@@ -1,0 +1,12 @@
+data: {"id":"chatcmpl-recorded-tool","object":"chat.completion.chunk","created":0,"model":"gpt-4o-conformance","choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_recorded","type":"function","function":{"name":"Read","arguments":""}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-recorded-tool","object":"chat.completion.chunk","created":0,"model":"gpt-4o-conformance","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\": \"b"}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-recorded-tool","object":"chat.completion.chunk","created":0,"model":"gpt-4o-conformance","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":".txt\"}"}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-recorded-tool","object":"chat.completion.chunk","created":0,"model":"gpt-4o-conformance","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: {"id":"chatcmpl-recorded-tool","object":"chat.completion.chunk","created":0,"model":"gpt-4o-conformance","choices":[],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}
+
+data: [DONE]
+

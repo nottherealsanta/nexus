@@ -236,7 +236,12 @@ def test_map_provider_prefers_npm_then_direct():
     assert map_provider("anything", "@ai-sdk/openai") == ADAPTER_OPENAI
     assert map_provider("anything", "@ai-sdk/openai-compatible") == ADAPTER_OPENAI
     assert map_provider("anything", "@ai-sdk/google") == ADAPTER_GEMINI
-    assert map_provider("anything", "@ai-sdk/google-vertex") == ADAPTER_GEMINI
+    assert map_provider("google", None) == ADAPTER_GEMINI
+    # Vertex is a different endpoint/auth flow no adapter speaks, so it is not
+    # claimed; an unmapped Vertex provider needs an explicit base_url.
+    assert map_provider("anything", "@ai-sdk/google-vertex") is None
+    assert map_provider("anything", "@ai-sdk/google-vertex/anthropic") is None
+    assert map_provider("google-vertex", None) is None
     assert map_provider("anything", "@ai-sdk/ollama") == ADAPTER_OLLAMA
     assert map_provider("ollama", None) == ADAPTER_OLLAMA
     assert map_provider("unknown", "@weird/thing") is None

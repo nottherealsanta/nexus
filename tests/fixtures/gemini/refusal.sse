@@ -1,0 +1,2 @@
+data: {"candidates":[{"content":{"role":"model","parts":[]},"finishReason":"SAFETY","index":0}],"modelVersion":"gemini-3-flash"}
+

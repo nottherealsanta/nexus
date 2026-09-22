@@ -2,24 +2,24 @@
   "full_suite": {
     "command": "/Users/santa/repos/nexus/.venv/bin/python -m pytest -q -p no:cacheprovider",
     "returncode": 0,
-    "seconds": 36.3,
-    "summary": "2367 passed, 2 skipped, 2 deselected, 1 xfailed, 4 subtests passed in 35.90s"
+    "seconds": 42.05,
+    "summary": "2772 passed, 311 skipped, 2 deselected, 1 xfailed, 4 subtests passed in 41.59s"
   },
-  "generated_at": "2026-09-23T02:13:43+0530",
-  "head": "e7a905f2477a812abfc2ad8268efcc637ea28d5a",
+  "generated_at": "2026-09-23T04:47:27+0530",
+  "head": "da00543440f619f15bfcc3c3379e4ee6b0023312",
   "import_cost": {
     "heavy_loaded": [],
-    "import_nexus_ms": 36.25,
-    "import_nexus_new_modules": 132,
-    "import_runtime_modules": 375,
-    "import_runtime_ms": 99.19
+    "import_nexus_ms": 37.85,
+    "import_nexus_new_modules": 135,
+    "import_runtime_modules": 379,
+    "import_runtime_ms": 100.51
   },
   "line_budgets": {
     "core_model_spec": {
-      "code_lines": 6256,
-      "files": 23,
-      "overage": 5152,
-      "physical_lines": 7652,
+      "code_lines": 10464,
+      "files": 28,
+      "overage": 10145,
+      "physical_lines": 12645,
       "plan_cap": 2500,
       "within_plan_cap": false
     },
@@ -76,10 +76,10 @@
       "tests/test_hot_extension_e2e.py::test_walkthrough_read_template_write_reload_call",
       "tests/test_hot_extension_stress.py::test_two_hundred_reloads_do_not_leak"
     ],
-    "output_tail": "..                                                                       [100%]\n2 passed in 1.46s",
+    "output_tail": "..                                                                       [100%]\n2 passed in 1.45s",
     "returncode": 0,
     "seconds": 1.63,
-    "summary": "2 passed in 1.46s"
+    "summary": "2 passed in 1.45s"
   },
   "schema": "nexus.phase3_exit_baseline/1"
 }

@@ -1,0 +1,6 @@
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Hel"}]},"index":0}],"modelVersion":"gemini-3-flash"}
+
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"lo"}]},"index":0}],"modelVersion":"gemini-3-flash"}
+
+data: {"candidates":[{"content":{"role":"model","parts":[]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":7,"totalTokenCount":19,"cachedContentTokenCount":3},"modelVersion":"gemini-3-flash"}
+

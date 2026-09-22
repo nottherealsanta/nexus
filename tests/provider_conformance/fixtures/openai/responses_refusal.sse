@@ -1,0 +1,18 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_recorded_refusal","object":"response","status":"in_progress","model":"gpt-5-conformance","output":[]}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_refusal","status":"in_progress","role":"assistant","content":[]}}
+
+event: response.refusal.delta
+data: {"type":"response.refusal.delta","item_id":"msg_refusal","output_index":0,"content_index":0,"delta":"I can't assist with that."}
+
+event: response.refusal.done
+data: {"type":"response.refusal.done","item_id":"msg_refusal","output_index":0,"content_index":0,"refusal":"I can't assist with that."}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"msg_refusal","status":"completed","role":"assistant","content":[{"type":"refusal","refusal":"I can't assist with that."}]}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_recorded_refusal","object":"response","status":"completed","model":"gpt-5-conformance","usage":{"input_tokens":4,"output_tokens":6,"total_tokens":10}}}
+

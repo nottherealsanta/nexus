@@ -1,0 +1,2 @@
+data: {"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"Read","args":{"path":"a.txt"}}}]},"finishReason":"STOP","index":0}],"modelVersion":"gemini-conformance"}
+

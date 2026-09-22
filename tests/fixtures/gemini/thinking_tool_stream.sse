@@ -1,0 +1,4 @@
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Let me check.","thought":true}]},"index":0}],"modelVersion":"gemini-3-pro"}
+
+data: {"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"Read","args":{"path":"a.txt"},"id":"call_abc"},"thoughtSignature":"c2lnbmF0dXJl"}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":20,"candidatesTokenCount":33,"thoughtsTokenCount":5},"modelVersion":"gemini-3-pro"}
+

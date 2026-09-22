@@ -23,13 +23,13 @@ from __future__ import annotations
 import base64
 import json
 import os
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import aclosing
 from typing import Any
 
 from ...errors import ProviderError
 from ..capabilities import Capabilities
-from ..http import HTTPTransport
+from ..http import HTTPTransport, redact_secrets
 from ..message import (
     ContentBlock,
     Document,
@@ -58,12 +58,20 @@ from ..stream import (
 __all__ = [
     "DEFAULT_MAX_TOKENS",
     "AnthropicProvider",
+    "CapabilitySource",
     "build_count_tokens_body",
     "build_request_body",
     "normalize_stop_reason",
 ]
 
 DEFAULT_MAX_TOKENS = 4096
+
+#: A capability source lets a runtime inject the registry/config-derived
+#: descriptor (plan section 15.5) without this adapter importing either.
+CapabilitySource = Callable[[str], "Capabilities | None"]
+
+#: Bound on a redacted in-stream error detail, matching the transport's own cap.
+_STREAM_ERROR_LIMIT = 500
 
 # Anthropic stop reasons map onto the normalized vocabulary (plan section 3.3).
 # ``pause_turn`` has no normalized equivalent; it is treated as a completed turn.
@@ -347,6 +355,23 @@ def _max_output_for(model: str | None) -> int:
     return 64000
 
 
+def _fallback_capabilities(model: str) -> Capabilities:
+    """The adapter's own descriptor when no registry source is injected."""
+    return Capabilities(
+        tools=True,
+        parallel_tool_calls=True,
+        streaming=True,
+        thinking=True,
+        prompt_caching=True,
+        vision=True,
+        documents=True,
+        json_schema_strict=False,
+        max_context_tokens=200_000,
+        max_output_tokens=_max_output_for(model),
+        degradation={"thinking": "drop"},
+    )
+
+
 class _UsageTotals:
     """Cumulative usage, last-write-wins per field across stream events."""
 
@@ -416,6 +441,8 @@ class AnthropicProvider:
         api_key: str | None = None,
         base_url: str | None = None,
         model: str | None = None,
+        capabilities: Capabilities | None = None,
+        capability_source: CapabilitySource | None = None,
         transport: HTTPTransport | None = None,
         client: Any | None = None,
         http_transport: Any | None = None,
@@ -434,6 +461,10 @@ class AnthropicProvider:
         self._environ = environ
         self._default_max_tokens = default_max_tokens
         self._extra_headers = dict(extra_headers or {})
+        #: Registry/config injection (plan section 15.5). ``capability_source``
+        #: wins, then a static descriptor, then the in-module table.
+        self._capabilities = capabilities
+        self._capability_source = capability_source
         self._closed = False
         if transport is not None:
             self._transport = transport
@@ -457,8 +488,12 @@ class AnthropicProvider:
             )
 
     def __repr__(self) -> str:
-        # Never include the API key spec, literal or reference.
-        return f"AnthropicProvider(model={self._model!r}, base_url={self._base_url!r})"
+        # Never include the API key spec, literal or reference. The endpoint has
+        # any userinfo/token pattern scrubbed too.
+        return (
+            f"AnthropicProvider(model={self._model!r}, "
+            f"base_url={redact_secrets(self._base_url)!r})"
+        )
 
     @property
     def transport(self) -> HTTPTransport:
@@ -517,19 +552,21 @@ class AnthropicProvider:
         return headers
 
     def capabilities(self, model: str) -> Capabilities:
-        return Capabilities(
-            tools=True,
-            parallel_tool_calls=True,
-            streaming=True,
-            thinking=True,
-            prompt_caching=True,
-            vision=True,
-            documents=True,
-            json_schema_strict=False,
-            max_context_tokens=200_000,
-            max_output_tokens=_max_output_for(model),
-            degradation={"thinking": "drop"},
-        )
+        base = self._capabilities
+        if base is None:
+            base = _fallback_capabilities(model)
+        if self._capability_source is not None:
+            try:
+                injected = self._capability_source(model)
+            except Exception:  # noqa: BLE001 - a bad source must not break a turn
+                injected = None
+            if injected is not None:
+                # The registry owns tools/thinking/vision/documents and the
+                # numeric limits; the adapter keeps the transport-only fields
+                # and its degradation policy. This is exactly the merge the
+                # router applies, so ``req.tools`` and the resolved caps agree.
+                return base.overridden_by(injected)
+        return base
 
     async def count_tokens(self, req: ModelRequest) -> int | None:
         """Count input tokens via ``/v1/messages/count_tokens``.
@@ -704,9 +741,13 @@ class AnthropicProvider:
                     error = payload.get("error")
                     error = error if isinstance(error, Mapping) else {}
                     kind = error.get("type") or "error"
-                    message = error.get("message") or ""
+                    message = str(error.get("message") or "")
+                    # An in-stream error frame has not passed through the shared
+                    # transport's error detail, so scrub it before it can reach
+                    # an error, event, or log.
+                    detail = redact_secrets(message.strip())[:_STREAM_ERROR_LIMIT]
                     raise ProviderError(
-                        f"anthropic: stream error {kind}: {message}"
+                        f"anthropic: stream error {kind}: {detail}"
                     )
                 # Unknown event types are ignored for forward compatibility.
 

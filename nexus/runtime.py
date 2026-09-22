@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self
 
+import httpx
 import msgspec
 
 from .agents import SubagentOutcome, SubagentRunner, SubagentUsage
@@ -58,7 +59,19 @@ from .hooks import HookEvent, HookInvocation, HookManager, HookOutcome
 from .model.message import Text
 from .model.provider import Provider
 from .model.providers.anthropic import AnthropicProvider
-from .model.registry import ModelRegistry
+from .model.providers.gemini import GeminiProvider
+from .model.providers.ollama import OllamaProvider
+from .model.providers.openai import OpenAIProvider
+from .model.providers.opencode import OpenCodeProvider
+from .model.registry import (
+    ADAPTER_ANTHROPIC,
+    ADAPTER_GEMINI,
+    ADAPTER_OLLAMA,
+    ADAPTER_OPENAI,
+    ADAPTER_OPENCODE,
+    OPENAI_COMPATIBLE,
+    ModelRegistry,
+)
 from .model.request import ModelRequest, ToolSchema
 from .model.router import ModelRouter
 from .model.tiers import DEFAULT_TIER, TierTable
@@ -81,6 +94,37 @@ if TYPE_CHECKING:  # pragma: no cover - typing only; the runtime imports lazily
     from .skills.manager import SkillManager
 
 __all__ = ["Runtime", "ToolTurn"]
+
+
+#: Provider section names that name a shipped adapter directly. ``codex`` is
+#: here so a Codex model reference (``codex/gpt-5-codex``) routes to the OpenAI
+#: adapter's Responses dialect; a legacy ``[providers.codex]`` section that only
+#: carries an ``executable`` is *not* a model provider and is skipped (see
+#: :meth:`Runtime._is_legacy_codex_section`).
+_CORE_ADAPTERS: dict[str, str] = {
+    "anthropic": ADAPTER_ANTHROPIC,
+    "openai": ADAPTER_OPENAI,
+    "codex": ADAPTER_OPENAI,
+    "google": ADAPTER_GEMINI,
+    "gemini": ADAPTER_GEMINI,
+    "ollama": ADAPTER_OLLAMA,
+    "opencode": ADAPTER_OPENCODE,
+}
+
+#: ``kind`` spellings that mean "any OpenAI-compatible endpoint".
+_OPENAI_COMPATIBLE_KINDS = frozenset(
+    {OPENAI_COMPATIBLE, "openai-compatible", "openai_compatible", "compatible"}
+)
+
+#: ``kind`` spellings for the OpenCode ACP subprocess agent surface.
+_OPENCODE_AGENT_KINDS = frozenset(
+    {ADAPTER_OPENCODE, "opencode-agent", "opencode_agent", "acp"}
+)
+
+#: ``kind`` spellings for the Gemini adapter. ``google`` is the catalogue id, so
+#: it must select the same adapter as ``gemini`` rather than fall through to the
+#: OpenAI-compatible default.
+_GEMINI_KINDS = frozenset({ADAPTER_GEMINI, "google"})
 
 
 def _grants_from_events(events: Any) -> tuple[Grant, ...]:
@@ -1121,6 +1165,10 @@ class Runtime:
         self._config_loader = config_loader
         self._http_transport = http_transport
         self._client = client
+        #: One HTTP client owned by the runtime and shared by every adapter it
+        #: constructs; ``None`` until the first provider build that needs it.
+        self._shared_client: Any | None = None
+        self._owns_shared_client = False
         self._mcp_client_factory = mcp_client_factory
         self._closed = False
 
@@ -1161,7 +1209,12 @@ class Runtime:
         else:
             initial = self._load_config()
             self._providers = self._build_providers(initial)
-            self._owned_providers = list(self._providers.values())
+            # One adapter may be registered under two keys (Gemini is ``google``
+            # and ``gemini``); close each owned provider once.
+            self._owned_providers = []
+            for provider in self._providers.values():
+                if not any(provider is owned for owned in self._owned_providers):
+                    self._owned_providers.append(provider)
 
         if initial is None:
             initial = self._load_config()
@@ -1798,25 +1851,325 @@ class Runtime:
             tier_table=self._tiers,
         )
 
+    def _provider_transport_kwargs(self) -> dict[str, Any]:
+        """Transport injection shared by every adapter the runtime builds.
+
+        One client is owned by the runtime and shared across adapters; providers
+        never close it (``owns_transport=False``), so connection reuse is real
+        and a close is not duplicated. An injected ``client`` stays the caller's.
+        An injected ``http_transport`` (the offline test seam) keeps per-provider
+        ownership so each adapter closes its own client, matching the reference
+        adapter's existing contract.
+        """
+        if self._http_transport is not None:
+            return {"http_transport": self._http_transport}
+        if self._client is not None:
+            return {"client": self._client, "owns_transport": False}
+        if self._shared_client is None:
+            self._shared_client = httpx.AsyncClient()
+            self._owns_shared_client = True
+        return {"client": self._shared_client, "owns_transport": False}
+
+    @staticmethod
+    def _is_legacy_codex_section(section: Any) -> bool:
+        """Whether a ``[providers.codex]`` section is the legacy CLI route.
+
+        Legacy v1 config translates into ``[providers.codex]`` with only an
+        ``executable``/``timeout_seconds``; that is the Codex subprocess, not an
+        OpenAI model provider, so it must not be claimed by the OpenAI adapter.
+        """
+        if section is None:
+            return False
+        return bool(getattr(section, "executable", None)) and not getattr(
+            section, "base_url", None
+        )
+
+    @classmethod
+    def _adapter_kind(cls, name: str, section: Any) -> str | None:
+        """The adapter a configured provider name/``kind`` selects, or ``None``.
+
+        Explicit ``kind`` wins, then the direct-name table, then the plan's
+        OpenAI-compatible fallback for any vendor with a configured endpoint
+        (section 15.3). A legacy ``codex`` section is never a model provider.
+        """
+        if name == "codex" and cls._is_legacy_codex_section(section):
+            return None
+        kind = getattr(section, "kind", None)
+        if isinstance(kind, str) and kind.strip():
+            normalized = kind.strip().lower()
+            if normalized in _OPENCODE_AGENT_KINDS:
+                return ADAPTER_OPENCODE
+            if normalized in _OPENAI_COMPATIBLE_KINDS:
+                return OPENAI_COMPATIBLE
+            if normalized in _GEMINI_KINDS:
+                return ADAPTER_GEMINI
+            if normalized in _CORE_ADAPTERS.values():
+                return normalized
+        mapped = _CORE_ADAPTERS.get(name)
+        if mapped is not None:
+            return mapped
+        if getattr(section, "base_url", None):
+            return OPENAI_COMPATIBLE
+        return None
+
+    def _construct_provider(
+        self,
+        name: str,
+        kind: str,
+        section: Any,
+        model_ref: str,
+    ) -> Provider | None:
+        """Build one adapter from its config section, or ``None`` if unmappable.
+
+        An OpenAI-compatible vendor must carry an explicit ``base_url``: without
+        one the adapter would silently default to ``api.openai.com`` and send the
+        vendor's model id (and, if configured, its key) to the wrong endpoint, so
+        that is a hard :class:`~nexus.errors.ConfigError` rather than a fallback.
+        """
+        api_key = getattr(section, "api_key", None)
+        base_url = getattr(section, "base_url", None) or None
+        api = getattr(section, "api", None)
+        if kind == OPENAI_COMPATIBLE and not base_url:
+            raise ConfigError(
+                f"providers.{name}: kind 'openai_compatible' requires a base_url "
+                "(Nexus will not default an OpenAI-compatible vendor to the "
+                "official OpenAI endpoint)"
+            )
+        if kind == ADAPTER_OPENCODE:
+            return self._construct_opencode(name, section, model_ref)
+        model = self._model_for(name, model_ref)
+        kwargs: dict[str, Any] = {
+            "api_key": api_key,
+            "base_url": base_url,
+            "model": model,
+            "environ": self._environ,
+            "capability_source": self._capability_source_for(name),
+            **self._provider_transport_kwargs(),
+        }
+        if kind == ADAPTER_ANTHROPIC:
+            return AnthropicProvider(**kwargs)
+        if kind == ADAPTER_GEMINI:
+            return GeminiProvider(**kwargs)
+        if kind == ADAPTER_OLLAMA:
+            return OllamaProvider(api=api, **kwargs)
+        if kind in (ADAPTER_OPENAI, OPENAI_COMPATIBLE):
+            if not api:
+                api = "chat" if kind == OPENAI_COMPATIBLE else "responses"
+            provider = OpenAIProvider(api=api, **kwargs)
+            # The adapter class is ``openai`` for every OpenAI-compatible wire,
+            # but the router key is the configured vendor id. Relabel so the
+            # provider identity the context layer round-trips (``provider.name``)
+            # matches the registered key; otherwise ``acme/...`` would resolve
+            # once and then fail on the second hop as ``openai/...``.
+            if name != "openai":
+                provider.name = name
+            return provider
+        return None
+
+    def _construct_opencode(
+        self, name: str, section: Any, model_ref: str
+    ) -> Provider:
+        """Build the OpenCode ACP subprocess agent (an agent surface, not HTTP).
+
+        The model id is opaque and ignored by the agent; ``command``/``args``
+        select the binary, ``permission_policy`` decides how ACP permission
+        prompts are answered, and ``inherit_env``/``env`` extend the explicit
+        credential allowlist. No credential store is read.
+        """
+        provider = OpenCodeProvider(
+            command=getattr(section, "command", None),
+            args=getattr(section, "args", None),
+            workspace=self.workspace,
+            model=self._model_for(name, model_ref),
+            timeout_seconds=getattr(section, "timeout_seconds", None),
+            environ=self._environ,
+            inherit_env=getattr(section, "inherit_env", None) or (),
+            env=getattr(section, "env", None),
+            permission_policy=getattr(section, "permission_policy", None) or "deny",
+        )
+        return provider
+
+    def _capability_source_for(self, name: str) -> Any:
+        """A registry-backed capability source for one adapter.
+
+        The adapter's own ``capabilities(model)`` must agree with the router's
+        registry-overlaid view, or it will build a request with tool schemas the
+        loop already dropped (or omit schemas the loop offered). This closure
+        resolves ``name/model`` through the registry, so both paths read the same
+        authoritative descriptor. A miss (an uncatalogued model, or one resolved
+        before the registry loads) returns ``None`` and the adapter falls back.
+        """
+        def source(model: str) -> Any | None:
+            registry = self._registry
+            if registry is None or not model:
+                return None
+            getter = getattr(registry, "get", None)
+            if getter is None:
+                return None
+            info = getter(f"{name}/{model}")
+            if info is None:
+                info = getter(model)
+            if info is None or not hasattr(info, "capabilities"):
+                return None
+            try:
+                return info.capabilities()
+            except Exception:  # noqa: BLE001 - a bad catalogue entry must not break
+                return None
+
+        return source
+
+
+    @staticmethod
+    def _model_for(name: str, model_ref: str) -> str | None:
+        """The configured default model when the reference names this provider."""
+        head, separator, tail = model_ref.partition("/")
+        if separator and tail and head == name:
+            return tail
+        return None
+
+    @staticmethod
+    def _provider_keys_for(
+        name: str, kind: str, sections: Mapping[str, Any]
+    ) -> tuple[str, ...]:
+        """The registry keys an adapter answers to.
+
+        Gemini is the catalogue id ``google``, so the two catalogue names alias
+        **only** when the section is actually named ``google`` or ``gemini``. A
+        custom name (``[providers.myvertex] kind = "google"``) answers to its own
+        name only, so two Google-kind sections can never hijack each other. An
+        alias is not added when the other catalogue name is itself a configured
+        section, because that section owns it.
+        """
+        if kind == ADAPTER_GEMINI:
+            if name == "google":
+                keys = ["google"]
+                if "gemini" not in sections:
+                    keys.append("gemini")
+                return tuple(keys)
+            if name == "gemini":
+                keys = ["gemini"]
+                if "google" not in sections:
+                    keys.append("google")
+                return tuple(keys)
+            return (name,)
+        if name == "codex":
+            return ("codex",)
+        return (name,)
+
     def _build_providers(self, config: Config) -> dict[str, Provider]:
-        """Construct the adapters the Phase 1 runtime knows how to own."""
+        """Construct every adapter the configuration asks the runtime to own.
+
+        Provider construction is config-driven (plan section 8):
+        ``[providers.<name>]`` selects the adapter by direct name or ``kind``, and
+        any unmapped vendor with a ``base_url`` is served by the OpenAI-compatible
+        adapter -- so a new OpenAI-compatible vendor needs only a ``nexus.toml``
+        block. Credentials stay references (``${env:VAR}``) resolved at request
+        time; this method never reads a secret value. The one shared HTTP client
+        is owned by the runtime.
+
+        Every configured section builds its **own** adapter instance, keyed by
+        its own name (plus the ``google``/``gemini`` catalogue alias when it is
+        one of those). A bare core-adapter reference with no section builds a
+        default instance, but only when no configured section already owns that
+        key -- so a configured section is never replaced by a default.
+        """
         providers: dict[str, Provider] = {}
         v2 = getattr(config, "v2", None)
         sections = getattr(v2, "providers", None) or {}
         model_ref = getattr(config, "model", None) or ""
-        if "anthropic" in sections or model_ref.startswith("anthropic/"):
-            providers["anthropic"] = AnthropicProvider.from_config(
-                config,
-                http_transport=self._http_transport,
-                client=self._client,
-                environ=self._environ,
-            )
+        if not isinstance(model_ref, str):
+            model_ref = ""
+        fallback = self._config_fallback(v2)
+
+        # (1) One instance per configured section, under its own name(s).
+        for name, section in sections.items():
+            kind = self._adapter_kind(name, section)
+            if kind is None:
+                continue
+            provider = self._construct_provider(name, kind, section, model_ref)
+            if provider is None:
+                continue
+            for key in self._provider_keys_for(name, kind, sections):
+                providers.setdefault(key, provider)
+
+        # (2) A core adapter the default/fallback references but no section (or
+        # alias) configured, so a bare ``ollama/...``/``google/...`` still
+        # resolves. An already-registered key is never overwritten.
+        for reference in (model_ref, *fallback):
+            head = reference.partition("/")[0] if "/" in reference else ""
+            if head not in _CORE_ADAPTERS or head in providers:
+                continue
+            kind = _CORE_ADAPTERS[head]
+            provider = self._construct_provider(head, kind, None, model_ref)
+            if provider is None:
+                continue
+            for key in self._provider_keys_for(head, kind, sections):
+                providers.setdefault(key, provider)
+
+        # File-loaded providers (``.nexus/providers/*.py``). A configured
+        # provider always wins a same-named file, and a quarantined file is a
+        # diagnostic, never a boot failure (plan section 8).
+        file_result = self._load_provider_files(config)
+        for name, provider in file_result.providers.items():
+            if name not in providers:
+                providers[name] = provider
+        self._provider_file_diagnostics = tuple(
+            diagnostic.to_dict() for diagnostic in file_result.diagnostics
+        )
         return providers
+
+    def _load_provider_files(self, config: Config) -> Any:
+        """Scan ``.nexus/providers/`` for hot-loaded adapters (quarantined)."""
+        from .model.providers.discovery import (
+            FileProviderLoader,
+            ProviderFileContext,
+            ProviderFileResult,
+        )
+
+        loader = FileProviderLoader()
+        if not loader.directories(self.workspace, self._home):
+            return ProviderFileResult()
+        context = ProviderFileContext(
+            config=config,
+            workspace=self.workspace,
+            home=self._home,
+            transport=self._provider_transport_kwargs(),
+        )
+        try:
+            return loader.load(self.workspace, self._home, context=context)
+        except Exception:  # noqa: BLE001 - discovery must never stop boot
+            return ProviderFileResult()
+
+    def _provider_diagnostics(self) -> tuple[dict[str, Any], ...]:
+        """Diagnostics from the most recent provider-file scan."""
+        return getattr(self, "_provider_file_diagnostics", ())
+
+    @staticmethod
+    def _config_fallback(v2: Any) -> list[str]:
+        """The configured provider-fallback references, in order.
+
+        Only non-empty strings are returned: a caller-supplied config object
+        (not the validated structs) must never make the provider builder or the
+        router index a malformed entry.
+        """
+        if v2 is None:
+            return []
+        getter = getattr(v2, "model_fallback", None)
+        if not callable(getter):
+            return []
+        try:
+            raw = list(getter())
+        except Exception:  # noqa: BLE001 - a bad config must not break boot
+            return []
+        return [
+            ref for ref in raw if isinstance(ref, str) and ref.strip()
+        ]
 
     def _build_router(self, config: Config) -> ModelRouter:
         aliases: dict[str, str] = {}
         v2 = getattr(config, "v2", None)
         default_ref = getattr(config, "model", None)
+        fallback: list[str] = []
         if v2 is not None:
             if default_ref:
                 aliases.setdefault("default", default_ref)
@@ -1826,10 +2179,12 @@ class Runtime:
                 aliases["fast"] = fast
             if plan:
                 aliases["plan"] = plan
+            fallback = self._config_fallback(v2)
         return ModelRouter(
             self._providers,
             aliases=aliases,
             default=default_ref,
+            fallback=fallback,
             registry=self._registry,
             tiers=self._tiers,
         )
@@ -2387,6 +2742,10 @@ class Runtime:
             if aclose is not None:
                 await aclose()
         self._owned_providers = []
+        if self._owns_shared_client and self._shared_client is not None:
+            await self._shared_client.aclose()
+            self._shared_client = None
+            self._owns_shared_client = False
         for manager in self._owned_tools:
             aclose = getattr(manager, "aclose", None)
             if aclose is not None:

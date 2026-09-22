@@ -65,6 +65,7 @@ import msgspec
 from ..errors import MalformedToolCall, OperationCancelled, ProviderError
 from ..events import Event
 from ..model.capabilities import Capabilities
+from ..model.http import redact_secrets
 from ..model.message import (
     DUPLICATE_TOOL_CALL_KEY,
     ContentBlock,
@@ -662,6 +663,54 @@ def _call_resolver(
     return resolver(request)  # type: ignore[operator]
 
 
+def _call_fallbacks(
+    resolver: ProviderResolver, request: ModelRequest
+) -> list[ResolvedModel]:
+    """Return the resolver's configured fallback candidates, or ``[]``.
+
+    Structural and optional: a resolver without ``fallbacks`` (every Phase 1
+    resolver) yields no candidates, so the loop keeps its single-provider
+    behaviour exactly. A broken fallbacks implementation never fails a turn.
+    """
+    method = getattr(resolver, "fallbacks", None)
+    if not callable(method):
+        return []
+    try:
+        candidates = method(request)
+    except Exception:  # noqa: BLE001 - a bad fallback list must not break a turn
+        return []
+    return [candidate for candidate in candidates if candidate is not None]
+
+
+def _candidate_models(
+    resolver: ProviderResolver,
+    request: ModelRequest,
+    primary: ResolvedModel,
+) -> list[ResolvedModel]:
+    """Primary first, then each distinct configured fallback."""
+    candidates = [primary]
+    seen = {(primary.provider.name, primary.model)}
+    for candidate in _call_fallbacks(resolver, request):
+        key = (candidate.provider.name, candidate.model)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(candidate)
+    return candidates
+
+
+def _session_provider(session: SessionView) -> str | None:
+    """The provider of the most recent assistant turn, for switch detection."""
+    for message in reversed(session.messages):
+        if message.role != "assistant":
+            continue
+        meta = getattr(message, "meta", None)
+        provider = getattr(meta, "provider", None)
+        if provider:
+            return provider
+    return None
+
+
 def _call_environment_factory(
     factory: EnvironmentFactory,
     session: SessionView,
@@ -1033,6 +1082,7 @@ async def _stream_with_degradation(
     token: CancelToken,
     iteration: int,
     model: str,
+    collector: _BlockCollector | None = None,
 ) -> tuple[
     _BlockCollector,
     str | None,
@@ -1048,12 +1098,17 @@ async def _stream_with_degradation(
     the call is retried exactly once. A rejection is only retried when nothing
     visible has streamed yet; a refusal (a stop reason) or a mid-stream failure
     is never retried.
+
+    ``collector`` may be supplied by the caller so it can inspect whether any
+    output streamed after a failure (the provider-fallback guard). It is reused
+    across the capability retry, which only happens while it is still empty.
     """
     attempt_caps = capabilities
     attempt_request = request
+    if collector is None:
+        collector = _BlockCollector()
     retried = False
     while True:
-        collector = _BlockCollector()
         try:
             stop_reason, usage, malformed = await _collect_stream(
                 provider, attempt_request, collector, emitter, token
@@ -1072,7 +1127,7 @@ async def _stream_with_degradation(
             attempt_request = _request_without_feature(
                 attempt_request, feature, attempt_caps
             )
-            detail = redact_url_userinfo(str(exc))
+            detail = redact_secrets(str(exc))
             await emitter.emit(
                 "context.degraded",
                 {
@@ -1626,45 +1681,116 @@ async def run_turn(
                     {"iteration": state.iteration, **dict(compacted)},
                 )
 
-            resolved = _call_resolver(provider_for, request)
-            model = request.model or resolved.model
-            # Capability adaptation: a provider without tool support must never
-            # receive schemas, and any tool call it still emits is answered with
-            # a capability error result rather than dispatched.
-            capabilities = resolved.capabilities
-            effective_tools = list(request.tools) if capabilities.tools else []
-            streaming_request = msgspec.structs.replace(
-                request,
-                model=model,
-                provider=resolved.provider.name,
-                tools=effective_tools,
-            )
-            await emitter.emit(
-                "model.started",
-                {
-                    "iteration": state.iteration,
-                    "provider": resolved.provider.name,
-                    "model": model,
-                    "tools": capabilities.tools,
-                    "streaming": capabilities.streaming,
-                },
-            )
-
-            (
-                collector,
-                stop_reason,
-                usage,
-                malformed,
-                capabilities,
-            ) = await _stream_with_degradation(
-                provider=resolved.provider,
-                request=streaming_request,
-                capabilities=capabilities,
-                emitter=emitter,
-                token=token,
-                iteration=state.iteration,
-                model=model,
-            )
+            primary = _call_resolver(provider_for, request)
+            candidates = _candidate_models(provider_for, request, primary)
+            # A provider switch mid-session reinterprets another provider's
+            # history; surface it before the call rather than silently migrating.
+            previous_provider = _session_provider(session)
+            collector = _BlockCollector()
+            resolved = primary
+            stop_reason: str | None = None
+            usage: StreamUsage | None = None
+            malformed: MalformedToolCall | None = None
+            for index, candidate in enumerate(candidates):
+                # The primary honours an explicit request model; a fallback uses
+                # the model its own reference resolved to, so ``backup/m2`` does
+                # not inherit the failed ``primary/m1`` id.
+                model = (
+                    request.model or candidate.model
+                    if index == 0
+                    else candidate.model or request.model
+                )
+                capabilities = candidate.capabilities
+                # Capability adaptation: a provider without tool support must
+                # never receive schemas, and any tool call it still emits is
+                # answered with a capability error result rather than dispatched.
+                effective_tools = list(request.tools) if capabilities.tools else []
+                streaming_request = msgspec.structs.replace(
+                    request,
+                    model=model,
+                    provider=candidate.provider.name,
+                    tools=effective_tools,
+                )
+                if (
+                    previous_provider is not None
+                    and previous_provider != candidate.provider.name
+                ):
+                    await emitter.emit(
+                        "context.degraded",
+                        {
+                            "iteration": state.iteration,
+                            "provider": candidate.provider.name,
+                            "model": model,
+                            "feature": "provider_switch",
+                            "reason": "provider_switch",
+                            "from": previous_provider,
+                            "to": candidate.provider.name,
+                        },
+                    )
+                if index > 0:
+                    fallback_from = candidates[index - 1]
+                    await emitter.emit(
+                        "model.retrying",
+                        {
+                            "iteration": state.iteration,
+                            "attempt": index,
+                            "from_provider": fallback_from.provider.name,
+                            "from_model": request.model or fallback_from.model,
+                            "provider": candidate.provider.name,
+                            "model": model,
+                            "reason": "provider_failure",
+                        },
+                    )
+                await emitter.emit(
+                    "model.started",
+                    {
+                        "iteration": state.iteration,
+                        "provider": candidate.provider.name,
+                        "model": model,
+                        "tools": capabilities.tools,
+                        "streaming": capabilities.streaming,
+                        "attempt": index,
+                    },
+                )
+                collector = _BlockCollector()
+                try:
+                    (
+                        collector,
+                        stop_reason,
+                        usage,
+                        malformed,
+                        capabilities,
+                    ) = await _stream_with_degradation(
+                        provider=candidate.provider,
+                        request=streaming_request,
+                        capabilities=capabilities,
+                        emitter=emitter,
+                        token=token,
+                        iteration=state.iteration,
+                        model=model,
+                        collector=collector,
+                    )
+                    resolved = candidate
+                    break
+                except ProviderError as exc:
+                    # A fallback is tried only on a provider-level failure that
+                    # produced no output. A refusal is a stop reason, and a
+                    # partial stream has ``has_output()`` true, so neither ever
+                    # falls back (plan section 8).
+                    if collector.has_output() or index + 1 >= len(candidates):
+                        raise
+                    await emitter.emit(
+                        "context.degraded",
+                        {
+                            "iteration": state.iteration,
+                            "provider": candidate.provider.name,
+                            "model": model,
+                            "feature": "provider_failure",
+                            "reason": "provider_failed",
+                            "fallback": candidates[index + 1].provider.name,
+                            "detail": redact_secrets(str(exc)),
+                        },
+                    )
             if malformed is not None:
                 malformed_total += 1
 

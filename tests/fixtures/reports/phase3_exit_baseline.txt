@@ -1,7 +1,7 @@
 Nexus Phase 3 exit - baseline closeout evidence
 ================================================
-generated : 2026-09-23T02:13:43+0530
-head      : e7a905f2477a812abfc2ad8268efcc637ea28d5a
+generated : 2026-09-23T04:47:27+0530
+head      : da00543440f619f15bfcc3c3379e4ee6b0023312
 schema    : nexus.phase3_exit_baseline/1
 
 Phase 3 exit criteria (plan section 10)
@@ -28,23 +28,23 @@ Controlled prompt cache before/after
 
 Line budgets (plan sections 11 / 14.14)
 ----------------------------------------
-  core+model+spec .......... 7652 physical / 6256 code (cap 2500, within=False, over=5152)
+  core+model+spec .......... 12645 physical / 10464 code (cap 2500, within=False, over=10145)
   host+view+ui ............. 391 physical / 320 code (cap 2000, within=True, over=0)
   surface baseline ......... host=0 view=0 ui=391
 
 Import cost (plan section 2.2)
 ----------------------------------------
-  import nexus ............. 36.25 ms, +132 modules, heavy=none
-  import nexus.runtime ..... 99.19 ms, 375 modules
+  import nexus ............. 37.85 ms, +135 modules, heavy=none
+  import nexus.runtime ..... 100.51 ms, 379 modules
 
 Phase 4 references (plan section 10)
 ----------------------------------------
   result ................... passed in 1.63s
-  summary .................. 2 passed in 1.46s
+  summary .................. 2 passed in 1.45s
     - tests/test_hot_extension_e2e.py::test_walkthrough_read_template_write_reload_call
     - tests/test_hot_extension_stress.py::test_two_hundred_reloads_do_not_leak
 
 Full suite
 ----------------------------------------
-  result ................... passed in 36.3s
-  summary .................. 2367 passed, 2 skipped, 2 deselected, 1 xfailed, 4 subtests passed in 35.90s
+  result ................... passed in 42.05s
+  summary .................. 2772 passed, 311 skipped, 2 deselected, 1 xfailed, 4 subtests passed in 41.59s

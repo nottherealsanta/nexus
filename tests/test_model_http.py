@@ -436,3 +436,46 @@ async def test_error_detail_redacts_raw_body_token():
     assert secret not in repr(excinfo.value)
     assert "rejected" in str(excinfo.value)
     await client.aclose()
+
+
+# --------------------------------------------------------------------------
+# URL userinfo must never reach an error or a debug log
+# --------------------------------------------------------------------------
+
+
+def test_safe_url_strips_userinfo_and_query():
+    from nexus.model.http import _safe_url
+
+    safe = _safe_url("https://user:hunter2@gateway.test/v1?token=sk-secret")
+    assert "hunter2" not in safe
+    assert "sk-secret" not in safe
+    assert "gateway.test" in safe
+    assert safe.startswith("https://")
+
+
+async def test_provider_error_redacts_url_userinfo():
+    def handler(request):
+        return httpx.Response(401, text="unauthorized")
+
+    transport, client = _transport(handler)
+    with pytest.raises(ProviderError) as excinfo:
+        await transport.request(
+            "GET", "https://user:hunter2@gateway.test/v1/models"
+        )
+    assert "hunter2" not in str(excinfo.value)
+    assert "hunter2" not in repr(excinfo.value)
+    assert "gateway.test" in str(excinfo.value)
+    await client.aclose()
+
+
+async def test_debug_log_redacts_url_userinfo(caplog):
+    def handler(request):
+        return httpx.Response(200)
+
+    transport, client = _transport(handler)
+    with caplog.at_level(logging.DEBUG, logger="nexus.model.http"):
+        await transport.request(
+            "GET", "https://user:hunter2@gateway.test/v1/models"
+        )
+    assert "hunter2" not in caplog.text
+    await client.aclose()

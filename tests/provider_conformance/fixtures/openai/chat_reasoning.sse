@@ -1,0 +1,10 @@
+data: {"id":"chatcmpl-recorded-reasoning","object":"chat.completion.chunk","created":0,"model":"gpt-4o-conformance","choices":[{"index":0,"delta":{"role":"assistant","content":"","reasoning_content":"Weighing options."},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-recorded-reasoning","object":"chat.completion.chunk","created":0,"model":"gpt-4o-conformance","choices":[{"index":0,"delta":{"reasoning_signature":"sig_chat_recorded"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-recorded-reasoning","object":"chat.completion.chunk","created":0,"model":"gpt-4o-conformance","choices":[{"index":0,"delta":{"content":"Here is the answer."},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-recorded-reasoning","object":"chat.completion.chunk","created":0,"model":"gpt-4o-conformance","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+

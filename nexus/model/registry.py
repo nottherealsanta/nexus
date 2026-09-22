@@ -42,6 +42,7 @@ __all__ = [
     "ADAPTER_GEMINI",
     "ADAPTER_OLLAMA",
     "ADAPTER_OPENAI",
+    "ADAPTER_OPENCODE",
     "DEFAULT_CATALOGUE_URL",
     "DEFAULT_MAX_BYTES",
     "DEFAULT_TIMEOUT_S",
@@ -61,6 +62,7 @@ __all__ = [
     "RegistryStatus",
     "build_index",
     "map_provider",
+    "normalize_adapter_kind",
     "parse_catalogue",
 ]
 
@@ -80,31 +82,66 @@ ADAPTER_ANTHROPIC = "anthropic"
 ADAPTER_OPENAI = "openai"
 ADAPTER_GEMINI = "gemini"
 ADAPTER_OLLAMA = "ollama"
+#: The OpenCode ACP subprocess agent. It is an agent surface, not a model wire
+#: protocol, so it declares no model capabilities; the registry maps it only so
+#: a catalogue listing is not reported as adapter-less.
+ADAPTER_OPENCODE = "opencode"
 OPENAI_COMPATIBLE = "openai_compatible"
 
 _KNOWN_ADAPTERS = frozenset(
-    {ADAPTER_ANTHROPIC, ADAPTER_OPENAI, ADAPTER_GEMINI, ADAPTER_OLLAMA}
+    {ADAPTER_ANTHROPIC, ADAPTER_OPENAI, ADAPTER_GEMINI, ADAPTER_OLLAMA, ADAPTER_OPENCODE}
 )
 
+#: ``kind`` spellings that alias a canonical adapter. ``google`` is the
+#: catalogue provider id for Gemini, so a ``kind = "google"`` block must select
+#: the Gemini adapter consistently rather than being reported as unknown.
+_KIND_ALIASES: dict[str, str] = {
+    "google": ADAPTER_GEMINI,
+    "opencode_agent": ADAPTER_OPENCODE,
+    "opencode-agent": ADAPTER_OPENCODE,
+}
+
+#: ``kind`` spellings that mean "any OpenAI-compatible endpoint".
+_OPENAI_COMPATIBLE_KINDS = frozenset(
+    {OPENAI_COMPATIBLE, "openai-compatible", "compatible"}
+)
+
+
+def normalize_adapter_kind(kind: object) -> str | None:
+    """Map a configured ``kind`` onto a known Nexus adapter, or ``None``."""
+    if not isinstance(kind, str):
+        return None
+    normalized = kind.strip().lower()
+    if normalized in _KIND_ALIASES:
+        return _KIND_ALIASES[normalized]
+    if normalized in _KNOWN_ADAPTERS:
+        return normalized
+    return None
+
 #: ``npm`` is the strongest signal models.dev carries for the wire protocol.
+#: Google Vertex is deliberately absent: it is a different endpoint and auth
+#: flow that no Nexus adapter speaks, so claiming it would route requests to an
+#: adapter that cannot serve them. Unmapped Vertex providers fall back to the
+#: OpenAI-compatible adapter only when a ``base_url`` is configured.
 _NPM_ADAPTERS: dict[str, str] = {
     "@ai-sdk/anthropic": ADAPTER_ANTHROPIC,
     "@ai-sdk/openai": ADAPTER_OPENAI,
     "@ai-sdk/openai-compatible": ADAPTER_OPENAI,
     "@ai-sdk/google": ADAPTER_GEMINI,
-    "@ai-sdk/google-vertex": ADAPTER_GEMINI,
-    "@ai-sdk/google-vertex/anthropic": ADAPTER_ANTHROPIC,
     "@ai-sdk/ollama": ADAPTER_OLLAMA,
 }
 
 #: Direct provider ids, for entries whose ``npm`` is missing or unfamiliar.
+#: Codex models are OpenAI Responses-API models (plan assumption #3): they are a
+#: routing entry on the OpenAI adapter, not a distinct provider.
 _DIRECT_ADAPTERS: dict[str, str] = {
     "anthropic": ADAPTER_ANTHROPIC,
     "openai": ADAPTER_OPENAI,
+    "codex": ADAPTER_OPENAI,
     "google": ADAPTER_GEMINI,
-    "google-vertex": ADAPTER_GEMINI,
     "gemini": ADAPTER_GEMINI,
     "ollama": ADAPTER_OLLAMA,
+    "opencode": ADAPTER_OPENCODE,
 }
 
 #: Bounds that keep a hostile or corrupt catalogue from exhausting memory. The
@@ -472,10 +509,14 @@ def _provider_status(
     kind: str | None = None
     cfg_kind = _cfg_value(cfg, "kind")
     base_url = _cfg_value(cfg, "base_url")
-    if isinstance(cfg_kind, str) and cfg_kind in _KNOWN_ADAPTERS:
-        adapter = cfg_kind
-        kind = cfg_kind
-    elif isinstance(cfg_kind, str) and cfg_kind == OPENAI_COMPATIBLE:
+    normalized_kind = (
+        cfg_kind.strip().lower() if isinstance(cfg_kind, str) else None
+    )
+    known = normalize_adapter_kind(cfg_kind)
+    if known is not None:
+        adapter = known
+        kind = known
+    elif normalized_kind in _OPENAI_COMPATIBLE_KINDS:
         if base_url:
             adapter = ADAPTER_OPENAI
             kind = OPENAI_COMPATIBLE

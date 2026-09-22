@@ -1,0 +1,21 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_recorded_tool","object":"response","status":"in_progress","model":"gpt-5-conformance","output":[]}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_recorded","call_id":"call_recorded","name":"Read","arguments":""}}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_recorded","output_index":0,"delta":"{\"path\": \"b"}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_recorded","output_index":0,"delta":".txt\"}"}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","item_id":"fc_recorded","output_index":0,"arguments":"{\"path\": \"b.txt\"}"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_recorded","call_id":"call_recorded","name":"Read","arguments":"{\"path\": \"b.txt\"}","status":"completed"}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_recorded_tool","object":"response","status":"completed","model":"gpt-5-conformance","usage":{"input_tokens":5,"output_tokens":3,"total_tokens":8}}}
+

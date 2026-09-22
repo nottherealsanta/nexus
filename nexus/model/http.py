@@ -3,8 +3,9 @@
 One pooled :class:`httpx.AsyncClient` per transport owns connection reuse,
 bounded retry with jittered exponential backoff on transport errors and
 429/5xx (honouring ``Retry-After``), and standards-shaped Server-Sent Events
-parsing. Adapters translate schemas in and streams out; they never touch
-``httpx`` directly.
+parsing. Newline-delimited JSON (line framing, for providers that do not speak
+SSE) is offered by the same wrapper. Adapters translate schemas in and streams
+out; they never touch ``httpx`` directly.
 
 Two deliberate policies live here rather than in adapters:
 
@@ -25,7 +26,6 @@ import codecs
 import json
 import logging
 import random
-import re
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -35,6 +35,7 @@ import httpx
 import msgspec
 
 from ..errors import ProviderError
+from ..util import redact_secrets, redact_url_userinfo
 
 __all__ = [
     "DONE_SENTINEL",
@@ -42,6 +43,7 @@ __all__ = [
     "RetryPolicy",
     "SSEDecoder",
     "SSEEvent",
+    "redact_secrets",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -213,53 +215,23 @@ class RetryPolicy:
 
 
 def _safe_url(url: object) -> str:
-    """URL string with any query (a possible secret carrier) stripped."""
+    """URL string safe for a log or an error: query and userinfo stripped.
+
+    A query string can carry a token and a configured URL can carry
+    ``user:password@`` userinfo; both are removed before the URL reaches an
+    error detail or a debug log.
+    """
     try:
         parsed = httpx.URL(str(url))
     except Exception:  # noqa: BLE001 - never let logging raise
         return "<invalid-url>"
     if parsed.query:
         parsed = parsed.copy_with(query=None)
-    return str(parsed)
+    return redact_url_userinfo(str(parsed))
 
-
-#: Patterns that hide echoed credentials in an error body before it reaches a
-#: :class:`~nexus.errors.ProviderError` or a log. This is deliberately
-#: conservative: an error detail is supplementary, so over-redaction is
-#: preferred to leaking a token. Order matters — scheme/prefix rules run first.
-_SECRET_REDACTIONS: tuple[tuple[re.Pattern[str], str], ...] = (
-    # Authorization schemes: "Bearer <token>", "Basic <token>".
-    (re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{6,}"), r"\1 ***"),
-    # Well-known API-key prefixes.
-    (re.compile(r"\bsk-[A-Za-z0-9._-]{4,}"), "***"),
-    (re.compile(r"\b(?:pk|rk)_[A-Za-z0-9]{8,}"), "***"),
-    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{8,}"), "***"),
-    (re.compile(r"\bgithub_pat_[A-Za-z0-9_]{8,}"), "***"),
-    (re.compile(r"\bAIza[A-Za-z0-9._-]{8,}"), "***"),
-    (re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{6,}"), "***"),
-    (re.compile(r"\bAKIA[A-Z0-9]{12,}"), "***"),
-    # "<credential-name>: <value>" / "<credential-name>=<value>"; keep the name.
-    (
-        re.compile(
-            r"(?i)(\b(?:api[-_]?key|x-api-key|authorization|access[-_]?token|"
-            r"refresh[-_]?token|client[-_]?secret|secret|password|token)\b"
-            r"\s*[:=]\s*[\"']?)[^\s\"',}]{4,}"
-        ),
-        r"\1***",
-    ),
-    # Long opaque tokens (JWTs, base64 blobs) with no recognizable prefix.
-    (re.compile(r"\b[A-Za-z0-9+/=_-]{40,}\b"), "***"),
-)
 
 #: Maximum length of a rendered error detail.
 _DETAIL_LIMIT = 500
-
-
-def _redact(text: str) -> str:
-    """Remove likely credentials from errant response text."""
-    for pattern, replacement in _SECRET_REDACTIONS:
-        text = pattern.sub(replacement, text)
-    return text
 
 
 def _response_detail(raw: bytes | str) -> str:
@@ -280,12 +252,12 @@ def _response_detail(raw: bytes | str) -> str:
         if isinstance(err, dict):
             message = err.get("message") or err.get("type")
             if message:
-                return _redact(str(message))[:_DETAIL_LIMIT]
+                return redact_secrets(str(message))[:_DETAIL_LIMIT]
         for key in ("message", "detail", "error"):
             value = payload.get(key)
             if isinstance(value, str) and value:
-                return _redact(value)[:_DETAIL_LIMIT]
-    return _redact(text.replace("\n", " "))[:_DETAIL_LIMIT]
+                return redact_secrets(value)[:_DETAIL_LIMIT]
+    return redact_secrets(text.replace("\n", " "))[:_DETAIL_LIMIT]
 
 
 def _retry_after_seconds(response: httpx.Response) -> float | None:
@@ -524,6 +496,86 @@ class HTTPTransport:
                             return
                         emitted = True
                         yield event
+                    return
+            except httpx.TransportError as exc:
+                if not emitted and attempt + 1 < self._retry.max_attempts:
+                    attempt += 1
+                    await self._sleep(self._delay_for(attempt))
+                    _logger.debug(
+                        "http %s %s retry %d/%d after transport error",
+                        method,
+                        _safe_url(url),
+                        attempt,
+                        self._retry.max_attempts,
+                    )
+                    continue
+                raise self._transport_error(exc, url) from exc
+
+    async def aiter_lines(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        json: object | None = None,
+        params: Mapping[str, object] | None = None,
+        stop_on_done: bool = True,
+    ) -> AsyncIterator[str]:
+        """Stream newline-delimited text lines, retrying before the first line.
+
+        The line-framed sibling of :meth:`aiter_sse`, for wire protocols that
+        are newline-delimited JSON (Ollama's native ``/api/chat``) rather than
+        Server-Sent Events. Lines are yielded without their terminator; blank
+        lines are skipped; the ``[DONE]`` sentinel ends iteration by default.
+        The same retry boundary applies: retries happen only before the first
+        line is yielded, and a mid-stream failure is surfaced, never replayed.
+        """
+        if self._closed:
+            raise ProviderError("HTTP transport is closed")
+        headers = self._merged_headers(headers)
+        attempt = 0
+        while True:
+            emitted = False
+            try:
+                async with self._client.stream(
+                    method, url, headers=headers, json=json, params=params
+                ) as response:
+                    if response.status_code >= 400:
+                        body = await response.aread()
+                        if (
+                            self._retry.should_retry_status(response.status_code)
+                            and attempt + 1 < self._retry.max_attempts
+                        ):
+                            attempt += 1
+                            delay = self._delay_for(attempt, response)
+                            await self._sleep(delay)
+                            _logger.debug(
+                                "http %s %s retry %d/%d after HTTP %d",
+                                method,
+                                _safe_url(url),
+                                attempt,
+                                self._retry.max_attempts,
+                                response.status_code,
+                            )
+                            continue
+                        raise self._http_error(
+                            response.status_code,
+                            url,
+                            _response_detail(body),
+                        )
+                    _logger.debug(
+                        "http %s %s -> %d (lines)",
+                        method,
+                        _safe_url(url),
+                        response.status_code,
+                    )
+                    async for line in response.aiter_lines():
+                        if not line:
+                            continue
+                        if stop_on_done and line.strip() == DONE_SENTINEL:
+                            return
+                        emitted = True
+                        yield line
                     return
             except httpx.TransportError as exc:
                 if not emitted and attempt + 1 < self._retry.max_attempts:

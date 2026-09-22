@@ -403,6 +403,19 @@ async def test_stream_error_event_raises():
     assert "overloaded_error" in str(excinfo.value)
 
 
+async def test_stream_error_detail_is_redacted():
+    secret = "sk-ant-LEAKME0123456789abcdef"
+    content = (
+        b'data: {"type":"error","error":'
+        b'{"type":"authentication_error","message":"bad key ' + secret.encode() + b'"}}\n\n'
+    )
+    provider, _ = _make(content=content)
+    with pytest.raises(ProviderError) as excinfo:
+        await _collect(provider, ModelRequest(messages=[]))
+    assert secret not in str(excinfo.value)
+    assert secret not in repr(excinfo.value)
+
+
 async def test_midstream_disconnect_raises_without_replay():
     prefix = (
         b'data: {"type":"message_start","message":{"model":"m","usage":{}}}\n\n'

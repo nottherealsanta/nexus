@@ -7,8 +7,11 @@ from __future__ import annotations
 
 import math
 from typing import Literal
+from urllib.parse import urlsplit
 
 import msgspec
+
+from ..util import redact_secrets
 
 Compaction = Literal["drop_oldest", "evict_tool_results", "summarize", "hybrid"]
 PermissionMode = Literal["allow", "ask", "deny"]
@@ -17,6 +20,46 @@ SandboxMode = Literal["read-only", "workspace-write"]
 
 _PERMISSION_MODES = frozenset({"allow", "ask", "deny"})
 _UNATTENDED_MODES = frozenset({"deny", "allow", "fail_turn"})
+
+#: Hosts for which plain ``http`` is tolerated (a loopback dev server such as
+#: Ollama). Any remote endpoint must use TLS.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _validate_base_url(value: str) -> None:
+    """Reject a provider ``base_url`` that could misdirect or leak a request.
+
+    ``file:`` and any non-http(s) scheme are refused, and plain ``http`` is
+    allowed only for a loopback host. Embedded ``user:pass@`` userinfo is
+    *allowed* (some gateways require it) but is therefore **always redacted** by
+    every repr, log, and error path. A ``${...}`` reference is left for
+    request-time resolution. The config layer never needs ``httpx`` for this.
+    """
+    text = value.strip()
+    if not text:
+        raise ValueError("providers.*.base_url must be a non-empty URL")
+    if text.startswith("${"):
+        return
+    try:
+        parts = urlsplit(text)
+    except ValueError as exc:
+        raise ValueError(
+            f"providers.*.base_url is not a valid URL: {exc}"
+        ) from exc
+    scheme = parts.scheme.lower()
+    if scheme == "file":
+        raise ValueError("providers.*.base_url must not use the file: scheme")
+    if scheme not in ("http", "https"):
+        raise ValueError("providers.*.base_url must use http or https")
+    if not parts.hostname:
+        raise ValueError("providers.*.base_url must name a host")
+    if scheme == "http":
+        host = (parts.hostname or "").lower()
+        if host not in _LOOPBACK_HOSTS and not host.startswith("127."):
+            raise ValueError(
+                "providers.*.base_url may use plain http only for a loopback "
+                "host; use https for a remote endpoint"
+            )
 
 #: Canonical model-registry defaults (plan section 15.9). Kept as literals here
 #: so ``nexus.config`` never imports the model layer (``import nexus`` stays
@@ -48,6 +91,14 @@ class ModelSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     fallback: list[str] = msgspec.field(default_factory=list)
     params: ModelParams = msgspec.field(default_factory=ModelParams)
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.fallback, list) or any(
+            not isinstance(ref, str) or not ref.strip() for ref in self.fallback
+        ):
+            raise ValueError(
+                "model.fallback must be a list of non-empty model references"
+            )
+
 
 class ModelsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     """Canonical ``[models]`` section (plan sections 15.3-15.4, 15.9).
@@ -64,6 +115,10 @@ class ModelsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     catalogue_url: str = DEFAULT_CATALOGUE_URL
     offline: bool = False
     tiers: dict[str, list[str]] = msgspec.field(default_factory=dict)
+    #: Ordered provider/model references tried only on a provider-level failure
+    #: *before* any output has streamed (plan section 8). A refusal or a partial
+    #: stream never falls back.
+    fallback: list[str] = msgspec.field(default_factory=list)
 
     def __post_init__(self) -> None:
         for name in ("default", "fast", "plan"):
@@ -72,6 +127,12 @@ class ModelsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
                 not isinstance(value, str) or not value.strip()
             ):
                 raise ValueError(f"models.{name} must be a nonempty string")
+        if not isinstance(self.fallback, list) or any(
+            not isinstance(ref, str) or not ref.strip() for ref in self.fallback
+        ):
+            raise ValueError(
+                "models.fallback must be a list of non-empty model references"
+            )
         ttl = self.refresh_ttl_days
         if (
             isinstance(ttl, bool)
@@ -170,16 +231,78 @@ class ProviderSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     api: str | None = None
     executable: str | None = None
     timeout_seconds: float | None = None
+    # -- OpenCode ACP subprocess agent (``kind = "opencode_agent"``) ---------
+    #: Explicit argv override for the agent binary (no shell is ever used).
+    command: list[str] | None = None
+    #: Arguments for the default executable; ignored when ``command`` is set.
+    args: list[str] | None = None
+    #: How ACP permission requests are answered: ``deny`` (default) or ``allow``.
+    #: This is *not* a sandbox -- see the adapter's documentation.
+    permission_policy: str | None = None
+    #: Extra parent environment variable names copied into the agent process.
+    inherit_env: list[str] | None = None
+    #: Literal environment values set on the agent process (may carry secrets).
+    env: dict[str, str] | None = None
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("command", self.command),
+            ("args", self.args),
+            ("inherit_env", self.inherit_env),
+        ):
+            if value is not None and (
+                not isinstance(value, list)
+                or any(not isinstance(item, str) for item in value)
+            ):
+                raise ValueError(f"providers.*.{name} must be a list of strings")
+        if self.env is not None and (
+            not isinstance(self.env, dict)
+            or any(
+                not isinstance(key, str) or not isinstance(val, str)
+                for key, val in self.env.items()
+            )
+        ):
+            raise ValueError("providers.*.env must be a mapping of strings")
+        if self.permission_policy is not None and self.permission_policy not in (
+            "deny",
+            "allow",
+        ):
+            raise ValueError(
+                "providers.*.permission_policy must be 'deny' or 'allow'"
+            )
+        if self.base_url is not None:
+            _validate_base_url(self.base_url)
+
+    @staticmethod
+    def _redact_list(values: list[str] | None) -> list[str] | None:
+        if not values:
+            return values
+        return [redact_secrets(item) for item in values]
 
     def __repr__(self) -> str:
         # Never render a literal credential (or its reference) through repr, so
-        # ``repr(config.v2)`` / tracebacks / logs cannot leak it.
+        # ``repr(config.v2)`` / tracebacks / logs cannot leak it. ``env`` values
+        # are hidden entirely; a ``base_url`` has its userinfo and any token
+        # pattern scrubbed, and ``command``/``args`` are scrubbed too because an
+        # argv can carry a credential (for example ``--token sk-...``).
         api_key = "***" if self.api_key else None
+        base_url = redact_secrets(self.base_url) if self.base_url else None
+        env = (
+            {key: "***" for key in self.env} if self.env else self.env
+        )
+        command = self._redact_list(self.command)
+        args = self._redact_list(self.args)
+        executable = (
+            redact_secrets(self.executable) if self.executable else None
+        )
         return (
             f"ProviderSection(kind={self.kind!r}, api_key={api_key!r}, "
-            f"base_url={self.base_url!r}, api={self.api!r}, "
-            f"executable={self.executable!r}, "
-            f"timeout_seconds={self.timeout_seconds!r})"
+            f"base_url={base_url!r}, api={self.api!r}, "
+            f"executable={executable!r}, "
+            f"timeout_seconds={self.timeout_seconds!r}, "
+            f"command={command!r}, args={args!r}, "
+            f"permission_policy={self.permission_policy!r}, "
+            f"inherit_env={self.inherit_env!r}, env={env!r})"
         )
 
 
@@ -357,6 +480,16 @@ class ConfigV2(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
                     f"conflicting model {name!r}: "
                     f"[models].{name}={canonical!r} but [model].{name}={compat!r}"
                 )
+        if (
+            self.models.fallback
+            and self.model.fallback
+            and self.models.fallback != self.model.fallback
+        ):
+            raise ValueError(
+                "conflicting model aliases: "
+                f"[models].fallback={self.models.fallback!r} but "
+                f"[model].fallback={self.model.fallback!r}"
+            )
 
     def model_default(self) -> str | None:
         """Effective default model reference: canonical then compatibility."""
@@ -367,6 +500,10 @@ class ConfigV2(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
     def model_plan(self) -> str | None:
         return self.models.plan or self.model.plan
+
+    def model_fallback(self) -> list[str]:
+        """Effective ordered fallback references: canonical then compatibility."""
+        return list(self.models.fallback or self.model.fallback)
 
     def models_configured(self) -> bool:
         """Whether ``[models]`` was set to anything beyond its defaults."""

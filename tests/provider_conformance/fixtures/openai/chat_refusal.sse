@@ -1,0 +1,6 @@
+data: {"id":"chatcmpl-recorded-refusal","object":"chat.completion.chunk","created":0,"model":"gpt-4o-conformance","choices":[{"index":0,"delta":{"role":"assistant","content":"I can't assist with that."},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-recorded-refusal","object":"chat.completion.chunk","created":0,"model":"gpt-4o-conformance","choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}]}
+
+data: [DONE]
+

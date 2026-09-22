@@ -204,6 +204,82 @@ async def test_runtime_injected_tool_manager_is_used(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Gemini registration (registry catalogue id ``google``)
+# ---------------------------------------------------------------------------
+
+
+def gemini_config(*, section="google", model="google/gemini-3-pro"):
+    return Config(
+        model=model,
+        version=2,
+        v2=ConfigV2(
+            model=ModelSection(default=model),
+            providers={section: ProviderSection(api_key="test-key")},
+        ),
+    )
+
+
+async def test_gemini_is_registered_under_google_and_gemini(tmp_path):
+    from nexus.model.request import ModelRequest
+
+    runtime = Runtime(
+        tmp_path,
+        config=gemini_config(),
+        http_transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, content=b"")
+        ),
+    )
+    try:
+        google = runtime.providers["google"]
+        assert google is runtime.providers["gemini"]
+        # The adapter identity stays ``gemini`` even though the registry key is
+        # the catalogue id ``google``.
+        assert google.name == "gemini"
+        resolved = runtime.router.resolve(
+            ModelRequest(messages=[], model="google/gemini-3-pro")
+        )
+        assert resolved.provider is google
+        assert resolved.model == "gemini-3-pro"
+        resolved_alias = runtime.router.resolve(
+            ModelRequest(messages=[], model="gemini/gemini-3-pro")
+        )
+        assert resolved_alias.provider is google
+    finally:
+        await runtime.aclose()
+
+
+async def test_gemini_config_section_may_be_named_gemini(tmp_path):
+    runtime = Runtime(
+        tmp_path,
+        config=gemini_config(section="gemini", model="gemini/gemini-3-pro"),
+        http_transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, content=b"")
+        ),
+    )
+    try:
+        assert runtime.providers["google"].name == "gemini"
+    finally:
+        await runtime.aclose()
+
+
+async def test_owned_gemini_provider_closes_once(tmp_path):
+    runtime = Runtime(
+        tmp_path,
+        config=gemini_config(),
+        http_transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, content=b"")
+        ),
+    )
+    client = runtime.providers["google"].transport.client
+    assert client.is_closed is False
+    await runtime.aclose()
+    assert client.is_closed is True
+    # Registered under two keys but owned once; a second close must be a no-op.
+    await runtime.aclose()
+    assert client.is_closed is True
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 

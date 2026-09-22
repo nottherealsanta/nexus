@@ -19,12 +19,17 @@ Resolution order, first hit wins:
 
 The registry is authoritative for the capabilities it describes (section 15.5);
 :meth:`~nexus.model.capabilities.Capabilities.overridden_by` layers those over
-the adapter's transport-only fields. There is still no fallback chain, no
-retry-on-provider-failure, and no mid-stream rerouting.
+the adapter's transport-only fields.
+
+:meth:`ModelRouter.fallbacks` enumerates the configured ``model.fallback`` chain
+as candidate :class:`ResolvedModel` triples. The router only *lists* them: the
+loop (:mod:`nexus.core.loop`) decides when to try one, and only after a
+provider-level failure that produced no output. A refusal or a partial stream
+never falls back, and there is no mid-stream rerouting.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ..errors import ConfigError
@@ -44,6 +49,7 @@ class ModelRouter:
         *,
         aliases: Mapping[str, str] | None = None,
         default: str | None = None,
+        fallback: Sequence[str] | None = None,
         registry: Any | None = None,
         tiers: Any | None = None,
     ) -> None:
@@ -54,6 +60,12 @@ class ModelRouter:
         ):
             raise ConfigError("default model reference must be a nonempty string")
         self._default = default
+        #: Ordered fallback references. A fallback is only ever tried after a
+        #: provider-level failure that produced no output (see ``core.loop``);
+        #: the router only enumerates them.
+        self._fallback: tuple[str, ...] = tuple(fallback or ())
+        if any(not isinstance(ref, str) or not ref.strip() for ref in self._fallback):
+            raise ConfigError("fallback references must be nonempty strings")
         #: An injected registry/tier table (plan section 15.3). Structural:
         #: only ``get``/``list`` and ``order`` are read, so the router imports
         #: no concrete registry and the model layer stays acyclic.
@@ -73,6 +85,10 @@ class ModelRouter:
     @property
     def default(self) -> str | None:
         return self._default
+
+    @property
+    def fallback(self) -> tuple[str, ...]:
+        return self._fallback
 
     @property
     def registry(self) -> Any | None:
@@ -102,6 +118,38 @@ class ModelRouter:
             return self._resolve_info(info, ref)
 
         return self._resolve_legacy(ref)
+
+    def fallbacks(self, request: ModelRequest, /) -> list[ResolvedModel]:
+        """Resolve the configured fallback chain for ``request``, in order.
+
+        The primary target is never repeated (by ``(provider, model)``). A
+        fallback reference that cannot resolve is skipped rather than aborting
+        the chain: the primary failure is the actionable error, and a broken
+        fallback must not mask it. The returned list is *candidates*, not a
+        commitment -- the loop only tries one after a provider-level failure
+        that produced no output (plan section 8).
+        """
+        if not self._fallback:
+            return []
+        seen: set[tuple[str, str]] = set()
+        try:
+            primary = self.resolve(request)
+            seen.add((primary.provider.name, primary.model))
+        except ConfigError:
+            pass
+        candidates: list[ResolvedModel] = []
+        for reference in self._fallback:
+            candidate = ModelRequest(messages=[], model=reference)
+            try:
+                resolved = self.resolve(candidate)
+            except ConfigError:
+                continue
+            key = (resolved.provider.name, resolved.model)
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(resolved)
+        return candidates
 
     # -- internals ---------------------------------------------------------
 
