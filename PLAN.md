@@ -1346,3 +1346,393 @@ The harness is finished when all of these are true:
 3. Start Phase 0. The first commit is `model/message.py` — the IR is the
    decision everything else inherits, and it is the one worth arguing about
    before any code depends on it.
+
+---
+
+## 14. Amendment: the host layer and multiple surfaces
+
+Added after Phase 3 shipped. This section is **append-only by design**: it does
+not rewrite sections 1-13, it amends them by reference. Where this section and
+an earlier one disagree, this section wins.
+
+### 14.0 What this amends
+
+| Section | Amendment |
+| --- | --- |
+| §1 Non-goals | Non-goal *"No web UI"* is **withdrawn**. A web surface is in scope; only its *frontend* is deferred (§14.12). |
+| §2.1 Layering | Two layers inserted: `view/` just above L0, `host/` between L4 and L5. |
+| §2.2 File layout | Adds `nexus/host/`, `nexus/view/`, restructures `nexus/ui/`. |
+| §3.5 Event catalogue | Adds the `input.*`, `presence.*`, and `daemon.*` groups (§14.10). |
+| §5.1 SessionManager | `Session.send()` splits into `start_turn()` + `subscribe()` (§14.2). |
+| §10 Phasing | Inserts **Phase 3.5** before Phase 4; rewrites Phase 8 as 8a-8c (§14.11). |
+| §11 Risks | Adds three risks (§14.13). |
+| §12 Done | Adds criteria 11-13 (§14.14). |
+
+### 14.1 Decisions added
+
+Settled before writing this section; treated as fixed the same way §0 is.
+
+| Decision | Choice |
+| --- | --- |
+| Surfaces | Core is exposed through a transport-neutral **facade**. A prompt_toolkit CLI and an HTTP surface are peers over it. Neither is privileged. |
+| Process model | **Daemon always.** The daemon owns every `Runtime`. The CLI is a pure client with no in-process fallback. |
+| Concurrency | Multiple sessions run turns **concurrently in one daemon**. A session's turn outlives every view of it. |
+| Views | **Single user, many views.** No multi-user identity, no per-user auth, no collaborative editing. Presence is a subscriber *count*. |
+| UI boundary | A UI may import `nexus.host`, `nexus.view`, `nexus.events` — nothing else. Enforced by a layering test, not by discipline. |
+| UI extension | Declarative-first, mirroring §0's self-extension rule: config, data files, and an above-the-facade renderer registry. No UI plugin ever receives a `Runtime`. |
+| Web frontend | **Deferred.** The protocol and the HTTP/SSE transport ship; no HTML does. |
+
+### 14.2 Why the present boundary is insufficient
+
+Phase 0-3 got the hard part right: `Session.send()` yields `Event` envelopes,
+everything is msgspec-serializable, and `nexus/ui/native.py` is already a real
+adapter that imports only `Event` and `Decision`. But the stream is
+**turn-scoped and single-consumer**, which blocks all three new requirements:
+
+1. **One consumer exists.** `_Fanout` is constructed inside `send()` and dies
+   with the turn. `core/bus.py` has a real multi-subscriber `Bus`; it is not
+   wired to sessions. A second view cannot attach.
+2. **The consumer owns the producer's lifetime.** Closing the generator cancels
+   the turn — correct for a CLI, fatal for a background session or a browser
+   tab.
+3. **`resolve_permission()` is a direct method call.** Meaningless over a wire.
+
+The fix is to split the primitive and keep `send()` as a wrapper over it:
+
+```python
+turn_id = await session.start_turn(content)     # runs to completion, unowned
+async for ev in session.subscribe(from_seq=n):  # any number of watchers
+```
+
+Sessions are already an append-only JSONL log with `seq` monotonic per session,
+so "catch up, then follow" is: read the log to `seq`, subscribe from `seq+1`.
+**Resumable, replayable, multi-watcher streams fall out of `session/store.py`
+as it already exists.** A reconnecting browser and a second terminal are the
+same case, and so is `nexus replay`.
+
+### 14.3 New layers
+
+```
+    L5  ui/            cli (prompt_toolkit), web         <- surfaces
+        ------------------------------------------------
+    L4½ host/          facade, protocol, supervisor, transports
+        ------------------------------------------------
+    L4  runtime.py     Runtime: owns managers, wiring, reload
+        ------------------------------------------------
+    L3  managers       session/ context/ tools/ skills/ mcp/ agents/ hooks/ ext/
+        ------------------------------------------------
+    L2  core/          loop, turn, bus, registry, watch
+        ------------------------------------------------
+    L1  model/         message IR, Provider protocol, adapters
+        ------------------------------------------------
+    L0½ view/          pure event reducer  (imports events.py ONLY)
+        ------------------------------------------------
+    L0  config, errors, events, util
+```
+
+`view/` sits low deliberately: it depends on nothing but the `Event` envelope,
+so the daemon, the CLI, and any future frontend can all reduce the same stream
+with the same code.
+
+```
+nexus/
+  view/
+    model.py                  ConversationView, TurnView, ToolCallView, ...
+    reduce.py                 apply(state, event) -> state   (pure, sync)
+    fold.py                   text.delta accumulation, dedup, ordering
+
+  host/
+    facade.py                 the complete verb list a surface may call
+    protocol.py               msgspec Command/Response structs (the wire contract)
+    supervisor.py             N concurrent sessions, turn scheduling, caps
+    presence.py               subscriber counts -> attended derivation
+    daemon.py                 lifecycle, socket, handshake, shutdown
+    transports/
+      uds.py                  local CLI <-> daemon (framed JSON)
+      http_sse.py             HTTP commands + SSE event stream
+
+  ui/
+    cli/                      prompt_toolkit line-mode client   [extra: nexus[cli]]
+      app.py  render.py  commands.py  keys.py  theme.py
+    jsonl.py                  --json passthrough
+```
+
+`nexus/ui/native.py` is retired into `ui/cli/` at Phase 8b.
+
+### 14.4 The facade
+
+`host/facade.py` is the **only** surface API. Everything a UI can do is here;
+anything not here, a UI cannot do.
+
+```
+commands      open_session(workspace, title?) -> id
+              start_turn(session, content) -> turn_id
+              enqueue(session, content) -> queued_id
+              cancel(session, reason?)
+              resolve_permission(session, request_id, decision)
+              fork(session, at_seq?) -> id
+              delete(session)
+              reload_extensions()
+queries       list_sessions() -> [SessionSummary]
+              state(session, from_seq) -> (ConversationView, seq)
+              list_tools() / list_models() / doctor()
+subscription  subscribe(session, from_seq) -> AsyncIterator[Event]
+```
+
+`SessionSummary` is what makes background work legible and is a hard
+requirement, not a convenience:
+
+```python
+class SessionSummary(Struct, frozen=True):
+    id: str
+    title: str                # auto-generated from the first message
+    state: Literal["idle", "running", "awaiting_input", "awaiting_permission"]
+    last_activity: float
+    last_seq: int             # a view diffs this against what it has rendered
+    viewers: int
+```
+
+Both surfaces render this identically, because both reduce the same view model.
+
+### 14.5 Background sessions
+
+The daemon runs many sessions at once. Three things this needs beyond
+`start_turn`:
+
+**A supervisor with a cap.** `host/supervisor.py` schedules turns across
+sessions under `daemon.max_concurrent_turns`. Without it, five background
+sessions x parallel tool calls x subagents is a fork bomb.
+
+**A per-session unattended policy.** §5.3's `permissions.on_unattended` becomes
+settable per session, so background work can be told to auto-deny and keep
+going rather than block.
+
+**Session-scoped shared state — a defect to fix first.** `JobRegistry` is *not*
+session-scoped: `spawn()` takes no session id, `_jobs` is a flat dict, and
+`Runtime` builds exactly one registry shared by every session
+(`nexus/runtime.py:372`). With concurrent sessions, session A can
+`BashOutput`/`KillShell` a job belonging to session B. `TodoStore` already does
+this correctly (keyed by `session_id`); `JobRegistry` must match. The same audit
+applies to MCP connections, the shared `httpx` client, and provider rate limits:
+**state that was safe when only one session could be live is now shared mutable
+state.** A concurrency test suite covering two sessions racing on each shared
+manager is part of Phase 3.5's exit criteria.
+
+The dominant failure mode of a background session is *silence* — it hits an
+approval prompt and stops, and nobody notices for twenty minutes. That is why
+`awaiting_permission` is a first-class value in `SessionSummary.state` and why
+permission requests carry a timeout.
+
+### 14.6 Many views of one session
+
+Single user throughout. No identity model, no auth beyond the localhost token,
+no shared draft buffers or cursors. "Multiplayer" here means **shared
+observation and shared control of one session from several windows.**
+
+**Presence replaces the `attended` flag.** Today `attended` is set once and
+gates whether approvals are prompted for. If a view attaches and then
+disconnects mid-turn, the session stays marked attended and blocks forever on
+an approval nobody will answer. Attendance becomes derived:
+`attended = viewers > 0`, recomputed on every subscribe/unsubscribe, and a drop
+to zero applies the session's unattended policy to any pending request.
+
+**Input while a turn runs.** The turn lease (`begin_turn` + flock) rejects a
+concurrent send with `SessionBusy`. Add `enqueue(session, content)`: the input
+is persisted, emits `input.queued`, and the loop consumes it at the next turn
+boundary. One primitive serves both a second view and the single impatient user
+typing while the agent works.
+
+**Permission races.** First responder wins. `resolve_permission` already returns
+`bool`, so a losing view simply gets `False` and re-renders from
+`permission.resolved`.
+
+**Optional `client_id`.** Events may carry the originating view's id for
+attribution and echo handling. This is a debugging aid, not an identity model,
+and nothing in the loop may branch on it.
+
+### 14.7 The view reducer
+
+Without this, every surface independently reinterprets forty event types and
+they drift. `nexus/ui/native.py` already documents the trap: stream
+`text.delta`, suppress the finalized `text` so nothing prints twice, track
+terminal events. That logic belongs in exactly one place.
+
+```python
+def apply(state: ConversationView, event: Event) -> ConversationView: ...
+```
+
+Pure, synchronous, no I/O, importing only `nexus.events`. It produces a
+renderable tree — turns, text blocks, thinking blocks, tool calls with live
+status and results, pending permission requests, usage totals. The CLI renders
+it to a terminal; the HTTP surface serializes it to JSON; a future frontend
+renders it in a browser. Identical semantics by construction.
+
+It is also testable with no terminal and no browser: feed a recorded session
+log, assert the view model, keep golden snapshots. `nexus replay <session>`
+is the same code path and becomes the primary UI regression harness.
+
+### 14.8 Daemon and client
+
+**The daemon always owns the Runtime. There is no in-process fallback.** One
+code path, one set of semantics, and multiple views work by construction rather
+than by a transport that only some surfaces use.
+
+The consequence, stated plainly: `nexus run` in a CI script now depends on a
+background process. That is acceptable only if the daemon is invisible when it
+is working, so `host/daemon.py` owns:
+
+- **auto-start** — the client starts a daemon if the socket is absent, then
+  waits for readiness with a bounded timeout;
+- **a deterministic socket path** — `~/.nexus/daemon/<hash-of-workspace>.sock`,
+  so a workspace maps to exactly one daemon;
+- **stale-socket cleanup** — a socket whose owning pid is gone is removed and
+  replaced, not reported as an error;
+- **a version handshake** — a client and daemon built from different versions
+  must fail loudly on connect, never speak a half-understood protocol;
+- **an idle shutdown policy** — exit after `daemon.idle_timeout` with no
+  viewers *and* no running turns; never exit with a turn in flight;
+- **`nexus daemon status|stop|logs`**.
+
+Exit criterion for this piece: `nexus run "..."` from a clean machine with no
+daemon running behaves exactly as it does today, including exit codes.
+
+### 14.9 Transport and wire protocol
+
+One protocol (`host/protocol.py`), two transports, same `Command` and `Event`
+structs on both:
+
+| Transport | Used by | Shape |
+| --- | --- | --- |
+| `uds.py` | CLI <-> daemon | length-framed JSON over a Unix socket |
+| `http_sse.py` | HTTP surface | commands as POST, events as SSE |
+
+SSE rather than WebSocket: commands are infrequent and events are the volume,
+and SSE's `Last-Event-ID` maps **exactly** onto the session log's `seq`. The
+resumability already present on disk becomes the resumability of the wire with
+no extra machinery. WebSocket stays available if a future frontend needs
+bidirectional low latency.
+
+### 14.10 Events added to the §3.5 catalogue
+
+```
+input.queued     input.consumed    input.dropped
+presence.joined  presence.left
+daemon.started   daemon.stopping   daemon.session_scheduled  daemon.session_queued
+```
+
+The §3.5 rule is unchanged and now load-bearing across processes: **every state
+change a UI could draw is an event; no UI polls the facade.** The queries in
+§14.4 exist only so a late-joining view can establish a baseline before
+subscribing.
+
+### 14.11 UI encapsulation and customizability
+
+**Encapsulation is enforced, not requested.** `tests/test_layering.py` already
+walks the AST to assert `nexus/model/**` never imports `nexus.core` and above.
+Extend that same machinery: anything under `nexus/ui/**` may import only
+`nexus.host`, `nexus.view`, `nexus.events`, and the standard library. An import
+of `nexus.runtime`, `nexus.core`, `nexus.tools`, `nexus.session`, or
+`nexus.model` from a UI fails CI. Surfaces additionally ship as extras
+(`nexus[cli]`, `nexus[web]`) so the dependency cannot run backwards either.
+
+**Customizability is declarative**, mirroring §0's rule for tools:
+
+| Mechanism | What it customizes |
+| --- | --- |
+| `[ui]` in `nexus.toml` | theme colours, compact vs. verbose tool rendering, which event types render, keybinding map |
+| `.nexus/commands/*.md` | slash commands as data — same frontmatter shape as skills |
+| renderer registry | a per-tool-name or per-event-type renderer, registered **above** the facade |
+
+A bad renderer breaks a pane, never a turn. There is deliberately no UI plugin
+API that receives a `Runtime`, a manager, or a tool.
+
+**The CLI is line-mode**, not a full-screen application: prompt_toolkit owns the
+input line, `patch_stdout()` keeps streaming output from scrambling it, and
+terminal scrollback and copy-paste keep working. `prompt_async` also removes the
+`asyncio.to_thread(input)` workaround the current approver relies on. A
+full-screen TUI, if ever wanted, is a separate surface over the same facade.
+
+Basic elements, identical on every surface because they render one view model:
+session switcher with state and unread marker; transcript with streaming text,
+collapsible thinking, and tool calls showing name, argument preview, status, and
+expandable result; approval prompt with the four `Decision` values; input with
+history, multi-line, and cancel; status bar with model, usage, turn state, and
+viewer count; slash commands `/new /sessions /model /tools /cancel /fork
+/export`.
+
+### 14.12 Security
+
+The daemon exposes an authenticated local endpoint that can run `Bash` on the
+host. This is a permanent property of the design, not a Phase 8 to-do:
+
+- bind `127.0.0.1` only; the Unix socket is `0600`;
+- a token generated at daemon start, required by the HTTP transport, never
+  logged;
+- `Origin` checked on every HTTP request;
+- credentials never traverse the facade in either direction;
+- `deny` rules (§5.3) remain absolute and are evaluated daemon-side, never
+  client-side.
+
+The web *frontend* is deferred; the transport and protocol are not, so these
+constraints are built in Phase 8c rather than retrofitted.
+
+### 14.13 Revised phasing
+
+**Phase 3.5 — Session surface (~3 days). Runs before Phase 4.**
+
+Core only, no UI. It changes `session/`, which Phases 4-7 all build on, so
+doing it later means touching them twice.
+
+Build: `Session.start_turn()` / `Session.subscribe(from_seq)` with `send()`
+retained as a wrapper; wire `core/bus.py` to sessions so a turn survives with
+zero subscribers; the input queue (`enqueue`, `input.*` events); presence
+counting and derived attendance; **session-scope `JobRegistry`**; the shared
+mutable state audit from §14.5.
+
+Exit: a turn started with no subscriber runs to completion and is fully
+recoverable by a late subscriber from `seq=0`; two sessions run concurrent
+turns with no shell-job cross-talk; a subscriber disconnecting mid-turn applies
+the unattended policy instead of hanging.
+
+**Phase 8 replaces §10's Phase 8 entirely.**
+
+| Phase | Build | Days |
+| --- | --- | --- |
+| **8a** | `view/` reducer + golden-log tests; `host/facade.py`, `host/protocol.py`, `host/supervisor.py`, `host/presence.py`; the UI layering test; `nexus replay` | ~4 |
+| **8b** | `host/daemon.py` + `transports/uds.py`; auto-start, handshake, stale-socket cleanup, idle shutdown; `nexus daemon status\|stop\|logs`; prompt_toolkit CLI over it; retire `ui/native.py` | ~5 |
+| **8c** | `transports/http_sse.py` + token auth + Origin checks; `nexus doctor`, `nexus sessions`, `nexus ext`; README / `ARCHITECTURE.md` / `EXTENDING.md` / `SOUL.md` rewrite | ~4 |
+
+~13 days against the 5 originally budgeted for Phase 8, plus Phase 3.5's 3.
+**Revised total: ~54 working days.** No web frontend is included; when one is
+built it is additive and touches nothing below `ui/`.
+
+### 14.14 Risks added to §11
+
+| Risk | Why it bites | Mitigation |
+| --- | --- | --- |
+| **The daemon becomes a single point of failure for scripting** | With no in-process fallback, a stale socket or a crashed daemon breaks `nexus run` in CI, where today nothing can. | Auto-start with bounded readiness wait; stale-socket reclaim; version handshake that fails loudly; an exit criterion that a clean machine with no daemon behaves exactly as today. |
+| **Concurrent sessions expose shared mutable state** | Managers written when one session could be live are now reached from several at once — `JobRegistry` is already wrong (§14.5). | Session-scope every registry; a two-session race suite per shared manager as a Phase 3.5 exit gate. |
+| **Surfaces drift apart** | Two renderers independently interpreting 40 event types diverge quietly, and bugs get fixed once. | One pure `view/` reducer that both import; golden view-model snapshots from recorded logs; the AST layering test making the boundary a CI failure rather than a convention. |
+
+The §11 core budget is amended: **the 2,500-line cap covers `core/` + `model/`
++ `tools/spec.py` only.** `host/`, `view/`, and `ui/` are explicitly outside it
+and get their own budget of 2,000 lines, reviewed the same way.
+
+### 14.15 Criteria added to §12
+
+11. Two views of one live session — a terminal and an HTTP client — render
+    identical state, and either can approve a permission request.
+12. A turn started from a view that then disconnects runs to completion, and a
+    view attaching afterwards reconstructs the full turn from the session log.
+13. No module under `nexus/ui/**` imports anything outside
+    `{nexus.host, nexus.view, nexus.events, stdlib}`, proven by a test.
+
+### 14.16 Explicitly deferred
+
+**A Jupyter/IPython kernel as a default tool** — a persistent execution
+namespace the model can hold state in, with tools callable from inside it
+("code mode"). Discussed and deliberately parked until the harness in §§0-13
+plus this amendment is working. It touches `tools/`, `context/` (a part
+rendering the live namespace), and the permission engine (arbitrary Python
+bypasses `write_roots`), so it wants a stable core underneath it. Revisit after
+Phase 8c.
