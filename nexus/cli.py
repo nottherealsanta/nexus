@@ -10,6 +10,7 @@ import sys
 
 from .agent import Agent
 from .config import Config
+from .events import Event
 
 DEFAULT_CONFIG = '''# Reloaded at the start of every turn. Unknown settings are errors.
 # Omit model to use your Codex default.
@@ -117,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
         return 130
     except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as exc:
         if getattr(args, "json", False):
-            print(json.dumps({"type": "error", "data": {"message": str(exc)}}), flush=True)
+            print(json.dumps(Event("error", {"message": str(exc)}).to_dict(), ensure_ascii=False), flush=True)
         else:
             print(f"Error: {exc}", file=sys.stderr)
         return 1

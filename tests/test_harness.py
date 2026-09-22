@@ -1,6 +1,7 @@
 import asyncio
 from contextlib import aclosing
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -64,8 +65,18 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        # Isolate Config.load from the developer's real ~/.nexus.
+        self._previous_home = os.environ.get("HOME")
+        os.environ["HOME"] = self.temp.name
+        self.addCleanup(self._restore_home)
         self.provider = FakeProvider()
         self.agent = Agent(self.root, provider=self.provider)
+
+    def _restore_home(self):
+        if self._previous_home is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = self._previous_home
 
     async def test_persistence_and_hot_reload(self):
         self.assertEqual(await self.agent.run("first"), "answer")

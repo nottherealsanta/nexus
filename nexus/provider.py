@@ -1,4 +1,10 @@
-"""Codex owns the model/tool loop; this adapter owns its process lifetime."""
+"""Legacy Codex CLI transport used by the current CLI path.
+
+On this route Codex owns the model/tool loop; this module owns the subprocess
+lifetime and event framing. The provider-neutral contract lives in
+:mod:`nexus.model.provider`; :mod:`nexus.model.providers.legacy_codex_cli`
+adapts this transport to it.
+"""
 import asyncio
 from collections import deque
 from collections.abc import AsyncIterator
@@ -9,11 +15,10 @@ import signal
 from typing import Protocol
 
 from .config import Config
+from .errors import ProviderError
 from .events import Event
 
-
-class ProviderError(RuntimeError):
-    pass
+__all__ = ["Provider", "ProviderError", "CodexProvider"]
 
 
 class Provider(Protocol):

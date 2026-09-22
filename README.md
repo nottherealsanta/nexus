@@ -1,7 +1,8 @@
 # Nexus
 
-A small, UI-independent Python agent harness. Zero Python runtime dependencies.
-Python 3.11+ on macOS or Linux, with an installed and authenticated Codex CLI.
+A small, UI-independent Python agent harness. Runtime dependencies are `httpx`
+and `msgspec`. Python 3.11+ on macOS or Linux, with an installed and
+authenticated Codex CLI.
 
 The harness loop is **load → build context → stream provider events → save**.
 Codex performs the model/tool loop, including workspace inspection, file editing,
@@ -9,7 +10,8 @@ and command execution. Nexus provides the application boundary around it.
 
 ## Run it
 
-From this checkout, no installation is required:
+From this checkout, install the runtime dependencies with `pip install -e .`,
+then run:
 
 ```sh
 codex login
@@ -157,15 +159,22 @@ fields with validation when a concrete feature needs them. No speculative plugin
 loader, registry, framework hooks, or skill/MCP implementation is included.
 
 Files have one purpose: `agent.py` orchestrates, `context.py` selects context,
-`config.py` validates settings, `store.py` persists sessions, `provider.py` adapts
+`config/` validates settings, `store.py` persists sessions, `provider.py` adapts
 Codex, and `cli.py` renders the terminal interface. `Event` and `Provider` are the
 small public contracts to preserve while extending the system.
 
 ## Development
 
+Run the full offline suite with pytest:
+
 ```sh
-python3 -m unittest discover -s tests -v
+pip install -e '.[dev]'
+pytest
 ```
+
+`python3 -m unittest discover -s tests -v` is retained only as a legacy
+compatibility check; it runs the original `unittest` tests and does not exercise
+the pytest-style Phase 0 suite.
 
 Tests use temporary workspaces and an executable fake Codex to exercise actual
 pipes, stderr backpressure, lifecycle events, failure, timeout, cancellation,

@@ -12,10 +12,9 @@ import re
 import tempfile
 
 from .context import Exchange
+from .errors import SessionBusy
 
-
-class SessionBusy(RuntimeError):
-    pass
+__all__ = ["SessionStore", "SessionBusy"]
 
 
 class SessionStore:

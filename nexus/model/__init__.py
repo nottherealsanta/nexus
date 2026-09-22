@@ -1,0 +1,66 @@
+"""Model layer: provider-neutral contracts shared by loop, managers, and adapters."""
+from .capabilities import Capabilities, DegradationPolicy
+from .message import (
+    ContentBlock,
+    Document,
+    Image,
+    Message,
+    MessageMeta,
+    Text,
+    Thinking,
+    ToolResult,
+    ToolUse,
+)
+from .provider import Provider, ProviderError
+from .request import ModelRequest, SamplingParams, ToolSchema
+from .stream import (
+    MessageStart,
+    MessageStop,
+    Raw,
+    StopReason,
+    StreamEvent,
+    TextDelta,
+    ThinkingDelta,
+    ThinkingEnd,
+    ToolCallAccumulator,
+    ToolCallDelta,
+    ToolCallEnd,
+    ToolCallStart,
+    Usage,
+)
+from .tokenizer import DEFAULT_TOKENIZER, HeuristicTokenizer, Tokenizer
+
+__all__ = [
+    "Capabilities",
+    "DegradationPolicy",
+    "ContentBlock",
+    "Document",
+    "Image",
+    "Message",
+    "MessageMeta",
+    "Text",
+    "Thinking",
+    "ToolResult",
+    "ToolUse",
+    "Provider",
+    "ProviderError",
+    "ModelRequest",
+    "SamplingParams",
+    "ToolSchema",
+    "MessageStart",
+    "MessageStop",
+    "Raw",
+    "StopReason",
+    "StreamEvent",
+    "TextDelta",
+    "ThinkingDelta",
+    "ThinkingEnd",
+    "ToolCallAccumulator",
+    "ToolCallDelta",
+    "ToolCallEnd",
+    "ToolCallStart",
+    "Usage",
+    "DEFAULT_TOKENIZER",
+    "HeuristicTokenizer",
+    "Tokenizer",
+]

@@ -1,0 +1,394 @@
+from pathlib import Path
+
+from nexus.config import Config
+from nexus.config.layers import (
+    build_v2,
+    deep_merge,
+    detect_version,
+    env_overlay_v2,
+    load_effective,
+    normalize_v1_to_v2,
+)
+from nexus.errors import ConfigError
+
+
+def _home(tmp_path: Path) -> Path:
+    home = tmp_path / "home"
+    home.mkdir()
+    return home
+
+
+def test_defaults_when_no_files(tmp_path):
+    config = Config.load(tmp_path, home=_home(tmp_path), environ={})
+    assert config.version == 1
+    assert config.executable == "codex"
+    assert config.sandbox == "workspace-write"
+    assert config.context_chars == 64000
+    assert config.v2 is None
+
+
+def test_flat_v1_loads_and_unknown_key_rejected(tmp_path):
+    home = _home(tmp_path)
+    config_path = tmp_path / "nexus.toml"
+    config_path.write_text('executable = "mycodex"\nmodel = "custom"\n')
+    config = Config.load(tmp_path, home=home, environ={})
+    assert config.version == 1
+    assert config.executable == "mycodex"
+    assert config.model == "custom"
+
+    config_path.write_text("typo = 1\n")
+    try:
+        Config.load(tmp_path, home=home, environ={})
+        assert False
+    except ConfigError as exc:
+        assert "Unknown" in str(exc)
+
+
+def test_v1_file_is_not_rewritten(tmp_path):
+    home = _home(tmp_path)
+    config_path = tmp_path / "nexus.toml"
+    original = 'executable = "mycodex"\n'
+    config_path.write_text(original)
+    Config.load(tmp_path, home=home, environ={})
+    assert config_path.read_text() == original
+
+
+def test_precedence_user_then_workspace_then_env(tmp_path):
+    home = _home(tmp_path)
+    (home / ".nexus").mkdir()
+    (home / ".nexus" / "config.toml").write_text(
+        'executable = "user"\ncontext_chars = 2048\n'
+    )
+    (tmp_path / "nexus.toml").write_text('executable = "workspace"\n')
+    config = Config.load(tmp_path, home=home, environ={})
+    assert config.executable == "workspace"
+    assert config.context_chars == 2048
+
+    config = Config.load(
+        tmp_path,
+        home=home,
+        environ={"NEXUS_EXECUTABLE": "env", "NEXUS_CONTEXT_CHARS": "4096"},
+    )
+    assert config.executable == "env"
+    assert config.context_chars == 4096
+
+
+def test_flags_and_session_have_highest_precedence(tmp_path):
+    home = _home(tmp_path)
+    config = Config.load(
+        tmp_path,
+        home=home,
+        environ={"NEXUS_CONTEXT_CHARS": "4096"},
+        flags={"context_chars": 8192},
+        session={"context_chars": 16384},
+    )
+    assert config.context_chars == 16384
+
+
+def test_v2_loads_sections_and_derives_legacy_facade(tmp_path):
+    home = _home(tmp_path)
+    (tmp_path / "nexus.toml").write_text(
+        """
+config_version = 2
+[agent]
+instructions_file = "GUIDE.md"
+memory_file = "NOTES.md"
+max_iterations = 12
+[model]
+default = "anthropic/claude-opus-5"
+[context]
+max_tokens = 100000
+[providers.codex]
+executable = "codex"
+timeout_seconds = 42
+"""
+    )
+    config = Config.load(tmp_path, home=home, environ={})
+    assert config.version == 2
+    assert config.v2 is not None
+    assert config.v2.agent.max_iterations == 12
+    assert config.v2.context.max_tokens == 100000
+    assert config.instructions_file == "GUIDE.md"
+    assert config.memory_file == "NOTES.md"
+    assert config.model == "anthropic/claude-opus-5"
+    assert config.timeout_seconds == 42
+    assert config.context_chars == 400000
+
+
+def test_v2_unknown_key_rejected(tmp_path):
+    home = _home(tmp_path)
+    (tmp_path / "nexus.toml").write_text("config_version = 2\n[agent]\nbogus = 1\n")
+    try:
+        Config.load(tmp_path, home=home, environ={})
+        assert False
+    except ConfigError as exc:
+        assert "Invalid v2" in str(exc)
+
+
+def test_mixed_v1_v2_in_one_document_rejected(tmp_path):
+    home = _home(tmp_path)
+    (tmp_path / "nexus.toml").write_text('config_version = 2\nexecutable = "codex"\n')
+    try:
+        Config.load(tmp_path, home=home, environ={})
+        assert False
+    except ConfigError as exc:
+        assert "Mixed" in str(exc)
+
+
+def test_explicit_v1_config_version_loads(tmp_path):
+    home = _home(tmp_path)
+    (tmp_path / "nexus.toml").write_text('config_version = 1\nexecutable = "mycodex"\n')
+    config = Config.load(tmp_path, home=home, environ={})
+    assert config.version == 1
+    assert config.executable == "mycodex"
+    assert config.v2 is None
+
+
+def test_v1_workspace_with_v2_home_is_bridged(tmp_path):
+    home = _home(tmp_path)
+    (home / ".nexus").mkdir()
+    (home / ".nexus" / "config.toml").write_text(
+        'config_version = 2\n[model]\ndefault = "home-model"\n'
+    )
+    (tmp_path / "nexus.toml").write_text(
+        'executable = "mycodex"\ncontext_chars = 32000\n'
+    )
+    config = Config.load(tmp_path, home=home, environ={})
+    assert config.version == 2
+    assert config.model == "home-model"  # v2 home supplies the default
+    assert config.executable == "mycodex"  # v1 workspace still wins its keys
+    assert config.context_chars == 32000
+    assert config.v2 is not None
+
+
+def test_v2_home_sandbox_survives_v1_workspace(tmp_path):
+    home = _home(tmp_path)
+    (home / ".nexus").mkdir()
+    (home / ".nexus" / "config.toml").write_text(
+        'config_version = 2\n[agent]\nsandbox = "read-only"\n'
+    )
+    (tmp_path / "nexus.toml").write_text('executable = "mycodex"\n')
+    config = Config.load(tmp_path, home=home, environ={})
+    assert config.sandbox == "read-only"
+    assert config.executable == "mycodex"
+
+
+def test_v1_home_with_v2_workspace_is_bridged(tmp_path):
+    home = _home(tmp_path)
+    (home / ".nexus").mkdir()
+    (home / ".nexus" / "config.toml").write_text('model = "home-model"\n')
+    (tmp_path / "nexus.toml").write_text(
+        "config_version = 2\n[context]\nmax_tokens = 1000\n"
+    )
+    config = Config.load(tmp_path, home=home, environ={})
+    assert config.version == 2
+    assert config.model == "home-model"
+    assert config.context_chars == 4000
+
+
+def test_v1_workspace_unknown_key_still_rejected_with_v2_home(tmp_path):
+    home = _home(tmp_path)
+    (home / ".nexus").mkdir()
+    (home / ".nexus" / "config.toml").write_text("config_version = 2\n")
+    (tmp_path / "nexus.toml").write_text("typo = 1\n")
+    try:
+        Config.load(tmp_path, home=home, environ={})
+        assert False
+    except ConfigError as exc:
+        assert "Unknown" in str(exc)
+
+
+def test_config_hashable_and_legacy_equality():
+    first, second = Config(), Config()
+    assert first == second
+    assert hash(first) == hash(second)
+    assert {first: "value"}[second] == "value"
+
+    bridged = Config(executable="codex", version=2, v2=build_v2({"config_version": 2}))
+    assert bridged == Config(executable="codex")
+    assert hash(bridged) == hash(Config(executable="codex"))
+
+
+def test_v2_field_excluded_from_repr_but_not_equality():
+    secret = "sk-ant-SUPER-SECRET-1234567890"
+    v2 = build_v2(
+        {"config_version": 2, "providers": {"anthropic": {"api_key": secret}}}
+    )
+    config = Config(executable="codex", version=2, v2=v2)
+    assert config.v2.providers["anthropic"].api_key == secret
+    assert secret not in repr(config)
+    assert "v2=" not in repr(config)
+    # Excluding v2 from repr must not disturb equality/hash compatibility.
+    assert config == Config(executable="codex")
+    assert hash(config) == hash(Config(executable="codex"))
+
+
+def test_env_coercion_is_schema_aware_for_legacy(tmp_path):
+    home = _home(tmp_path)
+    config = Config.load(
+        tmp_path,
+        home=home,
+        environ={
+            "NEXUS_MODEL": "123",
+            "NEXUS_TIMEOUT_SECONDS": "2.5",
+            "NEXUS_CONTEXT_CHARS": "2048",
+        },
+    )
+    assert config.model == "123"  # string field is not coerced to a number
+    assert config.timeout_seconds == 2.5
+    assert config.context_chars == 2048
+
+
+def test_v2_env_coercion_preserves_credentials_and_model(tmp_path):
+    home = _home(tmp_path)
+    (tmp_path / "nexus.toml").write_text("config_version = 2\n")
+    config = Config.load(
+        tmp_path,
+        home=home,
+        environ={
+            "NEXUS_MODEL__DEFAULT": "123",
+            "NEXUS_PROVIDERS__ANTHROPIC__API_KEY": "123456789",
+            "NEXUS_CONTEXT__MAX_TOKENS": "999",
+            "NEXUS_EXT__ENABLED": "false",
+        },
+    )
+    assert config.v2.model.default == "123"
+    assert config.v2.providers["anthropic"].api_key == "123456789"
+    assert config.v2.context.max_tokens == 999
+    assert config.v2.ext.enabled is False
+
+
+def test_normalize_v1_to_v2_fragment():
+    assert normalize_v1_to_v2(
+        {
+            "executable": "codex",
+            "model": "m",
+            "sandbox": "read-only",
+            "context_chars": 8000,
+        }
+    ) == {
+        "providers": {"codex": {"executable": "codex"}},
+        "model": {"default": "m"},
+        "agent": {"sandbox": "read-only"},
+        "context": {"max_tokens": 2000},
+    }
+
+
+def test_sections_require_explicit_v2(tmp_path):
+    home = _home(tmp_path)
+    (tmp_path / "nexus.toml").write_text("[agent]\nmax_iterations = 5\n")
+    try:
+        Config.load(tmp_path, home=home, environ={})
+        assert False
+    except ConfigError as exc:
+        assert "config_version" in str(exc)
+
+
+def test_permission_lists_append_and_dedupe_across_layers(tmp_path):
+    home = _home(tmp_path)
+    (home / ".nexus").mkdir()
+    (home / ".nexus" / "config.toml").write_text(
+        'config_version = 2\n[permissions]\nallow = ["Read(**)"]\n'
+    )
+    (tmp_path / "nexus.toml").write_text(
+        'config_version = 2\n[permissions]\nallow = ["Glob(**)", "Read(**)"]\n'
+    )
+    config = Config.load(tmp_path, home=home, environ={})
+    assert config.v2.permissions.allow == ["Read(**)", "Glob(**)"]
+
+
+def test_v2_env_overlay(tmp_path):
+    home = _home(tmp_path)
+    (tmp_path / "nexus.toml").write_text("config_version = 2\n")
+    config = Config.load(
+        tmp_path,
+        home=home,
+        environ={
+            "NEXUS_CONTEXT__MAX_TOKENS": "12345",
+            "NEXUS_AGENT__MAX_ITERATIONS": "7",
+            "UNRELATED": "x",
+        },
+    )
+    assert config.v2.context.max_tokens == 12345
+    assert config.v2.agent.max_iterations == 7
+
+
+def test_deep_merge_tables_append_scalars_replace():
+    base = {"context": {"max_tokens": 1, "limits": {"memory": 2}}, "model": "a"}
+    overlay = {"context": {"limits": {"environment": 3}}, "model": "b"}
+    assert deep_merge(base, overlay) == {
+        "context": {"max_tokens": 1, "limits": {"memory": 2, "environment": 3}},
+        "model": "b",
+    }
+
+
+def test_env_overlay_v2_nesting():
+    overlay = env_overlay_v2(
+        {"NEXUS_CONTEXT__MAX_TOKENS": "123", "NEXUS_AGENT__MAX_ITERATIONS": "5", "X": "y"}
+    )
+    assert overlay == {
+        "context": {"max_tokens": 123},
+        "agent": {"max_iterations": 5},
+    }
+
+
+def test_detect_version_variants():
+    assert detect_version({}, source="x") == 1
+    assert detect_version({"model": "m"}, source="x") == 1
+    assert detect_version({"config_version": 2}, source="x") == 2
+    assert detect_version({"config_version": 1}, source="x") == 1
+    try:
+        detect_version({"config_version": 3}, source="x")
+        assert False
+    except ConfigError:
+        pass
+
+
+def test_build_v2_populates_defaults():
+    config = build_v2({"config_version": 2})
+    assert config.context.max_tokens == 180000
+    assert config.permissions.write_roots == ["./"]
+    assert config.telemetry.log_level == "info"
+
+
+def test_read_returns_file_within_workspace(tmp_path):
+    (tmp_path / "SOUL.md").write_text("rules")
+    assert Config().read(tmp_path, "SOUL.md") == "rules"
+    assert Config().read(tmp_path, "MISSING.md") == ""
+
+
+def test_read_rejects_parent_escape(tmp_path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (tmp_path / "outside.md").write_text("x")
+    try:
+        Config().read(workspace, "../outside.md")
+        assert False
+    except ConfigError as exc:
+        assert "inside workspace" in str(exc)
+
+
+def test_read_rejects_symlink_escape(tmp_path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    secret = outside / "secret.md"
+    secret.write_text("secret")
+    link = workspace / "link.md"
+    try:
+        link.symlink_to(secret)
+    except OSError:
+        return
+    try:
+        Config().read(workspace, "link.md")
+        assert False
+    except ConfigError as exc:
+        assert "inside workspace" in str(exc)
+
+
+def test_load_effective_does_not_touch_real_home(tmp_path):
+    home = _home(tmp_path)
+    effective = load_effective(tmp_path, home, {})
+    assert effective.version == 1
+    assert effective.source is None

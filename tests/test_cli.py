@@ -26,11 +26,30 @@ class CliTests(unittest.TestCase):
             fake.chmod(0o755)
             (root / 'nexus.toml').write_text(f'executable = {json.dumps(str(fake))}\n')
             command = [sys.executable, '-m', 'nexus', '--workspace', str(root), 'run', '-', '--json']
-            result = subprocess.run(command, input='hello', capture_output=True, text=True, timeout=10)
+            # Point HOME inside the temp dir so the child never reads the
+            # developer's real ~/.nexus/config.toml.
+            env = {**os.environ, 'HOME': directory}
+            result = subprocess.run(command, input='hello', capture_output=True, text=True, timeout=10, env=env)
             self.assertEqual(result.returncode, 0, result.stderr)
             events = [json.loads(line) for line in result.stdout.splitlines()]
-            self.assertEqual(events[-1], {'type': 'completed', 'data': {'session': 'default', 'text': 'ok'}})
+            final = events[-1]
+            # The event envelope gained additive fields (plan section 3.5);
+            # type/data and event order are unchanged.
+            self.assertEqual(final['type'], 'completed')
+            self.assertEqual(final['data'], {'session': 'default', 'text': 'ok'})
+            self.assertEqual(events[0]['type'], 'started')
+            self.assertEqual(final['seq'], 0)
+            self.assertIsNone(final['session'])
+            self.assertIsNone(final['turn'])
+            self.assertIsInstance(final['ts'], float)
+            self.assertTrue(final['id'])
             (root / 'nexus.toml').write_text('unknown = 1')
-            result = subprocess.run(command, input='hello', capture_output=True, text=True, timeout=10)
+            result = subprocess.run(command, input='hello', capture_output=True, text=True, timeout=10, env=env)
             self.assertEqual(result.returncode, 1)
-            self.assertEqual(json.loads(result.stdout)['type'], 'error')
+            error = json.loads(result.stdout)
+            self.assertEqual(error['type'], 'error')
+            self.assertIn('Unknown', error['data']['message'])
+            # CLI JSON errors now use the widened Event envelope.
+            self.assertEqual(error['seq'], 0)
+            self.assertTrue(error['id'])
+            self.assertIsInstance(error['ts'], float)
