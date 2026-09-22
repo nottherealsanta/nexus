@@ -47,6 +47,17 @@ class ProviderSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     executable: str | None = None
     timeout_seconds: float | None = None
 
+    def __repr__(self) -> str:
+        # Never render a literal credential (or its reference) through repr, so
+        # ``repr(config.v2)`` / tracebacks / logs cannot leak it.
+        api_key = "***" if self.api_key else None
+        return (
+            f"ProviderSection(kind={self.kind!r}, api_key={api_key!r}, "
+            f"base_url={self.base_url!r}, api={self.api!r}, "
+            f"executable={self.executable!r}, "
+            f"timeout_seconds={self.timeout_seconds!r})"
+        )
+
 
 class ContextLimits(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     memory: int = 8000
@@ -122,18 +133,18 @@ class ConfigV2(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
 
 __all__ = [
-    "ConfigV2",
-    "SandboxMode",
     "AgentSection",
-    "ModelSection",
-    "ModelParams",
-    "ProviderSection",
-    "ContextSection",
+    "ConfigV2",
     "ContextLimits",
-    "PermissionsSection",
-    "ToolsSection",
+    "ContextSection",
     "ExtSection",
     "MCPSection",
+    "ModelParams",
+    "ModelSection",
+    "PermissionsSection",
+    "ProviderSection",
+    "SandboxMode",
     "SessionSection",
     "TelemetrySection",
+    "ToolsSection",
 ]

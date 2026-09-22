@@ -28,3 +28,10 @@ include = ["nexus*"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+# Offline by default: plain ``pytest`` deselects credential-gated ``live`` tests.
+# An explicit command-line ``-m live`` overrides this (last ``-m`` wins), e.g.
+# ``ANTHROPIC_API_KEY=... pytest -m live tests/test_anthropic_live.py``.
+addopts = "-m 'not live'"
+markers = [
+    "live: tests that hit real providers and require credentials; excluded from the offline suite",
+]

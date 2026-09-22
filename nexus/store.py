@@ -2,19 +2,18 @@
 
 Locks are automatically released on process death. macOS and Linux supported.
 """
-from contextlib import contextmanager
-from dataclasses import asdict
-import fcntl
 import json
 import os
-from pathlib import Path
 import re
 import tempfile
+from contextlib import contextmanager
+from dataclasses import asdict
+from pathlib import Path
 
 from .context import Exchange
 from .errors import SessionBusy
 
-__all__ = ["SessionStore", "SessionBusy"]
+__all__ = ["SessionBusy", "SessionStore"]
 
 
 class SessionStore:
@@ -28,6 +27,10 @@ class SessionStore:
 
     @contextmanager
     def lock(self, session: str):
+        # Imported lazily so ``import nexus`` does not pull the platform locking
+        # module on the legacy Agent path; locking is only needed at use time.
+        import fcntl
+
         path = self._path(session)
         self.directory.mkdir(parents=True, exist_ok=True)
         with path.with_suffix(".lock").open("a") as handle:
