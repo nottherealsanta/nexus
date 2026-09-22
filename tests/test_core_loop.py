@@ -387,6 +387,232 @@ async def test_malformed_budget_exhaustion_fails_the_turn():
 
 
 # ---------------------------------------------------------------------------
+# Protocol-level tool dispatch (fakes only; no concrete manager imported)
+# ---------------------------------------------------------------------------
+
+
+class _FakeEntry:
+    def __init__(self, call):
+        self.call = call
+        self.spec = object()
+        self.key = call.name
+        self.error = None
+        self.code = None
+        self.decision = None
+
+
+class _FakePrepared:
+    def __init__(self, calls):
+        self.entries = [_FakeEntry(call) for call in calls]
+        self.decisions = {}
+
+    def calls(self):
+        return [entry.call for entry in self.entries]
+
+    def spec_map(self):
+        return {entry.call.name: entry.spec for entry in self.entries}
+
+    def apply_plan(self, plan):
+        return self
+
+    def with_decisions(self, decisions):
+        self.decisions = dict(decisions)
+        return self
+
+
+class _FakeEvaluation:
+    def __init__(self, call, outcome, code, reason):
+        self.call = call
+        self.spec = object()
+        self.key = call.name
+        self.outcome = outcome
+        self.decision = None
+        self.code = code
+        self.reason = reason
+
+
+class _FakePlan:
+    def __init__(self, evaluations):
+        self.evaluations = evaluations
+
+    def asks(self):
+        return [e for e in self.evaluations if e.outcome == "ask"]
+
+    def failures(self):
+        return [e for e in self.evaluations if e.outcome == "fail_turn"]
+
+
+class _FakeRequest:
+    def __init__(self, call):
+        self.id = f"req-{call.id}"
+        self.call = call
+
+    def to_dict(self):
+        return {"id": self.id, "call_id": self.call.id, "tool": self.call.name}
+
+
+class _FakeGate:
+    def __init__(self, outcomes):
+        self._outcomes = list(outcomes)
+        self.opened = []
+        self.cancelled = 0
+
+    def plan(self, prepared):
+        evaluations = []
+        for index, call in enumerate(prepared.calls()):
+            outcome, code, reason = self._outcomes[index]
+            evaluations.append(_FakeEvaluation(call, outcome, code, reason))
+        return _FakePlan(evaluations)
+
+    def request_for(self, evaluation):
+        return _FakeRequest(evaluation.call)
+
+    def open(self, request):
+        self.opened.append(request.id)
+
+    async def await_decision(self, request, /, *, cancel):
+        return "allow_once"
+
+    def resolution(self, request_id):
+        return {"id": request_id, "decision": "allow_once"}
+
+    def resolve(self, request_id, decision):
+        return True
+
+    def cancel_pending(self):
+        self.cancelled += 1
+
+
+class _FakeDispatcher:
+    def __init__(self):
+        self.prepare_calls = 0
+        self.dispatch_calls = 0
+        self.emitted: list[str] = []
+
+    def prepare(self, tool_uses):
+        self.prepare_calls += 1
+        return _FakePrepared(list(tool_uses))
+
+    async def dispatch(self, prepared, /, *, emit, cancel, parallel_allowed=True):
+        self.dispatch_calls += 1
+        results = []
+        for entry in prepared.entries:
+            await emit(
+                "tool.started", {"call_id": entry.call.id, "tool": entry.call.name}
+            )
+            self.emitted.append("tool.started")
+            await emit(
+                "tool.completed", {"call_id": entry.call.id, "tool": entry.call.name}
+            )
+            self.emitted.append("tool.completed")
+            results.append(
+                ToolResult(
+                    tool_use_id=entry.call.id,
+                    content=[Text(text=f"ran {entry.call.name}")],
+                )
+            )
+        return tuple(results)
+
+
+async def test_protocol_tools_dispatch_and_persist_in_order():
+    provider = ScriptedProvider(
+        tool_response(("a", "Read", {"path": "a"}), ("b", "Read", {"path": "b"})),
+        text_response("done"),
+    )
+    session = FakeSession()
+    sink = FakeSink()
+    lease = FakeLease("t")
+    dispatcher = _FakeDispatcher()
+    gate = _FakeGate([("allow", "allow", "ok"), ("allow", "allow", "ok")])
+
+    outcome = await run_turn(
+        session=session,
+        user_input="go",
+        assemble=FakeAssembler(),
+        provider_for=make_resolver(provider),
+        emit=sink,
+        tools=dispatcher,
+        gate=gate,
+        lease=lease,
+    )
+
+    assert outcome.ok
+    assert dispatcher.dispatch_calls == 1
+    assert [m.role for m in session.appended] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+    ]
+    results = session.appended[2].content
+    assert [r.tool_use_id for r in results] == ["a", "b"]
+    assert [r.content[0].text for r in results] == ["ran Read", "ran Read"]
+    # Assistant tool_use is durable before the result message.
+    assert session.records[1].seq < session.records[2].seq
+    assert lease.released
+
+
+async def test_protocol_fail_turn_ends_before_dispatch():
+    provider = ScriptedProvider(
+        tool_response(("a", "Read", {"path": "a"})), text_response("unreached")
+    )
+    session = FakeSession()
+    sink = FakeSink()
+    lease = FakeLease("t")
+    dispatcher = _FakeDispatcher()
+    gate = _FakeGate([("fail_turn", "unattended_fail_turn", "no approver")])
+
+    outcome = await run_turn(
+        session=session,
+        user_input="go",
+        assemble=FakeAssembler(),
+        provider_for=make_resolver(provider),
+        emit=sink,
+        tools=dispatcher,
+        gate=gate,
+        lease=lease,
+    )
+
+    assert outcome.phase == "failed"
+    assert dispatcher.dispatch_calls == 0
+    assert "tool.started" not in dispatcher.emitted
+    _assert_single_terminal(sink, "turn.failed")
+    assert lease.released
+
+
+async def test_protocol_provider_without_tools_never_dispatches():
+    provider = ScriptedProvider(
+        tool_response(("a", "Read", {"path": "a"})),
+        text_response("ok"),
+        capabilities=Capabilities(tools=False, streaming=True),
+    )
+    session = FakeSession()
+    sink = FakeSink()
+    lease = FakeLease("t")
+    dispatcher = _FakeDispatcher()
+    gate = _FakeGate([("allow", "allow", "ok")])
+
+    outcome = await run_turn(
+        session=session,
+        user_input="go",
+        assemble=FakeAssembler(),
+        provider_for=make_resolver(provider),
+        emit=sink,
+        tools=dispatcher,
+        gate=gate,
+        lease=lease,
+    )
+
+    assert outcome.ok
+    assert dispatcher.prepare_calls == 0
+    assert dispatcher.dispatch_calls == 0
+    assert provider.requests[0].tools == []
+    result = session.appended[2].content[0]
+    assert result.is_error is True
+    assert "does not support tool calls" in result.content[0].text
+
+
+# ---------------------------------------------------------------------------
 # Cancellation, failure, and limits
 # ---------------------------------------------------------------------------
 
@@ -684,6 +910,7 @@ def test_msgspec_is_the_only_third_party_import_in_loop():
         "contextlib",
         "inspect",
         "msgspec",
+        "re",
         "time",
         "typing",
         "__future__",

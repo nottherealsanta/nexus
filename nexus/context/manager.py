@@ -42,7 +42,7 @@ from ..config import Config
 from ..config.paths import resolve_within
 from ..core.turn import TurnLimits
 from ..errors import ConfigError
-from ..model.request import ModelRequest, SamplingParams
+from ..model.request import ModelRequest, SamplingParams, ToolSchema
 
 __all__ = ["DEFAULT_MAX_FILE_BYTES", "IDENTITY_PREAMBLE", "ContextManager"]
 
@@ -91,6 +91,10 @@ class ContextManager:
         #: Pre-rendered system text for a per-turn snapshot; ``None`` means render
         #: from the current config/files on each assemble.
         self._system = system
+        #: Frozen tool schemas for this turn. Populated by the runtime's per-turn
+        #: tool snapshot through :meth:`freeze_tools`; descriptions live only on
+        #: these schemas and are never interpolated into the system text.
+        self._tool_schemas: tuple[ToolSchema, ...] = ()
 
     # -- config ------------------------------------------------------------
 
@@ -109,13 +113,31 @@ class ContextManager:
         asks for a new snapshot.
         """
         config = self.effective_config()
-        return ContextManager(
+        snapshot = ContextManager(
             self.workspace,
             config=config,
             identity=self._identity,
             max_file_bytes=self.max_file_bytes,
             system=self._render_system(config),
         )
+        snapshot._tool_schemas = self._tool_schemas
+        return snapshot
+
+    def freeze_tools(self, schemas) -> None:
+        """Attach the frozen per-turn tool schemas to this snapshot.
+
+        Called once per turn by the runtime adapter after it resolves the tool
+        snapshot, so every assembly in the turn sends exactly the same schemas.
+        """
+        frozen = tuple(schemas)
+        for schema in frozen:
+            if not isinstance(schema, ToolSchema):
+                raise TypeError("freeze_tools expects ToolSchema instances")
+        self._tool_schemas = frozen
+
+    @property
+    def tool_schemas(self) -> tuple[ToolSchema, ...]:
+        return self._tool_schemas
 
     def turn_limits(self) -> TurnLimits:
         """Turn limits derived from this manager's effective config snapshot.
@@ -145,7 +167,7 @@ class ContextManager:
         return ModelRequest(
             messages=list(session.messages),
             system=self._system_text(config),
-            tools=[],
+            tools=list(self._tool_schemas),
             params=self._sampling(config),
             model=model,
             provider=provider,

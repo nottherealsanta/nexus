@@ -14,9 +14,10 @@ v2-configured home, and a v1 home still contributes to a v2 workspace.
 from __future__ import annotations
 
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import msgspec
 
@@ -289,6 +290,10 @@ def build_v2(values: Mapping[str, Any]) -> ConfigV2:
         return msgspec.convert(payload, ConfigV2, strict=True)
     except msgspec.ValidationError as exc:
         raise ConfigError(f"Invalid v2 configuration: {exc}") from exc
+    except ValueError as exc:
+        # Section ``__post_init__`` hooks raise plain ValueError for numeric or
+        # enumerated constraints msgspec's type check cannot express.
+        raise ConfigError(f"Invalid v2 configuration: {exc}") from exc
 
 
 def _read_docs(
@@ -357,11 +362,11 @@ def load_effective(
 
 
 __all__ = [
-    "Effective",
     "LEGACY_KEYS",
     "V2_SECTION_KEYS",
-    "builtin_defaults",
+    "Effective",
     "build_v2",
+    "builtin_defaults",
     "deep_merge",
     "detect_version",
     "env_overlay_v1",

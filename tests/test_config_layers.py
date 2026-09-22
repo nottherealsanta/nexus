@@ -392,3 +392,66 @@ def test_load_effective_does_not_touch_real_home(tmp_path):
     effective = load_effective(tmp_path, home, {})
     assert effective.version == 1
     assert effective.source is None
+
+
+def test_permissions_read_denyroots_default_and_parsing(tmp_path):
+    home = _home(tmp_path)
+    assert build_v2({"config_version": 2}).permissions.read_denyroots == []
+    (tmp_path / "nexus.toml").write_text(
+        """
+config_version = 2
+[permissions]
+read_denyroots = ["~/.ssh", "~/.nexus/credentials.json"]
+"""
+    )
+    config = Config.load(tmp_path, home=home, environ={})
+    assert config.v2.permissions.read_denyroots == [
+        "~/.ssh",
+        "~/.nexus/credentials.json",
+    ]
+
+
+def test_permissions_mode_and_unattended_validated(tmp_path):
+    home = _home(tmp_path)
+    for body in (
+        '[permissions]\nmode = "sometimes"\n',
+        '[permissions]\non_unattended = "maybe"\n',
+    ):
+        (tmp_path / "nexus.toml").write_text(f"config_version = 2\n{body}")
+        try:
+            Config.load(tmp_path, home=home, environ={})
+            assert False, body
+        except ConfigError:
+            pass
+
+
+def test_tool_numeric_fields_validated(tmp_path):
+    home = _home(tmp_path)
+    for body in (
+        "[tools]\nmax_parallel = 0\n",
+        "[tools]\nmax_parallel = -1\n",
+        "[tools]\nbash_timeout_s = 0\n",
+        "[tools]\nbash_timeout_s = -3\n",
+        "[tools]\nbash_timeout_s = nan\n",
+        "[tools]\nmax_result_tokens = 0\n",
+        "[tools]\nmax_result_tokens = -10\n",
+    ):
+        (tmp_path / "nexus.toml").write_text(f"config_version = 2\n{body}")
+        try:
+            Config.load(tmp_path, home=home, environ={})
+            assert False, body
+        except ConfigError:
+            pass
+
+
+def test_tool_section_defaults_unchanged_for_legacy(tmp_path):
+    home = _home(tmp_path)
+    config = Config.load(tmp_path, home=home, environ={})
+    assert config.version == 1
+    assert config.v2 is None
+    # A valid v2 document keeps the plan defaults.
+    (tmp_path / "nexus.toml").write_text("config_version = 2\n")
+    config = Config.load(tmp_path, home=home, environ={})
+    assert config.v2.tools.bash_timeout_s == 120
+    assert config.v2.tools.max_result_tokens == 25000
+    assert config.v2.tools.max_parallel == 8

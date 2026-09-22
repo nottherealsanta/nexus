@@ -1066,8 +1066,9 @@ attachments = 20000
 [permissions]
 mode = "ask"
 allow = ["Read(**)", "Glob(**)", "Grep(**)", "LS(**)"]
-deny  = ["Bash(rm -rf /*)", "Read(**/.env)", "Read(~/.ssh/**)"]
+deny  = ["Bash(rm -rf /*)", "Read(**/.env)"]
 write_roots = ["./"]
+read_denyroots = ["~/.ssh"]          # home paths belong here (roots expand '~')
 on_unattended = "deny"
 
 [tools]

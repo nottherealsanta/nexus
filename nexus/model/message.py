@@ -32,6 +32,15 @@ class Document(msgspec.Struct, tag="document"):
     title: str | None = None
 
 
+#: Harness-internal marker injected into the input of a **later** duplicate of a
+#: tool-call id after the loop has re-identified it. The tools layer turns a
+#: marked entry into a model-visible duplicate-id error, so rejecting the
+#: duplicate never depends solely on manager-level id detection. It rides along
+#: in persisted history and is harmless on the wire (it is not authoritative
+#: input); it is not part of any tool's declared schema.
+DUPLICATE_TOOL_CALL_KEY = "__nexus_duplicate_tool_call_id__"
+
+
 class ToolUse(msgspec.Struct, tag="tool_use"):
     id: str
     name: str
@@ -66,13 +75,14 @@ class Message(msgspec.Struct):
 
 
 __all__ = [
+    "DUPLICATE_TOOL_CALL_KEY",
+    "ContentBlock",
+    "Document",
+    "Image",
+    "Message",
+    "MessageMeta",
     "Text",
     "Thinking",
-    "Image",
-    "Document",
-    "ToolUse",
     "ToolResult",
-    "ContentBlock",
-    "MessageMeta",
-    "Message",
+    "ToolUse",
 ]

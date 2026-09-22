@@ -9,6 +9,7 @@ from nexus.config.schema import AgentSection, ConfigV2, ModelParams, ModelSectio
 from nexus.context import ContextManager, Exchange, build_context
 from nexus.errors import ConfigError
 from nexus.model.message import Message, Text, ToolUse
+from nexus.model.request import ToolSchema
 
 
 class FakeSession:
@@ -152,6 +153,36 @@ def test_history_is_complete_structured_and_user_appears_once(tmp_path):
 def test_no_tool_schemas_are_sent(tmp_path):
     manager = ContextManager(tmp_path, config=v2_config())
     assert manager.assemble(FakeSession(Message(role="user", content=[Text("hi")]))).tools == []
+
+
+def test_frozen_tool_schemas_reach_the_request_not_the_system(tmp_path):
+    schema = ToolSchema(
+        name="Read",
+        description="Read a file from disk",
+        input_schema={"type": "object", "properties": {"path": {"type": "string"}}},
+    )
+    manager = ContextManager(tmp_path, config=v2_config())
+    snapshot = manager.for_turn()
+    snapshot.freeze_tools([schema])
+
+    request = snapshot.assemble(FakeSession(Message(role="user", content=[Text("hi")])))
+
+    assert request.tools == [schema]
+    # Descriptions live on the schemas only, never interpolated into system text.
+    assert "Read a file from disk" not in (request.system or "")
+
+
+def test_for_turn_copies_existing_tool_schemas(tmp_path):
+    schema = ToolSchema(name="Glob", description="glob", input_schema={"type": "object"})
+    manager = ContextManager(tmp_path, config=v2_config())
+    manager.freeze_tools([schema])
+    assert manager.for_turn().assemble(FakeSession()).tools == [schema]
+
+
+def test_freeze_tools_rejects_non_schemas(tmp_path):
+    manager = ContextManager(tmp_path, config=v2_config())
+    with pytest.raises(TypeError):
+        manager.freeze_tools([object()])
 
 
 # ---------------------------------------------------------------------------

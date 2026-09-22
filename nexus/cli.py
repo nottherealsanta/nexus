@@ -1,12 +1,12 @@
 """A thin terminal adapter; applications can use Agent directly."""
 import argparse
 import asyncio
-from contextlib import aclosing
 import json
-from pathlib import Path
 import shutil
 import subprocess
 import sys
+from contextlib import aclosing
+from pathlib import Path
 
 from .agent import Agent
 from .config import Config
@@ -77,7 +77,7 @@ async def chat(agent: Agent, session: str) -> None:
             print(f"Error: {exc}", file=sys.stderr)
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Nexus: a small Codex-powered agent harness")
     parser.add_argument("--workspace", type=Path, default=Path.cwd())
     sub = parser.add_subparsers(dest="command", required=True)
@@ -89,6 +89,30 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--json", action="store_true", help="Stream JSONL events")
     repl = sub.add_parser("chat", help="Open an interactive prompt")
     repl.add_argument("--session", default="default")
+    # Opt-in Phase 2 path. These are additive: `run`/`chat` above stay the
+    # legacy Codex-backed commands, byte for byte. The native module (and thus
+    # Runtime/httpx) is imported only when one of these commands is selected.
+    native_run = sub.add_parser(
+        "native-run",
+        help="Run one turn on the native Runtime (Nexus-owned tools and permissions)",
+    )
+    native_run.add_argument("message", help="Prompt, or - to read stdin")
+    native_run.add_argument("--session", default="default")
+    native_run.add_argument(
+        "--json",
+        action="store_true",
+        help="Stream full JSONL event envelopes; headless, never prompts",
+    )
+    native_chat = sub.add_parser(
+        "native-chat",
+        help="Open an interactive native Runtime prompt with approval requests",
+    )
+    native_chat.add_argument("--session", default="default")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
     try:
         workspace = args.workspace.resolve()
@@ -105,6 +129,11 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError(f"Executable not found: {config.executable}. Install Codex and run codex login.")
             version = subprocess.run([executable, "--version"], capture_output=True, text=True, timeout=10, check=True)
             print(f"Configuration valid. {version.stdout.strip()}\nAuthentication is checked on the first turn.")
+        elif args.command in ("native-run", "native-chat"):
+            from .ui import native
+            if args.command == "native-run":
+                return native.run_native(args)
+            return native.chat_native(args)
         else:
             agent = Agent(workspace)
             if args.command == "run":

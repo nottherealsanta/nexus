@@ -7,6 +7,7 @@ from nexus.config import Config
 from nexus.config.schema import ConfigV2, ModelSection, ProviderSection
 from nexus.model.providers.scripted import ScriptedProvider, text_response
 from nexus.runtime import Runtime
+from nexus.tools.manager import ToolManager
 
 FIXTURES = Path(__file__).parent / "fixtures" / "anthropic"
 
@@ -158,6 +159,47 @@ async def test_anthropic_runtime_with_mock_transport(tmp_path):
     assert any(event.type == "text" and event.data["text"] == "Hello" for event in events)
     assert events[-1].type == "turn.completed"
 
+    await runtime.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Native tool infrastructure
+# ---------------------------------------------------------------------------
+
+
+async def test_runtime_builds_native_tools_and_closes_owned_registry(tmp_path):
+    provider = ScriptedProvider(text_response("ok"))
+    config = scripted_config()
+    runtime = Runtime(tmp_path, config=config, providers={"scripted": provider})
+
+    assert runtime.job_registry is not None
+    assert runtime.job_registry.closed is False
+
+    session = runtime.session("t")
+    turn = runtime._make_tool_turn(
+        config=config, session=session, turn_id="turn-1", attended=False
+    )
+    assert turn is not None
+    assert len(turn.schemas) == 11
+    assert turn.gate is not None
+
+    await runtime.aclose()
+    assert runtime.job_registry.closed is True
+
+
+async def test_runtime_injected_tool_manager_is_used(tmp_path):
+    provider = ScriptedProvider(text_response("ok"))
+    config = scripted_config()
+    manager = ToolManager(config, workspace=tmp_path, profile="research")
+    runtime = Runtime(
+        tmp_path, config=config, providers={"scripted": provider}, tools=manager
+    )
+    session = runtime.session("t")
+    turn = runtime._make_tool_turn(
+        config=config, session=session, turn_id="turn-1", attended=False
+    )
+    assert turn.manager is manager
+    assert [schema.name for schema in turn.schemas] == ["Read", "Glob", "Grep", "LS"]
     await runtime.aclose()
 
 

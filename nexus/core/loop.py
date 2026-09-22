@@ -7,22 +7,28 @@ concrete session, context, runtime, manager, or provider adapter. Everything
 below the loop (L0 ``errors``/``events``, L1 ``model``, core ``turn``/``cancel``)
 is fair game; everything above it is reached through a protocol.
 
-Phase 1 scope
+Tool handling
 -------------
 
-This is the no-tools phase. The loop assembles one structured
-:class:`~nexus.model.request.ModelRequest` per iteration, streams the provider's
-normalized events, collects assistant content blocks in wire order, and persists
-the assistant message **before** any tool handling. There is no dispatcher and
-there are deliberately no ``tools``/``permissions`` modules referenced here.
+The loop assembles one structured :class:`~nexus.model.request.ModelRequest` per
+iteration, streams the provider's normalized events, collects assistant content
+blocks in wire order, and persists the assistant message **before** any tool
+handling.
 
-When the model asks for a tool, valid calls are answered with one persisted user
-message of error ``ToolResult`` blocks explaining that tools are unavailable
-until Phase 2. The turn then continues to the next iteration so the model can
-self-correct in text; the number of iterations is bounded by
-:attr:`~nexus.core.turn.TurnLimits.max_iterations`. Malformed tool arguments are
-converted into a durable, model-visible error result and count against
-``malformed_budget``. Nothing is ever executed.
+With no ``tools``/``gate`` dependencies (the Phase 1 path) every tool call is
+answered with one persisted user message of error ``ToolResult`` blocks; the
+turn continues so the model can self-correct, bounded by
+:attr:`~nexus.core.turn.TurnLimits.max_iterations`. Malformed tool arguments
+become a durable error result and count against ``malformed_budget``. Nothing is
+ever executed.
+
+With protocol ``tools``/``gate`` dependencies the loop drives the full Phase 2
+flow using **only** the structural contracts defined below — it still imports no
+concrete manager. It prepares and permission-plans the whole batch, resolves
+every ``ASK`` durably (emitting ``permission.requested``/``permission.resolved``),
+dispatches only approved calls, and appends exactly one user ``ToolResult``
+message after all executions finish. Provider capability ``tools=False`` drops
+the schemas and turns any emitted call into a capability error result.
 
 Persistence contract
 --------------------
@@ -49,15 +55,17 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
+import re
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
-from typing import Protocol
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from typing import Any, Protocol
 
 import msgspec
 
 from ..errors import MalformedToolCall, OperationCancelled, ProviderError
 from ..events import Event
 from ..model.message import (
+    DUPLICATE_TOOL_CALL_KEY,
     ContentBlock,
     Message,
     MessageMeta,
@@ -85,11 +93,18 @@ from .turn import TurnLimits, TurnOutcome, TurnState, TurnUsage
 
 __all__ = [
     "DEFAULT_MALFORMED_BUDGET",
+    "BatchPlanView",
     "ContextAssembler",
+    "EvaluationView",
     "EventSink",
+    "PermissionGate",
+    "PreparedBatchView",
+    "PreparedCallView",
     "ProviderResolver",
     "ResolvedModel",
     "SessionView",
+    "ToolCallView",
+    "ToolDispatcher",
     "TurnLeaseView",
     "run_turn",
 ]
@@ -193,6 +208,120 @@ class EventSink(Protocol):
     """
 
     def emit(self, event: Event) -> object | Awaitable[object]: ...
+
+
+# ---------------------------------------------------------------------------
+# Tool contracts (protocol level; the loop never imports a concrete manager)
+# ---------------------------------------------------------------------------
+#
+# The tools packet (``nexus.tools``) owns the concrete shapes; the loop only
+# depends on the structural surface below. That keeps ``core/loop.py`` free of
+# any ``nexus.tools`` import while still letting it drive preparation, permission
+# planning, durable approval, and dispatch. The concrete adapters live in
+# ``nexus.runtime`` (composition root) and are handed to ``run_turn`` by
+# ``Session``.
+
+
+class ToolCallView(Protocol):
+    """One parsed tool invocation (``ToolUse``-shaped)."""
+
+    id: str
+    name: str
+    input: dict[str, Any]
+
+
+class PreparedCallView(Protocol):
+    """One prepared batch entry: an error, or an executable awaiting a decision."""
+
+    call: ToolCallView
+    spec: object | None
+    key: str | None
+    error: object | None
+    code: str | None
+    decision: object | None
+
+
+class PreparedBatchView(Protocol):
+    """An ordered, prepared batch (see ``nexus.tools.manager.PreparedBatch``)."""
+
+    entries: Sequence[PreparedCallView]
+
+    def calls(self) -> Sequence[ToolCallView]: ...
+
+    def spec_map(self) -> Mapping[str, object]: ...
+
+    def apply_plan(self, plan: BatchPlanView, /) -> PreparedBatchView: ...
+
+    def with_decisions(
+        self,
+        decisions: Mapping[str, object] | Sequence[tuple[str, object]],
+        /,
+    ) -> PreparedBatchView: ...
+
+
+class EvaluationView(Protocol):
+    """The permission engine's verdict for one call."""
+
+    call: ToolCallView
+    spec: object | None
+    key: str | None
+    outcome: object
+    decision: object | None
+    code: str
+    reason: str
+
+
+class BatchPlanView(Protocol):
+    """A pure permission plan over a whole batch (see ``BatchPlan``)."""
+
+    evaluations: Sequence[EvaluationView]
+
+    def asks(self) -> Sequence[EvaluationView]: ...
+
+    def failures(self) -> Sequence[EvaluationView]: ...
+
+
+class PermissionGate(Protocol):
+    """Permission planning plus UI-independent, durable approval.
+
+    The concrete adapter binds the frozen engine, session grants, attended flag,
+    and an :class:`~nexus.tools.permissions.ApprovalBroker`. The loop emits
+    ``permission.requested``/``permission.resolved`` around :meth:`open` /
+    :meth:`await_decision`, so a UI can resolve the request by id through the
+    session while the turn is parked.
+    """
+
+    def plan(self, prepared: PreparedBatchView, /) -> BatchPlanView: ...
+
+    def request_for(self, evaluation: EvaluationView, /) -> object: ...
+
+    def open(self, request: object, /) -> None: ...
+
+    async def await_decision(
+        self, request: object, /, *, cancel: CancelToken
+    ) -> object: ...
+
+    def resolution(self, request_id: str, /) -> Mapping[str, Any] | None: ...
+
+    def resolve(self, request_id: str, decision: object, /) -> bool: ...
+
+    def cancel_pending(self) -> None: ...
+
+
+class ToolDispatcher(Protocol):
+    """Validation/preparation plus gated dispatch, preserving result order."""
+
+    def prepare(self, tool_uses: Sequence[ToolUse], /) -> PreparedBatchView: ...
+
+    async def dispatch(
+        self,
+        prepared: PreparedBatchView,
+        /,
+        *,
+        emit: Callable[[str, dict[str, Any] | None], object],
+        cancel: CancelToken,
+        parallel_allowed: bool = True,
+    ) -> Sequence[ToolResult]: ...
 
 
 # ---------------------------------------------------------------------------
@@ -479,13 +608,74 @@ def _turn_usage_data(usage: TurnUsage) -> dict:
     }
 
 
+#: Provider-safe synthetic id length cap (Anthropic accepts short opaque ids).
+_MAX_SYNTHETIC_ID = 64
+
+
+def _synthetic_call_id(original: str, reserved: set[str]) -> str:
+    """A fresh, deterministic, provider-safe id for a duplicated call.
+
+    ``reserved`` contains every original id in the message (so a synthetic id
+    can never collide with a later legitimate id) plus synthetics already
+    handed out. The result is stable for a given message.
+    """
+    base = re.sub(r"[^A-Za-z0-9_-]", "_", original).strip("_") or "call"
+    base = base[: _MAX_SYNTHETIC_ID - 8]
+    index = 1
+    candidate = f"{base}_dup{index}"
+    while candidate in reserved:
+        index += 1
+        candidate = f"{base}_dup{index}"
+    return candidate
+
+
+def _normalize_tool_use_ids(
+    blocks: list[ContentBlock],
+) -> tuple[list[ContentBlock], dict[str, str]]:
+    """Make every persisted ``ToolUse`` id unique; return re-identified duplicates.
+
+    The first occurrence of an id keeps its original id. Each later occurrence
+    gets a fresh synthetic id and its input is marked with
+    :data:`~nexus.model.message.DUPLICATE_TOOL_CALL_KEY` set to the original id,
+    so the tools layer can turn it into a model-visible duplicate-id error
+    without depending on manager-level detection. The returned mapping is
+    ``synthetic_id -> original_id``.
+    """
+    reserved = {block.id for block in blocks if isinstance(block, ToolUse)}
+    seen: set[str] = set()
+    out: list[ContentBlock] = []
+    duplicates: dict[str, str] = {}
+    for block in blocks:
+        if not isinstance(block, ToolUse):
+            out.append(block)
+            continue
+        if block.id in seen:
+            original = block.id
+            new_id = _synthetic_call_id(original, reserved | seen)
+            new_input = dict(block.input)
+            new_input[DUPLICATE_TOOL_CALL_KEY] = original
+            block = ToolUse(id=new_id, name=block.name, input=new_input)
+            duplicates[new_id] = original
+        seen.add(block.id)
+        out.append(block)
+    return out, duplicates
+
+
 def _synthetic_results(
-    tool_uses: list[ToolUse], malformed: MalformedToolCall | None
+    tool_uses: list[ToolUse],
+    malformed: MalformedToolCall | None,
+    duplicates: Mapping[str, str] | None = None,
 ) -> list[ToolResult]:
     """One error result per call; nothing is ever dispatched."""
+    duplicates = duplicates or {}
     results: list[ToolResult] = []
     for block in tool_uses:
-        if malformed is not None and block.id == malformed.tool_call_id:
+        if block.id in duplicates:
+            detail = (
+                f"Tool call {block.name!r} ({block.id}) duplicated id "
+                f"{duplicates[block.id]!r}; the duplicated call was not executed."
+            )
+        elif malformed is not None and block.id == malformed.tool_call_id:
             detail = (
                 f"Tool call {block.name!r} ({block.id}) had malformed arguments: "
                 f"{malformed}. It was not executed."
@@ -500,6 +690,59 @@ def _synthetic_results(
             )
         )
     return results
+
+
+def _outcome_value(outcome: object) -> str:
+    """Normalize a StrEnum/str outcome to its plain string value."""
+    value = getattr(outcome, "value", outcome)
+    return value if isinstance(value, str) else str(value)
+
+
+def _error_result(tool_use_id: str, name: str, detail: str) -> ToolResult:
+    return ToolResult(
+        tool_use_id=tool_use_id,
+        content=[Text(text=f"{name}: {detail}")],
+        is_error=True,
+    )
+
+
+def _tools_supported(resolved: ResolvedModel) -> bool:
+    return bool(getattr(resolved.capabilities, "tools", False))
+
+
+def _result_for_entry(entry: object, detail: str) -> ToolResult:
+    """Best-effort IR error result for a prepared entry (harness failure path)."""
+    call = getattr(entry, "call", None)
+    call_id = getattr(call, "id", "")
+    name = getattr(call, "name", "")
+    error = getattr(entry, "error", None)
+    to_ir = getattr(error, "to_tool_result", None)
+    if callable(to_ir):
+        converted: ToolResult | None = None
+        with contextlib.suppress(Exception):
+            converted = to_ir(call_id)
+        if isinstance(converted, ToolResult):
+            return converted
+    return _error_result(call_id, name, detail)
+
+
+async def _emit_gate_decision(
+    emitter: _Emitter, evaluation, gate: PermissionGate
+) -> None:
+    """Audit an unattended allow/deny so the decision is reconstructable."""
+    request = gate.request_for(evaluation)
+    data = dict(request.to_dict()) if hasattr(request, "to_dict") else {}
+    data.update(
+        {
+            "decision": _outcome_value(evaluation.decision)
+            if evaluation.decision is not None
+            else _outcome_value(evaluation.outcome),
+            "code": evaluation.code,
+            "reason": evaluation.reason,
+            "grant": None,
+        }
+    )
+    await emitter.emit("permission.resolved", data)
 
 
 async def _emit_terminal(emitter: _Emitter, state: TurnState) -> None:
@@ -536,6 +779,8 @@ async def run_turn(
     assemble: ContextAssembler,
     provider_for: ProviderResolver,
     emit: EventSink,
+    tools: ToolDispatcher | None = None,
+    gate: PermissionGate | None = None,
     lease: TurnLeaseView | None = None,
     limits: TurnLimits | None = None,
     cancel: CancelToken | None = None,
@@ -543,7 +788,7 @@ async def run_turn(
     persist_user_message: bool = True,
     clock: Callable[[], float] = time.monotonic,
 ) -> TurnOutcome:
-    """Run one Phase 1 turn to a terminal state and return its outcome.
+    """Run one turn to a terminal state and return its outcome.
 
     ``lease`` may be supplied by a caller that already holds the session lock;
     otherwise the loop acquires one. The lease is always released before this
@@ -555,6 +800,13 @@ async def run_turn(
     coalesced with the new input). The loop still validates ``user_input`` and
     assembles from ``session.messages``, but must not append a second user
     message, which would break role alternation.
+
+    ``tools``/``gate`` are optional protocol adapters. When both are supplied
+    the loop prepares and permission-plans the whole batch, resolves every
+    ``ASK`` durably, dispatches only approved calls, and persists one ordered
+    ``ToolResult`` message before the next iteration. When either is absent the
+    loop keeps the Phase 1 behaviour exactly: every tool call is answered with a
+    synthetic, model-visible error result and nothing is executed.
     """
     if malformed_budget < 0:
         raise ValueError("malformed_budget must be non-negative")
@@ -572,6 +824,10 @@ async def run_turn(
     turn_id = lease.turn_id
     token = lease.cancel_token
     emitter = _Emitter(emit, session_id, turn_id)
+
+    async def _tool_emit(event_type: str, data: dict[str, Any] | None) -> None:
+        """Adapt the dispatcher's ``(type, data)`` emit seam to the event sink."""
+        await emitter.emit(event_type, data)
 
     state = lease.state
     started = clock()
@@ -611,13 +867,23 @@ async def run_turn(
                     "messages": len(request.messages),
                     "provider": request.provider,
                     "model": request.model,
+                    "tools": len(request.tools),
                 },
             )
 
             resolved = _call_resolver(provider_for, request)
             model = request.model or resolved.model
+            # Capability adaptation: a provider without tool support must never
+            # receive schemas, and any tool call it still emits is answered with
+            # a capability error result rather than dispatched.
+            effective_tools = (
+                list(request.tools) if _tools_supported(resolved) else []
+            )
             streaming_request = msgspec.structs.replace(
-                request, model=model, provider=resolved.provider.name
+                request,
+                model=model,
+                provider=resolved.provider.name,
+                tools=effective_tools,
             )
             await emitter.emit(
                 "model.started",
@@ -634,8 +900,14 @@ async def run_turn(
             stop_reason, usage, malformed = await _collect_stream(
                 resolved.provider, streaming_request, collector, emitter, token
             )
+            if malformed is not None:
+                malformed_total += 1
 
-            blocks = collector.blocks()
+            # Guarantee unique ToolUse ids *before* the assistant message is
+            # persisted, so no later iteration/replay can ever hand a provider or
+            # manager a duplicate id. Re-identified duplicates are marked so they
+            # become model-visible errors rather than executables.
+            blocks, duplicate_calls = _normalize_tool_use_ids(collector.blocks())
             text = "".join(block.text for block in blocks if isinstance(block, Text))
             thinking = "".join(
                 block.text for block in blocks if isinstance(block, Thinking)
@@ -696,29 +968,194 @@ async def run_turn(
                     )
                 break
 
-            # Phase 1: no dispatcher. Answer every call with a durable,
-            # model-visible error result and let the model self-correct.
-            if malformed is not None:
-                malformed_total += 1
+            tool_uses = [b for b in blocks if isinstance(b, ToolUse)]
+
+            if tools is None or gate is None:
+                # Phase 1: no dispatcher. Answer every call with a durable,
+                # model-visible error result and let the model self-correct.
+                session.append_message(
+                    Message(
+                        role="user",
+                        content=_synthetic_results(
+                            tool_uses, malformed, duplicate_calls
+                        ),
+                        meta=MessageMeta(turn_id=turn_id),
+                    )
+                )
+                state = state.model_responded(
+                    has_tool_use=True, stop_reason="tool_use"
+                )
+                lease.state = state
+
+                if malformed_total > malformed_budget:
+                    terminal = state.fail(
+                        "malformed tool call budget exceeded "
+                        f"({malformed_total} > {malformed_budget})"
+                    )
+                    break
+
+                state = state.begin_iteration()
+                lease.state = state
+                continue
+
+            # Phase 2: tools are available. The assistant message above is
+            # already durable, so a crash can never orphan a tool call. Every
+            # call is announced, then the *whole* batch is prepared and planned
+            # before anything executes.
+            for block in tool_uses:
+                await emitter.emit(
+                    "tool.requested", {"call_id": block.id, "tool": block.name}
+                )
+
+            if not _tools_supported(resolved):
+                provider_name = resolved.provider.name
+                for block in tool_uses:
+                    await emitter.emit(
+                        "tool.failed",
+                        {
+                            "call_id": block.id,
+                            "tool": block.name,
+                            "code": "tools_unsupported",
+                            "executed": False,
+                        },
+                    )
+                session.append_message(
+                    Message(
+                        role="user",
+                        content=[
+                            _error_result(
+                                block.id,
+                                block.name,
+                                f"provider {provider_name!r} does not support "
+                                "tool calls; the call was not run",
+                            )
+                            for block in tool_uses
+                        ],
+                        meta=MessageMeta(turn_id=turn_id),
+                    )
+                )
+                state = state.model_responded(
+                    has_tool_use=True, stop_reason="tool_use"
+                )
+                lease.state = state
+                state = state.begin_iteration()
+                lease.state = state
+                continue
+
+            prepared = tools.prepare(tool_uses)
+            # Duplicate-id rejections are a malformed batch and count against the
+            # same budget as malformed streamed arguments (Phase 2 consistency).
+            malformed_total += sum(
+                1
+                for entry in prepared.entries
+                if getattr(entry, "code", None) == "duplicate_tool_call_id"
+            )
+            plan = gate.plan(prepared)
+
+            # fail_turn (unattended) ends the turn before any executable starts,
+            # but history stays valid: one ordered error result per call.
+            failures = list(plan.failures())
+            if failures:
+                reason = failures[0].reason
+                for evaluation in plan.evaluations:
+                    if _outcome_value(evaluation.outcome) == "fail_turn":
+                        await _emit_gate_decision(emitter, evaluation, gate)
+                # One ordered result per *prepared* entry keeps the tool_use /
+                # tool_result pairing valid even though the turn aborts. Match
+                # evaluations positionally (never by id) so a duplicate id
+                # cannot collapse two entries onto one evaluation.
+                remaining = list(plan.evaluations)
+                content = []
+                for entry in prepared.entries:
+                    evaluation = None
+                    for index, candidate in enumerate(remaining):
+                        if candidate.call.id == entry.call.id:
+                            evaluation = remaining.pop(index)
+                            break
+                    detail = (
+                        f"the turn was stopped before tools ran: {evaluation.reason}"
+                        if evaluation is not None
+                        else "the turn was stopped before tools ran"
+                    )
+                    content.append(_result_for_entry(entry, detail))
+                session.append_message(
+                    Message(
+                        role="user",
+                        content=content,
+                        meta=MessageMeta(turn_id=turn_id),
+                    )
+                )
+                terminal = state.fail(
+                    f"unattended policy fails the turn: {reason}"
+                )
+                break
+
+            # Audit unattended allow/deny decisions (no ASK round-trip).
+            for evaluation in plan.evaluations:
+                if _outcome_value(evaluation.outcome) == "ask":
+                    continue
+                if evaluation.code.startswith("unattended"):
+                    await _emit_gate_decision(emitter, evaluation, gate)
+
+            prepared = prepared.apply_plan(plan)
+
+            # Open every ASK in the batch first (so one prompt can cover the
+            # whole batch), then await all of them. No executable starts until
+            # every ask has resolved.
+            pending_asks: list[tuple[Any, Any]] = []
+            for evaluation in plan.asks():
+                request = gate.request_for(evaluation)
+                gate.open(request)
+                request_data = (
+                    dict(request.to_dict()) if hasattr(request, "to_dict") else {}
+                )
+                await emitter.emit("permission.requested", request_data)
+                pending_asks.append((evaluation, request, request_data))
+
+            # An ordered list (not a dict keyed by call id) so a duplicated id
+            # can never collapse two decisions into one.
+            decisions: list[tuple[str, object]] = []
+            for evaluation, request, request_data in pending_asks:
+                try:
+                    decision = await gate.await_decision(request, cancel=token)
+                except OperationCancelled:
+                    gate.cancel_pending()
+                    raise
+                record = gate.resolution(request.id)
+                await emitter.emit(
+                    "permission.resolved",
+                    dict(record) if record is not None else request_data,
+                )
+                decisions.append((evaluation.call.id, decision))
+            if decisions:
+                prepared = prepared.with_decisions(decisions)
+
+            results = await tools.dispatch(
+                prepared,
+                emit=_tool_emit,
+                cancel=token,
+                parallel_allowed=bool(
+                    getattr(resolved.capabilities, "parallel_tool_calls", False)
+                ),
+            )
+
+            # Exactly one result message, in original call order, only after
+            # every execution has finished.
             session.append_message(
                 Message(
                     role="user",
-                    content=_synthetic_results(
-                        [b for b in blocks if isinstance(b, ToolUse)], malformed
-                    ),
+                    content=list(results),
                     meta=MessageMeta(turn_id=turn_id),
                 )
             )
-            state = state.model_responded(has_tool_use=True, stop_reason="tool_use")
-            lease.state = state
-
             if malformed_total > malformed_budget:
                 terminal = state.fail(
                     "malformed tool call budget exceeded "
                     f"({malformed_total} > {malformed_budget})"
                 )
                 break
-
+            state = state.model_responded(has_tool_use=True, stop_reason="tool_use")
+            lease.state = state
             state = state.begin_iteration()
             lease.state = state
 
@@ -735,6 +1172,11 @@ async def run_turn(
         # Lease release is the outermost cleanup: it must run even if draining
         # the watcher or emitting the terminal event raises unexpectedly.
         try:
+            if gate is not None:
+                cancel_pending = getattr(gate, "cancel_pending", None)
+                if callable(cancel_pending):
+                    with contextlib.suppress(Exception):
+                        cancel_pending()
             if watcher is not None:
                 watcher.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):

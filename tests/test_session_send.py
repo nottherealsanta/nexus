@@ -15,7 +15,7 @@ from nexus.model.providers.scripted import (
     text_response,
     tool_response,
 )
-from nexus.model.request import ModelRequest
+from nexus.model.request import ModelRequest, ToolSchema
 from nexus.model.router import ModelRouter
 from nexus.model.stream import MessageStart, MessageStop, TextDelta, Usage
 from nexus.session.manager import SessionManager
@@ -123,6 +123,51 @@ async def test_empty_input_is_rejected_before_lock(tmp_path):
     with pytest.raises(ValueError):
         await session.send([]).__anext__()
     assert session.active is False
+
+
+class _FakeGate:
+    def __init__(self):
+        self.resolved = []
+
+    def resolve(self, request_id, decision):
+        self.resolved.append((request_id, decision))
+        return True
+
+
+class _FakeToolBundle:
+    def __init__(self, schemas, gate):
+        self.schemas = schemas
+        self.dispatcher = None
+        self.gate = gate
+
+
+async def test_send_freezes_schemas_and_delegates_resolution(tmp_path):
+    provider = ScriptedProvider(text_response("hi"))
+    schema = ToolSchema(name="Read", description="d", input_schema={"type": "object"})
+    gate = _FakeGate()
+    seen = {}
+
+    def factory(*, config, session, turn_id, attended):
+        seen["attended"] = attended
+        return _FakeToolBundle([schema], gate)
+
+    context = ContextManager(tmp_path, config=scripted_config("scripted/first"))
+    router = ModelRouter({"scripted": provider}, default="scripted/first")
+    session = SessionManager(
+        tmp_path, assemble=context, provider_for=router, tools=factory
+    ).open("tools")
+
+    resolved = None
+    async for event in session.send("go", attended=True):
+        if event.type == "turn.started":
+            resolved = session.resolve_permission("x", "allow_once")
+
+    assert resolved is True
+    assert gate.resolved == [("x", "allow_once")]
+    assert provider.requests[0].tools == [schema]
+    assert seen["attended"] is True
+    # No active turn: resolution is safely rejected.
+    assert session.resolve_permission("x", "allow_once") is False
 
 
 async def test_send_without_wiring_raises(tmp_path):

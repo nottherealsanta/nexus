@@ -31,15 +31,19 @@ class SessionManager:
         assemble: Callable[[object], Any] | None = None,
         provider_for: Callable[..., Any] | None = None,
         limits: TurnLimits | Callable[[], TurnLimits] | None = None,
+        tools: Callable[..., Any] | None = None,
+        attended: bool = False,
         event_buffer: int = DEFAULT_EVENT_BUFFER,
     ):
         self.directory = Path(directory)
         self.store = store if store is not None else SessionStore(self.directory)
         # Loop dependencies are opaque callables forwarded to each handle, so
-        # this layer stays free of context/router imports.
+        # this layer stays free of context/router/tools imports.
         self._assemble = assemble
         self._provider_for = provider_for
         self._limits = limits
+        self._tools = tools
+        self._attended = bool(attended)
         self._event_buffer = event_buffer
 
     def path(self, session_id: str) -> Path:
@@ -76,6 +80,8 @@ class SessionManager:
             assemble=self._assemble,
             provider_for=self._provider_for,
             limits=self._limits,
+            tools=self._tools,
+            attended=self._attended,
             event_buffer=self._event_buffer,
         )
         if recover:

@@ -94,13 +94,30 @@ class ToolCallAccumulator:
     are supported because every buffer is keyed by call id. Parsing happens at
     tool-call end and a typed :class:`MalformedToolCall` is raised when the
     buffered text is not a JSON object.
+
+    A duplicate id — one that is already active or was already finished in the
+    same message — is also a typed :class:`MalformedToolCall` on
+    :meth:`start`. Overwriting the buffer would make the two calls
+    indistinguishable and could let a denied call be executed under an allowed
+    call's decision, so the ambiguity is refused instead.
     """
 
     def __init__(self) -> None:
         self._names: dict[str, str] = {}
         self._parts: dict[str, list[str]] = {}
+        # Every id ever seen in this message, active or already finished. A
+        # duplicate id is ambiguous (two calls would share one result slot) so it
+        # is rejected deterministically rather than silently overwriting a
+        # buffer, which could otherwise let a denied call be answered by another.
+        self._seen: set[str] = set()
 
     def start(self, call_id: str, name: str) -> None:
+        if call_id in self._seen:
+            raise MalformedToolCall(
+                call_id,
+                "duplicate tool-call id; the whole duplicated-id group is rejected",
+            )
+        self._seen.add(call_id)
         self._names[call_id] = name
         self._parts[call_id] = []
 
@@ -153,17 +170,17 @@ class ToolCallAccumulator:
 
 
 __all__ = [
-    "StopReason",
     "MessageStart",
+    "MessageStop",
+    "Raw",
+    "StopReason",
+    "StreamEvent",
     "TextDelta",
     "ThinkingDelta",
     "ThinkingEnd",
-    "ToolCallStart",
+    "ToolCallAccumulator",
     "ToolCallDelta",
     "ToolCallEnd",
+    "ToolCallStart",
     "Usage",
-    "MessageStop",
-    "Raw",
-    "StreamEvent",
-    "ToolCallAccumulator",
 ]

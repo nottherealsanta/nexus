@@ -195,6 +195,8 @@ class Session:
         assemble: Callable[[object], Any] | None = None,
         provider_for: Callable[..., Any] | None = None,
         limits: TurnLimits | Callable[[], TurnLimits] | None = None,
+        tools: Callable[..., Any] | None = None,
+        attended: bool = False,
         event_buffer: int = DEFAULT_EVENT_BUFFER,
     ):
         self._id = validate_session_id(session_id)
@@ -204,10 +206,17 @@ class Session:
         self._active: TurnLease | None = None
         self._cancel = CancelToken()
         # Loop dependencies, injected by the runtime (or a test) so this layer
-        # never imports a concrete context manager, router, or provider.
+        # never imports a concrete context manager, router, provider, or tools
+        # manager. ``tools`` is an opaque per-turn factory returning a bundle
+        # exposing ``schemas``/``dispatcher``/``gate``.
         self._assemble = assemble
         self._provider_for = provider_for
         self._limits = limits
+        self._tools_for_turn = tools
+        self._attended = bool(attended)
+        #: The active turn's frozen tool bundle, so ``resolve_permission`` can
+        #: reach the approval broker without this layer importing ``nexus.tools``.
+        self._active_tools: Any | None = None
         if type(event_buffer) is not int or event_buffer < 1:
             raise ValueError("event_buffer must be a positive integer")
         self._event_buffer = event_buffer
@@ -227,6 +236,8 @@ class Session:
         assemble: Callable[[object], Any] | None = None,
         provider_for: Callable[..., Any] | None = None,
         limits: TurnLimits | Callable[[], TurnLimits] | None = None,
+        tools: Callable[..., Any] | None = None,
+        attended: bool | None = None,
     ) -> Session:
         """Attach or replace the loop dependencies used by :meth:`send`."""
         if assemble is not None:
@@ -235,7 +246,42 @@ class Session:
             self._provider_for = provider_for
         if limits is not None:
             self._limits = limits
+        if tools is not None:
+            self._tools_for_turn = tools
+        if attended is not None:
+            self._attended = bool(attended)
         return self
+
+    # -- approvals ---------------------------------------------------------
+
+    @property
+    def attended(self) -> bool:
+        """Whether an interactive approver is attached for this session.
+
+        Headless sessions stay ``False`` so the configured ``on_unattended``
+        policy applies; an interactive adapter calls :meth:`mark_attended` (or
+        passes ``attended=True`` to :meth:`send`). This decouples attendance from
+        any particular terminal/UI.
+        """
+        return self._attended
+
+    def mark_attended(self, attended: bool = True) -> Session:
+        self._attended = bool(attended)
+        return self
+
+    def resolve_permission(self, request_id: str, decision: object) -> bool:
+        """Resolve one active pending approval; unknown/stale ids return False.
+
+        Delegates to the active turn's approval broker. There is no terminal
+        coupling: any UI adapter can call this with a
+        :class:`~nexus.tools.permissions.Decision` (or its string value).
+        """
+        bundle = self._active_tools
+        gate = getattr(bundle, "gate", None)
+        resolve = getattr(gate, "resolve", None)
+        if resolve is None:
+            return False
+        return bool(resolve(request_id, decision))
 
     # -- identity ----------------------------------------------------------
 
@@ -417,8 +463,32 @@ class Session:
             return self._limits()
         return self._limits
 
+    def _tool_turn_for(self, assembler: Any, lease: TurnLease, attended: bool | None) -> Any:
+        """Build the frozen per-turn tool bundle, or ``None`` when unwired.
+
+        Called during the snapshot phase (before any log mutation) so an unknown
+        profile or tool-config error releases the lease without a partial turn.
+        """
+        if self._tools_for_turn is None:
+            return None
+        config: Any | None = None
+        effective = getattr(assembler, "effective_config", None)
+        if callable(effective):
+            config = effective()
+        bundle = self._tools_for_turn(
+            config=config,
+            session=self,
+            turn_id=lease.turn_id,
+            attended=self._attended if attended is None else bool(attended),
+        )
+        if bundle is not None:
+            freeze = getattr(assembler, "freeze_tools", None)
+            if callable(freeze):
+                freeze(getattr(bundle, "schemas", ()))
+        return bundle
+
     async def send(
-        self, user_input: str | list[ContentBlock]
+        self, user_input: str | list[ContentBlock], *, attended: bool | None = None
     ) -> AsyncIterator[Event]:
         """Run one turn and stream its persisted events in order.
 
@@ -459,12 +529,14 @@ class Session:
         try:
             assembler = self._assemble_for_turn()
             lease.limits = self._limits_for_turn(assembler)
+            tool_turn = self._tool_turn_for(assembler, lease, attended)
         except BaseException:
             lease.release()
             raise
 
         # The snapshot succeeded; from here the turn persists append-only.
         try:
+            self._active_tools = tool_turn
             self.recover_dangling_tool_uses(lock=False)
             self.append_message(
                 Message(
@@ -482,6 +554,8 @@ class Session:
                     assemble=assembler,
                     provider_for=self._provider_for,
                     emit=sink,
+                    tools=getattr(tool_turn, "dispatcher", None),
+                    gate=getattr(tool_turn, "gate", None),
                     lease=lease,
                     persist_user_message=False,
                 )
@@ -503,8 +577,10 @@ class Session:
                     # The loop releases the lease in its own ``finally``; this is
                     # an outermost safety net (e.g. a producer cancelled before
                     # it entered the loop, or a task that raised).
+                    self._active_tools = None
                     lease.release()
         except BaseException:
+            self._active_tools = None
             lease.release()
             raise
 

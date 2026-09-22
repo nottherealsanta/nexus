@@ -34,6 +34,57 @@ files. `run -` reads its prompt from stdin. Sessions default to `default`; reuse
 name to continue or choose a new name for a fresh conversation. Ctrl-C cancels the
 active turn and exits. EOF or `/exit` leaves the interactive prompt.
 
+## Native commands (opt-in)
+
+`native-run` and `native-chat` drive Nexus's own loop and tool stack
+(`Runtime` + `Session`) rather than the Codex CLI. They are additive: `run` and
+`chat` above are unchanged and still use Codex.
+
+```sh
+python3 -m nexus native-run "Inspect the failing tests and fix them"
+python3 -m nexus native-run "Summarize the repository" --json
+python3 -m nexus native-chat --session work
+```
+
+Tools execute **on the host** under the permission engine (declarative
+allow/ask/deny rules plus path scoping). There is **no OS sandbox or container
+isolation**: an approved `Bash` call runs with your user's privileges, so review
+prompts and keep `deny` rules for anything destructive.
+
+Interactive runs (`native-run` without `--json`, and `native-chat`) prompt before
+an `ask` action with four choices: `y` allow once, `a` allow always (a
+session-scoped grant, replayed on later turns), `n` deny once, `never` deny
+always. A denial is returned to the model as an error tool result and the turn
+continues; only a failed turn or harness error makes the command exit nonzero.
+EOF, unrecognized input, or an exhausted prompt always resolves as deny once — it
+can never auto-allow.
+
+`--json` is headless: it streams every persisted event envelope as JSONL on
+stdout, sends diagnostics to stderr, and never prompts. No approver is attached,
+so the configured `permissions.on_unattended` policy applies (`deny` by default,
+or `allow` / `fail_turn`). Minimal native `nexus.toml`:
+
+```toml
+config_version = 2
+
+[model]
+default = "anthropic/claude-sonnet-4-5"
+
+[providers.anthropic]
+api_key = "${env:ANTHROPIC_API_KEY}"
+
+[permissions]
+mode = "ask"
+allow = ["Read(**)", "Glob(**)", "Grep(**)", "LS(**)"]
+deny = ["Bash(rm -rf*)", "Read(**/.env)"]
+write_roots = ["./"]
+on_unattended = "deny"
+```
+
+The native path reads only `${env:...}`/`${keychain:...}` credential references;
+it never writes secret values to configuration, events, or context, and it does
+not claim shell sandboxing. `run` / `chat` remain the default legacy commands.
+
 ## Python and UI integration
 
 ```python
