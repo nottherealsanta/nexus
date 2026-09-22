@@ -1,7 +1,7 @@
 Nexus Phase 3 exit - baseline closeout evidence
 ================================================
-generated : 2026-09-22T23:38:17+0530
-head      : 2cf74d68bd159f67a1c15011ea1634c277920496
+generated : 2026-09-23T02:13:43+0530
+head      : e7a905f2477a812abfc2ad8268efcc637ea28d5a
 schema    : nexus.phase3_exit_baseline/1
 
 Phase 3 exit criteria (plan section 10)
@@ -10,17 +10,17 @@ Phase 3 exit criteria (plan section 10)
   turns .................... 100
   messages ................. 200
   model calls .............. 100
-  compacted assemblies ..... 18
+  compacted assemblies ..... 29
   input budget ............. 5744 tokens
-  peak used ................ 4882 tokens
+  peak used ................ 4866 tokens
   log message lines ........ 200
   contiguous suffix ........ True
   current turn once ........ True
 
 Controlled prompt cache before/after
   turns .................... 30
-  uncached input tokens .... 69385
-  cached input tokens ...... 13601.9
+  uncached input tokens .... 69415
+  cached input tokens ...... 13606.0
   savings .................. 80.4%
   rates .................... read 0.1x / write 1.25x
   boundaries (off) ......... []
@@ -28,23 +28,23 @@ Controlled prompt cache before/after
 
 Line budgets (plan sections 11 / 14.14)
 ----------------------------------------
-  core+model+spec .......... 7174 physical / 5862 code (cap 2500, within=False, over=4674)
+  core+model+spec .......... 7652 physical / 6256 code (cap 2500, within=False, over=5152)
   host+view+ui ............. 391 physical / 320 code (cap 2000, within=True, over=0)
   surface baseline ......... host=0 view=0 ui=391
 
 Import cost (plan section 2.2)
 ----------------------------------------
-  import nexus ............. 35.09 ms, +132 modules, heavy=none
-  import nexus.runtime ..... 87.07 ms, 366 modules
+  import nexus ............. 36.25 ms, +132 modules, heavy=none
+  import nexus.runtime ..... 99.19 ms, 375 modules
 
 Phase 4 references (plan section 10)
 ----------------------------------------
-  result ................... passed in 1.11s
-  summary .................. 2 passed in 0.95s
+  result ................... passed in 1.63s
+  summary .................. 2 passed in 1.46s
     - tests/test_hot_extension_e2e.py::test_walkthrough_read_template_write_reload_call
     - tests/test_hot_extension_stress.py::test_two_hundred_reloads_do_not_leak
 
 Full suite
 ----------------------------------------
-  result ................... passed in 31.89s
-  summary .................. 2149 passed, 2 skipped, 2 deselected, 1 xfailed, 4 subtests passed in 31.47s
+  result ................... passed in 36.3s
+  summary .................. 2367 passed, 2 skipped, 2 deselected, 1 xfailed, 4 subtests passed in 35.90s

@@ -164,7 +164,7 @@ async def test_native_read_write_bash_flow(tmp_path):
     assert [r.content[0].tool_use_id for r in results] == ["c1", "c2", "c3"]
     assert "hello" in results[0].content[0].content[0].text
     # Schemas reached every request in the turn.
-    assert [len(req.tools) for req in provider.requests] == [15, 15, 15, 15]
+    assert [len(req.tools) for req in provider.requests] == [16, 16, 16, 16]
     assert {t.name for t in provider.requests[0].tools} >= {"Read", "Write", "Bash"}
     await runtime.aclose()
 
@@ -754,13 +754,13 @@ async def test_config_profile_and_policy_freeze_within_turn(tmp_path):
     # Within the turn the catalog and policy are frozen: the second iteration
     # still sees the coding tool set and allow policy, and SOUL-A.
     assert (tmp_path / "out.txt").exists()
-    assert [len(req.tools) for req in provider.requests] == [15, 15]
+    assert [len(req.tools) for req in provider.requests] == [16, 16]
     assert all("SOUL-A" in (req.system or "") for req in provider.requests)
     assert types(events)[-1] == "turn.completed"
 
     # Between turns the edit takes effect: research has fewer tools.
     await drain(session.send("again"))
-    assert len(provider.requests[-1].tools) == 4
+    assert len(provider.requests[-1].tools) == 5
     await runtime.aclose()
 
 

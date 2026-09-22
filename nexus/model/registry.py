@@ -887,6 +887,22 @@ class ModelRegistry:
         """Resolve a reference to a model, or ``None``. Never raises."""
         return self._lookup(ref)
 
+    def model_cost(self, provider: str, model: str) -> Cost | None:
+        """The pricing for ``provider/model``, or ``None`` when unknown.
+
+        Used by the subagent budget to price a child turn from its measured
+        token usage. Never raises: an unknown model or a provider without cost
+        data returns ``None`` (the caller treats unpriced usage conservatively).
+        """
+        if not isinstance(provider, str) or not provider:
+            return None
+        if not isinstance(model, str) or not model:
+            return None
+        info = self._lookup(f"{provider}/{model}")
+        if info is None:
+            info = self._lookup(model)
+        return info.cost if info is not None else None
+
     def resolve(self, ref: str) -> ModelInfo:
         """Resolve a reference to a selectable model.
 

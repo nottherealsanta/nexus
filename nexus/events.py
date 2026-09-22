@@ -69,7 +69,7 @@ EXT_EVENTS = (
 )
 MCP_EVENTS = ("mcp.connected", "mcp.disconnected", "mcp.failed", "mcp.tools_changed")
 SKILL_EVENTS = ("skill.invoked", "skill.completed")
-AGENT_EVENTS = ("agent.spawned", "agent.completed")
+AGENT_EVENTS = ("agent.spawned", "agent.completed", "agent.clamped")
 HOOK_EVENTS = ("hook.fired", "hook.blocked")
 
 # Plan section 15.10: the model-registry lifecycle. ``registry.refreshed``/

@@ -206,6 +206,38 @@ class SkillActivationSink(Protocol):
     def record(self, activation: object) -> object: ...
 
 
+class SubagentServiceView(Protocol):
+    """The narrow slice of ``SubagentRunner`` the ``Task`` builtin may reach.
+
+    Structural only: the tool names the request, the effective gate key, and the
+    spawn coroutine, so the tools layer never imports ``nexus.agents`` (which
+    would couple it to a manager and to the runtime that builds one). A concrete
+    :class:`~nexus.agents.runner.SubagentRunner` satisfies it unchanged; a test
+    double need only implement these members. The request and the returned
+    outcome are opaque here and are consumed through their own contract.
+
+    ``spawn`` may raise :class:`~nexus.errors.OperationCancelled` when the parent
+    turn is cancelled; every *expected* refusal (unknown role, depth, budget)
+    comes back as an outcome whose ``is_error`` is true.
+    """
+
+    @property
+    def default_type(self) -> str: ...
+
+    def permission_key(self, request: object) -> str: ...
+
+    def resolve_tier(self, request: object) -> object: ...
+
+    async def spawn(
+        self,
+        request: object,
+        /,
+        *,
+        cancel: object = ...,
+        emit: object = ...,
+    ) -> object: ...
+
+
 #: How a tool declares what a permission rule matches against.
 PermissionKeyFn = Callable[[dict[str, Any]], str]
 
@@ -483,6 +515,11 @@ class ToolContext:
     emit: ProgressEmitter | None = None
     #: Supplied by the agents packet; ``None`` until then.
     spawn_agent: Callable[..., Awaitable[Any]] | None = None
+    #: The ``Task`` subagent service (plan sections 5.6, 15.6). The structured
+    #: form of ``spawn_agent``: it owns authority intersection, the tree budget,
+    #: the child session, and the event relay. ``None`` means the capability is
+    #: unavailable for this call and ``Task`` reports an actionable error.
+    subagents: SubagentServiceView | None = None
     #: Supplied by the tool manager packet; ``None`` until then.
     invoke_tool: Callable[..., Awaitable[Any]] | None = None
     #: Explicit service seams injected by the tool manager (never a Runtime).
@@ -566,6 +603,7 @@ __all__ = [
     "RegisteredTool",
     "SkillActivationSink",
     "SkillServiceView",
+    "SubagentServiceView",
     "TodoStoreView",
     "ToolCall",
     "ToolContext",

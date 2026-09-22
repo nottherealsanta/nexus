@@ -70,6 +70,7 @@ __all__ = [
     "ToolInputError",
     "ToolManager",
     "ToolManagerError",
+    "ToolPreview",
     "ToolSelectionError",
     "validate_tool_input",
 ]
@@ -258,6 +259,23 @@ def validate_tool_input(spec: ToolSpec, tool_input: Mapping[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 # Prepared calls and batches
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ToolPreview:
+    """A non-executing preview of one call's permission shape.
+
+    Used to hand a ``PreToolUse``/``PostToolUse`` hook the canonical permission
+    key and bundle without executing anything. Filesystem and path-mode keys are
+    canonicalized through the manager's :class:`PathGuard`, exactly as
+    :meth:`ToolManager.prepare` would, so a hook matcher such as
+    ``Write(**/*.py)`` sees the same absolute key the permission engine will.
+    """
+
+    name: str
+    bundle: str | None = None
+    key: str | None = None
+    error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -789,6 +807,35 @@ class ToolManager:
             else:
                 entries.append(self._prepare_one(call, guard))
         return PreparedBatch(tuple(entries))
+
+    def preview(self, calls: Sequence[ToolCall | Any]) -> tuple[ToolPreview, ...]:
+        """Canonicalize each call's ``(bundle, key)`` without executing anything.
+
+        This is the seam a ``PreToolUse``/``PostToolUse`` hook uses to match on
+        the canonical permission key (an absolute path for fs/path-mode tools)
+        and bundle. It reuses :meth:`_prepare_one`, so the key it reports is
+        exactly the key the permission engine plans against; an unknown tool or
+        an invalid input reports ``key=None`` plus a sanitized ``error``.
+        """
+        previews: list[ToolPreview] = []
+        for call in calls:
+            normalized = self._coerce_call(call)
+            prepared = self._prepare_one(normalized, self._path_guard)
+            spec = prepared.spec
+            bundle = getattr(spec, "bundle", None)
+            previews.append(
+                ToolPreview(
+                    name=normalized.name,
+                    bundle=bundle if isinstance(bundle, str) else None,
+                    key=prepared.key,
+                    error=(
+                        _first_text(prepared.error)
+                        if prepared.error is not None
+                        else None
+                    ),
+                )
+            )
+        return tuple(previews)
 
     @staticmethod
     def _duplicate_entry(call: ToolCall) -> PreparedCall:

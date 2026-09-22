@@ -362,6 +362,8 @@ class ExtensionManager:
         skills: SkillManager | None = None,
         mcp: Any | None = None,
         sink: Any | None = None,
+        agents: Any | None = None,
+        hooks: Any | None = None,
     ) -> None:
         self._workspace = _absolute(Path(workspace))
         self._home = _absolute(Path(home)) if home is not None else Path.home()
@@ -371,6 +373,15 @@ class ExtensionManager:
         self._skills = skills or SkillManager.for_workspace(
             self._workspace, home=self._home
         )
+        #: The subagent-definition manager (duck-typed) whose discovered set this
+        #: manager folds into each pinned generation. ``None`` keeps agents off.
+        #: ``nexus.ext`` never imports ``nexus.agents`` for it.
+        self._agents = agents
+        #: The lifecycle-hook manager (duck-typed) whose loaded set this manager
+        #: folds into each pinned generation and refreshes on the same rebuild.
+        self._hooks = hooks
+        self._agent_diagnostics: tuple[dict[str, Any], ...] = ()
+        self._hook_diagnostics: tuple[dict[str, Any], ...] = ()
         #: The MCP manager (duck-typed) whose immutable snapshot this manager
         #: folds into each pinned generation. ``None`` keeps MCP off entirely;
         #: ``nexus.ext`` never imports ``nexus.mcp`` for it.
@@ -534,7 +545,21 @@ class ExtensionManager:
             row = failure.to_dict()
             row["kind"] = "mcp"
             rows.append(row)
+        rows.extend(dict(row) for row in self._agent_diagnostics)
+        rows.extend(dict(row) for row in self._hook_diagnostics)
         return tuple(rows)
+
+    # -- agents / hooks ----------------------------------------------------
+
+    @property
+    def agents(self) -> Any | None:
+        """The duck-typed agent-definition manager, or ``None``."""
+        return self._agents
+
+    @property
+    def hooks(self) -> Any | None:
+        """The duck-typed lifecycle-hook manager, or ``None``."""
+        return self._hooks
 
     # -- MCP ---------------------------------------------------------------
 
@@ -982,7 +1007,70 @@ class ExtensionManager:
 
         report = self._report(previous, candidate, result.diff, True, (), start)
         await self._emit_changes(active_sink, trigger, previous, candidate, report)
+        await self._run_extension_loaded_hooks(active_sink, previous, candidate)
         return report
+
+    async def _run_extension_loaded_hooks(
+        self, sink: Any | None, previous: Manifest, current: Manifest
+    ) -> None:
+        """Fire ``ExtensionLoaded`` hooks from the newly installed generation.
+
+        Runs only when this generation actually added tools or agent definitions,
+        using exactly the generation's own hook specs, and persists
+        ``hook.fired``/``hook.blocked`` through the same sink as every other
+        reload event. A broken hook never fails a reload.
+        """
+        hooks = self._hooks
+        if hooks is None:
+            return
+        hook_map = getattr(current, "hooks", None)
+        specs = (
+            tuple(hook_map.get("ExtensionLoaded", ()))
+            if isinstance(hook_map, Mapping)
+            else ()
+        )
+        if not specs:
+            return
+        loaded_tools = sorted(set(current.tools) - set(previous.tools))
+        loaded_agents = sorted(set(current.agents) - set(previous.agents))
+        if not loaded_tools and not loaded_agents:
+            return
+        try:
+            outcome = await hooks.run(
+                "ExtensionLoaded",
+                {
+                    "data": {
+                        "tools": loaded_tools,
+                        "agents": loaded_agents,
+                        "generation": current.generation,
+                    }
+                },
+                specs=specs,
+            )
+        except Exception:  # noqa: BLE001 - a broken hook never fails a reload
+            return
+        payload = outcome.to_dict() if hasattr(outcome, "to_dict") else {}
+        for decision in payload.get("decisions", ()) or ():
+            if not isinstance(decision, Mapping):
+                continue
+            await self._emit(
+                sink,
+                "hook.fired",
+                {
+                    "event": "ExtensionLoaded",
+                    "hook": decision.get("hook"),
+                    "action": decision.get("action"),
+                },
+            )
+        if str(payload.get("decision")) == "block":
+            await self._emit(
+                sink,
+                "hook.blocked",
+                {
+                    "event": "ExtensionLoaded",
+                    "reason": payload.get("reason") or "blocked by hook",
+                },
+            )
 
     def _report(
         self,
@@ -1100,12 +1188,22 @@ class ExtensionManager:
         }
         for item in skill_loaded.values():
             modules_map[item.record.handle.name] = item.record.handle
+        # Agents and hooks are refreshed by the *same* build, so the manifest,
+        # the tool world, and the hook/agent managers advance together. A build
+        # that already failed (so will not swap) never refreshes them, keeping
+        # the live managers consistent with the retained generation.
+        agents_map: dict[str, Any] = {}
+        hooks_map: dict[str, tuple[Any, ...]] = {}
+        if not all_failures:
+            agents_map, hooks_map = self._refresh_agents_and_hooks(config)
         candidate = Manifest(
             generation=generation,
             config=config,
             tools=tools_map,
             skills=skills_map,
             skill_tools=skill_tools,
+            agents=agents_map,
+            hooks=hooks_map,
             system_files=system_files,
             modules=modules_map,
             mcp=mcp_map,
@@ -1168,6 +1266,65 @@ class ExtensionManager:
                 name=logical, content=content, path=str(path)
             )
         return SystemFiles(files=files), failures
+
+    def _refresh_agents_and_hooks(
+        self, config: Config
+    ) -> tuple[dict[str, Any], dict[str, tuple[Any, ...]]]:
+        """Refresh the agent/hook managers and return their manifest views.
+
+        Discovery is failure-isolated exactly like tools: a broken ``*.md`` or a
+        hook whose Python fails to import is recorded as a sanitized diagnostic
+        and dropped, never failing the rebuild. Both managers reuse unchanged
+        objects (so the manifest diff does not churn) and release the modules a
+        semantic change dropped. ``[agents].enabled``/``[hooks].enabled`` turn
+        each side off without touching the other.
+        """
+        v2 = getattr(config, "v2", None)
+        agents_section = getattr(v2, "agents", None)
+        hooks_section = getattr(v2, "hooks", None)
+
+        agents_map: dict[str, Any] = {}
+        self._agent_diagnostics = ()
+        if self._agents is not None and getattr(agents_section, "enabled", True):
+            with contextlib.suppress(Exception):
+                self._agents.refresh()
+            agents_map = {
+                agent.name: agent for agent in getattr(self._agents, "agents", ())
+            }
+            self._agent_diagnostics = tuple(
+                self._agent_diagnostic_rows(getattr(self._agents, "diagnostics", ()))
+            )
+
+        hooks_map: dict[str, tuple[Any, ...]] = {}
+        self._hook_diagnostics = ()
+        if self._hooks is not None and getattr(hooks_section, "enabled", True):
+            with contextlib.suppress(Exception):
+                self._hooks.refresh()
+            as_map = getattr(self._hooks, "as_manifest_map", None)
+            if callable(as_map):
+                hooks_map = {event: tuple(specs) for event, specs in as_map().items()}
+            self._hook_diagnostics = tuple(
+                dict(row) for row in getattr(self._hooks, "diagnostics", lambda: ())()
+            )
+        return agents_map, hooks_map
+
+    @staticmethod
+    def _agent_diagnostic_rows(diagnostics: Iterable[Any]) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for diagnostic in diagnostics or ():
+            rows.append(
+                {
+                    "kind": "agent",
+                    "name": getattr(diagnostic, "name", None),
+                    "code": str(getattr(diagnostic, "code", "")),
+                    "message": sanitize_text(str(getattr(diagnostic, "message", ""))),
+                    "path": sanitize_text(
+                        str(getattr(diagnostic, "path", "") or ""), limit=200
+                    ),
+                    "shadowed_by": getattr(diagnostic, "shadowed_by", None),
+                }
+            )
+        return rows
 
     def _discover_skills(
         self,

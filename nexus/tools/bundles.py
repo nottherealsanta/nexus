@@ -125,6 +125,7 @@ PROFILES: Mapping[str, Profile] = MappingProxyType(
         "research": Profile(
             name="research",
             bundles=("fs", "mcp"),
+            include=("Task",),
             exclude=("Write", "Edit", "MultiEdit"),
             read_only=True,
         ),

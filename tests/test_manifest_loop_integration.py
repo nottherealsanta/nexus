@@ -313,11 +313,11 @@ async def test_reload_refreshes_config_soul_memory_skills_next_iteration(tmp_pat
     # Iteration 1: the turn-start snapshot.
     assert "SOUL-A" in first.system and "MEMORY-A" in first.system
     assert "reader:" not in first.system
-    assert len(first.tools) == 15
+    assert len(first.tools) == 16  # Phase 6 adds the Task (subagent) tool
     # Iteration 2: the reloaded manifest.
     assert "SOUL-B" in second.system and "MEMORY-B" in second.system
     assert "reader: read things" in second.system
-    assert len(second.tools) == 4  # research profile
+    assert len(second.tools) == 5  # research profile (+Task)
     await runtime.aclose()
 
 

@@ -31,6 +31,8 @@ open a second handle (or evict and reopen) instead.
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import secrets
 import threading
 from collections.abc import AsyncIterator, Callable
@@ -70,6 +72,7 @@ class SessionManager:
         auto_start_queued: bool = True,
         ensure_ready: Callable[[], Any] | None = None,
         turn_cleanup: Callable[[str, str], None] | None = None,
+        hooks: Callable[[], Any] | None = None,
     ):
         self.directory = Path(directory)
         self.store = store if store is not None else SessionStore(self.directory)
@@ -94,6 +97,9 @@ class SessionManager:
         # bootstrapping extensions and dropping session/turn-local state).
         self._ensure_ready = ensure_ready
         self._turn_cleanup = turn_cleanup
+        # Optional provider of the current manifest's hook runner, forwarded to
+        # each handle so session-level lifecycle hooks run against the pinned set.
+        self._hooks = hooks
         #: One live :class:`Session` handle per id, so every caller that reaches
         #: the same session through this manager shares one bus, presence count,
         #: input queue, and active turn. Guarded for thread safety because
@@ -133,6 +139,11 @@ class SessionManager:
             self.migrate(session_id)
         with self._handles_lock:
             cached = self._handles.get(session_id)
+            if cached is not None and getattr(cached, "_session_ended", False):
+                # A closed handle must never be handed out again: drop it and
+                # build a fresh one so a reopened session gets a live bus.
+                self._handles.pop(session_id, None)
+                cached = None
             if cached is not None:
                 # Re-opening an already-live handle still honors ``recover``:
                 # crash recovery is idempotent and never writes while this handle
@@ -159,6 +170,7 @@ class SessionManager:
                 auto_start_queued=self._auto_start_queued,
                 ensure_ready=self._ensure_ready,
                 turn_cleanup=self._turn_cleanup,
+                hooks=self._hooks,
             )
             if recover:
                 session.recover_dangling_tool_uses()
@@ -189,7 +201,12 @@ class SessionManager:
                     f"(active={session.active}, viewers={session.viewers}); "
                     "refusing to evict"
                 )
-            return self._handles.pop(session_id)
+            evicted = self._handles.pop(session_id)
+        # Fire ``SessionEnd`` for the retired handle. A synchronous caller with a
+        # running loop gets the close scheduled; otherwise an explicit
+        # :meth:`aclose_session`/``await handle.aclose()`` performs it.
+        self._schedule_session_end(evicted)
+        return evicted
 
     def close(self, session_id: str) -> bool:
         """Alias for :meth:`evict` returning whether a handle was dropped."""
@@ -200,12 +217,41 @@ class SessionManager:
 
         This is the shutdown seam and deliberately **forces** eviction even for
         handles that are active or viewed; the caller is expected to have torn
-        those down first.
+        those down first. Each retired handle's ``SessionEnd`` is scheduled (or
+        awaited via :meth:`aclose_all`).
         """
         with self._handles_lock:
             handles = list(self._handles.values())
             self._handles.clear()
-            return handles
+        for handle in handles:
+            self._schedule_session_end(handle)
+        return handles
+
+    @staticmethod
+    def _schedule_session_end(session: Session) -> None:
+        """Best-effort schedule of ``session.aclose()`` on the running loop."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(session.aclose())
+
+    async def aclose_session(self, session_id: str) -> bool:
+        """Evict one idle session and await its ``SessionEnd`` hook/bus close."""
+        session = self.evict(session_id)
+        if session is None:
+            return False
+        with contextlib.suppress(Exception):
+            await session.aclose()
+        return True
+
+    async def aclose_all(self) -> list[Session]:
+        """Evict every handle and await each ``SessionEnd`` before returning."""
+        handles = self.close_all()
+        for handle in handles:
+            with contextlib.suppress(Exception):
+                await handle.aclose()
+        return handles
 
     @property
     def live_sessions(self) -> tuple[str, ...]:

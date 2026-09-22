@@ -102,6 +102,8 @@ __all__ = [
     "EnvironmentFactory",
     "EvaluationView",
     "EventSink",
+    "HookOutcomeView",
+    "HookRunner",
     "IterationEnvironment",
     "ManifestLeaseView",
     "ManifestRefView",
@@ -113,6 +115,7 @@ __all__ = [
     "SessionView",
     "ToolCallView",
     "ToolDispatcher",
+    "ToolPreviewView",
     "TurnLeaseView",
     "run_turn",
 ]
@@ -261,6 +264,77 @@ class ManifestRefView(Protocol):
     def pin(self) -> ManifestLeaseView: ...
 
 
+class HookOutcomeView(Protocol):
+    """The aggregate result of one lifecycle event's hooks (plan section 5.7).
+
+    Structurally matches :class:`nexus.hooks.model.HookOutcome`. ``blocked`` and
+    ``modified``/``modified_input`` are the only fields the loop acts on; a
+    ``modify`` input the loop applies must be revalidated against the tool schema
+    and re-gated before it is dispatched. ``to_dict`` is used to persist
+    ``hook.fired``/``hook.blocked``.
+    """
+
+    @property
+    def blocked(self) -> bool: ...
+
+    @property
+    def reason(self) -> str: ...
+
+    @property
+    def modified(self) -> bool: ...
+
+    @property
+    def modified_input(self) -> Mapping[str, Any] | None: ...
+
+    def to_dict(self) -> dict[str, Any]: ...
+
+
+class HookRunner(Protocol):
+    """Runs one pinned generation's lifecycle hooks.
+
+    The loop names only the lifecycle events and the tool hooks; the concrete
+    runner (a runtime adapter over the hook manager) owns discovery, matching,
+    timeouts, and the ``block``/``modify`` semantics. Every method returns a
+    :class:`HookOutcomeView` so the loop can persist the decision and act on a
+    block/modify without importing ``nexus.hooks``.
+    """
+
+    async def lifecycle(
+        self,
+        event: str,
+        *,
+        session_id: str,
+        turn_id: str,
+        data: Mapping[str, Any] | None = None,
+        cancel: CancelToken | None = None,
+    ) -> HookOutcomeView: ...
+
+    async def pre_tool_use(
+        self,
+        *,
+        tool: str,
+        key: str | None = None,
+        bundle: str | None = None,
+        tool_input: Mapping[str, Any],
+        session_id: str,
+        turn_id: str,
+        cancel: CancelToken | None = None,
+    ) -> HookOutcomeView: ...
+
+    async def post_tool_use(
+        self,
+        *,
+        tool: str,
+        key: str | None = None,
+        bundle: str | None = None,
+        tool_input: Mapping[str, Any],
+        result: Mapping[str, Any] | None = None,
+        session_id: str,
+        turn_id: str,
+        cancel: CancelToken | None = None,
+    ) -> HookOutcomeView: ...
+
+
 class IterationEnvironment(Protocol):
     """Everything one loop iteration draws from a single pinned generation.
 
@@ -282,6 +356,9 @@ class IterationEnvironment(Protocol):
 
     @property
     def gate(self) -> PermissionGate | None: ...
+
+    @property
+    def hooks(self) -> HookRunner | None: ...
 
 
 class EnvironmentFactory(Protocol):
@@ -399,10 +476,32 @@ class PermissionGate(Protocol):
     def cancel_pending(self) -> None: ...
 
 
+class ToolPreviewView(Protocol):
+    """A non-executing preview of one call's bundle and canonical key."""
+
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def bundle(self) -> str | None: ...
+
+    @property
+    def key(self) -> str | None: ...
+
+
 class ToolDispatcher(Protocol):
     """Validation/preparation plus gated dispatch, preserving result order."""
 
     def prepare(self, tool_uses: Sequence[ToolUse], /) -> PreparedBatchView: ...
+
+    def preview(self, tool_uses: Sequence[ToolUse], /) -> Sequence[ToolPreviewView]:
+        """Preview each call's canonical ``(bundle, key)`` without executing.
+
+        Optional in practice (the loop duck-types it): the concrete adapter
+        canonicalizes fs/path-mode keys through its ``PathGuard`` so a
+        ``PreToolUse`` hook matches the same key the permission engine will.
+        """
+        ...
 
     async def dispatch(
         self,
@@ -568,12 +667,33 @@ def _call_environment_factory(
     session: SessionView,
     lease: ManifestLeaseView,
     iteration: int,
+    *,
+    cancel: CancelToken | None = None,
 ) -> IterationEnvironment | Awaitable[IterationEnvironment]:
-    """Invoke an environment factory, tolerating a ``for_iteration`` method."""
+    """Invoke an environment factory, tolerating a ``for_iteration`` method.
+
+    ``cancel`` is passed only when the factory accepts it, so existing factories
+    keep working while a manifest environment can wire it into the PreCompact
+    gate (a command hook then cancels with the turn).
+    """
     method = getattr(factory, "for_iteration", None)
-    if method is not None:
-        return method(session, lease, iteration)
-    return factory(session, lease, iteration)
+    if method is None:
+        method = factory
+    if _accepts_keyword(method, "cancel"):
+        return method(session, lease, iteration, cancel=cancel)
+    return method(session, lease, iteration)
+
+
+def _accepts_keyword(func: object, name: str) -> bool:
+    try:
+        params = inspect.signature(func).parameters
+    except (TypeError, ValueError):  # pragma: no cover - builtins/opaque callables
+        return False
+    if name in params:
+        return True
+    return any(
+        param.kind is inspect.Parameter.VAR_KEYWORD for param in params.values()
+    )
 
 
 async def _forward_cancel(source: CancelToken, target: CancelToken) -> None:
@@ -1117,6 +1237,48 @@ def _error_result(tool_use_id: str, name: str, detail: str) -> ToolResult:
     )
 
 
+def _hook_missing_result(block: ToolUse) -> ToolResult:
+    """A defensive result for a call the dispatcher did not return a result for."""
+    return ToolResult(
+        tool_use_id=block.id,
+        content=[Text(text=f"{block.name}: no result was produced")],
+        is_error=True,
+    )
+
+
+#: Per-text-block and total bounds for the result view handed to ``PostToolUse``.
+_MAX_POST_RESULT_CHARS = 4000
+_MAX_POST_RESULT_TOTAL = 16000
+
+
+def _tool_result_view(result: object, call_id: str) -> dict[str, Any]:
+    """A bounded, JSON-safe view of a dispatched tool result for ``PostToolUse``.
+
+    The hook sees the *actual* result text (not just a status), capped so a huge
+    tool output cannot blow the hook's stdin budget.
+    """
+    texts: list[str] = []
+    total = 0
+    for block in getattr(result, "content", ()) or ():
+        text = getattr(block, "text", None)
+        if not isinstance(text, str) or not text:
+            continue
+        chunk = text[:_MAX_POST_RESULT_CHARS]
+        if total + len(chunk) > _MAX_POST_RESULT_TOTAL:
+            chunk = chunk[: max(0, _MAX_POST_RESULT_TOTAL - total)]
+        if chunk:
+            texts.append(chunk)
+            total += len(chunk)
+        if total >= _MAX_POST_RESULT_TOTAL:
+            break
+    return {
+        "tool_use_id": getattr(result, "tool_use_id", call_id) or call_id,
+        "is_error": bool(getattr(result, "is_error", False)),
+        "content": texts,
+        "context_note": getattr(result, "context_note", None),
+    }
+
+
 def _result_for_entry(entry: object, detail: str) -> ToolResult:
     """Best-effort IR error result for a prepared entry (harness failure path)."""
     call = getattr(entry, "call", None)
@@ -1174,6 +1336,81 @@ async def _emit_terminal(emitter: _Emitter, state: TurnState) -> None:
         )
 
 
+def _hook_payload(outcome: object) -> dict[str, Any]:
+    if isinstance(outcome, Mapping):
+        return dict(outcome)
+    to_dict = getattr(outcome, "to_dict", None)
+    if callable(to_dict):
+        try:
+            payload = to_dict()
+        except Exception:  # noqa: BLE001 - a bad hook result must not break a turn
+            return {}
+        if isinstance(payload, Mapping):
+            return dict(payload)
+    return {}
+
+
+async def _persist_hook_events(
+    emitter: _Emitter, outcome: object, event_name: str
+) -> None:
+    """Persist ``hook.fired``/``hook.blocked`` for one lifecycle outcome.
+
+    Hook events are part of the durable session log, so a replay reconstructs
+    exactly which hooks ran and what they decided.
+    """
+    payload = _hook_payload(outcome)
+    decisions = payload.get("decisions")
+    if isinstance(decisions, Sequence):
+        for decision in decisions:
+            if not isinstance(decision, Mapping):
+                continue
+            await emitter.emit(
+                "hook.fired",
+                {
+                    "event": event_name,
+                    "hook": decision.get("hook"),
+                    "action": decision.get("action"),
+                },
+            )
+    if str(payload.get("decision")) == "block":
+        await emitter.emit(
+            "hook.blocked",
+            {
+                "event": event_name,
+                "reason": payload.get("reason") or "blocked by hook",
+            },
+        )
+
+
+async def _run_lifecycle_hook(
+    hook_runner: HookRunner | None,
+    emitter: _Emitter,
+    event: str,
+    *,
+    session_id: str,
+    turn_id: str,
+    data: Mapping[str, Any] | None = None,
+    cancel: CancelToken | None = None,
+) -> object | None:
+    """Run one lifecycle hook event, persisting its decisions; never fatal."""
+    if hook_runner is None:
+        return None
+    try:
+        outcome = await hook_runner.lifecycle(
+            event,
+            session_id=session_id,
+            turn_id=turn_id,
+            data=data or {},
+            cancel=cancel,
+        )
+    except (OperationCancelled, asyncio.CancelledError):
+        raise
+    except Exception:  # noqa: BLE001 - a broken hook never fails the turn
+        return None
+    await _persist_hook_events(emitter, outcome, event)
+    return outcome
+
+
 # ---------------------------------------------------------------------------
 # The loop
 # ---------------------------------------------------------------------------
@@ -1195,6 +1432,7 @@ async def run_turn(
     persist_user_message: bool = True,
     manifest_ref: ManifestRefView | None = None,
     environment_for: EnvironmentFactory | None = None,
+    hooks: HookRunner | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> TurnOutcome:
     """Run one turn to a terminal state and return its outcome.
@@ -1272,6 +1510,9 @@ async def run_turn(
 
     try:
         await emitter.emit("turn.started", {"limits": _limits_data(limits)})
+        # ``SessionStart``/``UserPromptSubmit`` run in the session layer, before
+        # the user message is persisted, so a block leaves no orphan prompt and a
+        # modify is durable. The loop only fires the per-iteration/turn hooks.
         if persist_user_message:
             session.append_message(
                 Message(
@@ -1300,7 +1541,11 @@ async def run_turn(
                 try:
                     environment = await _maybe_await(
                         _call_environment_factory(
-                            environment_for, session, manifest_lease, state.iteration
+                            environment_for,
+                            session,
+                            manifest_lease,
+                            state.iteration,
+                            cancel=token,
                         )
                     )
                 except BaseException:
@@ -1321,11 +1566,32 @@ async def run_turn(
                 if environment is not None
                 else gate
             )
+            iteration_hooks = (
+                getattr(environment, "hooks", None)
+                if environment is not None
+                else hooks
+            ) or hooks
 
             request = await _maybe_await(_call_assembler(iteration_assemble, session))
             request_metadata = (
                 request.metadata if isinstance(request.metadata, dict) else {}
             )
+            # The assembler ran the pinned PreCompact gate before compacting. Its
+            # decisions are persisted here; a block prevents compaction (no
+            # summary) and fails the turn actionably before the model is called.
+            pre_compact_meta = request_metadata.get("pre_compact")
+            if isinstance(pre_compact_meta, Mapping):
+                outcome = pre_compact_meta.get("outcome")
+                if isinstance(outcome, Mapping):
+                    await _persist_hook_events(emitter, outcome, "PreCompact")
+                if pre_compact_meta.get("blocked"):
+                    reason = str(
+                        pre_compact_meta.get("reason")
+                        or "blocked by PreCompact hook"
+                    )
+                    terminal = state.fail(f"PreCompact blocked: {reason}")
+                    _release_manifest()
+                    break
             assembled_data: dict[str, Any] = {
                 "iteration": state.iteration,
                 "messages": len(request.messages),
@@ -1340,6 +1606,15 @@ async def run_turn(
             if isinstance(cache_meta, dict):
                 assembled_data["cache"] = dict(cache_meta)
             await emitter.emit("context.assembled", assembled_data)
+            await _run_lifecycle_hook(
+                iteration_hooks,
+                emitter,
+                "ContextAssembled",
+                session_id=session_id,
+                turn_id=turn_id,
+                data=assembled_data,
+                cancel=token,
+            )
             compacted = (
                 context_meta.get("compacted")
                 if isinstance(context_meta, dict)
@@ -1536,7 +1811,102 @@ async def run_turn(
                 _release_manifest()
                 continue
 
-            prepared = iteration_tools.prepare(tool_uses)
+            # PreToolUse runs over the *whole* batch before anything is prepared,
+            # gated, or dispatched. A block becomes an exact sanitized error
+            # ToolResult; a modify rewrites the call's input, which is then
+            # revalidated by ``prepare`` and re-gated by ``plan`` below.
+            dispatch_uses = list(tool_uses)
+            blocked_results: dict[str, ToolResult] = {}
+            if iteration_hooks is not None:
+                previews = None
+                preview_fn = getattr(iteration_tools, "preview", None)
+                if callable(preview_fn):
+                    try:
+                        previews = list(preview_fn(tool_uses))
+                    except Exception:  # noqa: BLE001 - a preview never fails a turn
+                        previews = None
+                for index, block in enumerate(tool_uses):
+                    preview = (
+                        previews[index]
+                        if previews is not None and index < len(previews)
+                        else None
+                    )
+                    bundle: str | None = None
+                    key: str | None = None
+                    if preview is not None:
+                        bundle = getattr(preview, "bundle", None)
+                        key = getattr(preview, "key", None)
+                    else:
+                        bundle_for = getattr(iteration_tools, "bundle_for", None)
+                        if callable(bundle_for):
+                            try:
+                                bundle = bundle_for(block.name)
+                            except Exception:  # noqa: BLE001
+                                bundle = None
+                    try:
+                        outcome = await iteration_hooks.pre_tool_use(
+                            tool=block.name,
+                            key=key,
+                            bundle=bundle,
+                            tool_input=dict(block.input),
+                            session_id=session_id,
+                            turn_id=turn_id,
+                            cancel=token,
+                        )
+                    except (OperationCancelled, asyncio.CancelledError):
+                        raise
+                    except Exception:  # noqa: BLE001 - a broken hook never fails a turn
+                        outcome = None
+                    if outcome is None:
+                        continue
+                    await _persist_hook_events(emitter, outcome, "PreToolUse")
+                    if getattr(outcome, "blocked", False):
+                        reason = str(getattr(outcome, "reason", "") or "").strip()
+                        reason = reason or "blocked by PreToolUse hook"
+                        blocked_results[block.id] = ToolResult(
+                            tool_use_id=block.id,
+                            content=[
+                                Text(
+                                    text=(
+                                        f"{block.name}: blocked by PreToolUse "
+                                        f"hook: {reason}"
+                                    )
+                                )
+                            ],
+                            is_error=True,
+                        )
+                    elif getattr(outcome, "modified", False):
+                        modified = getattr(outcome, "modified_input", None)
+                        if isinstance(modified, Mapping):
+                            dispatch_uses[index] = ToolUse(
+                                id=block.id,
+                                name=block.name,
+                                input=dict(modified),
+                            )
+
+            # A hook-blocked call never reaches prepare/gate/dispatch. Merge
+            # results back in the model's original call order so history stays
+            # a valid tool_use/tool_result pairing.
+            active_uses = [
+                block for block in dispatch_uses if block.id not in blocked_results
+            ]
+
+            def _merge_results(
+                dispatch_results,
+                _uses=tool_uses,
+                _blocked=blocked_results,
+            ) -> list[ToolResult]:
+                ordered: list[ToolResult] = []
+                iterator = iter(dispatch_results)
+                for block in _uses:
+                    blocked = _blocked.get(block.id)
+                    if blocked is not None:
+                        ordered.append(blocked)
+                    else:
+                        ordered.append(next(iterator, _hook_missing_result(block)))
+                return ordered
+
+            prepared = iteration_tools.prepare(active_uses)
             # Duplicate-id rejections are a malformed batch and count against the
             # same budget as malformed streamed arguments (Phase 2 consistency).
             malformed_total += sum(
@@ -1575,7 +1945,7 @@ async def run_turn(
                 session.append_message(
                     Message(
                         role="user",
-                        content=content,
+                        content=_merge_results(content),
                         meta=MessageMeta(turn_id=turn_id),
                     )
                 )
@@ -1636,12 +2006,49 @@ async def run_turn(
                 ),
             )
 
+            # PostToolUse observes the outcome of every dispatched call. It cannot
+            # change the persisted result; a modify/block here is advisory. The
+            # canonical key/bundle come from the prepared entries (so a hook
+            # matcher sees the same key the gate planned against, including for a
+            # PreToolUse-modified call).
+            if iteration_hooks is not None:
+                entries = getattr(prepared, "entries", ())
+                for offset, (block, result) in enumerate(
+                    zip(active_uses, results)
+                ):
+                    entry = entries[offset] if offset < len(entries) else None
+                    spec = getattr(entry, "spec", None)
+                    bundle = getattr(spec, "bundle", None)
+                    try:
+                        post = await iteration_hooks.post_tool_use(
+                            tool=block.name,
+                            key=getattr(entry, "key", None),
+                            bundle=bundle if isinstance(bundle, str) else None,
+                            tool_input=dict(block.input),
+                            result=_tool_result_view(result, block.id),
+                            session_id=session_id,
+                            turn_id=turn_id,
+                            cancel=token,
+                        )
+                    except (OperationCancelled, asyncio.CancelledError):
+                        raise
+                    except Exception:  # noqa: BLE001
+                        post = None
+                    if post is not None:
+                        await _persist_hook_events(emitter, post, "PostToolUse")
+
+            # Rebuild the result list in the model's original call order: a
+            # hook-blocked call contributes its exact sanitized result, and every
+            # other call consumes the next dispatch result in order (so duplicate
+            # call ids can never collapse two results into one).
+            final_results = _merge_results(list(results))
+
             # Exactly one result message, in original call order, only after
             # every execution has finished.
             session.append_message(
                 Message(
                     role="user",
-                    content=list(results),
+                    content=list(final_results),
                     meta=MessageMeta(turn_id=turn_id),
                 )
             )
@@ -1688,6 +2095,23 @@ async def run_turn(
                 terminal = state.fail("turn ended without a terminal state")
             if terminal is None:  # pragma: no cover - state.fail always succeeds
                 terminal = state
+            # TurnEnd observes every terminal outcome (completed/failed/
+            # cancelled). A cancelled turn must still emit its terminal event, so
+            # this hook can never abort cleanup.
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await _run_lifecycle_hook(
+                    hooks,
+                    emitter,
+                    "TurnEnd",
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    data={
+                        "phase": terminal.phase,
+                        "stop_reason": terminal.stop_reason,
+                        "iterations": terminal.iteration,
+                        "error": terminal.error,
+                    },
+                )
             await _emit_terminal(emitter, terminal)
         finally:
             _release_manifest()

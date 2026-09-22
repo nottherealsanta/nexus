@@ -117,7 +117,7 @@ async def test_declared_tools_narrow_the_next_iteration(tmp_path):
 
     await drain(session)
 
-    assert len(names(provider.requests[0])) == 15
+    assert len(names(provider.requests[0])) == 16
     assert names(provider.requests[1]) == ["Read"]
     await runtime.aclose()
 
@@ -148,7 +148,7 @@ async def test_declaration_of_nothing_does_not_narrow(tmp_path):
 
     await drain(session)
 
-    assert len(names(provider.requests[1])) == 15
+    assert len(names(provider.requests[1])) == 16
     await runtime.aclose()
 
 
@@ -200,7 +200,7 @@ async def test_activation_does_not_leak_to_another_session(tmp_path):
 
     await b.start_turn("go")
     await wait_until_idle(b)
-    assert len(recorded["b_tools"]) == 15  # B is unaffected by A's activation
+    assert len(recorded["b_tools"]) == 16  # B is unaffected by A's activation
 
     release.set()
     await wait_until_idle(a)
@@ -255,7 +255,7 @@ async def test_activation_is_cleared_when_the_turn_finishes(tmp_path):
     assert runtime._activations.get(session.id) is None
 
     await drain(session)
-    assert len(names(provider.requests[2])) == 15
+    assert len(names(provider.requests[2])) == 16
     await runtime.aclose()
 
 

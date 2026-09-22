@@ -33,7 +33,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import inspect
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,15 +43,19 @@ from typing import TYPE_CHECKING, Any, Self
 
 import msgspec
 
+from .agents import SubagentOutcome, SubagentRunner, SubagentUsage
 from .config import Config
 from .context import ContextManager
 from .context.cache import TokenCountCache
 from .context.counting import RequestTokenCounter
 from .core.bus import DROP_OLDEST, Bus
 from .core.cancel import CancelToken
+from .core.loop import run_turn
 from .core.turn import TurnLimits
 from .errors import ConfigError, OperationCancelled
 from .events import Event
+from .hooks import HookEvent, HookInvocation, HookManager, HookOutcome
+from .model.message import Text
 from .model.provider import Provider
 from .model.providers.anthropic import AnthropicProvider
 from .model.registry import ModelRegistry
@@ -110,6 +116,7 @@ class _ToolDispatcherAdapter:
         skills: Any | None = None,
         extensions: Any | None = None,
         activations: Any | None = None,
+        subagents: Any | None = None,
     ) -> None:
         self.manager = manager
         self._workspace = Path(workspace)
@@ -122,10 +129,25 @@ class _ToolDispatcherAdapter:
         self._skills = skills
         self._extensions = extensions
         self._activations = activations
+        #: The ``Task`` subagent service for this iteration. Injected into every
+        #: ``ToolContext`` so the builtin never imports ``nexus.agents``.
+        self._subagents = subagents
 
     def prepare(self, tool_uses):
         calls = [ToolCall.from_tool_use(block) for block in tool_uses]
         return self.manager.prepare(calls)
+
+    def bundle_for(self, name: object) -> str | None:
+        """The bundle of a named tool, for hook matchers (``Bundle:fs``)."""
+        tool = self.manager.get(name) if name is not None else None
+        spec = getattr(tool, "spec", None)
+        bundle = getattr(spec, "bundle", None)
+        return bundle if isinstance(bundle, str) else None
+
+    def preview(self, tool_uses):
+        """Preview canonical ``(bundle, key)`` for each call; executes nothing."""
+        calls = [ToolCall.from_tool_use(block) for block in tool_uses]
+        return self.manager.preview(calls)
 
     def _ctx_factory(self, call: ToolCall, spec: Any) -> ToolContext:
         return ToolContext(
@@ -136,6 +158,7 @@ class _ToolDispatcherAdapter:
             skills=self._skills,
             extensions=self._extensions,
             activations=self._activations,
+            subagents=self._subagents,
         )
 
     async def dispatch(
@@ -365,6 +388,9 @@ class _ContextCoordinator:
         system_files: Any = None,
         skills_index: Any = None,
         mcp_index: Any = None,
+        pre_compact: Any = None,
+        turn_id: str | None = None,
+        iteration: int = 0,
     ) -> Any:
         """Build one iteration's assembler from a pinned manifest generation.
 
@@ -414,6 +440,9 @@ class _ContextCoordinator:
             request_counter=request_counter,
             model=model,
             provider=provider_name,
+            pre_compact=pre_compact,
+            turn_id=turn_id,
+            iteration=iteration,
         )
 
 
@@ -425,6 +454,7 @@ class _IterationEnv:
     dispatcher: Any
     gate: Any
     manager: Any
+    hooks: Any | None = None
 
     def assemble(self, session: Any) -> Any:
         assemble = getattr(self.assembler, "assemble", None)
@@ -454,6 +484,7 @@ class _ManifestEnvironmentFactory:
         gate: _PermissionGateAdapter,
         path_guard: PathGuard,
         permissions: Any | None = None,
+        budget: Any | None = None,
     ) -> None:
         self._runtime = runtime
         self._session = session
@@ -466,13 +497,17 @@ class _ManifestEnvironmentFactory:
         #: sampling, profile, and context, but the absolute deny rules, write
         #: roots, and read denyroots stay exactly as they were at turn start.
         self._turn_permissions = permissions
+        #: The turn-scoped subagent tree budget, shared across every iteration and
+        #: every child/grandchild, so token/cost spend accumulates over the turn
+        #: instead of resetting each iteration.
+        self._budget = budget
 
     # The loop may call either form; keep both for protocol flexibility.
     def __call__(self, session: Any, lease: Any, iteration: int) -> _IterationEnv:
         return self.for_iteration(session, lease, iteration)
 
     def for_iteration(
-        self, session: Any, lease: Any, iteration: int
+        self, session: Any, lease: Any, iteration: int, *, cancel: Any = None
     ) -> _IterationEnv:
         runtime = self._runtime
         manifest = lease.manifest
@@ -486,6 +521,19 @@ class _ManifestEnvironmentFactory:
             tuple(skills.values()) if isinstance(skills, Mapping) else ()
         )
 
+        # The pinned generation's hooks, so a concurrent reload cannot change
+        # what this iteration enforces.
+        hooks_service = None
+        if runtime._hooks is not None:
+            hooks_service = _HookService(
+                runtime._hooks,
+                getattr(manifest, "hooks", None),
+                workspace=runtime.workspace,
+            )
+        session_id = getattr(session, "id", self._session.id)
+        pre_compact = runtime._pre_compact_gate(
+            hooks_service, session_id, self._turn_id, iteration, cancel
+        )
         assembler = runtime._assembler.for_iteration(
             config=config,
             system_files=system_files,
@@ -494,18 +542,30 @@ class _ManifestEnvironmentFactory:
             # resource roots only, folded by the context layer into its
             # untrusted ``mcp_index`` part.
             mcp_index=getattr(manifest, "mcp", None),
+            pre_compact=pre_compact,
+            turn_id=self._turn_id,
+            iteration=iteration,
         )
         activation = self._activation_for(session)
         skill_tools = self._skill_tools_for(manifest, activation)
-        catalog = (
+        base_catalog = (
             tuple(manifest.tools.values()) + skill_tools
             if isinstance(getattr(manifest, "tools", None), Mapping)
             else skill_tools
         )
+        restrict = self._restrict_for(activation, skill_tools)
+        runner = self._subagent_runner(
+            runtime, config, base_catalog, session_id, restrict, hooks_service
+        )
+        catalog = base_catalog
+        if runner is not None:
+            from .tools.builtin.task import build_task_tool
+
+            catalog = (*base_catalog, build_task_tool(runner))
         manager = runtime._build_iteration_manager(
             config,
             manifest,
-            restrict=self._restrict_for(activation, skill_tools),
+            restrict=restrict,
             catalog=catalog,
             path_guard=self._path_guard,
         )
@@ -518,18 +578,59 @@ class _ManifestEnvironmentFactory:
         dispatcher = _ToolDispatcherAdapter(
             manager,
             workspace=runtime.workspace,
-            session_id=getattr(session, "id", self._session.id),
+            session_id=session_id,
             turn_id=self._turn_id,
             config=config,
             skills=runtime._skills,
             extensions=runtime._extensions,
             activations=runtime._activations,
+            subagents=runner,
         )
         return _IterationEnv(
             assembler=assembler,
             dispatcher=dispatcher,
             gate=self._gate,
             manager=manager,
+            hooks=hooks_service,
+        )
+
+    def _subagent_runner(
+        self,
+        runtime: Runtime,
+        config: Config,
+        base_catalog: Sequence[Any],
+        session_id: str,
+        restrict: tuple[str, ...] | None,
+        hooks: Any | None = None,
+    ) -> Any | None:
+        if runtime._agents is None:
+            return None
+        # The parent's authority is exactly the tools this iteration advertises.
+        # Build a provisional manager (with a static Task) so the selection
+        # includes Task when the profile allows it, then rebuild with the Task
+        # tool bound to the runner.
+        from .tools.builtin.task import build_task_tool
+
+        provisional = runtime._build_iteration_manager(
+            config,
+            runtime.manifest,
+            restrict=restrict,
+            catalog=(*base_catalog, build_task_tool(None)),
+            path_guard=self._path_guard,
+        )
+        parent_tools = list(provisional.names)
+        authority = _ChildAuthority(
+            engine=self._gate.engine, path_guard=self._path_guard
+        )
+        return runtime._make_subagent_runner(
+            session_id=session_id,
+            parent_tools=parent_tools,
+            permissions=authority,
+            grants=tuple(getattr(self._gate, "_grants", ())),
+            config=config,
+            catalog=base_catalog,
+            hooks=hooks,
+            budget=self._budget,
         )
 
     def _secure_config(self, config: Config) -> Config:
@@ -639,6 +740,9 @@ class ToolTurn:
     #: on the static path (no extension integration): existing behaviour.
     manifest_ref: Any | None = None
     environment_for: Any | None = None
+    #: The turn's lifecycle-hook runner (pinned manifest's hooks). ``None`` keeps
+    #: hook integration off entirely.
+    hooks: Any | None = None
 
 
 #: MCP lifecycle events that change the manifest's tool set or server index.
@@ -665,6 +769,310 @@ class _MCPEventSink:
     def publish(self, event: Event) -> int:
         self._runtime._on_mcp_event(event)
         return 0
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle hooks (plan section 5.7)
+# ---------------------------------------------------------------------------
+
+
+class _HookService:
+    """Runs exactly the hooks of one pinned manifest generation.
+
+    The loop calls :meth:`lifecycle` and the two tool hooks; this adapter maps
+    them onto the runtime-owned :class:`~nexus.hooks.manager.HookManager` but
+    passes the *pinned* specs explicitly, so a reload that commits mid-iteration
+    cannot change what the running iteration enforces. It returns the real
+    :class:`~nexus.hooks.model.HookOutcome` (or an allow when the event has no
+    hooks), and the loop persists the decisions as ``hook.fired``/
+    ``hook.blocked``.
+    """
+
+    def __init__(self, manager: Any, specs_by_event: Any, *, workspace: Path) -> None:
+        self._manager = manager
+        self._specs = {
+            str(event): tuple(specs)
+            for event, specs in (specs_by_event or {}).items()
+            if specs
+        }
+        self._workspace = workspace
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self._specs) and self._manager is not None
+
+    def has_event(self, event: str) -> bool:
+        """Whether this pinned generation declares any hook for ``event``."""
+        return bool(self._specs.get(event)) and self._manager is not None
+
+    async def _run(
+        self, event: str, invocation: HookInvocation, cancel: Any
+    ) -> Any:
+        specs = self._specs.get(event, ())
+        if not specs or self._manager is None:
+            return HookOutcome.allow(event)
+        return await self._manager.run(
+            HookEvent.coerce(event), invocation, cancel=cancel, specs=specs
+        )
+
+    async def lifecycle(
+        self,
+        event: str,
+        *,
+        session_id: str,
+        turn_id: str,
+        data: Mapping[str, Any] | None = None,
+        cancel: Any = None,
+    ) -> Any:
+        name = HookEvent.coerce(event)
+        invocation = HookInvocation(
+            event=name.value,
+            session_id=session_id,
+            turn_id=turn_id,
+            data=dict(data or {}),
+        )
+        return await self._run(name.value, invocation, cancel)
+
+    async def pre_tool_use(
+        self,
+        *,
+        tool: str,
+        key: str | None = None,
+        bundle: str | None = None,
+        tool_input: Mapping[str, Any],
+        session_id: str,
+        turn_id: str,
+        cancel: Any = None,
+    ) -> Any:
+        invocation = HookInvocation(
+            event=HookEvent.PRE_TOOL_USE.value,
+            tool=tool,
+            key=key,
+            bundle=bundle,
+            tool_input=dict(tool_input or {}),
+            session_id=session_id,
+            turn_id=turn_id,
+        )
+        return await self._run(HookEvent.PRE_TOOL_USE.value, invocation, cancel)
+
+    async def post_tool_use(
+        self,
+        *,
+        tool: str,
+        key: str | None = None,
+        bundle: str | None = None,
+        tool_input: Mapping[str, Any],
+        result: Mapping[str, Any] | None = None,
+        session_id: str,
+        turn_id: str,
+        cancel: Any = None,
+    ) -> Any:
+        invocation = HookInvocation(
+            event=HookEvent.POST_TOOL_USE.value,
+            tool=tool,
+            key=key,
+            bundle=bundle,
+            tool_input=dict(tool_input or {}),
+            session_id=session_id,
+            turn_id=turn_id,
+            data={"result": dict(result or {})},
+        )
+        return await self._run(HookEvent.POST_TOOL_USE.value, invocation, cancel)
+
+    async def user_prompt_submit(
+        self,
+        *,
+        content: Any,
+        session_id: str,
+        turn_id: str,
+        cancel: Any = None,
+    ) -> Any:
+        """Run ``UserPromptSubmit`` with the prompt as the modifiable input.
+
+        The input is ``{"content": [...]}`` (JSON-safe block views); a hook's
+        ``modify`` returns the replacement mapping, which the session parses back
+        into content blocks before anything is persisted.
+        """
+        invocation = HookInvocation(
+            event=HookEvent.USER_PROMPT_SUBMIT.value,
+            tool_input={"content": list(content or [])},
+            session_id=session_id,
+            turn_id=turn_id,
+        )
+        return await self._run(HookEvent.USER_PROMPT_SUBMIT.value, invocation, cancel)
+
+
+# ---------------------------------------------------------------------------
+# Subagents (plan sections 5.6, 15.6-15.8)
+# ---------------------------------------------------------------------------
+
+
+#: The turn-frozen authority a child inherits: the parent's permission engine and
+#: path guard, passed through unchanged (never broadened).
+@dataclass(frozen=True)
+class _ChildAuthority:
+    engine: Any
+    path_guard: Any
+
+
+def _child_session_id(logical: str) -> str:
+    """Map a logical ``<parent>/sub/<n>`` id to a valid, collision-resistant id.
+
+    Sanitizing ``/`` to ``_`` could map two distinct logical ids onto one disk
+    id (``a/b/1`` and ``a_b_1``); a short deterministic hash of the logical id is
+    appended so the mapping is injective in practice while staying stable across
+    reopens. The 80-char session-id limit is preserved.
+    """
+    raw = str(logical or "subagent")
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:10]
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", raw)
+    safe = (safe or "subagent")[: 80 - len(digest) - 1]
+    return f"{safe}_{digest}"
+
+
+class _ChildSessionFacade:
+    """The runner's ``SessionFacade``: logical ids, real (valid) child logs.
+
+    The plan's `<parent>/sub/<n>` id is kept for agent metadata and the event
+    tree; a sanized id of the same shape is used for the on-disk session so the
+    child is a real, replayable session rather than an in-memory fake.
+    """
+
+    def __init__(self, directory: Path) -> None:
+        self._directory = Path(directory)
+        self._manager = SessionManager(self._directory)
+
+    @property
+    def manager(self) -> SessionManager:
+        return self._manager
+
+    def child_id(self, parent_id: str, index: int) -> str:
+        return f"{parent_id}/sub/{int(index)}"
+
+    async def aclose(self, session_id: str) -> None:
+        with contextlib.suppress(Exception):
+            self._manager.evict(_child_session_id(session_id))
+
+
+#: Child events that are internal to the child's own turn/session and must not
+#: reach the parent log: a relayed child ``turn.completed`` would look like the
+#: parent turn ending, and a relayed ``permission.requested`` would be tracked as
+#: a parent pending approval. The child's own log keeps them; the parent tree is
+#: reconstructed from ``agent.spawned``/``agent.completed`` plus the child's
+#: content/tool/model events carrying ``agent`` metadata.
+_CHILD_RELAY_SUPPRESS = frozenset(
+    {
+        "turn.started",
+        "turn.completed",
+        "turn.failed",
+        "turn.cancelled",
+        "session.opened",
+        "session.closed",
+        "context.assembled",
+        "context.compacted",
+        "context.degraded",
+        "permission.requested",
+        "permission.resolved",
+        "input.queued",
+        "input.consumed",
+        "input.dropped",
+        "presence.joined",
+        "presence.left",
+        "presence.changed",
+    }
+)
+
+
+class _ChildEventSink:
+    """Persist a child turn's events to its own log and relay them upward.
+
+    Relaying through the runner's ``spec.emit`` is what puts an ``agent`` field
+    on every child event and makes the whole tree replay from the parent log.
+    Child turn/session lifecycle events are persisted to the child log but *not*
+    relayed, so they cannot masquerade as the parent's own lifecycle.
+    """
+
+    def __init__(self, session: Any, relay: Any) -> None:
+        self._session = session
+        self._relay = relay
+
+    async def emit(self, event: Event) -> Event:
+        with contextlib.suppress(Exception):
+            self._session.append_event(event)
+        if self._relay is None or event.type in _CHILD_RELAY_SUPPRESS:
+            return event
+        with contextlib.suppress(Exception):
+            outcome = self._relay(event.type, dict(event.data))
+            if inspect.isawaitable(outcome):
+                await outcome
+        return event
+
+
+class _ChildRuntime:
+    """One child run: a restricted nested turn over the parent's providers.
+
+    It is deliberately not a second :class:`Runtime`: the child borrows the
+    parent's router and agent manager, gets the tools the runner already
+    intersected into ``spec.tools``, inherits the parent's permission engine and
+    grants, and can spawn its own children through the runner's shared budget.
+    """
+
+    def __init__(self, runtime: Runtime, spec: Any, runner: Any) -> None:
+        self._runtime = runtime
+        self._spec = spec
+        self._runner = runner
+
+    async def run(self) -> SubagentOutcome:
+        runtime = self._runtime
+        spec = self._spec
+        facade = runtime._ensure_child_sessions()
+        real_id = _child_session_id(spec.session_id)
+        session = facade.manager.open(real_id, create=True, recover=False)
+        config = runtime._child_config(spec)
+        assembler = runtime._build_child_assembler(spec, config)
+        manager = runtime._build_child_tool_manager(spec, config, self._runner)
+        engine = runtime._child_permission_engine(spec, config)
+        gate = _PermissionGateAdapter(
+            engine, grants=tuple(spec.grants), attended=False
+        )
+        dispatcher = _ToolDispatcherAdapter(
+            manager,
+            workspace=runtime.workspace,
+            session_id=real_id,
+            turn_id="",
+            config=config,
+            subagents=self._runner,
+        )
+        max_iterations = int(spec.max_iterations or 60)
+        limits = TurnLimits(max_iterations=max_iterations, max_seconds=1800.0)
+        lease = session.begin_turn(limits=limits)
+        sink = _ChildEventSink(session, spec.emit)
+        try:
+            outcome = await run_turn(
+                session=session,
+                user_input=spec.prompt,
+                assemble=assembler,
+                provider_for=runtime._router,
+                emit=sink,
+                tools=dispatcher,
+                gate=gate,
+                lease=lease,
+                persist_user_message=True,
+                hooks=spec.hooks,
+            )
+        finally:
+            with contextlib.suppress(Exception):
+                lease.release()
+        cost = runtime._child_cost(session, outcome)
+        return runtime._child_outcome(spec, session, outcome, cost=cost)
+
+    async def aclose(self) -> None:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Runtime
+# ---------------------------------------------------------------------------
 
 
 class Runtime:
@@ -701,6 +1109,10 @@ class Runtime:
         mcp: Any | None = None,
         owns_mcp: bool | None = None,
         mcp_client_factory: Any | None = None,
+        agents: Any | None = None,
+        owns_agents: bool | None = None,
+        hooks: Any | None = None,
+        owns_hooks: bool | None = None,
     ) -> None:
         self.workspace = Path(workspace).resolve()
         self._home = Path(home) if home is not None else None
@@ -820,6 +1232,15 @@ class Runtime:
             self._mcp = self._build_mcp_manager(initial)
             self._owns_mcp = self._mcp is not None
 
+        # Agents and hooks (plan sections 5.6-5.7, 15.6-15.8). The runtime owns
+        # both managers; the extension manager folds their discovered sets into
+        # the same pinned generation as tools, so one reload advances the whole
+        # world together. Agent construction seeds the workspace roles once (if
+        # enabled); hook construction is inert until the first rebuild.
+        self._agents = self._build_agent_manager(initial, agents, owns_agents)
+        self._hooks = self._build_hook_manager(initial, hooks, owns_hooks)
+        self._child_sessions: _ChildSessionFacade | None = None
+
         if extensions is not None:
             self._extensions: ExtensionManager | None = extensions
             self._owns_extensions = (
@@ -837,6 +1258,8 @@ class Runtime:
                 builtin_tools=BUILTIN_TOOLS,
                 skills=self._skills,
                 mcp=self._mcp,
+                agents=self._agents,
+                hooks=self._hooks,
                 sink=(
                     extension_sink
                     if extension_sink is not None
@@ -859,6 +1282,7 @@ class Runtime:
 
         if sessions is not None:
             self._sessions = sessions
+            self._owns_sessions = False
         else:
             directory = (
                 Path(session_dir)
@@ -875,7 +1299,9 @@ class Runtime:
                 unattended_decision=self._unattended_decision,
                 ensure_ready=self.ensure_started,
                 turn_cleanup=self._clear_activation,
+                hooks=self._session_hooks,
             )
+            self._owns_sessions = True
 
     # -- construction ------------------------------------------------------
 
@@ -936,6 +1362,16 @@ class Runtime:
     def skills(self) -> SkillManager:
         """The runtime-owned skill manager."""
         return self._skills
+
+    @property
+    def agents(self) -> Any | None:
+        """The runtime-owned agent-definition manager (or an injected one)."""
+        return self._agents
+
+    @property
+    def hooks(self) -> Any | None:
+        """The runtime-owned lifecycle-hook manager (or an injected one)."""
+        return self._hooks
 
     @property
     def manifest_ref(self) -> Any | None:
@@ -1087,6 +1523,30 @@ class Runtime:
             return False
         return bool(await aclose_session(session_id))
 
+    async def aclose_session(self, session_id: str) -> bool:
+        """Close one session: fire ``SessionEnd``, then release its shell jobs.
+
+        The ``SessionEnd`` hook runs against the pinned manifest and its events
+        are persisted before the session bus closes. Idempotent; a session with
+        no live handle returns ``False``.
+        """
+        closer = getattr(self._sessions, "aclose_session", None)
+        closed = False
+        if callable(closer):
+            closed = bool(await closer(session_id))
+        else:  # pragma: no cover - injected managers without the seam
+            handle = getattr(self._sessions, "_handles", {}).pop(session_id, None)
+            if handle is not None:
+                with contextlib.suppress(Exception):
+                    await handle.aclose()
+                closed = True
+        await self.close_session_jobs(session_id)
+        return closed
+
+    async def close_session(self, session_id: str) -> bool:
+        """Alias for :meth:`aclose_session` (explicit session close)."""
+        return await self.aclose_session(session_id)
+
     # -- configuration -----------------------------------------------------
 
     def _load_config(self) -> Config:
@@ -1193,6 +1653,27 @@ class Runtime:
         gate = _PermissionGateAdapter(
             engine, grants=grants, attended=attended
         )
+        hooks_service = None
+        current_manifest = self.manifest
+        if self._hooks is not None:
+            hooks_service = _HookService(
+                self._hooks,
+                getattr(current_manifest, "hooks", None),
+                workspace=self.workspace,
+            )
+        runner = None
+        if self._agents is not None and self._tools is None:
+            authority = _ChildAuthority(engine=engine, path_guard=manager.path_guard)
+            runner = self._make_subagent_runner(
+                session_id=session.id,
+                parent_tools=manager.names,
+                permissions=authority,
+                grants=grants,
+                config=config,
+                catalog=manager.tools,
+                hooks=hooks_service,
+                budget=self._new_subagent_budget(config),
+            )
         dispatcher = _ToolDispatcherAdapter(
             manager,
             workspace=self.workspace,
@@ -1202,6 +1683,7 @@ class Runtime:
             skills=self._skills,
             extensions=self._extensions,
             activations=self._activations,
+            subagents=runner,
         )
         # Per-iteration environment path: only when the runtime (not a caller)
         # owns the tool catalog and an extension world exists. An injected
@@ -1219,6 +1701,7 @@ class Runtime:
                 # write roots / read denyroots mid-turn.
                 path_guard=manager.path_guard,
                 permissions=getattr(getattr(config, "v2", None), "permissions", None),
+                budget=self._new_subagent_budget(config),
             )
         return ToolTurn(
             manager=manager,
@@ -1228,6 +1711,7 @@ class Runtime:
             schemas=tuple(manager.schemas()),
             manifest_ref=manifest_ref,
             environment_for=environment_for,
+            hooks=hooks_service,
         )
 
     def _build_iteration_manager(
@@ -1350,6 +1834,450 @@ class Runtime:
             tiers=self._tiers,
         )
 
+    # -- agents / hooks ----------------------------------------------------
+
+    @staticmethod
+    def _agents_section(config: Config | None) -> Any | None:
+        v2 = getattr(config, "v2", None)
+        return getattr(v2, "agents", None)
+
+    @staticmethod
+    def _hooks_section(config: Config | None) -> Any | None:
+        v2 = getattr(config, "v2", None)
+        return getattr(v2, "hooks", None)
+
+    def _build_agent_manager(
+        self, config: Config | None, injected: Any, owns: bool | None
+    ) -> Any | None:
+        """Own the agent-definition manager, seeding the workspace roles once."""
+        if injected is not None:
+            self._owns_agents = False if owns is None else bool(owns)
+            return injected
+        self._owns_agents = True
+        section = self._agents_section(config)
+        if section is None or not getattr(section, "enabled", True):
+            return None
+        try:
+            from .agents import AgentManager
+            from .tools.builtin import BUILTIN_TOOLS
+            from .tools.bundles import BUNDLES
+
+            known_bundles = {
+                name: bundle.tools for name, bundle in BUNDLES.items()
+            }
+            known_tools = {tool.name for tool in BUILTIN_TOOLS}
+            # ``Task`` is injected by the runtime per iteration, not a static
+            # builtin; include it so a role may declare it without a false
+            # ``unknown_tool`` diagnostic.
+            known_tools.add("Task")
+            manager = AgentManager.for_workspace(
+                self.workspace,
+                home=self._home,
+                seed=bool(getattr(section, "seed_roles", True)),
+                known_tools=known_tools,
+                known_bundles=known_bundles,
+            )
+            return manager
+        except Exception:  # noqa: BLE001 - a broken agents dir must not stop boot
+            return None
+
+    def _build_hook_manager(
+        self, config: Config | None, injected: Any, owns: bool | None
+    ) -> Any | None:
+        """Own the lifecycle-hook manager (inert until the first rebuild)."""
+        if injected is not None:
+            self._owns_hooks = False if owns is None else bool(owns)
+            return injected
+        self._owns_hooks = True
+        section = self._hooks_section(config)
+        if section is None or not getattr(section, "enabled", True):
+            return None
+        try:
+            return HookManager(self.workspace, home=self._home, config=config)
+        except Exception:  # noqa: BLE001 - a broken hooks dir must not stop boot
+            return None
+
+    def _session_hooks(self) -> Any | None:
+        """The current manifest's hook runner for session-level lifecycle events.
+
+        Called by a :class:`~nexus.session.session.Session` before a prompt is
+        persisted and once at close, so ``SessionStart``/``UserPromptSubmit``/
+        ``SessionEnd`` run against the pinned set and are persisted through the
+        session's own sink.
+        """
+        if self._hooks is None:
+            return None
+        manifest = self.manifest
+        specs = getattr(manifest, "hooks", None)
+        if not specs:
+            return None
+        return _HookService(self._hooks, specs, workspace=self.workspace)
+
+    def _pre_compact_gate(
+        self,
+        hooks_service: Any | None,
+        session_id: str,
+        turn_id: str,
+        iteration: int = 0,
+        cancel: Any = None,
+    ) -> Any | None:
+        """Build the async ``PreCompact`` gate for one iteration, or ``None``.
+
+        Runs exactly the pinned generation's PreCompact hooks and translates a
+        block/modify into a typed :class:`~nexus.context.manager.PreCompactDecision`.
+        A modify is accepted only through the four typed compaction options;
+        anything else is disallowed (no options applied). ``cancel`` is the
+        parent turn's token, so a command hook is cancelled promptly instead of
+        outliving the turn.
+        """
+        if hooks_service is None or not hooks_service.has_event("PreCompact"):
+            return None
+        from .context.manager import CompactionOptions, PreCompactDecision
+
+        async def gate(request: Any) -> Any:
+            request_turn = getattr(request, "turn_id", None) or turn_id
+            outcome = await hooks_service.lifecycle(
+                "PreCompact",
+                session_id=session_id,
+                turn_id=request_turn or "",
+                data=request.to_dict(),
+                cancel=cancel,
+            )
+            payload = outcome.to_dict() if hasattr(outcome, "to_dict") else {}
+            if getattr(outcome, "blocked", False):
+                return PreCompactDecision(
+                    blocked=True,
+                    reason=str(
+                        getattr(outcome, "reason", "")
+                        or "blocked by PreCompact hook"
+                    ),
+                    outcome=payload,
+                )
+            options = None
+            if getattr(outcome, "modified", False):
+                options = CompactionOptions.from_mapping(
+                    getattr(outcome, "modified_input", None)
+                )
+            return PreCompactDecision(
+                blocked=False, options=options, outcome=payload
+            )
+
+        return gate
+
+    # -- subagents ---------------------------------------------------------
+
+    def _ensure_child_sessions(self) -> _ChildSessionFacade:
+        if self._child_sessions is None:
+            directory = getattr(self._sessions, "directory", None) or (
+                self.workspace / ".nexus" / "sessions"
+            )
+            self._child_sessions = _ChildSessionFacade(Path(directory) / "agents")
+        return self._child_sessions
+
+    def _bundle_map(self, catalog: Sequence[Any] | None = None) -> dict[str, list[str]]:
+        from .tools.bundles import BUNDLES
+
+        mapping: dict[str, list[str]] = {
+            name: list(bundle.tools) for name, bundle in BUNDLES.items()
+        }
+        for tool in catalog or ():
+            spec = getattr(tool, "spec", tool)
+            bundle = getattr(spec, "bundle", None)
+            name = getattr(spec, "name", None)
+            if not isinstance(bundle, str) or not isinstance(name, str):
+                continue
+            mapping.setdefault(bundle, [])
+            if name not in mapping[bundle]:
+                mapping[bundle].append(name)
+        return mapping
+
+    @staticmethod
+    def _mutating_names(catalog: Sequence[Any] | None = None) -> tuple[str, ...]:
+        names: set[str] = set()
+        for tool in catalog or ():
+            spec = getattr(tool, "spec", tool)
+            if getattr(spec, "mutates", False):
+                name = getattr(spec, "name", None)
+                if isinstance(name, str):
+                    names.add(name)
+        return tuple(sorted(names))
+
+    def _new_subagent_budget(self, config: Config | None) -> Any | None:
+        """Build the turn-scoped subagent tree budget, or ``None``.
+
+        One budget per turn (shared across iterations, children, and
+        grandchildren) so aggregate token/cost spend accumulates over the turn
+        rather than resetting each iteration.
+        """
+        if self._agents is None:
+            return None
+        effective = config if isinstance(config, Config) else self._load_config()
+        section = self._agents_section(effective)
+        if section is None or not getattr(section, "enabled", True):
+            return None
+        try:
+            from .agents import SubagentBudget
+
+            return SubagentBudget(
+                max_concurrent=int(getattr(section, "max_concurrent", 4)),
+                max_depth=int(getattr(section, "max_depth", 3)),
+                max_fanout=getattr(section, "max_fanout", 16),
+                token_budget=getattr(section, "token_budget", None),
+                cost_budget=getattr(section, "cost_budget", None),
+            )
+        except Exception:  # noqa: BLE001 - an invalid config disables the budget
+            return None
+
+    def _make_subagent_runner(
+        self,
+        *,
+        session_id: str,
+        parent_tools: Sequence[str],
+        parent_depth: int = 0,
+        parent_session: str | None = None,
+        parent_tier: str | None = None,
+        budget: Any | None = None,
+        permissions: Any | None = None,
+        grants: Sequence[Any] = (),
+        config: Config | None = None,
+        catalog: Sequence[Any] | None = None,
+        event_sink: Any | None = None,
+        hooks: Any | None = None,
+    ) -> Any | None:
+        """Build a bounded subagent runner for one turn/iteration, or ``None``.
+
+        The runner is the ``Task`` service: it computes authority, clamps the
+        tier, enforces the shared tree budget, and drives children through the
+        real child runtime. It is built fresh per iteration because its tool
+        ceiling is that iteration's catalog.
+        """
+        if self._agents is None:
+            return None
+        effective = config if isinstance(config, Config) else self._load_config()
+        section = self._agents_section(effective)
+        if section is None or not getattr(section, "enabled", True):
+            return None
+        max_tier = str(getattr(section, "max_tier", "medium"))
+        if self._tiers.rank(max_tier) is None:
+            max_tier = self._tiers.default
+        try:
+            return SubagentRunner(
+                agents=self._agents,
+                runtime_factory=self._build_child_runtime,
+                workspace=self.workspace,
+                parent_session=parent_session or session_id,
+                tiers=self._tiers,
+                sessions=self._ensure_child_sessions(),
+                parent_tools=tuple(parent_tools or ()),
+                parent_tier=parent_tier or self._tiers.default,
+                parent_depth=parent_depth,
+                permissions=permissions,
+                grants=tuple(grants),
+                budget=budget,
+                max_tier=max_tier,
+                max_concurrent=int(getattr(section, "max_concurrent", 4)),
+                max_depth=int(getattr(section, "max_depth", 3)),
+                max_fanout=getattr(section, "max_fanout", 16),
+                token_budget=getattr(section, "token_budget", None),
+                cost_budget=getattr(section, "cost_budget", None),
+                default_type=str(getattr(section, "default_type", "general")),
+                config=effective,
+                event_sink=event_sink,
+                bundle_map=self._bundle_map(catalog),
+                mutating_tools=self._mutating_names(catalog),
+                hooks=hooks,
+            )
+        except Exception:  # noqa: BLE001 - an invalid agents config disables Task
+            return None
+
+    def _build_child_runtime(self, spec: Any) -> _ChildRuntime:
+        """The ``RuntimeFactory``: build a nested, restricted child run."""
+        config = spec.config if isinstance(spec.config, Config) else self._load_config()
+        child_runner = self._make_subagent_runner(
+            session_id=spec.session_id,
+            parent_tools=spec.tools,
+            parent_depth=spec.depth,
+            parent_session=spec.session_id,
+            parent_tier=spec.tier,
+            budget=spec.budget,
+            permissions=spec.permissions,
+            grants=spec.grants,
+            config=config,
+            hooks=spec.hooks,
+        )
+        return _ChildRuntime(self, spec, child_runner)
+
+    def _child_config(self, spec: Any) -> Config:
+        base = spec.config if isinstance(spec.config, Config) else self._load_config()
+        reference = spec.model
+        # Without a model registry a tier name cannot resolve to a concrete
+        # model, so an inherited/clamped tier falls back to the parent's model.
+        if reference in self._tiers.order and self._registry is None:
+            reference = getattr(base, "model", None)
+        if not reference:
+            reference = getattr(base, "model", None)
+        import dataclasses
+
+        v2 = getattr(base, "v2", None)
+        if v2 is not None:
+            with contextlib.suppress(Exception):
+                child_v2 = dataclasses.replace(
+                    v2,
+                    model=dataclasses.replace(v2.model, default=None),
+                    models=dataclasses.replace(v2.models, default=None),
+                )
+                return dataclasses.replace(base, model=reference, v2=child_v2)
+        return dataclasses.replace(base, model=reference)
+
+    def _build_child_assembler(self, spec: Any, config: Config) -> Any:
+        manager = self._assembler
+        if not hasattr(manager, "for_iteration"):
+            return manager
+        # The agent body is the child's SOUL; MEMORY is deliberately empty.
+        return manager.for_iteration(
+            config=config,
+            system_files={"soul": spec.system_prompt, "memory": ""},
+            skills_index=(),
+            mcp_index={},
+        )
+
+    def _build_child_tool_manager(
+        self, spec: Any, config: Config, runner: Any
+    ) -> ToolManager:
+        manifest = self.manifest
+        catalog_map: dict[str, Any] = (
+            dict(manifest.tools) if manifest is not None else {}
+        )
+        if runner is not None:
+            from .tools.builtin.task import build_task_tool
+
+            catalog_map["Task"] = build_task_tool(runner)
+        catalog = [catalog_map[name] for name in spec.tools if name in catalog_map]
+        authority = (
+            spec.permissions if isinstance(spec.permissions, _ChildAuthority) else None
+        )
+        return ToolManager(
+            config,
+            workspace=self.workspace,
+            tools=catalog,
+            path_guard=authority.path_guard if authority is not None else None,
+            job_registry=self._job_registry,
+            todo_store=self._todo_store,
+        )
+
+    def _child_permission_engine(self, spec: Any, config: Config) -> PermissionEngine:
+        authority = spec.permissions
+        if isinstance(authority, _ChildAuthority):
+            return authority.engine
+        permissions = getattr(getattr(config, "v2", None), "permissions", None)
+        if permissions is not None:
+            return PermissionEngine.from_config(
+                permissions, workspace=self.workspace, home=self._home
+            )
+        return PermissionEngine(workspace=self.workspace, home=self._home)
+
+    @staticmethod
+    def _child_outcome(
+        spec: Any, session: Any, outcome: Any, *, cost: float | None = None
+    ) -> SubagentOutcome:
+        text = ""
+        for message in reversed(session.messages):
+            if getattr(message, "role", None) != "assistant":
+                continue
+            chunk = "".join(
+                block.text
+                for block in message.content
+                if isinstance(block, Text)
+            )
+            if chunk.strip():
+                text = chunk
+                break
+        ok = bool(getattr(outcome, "ok", False))
+        phase = getattr(outcome, "phase", "failed")
+        if ok:
+            status = "completed"
+        elif phase == "cancelled":
+            status = "cancelled"
+        else:
+            status = "failed"
+        usage = getattr(outcome, "usage", None)
+        return SubagentOutcome(
+            agent=spec.agent,
+            session_id=spec.session_id,
+            status=status,
+            text=text,
+            is_error=not ok,
+            usage=SubagentUsage(
+                input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
+                output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+                cache_read_tokens=int(getattr(usage, "cache_read_tokens", 0) or 0),
+                cache_write_tokens=int(getattr(usage, "cache_write_tokens", 0) or 0),
+                reasoning_tokens=int(getattr(usage, "reasoning_tokens", 0) or 0),
+                cost_usd=cost,
+            ),
+            iterations=int(getattr(outcome, "iterations", 0) or 0),
+            stop_reason=getattr(outcome, "stop_reason", None),
+            dropped_tools=tuple(spec.dropped_tools),
+            clamped=bool(spec.clamped),
+            tier=spec.tier,
+            requested_tier=spec.requested_tier,
+            error=getattr(outcome, "error", None),
+        )
+
+    def _child_cost(self, session: Any, outcome: Any) -> float | None:
+        """Price a child turn from the registry's ``ModelInfo`` cost, or ``None``.
+
+        The child's concrete provider/model comes from its ``model.started``
+        event; pricing is ``$``/Mtok from ``models.dev``. Unknown pricing (no
+        registry, no catalogue entry, or no cost data — 421 catalogue models are
+        local/open-weight) returns ``None``, so the aggregate ``spent_cost``
+        counts only priced models: a ``cost_budget`` is therefore a bound over
+        priced models only, and ``token_budget`` is the universal bound. This is
+        documented rather than guessed.
+        """
+        registry = self._registry
+        if registry is None:
+            return None
+        provider = model = None
+        for event in reversed(list(getattr(session, "events", ()) or ())):
+            if getattr(event, "type", None) != "model.started":
+                continue
+            data = getattr(event, "data", None) or {}
+            candidate_provider = data.get("provider")
+            candidate_model = data.get("model")
+            if isinstance(candidate_provider, str) and isinstance(candidate_model, str):
+                provider, model = candidate_provider, candidate_model
+                break
+        if not provider or not model:
+            return None
+        model_cost = getattr(registry, "model_cost", None)
+        if callable(model_cost):
+            pricing = model_cost(provider, model)
+        else:  # pragma: no cover - duck-typed registry without the seam
+            get = getattr(registry, "get", None)
+            info = get(f"{provider}/{model}") if callable(get) else None
+            pricing = getattr(info, "cost", None)
+        if pricing is None:
+            return None
+        usage = getattr(outcome, "usage", None)
+        if usage is None:
+            return None
+        input_rate = float(getattr(pricing, "input", 0.0) or 0.0)
+        output_rate = float(getattr(pricing, "output", 0.0) or 0.0)
+        total = (
+            int(getattr(usage, "input_tokens", 0) or 0) * input_rate
+            + int(getattr(usage, "output_tokens", 0) or 0) * output_rate
+            + int(getattr(usage, "cache_read_tokens", 0) or 0)
+            * float(getattr(pricing, "cache_read", 0.0) or 0.0)
+            + int(getattr(usage, "cache_write_tokens", 0) or 0)
+            * float(getattr(pricing, "cache_write", 0.0) or 0.0)
+            # Reasoning is priced at the output rate; where a provider already
+            # folds reasoning into output this over-counts, the conservative
+            # direction for a budget.
+            + int(getattr(usage, "reasoning_tokens", 0) or 0) * output_rate
+        ) / 1_000_000
+        return total
+
     # -- MCP ---------------------------------------------------------------
 
     @property
@@ -1468,12 +2396,35 @@ class Runtime:
             aclose = getattr(self._job_registry, "aclose", None)
             if aclose is not None:
                 await aclose()
+        # Close sessions first, while the manifest and hook manager are still
+        # live, so every ``SessionEnd`` runs against the pinned set and its events
+        # are persisted before the session buses close.
+        if self._owns_sessions and self._sessions is not None:
+            aclose_all = getattr(self._sessions, "aclose_all", None)
+            if callable(aclose_all):
+                with contextlib.suppress(Exception):
+                    await aclose_all()
+            else:  # pragma: no cover - injected managers without the seam
+                for handle in self._sessions.close_all():
+                    with contextlib.suppress(Exception):
+                        await handle.aclose()
         if self._owns_extensions and self._extensions is not None:
             # The extension manager is the sole owner of the modules it loaded:
             # its ``aclose`` retires the live generation through the ref and
             # releases every module and staged copy after the last lease drains.
             # The runtime must not second-guess that with a direct release.
             await self._extensions.aclose()
+        # Retire the hook modules and any open child-session handles the runtime
+        # owns. The runner closes each child it spawns; this is the outer net for
+        # a handle left open by a cancelled turn.
+        if self._owns_hooks and self._hooks is not None:
+            aclose = getattr(self._hooks, "aclose", None)
+            if aclose is not None:
+                with contextlib.suppress(Exception):
+                    await aclose()
+        if self._child_sessions is not None:
+            with contextlib.suppress(Exception):
+                await self._child_sessions.manager.aclose_all()
         # Close MCP after the extension world so no scheduled change callback can
         # rebuild against a half-closed ref; the task is cancelled first.
         await self._aclose_mcp()

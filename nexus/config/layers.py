@@ -46,6 +46,8 @@ V2_SECTION_KEYS = frozenset(
         "permissions",
         "tools",
         "ext",
+        "agents",
+        "hooks",
         "mcp",
         "session",
         "telemetry",
@@ -89,12 +91,25 @@ _V2_NUMERIC = {
     "tools.max_parallel": int,
     "ext.watch_interval_ms": int,
     "ext.max_file_bytes": int,
+    "agents.max_depth": int,
+    "agents.max_concurrent": int,
+    "agents.max_fanout": int,
+    "agents.token_budget": int,
+    "agents.cost_budget": float,
     "mcp.connect_timeout_s": float,
     "mcp.restart_max": int,
     "session.snapshot_every": int,
 }
 _V2_BOOL = frozenset(
-    {"ext.enabled", "ext.quarantine", "mcp.enabled", "models.offline"}
+    {
+        "ext.enabled",
+        "ext.quarantine",
+        "agents.enabled",
+        "agents.seed_roles",
+        "hooks.enabled",
+        "mcp.enabled",
+        "models.offline",
+    }
 )
 
 

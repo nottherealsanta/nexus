@@ -7,8 +7,10 @@ Importing is cheap and side-effect free.
 
 The catalog order is the bundle order declared in
 :mod:`nexus.tools.bundles` (``fs``, ``shell``, ``task``, ``meta``, ``ext``),
-which keeps ``schemas()`` deterministic. ``Task`` (subagents) is not implemented
-until Phase 6, so the ``task`` bundle currently contributes ``TodoWrite`` only.
+which keeps ``schemas()`` deterministic. ``Task`` (subagents, Phase 6) is built
+per turn by the runtime (its permission key and authority are bound to the live
+``SubagentRunner``), so ``BUILTIN_TOOLS`` ships the static ``TodoWrite`` only and
+the runtime appends ``Task`` to the iteration catalog.
 """
 from __future__ import annotations
 

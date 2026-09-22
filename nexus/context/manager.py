@@ -102,7 +102,11 @@ __all__ = [
     "DEFAULT_MAX_FILE_BYTES",
     "IDENTITY_PREAMBLE",
     "AssemblyEnvironment",
+    "CompactionOptions",
     "ContextManager",
+    "PreCompactDecision",
+    "PreCompactGate",
+    "PreCompactRequest",
 ]
 
 #: Ceiling for a single system file. ``SOUL.md``/``MEMORY.md`` are prose, not
@@ -114,6 +118,116 @@ DEFAULT_KEEP_RECENT = 6
 
 #: Distinguishes "no per-iteration override supplied" from ``None`` (clear).
 _UNSET: Any = object()
+
+
+#: The typed compaction options a ``PreCompact`` ``modify`` may set. Any other
+#: key, or an invalid value, is rejected by :meth:`from_mapping` (returns
+#: ``None``), so a hook can never smuggle arbitrary state into the assembler.
+@dataclass(frozen=True)
+class CompactionOptions:
+    strategy: str | None = None
+    keep: int | None = None
+    keep_recent: int | None = None
+    min_content_chars: int | None = None
+
+    _STRATEGIES = frozenset(
+        {"drop_oldest", "evict_tool_results", "summarize", "hybrid"}
+    )
+    _KEYS = ("strategy", "keep", "keep_recent", "min_content_chars")
+
+    @classmethod
+    def from_mapping(cls, value: object) -> CompactionOptions | None:
+        """Parse a hook's modified input, or ``None`` when it is not meaningful.
+
+        ``None`` means "disallow": the caller must not apply an unrecognized
+        modification. Only the four typed keys are accepted, and the strategy
+        must be one of the four known names.
+        """
+        if value is None or not isinstance(value, Mapping):
+            return None
+        if set(value) - set(cls._KEYS):
+            return None
+        strategy = value.get("strategy")
+        if strategy is not None and (
+            not isinstance(strategy, str) or strategy not in cls._STRATEGIES
+        ):
+            return None
+
+        def _int(name: str) -> int | None:
+            raw = value.get(name)
+            if raw is None:
+                return None
+            if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+                raise ValueError(name)
+            return raw
+
+        try:
+            return cls(
+                strategy=strategy,
+                keep=_int("keep"),
+                keep_recent=_int("keep_recent"),
+                min_content_chars=_int("min_content_chars"),
+            )
+        except ValueError:
+            return None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "strategy": self.strategy,
+            "keep": self.keep,
+            "keep_recent": self.keep_recent,
+            "min_content_chars": self.min_content_chars,
+        }
+
+
+@dataclass(frozen=True)
+class PreCompactRequest:
+    """The frozen facts a ``PreCompact`` hook runs against."""
+
+    session_id: str | None
+    turn_id: str | None
+    iteration: int
+    strategy: str
+    keep: int
+    history_messages: int
+    dropped_messages: int
+    evicted_tool_results: int
+    input_budget: int
+    history_budget: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "session_id": self.session_id,
+            "turn_id": self.turn_id,
+            "iteration": self.iteration,
+            "strategy": self.strategy,
+            "keep": self.keep,
+            "history_messages": self.history_messages,
+            "dropped_messages": self.dropped_messages,
+            "evicted_tool_results": self.evicted_tool_results,
+            "input_budget": self.input_budget,
+            "history_budget": self.history_budget,
+        }
+
+
+@dataclass(frozen=True)
+class PreCompactDecision:
+    """The result of the pre-compaction gate.
+
+    ``blocked`` prevents compaction entirely (no summary is persisted) and the
+    loop fails the turn actionably. ``options`` applies a typed modification.
+    ``outcome`` is the sanitized hook outcome the loop persists through the
+    session sink.
+    """
+
+    blocked: bool = False
+    reason: str = ""
+    options: CompactionOptions | None = None
+    outcome: Mapping[str, Any] | None = None
+
+
+#: A pre-compaction gate: sync or async, returning a :class:`PreCompactDecision`.
+PreCompactGate = Callable[[PreCompactRequest], PreCompactDecision | Any]
 
 
 def _fit_whole_lines(
@@ -291,6 +405,9 @@ class ContextManager:
         skills_index: Any | None = None,
         skills: Any | None = None,
         mcp_index: Any | None = None,
+        pre_compact: PreCompactGate | None = None,
+        turn_id: str | None = None,
+        iteration: int = 0,
     ) -> None:
         if config is None and config_loader is None:
             raise ConfigError("ContextManager requires a config or config_loader")
@@ -343,6 +460,18 @@ class ContextManager:
         #: and resource roots. Populated through :meth:`configure`,
         #: :meth:`for_turn`, or :meth:`for_iteration`; empty renders nothing.
         self._mcp_index: str = freeze_mcp_index(mcp_index)
+        #: The optional pre-compaction gate (a ``PreCompact`` hook adapter). When
+        #: set, ``_finalize`` runs it *before* any compaction/summarization and
+        #: honors a block or typed modify. ``None`` keeps assembly synchronous.
+        self._pre_compact: PreCompactGate | None = pre_compact
+        #: The turn/iteration the PreCompact request reports. Injected by the
+        #: runtime per iteration so a hook sees real, actionable context.
+        self._turn_id: str | None = turn_id
+        self._iteration: int = int(iteration) if isinstance(iteration, int) else 0
+        #: The budget/eviction facts of the current pass, filled in by
+        #: ``_finalize`` just before the gate runs.
+        self._precompact_budgets: tuple[int, int] = (0, 0)
+        self._precompact_evicted: int = 0
         #: Frozen environment for a per-turn snapshot; ``None`` means build one
         #: from the effective config on each assemble.
         self._env: AssemblyEnvironment | None = None
@@ -351,6 +480,16 @@ class ContextManager:
         self._last_cache_metadata: dict[str, Any] = {}
         self._last_compacted: dict[str, Any] | None = None
         self._last_summary_reuse: dict[str, Any] | None = None
+        #: The current assemble's PreCompact outcome (sanitized), or ``None``.
+        #: Rides in the request metadata so the loop can persist the hook events
+        #: and fail actionably on a block.
+        self._last_precompact: dict[str, Any] | None = None
+        #: Whether the gate already ran for the current assemble (so a base pass
+        #: and a refinement pass hold one hook decision).
+        self._precompact_ran = False
+        #: Set when the gate blocked: no further pass of this assemble may
+        #: compact (so a refinement pass can never persist a partial summary).
+        self._precompact_blocked = False
 
     # -- config ------------------------------------------------------------
 
@@ -398,6 +537,7 @@ class ContextManager:
         skills_index: Any | None = None,
         skills: Any | None = None,
         mcp_index: Any | None = None,
+        pre_compact: PreCompactGate | None = None,
     ) -> None:
         """Inject the frozen per-turn environment used by the next snapshot.
 
@@ -432,6 +572,8 @@ class ContextManager:
             self._skills_index = freeze_skills_index(raw_skills)
         if mcp_index is not None:
             self._mcp_index = freeze_mcp_index(mcp_index)
+        if pre_compact is not None:
+            self._pre_compact = pre_compact
 
     def for_turn(
         self,
@@ -497,6 +639,9 @@ class ContextManager:
         provider: str | None = None,
         skills_index: Any | None = None,
         mcp_index: Any | None = None,
+        pre_compact: PreCompactGate | None = None,
+        turn_id: str | None = None,
+        iteration: int | None = None,
     ) -> ContextManager:
         """Build a sibling snapshot sharing this manager's frozen inputs.
 
@@ -550,6 +695,13 @@ class ContextManager:
                 if mcp_index is None
                 else freeze_mcp_index(mcp_index)
             ),
+            pre_compact=(
+                pre_compact if pre_compact is not None else self._pre_compact
+            ),
+            turn_id=turn_id if turn_id is not None else self._turn_id,
+            iteration=(
+                iteration if iteration is not None else self._iteration
+            ),
         )
         snapshot._tool_schemas = self._tool_schemas
         snapshot._env = self._env
@@ -569,6 +721,9 @@ class ContextManager:
         skills_index: Any = _UNSET,
         skills: Any = _UNSET,
         mcp_index: Any = _UNSET,
+        pre_compact: PreCompactGate | None = None,
+        turn_id: str | None = None,
+        iteration: int | None = None,
     ) -> ContextManager:
         """Return a sibling snapshot for one loop iteration.
 
@@ -611,6 +766,9 @@ class ContextManager:
             provider=provider,
             skills_index=frozen,
             mcp_index=frozen_mcp,
+            pre_compact=pre_compact,
+            turn_id=turn_id,
+            iteration=iteration,
         )
         if config is not None and (
             system_files is not None
@@ -834,9 +992,13 @@ class ContextManager:
 
         Returns a :class:`ModelRequest` synchronously unless an async token
         counter, a request-aware counter, or an async summarizer is configured —
-        or a sync summarizer returns an awaitable — in which case it returns an
-        awaitable the loop's ``_maybe_await`` consumes transparently.
+        or a pre-compaction gate or a sync summarizer returns an awaitable — in
+        which case it returns an awaitable the loop's ``_maybe_await`` consumes
+        transparently.
         """
+        self._last_precompact = None
+        self._precompact_ran = False
+        self._precompact_blocked = False
         config = self.effective_config()
         env = self._env if self._env is not None else self._build_env(config)
         if (
@@ -1140,6 +1302,12 @@ class ContextManager:
         )
         keep = fit_suffix_count(eligible_costs, plan.history_budget)
         keep = self._repair_pairing(costs.history, ctx.user_tail(), keep)
+        # Real budget/eviction facts for the PreCompact request, captured just
+        # before the gate runs.
+        self._precompact_budgets = (int(plan.input_budget), int(plan.history_budget))
+        self._precompact_evicted = (
+            len(costs.evicted_costs) if costs.evicted_costs is not None else 0
+        )
         compaction = self._compact_history(
             env, ctx, costs.history, keep, persist=persist_summary
         )
@@ -1252,6 +1420,8 @@ class ContextManager:
             },
             "cache": cache_metadata,
         }
+        if self._last_precompact is not None:
+            metadata["pre_compact"] = dict(self._last_precompact)
         return ModelRequest(
             messages=final_messages,
             system=system,
@@ -1684,6 +1854,117 @@ class ContextManager:
         history: tuple[Message, ...],
         keep: int,
         *,
+        persist: bool = True,
+    ) -> CompactionResult | Any:
+        """Run the ``PreCompact`` gate (once per assemble) then dispatch.
+
+        The gate is consulted for the first compaction of an assembly --
+        including a refinement pass -- so it always runs before any trimming,
+        eviction, summarization, or drop. A block returns the un-compacted
+        history (nothing is persisted) and records the block in metadata.
+        """
+        if self._precompact_blocked:
+            # A prior pass of this assembly was blocked: never compact, never
+            # persist a summary, on any subsequent pass either.
+            return CompactionResult(
+                messages=tuple(history), strategy="pre_compact_blocked"
+            )
+        gate = self._pre_compact
+        if (
+            gate is not None
+            and not self._precompact_ran
+            and self._will_compact(env, history, keep)
+        ):
+            self._precompact_ran = True
+            return self._compact_with_gate(env, ctx, history, keep, persist, gate)
+        return self._dispatch_compact(env, ctx, history, keep, persist)
+
+    @staticmethod
+    def _will_compact(
+        env: AssemblyEnvironment, history: tuple[Message, ...], keep: int
+    ) -> bool:
+        if keep < len(history):
+            return True
+        return env.strategy in ("evict_tool_results", "hybrid")
+
+    async def _compact_with_gate(
+        self,
+        env: AssemblyEnvironment,
+        ctx: AssemblyContext,
+        history: tuple[Message, ...],
+        keep: int,
+        persist: bool,
+        gate: PreCompactGate,
+    ) -> CompactionResult:
+        request = PreCompactRequest(
+            session_id=getattr(getattr(ctx, "session", None), "id", None),
+            turn_id=self._turn_id,
+            iteration=self._iteration,
+            strategy=env.strategy,
+            keep=keep,
+            history_messages=len(history),
+            dropped_messages=max(0, len(history) - keep),
+            evicted_tool_results=self._precompact_evicted,
+            input_budget=self._precompact_budgets[0],
+            history_budget=self._precompact_budgets[1],
+        )
+        decision = await _await_if_needed(gate(request))
+        outcome = (
+            dict(decision.outcome)
+            if getattr(decision, "outcome", None) is not None
+            else None
+        )
+        if getattr(decision, "blocked", False):
+            self._precompact_blocked = True
+            self._last_precompact = {
+                "blocked": True,
+                "reason": str(
+                    getattr(decision, "reason", "") or "blocked by PreCompact hook"
+                ),
+                "outcome": outcome,
+                "options": None,
+            }
+            return CompactionResult(
+                messages=tuple(history), strategy="pre_compact_blocked"
+            )
+        options = getattr(decision, "options", None)
+        compaction_env = env
+        effective_keep = keep
+        if isinstance(options, CompactionOptions):
+            compaction_env = replace(
+                env,
+                strategy=options.strategy or env.strategy,
+                keep_recent=(
+                    options.keep_recent
+                    if options.keep_recent is not None
+                    else env.keep_recent
+                ),
+                min_content_chars=(
+                    options.min_content_chars
+                    if options.min_content_chars is not None
+                    else env.min_content_chars
+                ),
+            )
+            if options.keep is not None:
+                effective_keep = options.keep
+        self._last_precompact = {
+            "blocked": False,
+            "reason": "",
+            "outcome": outcome,
+            "options": options.to_dict() if options is not None else None,
+        }
+        return await _await_if_needed(
+            self._dispatch_compact(
+                compaction_env, ctx, history, effective_keep, persist
+            )
+        )
+
+    def _dispatch_compact(
+        self,
+        env: AssemblyEnvironment,
+        ctx: AssemblyContext,
+        history: tuple[Message, ...],
+        keep: int,
         persist: bool = True,
     ) -> CompactionResult | Any:
         """Dispatch to the configured strategy.

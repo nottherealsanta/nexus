@@ -45,7 +45,7 @@ from ..core.bus import DROP_OLDEST, Bus
 from ..core.cancel import CancelToken
 from ..core.loop import run_turn
 from ..core.turn import TurnLimits, TurnState
-from ..errors import SessionBusy, SessionError
+from ..errors import OperationCancelled, SessionBusy, SessionError
 from ..events import Event
 from ..model.message import (
     ContentBlock,
@@ -337,6 +337,7 @@ class Session:
         auto_start_queued: bool = True,
         ensure_ready: Callable[[], Any] | None = None,
         turn_cleanup: Callable[[str, str], None] | None = None,
+        hooks: Callable[[], Any] | None = None,
     ):
         self._id = validate_session_id(session_id)
         self._store = store
@@ -401,9 +402,31 @@ class Session:
         #: detached turn retires (success, failure, or cancellation), so a runtime
         #: can drop session/turn-local state such as skill activations.
         self._turn_cleanup = turn_cleanup
+        #: Optional provider of the current manifest's hook runner. Called before
+        #: a user prompt is persisted and once at close, so ``SessionStart``/
+        #: ``UserPromptSubmit``/``SessionEnd`` run against the pinned set and are
+        #: persisted through this session's own sink.
+        self._hooks_for_session = hooks
+        #: Once-per-handle lifecycle flags. ``_session_started`` guards a blocked
+        #: first prompt from re-firing; ``_session_ended`` makes ``aclose``
+        #: idempotent.
+        self._session_started = False
+        self._session_ended = False
+        #: The single shared close task. Every ``aclose``/manager close awaits
+        #: this same task, so ``SessionEnd`` runs exactly once and the bus is
+        #: closed before any caller returns.
+        self._close_task: asyncio.Task | None = None
+        #: The last close failure, retained for observation (never raised).
+        self.close_error: Exception | None = None
+        #: The in-flight queued-turn consumer (a queued submission whose
+        #: ``UserPromptSubmit`` hook must run asynchronously before it is durable).
+        self._queued_task: asyncio.Task | None = None
         #: The unattended policy frozen at turn start, so a config reload mid-turn
         #: cannot weaken the turn's approval fallback.
         self._turn_unattended: object | None = None
+        #: Whether the turn now being prepared is the first in this session, so
+        #: ``run_turn`` can fire ``SessionStart`` exactly once.
+        self._turn_is_new = False
         #: Most recent background snapshot failure, for diagnostics only.
         self.snapshot_error: Exception | None = None
         #: Records appended by the last :meth:`recover_dangling_tool_uses` call.
@@ -433,6 +456,7 @@ class Session:
         auto_start_queued: bool | None = None,
         ensure_ready: Callable[[], Any] | None = None,
         turn_cleanup: Callable[[str, str], None] | None = None,
+        hooks: Callable[[], Any] | None = None,
     ) -> Session:
         """Attach or replace the loop dependencies used by :meth:`send`."""
         if assemble is not None:
@@ -455,6 +479,8 @@ class Session:
             self._ensure_ready = ensure_ready
         if turn_cleanup is not None:
             self._turn_cleanup = turn_cleanup
+        if hooks is not None:
+            self._hooks_for_session = hooks
         return self
 
     # -- presence ----------------------------------------------------------
@@ -622,6 +648,11 @@ class Session:
     @property
     def active_turn_id(self) -> str | None:
         return self._active.turn_id if self._active is not None else None
+
+    @property
+    def turn_is_new(self) -> bool:
+        """Whether the currently active/next turn is the session's first."""
+        return self._turn_is_new
 
     # -- history -----------------------------------------------------------
 
@@ -1189,6 +1220,186 @@ class Session:
                 return True
         return False
 
+    # -- lifecycle hooks ---------------------------------------------------
+
+    def _hook_runner(self) -> Any | None:
+        """The current manifest's hook runner, or ``None`` when hooks are off."""
+        provider = self._hooks_for_session
+        if provider is None:
+            return None
+        try:
+            return provider()
+        except Exception:  # noqa: BLE001 - a broken provider never blocks a turn
+            return None
+
+    def _persist_hook_outcome(self, outcome: Any, event: str) -> None:
+        """Persist ``hook.fired``/``hook.blocked`` through this session's sink."""
+        to_dict = getattr(outcome, "to_dict", None)
+        payload = to_dict() if callable(to_dict) else {}
+        if not isinstance(payload, Mapping):
+            return
+        for decision in payload.get("decisions", ()) or ():
+            if not isinstance(decision, Mapping):
+                continue
+            self._emit(
+                "hook.fired",
+                {
+                    "event": event,
+                    "hook": decision.get("hook"),
+                    "action": decision.get("action"),
+                },
+            )
+        if str(payload.get("decision")) == "block":
+            self._emit(
+                "hook.blocked",
+                {
+                    "event": event,
+                    "reason": payload.get("reason") or "blocked by hook",
+                },
+            )
+
+    async def _run_session_hook(
+        self,
+        runner: Any,
+        event: str,
+        *,
+        data: Mapping[str, Any] | None = None,
+        tool_input: Mapping[str, Any] | None = None,
+    ) -> Any | None:
+        """Run one lifecycle hook, persisting its decisions; never wedges a turn."""
+        if runner is None:
+            return None
+        try:
+            if tool_input is not None and event == "UserPromptSubmit":
+                submit = getattr(runner, "user_prompt_submit", None)
+                if callable(submit):
+                    outcome = await submit(
+                        content=tool_input.get("content", []),
+                        session_id=self._id,
+                        turn_id="",
+                    )
+                else:
+                    outcome = await runner.lifecycle(
+                        event,
+                        session_id=self._id,
+                        turn_id="",
+                        data=dict(data or {}),
+                    )
+            else:
+                outcome = await runner.lifecycle(
+                    event, session_id=self._id, turn_id="", data=dict(data or {})
+                )
+        except (OperationCancelled, asyncio.CancelledError):
+            raise
+        except Exception:  # noqa: BLE001 - a broken hook never wedges a prompt
+            return None
+        self._persist_hook_outcome(outcome, event)
+        return outcome
+
+    @staticmethod
+    def _block_to_dict(block: ContentBlock) -> dict[str, Any]:
+        try:
+            return dict(msgspec.structs.asdict(block))
+        except Exception:  # noqa: BLE001 - an unknown block type is opaque
+            return {"type": type(block).__name__}
+
+    @staticmethod
+    def _coerce_prompt_modified(modified: Any) -> list[ContentBlock] | None:
+        """Parse a ``UserPromptSubmit`` modify into content blocks, or ``None``.
+
+        A hook may return a ``text`` string or a ``content`` list of blocks; any
+        other shape is ignored rather than crashing the prompt.
+        """
+        if not isinstance(modified, Mapping):
+            return None
+        text = modified.get("text")
+        if isinstance(text, str):
+            return [Text(text=text)] if text.strip() else None
+        raw = modified.get("content")
+        if raw is None:
+            return None
+        if isinstance(raw, str):
+            return [Text(text=raw)] if raw.strip() else None
+        if isinstance(raw, (list, tuple)):
+            blocks: list[ContentBlock] = []
+            for item in raw:
+                if isinstance(item, ContentBlock):
+                    blocks.append(item)
+                elif isinstance(item, Mapping):
+                    try:
+                        blocks.append(msgspec.convert(item, type=ContentBlock))
+                    except (
+                        msgspec.ValidationError,
+                        msgspec.DecodeError,
+                        TypeError,
+                        ValueError,
+                    ):
+                        return None
+                else:
+                    return None
+            return blocks or None
+        return None
+
+    async def _gate_user_prompt(
+        self, content: list[ContentBlock]
+    ) -> tuple[list[ContentBlock], str | None]:
+        """Run ``SessionStart``/``UserPromptSubmit`` before the prompt is durable.
+
+        Returns ``(content, block_reason)``. A non-``None`` ``block_reason`` means
+        the prompt must not be appended: nothing was written, and the caller
+        fails the action with that reason. A modify is parsed safely into content
+        blocks and persisted/assembled instead of the original.
+        """
+        runner = self._hook_runner()
+        if runner is None:
+            return content, None
+        if not self._session_started and not self.read().records:
+            await self._run_session_hook(runner, "SessionStart")
+            self._session_started = True
+        outcome = await self._run_session_hook(
+            runner,
+            "UserPromptSubmit",
+            data={"content": [self._block_to_dict(b) for b in content]},
+            tool_input={"content": [self._block_to_dict(b) for b in content]},
+        )
+        if outcome is None:
+            return content, None
+        if getattr(outcome, "blocked", False):
+            reason = str(getattr(outcome, "reason", "") or "").strip()
+            return content, reason or "blocked by UserPromptSubmit hook"
+        if getattr(outcome, "modified", False):
+            modified = self._coerce_prompt_modified(
+                getattr(outcome, "modified_input", None)
+            )
+            if modified is not None:
+                return modified, None
+        return content, None
+
+    def _fail_blocked_prompt(self, reason: str) -> str:
+        """Emit a persisted failed turn for a hook-blocked prompt; no user message.
+
+        The session never acquires a lease, so there is no active turn to leak.
+        A synthetic ``turn.started``/``turn.failed`` pair keeps the stream
+        well-formed for a UI that pairs terminal events.
+        """
+        turn_id = new_id()
+        limits_data: dict[str, Any] = {}
+        try:
+            limits = self._limits() if callable(self._limits) else self._limits
+            if limits is not None:
+                limits_data = {
+                    "max_iterations": limits.max_iterations,
+                    "max_seconds": limits.max_seconds,
+                }
+        except Exception:  # noqa: BLE001 - limits are advisory here
+            limits_data = {}
+        self._emit("turn.started", {"limits": limits_data})
+        self._emit(
+            "turn.failed",
+            {"error": f"UserPromptSubmit blocked: {reason}", "iterations": 0},
+        )
+        return turn_id
+
     def _prepare_turn(
         self,
         content: list[ContentBlock],
@@ -1212,6 +1423,7 @@ class Session:
         # arrives mid-turn must not be able to weaken (or strengthen) it.
         self._turn_unattended = self._live_unattended_policy()
         try:
+            self._turn_is_new = not self.read().records
             assembler = self._assemble_for_turn()
             # An explicit per-turn ``limits`` argument wins over the config
             # snapshot; only derive from the snapshot when the caller passed none.
@@ -1273,6 +1485,7 @@ class Session:
                 persist_user_message=False,
                 manifest_ref=getattr(tool_turn, "manifest_ref", None),
                 environment_for=getattr(tool_turn, "environment_for", None),
+                hooks=getattr(tool_turn, "hooks", None),
             )
         )
         self._turn_task = task
@@ -1304,16 +1517,33 @@ class Session:
 
         Gated by ``auto_start_queued``: when disabled a completed turn never
         silently promotes the queue, so the session settles with the submission
-        pending until an explicit :meth:`start_turn`.
+        pending until an explicit :meth:`start_turn`. With hooks configured the
+        ``UserPromptSubmit`` gate is asynchronous, so consumption is scheduled;
+        without hooks it stays synchronous (the pre-hook behaviour).
         """
         if not self._auto_start_queued:
             return
         if self._active is not None or not self._queue:
             return
-        item = self._queue[0]
+        if self._queued_task is not None and not self._queued_task.done():
+            return
+        if self._hook_runner() is None:
+            item = self._queue[0]
+            self._start_queued_turn(item.content, item)
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._queued_task = loop.create_task(self._consume_queued_turn())
+
+    def _start_queued_turn(
+        self, content: list[ContentBlock], item: _QueuedInput
+    ) -> None:
+        """Prepare and launch one queued turn from already-gated content."""
         try:
             lease, assembler, tool_turn = self._prepare_turn(
-                item.content, self.attended, None, None, queued_item=item
+                content, self.attended, None, None, queued_item=item
             )
         except BaseException:  # noqa: BLE001 - a bad queued turn must not crash the drain
             # Drop only if it is still pending. If preparation got past the
@@ -1326,7 +1556,7 @@ class Session:
                 )
             return
         try:
-            self._launch_turn(lease, item.content, assembler, tool_turn, fanout=None)
+            self._launch_turn(lease, content, assembler, tool_turn, fanout=None)
         except BaseException:  # noqa: BLE001 - release the lease, then keep draining
             self._active_tools = None
             lease.release()
@@ -1335,6 +1565,25 @@ class Session:
                     "input.dropped",
                     {"queued_id": item.queued_id, "reason": "turn launch failed"},
                 )
+
+    async def _consume_queued_turn(self) -> None:
+        """Run the queued prompt's hooks, then prepare and launch its turn."""
+        if self._active is not None or not self._queue:
+            return
+        item = self._queue[0]
+        content, block_reason = await self._gate_user_prompt(item.content)
+        if block_reason is not None:
+            if self._remove_queued(item):
+                self._emit(
+                    "input.dropped",
+                    {
+                        "queued_id": item.queued_id,
+                        "reason": f"UserPromptSubmit blocked: {block_reason}",
+                    },
+                )
+            self._fail_blocked_prompt(block_reason)
+            return
+        self._start_queued_turn(content, item)
 
     async def start_turn(
         self,
@@ -1361,6 +1610,17 @@ class Session:
         if self._ensure_ready is not None:
             await self._ensure_ready()
         content, queued_item = self._resolve_turn_input(user_input)
+        content, block_reason = await self._gate_user_prompt(content)
+        if block_reason is not None:
+            if queued_item is not None and self._remove_queued(queued_item):
+                self._emit(
+                    "input.dropped",
+                    {
+                        "queued_id": queued_item.queued_id,
+                        "reason": f"UserPromptSubmit blocked: {block_reason}",
+                    },
+                )
+            return self._fail_blocked_prompt(block_reason)
         effective = self.attended if attended is None else bool(attended)
         lease, assembler, tool_turn = self._prepare_turn(
             content, effective, turn_id, limits, queued_item=queued_item
@@ -1444,6 +1704,15 @@ class Session:
         if self._ensure_ready is not None:
             await self._ensure_ready()
         content = _coerce_user_input(user_input)
+        # ``UserPromptSubmit`` runs before anything is durable; capture the log
+        # watermark so the blocked path can yield exactly the events it emitted.
+        watermark = self.next_seq() - 1
+        content, block_reason = await self._gate_user_prompt(content)
+        if block_reason is not None:
+            self._fail_blocked_prompt(block_reason)
+            for event in self._events_after(watermark):
+                yield event
+            return
         # The legacy sticky flag (not presence) drives attendance here, so a
         # headless JSON consumer stays unattended even while it is attached.
         effective = self._attended if attended is None else bool(attended)
@@ -1451,6 +1720,10 @@ class Session:
         lease, assembler, tool_turn = self._prepare_turn(
             content, effective, None, None
         )
+        # Every event persisted before the producer started (the gate's hook
+        # events, and a queued ``input.consumed``) is replayed first, because the
+        # fan-out only captures what the loop emits after launch.
+        pre_launch_events = self._events_after(watermark)
         try:
             task = self._launch_turn(
                 lease, content, assembler, tool_turn, fanout=fanout
@@ -1460,6 +1733,8 @@ class Session:
             lease.release()
             raise
         try:
+            for event in pre_launch_events:
+                yield event
             while True:
                 item = await fanout.get()
                 if item is _SENTINEL:
@@ -1480,6 +1755,55 @@ class Session:
                 if self._active is None or self._active.turn_id == lease.turn_id:
                     self._active_tools = None
                 lease.release()
+
+    # -- close -------------------------------------------------------------
+
+    async def aclose(self, *, hook_timeout: float = 5.0) -> None:
+        """Close this handle: fire ``SessionEnd`` once, then close the bus.
+
+        The hook runs against the *current* manifest's pinned set and its events
+        are persisted before the bus closes. A hook timeout or failure is
+        swallowed so a wedged close can never hang shutdown. Every concurrent or
+        repeated caller awaits the **same** tracked close task, so ``SessionEnd``
+        fires exactly once and the bus is closed before any caller returns.
+        """
+        task = self._close_task
+        if task is None:
+            task = asyncio.ensure_future(self._close_session(hook_timeout))
+            self._close_task = task
+        # Shield so a cancelled *waiter* never cancels the shared close; the
+        # CancelledError still propagates to that waiter.
+        await asyncio.shield(task)
+
+    async def _close_session(self, hook_timeout: float) -> None:
+        if self._session_ended:
+            return
+        self._session_ended = True
+        try:
+            # Stop an in-flight queued consumer and any active turn first, so no
+            # writer races the final events.
+            queued, self._queued_task = self._queued_task, None
+            if queued is not None and not queued.done():
+                queued.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await queued
+            task = self._turn_task
+            if task is not None and not task.done():
+                self.cancel("session closed")
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await self._await_detached(task)
+            runner = self._hook_runner()
+            if runner is not None:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(
+                        self._run_session_hook(runner, "SessionEnd"),
+                        timeout=hook_timeout,
+                    )
+        except Exception as exc:  # noqa: BLE001 - observe, never wedge a close
+            self.close_error = exc
+        finally:
+            with contextlib.suppress(Exception):
+                await self._bus.aclose()
 
 
 __all__ = [

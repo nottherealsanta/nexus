@@ -54,9 +54,13 @@ def test_coding_profile_covers_all_phase2_tools():
 
 
 def test_research_profile_is_read_search_only():
-    assert profile_tools("research") == frozenset({"Read", "Glob", "Grep", "LS"})
+    # Phase 6 adds Task: research may delegate, but read_only still strips every
+    # mutating and shell tool, so a child can never write.
+    assert profile_tools("research") == frozenset(
+        {"Read", "Glob", "Grep", "LS", "Task"}
+    )
     assert profile_tools("research").isdisjoint(
-        {"Write", "Edit", "MultiEdit", "Bash", "Task"}
+        {"Write", "Edit", "MultiEdit", "Bash"}
     )
 
 

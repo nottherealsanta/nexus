@@ -97,6 +97,72 @@ class ModelsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
                 )
 
 
+class AgentsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """Canonical ``[agents]`` section (plan sections 5.6, 15.8).
+
+    Bounds every subagent tree: depth, concurrent children, the requested tier,
+    fan-out, and the aggregate token/cost budget. A child can never exceed its
+    parent; these values only ever clamp further. ``max_tier`` is validated
+    against the runtime tier table (this layer does not import ``model``).
+    """
+
+    enabled: bool = True
+    default_type: str = "general"
+    max_depth: int = 3
+    max_concurrent: int = 4
+    max_fanout: int | None = 16
+    max_tier: str = "medium"
+    token_budget: int | None = None
+    cost_budget: float | None = None
+    seed_roles: bool = True
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.default_type, str) or not self.default_type.strip():
+            raise ValueError("agents.default_type must be a nonempty string")
+        if not isinstance(self.max_tier, str) or not self.max_tier.strip():
+            raise ValueError("agents.max_tier must be a nonempty string")
+        for name in ("max_depth",):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"agents.{name} must be a non-negative integer")
+        if (
+            isinstance(self.max_concurrent, bool)
+            or not isinstance(self.max_concurrent, int)
+            or self.max_concurrent < 1
+        ):
+            raise ValueError("agents.max_concurrent must be a positive integer")
+        if self.max_fanout is not None and (
+            isinstance(self.max_fanout, bool)
+            or not isinstance(self.max_fanout, int)
+            or self.max_fanout < 1
+        ):
+            raise ValueError("agents.max_fanout must be a positive integer or null")
+        if self.token_budget is not None and (
+            isinstance(self.token_budget, bool)
+            or not isinstance(self.token_budget, int)
+            or self.token_budget < 0
+        ):
+            raise ValueError("agents.token_budget must be a non-negative integer or null")
+        if self.cost_budget is not None and (
+            isinstance(self.cost_budget, bool)
+            or not isinstance(self.cost_budget, (int, float))
+            or not math.isfinite(self.cost_budget)
+            or self.cost_budget < 0
+        ):
+            raise ValueError("agents.cost_budget must be finite and >= 0 or null")
+
+
+class HooksSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """Canonical ``[hooks]`` section (plan section 5.7).
+
+    ``enabled = false`` disables discovery/execution entirely; the hook files
+    remain on disk. Timeouts and non-zero policies are declared per hook in
+    ``hooks.toml`` and are not configurable here.
+    """
+
+    enabled: bool = True
+
+
 class ProviderSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     kind: str | None = None
     api_key: str | None = None
@@ -273,6 +339,8 @@ class ConfigV2(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     permissions: PermissionsSection = msgspec.field(default_factory=PermissionsSection)
     tools: ToolsSection = msgspec.field(default_factory=ToolsSection)
     ext: ExtSection = msgspec.field(default_factory=ExtSection)
+    agents: AgentsSection = msgspec.field(default_factory=AgentsSection)
+    hooks: HooksSection = msgspec.field(default_factory=HooksSection)
     mcp: MCPSection = msgspec.field(default_factory=MCPSection)
     session: SessionSection = msgspec.field(default_factory=SessionSection)
     telemetry: TelemetrySection = msgspec.field(default_factory=TelemetrySection)
@@ -309,10 +377,12 @@ __all__ = [
     "DEFAULT_CATALOGUE_URL",
     "DEFAULT_REFRESH_TTL_DAYS",
     "AgentSection",
+    "AgentsSection",
     "ConfigV2",
     "ContextLimits",
     "ContextSection",
     "ExtSection",
+    "HooksSection",
     "MCPSection",
     "ModelParams",
     "ModelSection",

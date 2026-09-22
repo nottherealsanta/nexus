@@ -290,6 +290,8 @@ async def test_broken_syntax_reload_errors_then_recovers(tmp_path):
         text_response("done"),
     )
     runtime = make_runtime(tmp_path, provider)
+    await runtime.ensure_started()
+    baseline = runtime.manifest.generation
     session = runtime.session("recover")
 
     events = await drain(session)
@@ -300,7 +302,7 @@ async def test_broken_syntax_reload_errors_then_recovers(tmp_path):
     assert first_reload is not None and first_reload.is_error is True
     assert "syntax" in first_reload.content[0].text.lower()
     # The previous manifest stayed live across the failed reload.
-    assert observed["generation"] == 0
+    assert observed["generation"] == baseline
     assert observed["has_fixed"] is False
     # The fix reloads and the tool becomes callable in the same turn.
     second_reload = tool_result_for(session, "l2")
@@ -675,8 +677,8 @@ async def test_config_system_files_and_skills_are_hot_next_iteration(tmp_path):
     assert "SOUL-A" in provider.requests[0].system
     assert "SOUL-B" in provider.requests[1].system
     assert "reader: read things" in provider.requests[1].system
-    assert len(provider.requests[0].tools) == 15
-    assert len(provider.requests[1].tools) == 4  # research profile
+    assert len(provider.requests[0].tools) == 16
+    assert len(provider.requests[1].tools) == 5  # research profile (+Task)
     await runtime.aclose()
 
 
