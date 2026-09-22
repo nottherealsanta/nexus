@@ -1,0 +1,85 @@
+{
+  "full_suite": {
+    "command": "/Users/santa/repos/nexus/.venv/bin/python -m pytest -q -p no:cacheprovider",
+    "returncode": 0,
+    "seconds": 31.89,
+    "summary": "2149 passed, 2 skipped, 2 deselected, 1 xfailed, 4 subtests passed in 31.47s"
+  },
+  "generated_at": "2026-09-22T23:38:17+0530",
+  "head": "2cf74d68bd159f67a1c15011ea1634c277920496",
+  "import_cost": {
+    "heavy_loaded": [],
+    "import_nexus_ms": 35.09,
+    "import_nexus_new_modules": 132,
+    "import_runtime_modules": 366,
+    "import_runtime_ms": 87.07
+  },
+  "line_budgets": {
+    "core_model_spec": {
+      "code_lines": 5862,
+      "files": 23,
+      "overage": 4674,
+      "physical_lines": 7174,
+      "plan_cap": 2500,
+      "within_plan_cap": false
+    },
+    "host_view_ui": {
+      "baseline_by_dir": {
+        "host": 0,
+        "ui": 391,
+        "view": 0
+      },
+      "code_lines": 320,
+      "files": 2,
+      "overage": 0,
+      "physical_lines": 391,
+      "plan_cap": 2000,
+      "within_plan_cap": true
+    }
+  },
+  "phase3": {
+    "prompt_cache": {
+      "boundaries_with_caching": [
+        {
+          "position": 0,
+          "scope": "system_tools"
+        },
+        {
+          "position": 58,
+          "scope": "history"
+        }
+      ],
+      "boundaries_without_caching": [],
+      "cache_read_rate": 0.1,
+      "cache_write_rate": 1.25,
+      "cached_input_tokens": 13601.9,
+      "savings_pct": 80.4,
+      "turns": 30,
+      "uncached_input_tokens": 69385
+    },
+    "session_200": {
+      "compacted_assemblies": 18,
+      "contiguous_suffix": true,
+      "current_turn_appears_once": true,
+      "final_request_messages": 163,
+      "input_budget": 5744,
+      "log_message_lines": 200,
+      "messages": 200,
+      "model_calls": 100,
+      "peak_used_tokens": 4882,
+      "turns": 100
+    }
+  },
+  "phase4": {
+    "command": "/Users/santa/repos/nexus/.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_hot_extension_e2e.py::test_walkthrough_read_template_write_reload_call tests/test_hot_extension_stress.py::test_two_hundred_reloads_do_not_leak",
+    "nodeids": [
+      "tests/test_hot_extension_e2e.py::test_walkthrough_read_template_write_reload_call",
+      "tests/test_hot_extension_stress.py::test_two_hundred_reloads_do_not_leak"
+    ],
+    "output_tail": "..                                                                       [100%]\n2 passed in 0.95s",
+    "returncode": 0,
+    "seconds": 1.11,
+    "summary": "2 passed in 0.95s"
+  },
+  "schema": "nexus.phase3_exit_baseline/1"
+}

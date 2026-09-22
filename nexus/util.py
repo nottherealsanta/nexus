@@ -2,8 +2,30 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 import uuid
+
+#: URL userinfo (``scheme://user:password@host``). The userinfo section may not
+#: contain ``/`` or whitespace, so a bare email address (``user@host``) is never
+#: matched -- only credentials that precede a URL authority.
+_URL_USERINFO = re.compile(r"(?P<scheme>[a-zA-Z][a-zA-Z0-9+.\-]*://)[^/@\s]+@")
+
+_CREDENTIAL = "<redacted>"
+
+
+def redact_url_userinfo(text: str) -> str:
+    """Strip ``user:password@`` userinfo from every URL in ``text``.
+
+    Used on strings that may be surfaced in events, logs, or error results: a
+    configured catalogue or provider URL may carry embedded credentials, and an
+    exception from an HTTP client can echo the full URL back. The userinfo is
+    replaced (not merely truncated) so a short password cannot survive as a
+    fragment, and bare email addresses are left alone.
+    """
+    if not text:
+        return text
+    return _URL_USERINFO.sub(rf"\g<scheme>{_CREDENTIAL}@", text)
 
 
 def new_id() -> str:

@@ -1,5 +1,10 @@
 """Model layer: provider-neutral contracts shared by loop, managers, and adapters."""
-from .capabilities import Capabilities, DegradationPolicy
+from .capabilities import (
+    CAPABILITY_FEATURES,
+    Capabilities,
+    CapabilityRejected,
+    DegradationPolicy,
+)
 from .message import (
     ContentBlock,
     Document,
@@ -31,7 +36,9 @@ from .stream import (
 from .tokenizer import DEFAULT_TOKENIZER, HeuristicTokenizer, Tokenizer
 
 __all__ = [
+    "CAPABILITY_FEATURES",
     "Capabilities",
+    "CapabilityRejected",
     "DegradationPolicy",
     "ContentBlock",
     "Document",

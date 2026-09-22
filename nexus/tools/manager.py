@@ -665,7 +665,18 @@ class ToolManager:
             if name in available and name not in order:
                 order.append(name)
         excluded = set(self._profile.exclude)
-        return tuple(self._by_name[name] for name in order if name not in excluded)
+        selected: list[RegisteredTool] = []
+        for name in order:
+            if name in excluded:
+                continue
+            tool = self._by_name[name]
+            # A read-only profile (for example ``research``) never enables a
+            # mutating tool, including dynamically named MCP tools that no
+            # static ``exclude`` list can name.
+            if self._profile.read_only and getattr(tool.spec, "mutates", False):
+                continue
+            selected.append(tool)
+        return tuple(selected)
 
     # -- introspection -----------------------------------------------------
 

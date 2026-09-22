@@ -32,6 +32,7 @@ fallback routing.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -47,11 +48,14 @@ from .context.counting import RequestTokenCounter
 from .core.bus import DROP_OLDEST, Bus
 from .core.cancel import CancelToken
 from .core.turn import TurnLimits
-from .errors import OperationCancelled
+from .errors import ConfigError, OperationCancelled
+from .events import Event
 from .model.provider import Provider
 from .model.providers.anthropic import AnthropicProvider
+from .model.registry import ModelRegistry
 from .model.request import ModelRequest, ToolSchema
 from .model.router import ModelRouter
+from .model.tiers import DEFAULT_TIER, TierTable
 from .session import Session, SessionManager
 from .tools.builtin._jobs import JobRegistry
 from .tools.builtin.todo import TodoStore
@@ -64,6 +68,7 @@ from .tools.permissions import (
     collect_grants,
 )
 from .tools.spec import ToolCall, ToolContext
+from .util import redact_url_userinfo
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; the runtime imports lazily
     from .ext.manager import ExtensionManager
@@ -359,6 +364,7 @@ class _ContextCoordinator:
         config: Config | None,
         system_files: Any = None,
         skills_index: Any = None,
+        mcp_index: Any = None,
     ) -> Any:
         """Build one iteration's assembler from a pinned manifest generation.
 
@@ -403,6 +409,7 @@ class _ContextCoordinator:
             config=config,
             system_files=system_files,
             skills_index=skills_index,
+            mcp_index=mcp_index,
             capabilities=capabilities,
             request_counter=request_counter,
             model=model,
@@ -483,6 +490,10 @@ class _ManifestEnvironmentFactory:
             config=config,
             system_files=system_files,
             skills_index=skills_index,
+            # The pinned generation's MCP view: connected servers and their
+            # resource roots only, folded by the context layer into its
+            # untrusted ``mcp_index`` part.
+            mcp_index=getattr(manifest, "mcp", None),
         )
         activation = self._activation_for(session)
         skill_tools = self._skill_tools_for(manifest, activation)
@@ -630,6 +641,32 @@ class ToolTurn:
     environment_for: Any | None = None
 
 
+#: MCP lifecycle events that change the manifest's tool set or server index.
+#: Each one schedules one coalesced rebuild; the rebuild itself is idempotent
+#: and emits nothing further, so the callback cannot loop.
+_MCP_REBUILD_EVENTS = frozenset(
+    {"mcp.connected", "mcp.disconnected", "mcp.failed", "mcp.tools_changed"}
+)
+
+
+class _MCPEventSink:
+    """The MCP manager's event sink: publish to the bus, rebuild on change.
+
+    The manager calls ``publish(event)`` for every ``mcp.*`` lifecycle event.
+    Publishing keeps those events visible on the runtime's extension bus, and a
+    tool-affecting change asks the runtime to rebuild the manifest so the next
+    iteration sees the server's current tools — the "manager change callback"
+    without the MCP layer importing the runtime or the extension layer.
+    """
+
+    def __init__(self, runtime: Runtime) -> None:
+        self._runtime = runtime
+
+    def publish(self, event: Event) -> int:
+        self._runtime._on_mcp_event(event)
+        return 0
+
+
 class Runtime:
     """Owns the Phase 1 managers and hands out sendable sessions."""
 
@@ -643,6 +680,8 @@ class Runtime:
         config_loader: Callable[[], Config] | None = None,
         providers: Mapping[str, Provider] | None = None,
         router: Any | None = None,
+        registry: ModelRegistry | None = None,
+        tiers: TierTable | None = None,
         context: Any | None = None,
         sessions: SessionManager | None = None,
         session_dir: str | Path | None = None,
@@ -659,6 +698,9 @@ class Runtime:
         owns_extensions: bool | None = None,
         skills: SkillManager | None = None,
         extension_sink: Any | None = None,
+        mcp: Any | None = None,
+        owns_mcp: bool | None = None,
+        mcp_client_factory: Any | None = None,
     ) -> None:
         self.workspace = Path(workspace).resolve()
         self._home = Path(home) if home is not None else None
@@ -667,6 +709,7 @@ class Runtime:
         self._config_loader = config_loader
         self._http_transport = http_transport
         self._client = client
+        self._mcp_client_factory = mcp_client_factory
         self._closed = False
 
         # Tool infrastructure. A caller may inject a ready ToolManager, a
@@ -708,11 +751,28 @@ class Runtime:
             self._providers = self._build_providers(initial)
             self._owned_providers = list(self._providers.values())
 
+        if initial is None:
+            initial = self._load_config()
+
+        # Model registry and tier table (plan sections 15.3-15.4). The runtime
+        # owns both; an injected registry/tier table is the caller's. A registry
+        # is only built when ``[models]`` is explicitly configured, so a plain
+        # config keeps the Phase 1 router and never touches the network.
+        self._tiers: TierTable = (
+            tiers if tiers is not None else self._build_tiers(initial)
+        )
+        self._registry: ModelRegistry | None = (
+            registry if registry is not None else self._build_registry(initial)
+        )
+        self._registry_loaded = False
+        #: Serializes concurrent turn boundaries onto one acquisition and is the
+        #: flag's guard: ``_registry_loaded`` is set only after a successful
+        #: load, so a failed load is retried rather than remembered as done.
+        self._registry_lock: asyncio.Lock | None = None
+
         if router is not None:
             self._router = router
         else:
-            if initial is None:
-                initial = self._load_config()
             self._router = self._build_router(initial)
         self._context = (
             context
@@ -742,6 +802,24 @@ class Runtime:
             else SkillManager.for_workspace(self.workspace, home=self._home)
         )
         self._extension_events = Bus(maxsize=256, policy=DROP_OLDEST)
+
+        # MCP world. The runtime owns the server manager (or adopts an injected
+        # one), wires its lifecycle events onto the extension bus, and asks the
+        # extension manager to fold its immutable snapshot into each manifest
+        # generation. Construction does not connect anything: ``ensure_started``
+        # reconciles ``.nexus/mcp.json`` and lazily connects enabled servers at
+        # the turn boundary, so a dead or hung server can only remove its own
+        # tools, never fail construction or a turn.
+        self._mcp_rebuild_pending = False
+        self._mcp_rebuild_dirty = False
+        self._mcp_rebuild_task: asyncio.Task | None = None
+        if mcp is not None:
+            self._mcp: Any | None = mcp
+            self._owns_mcp = False if owns_mcp is None else bool(owns_mcp)
+        else:
+            self._mcp = self._build_mcp_manager(initial)
+            self._owns_mcp = self._mcp is not None
+
         if extensions is not None:
             self._extensions: ExtensionManager | None = extensions
             self._owns_extensions = (
@@ -758,6 +836,7 @@ class Runtime:
                 config_loader=self._load_config,
                 builtin_tools=BUILTIN_TOOLS,
                 skills=self._skills,
+                mcp=self._mcp,
                 sink=(
                     extension_sink
                     if extension_sink is not None
@@ -814,6 +893,16 @@ class Runtime:
     @property
     def router(self) -> Any:
         return self._router
+
+    @property
+    def registry(self) -> ModelRegistry | None:
+        """The runtime-owned model registry, or ``None`` when ``[models]`` is off."""
+        return self._registry
+
+    @property
+    def tiers(self) -> TierTable:
+        """The runtime-owned tier table (always present; built-ins by default)."""
+        return self._tiers
 
     @property
     def context(self) -> Any:
@@ -882,6 +971,7 @@ class Runtime:
         when watching is disabled). A failed rebuild keeps the previous manifest
         and is recorded on the manager's diagnostics; it never fails a turn.
         """
+        await self._ensure_registry()
         if self._extensions is None:
             return
         if self._extensions_lock is None:
@@ -891,6 +981,76 @@ class Runtime:
             if not self._extensions_started:
                 self._extensions.start(sink=self._extension_events)
                 self._extensions_started = True
+
+    async def _ensure_registry(self, *, force: bool = False) -> None:
+        """Populate the model registry once, publishing its lifecycle events.
+
+        Called at the turn boundary (before model resolution) so tier names
+        resolve against a loaded catalogue. Acquisition is cache-first and
+        TTL-bound; ``offline`` and an already-installed injected registry never
+        touch the network. A load failure degrades to the status the registry
+        already reports (stale cache, snapshot, or empty) and is never fatal.
+        """
+        registry = self._registry
+        if registry is None:
+            return
+        if self._registry_loaded and not force:
+            return
+        if self._registry_lock is None:
+            self._registry_lock = asyncio.Lock()
+        async with self._registry_lock:
+            # Re-check under the lock: a second turn boundary that waited here
+            # must not repeat the acquisition the first one just completed.
+            if self._registry_loaded and not force:
+                return
+            try:
+                status = await registry.load(force=force)
+            except Exception as exc:  # noqa: BLE001 - registry I/O must not fail a turn
+                self._publish_registry_event(
+                    "registry.failed",
+                    {
+                        "error": redact_url_userinfo(
+                            f"{type(exc).__name__}: {exc}"
+                        )
+                    },
+                )
+                # The flag stays unset so the next turn boundary retries; a
+                # transient fetch failure must not permanently disable tiers.
+                return
+            self._registry_loaded = True
+        data = {
+            "source": status.source,
+            "stale": status.stale,
+            "models": status.model_count,
+            "providers": status.provider_count,
+        }
+        if status.error:
+            self._publish_registry_event(
+                "registry.failed",
+                {**data, "error": redact_url_userinfo(status.error)},
+            )
+        if status.stale:
+            self._publish_registry_event("registry.stale", data)
+        else:
+            self._publish_registry_event("registry.refreshed", data)
+
+    async def refresh_models(self) -> Any:
+        """Force a catalogue refresh, publishing ``registry.*`` events.
+
+        Returns the resulting :class:`~nexus.model.registry.RegistryStatus`, or
+        ``None`` when no registry is configured.
+        """
+        if self._registry is None:
+            return None
+        await self._ensure_registry(force=True)
+        return self._registry.status()
+
+    def _publish_registry_event(self, event_type: str, data: dict[str, Any]) -> None:
+        """Publish a registry lifecycle event on the runtime event bus."""
+        try:
+            self._extension_events.publish(Event(type=event_type, data=dict(data)))
+        except Exception:  # noqa: BLE001 - a closed bus must not fail a turn
+            return
 
     def _clear_activation(self, session_id: str, turn_id: str) -> None:
         """Drop one finished turn's skill activation.
@@ -1111,6 +1271,49 @@ class Runtime:
 
     # -- providers / router ------------------------------------------------
 
+    def _build_tiers(self, config: Config) -> TierTable:
+        """Build the tier table from ``[models.tiers]`` (plan section 15.4)."""
+        v2 = getattr(config, "v2", None)
+        models = getattr(v2, "models", None)
+        overrides = getattr(models, "tiers", None) if models is not None else None
+        default = getattr(models, "default", None) if models is not None else None
+        try:
+            table = TierTable(overrides=overrides or None, default=DEFAULT_TIER)
+            if isinstance(default, str) and default in table.order:
+                table = TierTable(overrides=overrides or None, default=default)
+            return table
+        except ConfigError:
+            raise
+        except ValueError as exc:  # pragma: no cover - defensive
+            raise ConfigError(f"invalid models.tiers: {exc}") from exc
+
+    def _build_registry(self, config: Config) -> ModelRegistry | None:
+        """Build the registry only when ``[models]`` is explicitly configured.
+
+        A plain config keeps the Phase 1 router, so the default suite (and any
+        run without a model catalogue) never touches the network. An explicit
+        ``[models]`` block -- a default, tiers, a URL/TTL, or ``offline`` --
+        opts in.
+        """
+        v2 = getattr(config, "v2", None)
+        if v2 is None:
+            return None
+        models = getattr(v2, "models", None)
+        if models is None or not v2.models_configured():
+            return None
+        sections = getattr(v2, "providers", None) or {}
+        providers_cfg = {name: section for name, section in sections.items()}
+        cache_path = self.workspace / ".nexus" / "cache" / "models.dev.json"
+        return ModelRegistry(
+            providers=providers_cfg,
+            env=self._environ,
+            cache_path=cache_path,
+            catalogue_url=models.catalogue_url,
+            ttl_days=models.refresh_ttl_days,
+            offline=models.offline,
+            tier_table=self._tiers,
+        )
+
     def _build_providers(self, config: Config) -> dict[str, Provider]:
         """Construct the adapters the Phase 1 runtime knows how to own."""
         providers: dict[str, Provider] = {}
@@ -1129,19 +1332,120 @@ class Runtime:
     def _build_router(self, config: Config) -> ModelRouter:
         aliases: dict[str, str] = {}
         v2 = getattr(config, "v2", None)
-        model_section = getattr(v2, "model", None)
-        if model_section is not None:
-            if model_section.default:
-                aliases.setdefault("default", model_section.default)
-            if model_section.fast:
-                aliases["fast"] = model_section.fast
-            if model_section.plan:
-                aliases["plan"] = model_section.plan
+        default_ref = getattr(config, "model", None)
+        if v2 is not None:
+            if default_ref:
+                aliases.setdefault("default", default_ref)
+            fast = v2.model_fast()
+            plan = v2.model_plan()
+            if fast:
+                aliases["fast"] = fast
+            if plan:
+                aliases["plan"] = plan
         return ModelRouter(
             self._providers,
             aliases=aliases,
-            default=getattr(config, "model", None),
+            default=default_ref,
+            registry=self._registry,
+            tiers=self._tiers,
         )
+
+    # -- MCP ---------------------------------------------------------------
+
+    @property
+    def mcp(self) -> Any | None:
+        """The runtime-owned (or injected) MCP manager."""
+        return self._mcp
+
+    def _build_mcp_manager(self, config: Config) -> Any:
+        """Construct the MCP server manager from the effective config.
+
+        The manager is cheap and does no I/O here: it parses nothing until a
+        reconcile and connects nothing until ``ensure_started``. A caller may
+        inject ``mcp_client_factory`` to choose a client backend (for example
+        the deterministic native transports in tests).
+        """
+        from .mcp.manager import MCPManager
+
+        v2 = getattr(config, "v2", None)
+        mcp_config = getattr(v2, "mcp", None)
+        enabled = bool(getattr(mcp_config, "enabled", True))
+        restart_max = getattr(mcp_config, "restart_max", 5)
+        return MCPManager(
+            None,
+            enabled=enabled,
+            cache_dir=self.workspace / ".nexus" / "cache" / "mcp",
+            workspace=self.workspace,
+            environ=self._environ,
+            client_factory=self._mcp_client_factory,
+            sink=_MCPEventSink(self),
+            restart_max=restart_max,
+        )
+
+    def _on_mcp_event(self, event: Event) -> None:
+        """Publish an MCP event and, for tool-affecting ones, schedule a rebuild."""
+        try:
+            self._extension_events.publish(event)
+        except Exception:  # noqa: BLE001, S110 - a closed bus must not break MCP
+            pass
+        if getattr(event, "type", None) in _MCP_REBUILD_EVENTS:
+            self._schedule_mcp_rebuild()
+
+    def _schedule_mcp_rebuild(self) -> None:
+        """Coalesce change notifications into one background manifest rebuild.
+
+        Safe to call from any MCP coroutine: it only schedules on a running loop,
+        does nothing after close, and suppresses a second task while one is
+        pending. The rebuild reconciles definitions, connects lazily (a no-op
+        when already connected), and swaps the manifest only if the aggregate
+        actually changed — so it cannot loop back into another change.
+        """
+        if self._extensions is None or self._extensions.closed:
+            return
+        if self._mcp_rebuild_pending:
+            # A rebuild is already in flight. Mark it dirty so it runs once more
+            # *after* it reads the snapshot; otherwise a change that lands during
+            # the build (a `list_changed` refresh, a late connect) would be lost.
+            self._mcp_rebuild_dirty = True
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._mcp_rebuild_pending = True
+        self._mcp_rebuild_task = loop.create_task(self._run_mcp_rebuild())
+
+    async def _run_mcp_rebuild(self) -> None:
+        try:
+            while not self._closed:
+                self._mcp_rebuild_dirty = False
+                extensions = self._extensions
+                if extensions is None or extensions.closed:
+                    return
+                await asyncio.sleep(0)
+                await extensions.reload(trigger="mcp", sink=self._extension_events)
+                if not self._mcp_rebuild_dirty:
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - a background rebuild must not raise
+            return
+        finally:
+            self._mcp_rebuild_pending = False
+            if self._mcp_rebuild_dirty and not self._closed:
+                # Re-arm for a change that arrived in the final window.
+                self._schedule_mcp_rebuild()
+
+    async def _aclose_mcp(self) -> None:
+        task, self._mcp_rebuild_task = self._mcp_rebuild_task, None
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+        if self._owns_mcp and self._mcp is not None:
+            aclose = getattr(self._mcp, "aclose", None)
+            if aclose is not None:
+                await aclose()
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -1170,6 +1474,9 @@ class Runtime:
             # releases every module and staged copy after the last lease drains.
             # The runtime must not second-guess that with a direct release.
             await self._extensions.aclose()
+        # Close MCP after the extension world so no scheduled change callback can
+        # rebuild against a half-closed ref; the task is cancelled first.
+        await self._aclose_mcp()
         await self._extension_events.aclose()
 
     async def __aenter__(self) -> Self:

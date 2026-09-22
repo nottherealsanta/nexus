@@ -71,7 +71,19 @@ MCP_EVENTS = ("mcp.connected", "mcp.disconnected", "mcp.failed", "mcp.tools_chan
 SKILL_EVENTS = ("skill.invoked", "skill.completed")
 AGENT_EVENTS = ("agent.spawned", "agent.completed")
 HOOK_EVENTS = ("hook.fired", "hook.blocked")
-MISC_EVENTS = ("provider.raw", "error")
+
+# Plan section 15.10: the model-registry lifecycle. ``registry.refreshed``/
+# ``registry.stale``/``registry.failed`` describe acquisition; ``registry.mismatch``
+# records a provider rejection that contradicts a registry capability claim
+# (section 15.5). They are folded into ``misc`` so the earlier catalogue groups
+# stay exact and mutually disjoint (the surface-amendment tests pin that list).
+REGISTRY_EVENTS = (
+    "registry.refreshed",
+    "registry.stale",
+    "registry.failed",
+    "registry.mismatch",
+)
+MISC_EVENTS = ("provider.raw", "error", *REGISTRY_EVENTS)
 
 # Phase 3.5 session surface, as amended by PLAN section 14.10. The input queue
 # persists a submission, the loop consumes it at the next turn boundary, and a
@@ -157,6 +169,7 @@ __all__ = [
     "MODEL_EVENTS",
     "PERMISSION_EVENTS",
     "PRESENCE_EVENTS",
+    "REGISTRY_EVENTS",
     "SESSION_EVENTS",
     "SKILL_EVENTS",
     "TOOL_EVENTS",

@@ -93,6 +93,7 @@ from .parts import (
     canonical_tool_text,
     capture_environment,
     current_user_index,
+    freeze_mcp_index,
     freeze_skills_index,
     render_parts,
 )
@@ -289,6 +290,7 @@ class ContextManager:
         min_content_chars: int = 0,
         skills_index: Any | None = None,
         skills: Any | None = None,
+        mcp_index: Any | None = None,
     ) -> None:
         if config is None and config_loader is None:
             raise ConfigError("ContextManager requires a config or config_loader")
@@ -337,6 +339,10 @@ class ContextManager:
         self._skills_index: tuple[str, ...] = freeze_skills_index(
             skills_index if skills_index is not None else skills
         )
+        #: Frozen MCP index block for the current iteration's connected servers
+        #: and resource roots. Populated through :meth:`configure`,
+        #: :meth:`for_turn`, or :meth:`for_iteration`; empty renders nothing.
+        self._mcp_index: str = freeze_mcp_index(mcp_index)
         #: Frozen environment for a per-turn snapshot; ``None`` means build one
         #: from the effective config on each assemble.
         self._env: AssemblyEnvironment | None = None
@@ -391,6 +397,7 @@ class ContextManager:
         cache: TokenCountCache | None = None,
         skills_index: Any | None = None,
         skills: Any | None = None,
+        mcp_index: Any | None = None,
     ) -> None:
         """Inject the frozen per-turn environment used by the next snapshot.
 
@@ -398,7 +405,9 @@ class ContextManager:
         before ``assemble`` when it does not snapshot). Passing ``None`` leaves
         the corresponding value unchanged. ``skills_index`` (or its alias
         ``skills``) accepts a raw skill snapshot/index (or already-frozen lines);
-        pass ``()`` to clear it.
+        pass ``()`` to clear it. ``mcp_index`` accepts a manifest ``mcp``
+        mapping, an iterable of server states, or an already-frozen block; pass
+        ``{}`` to clear it.
         """
         if capabilities is not None:
             self._capabilities = capabilities
@@ -421,6 +430,8 @@ class ContextManager:
         raw_skills = skills_index if skills_index is not None else skills
         if raw_skills is not None:
             self._skills_index = freeze_skills_index(raw_skills)
+        if mcp_index is not None:
+            self._mcp_index = freeze_mcp_index(mcp_index)
 
     def for_turn(
         self,
@@ -435,6 +446,7 @@ class ContextManager:
         provider: str | None = None,
         skills_index: Any | None = None,
         skills: Any | None = None,
+        mcp_index: Any | None = None,
     ) -> ContextManager:
         """Return a snapshot manager with config and rendered inputs frozen.
 
@@ -462,6 +474,11 @@ class ContextManager:
                 if raw_skills is None
                 else freeze_skills_index(raw_skills)
             ),
+            mcp_index=(
+                self._mcp_index
+                if mcp_index is None
+                else freeze_mcp_index(mcp_index)
+            ),
         )
         snapshot._env = snapshot._build_env(config)
         return snapshot
@@ -479,6 +496,7 @@ class ContextManager:
         model: str | None = None,
         provider: str | None = None,
         skills_index: Any | None = None,
+        mcp_index: Any | None = None,
     ) -> ContextManager:
         """Build a sibling snapshot sharing this manager's frozen inputs.
 
@@ -527,6 +545,11 @@ class ContextManager:
                 if skills_index is None
                 else freeze_skills_index(skills_index)
             ),
+            mcp_index=(
+                self._mcp_index
+                if mcp_index is None
+                else freeze_mcp_index(mcp_index)
+            ),
         )
         snapshot._tool_schemas = self._tool_schemas
         snapshot._env = self._env
@@ -545,6 +568,7 @@ class ContextManager:
         provider: str | None = None,
         skills_index: Any = _UNSET,
         skills: Any = _UNSET,
+        mcp_index: Any = _UNSET,
     ) -> ContextManager:
         """Return a sibling snapshot for one loop iteration.
 
@@ -574,6 +598,11 @@ class ContextManager:
         frozen = (
             self._skills_index if raw is _UNSET else freeze_skills_index(raw)
         )
+        frozen_mcp = (
+            self._mcp_index
+            if mcp_index is _UNSET
+            else freeze_mcp_index(mcp_index)
+        )
         snapshot = self._spawn(
             config=config,
             capabilities=capabilities,
@@ -581,6 +610,7 @@ class ContextManager:
             model=model,
             provider=provider,
             skills_index=frozen,
+            mcp_index=frozen_mcp,
         )
         if config is not None and (
             system_files is not None
@@ -624,6 +654,11 @@ class ContextManager:
     def skills_index(self) -> tuple[str, ...]:
         """The frozen, sanitized skills-index lines for this manager."""
         return self._skills_index
+
+    @property
+    def mcp_index(self) -> str:
+        """The frozen, bounded MCP index block for this manager (``""`` if none)."""
+        return self._mcp_index
 
     def freeze_tools(self, schemas: Any) -> None:
         """Attach the frozen per-turn tool schemas to this snapshot."""
@@ -834,6 +869,7 @@ class ContextManager:
             summarizer=env.summarizer,
             session=session,
             skills_index=self._skills_index,
+            mcp_index=self._mcp_index,
         )
 
     def _assemble_sync(self, session: Any, env: AssemblyEnvironment) -> Any:

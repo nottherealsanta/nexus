@@ -40,6 +40,7 @@ V2_SECTION_KEYS = frozenset(
     {
         "agent",
         "model",
+        "models",
         "providers",
         "context",
         "permissions",
@@ -75,6 +76,7 @@ _V2_NUMERIC = {
     "model.params.temperature": float,
     "model.params.max_output_tokens": int,
     "model.params.thinking_budget": int,
+    "models.refresh_ttl_days": float,
     "context.max_tokens": int,
     "context.safety_margin_tokens": int,
     "context.compact_at_fraction": float,
@@ -91,7 +93,9 @@ _V2_NUMERIC = {
     "mcp.restart_max": int,
     "session.snapshot_every": int,
 }
-_V2_BOOL = frozenset({"ext.enabled", "ext.quarantine", "mcp.enabled"})
+_V2_BOOL = frozenset(
+    {"ext.enabled", "ext.quarantine", "mcp.enabled", "models.offline"}
+)
 
 
 @dataclass(frozen=True)

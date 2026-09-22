@@ -18,6 +18,12 @@ SandboxMode = Literal["read-only", "workspace-write"]
 _PERMISSION_MODES = frozenset({"allow", "ask", "deny"})
 _UNATTENDED_MODES = frozenset({"deny", "allow", "fail_turn"})
 
+#: Canonical model-registry defaults (plan section 15.9). Kept as literals here
+#: so ``nexus.config`` never imports the model layer (``import nexus`` stays
+#: lazy); the runtime passes these values straight into ``ModelRegistry``.
+DEFAULT_CATALOGUE_URL = "https://models.dev/api.json"
+DEFAULT_REFRESH_TTL_DAYS = 7.0
+
 
 class ModelParams(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     temperature: float | None = None
@@ -41,6 +47,54 @@ class ModelSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     plan: str | None = None
     fallback: list[str] = msgspec.field(default_factory=list)
     params: ModelParams = msgspec.field(default_factory=ModelParams)
+
+
+class ModelsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """Canonical ``[models]`` section (plan sections 15.3-15.4, 15.9).
+
+    ``[model]`` remains the compatibility section; the two are reconciled in
+    :class:`ConfigV2`, which rejects a field the two set to different values.
+    ``tiers`` is the ``[models.tiers]`` table: ``tier -> [reference, ...]``.
+    """
+
+    default: str | None = None
+    fast: str | None = None
+    plan: str | None = None
+    refresh_ttl_days: float = DEFAULT_REFRESH_TTL_DAYS
+    catalogue_url: str = DEFAULT_CATALOGUE_URL
+    offline: bool = False
+    tiers: dict[str, list[str]] = msgspec.field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for name in ("default", "fast", "plan"):
+            value = getattr(self, name)
+            if value is not None and (
+                not isinstance(value, str) or not value.strip()
+            ):
+                raise ValueError(f"models.{name} must be a nonempty string")
+        ttl = self.refresh_ttl_days
+        if (
+            isinstance(ttl, bool)
+            or not isinstance(ttl, (int, float))
+            or not math.isfinite(ttl)
+            or ttl < 0
+        ):
+            raise ValueError("models.refresh_ttl_days must be finite and >= 0")
+        if not isinstance(self.catalogue_url, str) or self.catalogue_url.partition(
+            "://"
+        )[0].lower() not in ("https", "http"):
+            raise ValueError("models.catalogue_url must be an http(s) URL")
+        for tier, refs in self.tiers.items():
+            if not isinstance(tier, str) or not tier.strip():
+                raise ValueError("models.tiers keys must be nonempty tier names")
+            if (
+                not isinstance(refs, list)
+                or not refs
+                or not all(isinstance(ref, str) and ref.strip() for ref in refs)
+            ):
+                raise ValueError(
+                    f"models.tiers.{tier} must be a nonempty list of references"
+                )
 
 
 class ProviderSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -213,6 +267,7 @@ class ConfigV2(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     config_version: Literal[2] = 2
     agent: AgentSection = msgspec.field(default_factory=AgentSection)
     model: ModelSection = msgspec.field(default_factory=ModelSection)
+    models: ModelsSection = msgspec.field(default_factory=ModelsSection)
     providers: dict[str, ProviderSection] = msgspec.field(default_factory=dict)
     context: ContextSection = msgspec.field(default_factory=ContextSection)
     permissions: PermissionsSection = msgspec.field(default_factory=PermissionsSection)
@@ -222,8 +277,37 @@ class ConfigV2(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     session: SessionSection = msgspec.field(default_factory=SessionSection)
     telemetry: TelemetrySection = msgspec.field(default_factory=TelemetrySection)
 
+    def __post_init__(self) -> None:
+        # ``[models]`` is canonical and ``[model]`` is compatibility. A field
+        # both sections set must agree; disagreement is a conflict, not a
+        # precedence puzzle (plan section 15.9).
+        for name in ("default", "fast", "plan"):
+            canonical = getattr(self.models, name)
+            compat = getattr(self.model, name)
+            if canonical is not None and compat is not None and canonical != compat:
+                raise ValueError(
+                    f"conflicting model {name!r}: "
+                    f"[models].{name}={canonical!r} but [model].{name}={compat!r}"
+                )
+
+    def model_default(self) -> str | None:
+        """Effective default model reference: canonical then compatibility."""
+        return self.models.default or self.model.default
+
+    def model_fast(self) -> str | None:
+        return self.models.fast or self.model.fast
+
+    def model_plan(self) -> str | None:
+        return self.models.plan or self.model.plan
+
+    def models_configured(self) -> bool:
+        """Whether ``[models]`` was set to anything beyond its defaults."""
+        return self.models != ModelsSection()
+
 
 __all__ = [
+    "DEFAULT_CATALOGUE_URL",
+    "DEFAULT_REFRESH_TTL_DAYS",
     "AgentSection",
     "ConfigV2",
     "ContextLimits",
@@ -232,6 +316,7 @@ __all__ = [
     "MCPSection",
     "ModelParams",
     "ModelSection",
+    "ModelsSection",
     "PermissionsSection",
     "ProviderSection",
     "SandboxMode",

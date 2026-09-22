@@ -90,7 +90,7 @@ class Config:
         codex = v2.providers.get("codex")
         return cls(
             executable=(codex.executable if codex and codex.executable else "codex"),
-            model=v2.model.default,
+            model=v2.model_default(),
             sandbox=v2.agent.sandbox,
             timeout_seconds=(
                 codex.timeout_seconds

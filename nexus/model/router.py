@@ -1,25 +1,31 @@
 """Resolve a configured model reference to a provider, model, and capabilities.
 
-Plan section 8 defines the contract: ``"anthropic/claude-opus-5"`` maps to
-``provider="anthropic", model="claude-opus-5"``, and a bare name resolves
-through an alias table. Config aliases (``default``, ``fast``, ``plan``) exist so
-skills and subagents can request ``model: fast`` and stay portable.
+Plan sections 8 and 15.3-15.5 define the contract: ``"anthropic/claude-opus-5"``
+maps to ``provider="anthropic", model="claude-opus-5"``; a bare name resolves
+through an alias table; and a **tier name** (``low``/``medium``/``high`` or a
+custom ``[models.tiers]`` name) is usable anywhere a model string is accepted.
 
-Phase 1 scope is deliberately narrow:
+Resolution order, first hit wins:
 
-* a fixed, injected ``providers`` map (name -> :class:`~nexus.model.provider.Provider`);
-* alias lookup with cycle detection;
-* clear rejection of malformed references and of providers that are not
-  registered.
+1. Config aliases (``default``/``fast``/``plan``, plus any explicit alias).
+2. A tier name, when a registry and tier table are wired: the first selectable
+   model whose provider this router can actually stream resolves to its
+   :class:`~nexus.model.registry.ModelInfo`; a tier with no runnable model is a
+   clear :class:`~nexus.errors.ConfigError`.
+3. A registry reference -- ``provider/model``, a bare id, or an aggregator
+   alias -- resolving to :class:`ModelInfo`.
+4. The Phase 1 fallback: split ``provider/model`` and take the adapter's own
+   capability descriptor.
 
-There is no fallback chain, no retry-on-provider-failure, and no mid-stream
-rerouting; those arrive with provider breadth. ``ModelRouter`` implements the
-loop's :class:`~nexus.core.loop.ProviderResolver` protocol structurally, so the
-loop still imports no concrete router.
+The registry is authoritative for the capabilities it describes (section 15.5);
+:meth:`~nexus.model.capabilities.Capabilities.overridden_by` layers those over
+the adapter's transport-only fields. There is still no fallback chain, no
+retry-on-provider-failure, and no mid-stream rerouting.
 """
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Any
 
 from ..errors import ConfigError
 from .capabilities import Capabilities
@@ -38,6 +44,8 @@ class ModelRouter:
         *,
         aliases: Mapping[str, str] | None = None,
         default: str | None = None,
+        registry: Any | None = None,
+        tiers: Any | None = None,
     ) -> None:
         self._providers = dict(providers)
         self._aliases = dict(aliases or {})
@@ -46,6 +54,11 @@ class ModelRouter:
         ):
             raise ConfigError("default model reference must be a nonempty string")
         self._default = default
+        #: An injected registry/tier table (plan section 15.3). Structural:
+        #: only ``get``/``list`` and ``order`` are read, so the router imports
+        #: no concrete registry and the model layer stays acyclic.
+        self._registry = registry
+        self._tiers = tiers
 
     # -- introspection -----------------------------------------------------
 
@@ -61,35 +74,34 @@ class ModelRouter:
     def default(self) -> str | None:
         return self._default
 
+    @property
+    def registry(self) -> Any | None:
+        return self._registry
+
+    @property
+    def tiers(self) -> Any | None:
+        return self._tiers
+
     # -- ProviderResolver protocol ----------------------------------------
 
     def resolve(self, request: ModelRequest, /) -> ResolvedModel:
         """Return ``(provider, model, capabilities)`` for ``request``.
 
         Raises :class:`~nexus.errors.ConfigError` for a missing model, a
-        malformed reference, an alias cycle, or an unregistered provider.
+        malformed reference, an alias cycle, an unregistered provider, or a
+        tier with no selectable model.
         """
         ref = self._resolve_alias(self._reference(request))
-        provider_name, model = self._split(ref)
 
-        if provider_name is None:
-            provider_name = self._default_provider_name()
-        if provider_name is None and len(self._providers) == 1:
-            provider_name = next(iter(self._providers))
-        if provider_name is None:
-            raise ConfigError(
-                f"Cannot determine the provider for model reference {ref!r}"
-            )
+        tier = self._as_tier(ref)
+        if tier is not None:
+            return self._resolve_tier(tier, ref)
 
-        provider = self._providers.get(provider_name)
-        if provider is None:
-            known = ", ".join(sorted(self._providers)) or "none"
-            raise ConfigError(
-                f"Unknown provider {provider_name!r} in model reference {ref!r} "
-                f"(registered: {known})"
-            )
-        capabilities: Capabilities = provider.capabilities(model)
-        return ResolvedModel(provider, model, capabilities)
+        info = self._registry_lookup(ref)
+        if info is not None:
+            return self._resolve_info(info, ref)
+
+        return self._resolve_legacy(ref)
 
     # -- internals ---------------------------------------------------------
 
@@ -116,6 +128,114 @@ class ModelRouter:
             seen.add(ref)
             ref = self._aliases[ref]
         return ref
+
+    def _as_tier(self, ref: str) -> str | None:
+        """Return ``ref`` if it names a tier this router can resolve, else ``None``.
+
+        Tier resolution needs both a registry (to find a model) and a tier table
+        (to know the names/order); without them a bare id stays a model string,
+        which preserves the Phase 1 behaviour exactly.
+
+        The tier table is open, so a custom tier name may legally contain ``/``
+        (``[models.tiers."team/high"]``). An exact tier-name match therefore
+        wins over the ``provider/model`` split; a user who names a tier after a
+        model reference accepts that it shadows the model reference.
+        """
+        if self._registry is None or self._tiers is None:
+            return None
+        order = getattr(self._tiers, "order", None) or getattr(
+            self._tiers, "names", ()
+        )
+        return ref if ref in order else None
+
+    def _registry_lookup(self, ref: str) -> Any | None:
+        if self._registry is None:
+            return None
+        get = getattr(self._registry, "get", None)
+        if get is None:
+            return None
+        return get(ref)
+
+    def _resolve_tier(self, tier: str, ref: str) -> ResolvedModel:
+        listed = getattr(self._registry, "list", None)
+        candidates = (
+            list(listed(tier=tier, selectable_only=True))
+            if callable(listed)
+            else []
+        )
+        # Only a provider this router can actually stream is runnable. A
+        # catalogue entry whose provider has no adapter (or whose provider was
+        # not constructed) must never be chosen just because it sorts first.
+        runnable = [
+            info
+            for info in candidates
+            if getattr(info, "provider", None) in self._providers
+        ]
+        if not runnable:
+            registered = ", ".join(sorted(self._providers)) or "none"
+            available = (
+                ", ".join(
+                    sorted(
+                        {
+                            str(getattr(info, "provider", "?"))
+                            for info in candidates
+                        }
+                    )
+                )
+                or "none"
+            )
+            raise ConfigError(
+                f"No runnable provider has a model for tier {tier!r} "
+                f"(reference {ref!r}); registered providers: {registered}; "
+                f"catalogue providers offering this tier: {available}"
+            )
+        return self._resolve_info(runnable[0], ref)
+
+    def _resolve_info(self, info: Any, ref: str) -> ResolvedModel:
+        provider_name = getattr(info, "provider", None)
+        model = getattr(info, "id", None)
+        provider = self._providers.get(provider_name)
+        if provider is None:
+            known = ", ".join(sorted(self._providers)) or "none"
+            raise ConfigError(
+                f"Unknown provider {provider_name!r} in model reference {ref!r} "
+                f"(registered: {known})"
+            )
+        capabilities = self._merge_capabilities(provider, model, info)
+        return ResolvedModel(provider, model, capabilities)
+
+    @staticmethod
+    def _merge_capabilities(
+        provider: Provider, model: str, info: Any
+    ) -> Capabilities:
+        base = provider.capabilities(model)
+        registry_caps = info.capabilities() if hasattr(info, "capabilities") else None
+        if registry_caps is None:
+            return base
+        override = getattr(base, "overridden_by", None)
+        if override is None:
+            return registry_caps
+        return override(registry_caps)
+
+    def _resolve_legacy(self, ref: str) -> ResolvedModel:
+        provider_name, model = self._split(ref)
+        if provider_name is None:
+            provider_name = self._default_provider_name()
+        if provider_name is None and len(self._providers) == 1:
+            provider_name = next(iter(self._providers))
+        if provider_name is None:
+            raise ConfigError(
+                f"Cannot determine the provider for model reference {ref!r}"
+            )
+        provider = self._providers.get(provider_name)
+        if provider is None:
+            known = ", ".join(sorted(self._providers)) or "none"
+            raise ConfigError(
+                f"Unknown provider {provider_name!r} in model reference {ref!r} "
+                f"(registered: {known})"
+            )
+        capabilities: Capabilities = provider.capabilities(model)
+        return ResolvedModel(provider, model, capabilities)
 
     def _default_provider_name(self) -> str | None:
         if not self._default:

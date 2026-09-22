@@ -48,6 +48,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
+import json
 import os
 import threading
 import time
@@ -84,6 +85,119 @@ __all__ = ["ExtensionManager", "LoadedExtension"]
 _TIER_WORKSPACE = 2
 _TIER_USER = 1
 _TIER_OTHER = 0
+
+#: The MCP server definition file, relative to the workspace. Its set of servers
+#: is reconciled hot on every rebuild; editing it takes effect live.
+_MCP_CONFIG_RELATIVE = ".nexus/mcp.json"
+#: A definition file larger than this is refused rather than read (it carries
+#: command/env/url strings, never a payload).
+_MCP_MAX_BYTES = 262_144
+
+
+def _strip_jsonc(text: str) -> str:
+    """Remove ``//`` and ``/* */`` comments and trailing commas from JSONC.
+
+    ``.nexus/mcp.json`` is shown as JSONC in the plan, so a human may add a
+    comment. Only comments and trailing commas are relaxed; the decoded value is
+    then parsed as strict JSON (duplicate keys and ``NaN``/``Infinity`` are
+    refused). A ``//`` or ``/*`` inside a string literal is left alone.
+    """
+    out: list[str] = []
+    index = 0
+    length = len(text)
+    in_string = False
+    escaped = False
+    while index < length:
+        char = text[index]
+        if in_string:
+            out.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            out.append(char)
+            index += 1
+            continue
+        if char == "/" and index + 1 < length and text[index + 1] == "/":
+            index += 2
+            while index < length and text[index] not in "\r\n":
+                index += 1
+            continue
+        if char == "/" and index + 1 < length and text[index + 1] == "*":
+            end = text.find("*/", index + 2)
+            index = length if end < 0 else end + 2
+            continue
+        out.append(char)
+        index += 1
+    cleaned = "".join(out)
+    return _remove_trailing_commas(cleaned)
+
+
+def _remove_trailing_commas(text: str) -> str:
+    """Drop a comma that is followed only by whitespace and a closing bracket."""
+    out: list[str] = []
+    index = 0
+    length = len(text)
+    in_string = False
+    escaped = False
+    while index < length:
+        char = text[index]
+        if in_string:
+            out.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            out.append(char)
+            index += 1
+            continue
+        if char == ",":
+            look = index + 1
+            while look < length and text[look] in " \t\r\n":
+                look += 1
+            if look < length and text[look] in "}]":
+                index += 1
+                continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def _strict_json_object(text: str) -> Any:
+    """Parse ``text`` as JSONC for comments/trailing commas, then strict JSON.
+
+    Python's default ``json`` reader accepts ``NaN``/``Infinity`` and silently
+    keeps the last of duplicate object keys. Neither is valid JSON or a safe
+    configuration semantic, so a definition document is refused instead of
+    guessed at. Comments and trailing commas are the only relaxations.
+    """
+
+    def _pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        seen: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in seen:
+                raise ValueError(f"duplicate key {key!r}")
+            seen[key] = value
+        return seen
+
+    def _constant(name: str) -> Any:
+        raise ValueError(f"non-standard JSON constant {name!r}")
+
+    return json.loads(
+        _strip_jsonc(text), object_pairs_hook=_pairs, parse_constant=_constant
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +360,7 @@ class ExtensionManager:
         loader: ToolLoader | None = None,
         quarantine: Quarantine | None = None,
         skills: SkillManager | None = None,
+        mcp: Any | None = None,
         sink: Any | None = None,
     ) -> None:
         self._workspace = _absolute(Path(workspace))
@@ -256,6 +371,18 @@ class ExtensionManager:
         self._skills = skills or SkillManager.for_workspace(
             self._workspace, home=self._home
         )
+        #: The MCP manager (duck-typed) whose immutable snapshot this manager
+        #: folds into each pinned generation. ``None`` keeps MCP off entirely;
+        #: ``nexus.ext`` never imports ``nexus.mcp`` for it.
+        self._mcp = mcp
+        #: Definition-parse / hot-apply failures from the last MCP sync. They are
+        #: diagnostics only: a broken or dead MCP server must never fail a
+        #: rebuild or a turn, so they are never added to ``_BuildResult.failures``.
+        self._mcp_failures: tuple[ReloadFailure, ...] = ()
+        #: The single, long-lived ``ReadMcpResource`` tool. Built once on the
+        #: loop (its resolver reads live server state) so every generation reuses
+        #: the same object and the manifest diff never churns on it.
+        self._read_resource_tool: Any | None = None
         self._sink = sink
 
         tools = tuple(builtin_tools or ())
@@ -403,7 +530,237 @@ class ExtensionManager:
                     ),
                 }
             )
+        for failure in self._mcp_failures:
+            row = failure.to_dict()
+            row["kind"] = "mcp"
+            rows.append(row)
         return tuple(rows)
+
+    # -- MCP ---------------------------------------------------------------
+
+    @property
+    def mcp(self) -> Any | None:
+        """The MCP manager this extension world folds into its manifest."""
+        return self._mcp
+
+    def mcp_config_path(self) -> Path:
+        """The watched MCP definition file (``<workspace>/.nexus/mcp.json``)."""
+        return self._workspace / _MCP_CONFIG_RELATIVE
+
+    def _load_mcp_definitions(
+        self,
+    ) -> tuple[dict[str, Any] | None, tuple[ReloadFailure, ...]]:
+        """Read and validate the ``servers`` map from ``mcp.json``.
+
+        Returns ``(None, failures)`` when the file exists but cannot be used, so
+        the caller keeps the previous definition set rather than silently
+        removing every server. A missing file is an empty set (no MCP servers);
+        an explicit ``{"servers": {}}`` is the same. The strict per-server
+        parsing (allowed keys, ``${env:VAR}`` interpolation, transport rules)
+        lives in :func:`nexus.mcp.client.parse_server_config` and runs inside the
+        manager's ``apply``; this only bounds the file and decodes it as JSONC
+        (comments/trailing commas) into a strict JSON object, rejecting duplicate
+        keys and non-standard constants.
+        """
+        path = self.mcp_config_path()
+        try:
+            if not path.is_file():
+                return {}, ()
+            size = path.stat().st_size
+        except OSError as exc:
+            return None, (
+                ReloadFailure(
+                    kind="mcp",
+                    name="mcp.json",
+                    error=sanitize_text(str(exc)),
+                    error_type=type(exc).__name__,
+                    path=sanitize_text(str(path), limit=200),
+                ),
+            )
+        if size > _MCP_MAX_BYTES:
+            return None, (
+                ReloadFailure(
+                    kind="mcp",
+                    name="mcp.json",
+                    error=f"definition file exceeds {_MCP_MAX_BYTES} bytes",
+                    error_type="MCPConfigError",
+                    path=sanitize_text(str(path), limit=200),
+                ),
+            )
+        try:
+            document = _strict_json_object(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, UnicodeDecodeError) as exc:
+            return None, (
+                ReloadFailure(
+                    kind="mcp",
+                    name="mcp.json",
+                    error=sanitize_text(f"{type(exc).__name__}: {exc}"),
+                    error_type=type(exc).__name__,
+                    path=sanitize_text(str(path), limit=200),
+                ),
+            )
+        if not isinstance(document, Mapping):
+            return None, (
+                ReloadFailure(
+                    kind="mcp",
+                    name="mcp.json",
+                    error="mcp.json must be a JSON object",
+                    error_type="MCPConfigError",
+                    path=sanitize_text(str(path), limit=200),
+                ),
+            )
+        unknown = sorted(set(document) - {"servers"})
+        if unknown:
+            return None, (
+                ReloadFailure(
+                    kind="mcp",
+                    name="mcp.json",
+                    error="unknown top-level keys: " + ", ".join(unknown),
+                    error_type="MCPConfigError",
+                    path=sanitize_text(str(path), limit=200),
+                ),
+            )
+        servers = document.get("servers", {})
+        if not isinstance(servers, Mapping):
+            return None, (
+                ReloadFailure(
+                    kind="mcp",
+                    name="mcp.json",
+                    error="mcp.json 'servers' must be an object",
+                    error_type="MCPConfigError",
+                    path=sanitize_text(str(path), limit=200),
+                ),
+            )
+        return dict(servers), ()
+
+    def _failure_from_apply(self, failure: Any) -> ReloadFailure:
+        to_dict = getattr(failure, "to_dict", None)
+        if callable(to_dict):
+            try:
+                data = dict(to_dict())
+            except Exception:  # noqa: BLE001 - diagnostics are best-effort
+                data = {}
+        else:
+            data = {}
+        return ReloadFailure(
+            kind="mcp",
+            name=sanitize_text(str(data.get("name", "mcp")), limit=200) or "mcp",
+            error=sanitize_text(str(data.get("error", ""))),
+            error_type=sanitize_text(str(data.get("error_type", "MCPConfigError"))),
+            path=sanitize_text(str(self.mcp_config_path()), limit=200),
+        )
+
+    async def sync_mcp(self) -> None:
+        """Reconcile the live MCP definition set from ``mcp.json``.
+
+        Hot add/remove/reconfigure: the manager's ``apply`` closes removed or
+        reconfigured servers, parks added ones, and advances its snapshot only
+        when the aggregate tool set changed. Definition and apply failures are
+        recorded as diagnostics, never raised: MCP is additive and a bad entry
+        must not fail a rebuild or a turn.
+        """
+        if self._mcp is None:
+            return
+        definitions, failures = self._load_mcp_definitions()
+        collected = list(failures)
+        if definitions is not None:
+            try:
+                report = await self._mcp.apply(definitions)
+            except Exception as exc:  # noqa: BLE001 - MCP must never fail a reload
+                collected.append(
+                    ReloadFailure(
+                        kind="mcp",
+                        name="mcp.json",
+                        error=sanitize_text(f"{type(exc).__name__}: {exc}"),
+                        error_type=type(exc).__name__,
+                        path=sanitize_text(str(self.mcp_config_path()), limit=200),
+                    )
+                )
+            else:
+                for failure in getattr(report, "failures", ()) or ():
+                    collected.append(self._failure_from_apply(failure))
+        if self._read_resource_tool is None:
+            builder = getattr(self._mcp, "read_resource_tool", None)
+            if callable(builder):
+                try:
+                    self._read_resource_tool = builder()
+                except Exception:  # noqa: BLE001 - resources are best-effort
+                    self._read_resource_tool = None
+        self._mcp_failures = tuple(collected)
+
+    async def _connect_mcp(self) -> None:
+        """Lazily connect every enabled server, isolating each failure.
+
+        This is the "first use" that makes an MCP server's tools part of the
+        manifest: a server that is not connected contributes nothing, and a dead
+        or hung one records its health and is skipped. A failure here is never
+        fatal to the rebuild.
+        """
+        if self._mcp is None:
+            return
+        try:
+            definitions = self._mcp.definitions
+        except Exception:  # noqa: BLE001 - a foreign manager must not break us
+            return
+        if not isinstance(definitions, Mapping):
+            return
+        for name in sorted(definitions):
+            if self._closed:
+                return
+            try:
+                await self._mcp.ensure_connected(name)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001, S112 - one server never fails the rebuild
+                continue
+
+    def _mcp_manifest_parts(
+        self,
+    ) -> tuple[dict[str, Any], dict[str, Any], Any | None, list[ReloadFailure]]:
+        """Read the MCP snapshot into ``(tools, mcp_map, read_tool, shadows)``.
+
+        Called from the build thread. ``snapshot()`` is one atomic read of an
+        immutable value, so no lock is needed and no half-built state is visible.
+        Tool objects are reused across rebuilds (the manager keeps them until its
+        own generation changes), so the manifest diff does not churn. The
+        ``ReadMcpResource`` tool is a single long-lived object built once on the
+        loop and included only while a connected server actually exposes
+        resources or resource templates.
+        """
+        mcp_tools: dict[str, Any] = {}
+        mcp_map: dict[str, Any] = {}
+        shadows: list[ReloadFailure] = []
+        if self._mcp is None:
+            return mcp_tools, mcp_map, None, shadows
+        try:
+            snapshot = self._mcp.snapshot()
+        except Exception as exc:  # noqa: BLE001 - a broken manager is not fatal
+            shadows.append(
+                ReloadFailure(
+                    kind="mcp",
+                    name="snapshot",
+                    error=sanitize_text(f"{type(exc).__name__}: {exc}"),
+                    error_type=type(exc).__name__,
+                )
+            )
+            return mcp_tools, mcp_map, None, shadows
+        for server in getattr(snapshot, "servers", ()) or ():
+            name = getattr(server, "name", None)
+            if isinstance(name, str) and name:
+                mcp_map[name] = server
+        has_resources = False
+        for tool in getattr(snapshot, "tools", ()) or ():
+            tool_name = getattr(tool, "name", None)
+            if isinstance(tool_name, str) and tool_name:
+                mcp_tools[tool_name] = tool
+        for server in getattr(snapshot, "servers", ()) or ():
+            if getattr(server, "resources", ()) or getattr(
+                server, "resource_templates", ()
+            ):
+                has_resources = True
+                break
+        read_tool = self._read_resource_tool if has_resources else None
+        return mcp_tools, mcp_map, read_tool, shadows
 
     # -- the transaction ---------------------------------------------------
 
@@ -555,6 +912,13 @@ class ExtensionManager:
     async def _rebuild(self, trigger: str, sink: Any | None) -> ReloadReport:
         start = time.monotonic()
         previous = self._ref.get()
+        # Reconcile and lazily connect MCP before the build reads its snapshot,
+        # so a newly added or newly connected server's tools are part of this
+        # generation. Both are failure-isolated: a broken or dead server only
+        # removes its own tools and is recorded as a diagnostic.
+        if not self._closed and self._mcp is not None:
+            await self.sync_mcp()
+            await self._connect_mcp()
         result = await self._run_build(previous, previous.generation + 1)
         if result.config is not None:
             self._last_config = result.config
@@ -709,6 +1073,28 @@ class ExtensionManager:
 
         tools_map = dict(self._builtin_by_name)
         tools_map.update(external)
+        mcp_tools, mcp_map, read_tool, mcp_shadows = self._mcp_manifest_parts()
+        shadow_rows = list(shadows)
+        for name, tool in mcp_tools.items():
+            if name in tools_map and tools_map[name] is not tool:
+                # A builtin or external tool already claims this exact name.
+                # Keep the local tool (workspace precedence) and record it, so
+                # the collision is visible rather than silent.
+                shadow_rows.append(
+                    ReloadFailure(
+                        kind="shadowed",
+                        name=name,
+                        error=sanitize_text(
+                            f"MCP tool {name!r} is shadowed by a local tool"
+                        ),
+                        error_type="shadow",
+                    )
+                )
+                continue
+            tools_map[name] = tool
+        if read_tool is not None and read_tool.name not in tools_map:
+            tools_map[read_tool.name] = read_tool
+        shadow_rows.extend(mcp_shadows)
         modules_map = {
             item.record.handle.name: item.record.handle for item in loaded.values()
         }
@@ -722,6 +1108,7 @@ class ExtensionManager:
             skill_tools=skill_tools,
             system_files=system_files,
             modules=modules_map,
+            mcp=mcp_map,
         )
         diff = ManifestDiff.between(previous, candidate)
         return _BuildResult(
@@ -730,7 +1117,7 @@ class ExtensionManager:
             diff=diff,
             changed=diff.changed,
             failures=tuple(all_failures),
-            shadows=tuple(shadows),
+            shadows=tuple(shadow_rows),
             loaded=loaded,
             newly_loaded=tuple(newly),
             skill_loaded=skill_loaded,
@@ -1416,6 +1803,13 @@ class ExtensionManager:
                 (self._workspace, self._home / ".nexus"), pattern="*", recursive=False
             )
         )
+        if self._mcp is not None:
+            mcp_path = self.mcp_config_path()
+            watchers.append(
+                DirectoryWatcher(
+                    (mcp_path.parent,), pattern=mcp_path.name, recursive=False
+                )
+            )
         skill_roots = [root for _tier, root in self._skills.roots]
         if skill_roots:
             watchers.append(

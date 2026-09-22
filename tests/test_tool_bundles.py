@@ -22,7 +22,7 @@ from nexus.tools.bundles import (
 
 
 def test_the_bundles_are_defined():
-    assert BUNDLE_NAMES == frozenset({"fs", "shell", "task", "meta", "ext"})
+    assert BUNDLE_NAMES == frozenset({"fs", "shell", "task", "meta", "ext", "mcp"})
     assert all_bundles() is BUNDLES
 
 
@@ -36,6 +36,8 @@ def test_bundle_contents_match_the_plan():
         "WriteTool",
     )
     assert bundle_tools("ext") == ("Skill",)
+    # The MCP bundle owns no static names: bridged tools join it dynamically.
+    assert bundle_tools("mcp") == ()
 
 
 def test_profile_table():

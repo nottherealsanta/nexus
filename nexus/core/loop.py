@@ -64,9 +64,12 @@ import msgspec
 
 from ..errors import MalformedToolCall, OperationCancelled, ProviderError
 from ..events import Event
+from ..model.capabilities import Capabilities
 from ..model.message import (
     DUPLICATE_TOOL_CALL_KEY,
     ContentBlock,
+    Document,
+    Image,
     Message,
     MessageMeta,
     Text,
@@ -88,6 +91,7 @@ from ..model.stream import (
     ToolCallStart,
 )
 from ..model.stream import Usage as StreamUsage
+from ..util import redact_url_userinfo
 from .cancel import CancelToken
 from .turn import TurnLimits, TurnOutcome, TurnState, TurnUsage
 
@@ -525,6 +529,15 @@ class _BlockCollector:
                 blocks.append(ToolUse(id=item[1], name=item[2], input=item[3]))
         return blocks
 
+    def has_output(self) -> bool:
+        """Whether any user-visible content has been produced so far.
+
+        Used by the degradation path: a capability rejection may only be retried
+        when *nothing* visible has streamed yet (plan section 15.5). Text and
+        thinking buffers count, as does any started or flushed tool call.
+        """
+        return bool(self._text or self._thinking or self._items or self._names)
+
 
 async def _maybe_await(value):
     if inspect.isawaitable(value):
@@ -667,6 +680,304 @@ async def _collect_stream(
     return stop_reason, usage, malformed
 
 
+#: Message substrings that identify which capability a plain ``ProviderError``
+#: is rejecting. Adapters should raise :class:`CapabilityRejected` with an
+#: explicit ``feature``; this is the best-effort fallback for a provider that
+#: only carries the rejection in its error text.
+_CAPABILITY_FEATURE_HINTS: tuple[tuple[str, str], ...] = (
+    ("does not support tool", "tools"),
+    ("does not support function", "tools"),
+    ("unsupported tool", "tools"),
+    ("tool calling", "tools"),
+    ("function calling", "tools"),
+    ("tool_use", "tools"),
+    ("tool use", "tools"),
+    ("does not support parallel", "parallel_tool_calls"),
+    ("parallel tool", "parallel_tool_calls"),
+    ("does not support thinking", "thinking"),
+    ("extended thinking", "thinking"),
+    ("does not support prompt cach", "prompt_caching"),
+    ("prompt cach", "prompt_caching"),
+    ("does not support vision", "vision"),
+    ("does not support image", "vision"),
+    ("does not support document", "documents"),
+    ("does not support pdf", "documents"),
+    ("structured output", "json_schema_strict"),
+    ("json schema", "json_schema_strict"),
+)
+
+
+def _rejected_feature(exc: ProviderError) -> str | None:
+    """The capability a provider error rejects, or ``None`` if unrecognized."""
+    feature = getattr(exc, "feature", None) or getattr(exc, "capability", None)
+    if isinstance(feature, str) and feature:
+        return feature
+    message = str(exc).lower()
+    for needle, name in _CAPABILITY_FEATURE_HINTS:
+        if needle in message:
+            return name
+    return None
+
+
+#: Fallback degradation policy per content-bearing feature when the adapter has
+#: not declared one. Dropping thinking keeps an unsupported chain-of-thought out
+#: of the prompt; converting an unsupported image/document to a short text note
+#: preserves the *existence* of the attachment rather than silently losing it.
+_DEFAULT_DEGRADATION: dict[str, str] = {
+    "thinking": "drop",
+    "vision": "to_text",
+    "documents": "to_text",
+}
+
+#: Metadata keys that only exist because a capability was requested. A
+#: degradation retry removes them so a provider that rejected the capability is
+#: not sent the metadata that advertised it.
+_FEATURE_METADATA_KEYS: dict[str, tuple[str, ...]] = {
+    "prompt_caching": ("cache",),
+    "json_schema_strict": (
+        "json_schema_strict",
+        "structured_output",
+        "response_format",
+        "strict",
+    ),
+    "parallel_tool_calls": ("parallel_tool_calls",),
+}
+
+
+def _degradation_policy(capabilities: Capabilities, feature: str) -> str:
+    """The declared ``drop``/``to_text``/``error`` policy for ``feature``.
+
+    An unknown or malformed declaration falls back to the per-feature default,
+    so a hostile or corrupt catalogue can never turn the retry path into a
+    silent no-op or an unexpected raise.
+    """
+    degradation = getattr(capabilities, "degradation", None) or {}
+    if isinstance(degradation, Mapping):
+        policy = degradation.get(feature)
+        if policy in ("drop", "to_text", "error"):
+            return policy
+    return _DEFAULT_DEGRADATION.get(feature, "drop")
+
+
+def _degrade_block(block: ContentBlock, feature: str, policy: str):
+    """Return the replacement block, ``None`` to drop, or raise for ``error``."""
+    if policy == "error":
+        raise ProviderError(
+            f"provider rejected the {feature!r} capability and the configured "
+            f"degradation policy for {feature!r} is 'error'"
+        )
+    if policy == "drop":
+        return None
+    if isinstance(block, Thinking):
+        return Text(text=block.text)
+    if isinstance(block, Image):
+        return Text(
+            text=f"[image omitted: provider does not support the {feature} capability]"
+        )
+    if isinstance(block, Document):
+        title = block.title or block.media_type
+        return Text(
+            text=(
+                f"[document omitted ({title}): provider does not support the "
+                f"{feature} capability]"
+            )
+        )
+    return Text(text=f"[{feature} omitted: provider does not support it]")
+
+
+def _degrade_inner(
+    content: list[Text | Image], feature: str, policy: str
+) -> list[Text | Image] | None:
+    """Apply a vision degradation to a ``ToolResult`` inner content list."""
+    changed = False
+    out: list[Text | Image] = []
+    for block in content:
+        if isinstance(block, Image):
+            changed = True
+            replacement = _degrade_block(block, feature, policy)
+            if replacement is None:
+                continue
+            out.append(replacement)  # type: ignore[arg-type]
+        else:
+            out.append(block)
+    return out if changed else None
+
+
+def _degrade_messages(
+    messages: list[Message], feature: str, policy: str
+) -> list[Message] | None:
+    """Return messages with ``feature`` blocks dropped/to-text, or ``None``.
+
+    ``None`` means nothing changed, which lets the caller avoid replacing the
+    request when a feature happens to be unused (so an identical request object
+    is reused and no cache-stability signal is perturbed).
+    """
+    if feature == "thinking":
+        block_type: type = Thinking
+    elif feature == "vision":
+        block_type = Image
+    elif feature == "documents":
+        block_type = Document
+    else:
+        return None
+    changed = False
+    out_messages: list[Message] = []
+    for message in messages:
+        content_changed = False
+        new_content: list[ContentBlock] = []
+        for block in message.content:
+            if isinstance(block, block_type):
+                content_changed = True
+                replacement = _degrade_block(block, feature, policy)
+                if replacement is None:
+                    continue
+                new_content.append(replacement)
+            elif isinstance(block, ToolResult) and feature == "vision":
+                inner = _degrade_inner(block.content, feature, policy)
+                if inner is None:
+                    new_content.append(block)
+                else:
+                    content_changed = True
+                    new_content.append(msgspec.structs.replace(block, content=inner))
+            else:
+                new_content.append(block)
+        if content_changed:
+            changed = True
+            out_messages.append(msgspec.structs.replace(message, content=new_content))
+        else:
+            out_messages.append(message)
+    return out_messages if changed else None
+
+
+def _request_without_feature(
+    request: ModelRequest,
+    feature: str,
+    capabilities: Capabilities,
+) -> ModelRequest:
+    """Adapt a request for one degradation retry with ``feature`` disabled.
+
+    This is the other half of "the retry actually changes the request": emitting
+    ``context.degraded`` while resending the same body would loop the provider's
+    rejection into a hard failure. Every supported feature has a concrete
+    transform, so a retry is always materially different:
+
+    * ``tools`` -- drop the tool schemas;
+    * ``thinking`` -- clear ``thinking_budget`` and drop/to-text thinking blocks
+      per the declared policy;
+    * ``prompt_caching`` -- remove the ``cache`` metadata the adapter reads to
+      place breakpoints;
+    * ``vision``/``documents`` -- drop or convert the blocks per policy,
+      including images nested in ``ToolResult.content``;
+    * ``json_schema_strict``/``parallel_tool_calls`` -- remove the metadata keys
+      that requested them, when the request represents them at all.
+
+    An unknown feature leaves the request unchanged; the caller still refuses a
+    second retry, so an unrecognized rejection fails the turn rather than
+    looping.
+    """
+    if feature == "tools":
+        if request.tools:
+            return msgspec.structs.replace(request, tools=[])
+        return request
+
+    if feature in ("thinking", "vision", "documents"):
+        policy = _degradation_policy(capabilities, feature)
+        updates: dict[str, object] = {}
+        messages = _degrade_messages(request.messages, feature, policy)
+        if messages is not None:
+            updates["messages"] = messages
+        if feature == "thinking" and request.params.thinking_budget is not None:
+            updates["params"] = msgspec.structs.replace(
+                request.params, thinking_budget=None
+            )
+        if not updates:
+            return request
+        return msgspec.structs.replace(request, **updates)
+
+    keys = _FEATURE_METADATA_KEYS.get(feature)
+    if keys and isinstance(request.metadata, Mapping):
+        remaining = {
+            key: value for key, value in request.metadata.items() if key not in keys
+        }
+        if len(remaining) != len(request.metadata):
+            return msgspec.structs.replace(request, metadata=remaining)
+    return request
+
+
+async def _stream_with_degradation(
+    *,
+    provider: Provider,
+    request: ModelRequest,
+    capabilities: Capabilities,
+    emitter: _Emitter,
+    token: CancelToken,
+    iteration: int,
+    model: str,
+) -> tuple[
+    _BlockCollector,
+    str | None,
+    StreamUsage | None,
+    MalformedToolCall | None,
+    Capabilities,
+]:
+    """Stream one model call, retrying once on a capability rejection.
+
+    Plan section 15.5: when the provider rejects a capability the registry
+    claimed, the turn degrades rather than failing -- ``context.degraded`` and
+    ``registry.mismatch`` are emitted, the offending feature is disabled, and
+    the call is retried exactly once. A rejection is only retried when nothing
+    visible has streamed yet; a refusal (a stop reason) or a mid-stream failure
+    is never retried.
+    """
+    attempt_caps = capabilities
+    attempt_request = request
+    retried = False
+    while True:
+        collector = _BlockCollector()
+        try:
+            stop_reason, usage, malformed = await _collect_stream(
+                provider, attempt_request, collector, emitter, token
+            )
+            return collector, stop_reason, usage, malformed, attempt_caps
+        except MalformedToolCall:
+            # _collect_stream turns malformed arguments into a durable error
+            # result; it is never a capability retry.
+            raise
+        except ProviderError as exc:
+            feature = None if retried else _rejected_feature(exc)
+            if feature is None or collector.has_output():
+                raise
+            retried = True
+            attempt_caps = attempt_caps.disabled(feature)
+            attempt_request = _request_without_feature(
+                attempt_request, feature, attempt_caps
+            )
+            detail = redact_url_userinfo(str(exc))
+            await emitter.emit(
+                "context.degraded",
+                {
+                    "iteration": iteration,
+                    "provider": provider.name,
+                    "model": model,
+                    "feature": feature,
+                    "reason": "capability_rejected",
+                    "retry": 1,
+                    "detail": detail,
+                },
+            )
+            await emitter.emit(
+                "registry.mismatch",
+                {
+                    "iteration": iteration,
+                    "provider": provider.name,
+                    "model": model,
+                    "feature": feature,
+                    "source": "provider-rejection",
+                    "detail": detail,
+                },
+            )
+
+
 # ---------------------------------------------------------------------------
 # Data shaping
 # ---------------------------------------------------------------------------
@@ -804,10 +1115,6 @@ def _error_result(tool_use_id: str, name: str, detail: str) -> ToolResult:
         content=[Text(text=f"{name}: {detail}")],
         is_error=True,
     )
-
-
-def _tools_supported(resolved: ResolvedModel) -> bool:
-    return bool(getattr(resolved.capabilities, "tools", False))
 
 
 def _result_for_entry(entry: object, detail: str) -> ToolResult:
@@ -1049,9 +1356,8 @@ async def run_turn(
             # Capability adaptation: a provider without tool support must never
             # receive schemas, and any tool call it still emits is answered with
             # a capability error result rather than dispatched.
-            effective_tools = (
-                list(request.tools) if _tools_supported(resolved) else []
-            )
+            capabilities = resolved.capabilities
+            effective_tools = list(request.tools) if capabilities.tools else []
             streaming_request = msgspec.structs.replace(
                 request,
                 model=model,
@@ -1064,14 +1370,25 @@ async def run_turn(
                     "iteration": state.iteration,
                     "provider": resolved.provider.name,
                     "model": model,
-                    "tools": resolved.capabilities.tools,
-                    "streaming": resolved.capabilities.streaming,
+                    "tools": capabilities.tools,
+                    "streaming": capabilities.streaming,
                 },
             )
 
-            collector = _BlockCollector()
-            stop_reason, usage, malformed = await _collect_stream(
-                resolved.provider, streaming_request, collector, emitter, token
+            (
+                collector,
+                stop_reason,
+                usage,
+                malformed,
+                capabilities,
+            ) = await _stream_with_degradation(
+                provider=resolved.provider,
+                request=streaming_request,
+                capabilities=capabilities,
+                emitter=emitter,
+                token=token,
+                iteration=state.iteration,
+                model=model,
             )
             if malformed is not None:
                 malformed_total += 1
@@ -1183,7 +1500,7 @@ async def run_turn(
                     "tool.requested", {"call_id": block.id, "tool": block.name}
                 )
 
-            if not _tools_supported(resolved):
+            if not capabilities.tools:
                 provider_name = resolved.provider.name
                 for block in tool_uses:
                     await emitter.emit(
@@ -1315,7 +1632,7 @@ async def run_turn(
                 emit=_tool_emit,
                 cancel=token,
                 parallel_allowed=bool(
-                    getattr(resolved.capabilities, "parallel_tool_calls", False)
+                    getattr(capabilities, "parallel_tool_calls", False)
                 ),
             )
 
@@ -1342,14 +1659,18 @@ async def run_turn(
             _release_manifest()
 
     except OperationCancelled as exc:
-        terminal = state.cancel(str(exc) or "cancelled")
+        terminal = state.cancel(redact_url_userinfo(str(exc)) or "cancelled")
     except ProviderError as exc:
-        terminal = state.fail(f"{type(exc).__name__}: {exc}")
+        terminal = state.fail(
+            redact_url_userinfo(f"{type(exc).__name__}: {exc}")
+        )
     except asyncio.CancelledError:
         terminal = state.cancel("task cancelled")
         raise
     except Exception as exc:  # noqa: BLE001 - harness failures end the turn, never crash
-        terminal = state.fail(f"{type(exc).__name__}: {exc}")
+        terminal = state.fail(
+            redact_url_userinfo(f"{type(exc).__name__}: {exc}")
+        )
     finally:
         # Lease release is the outermost cleanup: it must run even if draining
         # the watcher or emitting the terminal event raises unexpectedly.

@@ -935,3 +935,15 @@ async def test_dispatch_rejects_non_batch(tmp_path: Path):
 
     with pytest.raises(ToolManagerError):
         await m.dispatch([], ctx_factory(tmp_path))
+
+
+def test_research_profile_excludes_mutating_mcp_tools(tmp_path: Path):
+    read = make_tool("mcp__s__read", _noop, bundle="mcp", mutates=False)
+    write = make_tool("mcp__s__write", _noop, bundle="mcp", mutates=True)
+    m = ToolManager(
+        cfg(), workspace=tmp_path, tools=(read, write), profile="research"
+    )
+    assert "mcp__s__read" in m.names
+    assert "mcp__s__write" not in m.names
+    # The read-only profile still rejects a call to the dropped tool.
+    assert m.get("mcp__s__write") is None

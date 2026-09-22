@@ -55,12 +55,19 @@ class Bundle:
 
 @dataclass(frozen=True)
 class Profile:
-    """A composition of bundles with optional include/exclude tool filters."""
+    """A composition of bundles with optional include/exclude tool filters.
+
+    ``read_only`` profiles additionally drop every *mutating* tool at selection
+    time. That matters for dynamically named tools (MCP's ``mcp__<server>__*``)
+    which a static ``exclude`` list cannot name: a read-only profile never
+    enables a tool that declares ``mutates = True``.
+    """
 
     name: str
     bundles: tuple[str, ...]
     include: tuple[str, ...] = ()
     exclude: tuple[str, ...] = ()
+    read_only: bool = False
 
     def tool_names(self) -> frozenset[str]:
         names: set[str] = set()
@@ -96,6 +103,13 @@ BUNDLES: Mapping[str, Bundle] = MappingProxyType(
             name="ext",
             tools=("Skill",),
         ),
+        # Phase 5: everything bridged from MCP. The bundle owns no static names:
+        # bridged tools declare ``bundle="mcp"`` and join this bundle's ordered
+        # list through the profile-selection machinery (``ToolManager``).
+        "mcp": Bundle(
+            name="mcp",
+            tools=(),
+        ),
     }
 )
 
@@ -106,15 +120,16 @@ PROFILES: Mapping[str, Profile] = MappingProxyType(
     {
         "coding": Profile(
             name="coding",
-            bundles=("fs", "shell", "task", "meta", "ext"),
+            bundles=("fs", "shell", "task", "meta", "ext", "mcp"),
         ),
         "research": Profile(
             name="research",
-            bundles=("fs",),
+            bundles=("fs", "mcp"),
             exclude=("Write", "Edit", "MultiEdit"),
+            read_only=True,
         ),
         "chat": Profile(name="chat", bundles=()),
-        "ops": Profile(name="ops", bundles=("shell",)),
+        "ops": Profile(name="ops", bundles=("shell", "mcp")),
     }
 )
 
