@@ -1,0 +1,7 @@
+# Nexus reloads these settings before each turn. Codex supplies the default model.
+executable = "codex"
+sandbox = "workspace-write"
+timeout_seconds = 900
+context_chars = 64000
+instructions_file = "SOUL.md"
+memory_file = "MEMORY.md"
