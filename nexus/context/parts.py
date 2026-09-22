@@ -14,7 +14,7 @@ The ten builtin parts are:
 2     soul            0         text (``SOUL.md``)
 3     environment     1         text (frozen, deterministic field order)
 4     tools           0         structured :class:`ToolSchema` list, never text
-5     skills_index    1         no-op placeholder (Phase 4)
+5     skills_index    1         sanitized ``name: description`` lines, whole-line
 6     mcp_index       2         no-op placeholder (Phase 5)
 7     memory          1         text (``MEMORY.md``)
 8     attachments     2         no-op placeholder
@@ -22,9 +22,13 @@ The ten builtin parts are:
 10    user            0         current input + its pinned trailing messages
 ====  ==============  ========  ============================================
 
-``skills_index``/``mcp_index``/``attachments`` deliberately exist and render
-``None``: the fixed assembly order is part of the contract even before those
-phases populate them.
+``skills_index`` renders the frozen, sanitized ``name: description`` lines of the
+current iteration's skill snapshot; an absent/empty snapshot renders ``None``, so
+the part stays a no-op until skills exist. ``mcp_index``/``attachments``
+deliberately exist and render ``None``: the fixed assembly order is part of the
+contract even before those phases populate them. The skills index carries only
+names and descriptions — never a body, resource, path, bundled-tool candidate, or
+provenance — and is emitted as whole lines so a budget can never cut one in half.
 
 Everything here is pure: parts receive an immutable :class:`AssemblyContext`
 and return a :class:`PartOutput`; they never touch a session, a provider, or the
@@ -34,8 +38,9 @@ renders).
 from __future__ import annotations
 
 import hashlib
+import re
 import sys
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Awaitable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol, runtime_checkable
@@ -54,6 +59,7 @@ from .cache import canonical_json
 
 __all__ = [
     "IDENTITY_PREAMBLE",
+    "MAX_SKILLS_INDEX_DESCRIPTION_CHARS",
     "PART_ORDER",
     "PART_PRIORITY",
     "AssemblyContext",
@@ -67,6 +73,7 @@ __all__ = [
     "canonical_tool_text",
     "capture_environment",
     "current_user_index",
+    "freeze_skills_index",
     "render_parts",
 ]
 
@@ -78,7 +85,13 @@ IDENTITY_PREAMBLE = (
     "verify your work before reporting success."
 )
 
-PartKind = Literal["text", "tools", "history", "user", "noop"]
+PartKind = Literal["text", "tools", "history", "user", "skills_index", "noop"]
+
+#: Longest sanitized description placed on one skills-index line. It mirrors the
+#: skills layer's own description cap so the context layer can sanitize without
+#: importing ``nexus.skills`` (which would couple two same-tier managers).
+MAX_SKILLS_INDEX_DESCRIPTION_CHARS = 2_048
+_MAX_SKILLS_INDEX_NAME_CHARS = 256
 
 #: Fixed assembly order. The order is the contract; do not reorder.
 PART_ORDER: tuple[str, ...] = (
@@ -222,6 +235,101 @@ def canonical_tool_text(schema: ToolSchema) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Skills-index freezing (progressive disclosure)
+# ---------------------------------------------------------------------------
+
+
+def _sanitize_index_text(
+    text: Any, *, max_chars: int = MAX_SKILLS_INDEX_DESCRIPTION_CHARS
+) -> str:
+    """Collapse ``text`` to one safe line, bounded by ``max_chars``.
+
+    This is the same transformation the skills layer applies to a description:
+    control characters become spaces, whitespace runs collapse, and an over-long
+    value is truncated with an ellipsis. It is duplicated here (rather than
+    imported) so the context layer never depends on ``nexus.skills``.
+    """
+    raw = str(text)
+    cleaned = "".join(
+        " " if ord(ch) < 32 or ord(ch) == 127 else ch for ch in raw
+    )
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if max_chars is not None and len(cleaned) > max_chars:
+        cleaned = cleaned[:max_chars].rstrip() + "\u2026"
+    return cleaned
+
+
+def _compose_skill_line(name: Any, description: Any) -> str:
+    safe_name = _sanitize_index_text(name, max_chars=_MAX_SKILLS_INDEX_NAME_CHARS)
+    if not safe_name:
+        return ""
+    safe_description = (
+        "" if description is None else _sanitize_index_text(description)
+    )
+    return f"{safe_name}: {safe_description}"
+
+
+def _skill_entry_line(entry: Any) -> str:
+    """One sanitized line from a duck-typed index entry, or ``""`` when unusable.
+
+    Only ``name``/``description`` (or a ``line()``/``index_line()`` projection of
+    them) are read. Bodies, resources, paths, tool candidates, and provenance are
+    never touched, so no such data can reach the prompt through this path.
+    """
+    if isinstance(entry, (str, bytes, bytearray)):
+        return _sanitize_index_text(entry)
+    if isinstance(entry, (tuple, list)) and len(entry) == 2:
+        return _compose_skill_line(entry[0], entry[1])
+    for method_name in ("line", "index_line"):
+        method = getattr(entry, method_name, None)
+        if callable(method):
+            try:
+                return _sanitize_index_text(method())
+            except Exception:  # noqa: BLE001 - one bad row must not fail assembly
+                return ""
+    name = getattr(entry, "name", None)
+    if name is None:
+        return ""
+    return _compose_skill_line(name, getattr(entry, "description", ""))
+
+
+def _skill_entries(snapshot: Any) -> tuple[Any, ...]:
+    """Normalize any supported snapshot shape into a tuple of entries."""
+    if snapshot is None:
+        return ()
+    if isinstance(snapshot, (str, bytes, bytearray)):
+        return (snapshot,)
+    # ``SkillIndex`` exposes ``entries``; ``SkillManager`` exposes ``index``.
+    for attribute in ("entries", "index"):
+        value = getattr(snapshot, attribute, None)
+        if value is not None and not callable(value):
+            return tuple(value)
+    if isinstance(snapshot, Iterable):
+        return tuple(snapshot)
+    return (snapshot,)
+
+
+def freeze_skills_index(snapshot: Any) -> tuple[str, ...]:
+    """Freeze a skill snapshot/index into deterministic, sanitized lines.
+
+    Accepts a ``SkillIndex``-like object (``.entries``), an iterable of entries
+    (a ``name``/``description`` object, a ``(name, description)`` pair, an entry
+    exposing ``line()``/``index_line()``, or a pre-rendered string), or a single
+    entry. Only the name and description are read. Each line is sanitized to a
+    single line and the set is deduplicated and sorted by ``(casefold, line)``, so
+    an equal snapshot always freezes to an equal tuple and an equal prompt.
+    """
+    lines = [
+        line
+        for line in (
+            _skill_entry_line(entry) for entry in _skill_entries(snapshot)
+        )
+        if line
+    ]
+    return tuple(sorted(set(lines), key=lambda line: (line.casefold(), line)))
+
+
+# ---------------------------------------------------------------------------
 # Outputs and protocol
 # ---------------------------------------------------------------------------
 
@@ -241,6 +349,9 @@ class PartOutput:
     text: str = ""
     tools: tuple[ToolSchema, ...] = ()
     messages: tuple[Message, ...] = ()
+    #: Whole, sanitized lines for the ``skills_index`` kind. Emitted as a unit so
+    #: a budget always drops whole entries and never cuts one in half.
+    lines: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -266,6 +377,10 @@ class AssemblyContext:
     #: durable summary artifact before a summary is placed in an assembled copy;
     #: it is never imported as a concrete type here.
     session: Any = None
+    #: The frozen skills snapshot/index for this iteration. Either already-frozen
+    #: lines (the manager's normal form) or a raw snapshot the part will freeze.
+    #: Empty/``None`` renders nothing, so the part remains a no-op without skills.
+    skills_index: Any = None
 
     def history(self) -> tuple[Message, ...]:
         """Droppable prefix: everything before the current user turn."""
@@ -349,6 +464,31 @@ class _NoOpPart:
 
 
 @dataclass(frozen=True)
+class _SkillsIndexPart:
+    """Renders the frozen skills index as sanitized ``name: description`` lines.
+
+    The snapshot is frozen (and sanitized) here, at render time, so a raw
+    snapshot handed straight to an :class:`AssemblyContext` is handled the same
+    way as the manager's already-frozen lines. Nothing but the name and
+    description is ever read.
+    """
+
+    name: str = "skills_index"
+    priority: int = 1
+
+    def render(self, ctx: AssemblyContext) -> PartOutput | None:
+        lines = freeze_skills_index(ctx.skills_index)
+        if not lines:
+            return None
+        return PartOutput(
+            name=self.name,
+            priority=self.priority,
+            kind="skills_index",
+            lines=lines,
+        )
+
+
+@dataclass(frozen=True)
 class _HistoryPart:
     name: str = "history"
     priority: int = 3
@@ -383,7 +523,7 @@ def builtin_parts() -> tuple[ContextPart, ...]:
         _TextPart("soul", 0, "soul_text"),
         _EnvironmentPart(),
         _ToolsPart(),
-        _NoOpPart("skills_index", 1),
+        _SkillsIndexPart(),
         _NoOpPart("mcp_index", 2),
         _TextPart("memory", 1, "memory_text"),
         _NoOpPart("attachments", 2),

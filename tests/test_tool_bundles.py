@@ -21,8 +21,8 @@ from nexus.tools.bundles import (
 )
 
 
-def test_only_the_phase2_bundles_are_defined():
-    assert BUNDLE_NAMES == frozenset({"fs", "shell", "task"})
+def test_the_bundles_are_defined():
+    assert BUNDLE_NAMES == frozenset({"fs", "shell", "task", "meta", "ext"})
     assert all_bundles() is BUNDLES
 
 
@@ -30,6 +30,12 @@ def test_bundle_contents_match_the_plan():
     assert bundle_tools("fs") == ("Read", "Write", "Edit", "MultiEdit", "Glob", "Grep", "LS")
     assert bundle_tools("shell") == ("Bash", "BashOutput", "KillShell")
     assert bundle_tools("task") == ("Task", "TodoWrite")
+    assert bundle_tools("meta") == (
+        "ReloadExtensions",
+        "ListExtensions",
+        "WriteTool",
+    )
+    assert bundle_tools("ext") == ("Skill",)
 
 
 def test_profile_table():

@@ -276,7 +276,12 @@ def test_native_run_allow_always_persists_across_turns(tmp_path, capsys):
         tool_response(("c2", "Write", {"path": "out.txt", "content": "two"})),
         text_response("done-2"),
     )
-    runtime = make_runtime(tmp_path, provider, config=_ask_config())
+    # ``run_native`` closes the runtime it is given, and a closed runtime is
+    # terminal, so each turn gets a fresh runtime. The persisted session log is
+    # what carries the ``*_ALWAYS`` grant across turns.
+    def factory(workspace):
+        return make_runtime(tmp_path, provider, config=_ask_config())
+
     prompts: list[int] = []
 
     def read_line(prompt, stream):
@@ -285,12 +290,12 @@ def test_native_run_allow_always_persists_across_turns(tmp_path, capsys):
 
     first = native.run_native(
         native_run_args(tmp_path, "write"),
-        runtime_factory=lambda workspace: runtime,
+        runtime_factory=factory,
         read_line=read_line,
     )
     second = native.run_native(
         native_run_args(tmp_path, "again"),
-        runtime_factory=lambda workspace: runtime,
+        runtime_factory=factory,
         read_line=read_line,
     )
 

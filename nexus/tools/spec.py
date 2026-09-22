@@ -88,20 +88,41 @@ class JobRegistryView(Protocol):
     layer can type the seam without importing the concrete
     :class:`nexus.tools.builtin._jobs.JobRegistry` (and therefore without a
     cycle). ``None`` until the tool manager packet supplies one.
+
+    Every method is ``session_id``-scoped: the registry partitions jobs by
+    session, so a tool can only reach jobs its own session created. A missing
+    session id scopes to the default partition and never widens; cross-session
+    access is admin-only and requires an explicit ``admin=True`` the shell tools
+    never pass.
     """
 
-    def job(self, job_id: object) -> object | None: ...
+    def job(
+        self,
+        job_id: object,
+        *,
+        session_id: object = ...,
+        admin: bool = ...,
+    ) -> object | None: ...
 
-    async def kill(self, job_id: object) -> object: ...
+    async def kill(
+        self,
+        job_id: object,
+        *,
+        session_id: object = ...,
+        admin: bool = ...,
+    ) -> object: ...
 
     async def spawn(
         self,
         command: str,
         *,
+        session_id: object = ...,
         cwd: object,
         env: object = ...,
         output_limit: int | None = ...,
     ) -> object: ...
+
+    async def aclose_session(self, session_id: str) -> bool: ...
 
     async def aclose(self) -> None: ...
 
@@ -119,6 +140,70 @@ class TodoStoreView(Protocol):
     def replace(self, session_id: str, items: object) -> tuple[object, ...]: ...
 
     def clear(self, session_id: str) -> None: ...
+
+
+class SkillServiceView(Protocol):
+    """The narrow slice of ``SkillManager`` the ``Skill`` builtin may reach.
+
+    Structural only: it names the lookup and resource-read methods the tool
+    uses, so the tools layer never imports ``nexus.skills`` (which would couple
+    two same-tier managers). A concrete
+    :class:`~nexus.skills.manager.SkillManager` satisfies it unchanged; a test
+    double need only implement these members. The returned skill objects are
+    opaque here (``object``) and are consumed through their own contract.
+    """
+
+    @property
+    def generation(self) -> int: ...
+
+    def get(self, name: object) -> object | None: ...
+
+    def require(self, name: object) -> object: ...
+
+    def read_resource(
+        self,
+        skill: object,
+        relative: object,
+        *,
+        max_bytes: int | None = ...,
+    ) -> str: ...
+
+
+class ExtensionServiceView(Protocol):
+    """The narrow slice of ``ExtensionManager`` the meta builtins may reach.
+
+    Structural only: the ``ReloadExtensions`` and ``ListExtensions`` tools use
+    exactly this surface (a serialized reload, the immutable manifest, and the
+    sanitized listing/diagnostics views), so the tools layer never imports
+    ``nexus.ext.manager``. A concrete
+    :class:`~nexus.ext.manager.ExtensionManager` satisfies it unchanged.
+    """
+
+    @property
+    def generation(self) -> int: ...
+
+    @property
+    def manifest(self) -> object: ...
+
+    async def reload(
+        self, trigger: str = ..., sink: object = ...
+    ) -> object: ...
+
+    def list_extensions(self) -> tuple[dict[str, Any], ...]: ...
+
+    def diagnostics(self) -> tuple[dict[str, Any], ...]: ...
+
+
+class SkillActivationSink(Protocol):
+    """A session/turn-local sink for the ``SkillActivation`` overlays.
+
+    ``Skill`` computes an immutable overlay (the tools a skill may use) and
+    records it here for the *next* loop iteration to consume. The sink is a
+    seam, not a grant: recording never mutates the manifest, and the overlay is
+    always a subset of the authority the turn already holds.
+    """
+
+    def record(self, activation: object) -> object: ...
 
 
 #: How a tool declares what a permission rule matches against.
@@ -237,6 +322,14 @@ class ToolSpec(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     permission_key: PermissionKeyFn | None = None
     max_result_tokens: int = 25_000
     version: str = "1"
+    #: When true, the string returned by ``permission_key`` is a workspace-
+    #: relative path: the manager canonicalizes it through its ``PathGuard``
+    #: into an absolute permission key and applies the same write-root / read-
+    #: deny boundary and plan/execute recheck that the ``fs`` bundle gets. This
+    #: is the explicit manager path mode for path-bearing tools that are not in
+    #: the ``fs`` bundle (for example the meta ``WriteTool``). Declared last so
+    #: adding it leaves every existing positional field position unchanged.
+    path_mode: bool = False
 
     def __post_init__(self) -> None:
         from .bundles import BUNDLE_NAMES
@@ -264,6 +357,8 @@ class ToolSpec(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
             raise ToolSpecError("timeout_s must be a positive finite number")
         if self.permission_key is not None and not callable(self.permission_key):
             raise ToolSpecError("permission_key must be callable or None")
+        if not isinstance(self.path_mode, bool):
+            raise ToolSpecError("path_mode must be a bool")
         if (
             isinstance(self.max_result_tokens, bool)
             or not isinstance(self.max_result_tokens, int)
@@ -393,6 +488,17 @@ class ToolContext:
     #: Explicit service seams injected by the tool manager (never a Runtime).
     job_registry: JobRegistryView | None = None
     todo_store: TodoStoreView | None = None
+    #: Phase 4 meta/skill seams. ``None`` means the capability is unavailable
+    #: for this call; the builtins report an actionable error rather than
+    #: silently doing nothing. ``skills``/``extensions`` are structural views of
+    #: the live managers and ``activations`` is the session/turn-local overlay
+    #: sink the ``Skill`` builtin records into. ``skill_service``/
+    #: ``extension_service`` are accepted aliases so either spelling works.
+    skills: SkillServiceView | None = None
+    extensions: ExtensionServiceView | None = None
+    activations: SkillActivationSink | None = None
+    skill_service: SkillServiceView | None = None
+    extension_service: ExtensionServiceView | None = None
 
     async def report(self, text: str, data: dict[str, Any] | None = None) -> None:
         """Emit a ``tool.progress`` event if a sink is attached."""
@@ -453,10 +559,13 @@ __all__ = [
     "REGISTRATION_ORIGINS",
     "CancelTokenView",
     "Concurrency",
+    "ExtensionServiceView",
     "JobRegistryView",
     "PermissionKeyFn",
     "ProgressEmitter",
     "RegisteredTool",
+    "SkillActivationSink",
+    "SkillServiceView",
     "TodoStoreView",
     "ToolCall",
     "ToolContext",

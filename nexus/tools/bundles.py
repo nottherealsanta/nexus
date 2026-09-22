@@ -2,9 +2,10 @@
 
 Bundles group tools so a profile can say *what the harness is for* without any
 code in ``core/`` or the tool manager knowing what "coding" means. This packet
-ships the three Phase 2 bundles (``fs``, ``shell``, ``task``) and the four
-built-in profiles. Unknown profiles **fail closed**: resolution raises rather
-than silently granting no tools.
+ships the Phase 2 bundles (``fs``, ``shell``, ``task``) plus the Phase 4
+self-extension bundles (``meta``: reload/inspect/author; ``ext``: skill
+invocation), and the four built-in profiles. Unknown profiles **fail closed**:
+resolution raises rather than silently granting no tools.
 
 There is deliberately no custom/table-defined profile support yet; later packets
 may add a config table that composes the same primitives.
@@ -84,6 +85,17 @@ BUNDLES: Mapping[str, Bundle] = MappingProxyType(
             name="task",
             tools=("Task", "TodoWrite"),
         ),
+        # Phase 4 self-extension controls. ``meta`` owns the reload/inspect and
+        # extension-authoring tools; ``ext`` owns the skill-invocation tool
+        # (skills are extension-tier data, loaded progressively).
+        "meta": Bundle(
+            name="meta",
+            tools=("ReloadExtensions", "ListExtensions", "WriteTool"),
+        ),
+        "ext": Bundle(
+            name="ext",
+            tools=("Skill",),
+        ),
     }
 )
 
@@ -92,7 +104,10 @@ BUNDLE_NAMES = frozenset(BUNDLES)
 #: Research is read/search only: the fs bundle minus every mutating tool.
 PROFILES: Mapping[str, Profile] = MappingProxyType(
     {
-        "coding": Profile(name="coding", bundles=("fs", "shell", "task")),
+        "coding": Profile(
+            name="coding",
+            bundles=("fs", "shell", "task", "meta", "ext"),
+        ),
         "research": Profile(
             name="research",
             bundles=("fs",),

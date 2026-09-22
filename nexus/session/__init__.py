@@ -11,7 +11,13 @@ from .migrate import (
     migrate_session,
     should_migrate,
 )
-from .session import Session, TurnLease
+from .session import (
+    DEFAULT_EVENT_BUFFER,
+    DEFAULT_UNATTENDED_DECISION,
+    TERMINAL_EVENTS,
+    Session,
+    TurnLease,
+)
 from .snapshot import (
     SNAPSHOT_SUFFIX,
     SNAPSHOT_VERSION,
@@ -31,9 +37,12 @@ from .store import (
 )
 
 __all__ = [
+    "DEFAULT_EVENT_BUFFER",
+    "DEFAULT_UNATTENDED_DECISION",
     "SESSION_LOG_VERSION",
     "SNAPSHOT_SUFFIX",
     "SNAPSHOT_VERSION",
+    "TERMINAL_EVENTS",
     "CurrentState",
     "EventRecord",
     "MessageRecord",

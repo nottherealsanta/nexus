@@ -60,12 +60,42 @@ TOOL_EVENTS = (
     "tool.failed",
 )
 PERMISSION_EVENTS = ("permission.requested", "permission.resolved")
-EXT_EVENTS = ("ext.loaded", "ext.unloaded", "ext.failed", "ext.manifest_changed")
+EXT_EVENTS = (
+    "ext.loaded",
+    "ext.unloaded",
+    "ext.failed",
+    "ext.tool_shadowed",
+    "ext.manifest_changed",
+)
 MCP_EVENTS = ("mcp.connected", "mcp.disconnected", "mcp.failed", "mcp.tools_changed")
 SKILL_EVENTS = ("skill.invoked", "skill.completed")
 AGENT_EVENTS = ("agent.spawned", "agent.completed")
 HOOK_EVENTS = ("hook.fired", "hook.blocked")
 MISC_EVENTS = ("provider.raw", "error")
+
+# Phase 3.5 session surface, as amended by PLAN section 14.10. The input queue
+# persists a submission, the loop consumes it at the next turn boundary, and a
+# submission that can never run is dropped; each transition is a drawable event
+# so no UI polls the queue.
+INPUT_EVENTS = ("input.queued", "input.consumed", "input.dropped")
+
+# Presence is a subscriber count, not identity (single user, many views).
+# Section 14.10 adds only the join/leave transitions; the derived
+# ``presence.changed`` event is retained as a compatibility alias below so
+# existing emitters and status bars keep working.
+PRESENCE_EVENTS = ("presence.joined", "presence.left")
+
+# Phase 8's daemon lifecycle and handshake, per PLAN section 14.10. Emitted by
+# ``host/daemon.py``/``host/protocol.py`` once they exist; listed here so the
+# wire catalogue is fixed before any surface depends on the names. The earlier
+# ``daemon.stopped``/``daemon.client_*`` names are transitional compat aliases
+# below, not part of this group.
+DAEMON_EVENTS = (
+    "daemon.started",
+    "daemon.stopping",
+    "daemon.session_scheduled",
+    "daemon.session_queued",
+)
 
 # Transitional names still emitted by the pre-Phase-1 path: the agent emits
 # ``started``/``completed``, the Codex adapter emits ``message`` and
@@ -73,20 +103,63 @@ MISC_EVENTS = ("provider.raw", "error")
 # are documented here so the exported catalogue does not reject live events.
 LEGACY_EVENTS = ("started", "message", "provider", "completed", "error")
 
-EVENT_TYPES = frozenset(
-    SESSION_EVENTS
-    + TURN_EVENTS
-    + CONTEXT_EVENTS
-    + MODEL_EVENTS
-    + TOOL_EVENTS
-    + PERMISSION_EVENTS
-    + EXT_EVENTS
-    + MCP_EVENTS
-    + SKILL_EVENTS
-    + AGENT_EVENTS
-    + HOOK_EVENTS
-    + MISC_EVENTS
-    + LEGACY_EVENTS
+# Surface-amendment compatibility aliases. ``presence.changed`` is still emitted
+# alongside join/leave, and the pre-§14.10 daemon names remain documented
+# transitional aliases so a subscriber built against the earlier catalogue keeps
+# classifying them. They live outside ``EVENT_GROUPS`` so the planned groups stay
+# exact, internally unique, and mutually disjoint.
+COMPAT_EVENTS = (
+    "presence.changed",
+    "daemon.stopped",
+    "daemon.client_connected",
+    "daemon.client_disconnected",
 )
 
-__all__ = ["Event", "EVENT_TYPES"]
+#: Catalogue groups by name, in the order the plan lists them. This is the
+#: single source of truth for ``EVENT_TYPES`` and lets a view reducer classify an
+#: event without re-listing names. Membership is disjoint; legacy and compat
+#: names are not groups because ``error`` already lives in ``misc``.
+EVENT_GROUPS: dict[str, tuple[str, ...]] = {
+    "session": SESSION_EVENTS,
+    "turn": TURN_EVENTS,
+    "context": CONTEXT_EVENTS,
+    "model": MODEL_EVENTS,
+    "tool": TOOL_EVENTS,
+    "permission": PERMISSION_EVENTS,
+    "ext": EXT_EVENTS,
+    "mcp": MCP_EVENTS,
+    "skill": SKILL_EVENTS,
+    "agent": AGENT_EVENTS,
+    "hook": HOOK_EVENTS,
+    "input": INPUT_EVENTS,
+    "presence": PRESENCE_EVENTS,
+    "daemon": DAEMON_EVENTS,
+    "misc": MISC_EVENTS,
+}
+
+EVENT_TYPES = frozenset(
+    name for group in EVENT_GROUPS.values() for name in group
+).union(LEGACY_EVENTS, COMPAT_EVENTS)
+
+__all__ = [
+    "AGENT_EVENTS",
+    "COMPAT_EVENTS",
+    "CONTEXT_EVENTS",
+    "DAEMON_EVENTS",
+    "EVENT_GROUPS",
+    "EVENT_TYPES",
+    "EXT_EVENTS",
+    "HOOK_EVENTS",
+    "INPUT_EVENTS",
+    "LEGACY_EVENTS",
+    "MCP_EVENTS",
+    "MISC_EVENTS",
+    "MODEL_EVENTS",
+    "PERMISSION_EVENTS",
+    "PRESENCE_EVENTS",
+    "SESSION_EVENTS",
+    "SKILL_EVENTS",
+    "TOOL_EVENTS",
+    "TURN_EVENTS",
+    "Event",
+]

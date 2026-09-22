@@ -478,6 +478,38 @@ def test_path_guard_error_code_is_surfaced(tmp_path):
     assert evaluation.code == "write_root"
 
 
+def test_path_mode_tool_boundary_is_checked(tmp_path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    spec = ToolSpec(
+        name="WriteTool",
+        description="Write an extension tool",
+        input_schema={"type": "object"},
+        bundle="meta",
+        mutates=True,
+        path_mode=True,
+        permission_key=lambda data: f".nexus/tools/{data['filename']}",
+    )
+    engine = PermissionEngine(
+        mode="allow",
+        allow=["WriteTool(**)"],
+        workspace=workspace,
+        write_roots=["./src"],
+    )
+    evaluation = engine.evaluate(
+        ToolCall(
+            id="c",
+            name="WriteTool",
+            input={"filename": "x.py", "content": "c"},
+        ),
+        spec,
+    )
+    # The relative path-mode key is resolved through the guard, so the fs
+    # write-root boundary denies even though a whole-tool allow rule matches.
+    assert evaluation.outcome is Outcome.DENY
+    assert evaluation.code == "write_root"
+
+
 def test_malformed_permission_key_is_denied_before_rules():
     spec = ToolSpec(
         name="Read",

@@ -18,10 +18,21 @@ and never wait on (and never disturb) an active writer: they try a non-blocking
 *shared* lock and, if a writer holds the exclusive lock, fall back to a lock-free
 read. Because the log is append-only and the reader tolerates a crash tail, that
 yields a consistent valid prefix either way.
+
+Event-loop affinity
+-------------------
+``open``/``evict``/``close_all`` are synchronous and thread-safe (guarded by an
+``RLock``), so several threads may open or close handles concurrently. A live
+:class:`~nexus.session.session.Session` handle, however, is bound to the single
+asyncio event loop that runs its turns: its bus, input queue, and active turn
+task are loop-bound. Drive one handle from one loop only. Do not start a turn on
+one loop and await it from another, and do not share a handle between two loops;
+open a second handle (or evict and reopen) instead.
 """
 from __future__ import annotations
 
 import secrets
+import threading
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
@@ -55,6 +66,10 @@ class SessionManager:
         attended: bool = False,
         event_buffer: int = DEFAULT_EVENT_BUFFER,
         snapshot_every: int | Callable[[], int] | None = None,
+        unattended_decision: object | None = None,
+        auto_start_queued: bool = True,
+        ensure_ready: Callable[[], Any] | None = None,
+        turn_cleanup: Callable[[str, str], None] | None = None,
     ):
         self.directory = Path(directory)
         self.store = store if store is not None else SessionStore(self.directory)
@@ -70,6 +85,22 @@ class SessionManager:
         # integration packet read the effective config per turn without this
         # layer importing configuration.
         self._snapshot_every = snapshot_every
+        # Decision applied when the last viewer leaves with an approval pending.
+        # A plain value (string/Decision) so this layer stays tools-agnostic.
+        self._unattended_decision = unattended_decision
+        # Whether a completed turn auto-consumes the next queued submission.
+        self._auto_start_queued = auto_start_queued
+        # Opaque readiness/cleanup seams forwarded to each handle (a runtime
+        # bootstrapping extensions and dropping session/turn-local state).
+        self._ensure_ready = ensure_ready
+        self._turn_cleanup = turn_cleanup
+        #: One live :class:`Session` handle per id, so every caller that reaches
+        #: the same session through this manager shares one bus, presence count,
+        #: input queue, and active turn. Guarded for thread safety because
+        #: ``open`` is synchronous and may be called from several threads (or
+        #: several event loops); the asyncio side is naturally serialized by it.
+        self._handles: dict[str, Session] = {}
+        self._handles_lock = threading.RLock()
 
     def path(self, session_id: str) -> Path:
         return self.store.log_path(session_id)
@@ -85,34 +116,102 @@ class SessionManager:
         recover: bool = True,
         migrate: bool = True,
     ) -> Session:
-        """Open a session, migrating a legacy v1 file first if one exists.
+        """Open a session, reusing the live handle for an id when one exists.
 
-        ``create=False`` raises when the session has no log. ``recover`` runs
-        dangling-tool crash recovery before returning the handle.
+        ``create=False`` raises when the session has no log. With ``recover`` the
+        handle's dangling-tool crash recovery runs (idempotently) before it is
+        returned, whether it was just built or already cached.
+
+        Exactly one :class:`Session` handle exists per id per manager, so
+        repeated ``Runtime.session(id)`` calls share the same bus, presence
+        count, input queue, and active turn. Migration and recovery are both
+        idempotent, so re-opening never duplicates their effects.
         """
         session_id = validate_session_id(session_id)
         self.directory.mkdir(parents=True, exist_ok=True)
         if migrate:
             self.migrate(session_id)
-        if not self.store.exists(session_id):
-            if not create:
-                raise SessionError(f"Session {session_id!r} does not exist")
-            # Create only after migration so a legacy file is never shadowed.
-            self.store.create(session_id)
-        session = Session(
-            session_id,
-            store=self.store,
-            assemble=self._assemble,
-            provider_for=self._provider_for,
-            limits=self._limits,
-            tools=self._tools,
-            attended=self._attended,
-            event_buffer=self._event_buffer,
-            snapshot_every=self._snapshot_every,
-        )
-        if recover:
-            session.recover_dangling_tool_uses()
-        return session
+        with self._handles_lock:
+            cached = self._handles.get(session_id)
+            if cached is not None:
+                # Re-opening an already-live handle still honors ``recover``:
+                # crash recovery is idempotent and never writes while this handle
+                # (or another process) holds the exclusive turn lock.
+                if recover:
+                    cached.recover_dangling_tool_uses()
+                return cached
+            if not self.store.exists(session_id):
+                if not create:
+                    raise SessionError(f"Session {session_id!r} does not exist")
+                # Create only after migration so a legacy file is never shadowed.
+                self.store.create(session_id)
+            session = Session(
+                session_id,
+                store=self.store,
+                assemble=self._assemble,
+                provider_for=self._provider_for,
+                limits=self._limits,
+                tools=self._tools,
+                attended=self._attended,
+                event_buffer=self._event_buffer,
+                snapshot_every=self._snapshot_every,
+                unattended_decision=self._unattended_decision,
+                auto_start_queued=self._auto_start_queued,
+                ensure_ready=self._ensure_ready,
+                turn_cleanup=self._turn_cleanup,
+            )
+            if recover:
+                session.recover_dangling_tool_uses()
+            self._handles[session_id] = session
+            return session
+
+    def evict(self, session_id: str) -> Session | None:
+        """Drop the cached live handle for an idle id; the log is untouched.
+
+        The eviction seam for a host that needs to release or replace a handle
+        (for example before reloading it with new wiring). Fork/replay never
+        depend on a cached handle, so evicting can never corrupt them. Returns
+        the evicted handle, or ``None`` when the id was not cached.
+
+        Refuses (``SessionBusy``) to evict a handle that is in use — one with an
+        active turn or live subscribers — because dropping it would orphan the
+        turn task or leave viewers attached to a bus nothing owns. Cancel the
+        turn / detach the views first, or use :meth:`close_all` at shutdown.
+        """
+        session_id = validate_session_id(session_id)
+        with self._handles_lock:
+            session = self._handles.get(session_id)
+            if session is None:
+                return None
+            if session.active or session.viewers > 0:
+                raise SessionBusy(
+                    f"Session {session_id!r} is in use "
+                    f"(active={session.active}, viewers={session.viewers}); "
+                    "refusing to evict"
+                )
+            return self._handles.pop(session_id)
+
+    def close(self, session_id: str) -> bool:
+        """Alias for :meth:`evict` returning whether a handle was dropped."""
+        return self.evict(session_id) is not None
+
+    def close_all(self) -> list[Session]:
+        """Evict every cached handle; returns them in insertion order.
+
+        This is the shutdown seam and deliberately **forces** eviction even for
+        handles that are active or viewed; the caller is expected to have torn
+        those down first.
+        """
+        with self._handles_lock:
+            handles = list(self._handles.values())
+            self._handles.clear()
+            return handles
+
+    @property
+    def live_sessions(self) -> tuple[str, ...]:
+        """Ids with a cached live handle, in insertion order."""
+        with self._handles_lock:
+            return tuple(self._handles)
 
     def migrate(self, session_id: str) -> MigrationResult | None:
         """Migrate one session if needed, serialized by the session lock."""

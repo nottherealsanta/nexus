@@ -34,6 +34,27 @@ class ToolError(NexusError):
     """A tool failed in a way the harness reports back to the model."""
 
 
+class ExtensionError(NexusError):
+    """An extension could not be loaded, validated, or swapped into a manifest."""
+
+
+class ManagerClosed(ExtensionError, RuntimeError):
+    """An extension manager was used after it was closed.
+
+    A closed manager is terminal: no reload may start and no compare-and-swap
+    may run, so a rebuild racing a close can never install a generation into a
+    manager whose resources are being released.
+    """
+
+
+class ManifestError(ExtensionError, ValueError):
+    """A manifest is malformed, or a manifest operation is invalid."""
+
+
+class StaleGenerationError(ManifestError):
+    """A swap was attempted with a generation older than the current one."""
+
+
 class SessionError(NexusError, RuntimeError):
     """Session storage, locking, or format failure."""
 

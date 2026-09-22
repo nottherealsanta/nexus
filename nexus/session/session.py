@@ -1,4 +1,4 @@
-"""The public session handle for Phase 1 (plan section 5.1).
+"""The public session handle (plan sections 5.1 and 14.2).
 
 ``Session`` is the substrate the loop and UI adapters build on. It provides:
 
@@ -10,29 +10,38 @@
   tool call was persisted but before its results were, recovery appends one
   model-visible error ``ToolResult`` per unresolved call **without executing
   anything**;
-* :meth:`send`, which snapshots configuration once per turn, drives
-  :func:`nexus.core.loop.run_turn` as a producer, persists every event before
-  fanning it out through a bounded lossless buffer, and yields those events in
-  order.
+* a **persistent, session-scoped event bus** wired from :mod:`nexus.core.bus`.
+  The bus outlives any single turn, so a turn survives with zero subscribers and
+  any number of views may watch the same session;
+* :meth:`start_turn`, which runs a turn **detached** from any consumer and
+  returns its ``turn_id`` immediately;
+* :meth:`subscribe`, which catches a late view up from the append-only log and
+  then follows the live bus with no gaps and no duplicates;
+* :meth:`enqueue`, the durable input queue consumed at the next turn boundary;
+* presence counting: ``attended`` is derived from the subscriber count, and a
+  drop to zero applies the session's unattended policy to any pending approval;
+* :meth:`send`, retained as the attached, backpressured compatibility wrapper
+  whose early close still cancels the turn.
 
-Still absent until later packets: permissions, snapshots, and
-fork/list/delete/replay. The seams they will build on are
-:meth:`append_message`, :meth:`append_event`, :meth:`begin_turn`,
-:meth:`cancel`, :meth:`recover_dangling_tool_uses`, :meth:`send`, and
-:meth:`bind`.
+Still absent until later packets: fork/list/delete/replay live on
+:class:`~nexus.session.manager.SessionManager`; permissions are reached through
+:meth:`resolve_permission`.
 """
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import contextlib
 from collections import deque
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Self
 
 import msgspec
 
+from ..core.bus import DROP_OLDEST, Bus
 from ..core.cancel import CancelToken
 from ..core.loop import run_turn
 from ..core.turn import TurnLimits, TurnState
@@ -68,9 +77,105 @@ _CRITICAL_EVENTS = frozenset(
     {"turn.started", "turn.completed", "turn.failed", "turn.cancelled", "error"}
 )
 
+#: Terminal turn events. A follower may stop after one with ``until``.
+TERMINAL_EVENTS = frozenset({"turn.completed", "turn.failed", "turn.cancelled"})
+
 #: Default fan-out capacity. Non-critical events block the producer until the
 #: consumer makes room, so this bounds memory without ever dropping an event.
 DEFAULT_EVENT_BUFFER = 512
+
+#: Default decision applied to a pending approval when the last viewer leaves.
+#: Kept as a plain string so this layer never imports ``nexus.tools``.
+DEFAULT_UNATTENDED_DECISION = "deny_once"
+
+#: Reason attached to an unattended ``fail_turn`` fallback.
+_UNATTENDED_FAIL_REASON = "unattended policy fails the turn"
+
+#: Input-queue event types. Replayed in append order on open so a crash between
+#: a submission and its consumption/drop never loses the pending FIFO.
+_QUEUED_EVENT = "input.queued"
+_INPUT_EVENT_TYPES = frozenset(
+    {_QUEUED_EVENT, "input.consumed", "input.dropped"}
+)
+
+#: Tag for raw bytes in a queued-input payload. Makes the representation
+#: self-describing and JSON-safe independent of the encoder.
+_QUEUED_BYTES_TAG = "__nexus_bytes__"
+
+
+def _decode_queued_content(raw: object) -> list[ContentBlock] | None:
+    """Decode a persisted ``input.queued`` payload; ``None`` when malformed.
+
+    Rehydration is best-effort: a corrupt or unrepresentable payload is skipped
+    rather than failing the open, exactly as a UI tolerates an unknown event.
+    """
+    if raw is None:
+        return None
+    try:
+        restored = _restore_queued_bytes(raw)
+        content = msgspec.convert(restored, type=list[ContentBlock])
+    except (msgspec.ValidationError, msgspec.DecodeError, TypeError, ValueError):
+        return None
+    if not content:
+        return None
+    return content
+
+
+def _encode_queued_content(content: list[ContentBlock]) -> list[object]:
+    """Encode queued content into a JSON-safe, self-describing payload.
+
+    ``msgspec`` already base64-encodes ``bytes`` when converting structs to
+    builtins, and the block ``type`` tag is preserved. Any bytes that survive
+    as raw bytes (for example from a caller-supplied ``dict`` block) are tagged
+    explicitly, so the payload is safe under **any** JSON encoder and can be
+    reopened without relying on msgspec's implicit binary handling.
+    """
+    return [_json_safe(block) for block in msgspec.to_builtins(content)]
+
+
+def _json_safe(value: object) -> object:
+    """Recursively make a builtins tree JSON-native, tagging raw bytes."""
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return {_QUEUED_BYTES_TAG: base64.b64encode(bytes(value)).decode("ascii")}
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def _restore_queued_bytes(value: object) -> object:
+    """Inverse of :func:`_json_safe`: untag base64 byte markers."""
+    if isinstance(value, Mapping):
+        if set(value) == {_QUEUED_BYTES_TAG}:
+            encoded = value[_QUEUED_BYTES_TAG]
+            if isinstance(encoded, str):
+                try:
+                    return base64.b64decode(encoded, validate=True)
+                except (ValueError, binascii.Error):
+                    return value
+        return {str(key): _restore_queued_bytes(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_restore_queued_bytes(item) for item in value]
+    return value
+
+
+def _unattended_mode(policy: object) -> str:
+    """Normalize an unattended policy to ``"deny"``/``"allow"``/``"fail_turn"``.
+
+    Accepts the config vocabulary (``"deny"``/``"allow"``/``"fail_turn"``), the
+    legacy ``Decision`` string values (``"deny_once"``/``"allow_always"``), and
+    ``Decision`` enums. Anything unrecognized fails closed to ``"deny"``.
+    """
+    value = getattr(policy, "value", policy)
+    if not isinstance(value, str):
+        return "deny"
+    lowered = value.lower()
+    if lowered in ("fail", "fail_turn"):
+        return "fail_turn"
+    if lowered.startswith("allow"):
+        return "allow"
+    return "deny"
 
 
 def _coerce_user_input(user_input: str | list[ContentBlock]) -> list[ContentBlock]:
@@ -83,6 +188,14 @@ def _coerce_user_input(user_input: str | list[ContentBlock]) -> list[ContentBloc
     return blocks
 
 
+@dataclass
+class _QueuedInput:
+    """One durable-but-in-memory queued submission."""
+
+    queued_id: str
+    content: list[ContentBlock]
+
+
 class _Fanout:
     """Bounded single-producer/single-consumer buffer with true backpressure.
 
@@ -90,6 +203,10 @@ class _Fanout:
     delivered exactly once and nothing is dropped. Terminal/error/sentinel
     insertions are non-blocking (and may exceed the soft bound) so cleanup can
     always complete even when the consumer has gone away.
+
+    Used only by :meth:`Session.send`, the attached compatibility path. The
+    detached :meth:`Session.subscribe` path is lossless by construction because
+    it reads the authoritative append-only log.
     """
 
     __slots__ = ("_capacity", "_data", "_items", "_space")
@@ -137,29 +254,33 @@ class _Fanout:
 
 
 class _SessionEventSink:
-    """Persist-then-fan-out sink: JSONL first, bounded buffer second.
+    """Persist, then fan out to the persistent bus and an optional attached queue.
 
-    The loop emits in strict order and the buffer is FIFO, so consumers observe
-    exactly the persisted ordering. Persisting before enqueuing means an event a
-    consumer has seen is already durable.
+    The loop emits in strict order and both fan-out paths are FIFO, so consumers
+    observe exactly the persisted ordering. Persisting before enqueuing means an
+    event a consumer has seen is already durable. The bus carries live events to
+    every subscriber; the attached queue (``send`` only) applies backpressure.
     """
 
     __slots__ = ("_fanout", "_session")
 
-    def __init__(self, session: Session, fanout: _Fanout) -> None:
+    def __init__(self, session: Session, fanout: _Fanout | None = None) -> None:
         self._session = session
         self._fanout = fanout
 
     async def emit(self, event: Event) -> EventRecord:
         record = self._session.append_event(event)
+        self._session._observe_event(event)
         if event.type == "turn.completed":
             # Cadence is evaluated only on completed turns. Snapshot failure is
             # never allowed to fail the turn: the log is authoritative and a
             # missing/old snapshot only costs a full replay on resume.
             self._session._snapshot_after_completed_turn()
-        await self._fanout.put(
-            record.event, critical=event.type in _CRITICAL_EVENTS
-        )
+        self._session._publish(record.event)
+        if self._fanout is not None:
+            await self._fanout.put(
+                record.event, critical=event.type in _CRITICAL_EVENTS
+            )
         return record
 
 
@@ -191,7 +312,13 @@ class TurnLease:
 
 
 class Session:
-    """A handle over one append-only session log."""
+    """A handle over one append-only session log.
+
+    A handle is bound to the single asyncio event loop that runs its turns: its
+    event bus, idle event, input queue, and turn task are loop-bound. Drive one
+    handle from one loop only; see
+    :class:`~nexus.session.manager.SessionManager` for the full affinity rule.
+    """
 
     def __init__(
         self,
@@ -206,6 +333,10 @@ class Session:
         attended: bool = False,
         event_buffer: int = DEFAULT_EVENT_BUFFER,
         snapshot_every: int | Callable[[], int] | None = None,
+        unattended_decision: object | None = None,
+        auto_start_queued: bool = True,
+        ensure_ready: Callable[[], Any] | None = None,
+        turn_cleanup: Callable[[str, str], None] | None = None,
     ):
         self._id = validate_session_id(session_id)
         self._store = store
@@ -228,15 +359,59 @@ class Session:
         if type(event_buffer) is not int or event_buffer < 1:
             raise ValueError("event_buffer must be a positive integer")
         self._event_buffer = event_buffer
+        #: Persistent, session-scoped fan-out. It is created once and outlives
+        #: every turn, so a detached turn with zero subscribers still completes
+        #: and a late subscriber can replay from the log and then follow live.
+        self._bus = Bus(maxsize=event_buffer, policy=DROP_OLDEST)
+        #: Number of live :meth:`subscribe` iterators. Attendance is derived from
+        #: this count (single user, many views), never sticky.
+        self._viewers = 0
+        #: Durable input submissions awaiting the next turn boundary.
+        self._queue: deque[_QueuedInput] = deque()
+        #: Set when no detached turn is running. ``wait_idle`` awaits this
+        #: instead of polling, so it never busy-waits.
+        self._idle = asyncio.Event()
+        self._idle.set()
+        #: The current detached turn's task, retained so it is not garbage
+        #: collected and so callers can await it.
+        self._turn_task: asyncio.Task | None = None
+        #: Pending approval request ids observed on the event stream, so a drop
+        #: to zero viewers can apply the unattended policy without a UI call.
+        self._pending_permissions: set[str] = set()
+        #: Decision used when the last viewer leaves with an approval pending.
+        self._unattended_decision = (
+            DEFAULT_UNATTENDED_DECISION
+            if unattended_decision is None
+            else unattended_decision
+        )
         #: Snapshot cadence seam. ``int`` counts completed turns; a callable is
         #: re-evaluated per completed turn so the integration packet can feed it
         #: ``config.v2.session.snapshot_every`` without this layer importing
         #: configuration. ``None`` disables automatic snapshots.
         self._snapshot_every = snapshot_every
+        #: Whether a completed turn automatically starts the next queued
+        #: submission. When disabled, queued inputs wait for an explicit
+        #: :meth:`start_turn` and :meth:`wait_idle` treats a pending queue as idle.
+        self._auto_start_queued = bool(auto_start_queued)
+        #: Optional async readiness seam awaited before a turn is prepared (for
+        #: example a runtime bootstrapping its extension manifest). Kept opaque so
+        #: this layer imports no manager.
+        self._ensure_ready = ensure_ready
+        #: Optional per-turn cleanup seam called with the finished turn id when a
+        #: detached turn retires (success, failure, or cancellation), so a runtime
+        #: can drop session/turn-local state such as skill activations.
+        self._turn_cleanup = turn_cleanup
+        #: The unattended policy frozen at turn start, so a config reload mid-turn
+        #: cannot weaken the turn's approval fallback.
+        self._turn_unattended: object | None = None
         #: Most recent background snapshot failure, for diagnostics only.
         self.snapshot_error: Exception | None = None
         #: Records appended by the last :meth:`recover_dangling_tool_uses` call.
         self.recovered: tuple[MessageRecord, ...] = ()
+        # A crash can leave a submission durable as ``input.queued`` but absent
+        # from memory; rebuilding the FIFO here means a reopened handle resumes
+        # exactly where the previous process stopped.
+        self._rehydrate_queue()
 
     # -- wiring ------------------------------------------------------------
 
@@ -254,6 +429,10 @@ class Session:
         tools: Callable[..., Any] | None = None,
         attended: bool | None = None,
         snapshot_every: int | Callable[[], int] | None = None,
+        unattended_decision: object | None = None,
+        auto_start_queued: bool | None = None,
+        ensure_ready: Callable[[], Any] | None = None,
+        turn_cleanup: Callable[[str, str], None] | None = None,
     ) -> Session:
         """Attach or replace the loop dependencies used by :meth:`send`."""
         if assemble is not None:
@@ -268,24 +447,141 @@ class Session:
             self._attended = bool(attended)
         if snapshot_every is not None:
             self._snapshot_every = snapshot_every
+        if unattended_decision is not None:
+            self._unattended_decision = unattended_decision
+        if auto_start_queued is not None:
+            self._auto_start_queued = bool(auto_start_queued)
+        if ensure_ready is not None:
+            self._ensure_ready = ensure_ready
+        if turn_cleanup is not None:
+            self._turn_cleanup = turn_cleanup
         return self
 
-    # -- approvals ---------------------------------------------------------
+    # -- presence ----------------------------------------------------------
+
+    @property
+    def viewers(self) -> int:
+        """Live subscriber count (single user, many views)."""
+        return self._viewers
+
+    @property
+    def queue_depth(self) -> int:
+        """Number of queued submissions awaiting the next turn boundary."""
+        return len(self._queue)
+
+    @property
+    def queued_ids(self) -> tuple[str, ...]:
+        """Ids of queued submissions in FIFO order (oldest first)."""
+        return tuple(item.queued_id for item in self._queue)
+
+    @property
+    def pending_permissions(self) -> tuple[str, ...]:
+        """Approval request ids observed but not yet resolved."""
+        return tuple(self._pending_permissions)
 
     @property
     def attended(self) -> bool:
         """Whether an interactive approver is attached for this session.
 
-        Headless sessions stay ``False`` so the configured ``on_unattended``
-        policy applies; an interactive adapter calls :meth:`mark_attended` (or
-        passes ``attended=True`` to :meth:`send`). This decouples attendance from
-        any particular terminal/UI.
+        Derived from presence: any live subscriber counts as attended. The legacy
+        explicit flag (constructor/``bind``/``mark_attended``) is retained so the
+        single-view CLI keeps prompting; it is OR-ed in, never required.
         """
-        return self._attended
+        return self._viewers > 0 or self._attended
 
     def mark_attended(self, attended: bool = True) -> Session:
         self._attended = bool(attended)
         return self
+
+    def _live_unattended_policy(self) -> object:
+        """The live unattended policy from its (possibly) callable seam.
+
+        The integration packet wires a callable that reads
+        ``permissions.on_unattended`` from the effective config, so a config edit
+        between turns is honored. A callable that raises falls back to the default
+        rather than leaving a pending approval stuck.
+        """
+        policy = self._unattended_decision
+        if callable(policy):
+            try:
+                return policy()
+            except Exception:  # noqa: BLE001 - a bad policy must not wedge a turn
+                return DEFAULT_UNATTENDED_DECISION
+        return policy
+
+    def _unattended_policy(self) -> object:
+        """The policy in force for the active turn, frozen at turn start.
+
+        A running turn uses the value captured by :meth:`_prepare_turn`, so a
+        config reload (or any other change to the callable seam) cannot weaken the
+        approval fallback mid-turn. With no active turn the live value is used.
+        """
+        if self._active is not None and self._turn_unattended is not None:
+            return self._turn_unattended
+        return self._live_unattended_policy()
+
+    def _apply_unattended_fallback(self) -> None:
+        """Apply the session's unattended policy to every pending approval.
+
+        The plan's rule: a view that attaches and then disconnects mid-turn must
+        not leave the session blocked on an approval nobody will answer. The
+        policy vocabulary matches ``permissions.on_unattended``: ``deny`` resolves
+        each request with a one-shot deny, ``allow`` with a one-shot allow, and
+        ``fail_turn`` fails the running turn. First resolver always wins: an id
+        already resolved by a UI is gone from ``_pending_permissions``, and the
+        gate rejects a second resolution.
+        """
+        if not self._pending_permissions:
+            return
+        gate = getattr(self._active_tools, "gate", None)
+        if gate is None:
+            return
+        resolve = getattr(gate, "resolve", None)
+        fail = getattr(gate, "fail", None)
+        if not callable(resolve) and not callable(fail):
+            # No way to answer the prompt: cancel it so the turn cannot hang.
+            cancel_pending = getattr(gate, "cancel_pending", None)
+            if callable(cancel_pending):
+                cancel_pending()
+                self._pending_permissions.clear()
+            return
+        mode = _unattended_mode(self._unattended_policy())
+        decision = "allow_once" if mode == "allow" else "deny_once"
+        for request_id in list(self._pending_permissions):
+            try:
+                if mode == "fail_turn" and callable(fail):
+                    resolved = bool(fail(request_id, _UNATTENDED_FAIL_REASON))
+                elif callable(resolve):
+                    resolved = bool(resolve(request_id, decision))
+                else:
+                    resolved = False
+            except Exception:  # noqa: BLE001 - fallback must never crash a view
+                resolved = False
+            if resolved:
+                self._pending_permissions.discard(request_id)
+
+    def _observe_event(self, event: Event) -> None:
+        if event.type == "permission.requested":
+            request_id = event.data.get("id")
+            if request_id:
+                self._pending_permissions.add(request_id)
+            if not self.attended:
+                # The last viewer may have left *before* this approval was
+                # requested (a mid-turn disconnect race). Fallback only runs on
+                # the disconnect edge, so apply the session's unattended policy
+                # here too rather than leaving the turn blocked on a prompt that
+                # nobody can answer. The sticky attended flag (headless ``send``)
+                # is OR-ed into ``attended``, so an attached headless consumer
+                # still resolves manually.
+                self._apply_unattended_fallback()
+        elif event.type == "permission.resolved":
+            request_id = event.data.get("id")
+            if request_id:
+                self._pending_permissions.discard(request_id)
+        elif event.type in TERMINAL_EVENTS:
+            # A terminal turn can never resolve another approval; leaving stale
+            # ids behind would let a later viewer-drop "resolve" a dead request.
+            self._pending_permissions.clear()
 
     def resolve_permission(self, request_id: str, decision: object) -> bool:
         """Resolve one active pending approval; unknown/stale ids return False.
@@ -520,14 +816,188 @@ class Session:
         except Exception as exc:  # noqa: BLE001 - derived state must not fail a turn
             self.snapshot_error = exc
 
+    # -- event bus ---------------------------------------------------------
+
+    def _publish(self, event: Event) -> None:
+        """Fan one persisted event out to every live subscriber."""
+        self._bus.publish(event)
+
+    def _emit(self, event_type: str, data: dict[str, Any] | None = None) -> EventRecord:
+        """Persist and publish a session-scoped event (presence/input).
+
+        These transitions are not part of a turn, so they carry no turn id; they
+        still get a monotonic ``seq`` and are durable, so a late subscriber can
+        reconstruct them from the log.
+        """
+        event = Event(type=event_type, data=dict(data or {}), session=self._id)
+        record = self.append_event(event)
+        self._observe_event(event)
+        self._publish(record.event)
+        return record
+
+    def _events_after(self, from_seq: int) -> list[Event]:
+        """All persisted events with ``seq > from_seq`` (append-only, ordered)."""
+        return [
+            record.event
+            for record in self.read(force=True).records
+            if isinstance(record, EventRecord) and record.event.seq > from_seq
+        ]
+
+    async def subscribe(
+        self,
+        from_seq: int = 0,
+        *,
+        follow: bool = True,
+        until: Callable[[Event], bool] | None = None,
+    ) -> AsyncIterator[Event]:
+        """Catch up from ``from_seq`` then follow live events, gap-free.
+
+        ``from_seq`` is exclusive: events with a greater ``seq`` are yielded.
+        The bus subscription is registered **before** the log is read, so an
+        event persisted during catch-up is not missed; a running ``last_seq``
+        watermark then drops any event already replayed, so nothing is yielded
+        twice. If the bounded bus buffer dropped an event under load, the gap is
+        healed from the authoritative log before the live event is yielded.
+
+        Closing this iterator unsubscribes the view and updates presence; it
+        **never** cancels the turn, which is detached and owned by the session.
+        ``until`` stops iteration after the first event it accepts (used by
+        :meth:`send` to stop at a terminal event); ``follow=False`` replays the
+        log only.
+        """
+        if type(from_seq) is not int or from_seq < 0:
+            raise ValueError("from_seq must be a non-negative integer")
+        sub = self._bus.subscribe()
+        self._viewers += 1
+        last = from_seq
+        try:
+            # Presence is emitted inside the ``try`` so a failed publish still
+            # runs the unsubscribe/decrement cleanup below rather than leaking a
+            # subscriber count (and the bus registration) forever.
+            self._emit("presence.joined", {"viewers": self._viewers})
+            self._emit(
+                "presence.changed",
+                {"viewers": self._viewers, "attended": self.attended},
+            )
+            for event in self._events_after(from_seq):
+                last = event.seq
+                yield event
+                if until is not None and until(event):
+                    return
+            if not follow:
+                return
+            while True:
+                event = await sub.get()
+                if event.seq <= last:
+                    continue
+                if event.seq > last + 1:
+                    for missing in self._events_after(last):
+                        if missing.seq >= event.seq:
+                            break
+                        last = missing.seq
+                        yield missing
+                        if until is not None and until(missing):
+                            return
+                if event.seq <= last:
+                    continue
+                last = event.seq
+                yield event
+                if until is not None and until(event):
+                    return
+        finally:
+            self._bus.unsubscribe(sub)
+            self._viewers = max(0, self._viewers - 1)
+            # Cleanup must complete even if persisting/publishing a presence
+            # event fails, and must not mask an in-flight iteration error.
+            with contextlib.suppress(Exception):
+                self._emit("presence.left", {"viewers": self._viewers})
+            with contextlib.suppress(Exception):
+                self._emit(
+                    "presence.changed",
+                    {"viewers": self._viewers, "attended": self.attended},
+                )
+            if self._viewers == 0:
+                with contextlib.suppress(Exception):
+                    self._apply_unattended_fallback()
+
+    # -- input queue -------------------------------------------------------
+
+    def enqueue(self, user_input: str | list[ContentBlock]) -> str:
+        """Persist a submission to run at the next turn boundary; return its id.
+
+        The input is appended as an ``input.queued`` event (durable, drawable)
+        and held in a FIFO in-memory queue. It is consumed either by an explicit
+        :meth:`start_turn` with no content or automatically when the running turn
+        completes, emitting ``input.consumed``; if it can never run it emits
+        ``input.dropped``.
+        """
+        content = _coerce_user_input(user_input)
+        queued_id = new_id()
+        self._queue.append(_QueuedInput(queued_id, content))
+        self._emit(
+            "input.queued",
+            {
+                "queued_id": queued_id,
+                "content": _encode_queued_content(content),
+                "queue_depth": len(self._queue),
+            },
+        )
+        return queued_id
+
+    def _drop_queue(self, reason: str | None = None) -> None:
+        while self._queue:
+            item = self._queue.popleft()
+            self._emit(
+                "input.dropped",
+                {"queued_id": item.queued_id, "reason": reason or "dropped"},
+            )
+
+    def _rehydrate_queue(self) -> None:
+        """Rebuild the pending input FIFO from the append-only input events.
+
+        A process that died between ``input.queued`` and its
+        ``input.consumed``/``input.dropped`` leaves the submission durable but
+        absent from memory. Replaying the events in order restores the exact
+        pending order. This is a pure read: it emits nothing, so reopening never
+        duplicates an ``input.queued`` (or any other) event, and a malformed
+        payload is skipped so a corrupt line can never break an open. The
+        rehydrated queue then behaves exactly like one built in-process: the
+        next ``start_turn`` (or completed-turn boundary) consumes it FIFO.
+        """
+        pending: dict[str, _QueuedInput] = {}
+        for event in self.read().events():
+            if event.type not in _INPUT_EVENT_TYPES:
+                continue
+            data = event.data
+            if not isinstance(data, Mapping):
+                continue
+            queued_id = data.get("queued_id")
+            if not isinstance(queued_id, str) or not queued_id:
+                continue
+            if event.type == _QUEUED_EVENT:
+                content = _decode_queued_content(data.get("content"))
+                if content is None:
+                    continue
+                pending[queued_id] = _QueuedInput(queued_id, content)
+            else:
+                pending.pop(queued_id, None)
+        self._queue = deque(pending.values())
+
     # -- turn ownership and cancellation -----------------------------------
 
     @property
     def cancel_token(self) -> CancelToken:
         return self._cancel
 
-    def cancel(self, reason: str | None = None) -> None:
+    def cancel(self, reason: str | None = None, *, drop_queue: bool = True) -> None:
+        """Cancel the active turn and (by default) drop queued submissions."""
         self._cancel.cancel(reason)
+        # A cancelled turn can never resolve an approval; forget the ids now so a
+        # later viewer-drop cannot act on a request the loop is already tearing
+        # down. The terminal ``turn.cancelled`` event clears them again.
+        self._pending_permissions.clear()
+        if drop_queue:
+            self._drop_queue(reason or "cancelled")
 
     def begin_turn(
         self,
@@ -544,8 +1014,17 @@ class Session:
         if self._active is not None:
             raise SessionBusy(f"Session {self._id!r} already has an active turn")
         self._lock.acquire(shared=False, blocking=False)
-        token = CancelToken()
-        state = TurnState.new(turn_id=turn_id or new_id(), session_id=self._id).start()
+        self._idle.clear()
+        try:
+            token = CancelToken()
+            state = TurnState.new(
+                turn_id=turn_id or new_id(), session_id=self._id
+            ).start()
+        except BaseException:
+            # Never leak the flock if lease construction fails after acquiring.
+            self._lock.release()
+            self._idle.set()
+            raise
         lease = TurnLease(
             turn_id=state.turn_id,
             state=state,
@@ -558,10 +1037,27 @@ class Session:
         return lease
 
     def _end_turn(self, turn_id: str) -> None:
-        if self._active is None or self._active.turn_id != turn_id:
+        active = self._active
+        if active is not None and active.turn_id != turn_id:
+            # A newer turn owns the session; a stale lease must not release it.
             return
+        ended = active is not None
         self._active = None
+        self._turn_unattended = None
+        # Defensive: release even when ``_active`` was already cleared, so a
+        # lease that was detached without releasing cannot leak the flock.
         self._lock.release()
+        if ended:
+            # Terminal/cancel cleanup seam: a finished turn can never leave a
+            # session/turn-local activation behind to leak into a later turn.
+            cleanup = self._turn_cleanup
+            if cleanup is not None:
+                with contextlib.suppress(Exception):
+                    cleanup(self._id, turn_id)
+        if self._turn_task is None:
+            # No detached task (for example a preparation that failed before
+            # launch): the session is idle.
+            self._idle.set()
 
     # -- crash recovery ----------------------------------------------------
 
@@ -660,7 +1156,7 @@ class Session:
             config=config,
             session=self,
             turn_id=lease.turn_id,
-            attended=self._attended if attended is None else bool(attended),
+            attended=self.attended if attended is None else bool(attended),
         )
         if bundle is not None:
             freeze = getattr(assembler, "freeze_tools", None)
@@ -668,56 +1164,74 @@ class Session:
                 freeze(getattr(bundle, "schemas", ()))
         return bundle
 
-    async def send(
-        self, user_input: str | list[ContentBlock], *, attended: bool | None = None
-    ) -> AsyncIterator[Event]:
-        """Run one turn and stream its persisted events in order.
+    def _resolve_turn_input(
+        self, user_input: str | list[ContentBlock] | None
+    ) -> tuple[list[ContentBlock], _QueuedInput | None]:
+        """Return the turn's content and, if it comes from the queue, its item.
 
-        The sequence is deliberate:
-
-        1. validate the input and claim the exclusive turn lease (so a second
-           in-process or cross-process turn fails fast with
-           :class:`SessionBusy`);
-        2. take **one** per-turn snapshot of config/system and derive limits from
-           it. If the snapshot fails, the lease is released without touching the
-           log (no partial turn is persisted);
-        3. recover dangling tool uses under the held lock, then append the new
-           user message. Recovery and input are separate append-only records, so
-           stored IR may contain consecutive user messages; the adapter coalesces
-           adjacent same-role messages on the wire;
-        4. run :func:`nexus.core.loop.run_turn` as a producer task that persists
-           every event and fans it out to a bounded, lossless buffer;
-        5. yield those events to the consumer.
-
-        Closing the consumer early cancels the producer (even when it is blocked
-        on backpressure or a provider wait); the loop emits/persists its terminal
-        event, releases the lease, and the source stream is closed.
-        ``session.cancel()`` cancels the lease token.
-
-        Configuration is reloaded between turns but frozen within one, and never
-        cached on the session, so concurrent sessions cannot race on shared state.
+        The queue head is **peeked**, not popped: the caller removes it only
+        after the lease and config snapshot succeed, so a failed start (for
+        example :class:`SessionBusy`) leaves the durable FIFO intact instead of
+        silently losing the submission from memory.
         """
-        if self._assemble is None or self._provider_for is None:
-            raise SessionError(
-                "Session.send requires an assembler and provider resolver; "
-                "open the session through Runtime.session() or call bind() first"
-            )
-        content = _coerce_user_input(user_input)
+        if user_input is None:
+            if not self._queue:
+                raise ValueError("no queued input to start a turn")
+            item = self._queue[0]
+            return item.content, item
+        return _coerce_user_input(user_input), None
 
-        # Claim the lease first, then snapshot config/system exactly once. A
-        # snapshot failure releases the lease without mutating the log.
-        lease = self.begin_turn()
+    def _remove_queued(self, item: _QueuedInput) -> bool:
+        """Remove ``item`` from the FIFO by identity; ``False`` if absent."""
+        for index, candidate in enumerate(self._queue):
+            if candidate is item:
+                del self._queue[index]
+                return True
+        return False
+
+    def _prepare_turn(
+        self,
+        content: list[ContentBlock],
+        attended: bool,
+        turn_id: str | None,
+        limits: TurnLimits | None,
+        *,
+        queued_item: _QueuedInput | None = None,
+    ) -> tuple[TurnLease, Any, Any]:
+        """Claim the lease, snapshot config, and persist the user message.
+
+        Synchronous by design: the lease is claimed and the log is mutated with
+        no intervening ``await``, so a concurrent turn can never observe a
+        half-prepared turn. Any snapshot failure releases the lease without
+        touching the log. A queued submission is removed from the FIFO only
+        after the lease/snapshot succeed and its ``input.consumed`` event is
+        durable, so a failed preparation cannot lose it.
+        """
+        lease = self.begin_turn(turn_id=turn_id, limits=limits)
+        # Freeze the unattended fallback policy for the whole turn: a reload that
+        # arrives mid-turn must not be able to weaken (or strengthen) it.
+        self._turn_unattended = self._live_unattended_policy()
         try:
             assembler = self._assemble_for_turn()
-            lease.limits = self._limits_for_turn(assembler)
+            # An explicit per-turn ``limits`` argument wins over the config
+            # snapshot; only derive from the snapshot when the caller passed none.
+            if limits is None:
+                lease.limits = self._limits_for_turn(assembler)
             tool_turn = self._tool_turn_for(assembler, lease, attended)
         except BaseException:
+            self._turn_unattended = None
             lease.release()
             raise
-
-        # The snapshot succeeded; from here the turn persists append-only.
+        self._active_tools = tool_turn
         try:
-            self._active_tools = tool_turn
+            if queued_item is not None:
+                # Emit before removing: if the durable event fails, the item
+                # stays queued and memory still matches the log.
+                self._emit(
+                    "input.consumed",
+                    {"queued_id": queued_item.queued_id, "turn": lease.turn_id},
+                )
+                self._remove_queued(queued_item)
             self.recover_dangling_tool_uses(lock=False)
             self.append_message(
                 Message(
@@ -726,44 +1240,252 @@ class Session:
                     meta=MessageMeta(turn_id=lease.turn_id),
                 )
             )
-            fanout = _Fanout(self._event_buffer)
-            sink = _SessionEventSink(self, fanout)
-            task = asyncio.create_task(
-                run_turn(
-                    session=self,
-                    user_input=content,
-                    assemble=assembler,
-                    provider_for=self._provider_for,
-                    emit=sink,
-                    tools=getattr(tool_turn, "dispatcher", None),
-                    gate=getattr(tool_turn, "gate", None),
-                    lease=lease,
-                    persist_user_message=False,
-                )
+        except BaseException:
+            # From here the log may be partially written; still release ownership
+            # so the session is not wedged by a failed preparation.
+            self._active_tools = None
+            self._turn_unattended = None
+            lease.release()
+            raise
+        return lease, assembler, tool_turn
+
+    def _launch_turn(
+        self,
+        lease: TurnLease,
+        content: list[ContentBlock],
+        assembler: Any,
+        tool_turn: Any,
+        *,
+        fanout: _Fanout | None = None,
+    ) -> asyncio.Task:
+        """Start the detached producer task for a prepared turn."""
+        sink = _SessionEventSink(self, fanout)
+        task = asyncio.create_task(
+            run_turn(
+                session=self,
+                user_input=content,
+                assemble=assembler,
+                provider_for=self._provider_for,
+                emit=sink,
+                tools=getattr(tool_turn, "dispatcher", None),
+                gate=getattr(tool_turn, "gate", None),
+                lease=lease,
+                persist_user_message=False,
+                manifest_ref=getattr(tool_turn, "manifest_ref", None),
+                environment_for=getattr(tool_turn, "environment_for", None),
             )
+        )
+        self._turn_task = task
+        if fanout is not None:
             task.add_done_callback(lambda _task: fanout.close())
-            try:
-                while True:
-                    item = await fanout.get()
-                    if item is _SENTINEL:
-                        break
-                    yield item
-            finally:
-                try:
-                    if not task.done():
-                        task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await task
-                finally:
-                    # The loop releases the lease in its own ``finally``; this is
-                    # an outermost safety net (e.g. a producer cancelled before
-                    # it entered the loop, or a task that raised).
-                    self._active_tools = None
-                    lease.release()
+        task.add_done_callback(self._on_turn_done)
+        return task
+
+    def _on_turn_done(self, task: asyncio.Task) -> None:
+        """Retire a finished turn and consume the next queued submission."""
+        if self._turn_task is not task:
+            # A newer turn already took ownership; never clobber its state.
+            return
+        self._turn_task = None
+        self._active_tools = None
+        # Defensive lease release. ``run_turn`` releases in its own ``finally``
+        # on every normal path, but a task cancelled before it first runs (for
+        # example during loop shutdown) never reaches that block. Releasing here
+        # guarantees the flock cannot be leaked by such a cancellation.
+        lease = self._active
+        if lease is not None:
+            lease.release()
+        self._launch_queued_if_idle()
+        if self._turn_task is None:
+            self._idle.set()
+
+    def _launch_queued_if_idle(self) -> None:
+        """Start the next queued turn at a turn boundary, if one is waiting.
+
+        Gated by ``auto_start_queued``: when disabled a completed turn never
+        silently promotes the queue, so the session settles with the submission
+        pending until an explicit :meth:`start_turn`.
+        """
+        if not self._auto_start_queued:
+            return
+        if self._active is not None or not self._queue:
+            return
+        item = self._queue[0]
+        try:
+            lease, assembler, tool_turn = self._prepare_turn(
+                item.content, self.attended, None, None, queued_item=item
+            )
+        except BaseException:  # noqa: BLE001 - a bad queued turn must not crash the drain
+            # Drop only if it is still pending. If preparation got past the
+            # consumed transition before failing, a second ``input.dropped``
+            # would contradict the durable ``input.consumed``.
+            if self._remove_queued(item):
+                self._emit(
+                    "input.dropped",
+                    {"queued_id": item.queued_id, "reason": "turn start failed"},
+                )
+            return
+        try:
+            self._launch_turn(lease, item.content, assembler, tool_turn, fanout=None)
+        except BaseException:  # noqa: BLE001 - release the lease, then keep draining
+            self._active_tools = None
+            lease.release()
+            if self._remove_queued(item):
+                self._emit(
+                    "input.dropped",
+                    {"queued_id": item.queued_id, "reason": "turn launch failed"},
+                )
+
+    async def start_turn(
+        self,
+        user_input: str | list[ContentBlock] | None = None,
+        *,
+        attended: bool | None = None,
+        turn_id: str | None = None,
+        limits: TurnLimits | None = None,
+    ) -> str:
+        """Start one turn detached from any subscriber; return its ``turn_id``.
+
+        The turn runs to completion as a session-owned task, so closing or never
+        opening a subscriber does not affect it. With ``user_input=None`` the
+        head of the input queue is consumed instead (emitting ``input.consumed``).
+
+        Configuration is snapshotted once, synchronously, before the task starts;
+        a snapshot failure releases the lease without touching the log.
+        """
+        if self._assemble is None or self._provider_for is None:
+            raise SessionError(
+                "Session.start_turn requires an assembler and provider resolver; "
+                "open the session through Runtime.session() or call bind() first"
+            )
+        if self._ensure_ready is not None:
+            await self._ensure_ready()
+        content, queued_item = self._resolve_turn_input(user_input)
+        effective = self.attended if attended is None else bool(attended)
+        lease, assembler, tool_turn = self._prepare_turn(
+            content, effective, turn_id, limits, queued_item=queued_item
+        )
+        try:
+            self._launch_turn(lease, content, assembler, tool_turn, fanout=None)
         except BaseException:
             self._active_tools = None
             lease.release()
             raise
+        return lease.turn_id
+
+    async def wait_turn(self, turn_id: str | None = None) -> None:
+        """Await the current detached turn (optionally a specific ``turn_id``).
+
+        Awaiting a turn never cancels it: the shield means a cancelled waiter
+        leaves the session-owned task running.
+        """
+        task = self._turn_task
+        if task is None:
+            return
+        current = self.active_turn_id
+        if turn_id is not None and current is not None and current != turn_id:
+            return
+        await self._await_detached(task)
+
+    async def _await_detached(self, task: asyncio.Task) -> None:
+        """Await a detached turn without letting waiter cancellation cancel it.
+
+        ``asyncio.shield`` keeps the session-owned turn running when the waiter
+        is cancelled, but the ``CancelledError`` is **re-raised** so
+        ``asyncio.wait_for`` reports its timeout instead of silently returning.
+        A turn that was itself cancelled is treated as finished, preserving the
+        legacy "awaiting a cancelled turn returns quietly" behaviour.
+        """
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.cancelled():
+                return
+            raise
+
+    async def wait_idle(self) -> None:
+        """Wait until no detached turn is running.
+
+        Cancellable and ``asyncio.wait_for``-compatible: a cancelled waiter (or a
+        timeout) propagates, but never cancels the detached, session-owned turn.
+
+        This never busy-waits: it awaits the session's idle event, which is set
+        when the running task is retired. A queued submission with no running
+        turn is **idle** — queued inputs are consumed at the next turn boundary
+        (when ``auto_start_queued`` is enabled) or by an explicit
+        :meth:`start_turn` — so this returns instead of spinning on the queue.
+        Callers that want a pending submission to run should call
+        :meth:`start_turn`.
+        """
+        while self._turn_task is not None:
+            self._idle.clear()
+            # Re-check after clearing: a turn may have finished between the loop
+            # condition and the clear, in which case the event is already set.
+            if self._turn_task is None:
+                break
+            await self._idle.wait()
+
+    async def send(
+        self, user_input: str | list[ContentBlock], *, attended: bool | None = None
+    ) -> AsyncIterator[Event]:
+        """Run one turn and stream its persisted events in order (attached).
+
+        This is the compatibility wrapper for the single-view CLI: unlike
+        :meth:`subscribe`, the consumer owns the turn's lifetime, so closing the
+        stream early cancels the turn and releases the lease. It is implemented
+        over the same prepared-turn/turn-runner core as :meth:`start_turn`, with
+        a private backpressured fan-out so a slow consumer never loses an event.
+        """
+        if self._assemble is None or self._provider_for is None:
+            raise SessionError(
+                "Session.send requires an assembler and provider resolver; "
+                "open the session through Runtime.session() or call bind() first"
+            )
+        if self._ensure_ready is not None:
+            await self._ensure_ready()
+        content = _coerce_user_input(user_input)
+        # The legacy sticky flag (not presence) drives attendance here, so a
+        # headless JSON consumer stays unattended even while it is attached.
+        effective = self._attended if attended is None else bool(attended)
+        fanout = _Fanout(self._event_buffer)
+        lease, assembler, tool_turn = self._prepare_turn(
+            content, effective, None, None
+        )
+        try:
+            task = self._launch_turn(
+                lease, content, assembler, tool_turn, fanout=fanout
+            )
+        except BaseException:
+            self._active_tools = None
+            lease.release()
+            raise
+        try:
+            while True:
+                item = await fanout.get()
+                if item is _SENTINEL:
+                    break
+                yield item
+        finally:
+            try:
+                if not task.done():
+                    self.cancel("consumer closed")
+                    task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+            finally:
+                # The loop releases the lease in its own ``finally``; this is an
+                # outermost safety net (e.g. a producer cancelled before it
+                # entered the loop, or a task that raised). Only clear the active
+                # tool bundle if no newer (e.g. queued) turn has taken over.
+                if self._active is None or self._active.turn_id == lease.turn_id:
+                    self._active_tools = None
+                lease.release()
 
 
-__all__ = ["Session", "TurnLease"]
+__all__ = [
+    "DEFAULT_EVENT_BUFFER",
+    "DEFAULT_UNATTENDED_DECISION",
+    "TERMINAL_EVENTS",
+    "Session",
+    "TurnLease",
+]

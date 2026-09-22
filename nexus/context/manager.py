@@ -52,7 +52,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -93,6 +93,7 @@ from .parts import (
     canonical_tool_text,
     capture_environment,
     current_user_index,
+    freeze_skills_index,
     render_parts,
 )
 
@@ -109,6 +110,54 @@ DEFAULT_MAX_FILE_BYTES = 1_000_000
 
 #: How many trailing history messages eviction never touches.
 DEFAULT_KEEP_RECENT = 6
+
+#: Distinguishes "no per-iteration override supplied" from ``None`` (clear).
+_UNSET: Any = object()
+
+
+def _fit_whole_lines(
+    lines: tuple[str, ...], costs: Sequence[int], budget: int
+) -> tuple[str, ...]:
+    """The longest prefix of ``lines`` whose whole-line costs fit ``budget``.
+
+    A line is either fully included or not included at all, so a token budget can
+    never cut a ``name: description`` entry in half. Stops at the first line that
+    would overflow, keeping the rendered index a contiguous, deterministic prefix.
+    """
+    if budget <= 0 or not lines:
+        return ()
+    total = 0
+    kept: list[str] = []
+    for line, cost in zip(lines, costs):
+        if total + cost > budget:
+            break
+        total += cost
+        kept.append(line)
+    return tuple(kept)
+
+
+def _system_file_text(system_files: Any, name: str) -> str | None:
+    """Extract one frozen system-file body without touching the live file.
+
+    Accepts a ``SystemFiles``-like object (``.get(name)``), a plain mapping, or
+    ``None``. ``None`` means "no snapshot supplied" so the caller falls back to
+    reading; an empty string means the snapshot deliberately has no such file,
+    so nothing is reread.
+    """
+    if system_files is None:
+        return None
+    entry = None
+    getter = getattr(system_files, "get", None)
+    if callable(getter):
+        entry = getter(name)
+    elif isinstance(system_files, Mapping):
+        entry = system_files.get(name)
+    if entry is None:
+        return ""
+    content = getattr(entry, "content", None)
+    if content is None:
+        content = entry if isinstance(entry, str) else ""
+    return content if isinstance(content, str) else ""
 
 
 def _invoke_counter(counter: Any, text: str) -> Any:
@@ -209,6 +258,9 @@ class _Costs:
     user_costs: tuple[int, ...]
     evicted_messages: tuple[Message, ...] | None
     evicted_costs: tuple[int, ...] | None
+    #: Per-line token costs for whole-line parts (the skills index), keyed by part
+    #: name. Empty for every part whose text is truncated by ratio instead.
+    line_costs: dict[str, tuple[int, ...]]
 
 
 class ContextManager:
@@ -235,6 +287,8 @@ class ContextManager:
         cache: TokenCountCache | None = None,
         keep_recent: int = DEFAULT_KEEP_RECENT,
         min_content_chars: int = 0,
+        skills_index: Any | None = None,
+        skills: Any | None = None,
     ) -> None:
         if config is None and config_loader is None:
             raise ConfigError("ContextManager requires a config or config_loader")
@@ -275,6 +329,14 @@ class ContextManager:
         #: tool snapshot through :meth:`freeze_tools`; descriptions live only on
         #: these schemas and are never interpolated into system text.
         self._tool_schemas: tuple[ToolSchema, ...] = ()
+        #: Frozen, sanitized ``name: description`` lines for the current
+        #: iteration's skills index. Populated through :meth:`configure`,
+        #: :meth:`for_turn`, :meth:`for_iteration`, or :meth:`freeze_skills`. Only
+        #: names and descriptions are ever read from the injected snapshot.
+        #: ``skills`` is an accepted alias for ``skills_index``.
+        self._skills_index: tuple[str, ...] = freeze_skills_index(
+            skills_index if skills_index is not None else skills
+        )
         #: Frozen environment for a per-turn snapshot; ``None`` means build one
         #: from the effective config on each assemble.
         self._env: AssemblyEnvironment | None = None
@@ -327,12 +389,16 @@ class ContextManager:
         model: str | None = None,
         provider: str | None = None,
         cache: TokenCountCache | None = None,
+        skills_index: Any | None = None,
+        skills: Any | None = None,
     ) -> None:
         """Inject the frozen per-turn environment used by the next snapshot.
 
         This is the seam a runtime/provider packet calls before ``for_turn`` (or
         before ``assemble`` when it does not snapshot). Passing ``None`` leaves
-        the corresponding value unchanged.
+        the corresponding value unchanged. ``skills_index`` (or its alias
+        ``skills``) accepts a raw skill snapshot/index (or already-frozen lines);
+        pass ``()`` to clear it.
         """
         if capabilities is not None:
             self._capabilities = capabilities
@@ -352,6 +418,9 @@ class ContextManager:
             self._provider_override = provider
         if cache is not None:
             self.cache = cache
+        raw_skills = skills_index if skills_index is not None else skills
+        if raw_skills is not None:
+            self._skills_index = freeze_skills_index(raw_skills)
 
     def for_turn(
         self,
@@ -364,15 +433,65 @@ class ContextManager:
         request_counter: Any | None = None,
         model: str | None = None,
         provider: str | None = None,
+        skills_index: Any | None = None,
+        skills: Any | None = None,
     ) -> ContextManager:
         """Return a snapshot manager with config and rendered inputs frozen.
 
         Called once per turn by ``Session.send`` so every assembly in the turn
         reuses one effective configuration. The snapshot's environment is built
         here, which is also where a path/size error in ``SOUL.md``/``MEMORY.md``
-        surfaces (before the turn appends anything).
+        surfaces (before the turn appends anything). ``skills_index`` (or its
+        alias ``skills``) freezes the turn's initial skills snapshot; a
+        per-iteration override goes through :meth:`for_iteration`.
         """
         config = self.effective_config()
+        raw_skills = skills_index if skills_index is not None else skills
+        snapshot = self._spawn(
+            config=config,
+            capabilities=capabilities,
+            counter=counter,
+            environment=environment,
+            note_resolver=note_resolver,
+            summarizer=summarizer,
+            request_counter=request_counter,
+            model=model,
+            provider=provider,
+            skills_index=(
+                self._skills_index
+                if raw_skills is None
+                else freeze_skills_index(raw_skills)
+            ),
+        )
+        snapshot._env = snapshot._build_env(config)
+        return snapshot
+
+    def _spawn(
+        self,
+        *,
+        config: Config | None = None,
+        capabilities: Any | None = None,
+        counter: Any | None = None,
+        environment: EnvironmentInfo | None = None,
+        note_resolver: Any | None = None,
+        summarizer: Any | None = None,
+        request_counter: Any | None = None,
+        model: str | None = None,
+        provider: str | None = None,
+        skills_index: Any | None = None,
+    ) -> ContextManager:
+        """Build a sibling snapshot sharing this manager's frozen inputs.
+
+        ``None`` arguments fall back to this manager's current values. The frozen
+        ``_env`` and tool schemas are copied afterwards, so the sibling is
+        independent: mutating one never changes the other.
+        """
+        if config is None:
+            config = (
+                self._env.config
+                if self._env is not None
+                else self.effective_config()
+            )
         snapshot = ContextManager(
             self.workspace,
             config=config,
@@ -403,10 +522,108 @@ class ContextManager:
             cache=self.cache,
             keep_recent=self.keep_recent,
             min_content_chars=self.min_content_chars,
+            skills_index=(
+                self._skills_index
+                if skills_index is None
+                else freeze_skills_index(skills_index)
+            ),
         )
         snapshot._tool_schemas = self._tool_schemas
-        snapshot._env = snapshot._build_env(config)
+        snapshot._env = self._env
         return snapshot
+
+    def for_iteration(
+        self,
+        *,
+        config: Config | None = None,
+        system_files: Any = None,
+        soul_text: str | None = None,
+        memory_text: str | None = None,
+        capabilities: Any | None = None,
+        request_counter: Any | None = None,
+        model: str | None = None,
+        provider: str | None = None,
+        skills_index: Any = _UNSET,
+        skills: Any = _UNSET,
+    ) -> ContextManager:
+        """Return a sibling snapshot for one loop iteration.
+
+        Skills are re-scanned between loop iterations, so the index can change
+        inside one turn. This seam freezes the new index into a *new* snapshot
+        while leaving this (already-frozen) snapshot byte-for-byte stable — the
+        per-turn prompt prefix never mutates under a live iteration. Omit both
+        ``skills_index`` and its alias ``skills`` to clone with the current index;
+        pass ``()`` to clear it.
+
+        When ``config`` and/or a system-file snapshot is supplied the sibling's
+        environment is rebuilt from those frozen values **without rereading the
+        live ``SOUL.md``/``MEMORY.md``** — the seam a manifest-driven runtime uses
+        so one iteration draws its config, system files, skills index, and tool
+        schemas from a single pinned generation. ``system_files`` accepts a
+        ``SystemFiles``-like object or a mapping of logical name to content;
+        explicit ``soul_text``/``memory_text`` win when both are given. Supplying
+        only ``config`` rebuilds the environment from that config (and therefore
+        reads the files named by it, the pre-manifest behaviour).
+        """
+        if skills_index is not _UNSET:
+            raw = skills_index
+        elif skills is not _UNSET:
+            raw = skills
+        else:
+            raw = _UNSET
+        frozen = (
+            self._skills_index if raw is _UNSET else freeze_skills_index(raw)
+        )
+        snapshot = self._spawn(
+            config=config,
+            capabilities=capabilities,
+            request_counter=request_counter,
+            model=model,
+            provider=provider,
+            skills_index=frozen,
+        )
+        if config is not None and (
+            system_files is not None
+            or soul_text is not None
+            or memory_text is not None
+        ):
+            frozen_soul = (
+                _system_file_text(system_files, "soul")
+                if soul_text is None
+                else soul_text
+            )
+            frozen_memory = (
+                _system_file_text(system_files, "memory")
+                if memory_text is None
+                else memory_text
+            )
+            snapshot._env = snapshot._build_env(
+                config,
+                soul_text="" if frozen_soul is None else frozen_soul,
+                memory_text="" if frozen_memory is None else frozen_memory,
+            )
+        elif config is not None:
+            snapshot._env = snapshot._build_env(config)
+        return snapshot
+
+    def freeze_skills(self, snapshot: Any) -> None:
+        """Attach the frozen per-iteration skills snapshot to this manager.
+
+        The snapshot is normalized to sanitized ``name: description`` lines once,
+        so a later mutation of the injected object cannot change this manager's
+        rendered prompt. ``None``/empty clears the index (the part becomes a
+        no-op).
+        """
+        self._skills_index = freeze_skills_index(snapshot)
+
+    def freeze_skills_index(self, snapshot: Any) -> None:
+        """Alias for :meth:`freeze_skills` (matches the part's name)."""
+        self.freeze_skills(snapshot)
+
+    @property
+    def skills_index(self) -> tuple[str, ...]:
+        """The frozen, sanitized skills-index lines for this manager."""
+        return self._skills_index
 
     def freeze_tools(self, schemas: Any) -> None:
         """Attach the frozen per-turn tool schemas to this snapshot."""
@@ -458,7 +675,13 @@ class ContextManager:
 
     # -- environment -------------------------------------------------------
 
-    def _build_env(self, config: Config) -> AssemblyEnvironment:
+    def _build_env(
+        self,
+        config: Config,
+        *,
+        soul_text: str | None = None,
+        memory_text: str | None = None,
+    ) -> AssemblyEnvironment:
         capabilities = (
             self._capabilities
             if self._capabilities is not None
@@ -476,8 +699,16 @@ class ContextManager:
             model=model,
             provider=provider,
             identity=self._identity,
-            soul_text=self._read(config.instructions_file),
-            memory_text=self._read(config.memory_file),
+            soul_text=(
+                self._read(config.instructions_file)
+                if soul_text is None
+                else soul_text
+            ),
+            memory_text=(
+                self._read(config.memory_file)
+                if memory_text is None
+                else memory_text
+            ),
             environment=environment,
             counter=self._counter,
             counter_async=_is_async(self._counter),
@@ -602,6 +833,7 @@ class ContextManager:
             note_resolver=env.note_resolver,
             summarizer=env.summarizer,
             session=session,
+            skills_index=self._skills_index,
         )
 
     def _assemble_sync(self, session: Any, env: AssemblyEnvironment) -> Any:
@@ -647,6 +879,7 @@ class ContextManager:
         part_costs: dict[str, int] = {}
         history: tuple[Message, ...] = ()
         user_costs: tuple[int, ...] = ()
+        line_costs: dict[str, tuple[int, ...]] = {}
         for output in outputs:
             if output is None:
                 continue
@@ -656,6 +889,10 @@ class ContextManager:
                 part_costs["tools"] = sum(
                     count(canonical_tool_text(schema)) for schema in output.tools
                 )
+            elif output.kind == "skills_index":
+                costs = tuple(count(line) for line in output.lines)
+                line_costs[output.name] = costs
+                part_costs[output.name] = sum(costs)
             elif output.kind == "user":
                 user_costs = tuple(
                     count(canonical_message_text(message))
@@ -680,6 +917,7 @@ class ContextManager:
             user_costs=user_costs,
             evicted_messages=evicted,
             evicted_costs=evicted_costs,
+            line_costs=line_costs,
         )
 
     async def _gather_async(
@@ -691,6 +929,7 @@ class ContextManager:
         part_costs: dict[str, int] = {}
         history: tuple[Message, ...] = ()
         user_costs: tuple[int, ...] = ()
+        line_costs: dict[str, tuple[int, ...]] = {}
         for output in outputs:
             if output is None:
                 continue
@@ -702,6 +941,10 @@ class ContextManager:
                 part_costs["tools"] = sum(
                     [await count(canonical_tool_text(schema)) for schema in output.tools]
                 )
+            elif output.kind == "skills_index":
+                costs = tuple([await count(line) for line in output.lines])
+                line_costs[output.name] = costs
+                part_costs[output.name] = sum(costs)
             elif output.kind == "user":
                 user_costs = tuple(
                     [await count(canonical_message_text(m)) for m in output.messages]
@@ -725,6 +968,7 @@ class ContextManager:
             user_costs=user_costs,
             evicted_messages=evicted,
             evicted_costs=evicted_costs,
+            line_costs=line_costs,
         )
 
     @staticmethod
@@ -826,6 +1070,16 @@ class ContextManager:
                         required=True,
                     )
                 )
+            elif output.kind == "skills_index":
+                requests.append(
+                    PartRequest(
+                        name=output.name,
+                        priority=priority,
+                        tokens=costs.part_costs.get(output.name, 0),
+                        cap=caps.get(output.name),
+                        required=priority == 0,
+                    )
+                )
             elif output.kind == "user":
                 requests.append(
                     PartRequest(
@@ -897,7 +1151,7 @@ class ContextManager:
         text_tokens = sum(
             plan.granted(output.name)
             for output in outputs
-            if output is not None and output.kind == "text"
+            if output is not None and output.kind in ("text", "skills_index")
         )
         user_tokens = costs.part_costs.get("user", 0)
         # Accounting is derived from the *actual* compacted message set: the
@@ -1535,15 +1789,25 @@ class ContextManager:
             return env.system_override
         pieces: list[str] = []
         for output in outputs:
-            if output is None or output.kind != "text" or not output.text:
+            if output is None:
                 continue
             granted = plan.granted(output.name)
             if granted <= 0:
                 continue
-            requested = costs.part_costs.get(output.name, 0)
-            text = _truncate_text(output.text, requested, granted)
-            if text.strip():
-                pieces.append(text)
+            if output.kind == "text":
+                if not output.text:
+                    continue
+                requested = costs.part_costs.get(output.name, 0)
+                text = _truncate_text(output.text, requested, granted)
+                if text.strip():
+                    pieces.append(text)
+            elif output.kind == "skills_index":
+                # Whole lines only: a token budget drops entries, never halves one.
+                kept = _fit_whole_lines(
+                    output.lines, costs.line_costs.get(output.name, ()), granted
+                )
+                if kept:
+                    pieces.append("\n".join(kept))
         return "\n\n".join(pieces) or None
 
     @staticmethod

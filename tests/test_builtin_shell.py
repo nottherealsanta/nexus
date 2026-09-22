@@ -117,7 +117,7 @@ async def test_high_volume_streams_do_not_deadlock(registry, ctx):
     command = "yes A | head -c 3000000; yes B | head -c 3000000 1>&2"
     result = await bash.run({"command": command}, ctx)
     assert result.is_error is False
-    job = registry.jobs()[0]
+    job = registry.jobs(admin=True)[0]
     assert job.stdout.total == 3_000_000
     assert job.stderr.total == 3_000_000
     assert job.stdout.truncated is True
@@ -136,7 +136,7 @@ async def test_env_overlay_is_applied(registry, ctx):
 async def test_process_is_reaped_after_completion(registry, ctx):
     result = await bash.run({"command": "true"}, ctx)
     assert result.is_error is False
-    job = registry.jobs()[0]
+    job = registry.jobs(admin=True)[0]
     assert job.done is True
     assert job.exit_code == 0
     assert job.pid is not None
@@ -158,7 +158,7 @@ async def test_timeout_terminates_process_group(registry, ctx):
     assert "timed out after 0.3s" in body(result)
     assert "status: timed_out" in body(result)
     assert elapsed < 10
-    assert registry.active() == ()
+    assert registry.active(admin=True) == ()
 
 
 async def test_timeout_kills_descendants(registry, ctx):
@@ -183,11 +183,11 @@ async def test_external_cancellation_cleans_up(registry, workspace):
     )
     task = asyncio.create_task(bash.run({"command": "sleep 30"}, ctx))
     await asyncio.sleep(0.2)
-    assert len(registry.active()) == 1
+    assert len(registry.active(admin=True)) == 1
     token.cancel("stop")
     with pytest.raises(OperationCancelled):
         await task
-    assert registry.active() == ()
+    assert registry.active(admin=True) == ()
 
 
 async def test_task_cancellation_cleans_up(registry, ctx):
@@ -196,7 +196,7 @@ async def test_task_cancellation_cleans_up(registry, ctx):
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert registry.active() == ()
+    assert registry.active(admin=True) == ()
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +213,7 @@ async def test_background_job_polling_and_incremental_reads(registry, ctx):
     assert "status: running" in body(started)
     job_id = job_id_of(started)
 
-    job = registry.job(job_id)
+    job = registry.job(job_id, admin=True)
     await job.wait(5)
     assert job.done is True
 
@@ -253,7 +253,7 @@ async def test_kill_shell_terminates_and_is_idempotent(registry, ctx):
     killed = await kill_shell.run({"job_id": job_id}, ctx)
     assert killed.is_error is False
     assert "terminated" in body(killed)
-    assert registry.job(job_id).done is True
+    assert registry.job(job_id, admin=True).done is True
 
     second = await kill_shell.run({"job_id": job_id}, ctx)
     assert second.is_error is False
@@ -288,7 +288,7 @@ async def test_output_truncation_is_explicit(workspace, ctx):
         result = await bash.run(
             {"command": "yes x | head -c 1000"}, ctx
         )
-        job = reg.jobs()[0]
+        job = reg.jobs(admin=True)[0]
         assert job.stdout.truncated is True
         assert len(job.stdout) == 64
         assert job.stdout.dropped == 1000 - 64
@@ -306,9 +306,9 @@ async def test_cleanup_all_terminates_owned_jobs(workspace, ctx):
             await bash.run(
                 {"command": "sleep 30", "run_in_background": True}, ctx
             )
-        assert len(reg.active()) == 2
+        assert len(reg.active(admin=True)) == 2
         await reg.aclose()
-        assert reg.active() == ()
+        assert reg.active(admin=True) == ()
         assert reg.closed is True
     finally:
         _jobs.set_default_registry(None)
@@ -318,9 +318,9 @@ async def test_close_default_registry_seam(workspace, ctx):
     reg = _jobs.JobRegistry()
     _jobs.set_default_registry(reg)
     await bash.run({"command": "sleep 30", "run_in_background": True}, ctx)
-    assert len(reg.active()) == 1
+    assert len(reg.active(admin=True)) == 1
     await _jobs.close_default_registry()
-    assert reg.active() == ()
+    assert reg.active(admin=True) == ()
     assert _jobs.get_default_registry() is not reg
 
 

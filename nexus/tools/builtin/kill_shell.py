@@ -48,11 +48,15 @@ async def run(
         )
 
     registry = _jobs.registry_for(ctx)
-    result = await registry.kill(job_id)
+    try:
+        session_id = _jobs.require_session_id(ctx.session_id)
+    except _jobs.JobRegistryError as exc:
+        return ToolExecutionResult.text(f"KillShell: {exc}", is_error=True)
+    result = await registry.kill(job_id, session_id=session_id)
     if result.outcome == "unknown":
         return ToolExecutionResult.text(
             f"KillShell: unknown job_id {job_id!r}; only jobs started by "
-            "Bash in this runtime can be terminated",
+            "Bash in this session can be terminated",
             is_error=True,
         )
     if result.outcome == "finished":

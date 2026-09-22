@@ -98,7 +98,13 @@ async def run(
 
     registry = _jobs.registry_for(ctx)
     try:
-        job = await registry.spawn(command, cwd=workspace, env=env)
+        session_id = _jobs.require_session_id(ctx.session_id)
+    except _jobs.JobRegistryError as exc:
+        return _error(f"Bash: {exc}")
+    try:
+        job = await registry.spawn(
+            command, session_id=session_id, cwd=workspace, env=env
+        )
     except (OSError, ValueError, _jobs.JobRegistryError) as exc:
         return _error(f"Bash: failed to start command: {exc}")
 

@@ -446,6 +446,21 @@ def _safe_message(value: object, *, limit: int = 500) -> str:
     return text if len(text) <= limit else text[:limit] + "…"
 
 
+def _constant_permission_key(key: str) -> Callable[[dict[str, Any]], str]:
+    """A permission-key function that always returns a fixed canonical path.
+
+    Used by the explicit manager path mode: after the manager resolves a
+    tool's declared relative key through the :class:`PathGuard`, it hands the
+    permission engine a spec whose key function returns that absolute key, so
+    rule matching and persisted grants use the canonical form.
+    """
+
+    def _key(_data: dict[str, Any]) -> str:
+        return key
+
+    return _key
+
+
 def _first_text(result: ToolExecutionResult) -> str:
     for block in result.content:
         if isinstance(block, Text):
@@ -493,6 +508,7 @@ class ToolManager:
         profile: str | None = None,
         tools: Sequence[RegisteredTool] | None = None,
         tool_names: Iterable[str] | None = None,
+        restrict: Iterable[str] | None = None,
         job_registry: Any | None = None,
         todo_store: Any | None = None,
         path_guard: PathGuard | None = None,
@@ -510,7 +526,16 @@ class ToolManager:
         catalog = tuple(tools) if tools is not None else self._builtin_catalog()
         self._catalog = catalog
         self._by_name = self._index(catalog)
-        self._tools = self._select(catalog, tool_names)
+        selected = self._select(catalog, tool_names)
+        if restrict is not None:
+            # An activation overlay narrows the selected catalog to a subset;
+            # unknown names are ignored (they were never available). Order is
+            # preserved so schemas stay deterministic.
+            allowed = {
+                name for name in restrict if isinstance(name, str)
+            }
+            selected = tuple(tool for tool in selected if tool.name in allowed)
+        self._tools = selected
         # ``prepare`` must resolve against the *selected* catalog, not the full
         # one: a profile that excludes a tool (e.g. ``research`` excludes
         # ``Write``) has to reject a call to it as an unknown tool. ``_by_name``
@@ -609,11 +634,31 @@ class ToolManager:
         Order is the profile's bundle order (then ``include``), so ``schemas()``
         is deterministic. Bundle tools not yet implemented (``Task``) are simply
         absent, not an error; an explicit ``tool_names`` request for one *is*.
+
+        A registered tool that declares a bundle (an external, hot-loaded tool)
+        joins that bundle's ordered list after the built-in names, sorted by
+        ``(casefold name, name)``. This is how a manifest's external tools become
+        selectable through the same profile machinery without the manager
+        importing ``nexus.ext``.
         """
-        available = {tool.name for tool in catalog}
+        by_bundle: dict[str, list[str]] = {}
+        available: set[str] = set()
+        for tool in catalog:
+            available.add(tool.name)
+            bundle = getattr(tool.spec, "bundle", None)
+            if isinstance(bundle, str):
+                by_bundle.setdefault(bundle, []).append(tool.name)
         order: list[str] = []
         for bundle_name in self._profile.bundles:
-            for name in get_bundle(bundle_name).tools:
+            extra = sorted(
+                (
+                    name
+                    for name in by_bundle.get(bundle_name, ())
+                    if name not in get_bundle(bundle_name).tools
+                ),
+                key=lambda name: (name.casefold(), name),
+            )
+            for name in (*get_bundle(bundle_name).tools, *extra):
                 if name in available and name not in order:
                     order.append(name)
         for name in self._profile.include:
@@ -788,20 +833,69 @@ class ToolManager:
                     is_error=True,
                 ),
             )
-        if spec.bundle != "fs" or "path" not in normalized.input:
-            try:
-                key = spec.resolve_permission_key(normalized.input)
-            except ToolSpecError as exc:
-                return PreparedCall(
-                    call=normalized,
-                    spec=spec,
-                    code="permission_key_error",
-                    error=ToolExecutionResult.text(
-                        f"{normalized.name}: {exc}", is_error=True
-                    ),
-                )
-            return PreparedCall(call=normalized, spec=spec, key=key)
-        return self._prepare_fs(normalized, spec, guard)
+        if spec.bundle == "fs" and "path" in normalized.input:
+            return self._prepare_fs(normalized, spec, guard)
+        if spec.path_mode:
+            return self._prepare_path_mode(normalized, spec, guard)
+        try:
+            key = spec.resolve_permission_key(normalized.input)
+        except ToolSpecError as exc:
+            return PreparedCall(
+                call=normalized,
+                spec=spec,
+                code="permission_key_error",
+                error=ToolExecutionResult.text(
+                    f"{normalized.name}: {exc}", is_error=True
+                ),
+            )
+        return PreparedCall(call=normalized, spec=spec, key=key)
+
+    def _prepare_path_mode(
+        self, call: ToolCall, spec: ToolSpec, guard: PathGuard
+    ) -> PreparedCall:
+        """Canonicalize an explicit path-mode key into an absolute permission key.
+
+        The declared ``permission_key`` yields a workspace-relative path (for
+        example ``.nexus/tools/x.py``). It is resolved through the manager's
+        :class:`PathGuard`, which enforces the write-root/read-deny boundary and
+        fails closed on a symlink or ``..`` escape. The spec handed to the
+        permission engine is rebuilt with a constant key function returning that
+        canonical absolute path, so rules and persisted grants match the same
+        form the ``fs`` bundle uses. The call's input is left untouched: the tool
+        still receives its own ``filename``/``path`` field.
+        """
+        try:
+            raw_key = spec.resolve_permission_key(call.input)
+        except ToolSpecError as exc:
+            return PreparedCall(
+                call=call,
+                spec=spec,
+                code="permission_key_error",
+                error=ToolExecutionResult.text(f"{call.name}: {exc}", is_error=True),
+            )
+        if not raw_key:
+            return PreparedCall(
+                call=call,
+                spec=spec,
+                code="permission_key_error",
+                error=ToolExecutionResult.text(
+                    f"{call.name}: permission key is empty", is_error=True
+                ),
+            )
+        try:
+            resolved = guard.resolve(raw_key, for_write=spec.mutates)
+        except PathSecurityError as exc:
+            return PreparedCall(
+                call=call,
+                spec=spec,
+                code=exc.code,
+                error=ToolExecutionResult.text(f"{call.name}: {exc}", is_error=True),
+            )
+        canonical = str(resolved.absolute)
+        bound = msgspec.structs.replace(
+            spec, permission_key=_constant_permission_key(canonical)
+        )
+        return PreparedCall(call=call, spec=bound, key=canonical)
 
     def _prepare_fs(
         self, call: ToolCall, spec: ToolSpec, guard: PathGuard
@@ -970,13 +1064,15 @@ class ToolManager:
 
         Only calls whose canonical permission key is an absolute path are
         re-checked: that is exactly the set whose key was produced by
-        ``_prepare_fs`` (directory tools without a path keep a relative ``.``
-        key and have no target to swap). A key that is no longer canonical — a
-        symlink retarget, a swapped parent, or a now-forbidden boundary — is
-        refused fail-closed.
+        ``_prepare_fs`` or ``_prepare_path_mode`` (directory tools without a
+        path keep a relative ``.`` key and have no target to swap). A key that
+        is no longer canonical — a symlink retarget, a swapped parent, or a
+        now-forbidden boundary — is refused fail-closed.
         """
         spec = entry.spec
-        if spec is None or spec.bundle != "fs" or entry.key is None:
+        if spec is None or entry.key is None:
+            return None
+        if spec.bundle != "fs" and not spec.path_mode:
             return None
         if not os.path.isabs(entry.key):
             return None

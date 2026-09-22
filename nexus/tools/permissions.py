@@ -1057,7 +1057,9 @@ class PermissionEngine:
     def _check_boundaries(
         self, spec: ToolSpec, key: str | None
     ) -> tuple[str, str] | None:
-        if spec.bundle != "fs" or key is None or self.path_guard is None:
+        if self.path_guard is None or key is None:
+            return None
+        if spec.bundle != "fs" and not spec.path_mode:
             return None
         try:
             self.path_guard.recheck(key, for_write=spec.mutates)

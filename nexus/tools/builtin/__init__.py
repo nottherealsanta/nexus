@@ -1,4 +1,4 @@
-"""Phase 2 built-in tools (bundles ``fs``, ``shell``, ``task``).
+"""Phase 2 and Phase 4 built-in tools.
 
 Registration surface for the ``ToolManager``: each tool module exposes a
 validated :class:`~nexus.tools.spec.ToolSpec` and an async ``run(args, ctx)``,
@@ -6,9 +6,9 @@ and this package bundles them into ready-to-register ``RegisteredTool`` pairs.
 Importing is cheap and side-effect free.
 
 The catalog order is the bundle order declared in
-:mod:`nexus.tools.bundles` (``fs`` then ``shell`` then ``task``), which keeps
-``schemas()`` deterministic. ``Task`` (subagents) is not implemented until
-Phase 6, so the ``task`` bundle currently contributes ``TodoWrite`` only.
+:mod:`nexus.tools.bundles` (``fs``, ``shell``, ``task``, ``meta``, ``ext``),
+which keeps ``schemas()`` deterministic. ``Task`` (subagents) is not implemented
+until Phase 6, so the ``task`` bundle currently contributes ``TodoWrite`` only.
 """
 from __future__ import annotations
 
@@ -24,8 +24,10 @@ from . import (
     grep,
     kill_shell,
     ls,
+    meta,
     multiedit,
     read,
+    skill,
     todo,
     write,
 )
@@ -36,8 +38,10 @@ from .glob import SPEC as GLOB_SPEC
 from .grep import SPEC as GREP_SPEC
 from .kill_shell import SPEC as KILL_SHELL_SPEC
 from .ls import SPEC as LS_SPEC
+from .meta import LIST_EXTENSIONS_SPEC, RELOAD_EXTENSIONS_SPEC, WRITE_TOOL_SPEC
 from .multiedit import SPEC as MULTIEDIT_SPEC
 from .read import SPEC as READ_SPEC
+from .skill import SKILL_SPEC
 from .todo import TODO_SPEC
 from .write import SPEC as WRITE_SPEC
 
@@ -97,9 +101,35 @@ TASK_TOOLS = tuple(
     for spec in TASK_SPECS
 )
 
-#: The full built-in catalog in bundle order (fs, shell, task).
-BUILTIN_SPECS = FS_SPECS + SHELL_SPECS + TASK_SPECS
-BUILTIN_TOOLS = FS_TOOLS + SHELL_TOOLS + TASK_TOOLS
+#: Bundle order, matching ``nexus.tools.bundles.bundle_tools("meta")``.
+META_SPECS = (RELOAD_EXTENSIONS_SPEC, LIST_EXTENSIONS_SPEC, WRITE_TOOL_SPEC)
+
+META_RUNNERS = MappingProxyType(
+    {
+        RELOAD_EXTENSIONS_SPEC.name: meta.run_reload_extensions,
+        LIST_EXTENSIONS_SPEC.name: meta.run_list_extensions,
+        WRITE_TOOL_SPEC.name: meta.run_write_tool,
+    }
+)
+
+META_TOOLS = tuple(
+    RegisteredTool(spec=spec, run=META_RUNNERS[spec.name], origin="builtin")
+    for spec in META_SPECS
+)
+
+#: Bundle order, matching ``nexus.tools.bundles.bundle_tools("ext")``.
+EXT_SPECS = (SKILL_SPEC,)
+
+EXT_RUNNERS = MappingProxyType({SKILL_SPEC.name: skill.run})
+
+EXT_TOOLS = tuple(
+    RegisteredTool(spec=spec, run=EXT_RUNNERS[spec.name], origin="builtin")
+    for spec in EXT_SPECS
+)
+
+#: The full built-in catalog in bundle order (fs, shell, task, meta, ext).
+BUILTIN_SPECS = FS_SPECS + SHELL_SPECS + TASK_SPECS + META_SPECS + EXT_SPECS
+BUILTIN_TOOLS = FS_TOOLS + SHELL_TOOLS + TASK_TOOLS + META_TOOLS + EXT_TOOLS
 
 __all__ = [
     "BASH_OUTPUT_SPEC",
@@ -107,23 +137,33 @@ __all__ = [
     "BUILTIN_SPECS",
     "BUILTIN_TOOLS",
     "EDIT_SPEC",
+    "EXT_RUNNERS",
+    "EXT_SPECS",
+    "EXT_TOOLS",
     "FS_RUNNERS",
     "FS_SPECS",
     "FS_TOOLS",
     "GLOB_SPEC",
     "GREP_SPEC",
     "KILL_SHELL_SPEC",
+    "LIST_EXTENSIONS_SPEC",
     "LS_SPEC",
+    "META_RUNNERS",
+    "META_SPECS",
+    "META_TOOLS",
     "MULTIEDIT_SPEC",
     "READ_SPEC",
+    "RELOAD_EXTENSIONS_SPEC",
     "SHELL_RUNNERS",
     "SHELL_SPECS",
     "SHELL_TOOLS",
+    "SKILL_SPEC",
     "TASK_RUNNERS",
     "TASK_SPECS",
     "TASK_TOOLS",
     "TODO_SPEC",
     "WRITE_SPEC",
+    "WRITE_TOOL_SPEC",
     "_jobs",
     "bash",
     "bash_output",
@@ -132,8 +172,10 @@ __all__ = [
     "grep",
     "kill_shell",
     "ls",
+    "meta",
     "multiedit",
     "read",
+    "skill",
     "todo",
     "write",
 ]

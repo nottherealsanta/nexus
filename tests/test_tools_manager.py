@@ -61,6 +61,10 @@ ALL_BUILTINS = (
     "BashOutput",
     "KillShell",
     "TodoWrite",
+    "ReloadExtensions",
+    "ListExtensions",
+    "WriteTool",
+    "Skill",
 )
 
 

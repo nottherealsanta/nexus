@@ -86,11 +86,15 @@ async def run(
         return _error("BashOutput: 'job_id' must be a non-empty string")
 
     registry = _jobs.registry_for(ctx)
-    job = registry.job(job_id)
+    try:
+        session_id = _jobs.require_session_id(ctx.session_id)
+    except _jobs.JobRegistryError as exc:
+        return _error(f"BashOutput: {exc}")
+    job = registry.job(job_id, session_id=session_id)
     if job is None:
         return _error(
             f"BashOutput: unknown job_id {job_id!r}; only jobs started by "
-            "Bash in this runtime are valid"
+            "Bash in this session are valid"
         )
 
     try:

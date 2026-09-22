@@ -95,8 +95,12 @@ __all__ = [
     "DEFAULT_MALFORMED_BUDGET",
     "BatchPlanView",
     "ContextAssembler",
+    "EnvironmentFactory",
     "EvaluationView",
     "EventSink",
+    "IterationEnvironment",
+    "ManifestLeaseView",
+    "ManifestRefView",
     "PermissionGate",
     "PreparedBatchView",
     "PreparedCallView",
@@ -208,6 +212,89 @@ class EventSink(Protocol):
     """
 
     def emit(self, event: Event) -> object | Awaitable[object]: ...
+
+
+# ---------------------------------------------------------------------------
+# Manifest / per-iteration environment contracts
+# ---------------------------------------------------------------------------
+#
+# The loop is deliberately unaware of ``nexus.ext``: it names only the
+# structural shape of an atomically pinned manifest generation and of the
+# per-iteration environment a runtime builds from it. A runtime that owns an
+# extension world passes ``manifest_ref``/``environment_for`` and the loop pins
+# exactly one generation per iteration, then releases it after every tool and
+# event for that iteration. A runtime without one passes neither, and the loop
+# behaves exactly as it did before manifests existed.
+
+
+class ManifestLeaseView(Protocol):
+    """A pinned claim on one immutable manifest generation.
+
+    Structurally matches :class:`nexus.ext.manifest.ManifestLease`. ``manifest``
+    is opaque to the loop: only the runtime's environment factory reads it.
+    """
+
+    @property
+    def manifest(self) -> object: ...
+
+    @property
+    def generation(self) -> int: ...
+
+    @property
+    def released(self) -> bool: ...
+
+    def release(self) -> None: ...
+
+
+class ManifestRefView(Protocol):
+    """The atomic, reference-counted handle to the current generation."""
+
+    @property
+    def generation(self) -> int: ...
+
+    def get(self) -> object: ...
+
+    def pin(self) -> ManifestLeaseView: ...
+
+
+class IterationEnvironment(Protocol):
+    """Everything one loop iteration draws from a single pinned generation.
+
+    A runtime builds this from the pinned manifest: the context assembler
+    (config/system files/skills index/tool schemas), the tool dispatcher (the
+    generation's registered tools), and the permission gate (turn-frozen
+    security baseline). The loop uses one environment for the whole iteration —
+    assembly, model request, permission planning, dispatch, and result
+    persistence — so a concurrent reload cannot split an iteration across
+    generations.
+    """
+
+    def assemble(
+        self, session: SessionView, /
+    ) -> ModelRequest | Awaitable[ModelRequest]: ...
+
+    @property
+    def dispatcher(self) -> ToolDispatcher | None: ...
+
+    @property
+    def gate(self) -> PermissionGate | None: ...
+
+
+class EnvironmentFactory(Protocol):
+    """Build the iteration environment from one pinned manifest generation.
+
+    Called once per loop iteration, synchronously after the generation is
+    pinned, so the manifest is stable for the whole iteration. May return an
+    awaitable; the loop awaits it before using the environment.
+    """
+
+    def __call__(
+        self,
+        session: SessionView,
+        lease: ManifestLeaseView,
+        iteration: int,
+        /,
+    ) -> IterationEnvironment | Awaitable[IterationEnvironment]: ...
 
 
 # ---------------------------------------------------------------------------
@@ -461,6 +548,19 @@ def _call_resolver(
     if method is not None:
         return method(request)
     return resolver(request)  # type: ignore[operator]
+
+
+def _call_environment_factory(
+    factory: EnvironmentFactory,
+    session: SessionView,
+    lease: ManifestLeaseView,
+    iteration: int,
+) -> IterationEnvironment | Awaitable[IterationEnvironment]:
+    """Invoke an environment factory, tolerating a ``for_iteration`` method."""
+    method = getattr(factory, "for_iteration", None)
+    if method is not None:
+        return method(session, lease, iteration)
+    return factory(session, lease, iteration)
 
 
 async def _forward_cancel(source: CancelToken, target: CancelToken) -> None:
@@ -786,6 +886,8 @@ async def run_turn(
     cancel: CancelToken | None = None,
     malformed_budget: int = DEFAULT_MALFORMED_BUDGET,
     persist_user_message: bool = True,
+    manifest_ref: ManifestRefView | None = None,
+    environment_for: EnvironmentFactory | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> TurnOutcome:
     """Run one turn to a terminal state and return its outcome.
@@ -807,6 +909,16 @@ async def run_turn(
     ``ToolResult`` message before the next iteration. When either is absent the
     loop keeps the Phase 1 behaviour exactly: every tool call is answered with a
     synthetic, model-visible error result and nothing is executed.
+
+    ``manifest_ref``/``environment_for`` optionally replace the static
+    ``assemble``/``tools``/``gate`` seams with a **per-iteration environment**.
+    When supplied, the loop synchronously pins exactly one manifest generation
+    before the first await of each iteration, builds that iteration's assembler,
+    dispatcher, and gate from that one snapshot, and releases the pin only after
+    every tool call and event for the iteration has finished. A reload that
+    commits mid-iteration is therefore invisible until the next iteration; the
+    pinned generation's modules stay alive until no in-flight call can use them.
+    When ``manifest_ref`` is ``None`` the static seams are used unchanged.
     """
     if malformed_budget < 0:
         raise ValueError("malformed_budget must be non-negative")
@@ -838,6 +950,19 @@ async def run_turn(
 
     malformed_total = 0
     terminal: TurnState | None = None
+    #: The generation pinned for the iteration currently executing. Held across
+    #: assembly, planning, dispatch, and result persistence, then released.
+    manifest_lease: ManifestLeaseView | None = None
+    #: The gate most recently used, so the outer cleanup can cancel any pending
+    #: approval even when it came from a per-iteration environment.
+    active_gate: PermissionGate | None = gate
+
+    def _release_manifest() -> None:
+        nonlocal manifest_lease
+        lease_to_release, manifest_lease = manifest_lease, None
+        if lease_to_release is not None:
+            lease_to_release.release()
+
     try:
         await emitter.emit("turn.started", {"limits": _limits_data(limits)})
         if persist_user_message:
@@ -859,7 +984,38 @@ async def run_turn(
                 break
             token.raise_if_cancelled()
 
-            request = await _maybe_await(_call_assembler(assemble, session))
+            # Pin exactly one generation synchronously, before any await, and
+            # build this iteration's environment from that snapshot. The pin is
+            # released after every tool call and event for the iteration.
+            environment: IterationEnvironment | None = None
+            if manifest_ref is not None and environment_for is not None:
+                manifest_lease = manifest_ref.pin()
+                try:
+                    environment = await _maybe_await(
+                        _call_environment_factory(
+                            environment_for, session, manifest_lease, state.iteration
+                        )
+                    )
+                except BaseException:
+                    _release_manifest()
+                    raise
+                active_gate = getattr(environment, "gate", None)
+
+            iteration_assemble = (
+                environment if environment is not None else assemble
+            )
+            iteration_tools = (
+                getattr(environment, "dispatcher", None)
+                if environment is not None
+                else tools
+            )
+            iteration_gate = (
+                getattr(environment, "gate", None)
+                if environment is not None
+                else gate
+            )
+
+            request = await _maybe_await(_call_assembler(iteration_assemble, session))
             request_metadata = (
                 request.metadata if isinstance(request.metadata, dict) else {}
             )
@@ -983,11 +1139,12 @@ async def run_turn(
                     terminal = state.model_responded(
                         has_tool_use=False, stop_reason=complete_reason
                     )
+                _release_manifest()
                 break
 
             tool_uses = [b for b in blocks if isinstance(b, ToolUse)]
 
-            if tools is None or gate is None:
+            if iteration_tools is None or iteration_gate is None:
                 # Phase 1: no dispatcher. Answer every call with a durable,
                 # model-visible error result and let the model self-correct.
                 session.append_message(
@@ -1009,10 +1166,12 @@ async def run_turn(
                         "malformed tool call budget exceeded "
                         f"({malformed_total} > {malformed_budget})"
                     )
+                    _release_manifest()
                     break
 
                 state = state.begin_iteration()
                 lease.state = state
+                _release_manifest()
                 continue
 
             # Phase 2: tools are available. The assistant message above is
@@ -1057,9 +1216,10 @@ async def run_turn(
                 lease.state = state
                 state = state.begin_iteration()
                 lease.state = state
+                _release_manifest()
                 continue
 
-            prepared = tools.prepare(tool_uses)
+            prepared = iteration_tools.prepare(tool_uses)
             # Duplicate-id rejections are a malformed batch and count against the
             # same budget as malformed streamed arguments (Phase 2 consistency).
             malformed_total += sum(
@@ -1067,7 +1227,7 @@ async def run_turn(
                 for entry in prepared.entries
                 if getattr(entry, "code", None) == "duplicate_tool_call_id"
             )
-            plan = gate.plan(prepared)
+            plan = iteration_gate.plan(prepared)
 
             # fail_turn (unattended) ends the turn before any executable starts,
             # but history stays valid: one ordered error result per call.
@@ -1076,7 +1236,7 @@ async def run_turn(
                 reason = failures[0].reason
                 for evaluation in plan.evaluations:
                     if _outcome_value(evaluation.outcome) == "fail_turn":
-                        await _emit_gate_decision(emitter, evaluation, gate)
+                        await _emit_gate_decision(emitter, evaluation, iteration_gate)
                 # One ordered result per *prepared* entry keeps the tool_use /
                 # tool_result pairing valid even though the turn aborts. Match
                 # evaluations positionally (never by id) so a duplicate id
@@ -1105,6 +1265,7 @@ async def run_turn(
                 terminal = state.fail(
                     f"unattended policy fails the turn: {reason}"
                 )
+                _release_manifest()
                 break
 
             # Audit unattended allow/deny decisions (no ASK round-trip).
@@ -1112,7 +1273,7 @@ async def run_turn(
                 if _outcome_value(evaluation.outcome) == "ask":
                     continue
                 if evaluation.code.startswith("unattended"):
-                    await _emit_gate_decision(emitter, evaluation, gate)
+                    await _emit_gate_decision(emitter, evaluation, iteration_gate)
 
             prepared = prepared.apply_plan(plan)
 
@@ -1121,8 +1282,8 @@ async def run_turn(
             # every ask has resolved.
             pending_asks: list[tuple[Any, Any]] = []
             for evaluation in plan.asks():
-                request = gate.request_for(evaluation)
-                gate.open(request)
+                request = iteration_gate.request_for(evaluation)
+                iteration_gate.open(request)
                 request_data = (
                     dict(request.to_dict()) if hasattr(request, "to_dict") else {}
                 )
@@ -1134,11 +1295,13 @@ async def run_turn(
             decisions: list[tuple[str, object]] = []
             for evaluation, request, request_data in pending_asks:
                 try:
-                    decision = await gate.await_decision(request, cancel=token)
+                    decision = await iteration_gate.await_decision(
+                        request, cancel=token
+                    )
                 except OperationCancelled:
-                    gate.cancel_pending()
+                    iteration_gate.cancel_pending()
                     raise
-                record = gate.resolution(request.id)
+                record = iteration_gate.resolution(request.id)
                 await emitter.emit(
                     "permission.resolved",
                     dict(record) if record is not None else request_data,
@@ -1147,7 +1310,7 @@ async def run_turn(
             if decisions:
                 prepared = prepared.with_decisions(decisions)
 
-            results = await tools.dispatch(
+            results = await iteration_tools.dispatch(
                 prepared,
                 emit=_tool_emit,
                 cancel=token,
@@ -1170,11 +1333,13 @@ async def run_turn(
                     "malformed tool call budget exceeded "
                     f"({malformed_total} > {malformed_budget})"
                 )
+                _release_manifest()
                 break
             state = state.model_responded(has_tool_use=True, stop_reason="tool_use")
             lease.state = state
             state = state.begin_iteration()
             lease.state = state
+            _release_manifest()
 
     except OperationCancelled as exc:
         terminal = state.cancel(str(exc) or "cancelled")
@@ -1189,8 +1354,8 @@ async def run_turn(
         # Lease release is the outermost cleanup: it must run even if draining
         # the watcher or emitting the terminal event raises unexpectedly.
         try:
-            if gate is not None:
-                cancel_pending = getattr(gate, "cancel_pending", None)
+            if active_gate is not None:
+                cancel_pending = getattr(active_gate, "cancel_pending", None)
                 if callable(cancel_pending):
                     with contextlib.suppress(Exception):
                         cancel_pending()
@@ -1204,6 +1369,7 @@ async def run_turn(
                 terminal = state
             await _emit_terminal(emitter, terminal)
         finally:
+            _release_manifest()
             lease.release()
 
     return TurnOutcome.from_state(terminal)

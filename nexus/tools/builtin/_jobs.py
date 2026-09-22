@@ -18,8 +18,27 @@ field, so :func:`registry_for` resolves, in order:
 Runtime/ToolManager should construct one :class:`JobRegistry` per runtime, pass
 it explicitly (or bind it), and ``await registry.aclose()`` on shutdown.
 
+Session scoping
+---------------
+One runtime may run several sessions concurrently, so a single flat job map
+would let session A's ``BashOutput``/``KillShell`` reach session B's process.
+The registry is therefore **partitioned by ``session_id``**: :meth:`spawn`
+places a job in its session's partition and every lookup (``job``/``kill``/…) is
+scoped to one session. A raw job id that belongs to another session resolves to
+``unknown`` rather than crossing the boundary. Job ids are generated unique
+within a session and inserted into their partition before the process is
+started, so concurrent ``spawn`` calls cannot race. Because every lookup is
+session-scoped, two sessions may coincidentally (or, in tests, deliberately)
+hold the same raw id without ever reaching each other's process.
+
+Passing ``session_id=None`` to a lookup scopes it to the registry's default
+partition; it never widens across sessions. Cross-session enumeration and lookup
+is **admin-only** and must be requested explicitly with ``admin=True``. The shell
+tools always pass ``ctx.session_id`` (and reject a missing/empty one) and never
+set ``admin``, so a tool can never reach another session's process.
+
 Safety notes
-------------
+-----------
 * Jobs are addressed only by opaque registry-owned ids. There is no code path
   that accepts a raw PID from a model.
 * ``Bash``'s declared ``permission_key`` is the submitted command string; that
@@ -41,7 +60,7 @@ from collections import deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
@@ -53,6 +72,7 @@ __all__ = [
     "DEFAULT_MAX_COMPLETED_JOBS",
     "DEFAULT_MAX_RESULT_CHARS",
     "DEFAULT_MAX_RETAINED_BYTES",
+    "DEFAULT_MAX_TOTAL_COMPLETED_JOBS",
     "DEFAULT_OUTPUT_LIMIT",
     "JobRegistry",
     "JobRegistryError",
@@ -66,6 +86,7 @@ __all__ = [
     "format_job_output",
     "get_default_registry",
     "registry_for",
+    "require_session_id",
     "reset_registry",
     "set_default_registry",
     "use_registry",
@@ -79,12 +100,18 @@ DEFAULT_GRACE_S = 2.0
 DEFAULT_KILL_WAIT_S = 2.0
 #: Model-facing text cap for a rendered result.
 DEFAULT_MAX_RESULT_CHARS = 200_000
-#: Retain at most this many completed jobs before evicting the oldest. Each job
-#: can hold up to two output buffers (2 MiB by default), so an unbounded registry
-#: would leak that per job for the lifetime of the runtime.
+#: Retain at most this many completed jobs **per session** before evicting the
+#: oldest in that session. Each job can hold up to two output buffers (2 MiB by
+#: default), so an unbounded partition would leak that per job for the lifetime
+#: of the runtime.
 DEFAULT_MAX_COMPLETED_JOBS = 32
-#: Combined retained stdout+stderr bytes across completed jobs.
+#: Combined retained stdout+stderr bytes across **all** sessions' completed jobs.
 DEFAULT_MAX_RETAINED_BYTES = 64 * 1024 * 1024
+#: Total completed jobs retained across **all** sessions. The per-session count
+#: bounds one busy session; this bounds many idle sessions that each stay under
+#: the per-session count but whose output is small enough not to trip the byte
+#: cap.
+DEFAULT_MAX_TOTAL_COMPLETED_JOBS = 256
 #: Pipe read size while draining.
 _READ_CHUNK = 65536
 
@@ -237,6 +264,11 @@ class ShellJob:
 
     async def start(self) -> None:
         """Spawn the process group and begin draining both pipes."""
+        if self._final is not None:
+            # Terminated before it could start (for example its session was
+            # released while the registry was still between insert and start).
+            # Never spawn a process that nothing tracks.
+            return
         # Always inherit the harness's environment; an explicit overlay adds to
         # (and may override) it. Never fall back to only the overlay, which
         # would drop PATH and every other inherited variable.
@@ -407,12 +439,27 @@ class ShellJob:
         await self._finish_drains()
 
 
+@dataclass
+class _Partition:
+    """One session's jobs plus its completion order (retention/LRU oldest first)."""
+
+    jobs: dict[str, ShellJob] = field(default_factory=dict)
+    completed: deque[str] = field(default_factory=deque)
+
+
 class JobRegistry:
-    """Owns every shell job for one Runtime/ToolManager.
+    """Owns every shell job for one Runtime/ToolManager, partitioned by session.
 
     The registry is the only way to reach a job: ``job``/``kill`` take opaque
     string ids, never PIDs, and a completed job remains readable until the
-    registry is closed or the job is explicitly discarded.
+    registry is closed, the session is released, or the job is explicitly
+    discarded. Lookups are scoped to one ``session_id`` so concurrent sessions
+    sharing one registry cannot read, enumerate, or kill each other's jobs.
+
+    Retention is bounded at two levels: ``max_completed_jobs`` per session and
+    ``max_total_completed_jobs`` / ``max_retained_bytes`` across all sessions.
+    Active jobs are never evicted. Empty session partitions are pruned, so the
+    registry does not accumulate one dict per session forever.
     """
 
     def __init__(
@@ -423,27 +470,24 @@ class JobRegistry:
         kill_wait_s: float = DEFAULT_KILL_WAIT_S,
         max_completed_jobs: int = DEFAULT_MAX_COMPLETED_JOBS,
         max_retained_bytes: int = DEFAULT_MAX_RETAINED_BYTES,
+        max_total_completed_jobs: int = DEFAULT_MAX_TOTAL_COMPLETED_JOBS,
     ) -> None:
-        if (
-            isinstance(max_completed_jobs, bool)
-            or not isinstance(max_completed_jobs, int)
-            or max_completed_jobs < 1
+        for name, value in (
+            ("max_completed_jobs", max_completed_jobs),
+            ("max_retained_bytes", max_retained_bytes),
+            ("max_total_completed_jobs", max_total_completed_jobs),
         ):
-            raise ValueError("max_completed_jobs must be a positive integer")
-        if (
-            isinstance(max_retained_bytes, bool)
-            or not isinstance(max_retained_bytes, int)
-            or max_retained_bytes < 1
-        ):
-            raise ValueError("max_retained_bytes must be a positive integer")
-        self._jobs: dict[str, ShellJob] = {}
-        #: Completed job ids in completion order, oldest first (retention/LRU).
-        self._completed: deque[str] = deque()
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
+        self._partitions: dict[str, _Partition] = {}
+        #: ``(session_id, job_id)`` in completion order across all sessions.
+        self._completed_global: deque[tuple[str, str]] = deque()
         self.output_limit = output_limit
         self.grace_s = grace_s
         self.kill_wait_s = kill_wait_s
         self.max_completed_jobs = max_completed_jobs
         self.max_retained_bytes = max_retained_bytes
+        self.max_total_completed_jobs = max_total_completed_jobs
         self._closed = False
 
     @property
@@ -451,23 +495,77 @@ class JobRegistry:
         return self._closed
 
     def __len__(self) -> int:
-        return len(self._jobs)
+        return sum(len(partition.jobs) for partition in self._partitions.values())
 
-    def jobs(self) -> tuple[ShellJob, ...]:
-        return tuple(self._jobs.values())
+    def jobs(
+        self, *, session_id: str | None = None, admin: bool = False
+    ) -> tuple[ShellJob, ...]:
+        """One session's jobs, or every job when ``admin=True``.
 
-    def active(self) -> tuple[ShellJob, ...]:
-        return tuple(job for job in self._jobs.values() if not job.done)
+        ``admin=True`` is the explicit, admin-only cross-session escape hatch:
+        it ignores ``session_id`` and returns every partition. Otherwise the
+        result is scoped to ``session_id`` (``None`` = the default partition), so
+        a missed session id can never widen a lookup.
+        """
+        self._check_scope(session_id, admin)
+        if admin:
+            return tuple(
+                job
+                for partition in self._partitions.values()
+                for job in partition.jobs.values()
+            )
+        partition = self._partitions.get(self._session_key(session_id))
+        return () if partition is None else tuple(partition.jobs.values())
 
-    def job(self, job_id: object) -> ShellJob | None:
+    def active(
+        self, *, session_id: str | None = None, admin: bool = False
+    ) -> tuple[ShellJob, ...]:
+        return tuple(
+            job for job in self.jobs(session_id=session_id, admin=admin) if not job.done
+        )
+
+    def sessions(self, *, admin: bool = False) -> tuple[str, ...]:
+        """Session ids that currently own at least one (possibly finished) job.
+
+        Enumerating sessions is inherently cross-session, so it is admin-only.
+        """
+        if not admin:
+            raise JobRegistryError("sessions() is admin-only; pass admin=True")
+        return tuple(
+            key for key, partition in self._partitions.items() if partition.jobs
+        )
+
+    def job(
+        self,
+        job_id: object,
+        *,
+        session_id: str | None = None,
+        admin: bool = False,
+    ) -> ShellJob | None:
+        """Resolve `job_id`, scoped to ``session_id`` unless ``admin=True``.
+
+        Without ``admin`` the search is confined to one partition
+        (``session_id=None`` = the default partition); an id that belongs to a
+        different session is reported as unknown. ``admin=True`` is the explicit,
+        admin-only cross-session search the shell tools never use.
+        """
+        self._check_scope(session_id, admin)
         if not isinstance(job_id, str):
             return None
-        return self._jobs.get(job_id)
+        if admin:
+            for partition in self._partitions.values():
+                found = partition.jobs.get(job_id)
+                if found is not None:
+                    return found
+            return None
+        partition = self._partitions.get(self._session_key(session_id))
+        return None if partition is None else partition.jobs.get(job_id)
 
     async def spawn(
         self,
         command: str,
         *,
+        session_id: str | None = None,
         cwd: str | Path,
         env: dict[str, str] | None = None,
         output_limit: int | None = None,
@@ -476,7 +574,14 @@ class JobRegistry:
             raise JobRegistryError("JobRegistry is closed")
         if not isinstance(command, str) or not command:
             raise JobRegistryError("command must be a non-empty string")
-        job_id = self._new_id()
+        key = self._session_key(session_id)
+        partition = self._partitions.get(key)
+        if partition is None:
+            partition = _Partition()
+            self._partitions[key] = partition
+        # Generate the id and insert the job *before* the first await, so two
+        # concurrent spawns cannot claim the same id or race on the partition.
+        job_id = self._new_id(partition)
         job = ShellJob(
             job_id,
             command,
@@ -487,57 +592,180 @@ class JobRegistry:
             ),
             grace_s=self.grace_s,
             kill_wait_s=self.kill_wait_s,
-            on_finish=self._note_finished,
+            on_finish=lambda finished, _key=key: self._note_finished(
+                _key, finished
+            ),
         )
-        await job.start()
-        self._jobs[job_id] = job
+        partition.jobs[job_id] = job
+        try:
+            await job.start()
+        except BaseException:
+            partition.jobs.pop(job_id, None)
+            self._prune_partition(key)
+            raise
+        if (
+            self._closed
+            or self._partitions.get(key) is not partition
+            or partition.jobs.get(job_id) is not job
+        ):
+            # The registry was closed, or this session was released, while we
+            # awaited the process start. Do not leave a live job behind.
+            await job.terminate(reason=JobStatus.KILLED)
+            partition.jobs.pop(job_id, None)
+            self._prune_partition(key)
+            reason = (
+                "JobRegistry is closed"
+                if self._closed
+                else "session was released"
+            )
+            raise JobRegistryError(reason)
         self._evict()
         return job
 
+    # -- session lifecycle -------------------------------------------------
+
+    async def aclose_session(self, session_id: str) -> bool:
+        """Terminate and reap every job owned by one session.
+
+        Returns ``True`` when the session had a partition (even an empty one).
+        Safe to call for an unknown session. Other sessions are untouched.
+        """
+        key = self._session_key(session_id)
+        partition = self._partitions.pop(key, None)
+        if partition is None:
+            return False
+        self._purge_global_for(key)
+        jobs = list(partition.jobs.values())
+        await asyncio.gather(
+            *(job.terminate(reason=JobStatus.KILLED) for job in jobs),
+            return_exceptions=True,
+        )
+        await asyncio.gather(
+            *(job.aclose() for job in jobs), return_exceptions=True
+        )
+        return True
+
     # -- retention ---------------------------------------------------------
 
-    def _note_finished(self, job: ShellJob) -> None:
+    def _note_finished(self, session_key: str, job: ShellJob) -> None:
         """Record a completed job for retention/eviction (oldest evicted first)."""
-        if job.job_id in self._jobs:
-            self._completed.append(job.job_id)
+        partition = self._partitions.get(session_key)
+        if partition is not None and job.job_id in partition.jobs:
+            partition.completed.append(job.job_id)
+            self._completed_global.append((session_key, job.job_id))
         self._evict()
 
     def _retained_bytes(self) -> int:
         return sum(
-            len(job.stdout) + len(job.stderr) for job in self._jobs.values()
+            len(job.stdout) + len(job.stderr)
+            for partition in self._partitions.values()
+            for job in partition.jobs.values()
         )
 
+    def _completed_count(self) -> int:
+        return sum(len(partition.completed) for partition in self._partitions.values())
+
     def _evict(self) -> None:
-        """Discard oldest completed jobs past the count/byte retention limits.
+        """Enforce the per-session count and the global count/byte limits.
 
         Active jobs are never evicted, so ``active()`` and any lookup of a
         running job are unaffected. Recently completed jobs stay readable until
-        the limits are exceeded.
+        the limits are exceeded. Empty partitions are pruned afterwards.
         """
-        while self._completed:
-            over_count = len(self._completed) > self.max_completed_jobs
-            over_bytes = self._retained_bytes() > self.max_retained_bytes
-            if not over_count and not over_bytes:
-                return
-            job_id = self._completed.popleft()
-            job = self._jobs.get(job_id)
+        for key, partition in list(self._partitions.items()):
+            while len(partition.completed) > self.max_completed_jobs:
+                if not self._drop_oldest_in(partition):
+                    break
+            self._prune_partition(key)
+        while (
+            self._completed_count() > self.max_total_completed_jobs
+            or self._retained_bytes() > self.max_retained_bytes
+        ):
+            if not self._drop_oldest_global():
+                break
+
+    @staticmethod
+    def _drop_oldest_in(partition: _Partition) -> bool:
+        while partition.completed:
+            job_id = partition.completed.popleft()
+            job = partition.jobs.get(job_id)
             if job is None:
                 continue
             if not job.done:  # pragma: no cover - defensive; ids are done-on-add
-                self._completed.append(job_id)
-                return
-            del self._jobs[job_id]
+                partition.completed.append(job_id)
+                return False
+            del partition.jobs[job_id]
+            return True
+        return False
 
-    def _new_id(self) -> str:
+    def _drop_oldest_global(self) -> bool:
+        while self._completed_global:
+            key, job_id = self._completed_global.popleft()
+            partition = self._partitions.get(key)
+            if partition is None:
+                continue
+            job = partition.jobs.get(job_id)
+            if job is None:
+                continue
+            if not job.done:  # pragma: no cover - defensive; ids are done-on-add
+                self._completed_global.append((key, job_id))
+                return False
+            del partition.jobs[job_id]
+            with contextlib.suppress(ValueError):
+                partition.completed.remove(job_id)
+            self._prune_partition(key)
+            return True
+        return False
+
+    def _prune_partition(self, key: str) -> None:
+        partition = self._partitions.get(key)
+        if partition is not None and not partition.jobs:
+            del self._partitions[key]
+
+    def _purge_global_for(self, key: str) -> None:
+        self._completed_global = deque(
+            (session, job_id)
+            for session, job_id in self._completed_global
+            if session != key
+        )
+
+    def _new_id(self, partition: _Partition) -> str:
+        """A fresh id unique **within this session's partition**.
+
+        Session-scoped lookups make cross-session id reuse harmless; only the
+        partition the job will live in must be collision-free.
+        """
         while True:
             candidate = f"job_{secrets.token_hex(6)}"
-            if candidate not in self._jobs:
+            if candidate not in partition.jobs:
                 return candidate
 
-    async def kill(self, job_id: object) -> KillResult:
+    @staticmethod
+    def _session_key(session_id: object) -> str:
+        if session_id is None:
+            return ""
+        if not isinstance(session_id, str):
+            raise JobRegistryError("session_id must be a string or None")
+        return session_id
+
+    @staticmethod
+    def _check_scope(session_id: object, admin: bool) -> None:
+        """Reject an ambiguous scope: ``admin`` and a session id are exclusive."""
+        if admin and session_id is not None:
+            raise JobRegistryError(
+                "pass either session_id or admin=True, not both"
+            )
+
+    async def kill(
+        self,
+        job_id: object,
+        *,
+        session_id: str | None = None,
+        admin: bool = False,
+    ) -> KillResult:
         if not isinstance(job_id, str):
             return KillResult("unknown", "")
-        job = self._jobs.get(job_id)
+        job = self.job(job_id, session_id=session_id, admin=admin)
         if job is None:
             return KillResult("unknown", job_id)
         if job.done:
@@ -547,23 +775,53 @@ class JobRegistry:
         await job.terminate(reason=JobStatus.KILLED)
         return KillResult("killed", job_id, job.exit_code, job.signal)
 
-    def discard(self, job_id: object) -> bool:
+    def discard(
+        self,
+        job_id: object,
+        *,
+        session_id: str | None = None,
+        admin: bool = False,
+    ) -> bool:
+        self._check_scope(session_id, admin)
         if not isinstance(job_id, str):
             return False
-        job = self._jobs.get(job_id)
+        if admin:
+            for key, partition in self._partitions.items():
+                if job_id in partition.jobs:
+                    return self._discard_from(key, partition, job_id)
+            return False
+        key = self._session_key(session_id)
+        partition = self._partitions.get(key)
+        if partition is None:
+            return False
+        return self._discard_from(key, partition, job_id)
+
+    def _discard_from(
+        self, key: str, partition: _Partition, job_id: str
+    ) -> bool:
+        job = partition.jobs.get(job_id)
         if job is None or not job.done:
             return False
-        del self._jobs[job_id]
-        try:
-            self._completed.remove(job_id)
-        except ValueError:
-            pass
+        del partition.jobs[job_id]
+        with contextlib.suppress(ValueError):
+            partition.completed.remove(job_id)
+        with contextlib.suppress(ValueError):
+            self._completed_global.remove((key, job_id))
+        self._prune_partition(key)
         return True
 
     async def aclose(self) -> None:
-        """Terminate and reap every owned job. Safe to call more than once."""
+        """Terminate and reap every owned job in every session. Idempotent."""
         self._closed = True
-        jobs = list(self._jobs.values())
+        jobs = [
+            job
+            for partition in self._partitions.values()
+            for job in partition.jobs.values()
+        ]
+        # Detach bookkeeping first so in-flight finish callbacks cannot mutate a
+        # partition we are tearing down.
+        self._partitions.clear()
+        self._completed_global.clear()
         await asyncio.gather(
             *(job.terminate(reason=JobStatus.KILLED) for job in jobs),
             return_exceptions=True,
@@ -571,8 +829,7 @@ class JobRegistry:
         await asyncio.gather(
             *(job.aclose() for job in jobs), return_exceptions=True
         )
-        self._jobs.clear()
-        self._completed.clear()
+
 
 
 async def await_job(
@@ -774,3 +1031,17 @@ def registry_for(ctx: object) -> JobRegistry:
     if bound is not None:
         return bound
     return get_default_registry()
+
+
+def require_session_id(session_id: object) -> str:
+    """Return a usable, non-empty session id or fail closed.
+
+    The shell tools call this before any registry lookup. A missing or empty
+    session id must never be silently treated as "all sessions": it is rejected
+    so a tool can only ever reach its own session's jobs.
+    """
+    if not isinstance(session_id, str) or not session_id:
+        raise JobRegistryError(
+            "a non-empty session_id is required for shell job scoping"
+        )
+    return session_id
