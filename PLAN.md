@@ -1736,3 +1736,316 @@ plus this amendment is working. It touches `tools/`, `context/` (a part
 rendering the live namespace), and the permission engine (arbitrary Python
 bypasses `write_roots`), so it wants a stable core underneath it. Revisit after
 Phase 8c.
+
+---
+
+## 15. Amendment: model registry, tiers, and subagents as a tool
+
+Second append-only amendment, same rules as §14: sections 1-14 are not
+rewritten, only amended by reference. Where this section disagrees with an
+earlier one, this section wins.
+
+### 15.0 What this amends
+
+| Section | Amendment |
+| --- | --- |
+| §0 Assumptions | Adds assumption #4: models.dev licence and redistribution terms (§15.12). |
+| §2.2 File layout | Adds `model/registry.py`, `model/tiers.py`, `model/data/`. |
+| §3.5 Events | Adds `registry.*` and widens `agent.*` (§15.10). |
+| §5.6 AgentManager | Extended, not replaced: adds ad-hoc spawning, the three seeded roles, and parent-bounding (§§15.6-15.8). |
+| §8 Model routing | The hand-maintained alias table is replaced by the registry + tier resolution (§§15.3-15.4). |
+| §10 Phasing | Inserts **Phase 5.5**; Phase 6 grows (§15.11). |
+| §11 Risks | Adds two risks (§15.12). |
+
+### 15.1 Decisions added
+
+| Decision | Choice |
+| --- | --- |
+| Catalogue source | **models.dev** (`https://models.dev/api.json`). Fetched on first use, cached with a TTL, with a small vendored snapshot as the offline fallback. |
+| Tier assignment | **Curated defaults, cost-based fallback, user override.** Shipped map wins for known models; blended cost classifies the rest; `[models.tiers]` overrides both. |
+| Capabilities | **The registry is authoritative.** No per-adapter override table. A provider rejection that contradicts the registry degrades the turn and is logged as a data defect (§15.5). |
+| Subagent invocation | Two modes: a **named type** (`general`, `explore`, `planner`, or any `.nexus/agents/<name>.md`) or an **ad-hoc** spawn with a task prompt and an explicit tool list. |
+| Subagent authority | **A child can never exceed its parent.** Tool lists intersect, permissions inherit, `deny` stays absolute, tier and fan-out are capped by config. |
+| Role definitions | The three roles are **seeded files** in `.nexus/agents/`, editable and deletable like any other extension. |
+
+### 15.2 What the catalogue actually contains
+
+Measured, not assumed (fetched 2026-09-22):
+
+- **223 providers, 7,997 models, 4.8 MB** of JSON.
+- Per model: `cost{input,output,cache_read,cache_write}` in $/Mtok,
+  `limit{context,output}`, `tool_call`, `reasoning` + `reasoning_options`,
+  `structured_output`, `temperature`, `attachment`,
+  `modalities{input,output}`, `open_weights`, `family`, `knowledge`,
+  `release_date`, `last_updated`.
+- Per provider: `env` (credential env var names), `npm`, `doc`, `name`.
+
+Three properties drive the design:
+
+1. **`env` is the filter that makes 7,997 tractable.** Ingest keeps only
+   providers whose env vars are present or that appear in a `[providers.*]`
+   config block. In practice that is single digits of providers.
+2. **The catalogue is full of aliases and re-listings.** `openai/o1-pro`,
+   `openrouter/openai/o1-pro`, and `nano-gpt/openai/o1-pro` are one model.
+   Ingest canonicalizes and prefers the direct provider, keeping the others as
+   `aliases` so a user-typed aggregator id still resolves.
+3. **It is not only chat models.** `text-embedding-3-small` and `gpt-image-2`
+   are in there. Ingest keeps only entries whose `modalities.output` includes
+   `text`; everything else is dropped.
+
+421 models carry no cost data (local and open-weight). They classify as `low`
+unless the curated map or user config says otherwise.
+
+### 15.3 The registry (`model/registry.py`)
+
+L1, alongside the other model contracts. It is data and lookup only — it
+performs no I/O during a turn.
+
+```python
+class ModelInfo(Struct, frozen=True):
+    provider: str                 # nexus provider id, mapped from models.dev
+    id: str                       # canonical model id
+    name: str
+    family: str | None
+    aliases: tuple[str, ...]      # aggregator re-listings that resolve here
+    context: int
+    max_output: int
+    tool_call: bool
+    reasoning: bool
+    structured_output: bool
+    temperature: bool
+    input_modalities: tuple[str, ...]
+    output_modalities: tuple[str, ...]
+    cost: Cost | None             # None for local/open-weight
+    tier: Literal["high", "medium", "low"] | str
+    source: Literal["catalogue", "config", "builtin"]
+```
+
+**Acquisition.** Fetch on first use into `.nexus/cache/models.dev.json`, TTL
+default 7 days. On a cache miss with no network, fall back to
+`nexus/model/data/models.min.json` — a filtered snapshot of the major direct
+providers, refreshed at release time, kilobytes rather than megabytes. Never
+fetched during tests: the conformance suite and every unit test run against a
+fixture registry. `nexus models refresh` forces it.
+
+**Provider mapping.** A models.dev provider id maps to a Nexus adapter
+(§8's one-adapter-per-wire-protocol rule), not one-to-one. `npm`
+(`@ai-sdk/anthropic`, `@ai-sdk/openai`, `@ai-sdk/google`) is the strongest
+available signal and seeds a small explicit mapping table; anything unmapped
+falls back to the OpenAI-compatible adapter with its `base_url` taken from
+config. An unmappable provider is listed but not selectable, with the reason
+shown by `nexus doctor`.
+
+**The registry does not carry credentials or base URLs.** It is descriptive
+data. Endpoints and keys stay in `[providers.*]` and `credentials.json`, which
+keeps a third-party catalogue from being able to redirect a request.
+
+### 15.4 Tiers (`model/tiers.py`)
+
+Three tiers ship: `high` (frontier, expensive), `medium` (the workhorse), `low`
+(fast and cheap, for quick mechanical work). The table is open — a user may add
+names — but the three built-ins always resolve.
+
+Resolution order, first hit wins:
+
+1. `[models.tiers]` in config — an explicit user pin.
+2. The curated default map shipped with Nexus.
+3. Blended-cost fallback: `blended = cost.input + cost.output / 4`
+   (agentic traffic is input-heavy), then `low <= 2.5 < medium <= 10 < high`.
+4. No cost data -> `low`.
+
+The fallback is calibrated against real pricing — Haiku 4.5 lands at 2.25,
+Sonnet at 4.5-6.75, Opus at 11.25, Fable at 22.5 — and it is deliberately only
+a fallback. It misclassifies flagships that happen to be cheap (`gpt-5.6` at
+9.0 reads as medium), which is exactly what the curated map is for.
+
+```toml
+[models]
+default = "medium"                 # the main session's model, too
+refresh_ttl_days = 7
+
+[models.tiers]
+high   = ["anthropic/claude-opus-5", "openai/gpt-5.6"]
+medium = ["anthropic/claude-sonnet-5"]
+low    = ["anthropic/claude-haiku-4-5"]
+```
+
+A tier name is usable **anywhere a model string is**: `nexus.toml`'s
+`models.default`, a skill's `model:`, an agent definition's `model:`, and
+`Task(model="low")`. This replaces §8's ad-hoc `default`/`fast`/`plan` aliases;
+those become tier names or config pins.
+
+### 15.5 Capabilities from the registry
+
+`model/capabilities.py`'s `Capabilities` is populated from `ModelInfo`:
+`tool_call`, `context`, `max_output`, `reasoning`, `structured_output`,
+`temperature`, and the modality lists. The registry is authoritative and there
+is no per-adapter override table.
+
+The one safeguard, which does not contradict that: when the registry claims a
+capability and the provider rejects the request for it, the loop treats the
+rejection as a **recoverable degradation** — emit `context.degraded` with the
+specific mismatch, retry once without the offending feature, and write the
+mismatch to the log as a catalogue defect. A wrong upstream entry costs one
+retry and produces an actionable report; it does not crash a turn and it does
+not silently succeed. `nexus doctor` surfaces accumulated mismatches so bad
+entries can be fixed upstream.
+
+### 15.6 `Task` — subagents as a tool
+
+§5.6's `Task` is extended rather than replaced. One tool, not three: a single
+permission key, one schema in context.
+
+```python
+Task(
+    prompt: str,                    # required: the task
+    subagent_type: str = "general", # a seeded role or any .nexus/agents/<name>
+    tools: list[str] | None = None, # ad-hoc: narrows the role's set
+    model: str | None = None,       # tier name, "provider/model", or bare id
+    description: str | None = None, # short label for the UI tree
+)
+```
+
+Two modes, as specified:
+
+- **Named type.** `Task(subagent_type="explore", prompt="...")` — system prompt,
+  tool set, and model all come from the definition file.
+- **Ad-hoc.** `Task(prompt="...", tools=["Read","Grep"], model="low")` — a
+  throwaway agent with exactly the listed tools. `subagent_type` defaults to
+  `general`, whose system prompt is written to work without task-specific
+  framing.
+
+The two compose: a named type with `tools` narrows that role for one call.
+
+`permission_key` returns `"<subagent_type>:<tier>"`, so the rule grammar in
+§5.3 can express real policy without new syntax:
+
+```toml
+deny  = ["Task(*:high)"]            # never spawn a frontier-tier subagent
+allow = ["Task(explore:*)", "Task(*:low)"]
+```
+
+Everything else from §5.6 is unchanged: nested Runtime, child session at
+`<parent>/sub/<n>` logged under the parent so the tree replays, events
+re-emitted on the parent bus with an `agent` field, final report returned as a
+`ToolResult`.
+
+### 15.7 The three seeded roles
+
+Written into `.nexus/agents/` on first run, then ordinary hot-loaded extensions
+— editable, forkable, deletable. A deleted file re-seeds only in a fresh
+workspace. Shadowing precedence is §2.3's: workspace > user > builtin.
+
+| Role | Tools | Model | Purpose |
+| --- | --- | --- | --- |
+| `general` | inherits the parent's set | `medium` | Catch-all delegation. The only role that can write. |
+| `explore` | `fs` bundle minus every mutating tool; `Grep`, `Glob`, `Read`, `LS` | `low` | Broad fan-out search. Returns findings, not file dumps. |
+| `planner` | same read-only set | `high` | Designs an approach and returns a plan. Cannot execute it. |
+
+`explore` and `planner` have **no write path at all** — not `Write`, `Edit`,
+`MultiEdit`, or `Bash`. This is enforced structurally by the same profile
+machinery as §5.3's `research` profile, not by system-prompt instruction.
+
+The tier assignments are the point of the whole feature: fan out ten `low`-tier
+explorers cheaply, spend `high` on the single planning call, keep `medium` for
+the work.
+
+### 15.8 A subagent can never exceed its parent
+
+Four rules, all enforced in `agents/runner.py` before the child Runtime is
+constructed:
+
+1. **Tools intersect.** The child's tool set is
+   `parent_tools & role_tools & requested_tools`. A name the parent lacks is
+   dropped, and the drop is reported in the `ToolResult` so the model learns
+   rather than silently getting less than it asked for.
+2. **Permissions inherit.** The parent's rules, session grants, `write_roots`,
+   and `read_denyroots` all apply to the child. `deny` remains absolute and is
+   evaluated in the child's own gate.
+3. **Tier is capped.** `agents.max_tier` (default `medium`) bounds what the
+   model may request. A request above the cap is clamped, not refused, and the
+   clamp is reported.
+4. **Fan-out is capped.** `agents.max_concurrent` (default 4) plus §5.6's
+   existing `max_depth` (3) and the aggregate token budget across the tree.
+
+Consequence worth stating plainly: a session running the `research` profile
+cannot spawn a child that writes files. The profile boundary in §5.3 stays a
+hard boundary rather than something a `Task` call can step around.
+
+```toml
+[agents]
+max_tier = "medium"
+max_concurrent = 4
+max_depth = 3
+default_type = "general"
+```
+
+### 15.9 Config summary
+
+```toml
+[models]
+default          = "medium"
+refresh_ttl_days = 7
+catalogue_url    = "https://models.dev/api.json"
+offline          = false           # true: never fetch, snapshot only
+
+[models.tiers]
+high   = [...]
+medium = [...]
+low    = [...]
+```
+
+### 15.10 Events and CLI
+
+Added to the §3.5 catalogue:
+
+```
+registry.refreshed   registry.stale   registry.failed   registry.mismatch
+agent.clamped        (tier or tool set narrowed from what was requested)
+```
+
+`agent.clamped` exists so a UI can show that the model asked for `high` and got
+`medium` — a silent clamp would be a debugging trap.
+
+CLI, added to §14's Phase 8c surface set: `nexus models list [--tier] [--provider]`,
+`nexus models show <id>`, `nexus models refresh`, `nexus models tiers`,
+and `nexus agents list`.
+
+### 15.11 Phasing
+
+**Phase 5.5 — Model registry (~3 days). Before Phase 6.**
+
+Build: `model/registry.py`, `model/tiers.py`, the ingest filter
+(env-gated, canonicalized, text-output-only), the provider mapping table,
+`model/data/models.min.json`, TTL caching in `.nexus/cache/`, `Capabilities`
+population, and the degradation path in §15.5. Depends only on `model/`, so it
+slots anywhere before Phase 6 needs tiers.
+
+Exit: `nexus models list` shows only reachable models; a tier name resolves
+everywhere a model string is accepted; the whole suite runs with no network
+against a fixture registry; a deliberately wrong fixture capability produces
+one retry, a `registry.mismatch`, and a completed turn.
+
+**Phase 6 grows by ~2 days** for the `Task` extensions: ad-hoc spawning, the
+three seeded role files, the four bounding rules, `agent.clamped`, and an
+adversarial suite proving a `research`-profile parent cannot obtain a writing
+child.
+
+**Revised total: ~59 working days** (from §14's ~54).
+
+### 15.12 Risks added to §11
+
+| Risk | Why it bites | Mitigation |
+| --- | --- | --- |
+| **A third-party catalogue is authoritative over capability gating** | A wrong `tool_call` or `context` upstream misconfigures every turn on that model, and by decision there is no local override table. | The §15.5 degradation path: one retry without the offending feature, `registry.mismatch` emitted and logged, `nexus doctor` reporting accumulated defects, and `models.offline = true` pinning to the vetted snapshot for anyone who wants determinism. |
+| **Cheap subagents make expensive fan-out easy** | `Task` is now trivial to call with a tier, so the model can spawn many agents without the user seeing the cost until the bill. | `agents.max_tier` and `max_concurrent` default conservatively; the aggregate tree token budget from §5.6 is enforced, not advisory; `Task(*:high)` is expressible as a `deny` rule; per-turn cost is surfaced in the status bar (§14.11). |
+
+### 15.13 Open assumption #4 (extends §0)
+
+**models.dev licence and redistribution terms.** The plan assumes the catalogue
+may be fetched at runtime *and* that a filtered subset may be redistributed
+inside the Nexus package as the offline fallback. Verify the project's licence
+and any attribution requirement before Phase 5.5 ships. If redistribution is
+not permitted, the vendored snapshot is dropped and `models.offline = true`
+instead requires a one-time `nexus models refresh`; nothing else in this
+section depends on it.
