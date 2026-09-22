@@ -7,12 +7,19 @@ Two record kinds share the envelope, distinguished by a top-level ``type`` tag:
 
 * ``{"type": "event",   "v": 1, "seq": n, "event": {...}}``
 * ``{"type": "message", "v": 1, "seq": n, "message": {...}}``
+* ``{"type": "summary", "v": 1, "seq": n, "text": "...", ...}``
 
 The ``type`` field is the *record* discriminator and never collides with the
 public event catalogue, which lives inside ``event.type``. Message payloads are
 encoded with msgspec, so ``Image.data`` / ``Document.data`` bytes round-trip
 losslessly through base64. Event ``data`` is expected to be JSON-native (the
 plan defines events as JSON-serializable), so it carries no bytes by contract.
+
+A **summary record** is a durable, append-only compaction artifact. It is *not*
+a transcript message and never masquerades as an assistant/user turn: it records
+the summary text, the strategy that produced it, the source record range it
+covers, and the token accounting around the compaction. Full original history
+remains authoritative; a summary is an additional, reproducible artifact.
 
 Crash-tail policy
 -----------------
@@ -36,8 +43,9 @@ on both read and append because silently dropping it would be data loss.
 from __future__ import annotations
 
 import os
+import tempfile
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -67,7 +75,35 @@ class MessageRecord(msgspec.Struct, tag="message", frozen=True):
     v: int = SESSION_LOG_VERSION
 
 
-SessionRecord = EventRecord | MessageRecord
+class SummaryRecord(msgspec.Struct, tag="summary", frozen=True):
+    """An append-only, versioned compaction/summary artifact.
+
+    This is deliberately **not** an assistant/user transcript message: it is a
+    separate record kind so a summary can never be mistaken for model output or
+    replay as a conversational turn. The full original history stays
+    authoritative; this record makes the compaction reproducible.
+    """
+
+    seq: int
+    text: str = ""
+    summary_id: str = ""
+    strategy: str = ""
+    #: Deterministic digest of the summarizer's semantic inputs; identical
+    #: ``(strategy, inputs)`` reuse the existing artifact instead of re-running.
+    input_digest: str = ""
+    #: Inclusive record-sequence range the summary covers (``0`` = unknown).
+    source_from_seq: int = 0
+    source_to_seq: int = 0
+    source_messages: int = 0
+    tokens_before: int | None = None
+    tokens_after: int | None = None
+    provider: str | None = None
+    model: str | None = None
+    ts: float = 0.0
+    v: int = SESSION_LOG_VERSION
+
+
+SessionRecord = EventRecord | MessageRecord | SummaryRecord
 
 
 @dataclass(frozen=True)
@@ -92,6 +128,9 @@ class ReadResult:
 
     def events(self) -> list[Event]:
         return [r.event for r in self.records if isinstance(r, EventRecord)]
+
+    def summaries(self) -> list[SummaryRecord]:
+        return [r for r in self.records if isinstance(r, SummaryRecord)]
 
 
 class SessionStore:
@@ -138,6 +177,52 @@ class SessionStore:
         if created:
             # Durably record the new directory entry where the platform allows.
             self._fsync_dir()
+        return path
+
+    @property
+    def fsync(self) -> Callable[[int], None]:
+        """The injectable fsync used for log and directory durability.
+
+        Exposed so sibling helpers (snapshots, fork publish) reuse the same
+        injection point, keeping tests able to observe every durability barrier.
+        """
+        return self._fsync
+
+    def create_from_records(
+        self, session: str, records: Sequence[SessionRecord]
+    ) -> Path:
+        """Atomically publish a new log from ``records``; never overwrites.
+
+        Used by :meth:`SessionManager.fork` to materialize an exact prefix in a
+        new session file. The payload is written to a same-directory temp file
+        and ``fsync``'d, then published with an **atomic hard link** into the
+        destination name. ``link`` fails with ``FileExistsError`` if the name is
+        already taken, so a concurrent creator can never be overwritten — the
+        check-and-create is a single filesystem operation, not a TOCTOU window.
+        Record ``seq``/``ts``/payloads are preserved verbatim.
+        """
+        path = self.log_path(session)
+        self.directory.mkdir(parents=True, exist_ok=True)
+        payload = b"".join(msgspec.json.encode(record) + b"\n" for record in records)
+        fd, temp = tempfile.mkstemp(dir=self.directory, prefix=f".{session}-")
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(payload)
+                handle.flush()
+                self._fsync(handle.fileno())
+            try:
+                os.link(temp, path)
+            except FileExistsError as exc:
+                raise SessionError(
+                    f"Session log already exists: {path.name}"
+                ) from exc
+            self._fsync_dir()
+        finally:
+            if os.path.exists(temp):
+                os.unlink(temp)
+        # The published file supersedes any cached view of this path.
+        self._tails.pop(path, None)
+        self._valid_end.pop(path, None)
         return path
 
     # -- reading -----------------------------------------------------------
@@ -298,6 +383,50 @@ class SessionStore:
         self._append(path, record)
         return record
 
+    def append_summary(
+        self,
+        session: str,
+        *,
+        text: str = "",
+        summary_id: str = "",
+        strategy: str = "",
+        input_digest: str = "",
+        source_from_seq: int = 0,
+        source_to_seq: int = 0,
+        source_messages: int = 0,
+        tokens_before: int | None = None,
+        tokens_after: int | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        ts: float | None = None,
+        seq: int | None = None,
+    ) -> SummaryRecord:
+        """Append one durable summary/compaction artifact.
+
+        Sequence assignment matches messages/events so a summary sits in the
+        same monotonic record ordering. No field is interpreted here.
+        """
+        path = self.log_path(session)
+        self._repair_tail(path)
+        assigned = self._assign_seq(session, seq)
+        record = SummaryRecord(
+            seq=assigned,
+            text=text,
+            summary_id=summary_id,
+            strategy=strategy,
+            input_digest=input_digest,
+            source_from_seq=source_from_seq,
+            source_to_seq=source_to_seq,
+            source_messages=source_messages,
+            tokens_before=tokens_before,
+            tokens_after=tokens_after,
+            provider=provider,
+            model=model,
+            ts=time.time() if ts is None else ts,
+        )
+        self._append(path, record)
+        return record
+
     def _assign_seq(self, session: str, requested: int | None) -> int:
         if requested is not None:
             if type(requested) is not int or requested < 1:
@@ -335,4 +464,5 @@ __all__ = [
     "ReadResult",
     "SessionRecord",
     "SessionStore",
+    "SummaryRecord",
 ]

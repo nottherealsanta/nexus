@@ -356,11 +356,17 @@ class ToolExecutionResult(msgspec.Struct, forbid_unknown_fields=True):
         )
 
     def to_tool_result(self, tool_use_id: str) -> ToolResult:
-        """Convert to the IR content block the loop persists."""
+        """Convert to the IR content block the loop persists.
+
+        ``context_note`` is carried into the persisted block so later context
+        compaction can evict the (large) content in an assembled copy without
+        losing the durable, re-runnable note.
+        """
         return ToolResult(
             tool_use_id=tool_use_id,
             content=list(self.content),
             is_error=self.is_error,
+            context_note=self.context_note,
         )
 
 

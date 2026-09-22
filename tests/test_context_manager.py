@@ -6,7 +6,7 @@ import pytest
 
 from nexus.config import Config
 from nexus.config.schema import AgentSection, ConfigV2, ModelParams, ModelSection
-from nexus.context import ContextManager, Exchange, build_context
+from nexus.context import IDENTITY_PREAMBLE, ContextManager, Exchange, build_context
 from nexus.errors import ConfigError
 from nexus.model.message import Message, Text, ToolUse
 from nexus.model.request import ToolSchema
@@ -324,3 +324,103 @@ def test_directory_as_context_file_is_a_config_error(tmp_path):
     with pytest.raises(ConfigError):
         manager.assemble(FakeSession())
 
+
+# ---------------------------------------------------------------------------
+# Phase 3: token callback (sync / async / fallback) and accounting metadata
+# ---------------------------------------------------------------------------
+
+
+def test_default_heuristic_counter_is_used_when_none_is_configured(tmp_path):
+    manager = ContextManager(tmp_path, config=v2_config())
+    request = manager.assemble(FakeSession(Message(role="user", content=[Text("hi")])))
+    assert request.metadata["context"]["input_budget"] == 180_000 - 4_000
+    assert manager.last_budget["parts"]
+
+
+def test_sync_token_callback_is_used(tmp_path):
+    calls = {"n": 0}
+
+    def counter(text):
+        calls["n"] += 1
+        return len(text)
+
+    manager = ContextManager(tmp_path, config=v2_config(), counter=counter)
+    manager.assemble(FakeSession(Message(role="user", content=[Text("hi")])))
+
+    assert calls["n"] > 0
+    identity = next(p for p in manager.last_budget["parts"] if p["name"] == "identity")
+    assert identity["requested"] == len(IDENTITY_PREAMBLE)
+
+
+def test_async_token_callback_returns_an_awaitable(tmp_path):
+    import asyncio
+
+    async def counter(text):
+        return len(text)
+
+    manager = ContextManager(tmp_path, config=v2_config(), counter=counter)
+    result = manager.assemble(FakeSession(Message(role="user", content=[Text("hi")])))
+    assert hasattr(result, "__await__")
+    request = asyncio.run(result)
+    assert request.metadata["context"]["input_budget"] == 176_000
+
+
+def test_async_token_callback_via_for_turn(tmp_path):
+    import asyncio
+
+    calls = {"n": 0}
+
+    async def counter(text):
+        calls["n"] += 1
+        return max(1, len(text) // 2)
+
+    manager = ContextManager(tmp_path, config=v2_config())
+    snapshot = manager.for_turn(counter=counter)
+    request = asyncio.run(
+        snapshot.assemble(FakeSession(Message(role="user", content=[Text("hello")])))
+    )
+    assert calls["n"] > 0
+    assert request.metadata["context"]["used_tokens"] > 0
+
+
+def test_accounting_metadata_never_leaks_content(tmp_path):
+    (tmp_path / "SOUL.md").write_text("SOUL-SECRET-CONTENT", encoding="utf-8")
+    (tmp_path / "MEMORY.md").write_text("MEMORY-SECRET-CONTENT", encoding="utf-8")
+    manager = ContextManager(tmp_path, config=v2_config())
+    manager.assemble(FakeSession(Message(role="user", content=[Text("USER-SECRET")])))
+
+    blob = str(manager.last_accounting)
+    assert "SOUL-SECRET-CONTENT" not in blob
+    assert "MEMORY-SECRET-CONTENT" not in blob
+    assert "USER-SECRET" not in blob
+    assert set(manager.last_accounting) == {"budget", "compaction", "cache"}
+
+
+def test_configure_then_for_turn_freezes_capabilities(tmp_path):
+    from nexus.model.capabilities import Capabilities
+
+    manager = ContextManager(tmp_path, config=v2_config())
+    manager.configure(capabilities=Capabilities(prompt_caching=True))
+    snapshot = manager.for_turn()
+    request = snapshot.assemble(
+        FakeSession(Message(role="user", content=[Text("hi")]))
+    )
+    assert request.metadata["cache"]["enabled"] is True
+    assert snapshot.last_cache["boundaries"]
+
+
+def test_tool_schemas_can_be_frozen_directly(tmp_path):
+    schema = ToolSchema(name="Read", description="d", input_schema={"type": "object"})
+    manager = ContextManager(tmp_path, config=v2_config())
+    manager.freeze_tools([schema])
+    assert manager.tool_schemas == (schema,)
+    assert manager.for_turn().assemble(FakeSession()).tools == [schema]
+
+
+def test_explicit_model_and_provider_overrides_win(tmp_path):
+    manager = ContextManager(
+        tmp_path, config=v2_config(), model="override-model", provider="override-provider"
+    )
+    request = manager.assemble(FakeSession())
+    assert request.model == "override-model"
+    assert request.provider == "override-provider"

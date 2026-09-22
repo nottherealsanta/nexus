@@ -462,6 +462,11 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
         )
         body = f"{body}\n{marker}" if body else marker
         context_note = marker
+    elif shown:
+        context_note = (
+            f"[Read {resolved.display}: {len(shown)} line(s) shown; re-run Read "
+            "to load the content again]"
+        )
     display = f"Read {resolved.display}: {len(shown)} of {total_lines} lines"
     if truncated:
         display += " (truncated)"

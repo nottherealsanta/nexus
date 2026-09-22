@@ -337,6 +337,11 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
         )
         body = f"{body}\n{marker}" if body else marker
         context_note = marker
+    elif match_count or shown:
+        context_note = (
+            f"[Grep {pattern!r}: {match_count} match(es) in "
+            f"{int(response.get('files', 0))} file(s); re-run Grep to see them]"
+        )
     display = (
         f"Grep {pattern!r}: {len(shown)} of {match_count} matches in "
         f"{int(response.get('files', 0))} file(s)"

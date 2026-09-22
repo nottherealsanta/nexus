@@ -77,6 +77,32 @@ class ContextSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     compact_at_fraction: float = 0.85
     limits: ContextLimits = msgspec.field(default_factory=ContextLimits)
 
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.compact_at_fraction, bool)
+            or not isinstance(self.compact_at_fraction, (int, float))
+            or not math.isfinite(self.compact_at_fraction)
+            or self.compact_at_fraction <= 0.0
+            or self.compact_at_fraction > 1.0
+        ):
+            raise ValueError(
+                "context.compact_at_fraction must be a finite number in (0, 1]"
+            )
+        if (
+            isinstance(self.max_tokens, bool)
+            or not isinstance(self.max_tokens, int)
+            or self.max_tokens < 0
+        ):
+            raise ValueError("context.max_tokens must be a non-negative integer")
+        if (
+            isinstance(self.safety_margin_tokens, bool)
+            or not isinstance(self.safety_margin_tokens, int)
+            or self.safety_margin_tokens < 0
+        ):
+            raise ValueError(
+                "context.safety_margin_tokens must be a non-negative integer"
+            )
+
 
 class PermissionsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     mode: PermissionMode = "ask"

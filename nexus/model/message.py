@@ -51,6 +51,12 @@ class ToolResult(msgspec.Struct, tag="tool_result"):
     tool_use_id: str
     content: list[Text | Image]
     is_error: bool = False
+    #: Harness-only, never sent to a provider. A stable, re-runnable replacement
+    #: note produced when the result was persisted (for example
+    #: ``"[Grep: 3,412 matches; re-run to see them]"``). Context compaction reads
+    #: it directly to evict large content from an **assembled copy** while the
+    #: durable log keeps the original content and this note.
+    context_note: str | None = None
 
 
 ContentBlock = Text | Thinking | ToolUse | ToolResult | Image | Document

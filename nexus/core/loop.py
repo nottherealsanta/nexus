@@ -860,16 +860,33 @@ async def run_turn(
             token.raise_if_cancelled()
 
             request = await _maybe_await(_call_assembler(assemble, session))
-            await emitter.emit(
-                "context.assembled",
-                {
-                    "iteration": state.iteration,
-                    "messages": len(request.messages),
-                    "provider": request.provider,
-                    "model": request.model,
-                    "tools": len(request.tools),
-                },
+            request_metadata = (
+                request.metadata if isinstance(request.metadata, dict) else {}
             )
+            assembled_data: dict[str, Any] = {
+                "iteration": state.iteration,
+                "messages": len(request.messages),
+                "provider": request.provider,
+                "model": request.model,
+                "tools": len(request.tools),
+            }
+            context_meta = request_metadata.get("context")
+            cache_meta = request_metadata.get("cache")
+            if isinstance(context_meta, dict):
+                assembled_data["context"] = dict(context_meta)
+            if isinstance(cache_meta, dict):
+                assembled_data["cache"] = dict(cache_meta)
+            await emitter.emit("context.assembled", assembled_data)
+            compacted = (
+                context_meta.get("compacted")
+                if isinstance(context_meta, dict)
+                else None
+            )
+            if isinstance(compacted, dict) and compacted:
+                await emitter.emit(
+                    "context.compacted",
+                    {"iteration": state.iteration, **dict(compacted)},
+                )
 
             resolved = _call_resolver(provider_for, request)
             model = request.model or resolved.model

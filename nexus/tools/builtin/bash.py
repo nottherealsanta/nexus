@@ -110,6 +110,10 @@ async def run(
                 f"started {job.job_id} in background "
                 f"(pid {job.pid}); poll with BashOutput"
             ),
+            context_note=(
+                f"[Bash {command!r} started in background as {job.job_id}; poll "
+                "with BashOutput to read its output]"
+            ),
         )
 
     outcome = await _jobs.await_job(
@@ -120,7 +124,16 @@ async def run(
             f"[timed out after {timeout:g}s; process group terminated]\n"
             + _jobs.format_job_output(job),
             is_error=True,
+            context_note=(
+                f"[Bash {command!r} timed out after {timeout:g}s and was "
+                "terminated; re-run with a longer timeout only if safe]"
+            ),
         )
     return ToolExecutionResult.text(
-        _jobs.format_job_output(job), is_error=job.exit_code != 0
+        _jobs.format_job_output(job),
+        is_error=job.exit_code != 0,
+        context_note=(
+            f"[Bash {command!r} exited {job.exit_code}; output evicted. Re-run "
+            "the command only if it is safe to repeat.]"
+        ),
     )

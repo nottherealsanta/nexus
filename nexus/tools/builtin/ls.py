@@ -141,6 +141,10 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
         )
         body = f"{body}\n{marker}" if body else marker
         context_note = marker
+    elif total_entries or shown:
+        context_note = (
+            f"[LS {root.display}: {total_entries} entry/entries; re-run LS to see them]"
+        )
     display = f"LS {root.display}: {len(shown)} of {total_entries} entries"
     if truncated:
         display += " (truncated)"

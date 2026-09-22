@@ -40,12 +40,14 @@ from typing import Any, Self
 
 from .config import Config
 from .context import ContextManager
+from .context.cache import TokenCountCache
+from .context.counting import RequestTokenCounter
 from .core.cancel import CancelToken
 from .core.turn import TurnLimits
 from .errors import OperationCancelled
 from .model.provider import Provider
 from .model.providers.anthropic import AnthropicProvider
-from .model.request import ToolSchema
+from .model.request import ModelRequest, ToolSchema
 from .model.router import ModelRouter
 from .session import Session, SessionManager
 from .tools.builtin._jobs import JobRegistry
@@ -210,6 +212,92 @@ class _PermissionGateAdapter:
         self._futures.clear()
 
 
+class _ContextCoordinator:
+    """Injects frozen per-turn provider capabilities and token counting.
+
+    Sits between the session and the context manager. It resolves the configured
+    model through the runtime's router **before** assembly so the context manager
+    receives the right capability descriptor (budget ceiling, prompt caching) and
+    a request-aware counter — without the context layer importing a concrete
+    provider, router, or runtime.
+    """
+
+    def __init__(
+        self,
+        context: Any,
+        resolver: Any,
+        *,
+        token_cache: TokenCountCache | None = None,
+    ) -> None:
+        self._context = context
+        self._resolver = resolver
+        self._token_cache = token_cache
+
+    def effective_config(self) -> Config | None:
+        fn = getattr(self._context, "effective_config", None)
+        if callable(fn):
+            return fn()
+        return None
+
+    def turn_limits(self) -> TurnLimits | None:
+        fn = getattr(self._context, "turn_limits", None)
+        if callable(fn):
+            return fn()
+        return None
+
+    def _resolve(self, provider_name: str | None, model: str | None) -> Any:
+        resolve = getattr(self._resolver, "resolve", None)
+        if resolve is None:
+            return None
+        try:
+            request = ModelRequest(
+                messages=[], provider=provider_name, model=model
+            )
+            return resolve(request)
+        except Exception:  # noqa: BLE001 - unresolved model keeps base defaults
+            return None
+
+    def for_turn(self) -> Any:
+        manager = self._context
+        for_turn = getattr(manager, "for_turn", None)
+        if not callable(for_turn):
+            return manager
+        config = self.effective_config()
+        provider_name: str | None = None
+        model: str | None = None
+        reference = getattr(manager, "model_reference", None)
+        if config is not None and callable(reference):
+            try:
+                provider_name, model = reference(config)
+            except Exception:  # noqa: BLE001
+                provider_name, model = None, None
+        capabilities = None
+        request_counter = None
+        if config is not None and self._resolver is not None:
+            resolved = self._resolve(provider_name, model)
+            if resolved is not None:
+                capabilities = resolved.capabilities
+                provider_name = resolved.provider.name
+                model = resolved.model
+                request_counter = RequestTokenCounter(
+                    resolved.provider,
+                    cache=self._token_cache,
+                    provider_name=provider_name,
+                )
+        return for_turn(
+            capabilities=capabilities,
+            request_counter=request_counter,
+            model=model,
+            provider=provider_name,
+        )
+
+    def assemble(self, session: Any) -> Any:
+        for_turn = getattr(self._context, "for_turn", None)
+        if callable(for_turn):
+            return self.for_turn().assemble(session)
+        return self._context.assemble(session)
+
+
 @dataclass(frozen=True)
 class ToolTurn:
     """The frozen per-turn tool environment handed to the loop.
@@ -311,6 +399,14 @@ class Runtime:
             if context is not None
             else ContextManager(self.workspace, config_loader=self._load_config)
         )
+        #: Request-aware token-count cache rooted in the workspace (best-effort;
+        #: a missing/unwritable cache is a silent miss, never a turn failure).
+        self._token_cache = TokenCountCache(
+            self.workspace / ".nexus" / "cache" / "tokens"
+        )
+        self._assembler = _ContextCoordinator(
+            self._context, self._router, token_cache=self._token_cache
+        )
         if sessions is not None:
             self._sessions = sessions
         else:
@@ -321,10 +417,11 @@ class Runtime:
             )
             self._sessions = SessionManager(
                 directory,
-                assemble=self._context,
+                assemble=self._assembler,
                 provider_for=self._router,
                 limits=limits if limits is not None else self._limits_from_config,
                 tools=self._make_tool_turn,
+                snapshot_every=self._snapshot_every,
             )
 
     # -- construction ------------------------------------------------------
@@ -402,6 +499,21 @@ class Runtime:
             max_iterations=v2.agent.max_iterations,
             max_seconds=v2.agent.max_turn_seconds,
         )
+
+    def _snapshot_every(self) -> int | None:
+        """Completed-turn snapshot cadence from the effective config.
+
+        Re-evaluated per completed turn (the session holds this callable), so a
+        config edit between turns takes effect without recreating the session.
+        A non-positive value disables automatic snapshots.
+        """
+        config = self._load_config()
+        v2 = getattr(config, "v2", None)
+        section = getattr(v2, "session", None)
+        value = getattr(section, "snapshot_every", None)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+            return value
+        return None
 
     # -- tools -------------------------------------------------------------
 

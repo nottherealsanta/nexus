@@ -144,6 +144,10 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
         )
         body = f"{body}\n{marker}" if body else marker
         context_note = marker
+    elif total_matches or shown:
+        context_note = (
+            f"[Glob {pattern!r}: {total_matches} match(es); re-run Glob to see them]"
+        )
     display = f"Glob {pattern!r}: {len(shown)} of {total_matches} matches"
     if truncated:
         display += " (truncated)"

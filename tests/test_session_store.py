@@ -254,3 +254,62 @@ def test_create_fsyncs_file_and_parent_directory(tmp_path):
     assert len(calls) >= 2
 
 
+# ---------------------------------------------------------------------------
+# Atomic publish from records (the fork primitive)
+# ---------------------------------------------------------------------------
+
+
+def test_create_from_records_preserves_records_and_never_overwrites(tmp_path):
+    source = SessionStore(tmp_path)
+    first = source.append_message("src", _user("a"))
+    second = source.append_event("src", Event(type="custom", data={"n": 1}))
+
+    dest = SessionStore(tmp_path)
+    path = dest.create_from_records("child", [first, second])
+    assert path.name == "child.jsonl"
+    assert SessionStore(tmp_path).read("child").records == (first, second)
+
+    with pytest.raises(SessionError):
+        SessionStore(tmp_path).create_from_records("child", [first])
+    assert SessionStore(tmp_path).read("child").records == (first, second)
+
+
+def test_create_from_records_next_append_is_monotonic(tmp_path):
+    source = SessionStore(tmp_path)
+    records = [
+        source.append_message("src", _user("a")),
+        source.append_message("src", _assistant("b")),
+    ]
+    dest = SessionStore(tmp_path)
+    dest.create_from_records("child", records)
+    assert dest.next_seq("child") == 3
+    appended = dest.append_message("child", _user("c"))
+    assert appended.seq == 3
+
+
+def test_create_from_records_publishes_atomically_without_replace(tmp_path, monkeypatch):
+    # The publish must be an exclusive atomic link, not a check-then-replace.
+    source = SessionStore(tmp_path)
+    records = [source.append_message("src", _user("a"))]
+
+    def boom(*args, **kwargs):
+        raise AssertionError("create_from_records must not use os.replace")
+
+    monkeypatch.setattr(os, "replace", boom)
+    dest = SessionStore(tmp_path)
+    dest.create_from_records("linked", records)
+    assert SessionStore(tmp_path).read("linked").records == tuple(records)
+
+
+def test_summary_records_keep_sequence_monotonic(tmp_path):
+    store = SessionStore(tmp_path)
+    store.append_message("s", _user("a"))
+    first = store.append_summary("s", text="one", summary_id="1", source_to_seq=1)
+    store.append_message("s", _assistant("b"))
+    second = store.append_summary("s", text="two", summary_id="2", source_to_seq=3)
+    assert second.seq > first.seq
+    seqs = [record.seq for record in store.read("s").records]
+    assert seqs == sorted(seqs)
+    assert store.read("s").summaries() == [first, second]
+
+

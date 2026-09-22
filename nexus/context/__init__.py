@@ -17,23 +17,89 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-#: Phase 1 manager symbols are resolved lazily so that legacy callers importing
-#: only ``Exchange``/``Context``/``build_context`` do not pay for loading the
-#: config/model modules the manager depends on. This mirrors PEP 562 on the root
-#: package. ``__all__`` still advertises them.
+#: Phase 1/3 manager symbols are resolved lazily so that legacy callers
+#: importing only ``Exchange``/``Context``/``build_context`` do not pay for
+#: loading the config/model modules the manager depends on. This mirrors PEP 562
+#: on the root package. ``__all__`` still advertises them.
 _LAZY = {
     "ContextManager": (".manager", "ContextManager"),
     "DEFAULT_MAX_FILE_BYTES": (".manager", "DEFAULT_MAX_FILE_BYTES"),
     "IDENTITY_PREAMBLE": (".manager", "IDENTITY_PREAMBLE"),
+    "AssemblyEnvironment": (".manager", "AssemblyEnvironment"),
+    "AssemblyContext": (".parts", "AssemblyContext"),
+    "ContextPart": (".parts", "ContextPart"),
+    "EnvironmentInfo": (".parts", "EnvironmentInfo"),
+    "PART_ORDER": (".parts", "PART_ORDER"),
+    "PART_PRIORITY": (".parts", "PART_PRIORITY"),
+    "PartOutput": (".parts", "PartOutput"),
+    "builtin_parts": (".parts", "builtin_parts"),
+    "capture_environment": (".parts", "capture_environment"),
+    "Allocation": (".budget", "Allocation"),
+    "BudgetInputs": (".budget", "BudgetInputs"),
+    "BudgetPlan": (".budget", "BudgetPlan"),
+    "ContextOverflow": (".budget", "ContextOverflow"),
+    "PartRequest": (".budget", "PartRequest"),
+    "allocate": (".budget", "allocate"),
+    "compute_input_budget": (".budget", "compute_input_budget"),
+    "CompactionAction": (".compact", "CompactionAction"),
+    "CompactionResult": (".compact", "CompactionResult"),
+    "MappingNoteResolver": (".compact", "MappingNoteResolver"),
+    "NoteResolver": (".compact", "NoteResolver"),
+    "Summarizer": (".compact", "Summarizer"),
+    "SummaryArtifact": (".compact", "SummaryArtifact"),
+    "compact": (".compact", "compact"),
+    "drop_oldest": (".compact", "drop_oldest"),
+    "evict_tool_results": (".compact", "evict_tool_results"),
+    "hybrid": (".compact", "hybrid"),
+    "summarize": (".compact", "summarize"),
+    "CacheBoundary": (".cache", "CacheBoundary"),
+    "TokenCountCache": (".cache", "TokenCountCache"),
+    "prompt_cache_boundaries": (".cache", "prompt_cache_boundaries"),
+    "semantic_key": (".cache", "semantic_key"),
+    "RequestTokenCounter": (".counting", "RequestTokenCounter"),
+    "request_semantic_key": (".counting", "request_semantic_key"),
 }
 
 __all__ = [
     "DEFAULT_MAX_FILE_BYTES",
     "IDENTITY_PREAMBLE",
+    "PART_ORDER",
+    "PART_PRIORITY",
+    "Allocation",
+    "AssemblyContext",
+    "AssemblyEnvironment",
+    "BudgetInputs",
+    "BudgetPlan",
+    "CacheBoundary",
+    "CompactionAction",
+    "CompactionResult",
     "Context",
     "ContextManager",
+    "ContextOverflow",
+    "ContextPart",
+    "EnvironmentInfo",
     "Exchange",
+    "MappingNoteResolver",
+    "NoteResolver",
+    "PartOutput",
+    "PartRequest",
+    "RequestTokenCounter",
+    "Summarizer",
+    "SummaryArtifact",
+    "TokenCountCache",
+    "allocate",
     "build_context",
+    "builtin_parts",
+    "capture_environment",
+    "compact",
+    "compute_input_budget",
+    "drop_oldest",
+    "evict_tool_results",
+    "hybrid",
+    "prompt_cache_boundaries",
+    "request_semantic_key",
+    "semantic_key",
+    "summarize",
 ]
 
 

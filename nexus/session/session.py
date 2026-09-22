@@ -47,9 +47,11 @@ from ..model.message import (
     ToolUse,
 )
 from ..util import new_id
+from . import snapshot as snapshot_mod
 from .ids import validate_session_id
 from .lock import SessionLock
-from .store import EventRecord, MessageRecord, ReadResult, SessionStore
+from .snapshot import Snapshot, SnapshotSummary
+from .store import EventRecord, MessageRecord, ReadResult, SessionStore, SummaryRecord
 
 _INTERRUPTED_TEMPLATE = (
     "Tool call {tool_use_id!r} ({name}) was interrupted before it ran because the "
@@ -150,6 +152,11 @@ class _SessionEventSink:
 
     async def emit(self, event: Event) -> EventRecord:
         record = self._session.append_event(event)
+        if event.type == "turn.completed":
+            # Cadence is evaluated only on completed turns. Snapshot failure is
+            # never allowed to fail the turn: the log is authoritative and a
+            # missing/old snapshot only costs a full replay on resume.
+            self._session._snapshot_after_completed_turn()
         await self._fanout.put(
             record.event, critical=event.type in _CRITICAL_EVENTS
         )
@@ -198,6 +205,7 @@ class Session:
         tools: Callable[..., Any] | None = None,
         attended: bool = False,
         event_buffer: int = DEFAULT_EVENT_BUFFER,
+        snapshot_every: int | Callable[[], int] | None = None,
     ):
         self._id = validate_session_id(session_id)
         self._store = store
@@ -220,6 +228,13 @@ class Session:
         if type(event_buffer) is not int or event_buffer < 1:
             raise ValueError("event_buffer must be a positive integer")
         self._event_buffer = event_buffer
+        #: Snapshot cadence seam. ``int`` counts completed turns; a callable is
+        #: re-evaluated per completed turn so the integration packet can feed it
+        #: ``config.v2.session.snapshot_every`` without this layer importing
+        #: configuration. ``None`` disables automatic snapshots.
+        self._snapshot_every = snapshot_every
+        #: Most recent background snapshot failure, for diagnostics only.
+        self.snapshot_error: Exception | None = None
         #: Records appended by the last :meth:`recover_dangling_tool_uses` call.
         self.recovered: tuple[MessageRecord, ...] = ()
 
@@ -238,6 +253,7 @@ class Session:
         limits: TurnLimits | Callable[[], TurnLimits] | None = None,
         tools: Callable[..., Any] | None = None,
         attended: bool | None = None,
+        snapshot_every: int | Callable[[], int] | None = None,
     ) -> Session:
         """Attach or replace the loop dependencies used by :meth:`send`."""
         if assemble is not None:
@@ -250,6 +266,8 @@ class Session:
             self._tools_for_turn = tools
         if attended is not None:
             self._attended = bool(attended)
+        if snapshot_every is not None:
+            self._snapshot_every = snapshot_every
         return self
 
     # -- approvals ---------------------------------------------------------
@@ -298,6 +316,10 @@ class Session:
         return self._store.directory
 
     @property
+    def snapshot_path(self) -> Path:
+        return snapshot_mod.snapshot_path(self.directory, self._id)
+
+    @property
     def active(self) -> bool:
         return self._active is not None
 
@@ -314,15 +336,29 @@ class Session:
 
     @property
     def records(self) -> list:
+        """Full, authoritative log records; snapshots never omit history."""
         return list(self.read().records)
 
     @property
-    def messages(self) -> list[Message]:
-        return self.read().messages()
+    def events(self) -> list[Event]:
+        """Full, authoritative log events; snapshots never omit history."""
+        return self.read().events()
 
     @property
-    def events(self) -> list[Event]:
-        return self.read().events()
+    def current(self) -> snapshot_mod.CurrentState:
+        """Snapshot-aware current state.
+
+        A valid snapshot supplies the message prefix and usage; the log tail is
+        appended. ``events``/``records`` remain the full log. An absent, corrupt,
+        stale, or future snapshot degrades cleanly to a full-log projection.
+        """
+        read = self.read()
+        loaded = snapshot_mod.load(self.directory, self._id, read)
+        return snapshot_mod.current_state(read, loaded)
+
+    @property
+    def messages(self) -> list[Message]:
+        return list(self.current.messages)
 
     def next_seq(self) -> int:
         return self._store.next_seq(self._id)
@@ -338,6 +374,151 @@ class Session:
         record = self._store.append_event(self._id, event, seq=seq)
         self._read = None
         return record
+
+    def append_summary(
+        self,
+        *,
+        text: str = "",
+        summary_id: str = "",
+        strategy: str = "",
+        input_digest: str = "",
+        source_from_seq: int = 0,
+        source_to_seq: int = 0,
+        source_messages: int = 0,
+        tokens_before: int | None = None,
+        tokens_after: int | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+    ) -> SummaryRecord:
+        """Append one durable summary/compaction artifact (never a transcript turn)."""
+        record = self._store.append_summary(
+            self._id,
+            text=text,
+            summary_id=summary_id,
+            strategy=strategy,
+            input_digest=input_digest,
+            source_from_seq=source_from_seq,
+            source_to_seq=source_to_seq,
+            source_messages=source_messages,
+            tokens_before=tokens_before,
+            tokens_after=tokens_after,
+            provider=provider,
+            model=model,
+        )
+        self._read = None
+        return record
+
+    @property
+    def summaries(self) -> list[SummaryRecord]:
+        """All durable summary artifacts, in append order."""
+        return [
+            record
+            for record in self.read().records
+            if isinstance(record, SummaryRecord)
+        ]
+
+    def latest_summary(self) -> SummaryRecord | None:
+        """The newest durable summary artifact, or ``None``."""
+        latest: SummaryRecord | None = None
+        for record in self.read().records:
+            if isinstance(record, SummaryRecord):
+                latest = record
+        return latest
+
+    def summary_for(self, input_digest: str, strategy: str) -> SummaryRecord | None:
+        """A durable artifact for the same semantic summary inputs, if any.
+
+        Used to make summarization idempotent: the same ``(inputs, strategy)``
+        reuses the existing artifact instead of re-running and re-appending.
+        """
+        if not input_digest:
+            return None
+        for record in self.read().records:
+            if (
+                isinstance(record, SummaryRecord)
+                and record.input_digest == input_digest
+                and record.strategy == strategy
+            ):
+                return record
+        return None
+
+    def message_seqs(self) -> tuple[int, ...]:
+        """The record sequence of every persisted message, in order.
+
+        Used to stamp a summary artifact's source range without the context
+        layer importing the session store's record types.
+        """
+        return tuple(
+            record.seq
+            for record in self.read().records
+            if isinstance(record, MessageRecord)
+        )
+
+    # -- snapshots ---------------------------------------------------------
+
+    def write_snapshot(
+        self,
+        *,
+        through_seq: int | None = None,
+        summary: SnapshotSummary | None = None,
+    ) -> Snapshot:
+        """Derive and atomically publish a snapshot; the log is never touched.
+
+        ``through_seq`` defaults to the last persisted sequence. The snapshot's
+        messages/usage are derived from the authoritative log prefix, so it is
+        always a valid projection at the moment it is written. ``summary`` is
+        opaque metadata for a later context packet: it is cached here but its
+        authority must live in the log.
+        """
+        read = self.read(force=True)
+        seq = read.next_seq if through_seq is None else through_seq
+        if type(seq) is not int or seq < 0:
+            raise ValueError("through_seq must be a non-negative integer")
+        if seq > read.next_seq:
+            raise SessionError(
+                f"snapshot boundary {seq} is beyond the log end {read.next_seq}"
+            )
+        snapshot = snapshot_mod.build_from_records(
+            self._id, read.records, seq, summary=summary
+        )
+        snapshot_mod.write(
+            self.directory, self._id, snapshot, fsync=self._store.fsync
+        )
+        return snapshot
+
+    def maybe_snapshot(self) -> Snapshot | None:
+        """Write a snapshot when the configured completed-turn cadence is due.
+
+        The cadence is the ``snapshot_every`` seam the integration packet feeds
+        from ``config.v2.session.snapshot_every``. Counting is durable: it is
+        derived from ``turn.completed`` events persisted after the last valid
+        snapshot boundary, so a reopened handle resumes the same cadence.
+        """
+        every = self._snapshot_every
+        if callable(every):
+            every = every()
+        if every is None:
+            return None
+        if type(every) is not int or every < 1:
+            raise ValueError("snapshot_every must be a positive integer or callable")
+        read = self.read(force=True)
+        prior = snapshot_mod.load(self.directory, self._id, read)
+        boundary = prior.seq if prior is not None else 0
+        completed = sum(
+            1
+            for event in read.events()
+            if event.type == "turn.completed" and event.seq > boundary
+        )
+        if completed < every:
+            return None
+        return self.write_snapshot()
+
+    def _snapshot_after_completed_turn(self) -> None:
+        """Cadence hook used by the event sink; never lets snapshot I/O escape."""
+        try:
+            self.maybe_snapshot()
+        except Exception as exc:  # noqa: BLE001 - derived state must not fail a turn
+            self.snapshot_error = exc
 
     # -- turn ownership and cancellation -----------------------------------
 

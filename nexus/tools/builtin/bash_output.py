@@ -121,7 +121,11 @@ async def run(
             stdout_offset=stdout_offset,
             stderr_offset=stderr_offset,
             show_offsets=True,
-        )
+        ),
+        context_note=(
+            f"[BashOutput {job_id}: output evicted; call BashOutput again with "
+            "the recorded offsets to re-read it]"
+        ),
     )
 
 

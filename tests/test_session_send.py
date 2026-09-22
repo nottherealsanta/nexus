@@ -498,6 +498,38 @@ async def test_slow_consumer_yields_every_persisted_event(tmp_path):
     assert session.active is False
 
 
+async def test_completed_turn_persists_snapshot_and_keeps_full_history(tmp_path):
+    from nexus.session import snapshot as snapshot_mod
+
+    provider = ScriptedProvider(text_response("hello"), text_response("hello"))
+    manager = SessionManager(
+        tmp_path,
+        assemble=RecordingAssembler(),
+        provider_for=Resolver(provider),
+        snapshot_every=1,
+    )
+    session = manager.open("snap")
+
+    events = await drain(session.send("hi"))
+    assert events[-1].type == "turn.completed"
+    assert session.snapshot_path.exists()
+
+    loaded = snapshot_mod.load(tmp_path, "snap", session.read(force=True))
+    assert loaded is not None
+    # Snapshot-aware messages equal the authoritative full-log history.
+    assert [m.content[0].text for m in loaded.messages] == ["hi", "hello"]
+    assert [m.content[0].text for m in session.messages] == ["hi", "hello"]
+    # A second turn continues from the snapshot boundary.
+    events = await drain(session.send("again"))
+    assert events[-1].type == "turn.completed"
+    assert [m.content[0].text for m in session.messages] == [
+        "hi",
+        "hello",
+        "again",
+        "hello",
+    ]
+
+
 async def test_early_close_under_backpressure_releases_and_persists_terminal(tmp_path):
     deltas = [TextDelta(text=f"t{i}") for i in range(500)]
     provider = ScriptedProvider(

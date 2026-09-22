@@ -58,6 +58,7 @@ from ..stream import (
 __all__ = [
     "DEFAULT_MAX_TOKENS",
     "AnthropicProvider",
+    "build_count_tokens_body",
     "build_request_body",
     "normalize_stop_reason",
 ]
@@ -178,7 +179,9 @@ def _content_to_wire(blocks: list[ContentBlock]) -> list[dict[str, Any]]:
     return out
 
 
-def _messages_to_wire(messages: list[Message]) -> list[dict[str, Any]]:
+def _messages_to_wire(
+    messages: list[Message], *, cache_at: int | None = None
+) -> list[dict[str, Any]]:
     """Translate messages, coalescing adjacent same-role turns.
 
     Durable history is append-only and may legitimately contain consecutive user
@@ -186,17 +189,55 @@ def _messages_to_wire(messages: list[Message]) -> list[dict[str, Any]]:
     user input). Anthropic requires alternating roles, so adjacent same-role
     messages are merged by concatenating their content in order — a recovered
     ``tool_result`` then the new text stays in that order. History is unchanged.
+
+    When ``cache_at`` is a positive count of leading *original* messages, the
+    last wire content block derived from original message ``cache_at - 1`` gets a
+    single ``cache_control`` breakpoint, so the stable prefix is cached even after
+    same-role coalescing.
     """
     wire: list[dict[str, Any]] = []
-    for message in messages:
+    origins: list[list[int]] = []
+    for index, message in enumerate(messages):
         content = _content_to_wire(message.content)
         if not content:
             continue  # Anthropic rejects empty content arrays
         if wire and wire[-1]["role"] == message.role:
             wire[-1]["content"].extend(content)
+            origins[-1].append(index)
         else:
             wire.append({"role": message.role, "content": content})
+            origins.append([index])
+    if cache_at is not None and cache_at > 0:
+        target = cache_at - 1
+        for entry, indexes in zip(wire, origins):
+            if target in indexes:
+                _mark_last_block(entry["content"])
+                break
     return wire
+
+
+def _mark_last_block(content: list[dict[str, Any]]) -> None:
+    if content:
+        content[-1]["cache_control"] = {"type": "ephemeral"}
+
+
+def _cache_boundaries(req: ModelRequest) -> tuple[bool, int | None]:
+    """Return ``(enabled, history_position)`` from provider-neutral metadata."""
+    metadata = req.metadata if isinstance(req.metadata, Mapping) else {}
+    cache = metadata.get("cache")
+    if not isinstance(cache, Mapping) or not cache.get("enabled"):
+        return False, None
+    history_position: int | None = None
+    boundaries = cache.get("boundaries")
+    if isinstance(boundaries, list):
+        for boundary in boundaries:
+            if not isinstance(boundary, Mapping):
+                continue
+            if boundary.get("scope") == "history":
+                position = boundary.get("position")
+                if isinstance(position, int) and not isinstance(position, bool):
+                    history_position = position
+    return True, history_position
 
 
 def build_request_body(
@@ -204,16 +245,39 @@ def build_request_body(
     *,
     model: str,
     default_max_tokens: int = DEFAULT_MAX_TOKENS,
+    stream: bool = True,
+    cache: bool = True,
 ) -> dict[str, Any]:
-    """Translate a :class:`ModelRequest` into an Anthropic Messages body."""
+    """Translate a :class:`ModelRequest` into an Anthropic Messages body.
+
+    ``stream=False`` and ``cache=False`` produce the body used by the
+    ``/v1/messages/count_tokens`` endpoint: identical semantics without the
+    streaming or prompt-cache-only wire fields.
+    """
     params = req.params
-    body: dict[str, Any] = {"model": model, "stream": True}
+    cache_enabled, history_position = (
+        _cache_boundaries(req) if cache else (False, None)
+    )
+    body: dict[str, Any] = {"model": model}
+    if stream:
+        body["stream"] = True
     body["max_tokens"] = int(params.max_output_tokens or default_max_tokens)
     if req.system:
-        body["system"] = req.system
-    body["messages"] = _messages_to_wire(req.messages)
+        if cache_enabled and not req.tools:
+            body["system"] = [
+                {
+                    "type": "text",
+                    "text": req.system,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        else:
+            body["system"] = req.system
+    body["messages"] = _messages_to_wire(
+        req.messages, cache_at=history_position if cache_enabled else None
+    )
     if req.tools:
-        body["tools"] = [
+        tools = [
             {
                 "name": tool.name,
                 "description": tool.description,
@@ -221,6 +285,9 @@ def build_request_body(
             }
             for tool in req.tools
         ]
+        if cache_enabled:
+            tools[-1]["cache_control"] = {"type": "ephemeral"}
+        body["tools"] = tools
     if params.thinking_budget:
         body["thinking"] = {
             "type": "enabled",
@@ -235,6 +302,42 @@ def build_request_body(
             body["top_p"] = params.top_p
     if params.stop_sequences:
         body["stop_sequences"] = list(params.stop_sequences)
+    return body
+
+
+def build_count_tokens_body(
+    req: ModelRequest,
+    *,
+    model: str,
+) -> dict[str, Any]:
+    """The dedicated ``/v1/messages/count_tokens`` payload for ``req``.
+
+    Only fields the count endpoint accepts are included, and only those that can
+    change the input token count: ``model``, ``messages``, ``system``, ``tools``,
+    and ``thinking``. Generation-only fields (``max_tokens``, ``temperature``,
+    ``top_p``, ``stop_sequences``, ``stream``) and prompt-cache markers (which do
+    not affect the count) are deliberately omitted.
+    """
+    body: dict[str, Any] = {
+        "model": model,
+        "messages": _messages_to_wire(req.messages),
+    }
+    if req.system:
+        body["system"] = req.system
+    if req.tools:
+        body["tools"] = [
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": tool.input_schema,
+            }
+            for tool in req.tools
+        ]
+    if req.params.thinking_budget:
+        body["thinking"] = {
+            "type": "enabled",
+            "budget_tokens": int(req.params.thinking_budget),
+        }
     return body
 
 
@@ -429,8 +532,42 @@ class AnthropicProvider:
         )
 
     async def count_tokens(self, req: ModelRequest) -> int | None:
-        # Phase 1: the caller falls back to the shared Tokenizer heuristic.
-        return None
+        """Count input tokens via ``/v1/messages/count_tokens``.
+
+        Uses the same semantic serialization as :func:`build_request_body`
+        without streaming or prompt-cache-only fields. Credentials resolve at
+        request time and are never included in an error. Returns ``None`` when
+        the endpoint answers without a usable ``input_tokens`` value so the
+        caller can fall back to the heuristic.
+        """
+        if self._closed:
+            raise ProviderError("anthropic: provider is closed")
+        model = req.model or self._model
+        if not model:
+            # No model means no endpoint call; the caller falls back to the
+            # heuristic rather than failing the turn.
+            return None
+        body = build_count_tokens_body(req, model=model)
+        response = await self._transport.request(
+            "POST",
+            f"{self._base_url}/v1/messages/count_tokens",
+            headers=self._headers(),
+            json=body,
+        )
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise ProviderError(
+                "anthropic: malformed count_tokens response"
+            ) from exc
+        if not isinstance(payload, Mapping):
+            raise ProviderError(
+                "anthropic: count_tokens response is not a JSON object"
+            )
+        value = payload.get("input_tokens")
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+        return value
 
     def stream(self, req: ModelRequest) -> AsyncIterator[StreamEvent]:
         return self._stream(req)
