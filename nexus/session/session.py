@@ -55,6 +55,7 @@ from ..model.message import (
     ToolResult,
     ToolUse,
 )
+from ..model.selection import ModelSelection
 from ..util import new_id
 from . import snapshot as snapshot_mod
 from .ids import validate_session_id
@@ -101,6 +102,12 @@ _INPUT_EVENT_TYPES = frozenset(
 #: Tag for raw bytes in a queued-input payload. Makes the representation
 #: self-describing and JSON-safe independent of the encoder.
 _QUEUED_BYTES_TAG = "__nexus_bytes__"
+
+#: The durable per-session model-selection event. Like ``input.*`` and
+#: ``presence.*`` it is emitted outside a turn (no turn id) and carries a
+#: monotonic ``seq``, so a late subscriber and a reopened handle both rebuild the
+#: same selection from the log.
+_MODEL_SELECTED_EVENT = "model.selected"
 
 
 def _decode_queued_content(raw: object) -> list[ContentBlock] | None:
@@ -437,10 +444,16 @@ class Session:
         self.snapshot_error: Exception | None = None
         #: Records appended by the last :meth:`recover_dangling_tool_uses` call.
         self.recovered: tuple[MessageRecord, ...] = ()
+        #: The last durable ``model.selected`` for this session, or ``None`` when
+        #: the session still uses the configured default. Rehydrated from the log
+        #: on open and refreshed as the event is observed, so a mid-turn selection
+        #: is visible to the *next* turn without reading the whole log again.
+        self._model_selection: ModelSelection | None = None
         # A crash can leave a submission durable as ``input.queued`` but absent
         # from memory; rebuilding the FIFO here means a reopened handle resumes
         # exactly where the previous process stopped.
         self._rehydrate_queue()
+        self._rehydrate_model_selection()
 
     # -- wiring ------------------------------------------------------------
 
@@ -610,6 +623,10 @@ class Session:
             request_id = event.data.get("id")
             if request_id:
                 self._pending_permissions.discard(request_id)
+        elif event.type == _MODEL_SELECTED_EVENT:
+            parsed = ModelSelection.from_dict(event.data)
+            if parsed is not None:
+                self._model_selection = parsed
         elif event.type in TERMINAL_EVENTS:
             # A terminal turn can never resolve another approval; leaving stale
             # ids behind would let a later viewer-drop "resolve" a dead request.
@@ -628,6 +645,46 @@ class Session:
         if resolve is None:
             return False
         return bool(resolve(request_id, decision))
+
+    # -- model selection ---------------------------------------------------
+
+    @property
+    def model_selection(self) -> ModelSelection | None:
+        """The session's durable model override, or ``None`` for the default.
+
+        Read from the in-memory mirror (rehydrated from the log on open and
+        refreshed on every ``model.selected``), so the turn-start freeze never
+        rescans the log.
+        """
+        return self._model_selection
+
+    def select_model(self, selection: ModelSelection) -> EventRecord | None:
+        """Persist one durable model selection and publish it.
+
+        Emitted outside a turn, exactly like ``input.*``/``presence.*``: it
+        carries no turn id, gets a monotonic ``seq``, and is rehydrated on
+        reopen. A selection is **not** applied to an active turn; the running
+        turn's environment was frozen at turn start, so only the next turn picks
+        the override up.
+        """
+        self._ensure_writable()
+        return self._emit(_MODEL_SELECTED_EVENT, selection.to_dict())
+
+    def _rehydrate_model_selection(self) -> None:
+        """Rebuild the model override from the append-only log.
+
+        A pure read that emits nothing, so reopening a handle never duplicates a
+        ``model.selected`` event. The newest event wins; a malformed one is
+        skipped rather than failing the open.
+        """
+        latest: ModelSelection | None = None
+        for event in self.read().events():
+            if event.type != _MODEL_SELECTED_EVENT:
+                continue
+            parsed = ModelSelection.from_dict(event.data)
+            if parsed is not None:
+                latest = parsed
+        self._model_selection = latest
 
     # -- identity ----------------------------------------------------------
 
@@ -1216,6 +1273,12 @@ class Session:
         """
         for_turn = getattr(self._assemble, "for_turn", None)
         if callable(for_turn):
+            # A session-aware assembler (the runtime's coordinator) is handed the
+            # session so a per-session model override is read and frozen once, at
+            # turn start. A mid-turn selection therefore affects only the next
+            # turn. Plain test doubles are called with no arguments as before.
+            if getattr(self._assemble, "session_aware", False):
+                return for_turn(session=self)
             return for_turn()
         return self._assemble
 

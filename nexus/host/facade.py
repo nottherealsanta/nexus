@@ -25,6 +25,7 @@ hands a surface a ``Runtime``, a manager, or a tool.
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import time
 from collections.abc import AsyncIterator
@@ -36,10 +37,12 @@ from ..errors import ExtensionTrashError, SessionBusy
 from ..events import Event
 from ..ext.quarantine import sanitize_text
 from ..model.message import ContentBlock
+from ..model.selection import ModelSelection
 from ..session.manager import SessionSummary, TrashRecord
 from ..util import redact_secrets
 from ..view import ConversationView, apply, initial_state
 from . import protocol as p
+from .doctor import mismatch_summary
 from .presence import Presence
 from .supervisor import Supervisor
 
@@ -295,11 +298,21 @@ class HostFacade:
 
         Counters and descriptors only; never a credential, endpoint userinfo, or
         environment value. ``explain_reload`` adds the hot-vs-restart boundary.
+
+        ``registry_mismatches`` aggregates the durable catalogue defects the loop
+        records when a provider rejects a claimed capability (PLAN §15.5). The
+        scan is bounded and best-effort: a bounded set of session logs is read
+        from a bounded tail, an inaccessible/corrupt log is skipped, and no
+        session handle is opened. Only counts, provider/model/reason tallies, and
+        bounded samples cross the boundary; the raw provider ``detail`` does not.
         """
         report: dict[str, Any] = {
             "workspace": str(getattr(self.runtime, "workspace", "") or ""),
             "providers": self._provider_report(),
             "registry": _status_dict(getattr(self.runtime.registry, "status", lambda: None)()),
+            "registry_mismatches": mismatch_summary(
+                getattr(getattr(self.runtime, "sessions", None), "directory", None)
+            ),
             "sessions": len(self.list_sessions()),
         }
         mcp = self._mcp_report()
@@ -392,6 +405,44 @@ class HostFacade:
             "builtin": dict(tiers.builtin),
             "overrides": dict(tiers.overrides),
         }
+
+    def select_model(self, session: str, ref: str) -> ModelSelection:
+        """Validate and persist a per-session model selection (PLAN §14.11).
+
+        Delegates resolution to the runtime, which uses the same router/tier
+        rules as a configured default and refuses an unknown provider, a
+        malformed reference, or a tier with no runnable model. The selection is
+        durable and applies from the session's next turn; a turn already running
+        is untouched.
+        """
+        return self.runtime.select_session_model(session, ref)
+
+    def _fallback_chain(self, selection: ModelSelection | None = None) -> list[str]:
+        """The configured fallback refs, redacted, deduped, minus the selection.
+
+        Only descriptive reference strings cross the wire: each is sanitized and
+        secret-redacted, duplicates collapse (first occurrence wins), and a
+        reference equal to the selected one is dropped -- falling back to the
+        model already in use is not a fallback. The list is empty when no
+        fallback is configured or the router exposes none.
+        """
+        router = getattr(self.runtime, "router", None)
+        chain = getattr(router, "fallback", None)
+        if callable(chain):  # pragma: no cover - a callable fallback seam
+            chain = chain()
+        excluded: set[str] = set()
+        if selection is not None:
+            excluded.add(selection.reference)
+            excluded.add(f"{selection.provider}/{selection.model}")
+        seen: set[str] = set()
+        out: list[str] = []
+        for ref in chain or ():
+            text = redact_secrets(sanitize_text(str(ref), limit=200))
+            if not text or text in seen or text in excluded:
+                continue
+            seen.add(text)
+            out.append(text)
+        return out
 
     def list_agents(self) -> list[dict[str, Any]]:
         """A sanitized, transport-neutral index of discovered subagents."""
@@ -584,6 +635,21 @@ class HostFacade:
                 builtin=tiers["builtin"],
                 overrides=tiers["overrides"],
             )
+        if isinstance(command, p.ModelSelect):
+            selection = self.select_model(command.session, command.ref)
+            return p.ModelSelectResult(
+                session=command.session,
+                accepted=True,
+                reference=selection.reference,
+                provider=selection.provider,
+                model=selection.model,
+                tier=selection.tier,
+                tier_source=selection.tier_source,
+                requested_tier=selection.requested_tier,
+                clamped=bool(selection.clamped),
+                fallback=self._fallback_chain(selection),
+                apply_next_turn=True,
+            )
         if isinstance(command, p.AgentsList):
             agents = self.runtime.agents
             return p.AgentsListResult(
@@ -594,7 +660,14 @@ class HostFacade:
             tools = await self.list_tools()
             return p.ToolsListResult(count=len(tools), tools=tools)
         if isinstance(command, p.Doctor):
-            report = self.doctor(explain_reload=command.explain_reload)
+            # The report can read a bounded set of session tails (up to 64 x
+            # 512 KiB) and parse their JSON. ``doctor`` stays a synchronous
+            # facade method -- its direct callers are unchanged -- but the wire
+            # path runs it in a worker thread so a large scan cannot stall the
+            # event loop and every other session.
+            report = await asyncio.to_thread(
+                self.doctor, explain_reload=command.explain_reload
+            )
             return p.DoctorResult(ok=not self._closed, report=report)
         if isinstance(command, p.Health):
             return p.HealthResult(**self.health())

@@ -55,6 +55,10 @@ class ChatSession:
             self.stdout, stderr=self.stderr, show_thinking=show_thinking
         )
         self._views: dict[str, ConversationView] = {}
+        #: The most recent ``/model`` selection per session, so the status line
+        #: shows the chosen model before the next turn repaints it. Cleared when
+        #: a ``model.started`` event proves the turn's effective model.
+        self._selected_models: dict[str, dict[str, str]] = {}
         # Seed the cursor with the session's current end so the first turn of a
         # resumed/existing session subscribes strictly after it and never
         # replays an earlier turn's terminal event.
@@ -86,7 +90,14 @@ class ChatSession:
     def status_line(self, session: str | None = None) -> str:
         name = session or self.session
         view = self.view(name)
-        model = (view.model or {}).get("model") or "-"
+        selected = self._selected_models.get(name)
+        if selected and selected.get("model"):
+            model = selected["model"]
+            tier = selected.get("tier")
+            if tier:
+                model = f"{model} [{tier}]"
+        else:
+            model = (view.model or {}).get("model") or "-"
         usage = view.usage
         phase = view.phase
         viewers = view.presence.viewers
@@ -173,6 +184,9 @@ class ChatSession:
         self._views[self.session] = view
         if event.seq and event.seq > 0:
             self._cursors[self.session] = max(self.cursor(), event.seq)
+        if event.type == "model.started":
+            # The turn's effective model now drives the status line.
+            self._selected_models.pop(self.session, None)
         self._unread.discard(self.session)
 
     # -- commands ----------------------------------------------------------
@@ -242,23 +256,69 @@ class ChatSession:
         return lines
 
     async def _cmd_model(self, args: tuple[str, ...]) -> None:
-        # The model is resolved daemon-side from the layered config per turn;
-        # there is no per-session override on the facade, so this command only
-        # reports what is selectable and says where to change it. It never
-        # repaints the status line with a model the daemon is not using.
-        models = await self.client.list_models(search=args[0] if args else None)
+        # No args lists what is selectable; ``/model <ref>`` sets this session's
+        # durable override (a tier name, provider/model, or bare id) and it takes
+        # effect from the next turn. ``/model list [search]`` keeps the old
+        # filtered listing.
+        if args and args[0] == "list":
+            await self._list_models(args[1] if len(args) > 1 else None)
+            return
+        if args:
+            await self._select_model(args[0])
+            return
+        await self._list_models(None)
+        current = await self._current_selection()
+        if current:
+            self._write(f"current: {current}\n")
+
+    async def _list_models(self, search: str | None) -> None:
+        models = await self.client.list_models(search=search)
         if not models:
             self._write("no models\n")
             return
         for model in models:
             provider = model.get("provider") or "?"
             identifier = model.get("id") or model.get("name") or "?"
-            self._write(f"  {provider}/{identifier}\n")
-        if args:
-            self._write(
-                "note: the model is set by config ([models] default); "
-                "edit nexus.toml to change it\n"
-            )
+            tier = model.get("tier")
+            suffix = f" [{tier}]" if tier else ""
+            self._write(f"  {provider}/{identifier}{suffix}\n")
+        if search is None:
+            self._write("choose with /model <tier|provider/model|id>\n")
+
+    async def _select_model(self, ref: str) -> None:
+        result = await self.client.select_model(self.session, ref)
+        provider = getattr(result, "provider", "") or "?"
+        model = getattr(result, "model", "") or "?"
+        tier = getattr(result, "tier", "") or ""
+        self._selected_models[self.session] = {
+            "provider": provider,
+            "model": model,
+            "tier": tier,
+            "reference": getattr(result, "reference", ref) or ref,
+        }
+        line = f"model -> {provider}/{model}"
+        if tier:
+            line += f" [{tier}]"
+        line += " (applies next turn)\n"
+        self._write(line)
+        fallback = list(getattr(result, "fallback", ()) or ())
+        if fallback:
+            self._write(f"fallback: {', '.join(fallback)}\n")
+        self._write(self.status_line() + "\n")
+
+    async def _current_selection(self) -> str | None:
+        """The session's current model from the replayed view, or ``None``."""
+        try:
+            view, _seq = await self.client.state(self.session, 0)
+        except ClientError:
+            return None
+        model = view.get("model") if isinstance(view, dict) else None
+        if not isinstance(model, dict):
+            return None
+        provider = model.get("provider") or "?"
+        identifier = model.get("model") or "?"
+        tier = model.get("tier")
+        return f"{provider}/{identifier}" + (f" [{tier}]" if tier else "")
 
     async def _cmd_tools(self, args: tuple[str, ...]) -> None:
         seen: list[str] = []

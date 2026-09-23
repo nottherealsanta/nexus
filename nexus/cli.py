@@ -295,6 +295,20 @@ async def _model_command(
                 for name, ref in sorted((getattr(result, "builtin", None) or {}).items())
             )
             return 0
+        if action == "select":
+            result = await client.select_model(args.session, args.ref)
+            line = (
+                f"{getattr(result, 'provider', '?')}/"
+                f"{getattr(result, 'model', '?')}"
+            )
+            tier = getattr(result, "tier", "")
+            if tier:
+                line += f" [{tier}]"
+            stdout.write(f"{line} (session {args.session}; applies next turn)\n")
+            fallback = list(getattr(result, "fallback", ()) or ())
+            if fallback:
+                stdout.write(f"fallback: {', '.join(fallback)}\n")
+            return 0
         raise ValueError(f"unknown model action {action!r}")
     finally:
         await client.aclose()
@@ -472,6 +486,7 @@ def _print_doctor(report: dict[str, Any], stdout: TextIO) -> None:
             f"registry: source={registry.get('source', '?')} "
             f"models={registry.get('models', 0)} stale={registry.get('stale', False)}\n"
         )
+    _print_registry_mismatches(report.get("registry_mismatches"), stdout)
     extensions = report.get("extensions")
     if isinstance(extensions, dict):
         stdout.write(
@@ -506,6 +521,58 @@ def _print_doctor(report: dict[str, Any], stdout: TextIO) -> None:
         note = reload_info.get("note")
         if note:
             stdout.write(f"  {note}\n")
+
+
+def _print_registry_mismatches(mismatches: Any, stdout: TextIO) -> None:
+    """Render the aggregated catalogue defects, truthfully and bounded (PLAN §15.5).
+
+    Counts and descriptors only; the raw provider detail is never in the report
+    to render. ``truncated`` is stated plainly so a capped scan is never mistaken
+    for a complete one.
+    """
+    if not isinstance(mismatches, dict):
+        return
+    count = mismatches.get("count", 0)
+    if not count:
+        stdout.write("registry mismatches: none\n")
+        return
+    scanned = mismatches.get("sessions_scanned", 0)
+    sessions = mismatches.get("sessions_with_mismatches", 0)
+    truncated = " (scan truncated)" if mismatches.get("truncated") else ""
+    stdout.write(
+        f"registry mismatches: {count} across {sessions}/{scanned} sessions"
+        f"{truncated}\n"
+    )
+    stdout.writelines(
+        f"  by {field}: {_format_tally(mismatches.get(f'by_{field}'))}\n"
+        for field in ("provider", "model", "reason")
+    )
+    stdout.writelines(
+        f"  - {_format_mismatch_sample(sample)}\n"
+        for sample in mismatches.get("samples", []) or []
+    )
+
+
+def _format_tally(tally: Any) -> str:
+    if not isinstance(tally, dict) or not tally:
+        return "none"
+    return ", ".join(f"{key}={tally[key]}" for key in sorted(tally))
+
+
+def _format_mismatch_sample(sample: Any) -> str:
+    if not isinstance(sample, dict):
+        return "?"
+    parts = [
+        f"session={sample.get('session', '?')}",
+        f"provider={sample.get('provider') or '(none)'}",
+        f"model={sample.get('model') or '(none)'}",
+        f"reason={sample.get('reason') or 'unknown'}",
+    ]
+    if sample.get("feature"):
+        parts.append(f"feature={sample['feature']}")
+    if sample.get("ts") is not None:
+        parts.append(f"ts={sample['ts']}")
+    return " ".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -602,6 +669,11 @@ def build_parser() -> argparse.ArgumentParser:
     models_show.add_argument("ref")
     models_sub.add_parser("refresh", help="Force a catalogue refresh")
     models_sub.add_parser("tiers", help="List tiers")
+    models_select = models_sub.add_parser(
+        "select", help="Set a session's model for its subsequent turns"
+    )
+    models_select.add_argument("ref", help="Tier name, provider/model, or model id")
+    models_select.add_argument("--session", default="default")
 
     agents = sub.add_parser("agents", help="List discovered subagent definitions")
     agents_sub = agents.add_subparsers(dest="agents_action", required=True)

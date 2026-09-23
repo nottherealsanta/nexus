@@ -149,6 +149,18 @@ class ModelTiers(msgspec.Struct, tag=True, frozen=True):
     """The tier table: ordering, default, curated map, and user overrides."""
 
 
+class ModelSelect(msgspec.Struct, tag=True, frozen=True):
+    """Select and persist one session's model for its subsequent turns.
+
+    ``ref`` is a tier name, ``"provider/model"``, or a bare id; it is validated
+    daemon-side (a bad reference is an ``ErrorResult``). The choice is durable in
+    the session log and never disturbs a turn already running.
+    """
+
+    session: str
+    ref: str
+
+
 class AgentsList(msgspec.Struct, tag=True, frozen=True):
     """The discovered subagent definitions (sanitized index rows)."""
 
@@ -196,6 +208,7 @@ Command = (
     | ModelsList
     | ModelShow
     | ModelTiers
+    | ModelSelect
     | AgentsList
     | ToolsList
     | Doctor
@@ -224,6 +237,7 @@ COMMANDS: tuple[type, ...] = (
     ModelsList,
     ModelShow,
     ModelTiers,
+    ModelSelect,
     AgentsList,
     ToolsList,
     Doctor,
@@ -369,6 +383,28 @@ class ModelTiersResult(msgspec.Struct, tag=True, frozen=True):
     overrides: dict[str, str] = msgspec.field(default_factory=dict)
 
 
+class ModelSelectResult(msgspec.Struct, tag=True, frozen=True):
+    """The accepted, validated selection plus how it resolved.
+
+    ``fallback`` is the configured fallback chain that still applies if the
+    selected provider fails at call time. ``apply_next_turn`` is always true: a
+    running turn's model was frozen at its start, so the selection takes effect
+    from the session's next turn onward.
+    """
+
+    session: str
+    accepted: bool = True
+    reference: str = ""
+    provider: str = ""
+    model: str = ""
+    tier: str = ""
+    tier_source: str = ""
+    requested_tier: str = ""
+    clamped: bool = False
+    fallback: list[str] = msgspec.field(default_factory=list)
+    apply_next_turn: bool = True
+
+
 class AgentsListResult(msgspec.Struct, tag=True, frozen=True):
     generation: int = 0
     agents: list[dict[str, Any]] = msgspec.field(default_factory=list)
@@ -429,6 +465,7 @@ Result = (
     | ModelsListResult
     | ModelShowResult
     | ModelTiersResult
+    | ModelSelectResult
     | AgentsListResult
     | ToolsListResult
     | DoctorResult
@@ -458,6 +495,7 @@ RESULTS: tuple[type, ...] = (
     ModelsListResult,
     ModelShowResult,
     ModelTiersResult,
+    ModelSelectResult,
     AgentsListResult,
     ToolsListResult,
     DoctorResult,
@@ -512,6 +550,8 @@ __all__ = [
     "ExtensionsValidateResult",
     "Health",
     "HealthResult",
+    "ModelSelect",
+    "ModelSelectResult",
     "ModelShow",
     "ModelShowResult",
     "ModelTiers",

@@ -145,6 +145,21 @@ class FakeFacade:
             return p.ModelTiersResult(
                 order=["low", "medium", "high"], default="medium"
             )
+        if isinstance(command, p.ModelSelect):
+            if command.ref == "nope/x":
+                return p.ErrorResult(
+                    kind="ConfigError", message="unknown provider 'nope'"
+                )
+            return p.ModelSelectResult(
+                session=command.session,
+                accepted=True,
+                reference=command.ref,
+                provider=command.ref.split("/")[0] if "/" in command.ref else "openai",
+                model=command.ref.split("/")[-1],
+                tier="high",
+                tier_source="tier",
+                fallback=["openai/gpt-5"],
+            )
         if isinstance(command, p.AgentsList):
             return p.AgentsListResult(generation=2, agents=[{"name": "explore"}])
         if isinstance(command, p.ToolsList):
@@ -274,6 +289,7 @@ async def test_client_methods_send_the_matching_commands():
     await client.validate_extensions("a.py")
     await client.show_model("p/m")
     await client.model_tiers()
+    await client.select_model("s", "p/m")
     await client.list_agents()
     await client.reload_extensions()
     await client.refresh_models()
@@ -296,6 +312,7 @@ async def test_client_methods_send_the_matching_commands():
         "ExtensionsValidate",
         "ModelShow",
         "ModelTiers",
+        "ModelSelect",
         "AgentsList",
         "ExtensionsReload",
         "ModelsRefresh",
@@ -546,6 +563,31 @@ async def test_chat_slash_commands_dispatch():
     assert "SessionFork" in kinds
     assert "exported body" in out.getvalue()
     assert chat.session == "work-fork"
+
+
+async def test_chat_model_select_sends_command_and_repaints_status():
+    reader = scripted_reader("/model high", "/model nope/x", "/exit")
+    chat, facade, _, out, err = make_chat(reader)
+    assert await chat.run() == 0
+    selects = [c for c in facade.commands if isinstance(c, p.ModelSelect)]
+    assert selects and selects[0].ref == "high" and selects[0].session == "s"
+    assert "model -> openai/high [high]" in out.getvalue()
+    assert "applies next turn" in out.getvalue()
+    assert "fallback: openai/gpt-5" in out.getvalue()
+    # The status line reflects the chosen model before the next turn.
+    assert "high [high]" in chat.status_line()
+    # A bad reference is a facade error, reported and non-fatal.
+    assert "unknown provider" in err.getvalue()
+    assert chat.closed is True
+
+
+async def test_chat_model_list_subcommand_still_lists():
+    reader = scripted_reader("/model list gpt", "/model", "/exit")
+    chat, facade, _, out, _ = make_chat(reader)
+    await chat.run()
+    kinds = [type(c).__name__ for c in facade.commands]
+    assert kinds.count("ModelsList") == 2
+    assert "openai/gpt-5" in out.getvalue()
 
 
 async def test_chat_tools_lists_seen_tools():

@@ -229,6 +229,14 @@ class Client:
     async def model_tiers(self) -> Any:
         return await self._request(p.ModelTiers())
 
+    async def select_model(self, session: str, ref: str) -> Any:
+        """Validate and persist a per-session model selection.
+
+        Returns the accepted :class:`~nexus.host.protocol.ModelSelectResult`; a
+        bad reference is raised as a :class:`FacadeError`.
+        """
+        return await self._request(p.ModelSelect(session=session, ref=ref))
+
     async def refresh_models(self) -> Any:
         return await self._request(p.ModelsRefresh())
 

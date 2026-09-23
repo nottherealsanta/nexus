@@ -1,7 +1,7 @@
 Nexus Phase 3 exit - baseline closeout evidence
 ================================================
-generated : 2026-09-23T09:37:39+0530
-head      : fc26db70659976284876ebcbd6326dfabf4c8fdf
+generated : 2026-09-23T10:33:18+0530
+head      : 4fd56175698c9566c1cdaeefef94e253a72d4c36
 schema    : nexus.phase3_exit_baseline/1
 
 Phase 3 exit criteria (plan section 10)
@@ -28,23 +28,23 @@ Controlled prompt cache before/after
 
 Line budgets (plan sections 11 / 14.14)
 ----------------------------------------
-  core+model+spec .......... 12476 physical / 10326 code (cap 2500, within=False, over=9976)
-  host+view+ui ............. 8029 physical / 6639 code (cap 2000, within=False, over=6029)
-  surface baseline ......... host=4694 view=1585 ui=1750
+  core+model+spec .......... 12560 physical / 10385 code (cap 2500, within=False, over=10060)
+  host+view+ui ............. 8620 physical / 7126 code (cap 2000, within=False, over=6620)
+  surface baseline ......... host=5198 view=1604 ui=1818
 
 Import cost (plan section 2.2)
 ----------------------------------------
-  import nexus ............. 9.38 ms, +40 modules, heavy=none
-  import nexus.runtime ..... 100.28 ms, 376 modules
+  import nexus ............. 10.04 ms, +40 modules, heavy=none
+  import nexus.runtime ..... 101.5 ms, 377 modules
 
 Phase 4 references (plan section 10)
 ----------------------------------------
-  result ................... passed in 1.14s
-  summary .................. 2 passed in 0.96s
+  result ................... passed in 1.18s
+  summary .................. 2 passed in 1.00s
     - tests/test_hot_extension_e2e.py::test_walkthrough_read_template_write_reload_call
     - tests/test_hot_extension_stress.py::test_two_hundred_reloads_do_not_leak
 
 Full suite
 ----------------------------------------
-  result ................... passed in 58.2s
-  summary .................. 3092 passed, 311 skipped, 2 deselected, 2 xfailed in 57.68s
+  result ................... passed in 60.31s
+  summary .................. 3148 passed, 311 skipped, 2 deselected, 2 xfailed in 59.79s

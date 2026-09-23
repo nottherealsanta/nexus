@@ -2496,3 +2496,162 @@ than changed. Likewise, `supervisor.cancel`'s synchronous return remains a
 pre-honor *estimate* for the in-flight case (the authoritative count is on
 `daemon.session_cancelled`); refactoring `cancel` into a deferred async
 completion was out of scope for a narrow follow-up.
+
+---
+
+## 17. Amendment: genuine per-session model switching (Phase 8 gap closure)
+
+Fourth append-only amendment, same rules as §14-§16: sections 1-16 are **not**
+rewritten, only amended by reference. This section records one packet's work:
+closing §16.5 item 2 ("`/model` is cosmetic"). `nexus doctor`'s aggregation of
+`registry.mismatch` (§16.5 item 3) is deliberately out of scope here and left to
+a subsequent packet.
+
+### 17.1 What was wrong
+
+§16.5 recorded that `/model` only listed selectable models and told the user to
+edit `[models] default` in `nexus.toml`: the facade had no per-session override,
+so the CLI never repainted a model the daemon was not using. The gap was a
+missing primitive, not a UI bug.
+
+### 17.2 What was built
+
+A durable, validated **per-session model selection** threaded through every
+layer the contract requires, with no new privileges:
+
+| Layer | Change |
+| --- | --- |
+| Event catalogue | `model.selected` added to `MODEL_EVENTS` (`nexus/events.py`). Session-scoped and turn-less, like `input.*`/`presence.*`. |
+| Model (L1) | `nexus/model/selection.py` — frozen `ModelSelection` `{reference, provider, model, tier, tier_source, requested_tier, clamped}` with `to_dict`/`from_dict`. Descriptive only; no credential/endpoint/sampling field can be present. |
+| Session (L3) | `Session.select_model()` persists the event; `Session.model_selection` is the rehydrated override. Rehydration is a pure log read on open; `_observe_event` keeps the in-memory mirror current. |
+| Runtime (L4) | `Runtime.select_session_model()` validates via the **same router** a configured default uses (provider/alias/tier rules), refusing an unknown provider, a malformed reference, or a tier with no runnable model; a tier name without a `[models]` registry is refused rather than silently reinterpreted as a model id. |
+| Host protocol | `ModelSelect` command + `ModelSelectResult` (redacted; carries the configured fallback chain and `apply_next_turn`). `HostFacade.select_model()` and `_dispatch` route it. |
+| Client / UI | `Client.select_model()`; `/model` lists with `list` and chooses with `/model <tier|provider/model|id>`, repainting the status line; `nexus models select <ref> --session <id>` is the root CLI entry. |
+| View | `_on_model_selected` records the choice so a replay shows it before any turn. |
+
+### 17.3 Guarantees held
+
+- **One durable event.** Each selection appends exactly one `model.selected`; a
+  reopen rehydrates the newest and writes nothing. Replay is exact.
+- **Frozen per turn.** The override is read once at turn start and handed to both
+  the static and the manifest per-iteration environment paths. A selection made
+  while a turn is in flight is invisible to that turn and takes effect on the
+  next.
+- **Tier ceiling.** The session's selected tier becomes the parent tier for its
+  subagents (in addition to `agents.max_tier`), so a child can never exceed the
+  model the session actually runs. Permission rules are untouched and remain
+  absolute.
+- **Fallback preserved.** The effective model still flows through the ordinary
+  `provider_for`/`model.fallback` path; the fallback chain is reported with the
+  selection.
+- **No secret exposure.** The selection crosses the facade as descriptors only;
+  resolution failures surface as redacted `ErrorResult`s.
+- **Layering preserved.** Still no in-process client fallback; `nexus/ui/**`
+  imports only `nexus.host`/`nexus.view`/`nexus.events` (the layering test is
+  unchanged and green).
+
+### 17.4 Verification
+
+New offline coverage: `tests/test_session_model.py` (14 tests: validation,
+one-event persistence, reopen rehydration, effective model, in-flight isolation,
+two-session isolation, tier resolution and the subagent tier ceiling, replay
+state, fallback reporting, no-secret fields); three real-daemon UDS tests in
+`tests/test_ui_daemon_e2e.py` (select over the wire with reconnect rehydration,
+per-session isolation, unknown-reference refusal); two interactive-CLI tests and
+one root-CLI test (`tests/test_ui_cli.py`, `tests/test_cli.py`); the protocol
+round-trip and every-verb facade tests were extended.
+
+Full offline suite: **3114 passed, 311 skipped, 2 deselected, 2 xfailed in
+63.92s** (`rc=0`). The two `xfail`s remain exactly the (non-strict) line-budget
+gates. The closeout report
+`tests/fixtures/reports/phase3_exit_baseline.{json,txt}` was regenerated after
+green: `core+model+spec = 12554` physical / `host+view+ui = 8190`
+(`host=4768 view=1604 ui=1818`). Both are still over the plan caps; the packet
+neither met nor waived a budget, only moved the recorded baseline.
+
+This closes §16.5 item 2. §16.5 item 3 (`doctor` and `registry.mismatch`) is
+untouched by this packet.
+
+### 17.5 `doctor` aggregation of `registry.mismatch` (§16.5 item 3 closure)
+
+A later packet in the same §17 amendment closes §16.5 item 3. `HostFacade.doctor`
+now reports accumulated catalogue defects in addition to registry *status*.
+
+- **New module.** `nexus/host/doctor.py` owns a `mismatch_summary(sessions_dir)`
+  read. It never opens a session handle (so a health check never migrates,
+  recovers, or writes); it only reads bounded bytes.
+- **Bounded.** `ScanLimits` caps discovered logs (`max_sessions`), each tail read
+  (`max_bytes_per_log`), parsed records (`max_lines_per_log`), tally keys
+  (`max_groups`), and retained samples (`max_samples`); any cap hit sets
+  `truncated`, so an incomplete scan is stated rather than hidden.
+- **Resilient.** A missing/inaccessible directory, a symlinked log, an
+  interior-corrupt log, or a crash tail is skipped; a malformed individual line
+  is skipped in place. Nothing raises.
+- **Redacted.** Only a count, grouped provider/model/reason/session tallies, and a
+  bounded sample of `session`/`seq`/`ts` plus those descriptive fields cross the
+  boundary. The event's raw `detail` (which may echo a provider error) is
+  dropped, and every surfaced string is sanitized and secret-redacted. Duplicate
+  events (by `id`) are folded once.
+- **Surfaces.** `DoctorResult.report["registry_mismatches"]` carries the summary;
+  the human `nexus doctor` output prints counts, per-field tallies, and samples,
+  and states `none` when clean; `nexus doctor --json` emits the same summary.
+
+Verification: `tests/test_doctor_mismatches.py` (21 tests: counts/groupings,
+empty/opaque/absent directory, non-mismatch records, duplicate events, an open
+session read without a handle, corrupt tails and bad lines, interior corruption,
+symlinked logs, secret-shaped hostile fields, and every bound) plus a real-runtime
+facade test in `tests/test_host_facade.py` and an end-to-end daemon+CLI test in
+`tests/test_cli.py` (human and `--json`, with a secret-bearing log asserted not
+to leak). Full offline suite: **3137 passed, 311 skipped, 2 deselected, 2
+xfailed**. The baseline report was regenerated after green (§16.4); the new
+`nexus/host/doctor.py` moved the recorded surface baseline to `host+view+ui =
+8526` physical (`host=5104 view=1604 ui=1818`), still over the plan cap.
+
+This closes §16.5 item 3.
+
+### 17.6 Review hardening of the §17.4/§17.5 packets
+
+A review of the two packets above found a small set of defects; this packet fixes
+them without changing either feature's contract. No commit was made.
+
+**`doctor` reads.** `_read_tail` now opens the log by descriptor with
+`O_NONBLOCK | O_NOFOLLOW` (each `getattr`-optional so a platform without it still
+runs), `fstat`s the descriptor, and refuses anything that is not `S_ISREG` before
+reading. A symlink can no longer be followed (closing the `stat`-then-read race),
+a named FIFO or device can no longer block the open, and the read is capped at
+`max_bytes` from a size taken on the same descriptor, so a log that grows during
+the scan cannot be read past the cap. The descriptor is always closed and every
+`OSError` becomes `None` (skip) rather than a raise.
+
+**`doctor` bounds and enumeration.** `ScanLimits` now rejects a zero, negative,
+non-integer, or boolean cap in `__post_init__` (`ValueError`), so a zero cap can
+never silently mean "unbounded". `_candidate_logs` enumerates directory entry
+*names* only, sorts the valid ids, and then slices, so exactly which logs are
+scanned no longer depends on filesystem iteration order; `truncated` is true iff
+more valid logs existed than the cap.
+
+**`doctor` offload.** `HostFacade.doctor` stays a synchronous method (its direct
+callers are unchanged), but the wire path in `_dispatch` now runs it through
+`asyncio.to_thread`, so reading up to 64 x 512 KiB and parsing their JSON cannot
+stall the daemon event loop. This was feasible without altering the sync facade
+contract, so it was implemented rather than waived.
+
+**Model selection minors.** The `ModelSelection.clamped` comment no longer claims
+a ceiling is applied (a session selection is never clamped today; the field is
+kept, documented as reserved, so the persisted/wire shape needs no migration).
+`from_dict` deserializes `clamped` strictly -- only a JSON boolean counts, so a
+hostile `"false"`/`1` reads as `False`. The reported fallback chain is now
+sanitized, secret-redacted, deduplicated, and has the selected reference dropped
+(a fallback to the model already in use is not a fallback). The unused
+`Runtime.session_model` helper (which reached into `SessionManager._handles`) was
+removed.
+
+**Verification.** New coverage: `tests/test_doctor_mismatches.py` adds a named
+FIFO that must not block, a concurrently growing log that must stay bounded,
+deterministic enumeration, and zero/negative/non-integer cap rejection;
+`tests/test_session_model.py` adds strict-bool parsing and fallback
+redaction/dedupe/selection-drop. Full offline suite: **3148 passed, 311 skipped,
+2 deselected, 2 xfailed** (`rc=0`). The baseline report was regenerated after
+green: `core+model+spec = 12560` physical / `10385` code, `host+view+ui = 8620`
+physical / `7126` code (`host=5198 view=1604 ui=1818`); both remain over the plan
+caps and no budget was met or waived.

@@ -73,6 +73,7 @@ from .model.registry import (
 )
 from .model.request import ModelRequest, ToolSchema
 from .model.router import ModelRouter
+from .model.selection import ModelSelection
 from .model.tiers import DEFAULT_TIER, TierTable
 from .session import Session, SessionManager
 from .tools.builtin._jobs import JobRegistry
@@ -359,6 +360,9 @@ class _ContextCoordinator:
         self._context = context
         self._resolver = resolver
         self._token_cache = token_cache
+        #: Marker read by :meth:`Session._assemble_for_turn`: this coordinator
+        #: accepts a ``session`` so it can freeze that session's model override.
+        self.session_aware = True
 
     def effective_config(self) -> Config | None:
         fn = getattr(self._context, "effective_config", None)
@@ -384,7 +388,20 @@ class _ContextCoordinator:
         except Exception:  # noqa: BLE001 - unresolved model keeps base defaults
             return None
 
-    def for_turn(self) -> Any:
+    def for_turn(
+        self,
+        *,
+        session: Any | None = None,
+        model_selection: ModelSelection | None = None,
+    ) -> Any:
+        """Freeze one turn's assembler, honoring a session model override.
+
+        The override (a session's last durable ``model.selected``) is resolved
+        once, here at turn start, and captured into the snapshot; the running
+        turn never re-reads it. If the override can no longer resolve (the
+        provider was removed from config), the configured default is used
+        instead, so a stale selection cannot wedge a turn.
+        """
         manager = self._context
         for_turn = getattr(manager, "for_turn", None)
         if not callable(for_turn):
@@ -392,25 +409,49 @@ class _ContextCoordinator:
         config = self.effective_config()
         provider_name: str | None = None
         model: str | None = None
-        reference = getattr(manager, "model_reference", None)
-        if config is not None and callable(reference):
-            try:
-                provider_name, model = reference(config)
-            except Exception:  # noqa: BLE001
-                provider_name, model = None, None
         capabilities = None
         request_counter = None
-        if config is not None and self._resolver is not None:
-            resolved = self._resolve(provider_name, model)
-            if resolved is not None:
-                capabilities = resolved.capabilities
-                provider_name = resolved.provider.name
-                model = resolved.model
-                request_counter = RequestTokenCounter(
-                    resolved.provider,
-                    cache=self._token_cache,
-                    provider_name=provider_name,
-                )
+
+        selection = model_selection
+        if selection is None and session is not None:
+            selection = getattr(session, "model_selection", None)
+        if selection is not None:
+            if config is not None and self._resolver is not None:
+                resolved = self._resolve(selection.provider, selection.model)
+                if resolved is None:
+                    # A selection that no longer resolves falls back to config
+                    # rather than failing the turn.
+                    selection = None
+                else:
+                    capabilities = resolved.capabilities
+                    provider_name = resolved.provider.name
+                    model = resolved.model
+                    request_counter = RequestTokenCounter(
+                        resolved.provider,
+                        cache=self._token_cache,
+                        provider_name=provider_name,
+                    )
+            else:
+                provider_name, model = selection.provider, selection.model
+
+        if selection is None:
+            reference = getattr(manager, "model_reference", None)
+            if config is not None and callable(reference):
+                try:
+                    provider_name, model = reference(config)
+                except Exception:  # noqa: BLE001
+                    provider_name, model = None, None
+            if config is not None and self._resolver is not None:
+                resolved = self._resolve(provider_name, model)
+                if resolved is not None:
+                    capabilities = resolved.capabilities
+                    provider_name = resolved.provider.name
+                    model = resolved.model
+                    request_counter = RequestTokenCounter(
+                        resolved.provider,
+                        cache=self._token_cache,
+                        provider_name=provider_name,
+                    )
         return for_turn(
             capabilities=capabilities,
             request_counter=request_counter,
@@ -421,7 +462,7 @@ class _ContextCoordinator:
     def assemble(self, session: Any) -> Any:
         for_turn = getattr(self._context, "for_turn", None)
         if callable(for_turn):
-            return self.for_turn().assemble(session)
+            return self.for_turn(session=session).assemble(session)
         return self._context.assemble(session)
 
     def for_iteration(
@@ -434,6 +475,7 @@ class _ContextCoordinator:
         pre_compact: Any = None,
         turn_id: str | None = None,
         iteration: int = 0,
+        model_selection: ModelSelection | None = None,
     ) -> Any:
         """Build one iteration's assembler from a pinned manifest generation.
 
@@ -443,6 +485,10 @@ class _ContextCoordinator:
         so it never rereads a live file. Resolution is strict: a config naming a
         provider the router cannot resolve raises, and the loop turns that into a
         visible failed turn rather than silently falling back.
+
+        ``model_selection`` is the session override **frozen at turn start** by
+        the caller; it is never read live here, so a selection made mid-turn
+        cannot change a running turn's model between iterations.
         """
         manager = self._context
         for_iteration = getattr(manager, "for_iteration", None)
@@ -451,21 +497,18 @@ class _ContextCoordinator:
 
         provider_name: str | None = None
         model: str | None = None
-        reference = getattr(manager, "model_reference", None)
-        if config is not None and callable(reference):
-            provider_name, model = reference(config)
-
         capabilities = None
         request_counter = None
-        if config is not None and self._resolver is not None and (
-            provider_name is not None or model is not None
+        used_selection = False
+        if (
+            model_selection is not None
+            and config is not None
+            and self._resolver is not None
         ):
-            resolve = getattr(self._resolver, "resolve", None)
-            if resolve is not None:
-                request = ModelRequest(
-                    messages=[], provider=provider_name, model=model
-                )
-                resolved = resolve(request)  # strict: unknown provider raises
+            resolved = self._resolve(
+                model_selection.provider, model_selection.model
+            )
+            if resolved is not None:
                 capabilities = resolved.capabilities
                 provider_name = resolved.provider.name
                 model = resolved.model
@@ -474,6 +517,30 @@ class _ContextCoordinator:
                     cache=self._token_cache,
                     provider_name=provider_name,
                 )
+                used_selection = True
+
+        if not used_selection:
+            reference = getattr(manager, "model_reference", None)
+            if config is not None and callable(reference):
+                provider_name, model = reference(config)
+
+            if config is not None and self._resolver is not None and (
+                provider_name is not None or model is not None
+            ):
+                resolve = getattr(self._resolver, "resolve", None)
+                if resolve is not None:
+                    request = ModelRequest(
+                        messages=[], provider=provider_name, model=model
+                    )
+                    resolved = resolve(request)  # strict: unknown provider raises
+                    capabilities = resolved.capabilities
+                    provider_name = resolved.provider.name
+                    model = resolved.model
+                    request_counter = RequestTokenCounter(
+                        resolved.provider,
+                        cache=self._token_cache,
+                        provider_name=provider_name,
+                    )
         return for_iteration(
             config=config,
             system_files=system_files,
@@ -528,10 +595,15 @@ class _ManifestEnvironmentFactory:
         path_guard: PathGuard,
         permissions: Any | None = None,
         budget: Any | None = None,
+        model_selection: ModelSelection | None = None,
     ) -> None:
         self._runtime = runtime
         self._session = session
         self._turn_id = turn_id
+        #: The session's model override, frozen at turn start (``None`` for the
+        #: configured default). Reused for every iteration and never re-read, so
+        #: a selection made mid-turn cannot change the running turn.
+        self._model_selection = model_selection
         #: The turn-scoped gate (engine + grants + attended + broker). Reused for
         #: every iteration, so a reload cannot detach a pending approval.
         self._gate = gate
@@ -588,6 +660,7 @@ class _ManifestEnvironmentFactory:
             pre_compact=pre_compact,
             turn_id=self._turn_id,
             iteration=iteration,
+            model_selection=self._model_selection,
         )
         activation = self._activation_for(session)
         skill_tools = self._skill_tools_for(manifest, activation)
@@ -665,9 +738,15 @@ class _ManifestEnvironmentFactory:
         authority = _ChildAuthority(
             engine=self._gate.engine, path_guard=self._path_guard
         )
+        # The session's selected tier is the parent tier, so a child can never
+        # exceed the model the session is actually running (section 15.8).
+        parent_tier = (
+            self._model_selection.tier if self._model_selection is not None else None
+        )
         return runtime._make_subagent_runner(
             session_id=session_id,
             parent_tools=parent_tools,
+            parent_tier=parent_tier,
             permissions=authority,
             grants=tuple(getattr(self._gate, "_grants", ())),
             config=config,
@@ -1595,6 +1674,59 @@ class Runtime:
         """Open (and migrate, and recover) a session ready for ``send``."""
         return self._sessions.open(session_id, create=create, recover=recover)
 
+    # -- per-session model selection ---------------------------------------
+
+    def select_session_model(
+        self, session_id: str, reference: str, *, create: bool = True
+    ) -> ModelSelection:
+        """Validate ``reference`` and persist it as this session's model.
+
+        The reference is a tier name, ``"provider/model"``, or a bare id, and is
+        resolved through the same router the turn loop uses, so a selection can
+        only name a provider/model the harness can actually stream. The durable
+        ``model.selected`` event makes the choice survive reopen and replay. A
+        selection never touches a turn already in flight (the turn's model was
+        frozen at turn start); it applies to the next turn.
+        """
+        selection = self._validate_model_selection(reference)
+        handle = self._sessions.open(session_id, create=create, recover=True)
+        handle.select_model(selection)
+        return selection
+
+    def _validate_model_selection(self, reference: str) -> ModelSelection:
+        """Resolve and validate one model/tier reference, or raise ``ConfigError``.
+
+        Tiers need a registry to name a concrete model; without ``[models]`` a
+        tier name is refused rather than silently reinterpreted as a model id.
+        Resolution is otherwise delegated to the router so the selection obeys
+        exactly the same provider, alias, and tier rules as a configured default.
+        """
+        if not isinstance(reference, str) or not reference.strip():
+            raise ConfigError("model reference must be a nonempty string")
+        ref = reference.strip()
+        if ref in self._tiers.order and self._registry is None:
+            raise ConfigError(
+                f"tier {ref!r} cannot be selected without a model registry; "
+                "configure [models] with a catalogue or use a provider/model id"
+            )
+        info = (
+            self._registry.get(ref) if self._registry is not None else None
+        )
+        # The router is authoritative for what is runnable: it raises for an
+        # unknown provider, a malformed reference, or a tier with no runnable
+        # model.
+        resolved = self._router.resolve(ModelRequest(messages=[], model=ref))
+        resolution = self._tiers.resolve(ref, info=info)
+        return ModelSelection(
+            reference=ref,
+            provider=resolved.provider.name,
+            model=resolved.model,
+            tier=resolution.tier,
+            tier_source=resolution.source,
+            requested_tier=ref if ref in self._tiers.order else "",
+            clamped=bool(resolution.clamped),
+        )
+
     async def close_session_jobs(self, session_id: str) -> bool:
         """Terminate and reap the shell jobs owned by one session.
 
@@ -1720,6 +1852,13 @@ class Runtime:
             )
         if config is None:
             config = self._load_config()
+        # Freeze the session's model override here, at turn start, and hand it to
+        # both environment paths. The running turn therefore cannot observe a
+        # selection made after this point.
+        model_selection = getattr(session, "model_selection", None)
+        parent_tier = (
+            model_selection.tier if model_selection is not None else None
+        )
         manager = self._tools
         if manager is None:
             manager = ToolManager(
@@ -1757,6 +1896,7 @@ class Runtime:
             runner = self._make_subagent_runner(
                 session_id=session.id,
                 parent_tools=manager.names,
+                parent_tier=parent_tier,
                 permissions=authority,
                 grants=grants,
                 config=config,
@@ -1792,6 +1932,7 @@ class Runtime:
                 path_guard=manager.path_guard,
                 permissions=getattr(getattr(config, "v2", None), "permissions", None),
                 budget=self._new_subagent_budget(config),
+                model_selection=model_selection,
             )
         return ToolTurn(
             manager=manager,

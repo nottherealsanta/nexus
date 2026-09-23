@@ -288,6 +288,24 @@ def _on_turn_terminal(
 # Model output
 # ---------------------------------------------------------------------------
 
+def _on_model_selected(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
+    """Record the session's selected model until a turn reports the effective one.
+
+    A selection is session-scoped and out-of-turn, so this replaces the
+    ``model`` summary with the chosen reference/provider/model/tier. The next
+    ``model.started`` overwrites it with the model the turn actually used.
+    """
+    selected = {
+        "selected": True,
+        "reference": _as_str(data.get("reference")),
+        "provider": _as_str(data.get("provider")),
+        "model": _as_str(data.get("model")),
+        "tier": _as_str(data.get("tier")),
+        "tier_source": _as_str(data.get("tier_source")),
+        "clamped": data.get("clamped") is True,
+    }
+    return replace(state, model=selected)
+
 def _on_model_started(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
     state, index = _turn_for(state, event)
     turn = state.turns[index]
@@ -889,6 +907,7 @@ _HANDLERS: dict[str, Any] = {
     "turn.completed": lambda s, e, d: _on_turn_terminal(s, e, d, "completed"),
     "turn.failed": lambda s, e, d: _on_turn_terminal(s, e, d, "failed"),
     "turn.cancelled": lambda s, e, d: _on_turn_terminal(s, e, d, "cancelled"),
+    "model.selected": _on_model_selected,
     "model.started": _on_model_started,
     "text.delta": _on_text_delta,
     "text": _on_text,

@@ -144,6 +144,7 @@ def test_parser_exposes_the_canonical_command_set():
         ["models", "show", "p/m"],
         ["models", "refresh"],
         ["models", "tiers"],
+        ["models", "select", "high", "--session", "s"],
         ["agents", "list"],
         ["doctor"],
         ["doctor", "--explain-reload", "--json"],
@@ -330,6 +331,52 @@ def test_doctor_explain_reload_json(cli_env):
     assert isinstance(report["providers"], list)
 
 
+def test_doctor_reports_aggregated_registry_mismatches(cli_env):
+    """`nexus doctor` surfaces durable registry.mismatch events (PLAN §15.5)."""
+    import msgspec
+
+    from nexus.events import Event
+
+    workspace, _home, _socket = cli_env
+    sessions_dir = workspace / ".nexus" / "sessions"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    log = sessions_dir / "probe.jsonl"
+    line = msgspec.json.encode(
+        {
+            "type": "event",
+            "seq": 1,
+            "ts": 1.0,
+            "v": 1,
+            "event": Event(
+                type="registry.mismatch",
+                data={
+                    "provider": "anthropic",
+                    "model": "claude-opus-5",
+                    "feature": "tools",
+                    "source": "provider-rejection",
+                    "detail": "Authorization: Bearer sk-secret1234567",
+                },
+                seq=1,
+                session="probe",
+                ts=1.0,
+            ).to_dict(),
+        }
+    )
+    log.write_bytes(line + b"\n")
+
+    human = _cli(cli_env, "doctor")
+    assert "registry mismatches: 1" in human.stdout
+    assert "feature=tools" in human.stdout
+    assert "sk-secret1234567" not in human.stdout
+
+    result = _cli(cli_env, "doctor", "--json")
+    report = json.loads(result.stdout)
+    summary = report["registry_mismatches"]
+    assert summary["count"] == 1
+    assert summary["by_provider"] == {"anthropic": 1}
+    assert "sk-secret1234567" not in result.stdout
+
+
 def test_models_sessions_agents_and_ext(cli_env):
     models = _cli(cli_env, "models", "list")
     assert models.returncode == 0
@@ -349,6 +396,17 @@ def test_models_sessions_agents_and_ext(cli_env):
 
     ext = _cli(cli_env, "ext", "list")
     assert "generation" in ext.stdout
+
+
+def test_models_select_sets_a_session_model(cli_env):
+    result = _cli(cli_env, "models", "select", "scripted/alt", "--session", "s")
+    assert "scripted/alt" in result.stdout
+    assert "session s" in result.stdout
+
+    # An invalid reference is a clean non-zero error, not a traceback or a change.
+    bad = _cli(cli_env, "models", "select", "nope/x", "--session", "s", check=False)
+    assert bad.returncode == 1
+    assert "nope" in bad.stderr
 
 
 def test_ext_trash_over_the_daemon(cli_env):

@@ -253,6 +253,19 @@ class _FakeRuntime:
     def session(self, session_id, *, create=True, recover=True):
         return self.sessions.open(session_id)
 
+    def select_session_model(self, session_id, ref):
+        from nexus.model.selection import ModelSelection
+
+        if not isinstance(ref, str) or not ref:
+            raise ValueError("bad ref")
+        return ModelSelection(
+            reference=ref,
+            provider="scripted",
+            model=ref,
+            tier="low",
+            tier_source="tier",
+        )
+
     async def list_tools(self):
         return [
             {
@@ -299,6 +312,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.ModelsList(provider="p", tier="high"),
         p.ModelShow(ref="p/m"),
         p.ModelTiers(),
+        p.ModelSelect(session="s", ref="high"),
         p.AgentsList(),
         p.ToolsList(),
         p.Doctor(explain_reload=True),
@@ -331,6 +345,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.ModelsListResult(count=1, models=[{"id": "m"}]),
         p.ModelShowResult(ref="p/m", found=True, model={"id": "m"}),
         p.ModelTiersResult(order=["low", "medium", "high"], default="medium"),
+        p.ModelSelectResult(session="s", provider="p", model="m", tier="high"),
         p.AgentsListResult(generation=3, agents=[{"name": "explore"}]),
         p.ToolsListResult(count=1, tools=[{"name": "Read"}]),
         p.DoctorResult(ok=True, report={"workspace": "/tmp/ws"}),
@@ -398,6 +413,11 @@ async def test_facade_handle_dispatches_every_verb():
     tiers = await facade.handle(p.ModelTiers())
     assert isinstance(tiers, p.ModelTiersResult)
     assert tiers.default == "medium" and tiers.order == ["low", "medium", "high"]
+
+    selected = await facade.handle(p.ModelSelect(session="s", ref="low"))
+    assert isinstance(selected, p.ModelSelectResult)
+    assert selected.accepted and selected.provider == "scripted"
+    assert selected.model == "low" and selected.tier == "low"
 
     doctor = await facade.handle(p.Doctor(explain_reload=True))
     assert isinstance(doctor, p.DoctorResult) and doctor.ok
@@ -565,6 +585,33 @@ async def test_facade_doctor_reports_mcp_server_health():
     assert report["mcp"]["diagnostics"] == [
         {"name": "github", "kind": "server", "error": "boom"}
     ]
+
+
+async def test_facade_doctor_aggregates_durable_registry_mismatches(tmp_path):
+    """A recorded `registry.mismatch` is surfaced, redacted, by `doctor` (§15.5)."""
+    runtime = _runtime(tmp_path, ScriptedProvider(text_response("ok")))
+    handle = runtime.session("probe")
+    handle.append_event(
+        Event(
+            type="registry.mismatch",
+            data={
+                "provider": "anthropic",
+                "model": "claude-opus-5",
+                "feature": "tools",
+                "source": "provider-rejection",
+                "detail": "Authorization: Bearer sk-secret1234567",
+            },
+            session="probe",
+        )
+    )
+    facade = HostFacade(runtime)
+
+    summary = facade.doctor()["registry_mismatches"]
+    assert summary["count"] == 1
+    assert summary["by_provider"] == {"anthropic": 1}
+    assert summary["samples"][0]["session"] == "probe"
+    assert "sk-secret1234567" not in str(summary)
+    await runtime.aclose()
 
 
 # ---------------------------------------------------------------------------

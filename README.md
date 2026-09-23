@@ -264,7 +264,8 @@ built-ins always resolve. A tier name works in `models.default`, a skill's
 
 Capabilities are authoritative from the registry. If a provider rejects a
 feature the registry claimed, the loop emits `context.degraded`, retries once
-without the feature, and emits a `registry.mismatch` event.
+without the feature, and emits a `registry.mismatch` event. `nexus doctor`
+aggregates those durable mismatch events so a bad upstream entry can be fixed.
 
 ## Tools and permissions
 
@@ -568,7 +569,12 @@ nexus doctor --explain-reload
 `doctor` validates the layered config, reports which providers are configured
 and reachable, whether the model registry is fresh or stale, which extensions
 loaded or were refused (with reasons), and which MCP servers are connected,
-degraded, or failed. It never performs a model request.
+degraded, or failed. It also aggregates the durable `registry.mismatch` events
+recorded when a provider rejects a capability the registry claimed: a count, the
+sessions involved, per-provider/model/reason tallies, and a bounded sample. The
+scan reads a bounded tail of a bounded set of session logs, skips an
+unreadable/corrupt one, and never opens a session or surfaces a raw provider
+error. It never performs a model request.
 
 Common checks:
 

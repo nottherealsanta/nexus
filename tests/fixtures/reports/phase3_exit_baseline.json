@@ -2,37 +2,37 @@
   "full_suite": {
     "command": "/Users/santa/repos/nexus/.venv/bin/python -m pytest -q -p no:cacheprovider",
     "returncode": 0,
-    "seconds": 58.2,
-    "summary": "3092 passed, 311 skipped, 2 deselected, 2 xfailed in 57.68s"
+    "seconds": 60.31,
+    "summary": "3148 passed, 311 skipped, 2 deselected, 2 xfailed in 59.79s"
   },
-  "generated_at": "2026-09-23T09:37:39+0530",
-  "head": "fc26db70659976284876ebcbd6326dfabf4c8fdf",
+  "generated_at": "2026-09-23T10:33:18+0530",
+  "head": "4fd56175698c9566c1cdaeefef94e253a72d4c36",
   "import_cost": {
     "heavy_loaded": [],
-    "import_nexus_ms": 9.38,
+    "import_nexus_ms": 10.04,
     "import_nexus_new_modules": 40,
-    "import_runtime_modules": 376,
-    "import_runtime_ms": 100.28
+    "import_runtime_modules": 377,
+    "import_runtime_ms": 101.5
   },
   "line_budgets": {
     "core_model_spec": {
-      "code_lines": 10326,
-      "files": 27,
-      "overage": 9976,
-      "physical_lines": 12476,
+      "code_lines": 10385,
+      "files": 28,
+      "overage": 10060,
+      "physical_lines": 12560,
       "plan_cap": 2500,
       "within_plan_cap": false
     },
     "host_view_ui": {
       "baseline_by_dir": {
-        "host": 4694,
-        "ui": 1750,
-        "view": 1585
+        "host": 5198,
+        "ui": 1818,
+        "view": 1604
       },
-      "code_lines": 6639,
-      "files": 26,
-      "overage": 6029,
-      "physical_lines": 8029,
+      "code_lines": 7126,
+      "files": 27,
+      "overage": 6620,
+      "physical_lines": 8620,
       "plan_cap": 2000,
       "within_plan_cap": false
     }
@@ -76,10 +76,10 @@
       "tests/test_hot_extension_e2e.py::test_walkthrough_read_template_write_reload_call",
       "tests/test_hot_extension_stress.py::test_two_hundred_reloads_do_not_leak"
     ],
-    "output_tail": "..                                                                       [100%]\n2 passed in 0.96s",
+    "output_tail": "..                                                                       [100%]\n2 passed in 1.00s",
     "returncode": 0,
-    "seconds": 1.14,
-    "summary": "2 passed in 0.96s"
+    "seconds": 1.18,
+    "summary": "2 passed in 1.00s"
   },
   "schema": "nexus.phase3_exit_baseline/1"
 }

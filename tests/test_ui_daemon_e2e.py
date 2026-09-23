@@ -32,6 +32,7 @@ from nexus.host import PROTOCOL_VERSION
 from nexus.ui.cli import (
     Approver,
     Client,
+    FacadeError,
     ProtocolVersionError,
     open_client,
     run_chat,
@@ -73,7 +74,9 @@ def _step(text):
     async def run(request):
         if DELAY:
             await asyncio.sleep(DELAY)
-        return text_response(f"{text}{next(COUNTER)}")
+        # Echo the requested model so a test can prove a per-session selection
+        # reached the provider on later turns.
+        return text_response(f"{text}{next(COUNTER)}@{request.model}")
     return run
 
 
@@ -629,6 +632,70 @@ async def test_ctrl_c_cancels_the_daemon_turn(ui_env):
             process.kill()
             with contextlib.suppress(Exception):
                 await process.wait()
+
+
+# ---------------------------------------------------------------------------
+# Per-session model switching over the real daemon
+# ---------------------------------------------------------------------------
+
+
+async def test_model_select_over_uds_survives_reconnect(ui_env):
+    client = await open_ui(ui_env)
+    first = _buffers()
+    try:
+        await client.open_session("s")
+        result = await client.select_model("s", "scripted/alt")
+        assert result.model == "alt" and result.tier
+        code = await run_once(
+            client, session="s", content="one", stdout=first[0], stderr=first[1]
+        )
+        assert code == 0 and "@alt" in first[0].getvalue()
+    finally:
+        await client.aclose()
+
+    # A fresh connection to the same daemon rehydrates the durable selection.
+    resumed = await open_ui(ui_env)
+    second = _buffers()
+    try:
+        code = await run_once(
+            resumed, session="s", content="two", stdout=second[0], stderr=second[1]
+        )
+        assert code == 0 and "@alt" in second[0].getvalue()
+    finally:
+        await resumed.aclose()
+
+
+async def test_model_selection_is_isolated_between_sessions(ui_env):
+    client = await open_ui(ui_env)
+    first, second = _buffers(), _buffers()
+    try:
+        await client.open_session("s1")
+        await client.open_session("s2")
+        await client.select_model("s1", "scripted/alt")
+        code_one = await run_once(
+            client, session="s1", content="one", stdout=first[0], stderr=first[1]
+        )
+        code_two = await run_once(
+            client, session="s2", content="two", stdout=second[0], stderr=second[1]
+        )
+    finally:
+        await client.aclose()
+    assert code_one == 0 and code_two == 0
+    assert "@alt" in first[0].getvalue()
+    # The untouched session keeps the configured default model.
+    assert "@m" in second[0].getvalue()
+    assert "@alt" not in second[0].getvalue()
+
+
+async def test_model_select_refuses_an_unknown_reference(ui_env):
+    client = await open_ui(ui_env)
+    try:
+        await client.open_session("s")
+        with pytest.raises(FacadeError) as info:
+            await client.select_model("s", "nope/x")
+        assert "nope" in info.value.message
+    finally:
+        await client.aclose()
 
 
 # ---------------------------------------------------------------------------

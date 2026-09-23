@@ -40,7 +40,7 @@ class CommandSpec:
 SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("/new", "start a new session", "[id]"),
     CommandSpec("/sessions", "list sessions and switch", "[id]"),
-    CommandSpec("/model", "show available models", "[name]"),
+    CommandSpec("/model", "list models or set this session's model", "[list|tier|provider/model|id]"),
     CommandSpec("/tools", "list tools used in this transcript"),
     CommandSpec("/cancel", "cancel the active turn"),
     CommandSpec("/fork", "branch this session", "[at_seq]"),

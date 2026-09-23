@@ -43,6 +43,7 @@ TURN_EVENTS = (
 )
 CONTEXT_EVENTS = ("context.assembled", "context.compacted", "context.degraded")
 MODEL_EVENTS = (
+    "model.selected",
     "model.started",
     "text.delta",
     "text",
