@@ -2049,3 +2049,197 @@ and any attribution requirement before Phase 5.5 ships. If redistribution is
 not permitted, the vendored snapshot is dropped and `models.offline = true`
 instead requires a one-time `nexus models refresh`; nothing else in this
 section depends on it.
+
+---
+
+## 16. Amendment: as-built status ledger (Phase 0-8)
+
+Third append-only amendment, same rules as §14 and §15: **sections 1-15 are not
+rewritten.** This section records what is *actually built and verified*, not what
+is required. Where it appears to conflict with a requirement section, the
+requirement section still states the intent; this section only reports progress
+against it. Nothing here relaxes a requirement.
+
+Recorded 2026-09-23. Base commit `2a159fb` (`feat: add multi-provider model
+adapters`) plus the **uncommitted** Phase 8 worktree. Evidence: direct source
+inspection, the **regenerated** (also uncommitted) closeout report
+`tests/fixtures/reports/phase3_exit_baseline.txt`, and a full offline suite run
+by this ledger's author (not taken on faith).
+
+### 16.1 Committed vs. uncommitted
+
+**Committed through `2a159fb` — Phases 0-7:**
+
+| Commit | Content |
+| --- | --- |
+| `23ea874` | Phase 0 foundations |
+| `39e1c89` | Phase 1 owned loop |
+| `db1c3d3` | Phase 2 tools and permissions |
+| `9ad195a` | Phase 3 context and sessions |
+| `75caf77` | docs: host-layer amendment (§14) |
+| `6cad851` | docs: model-registry amendment (§15) |
+| `2cf74d6` | Phase 3.5 detached sessions + Phase 4 hot extensions |
+| `e7a905f` | Phase 5 MCP + Phase 5.5 model registry/tiers |
+| `da00543` | Phase 6 subagents and hooks |
+| `2a159fb` | Phase 7 provider breadth |
+
+**Uncommitted in the worktree — Phase 8 (not yet committed):**
+
+- **Staged deletions (legacy cutover):** `nexus/agent.py`, `nexus/provider.py`,
+  `nexus/store.py`, `nexus/ui/native.py`,
+  `nexus/model/providers/legacy_codex_cli.py`, and their tests
+  (`tests/test_harness.py`, `tests/test_legacy_codex_provider.py`,
+  `tests/test_native_cli.py`, `tests/test_provider.py`).
+- **Modified:** `nexus/cli.py`, `nexus/__init__.py`, `nexus/runtime.py`,
+  `nexus/session/manager.py`, `nexus/session/session.py`,
+  `nexus/session/__init__.py`, `nexus/ext/manager.py`,
+  `nexus/model/provider.py`, `nexus/model/providers/__init__.py`,
+  `nexus/context/__init__.py`, `nexus/tools/manager.py`, `nexus/ui/__init__.py`,
+  `pyproject.toml`, `README.md`, `SOUL.md`, `examples/python_api.py`, several
+  `tests/`, and the baseline report fixtures.
+- **New (untracked):** `nexus/host/` (`facade.py`, `protocol.py`,
+  `supervisor.py`, `presence.py`, `daemon.py`,
+  `transports/{uds.py,http_sse.py}`), `nexus/view/` (`model.py`, `reduce.py`,
+  `fold.py`), `nexus/ui/cli/` (`app.py`, `approve.py`, `client.py`,
+  `commands.py`, `keys.py`, `render.py`, `run.py`, `stream.py`, `theme.py`,
+  `uds.py`), `nexus/ui/jsonl.py`, `nexus/session/export.py`, `ARCHITECTURE.md`,
+  `EXTENDING.md`, `examples/{nexus.toml,mcp.json,hooks.toml,skills/,agents/,tools/}`,
+  and the Phase 8 tests (`test_view_reduce.py`, `test_host_facade.py`,
+  `test_host_supervisor.py`, `test_host_daemon.py`, `test_uds_transport.py`,
+  `test_http_sse_transport.py`, `test_ui_cli.py`, `test_ui_daemon_e2e.py`,
+  `test_ui_layering.py`, `test_session_operations.py`, `test_examples_valid.py`).
+
+This ledger's own edit to `PLAN.md` is the only file it touches; every Phase 8
+item above pre-existed it.
+
+### 16.2 Phase checklist
+
+| Phase | Status | Evidence |
+| --- | --- | --- |
+| 0 Foundations | **Complete** (committed) | contracts, layered config, bus/registry/watch/cancel |
+| 1 Own the loop | **Complete** (committed) | `core/loop.py`, sessions, Anthropic + scripted providers, router |
+| 2 Tools and permissions | **Complete** (committed) | tool catalog, permission engine, adversarial suite |
+| 3 Context and sessions | **Complete** (committed) | parts/budget/compact/cache, fork/replay, snapshots |
+| 3.5 Session surface | **Complete** (committed) | `start_turn`/`subscribe`/`enqueue`, presence, session-scoped jobs |
+| 4 Self-extension | **Complete** (committed) | manifest/quarantine/manager, hot tools, §6.5 money path test |
+| 5 MCP | **Complete** (committed) | client/manager/bridge, failure isolation, injection wrapper |
+| 5.5 Model registry | **Complete** (committed) | registry/tiers/ingest, degradation path |
+| 6 Subagents and hooks | **Complete** (committed) | `Task` modes, seeded roles, bounding, hooks |
+| 7 Provider breadth | **Complete** (committed) | Anthropic/OpenAI/Gemini/Ollama/opencode + conformance; legacy adapter deleted |
+| 8 Surfaces and polish | **Implemented, uncommitted, partial** | see §16.3; gaps in §16.5 |
+
+### 16.3 Phase 8 pieces as built (uncommitted)
+
+- **Session (8a0):** `nexus/session/export.py` (json/markdown/jsonl, consistent
+  read, no exclusive lock); `SessionManager` session trash
+  (`delete`/`restore`/`list_trashed`/`purge_expired`, `TrashRecord`,
+  retention); `Session.fail_turn` for a durable synthetic terminal on a
+  supervisor start failure. The Phase 3.5 surface (`start_turn`/`subscribe`/
+  `enqueue`/presence) was already committed.
+- **View (8a1):** `nexus/view/{model,reduce,fold}.py` — pure, synchronous
+  reducer importing only `nexus.events`; `nexus replay` renders from the log;
+  golden tests in `tests/test_view_reduce.py` and `tests/fixtures/view/`.
+- **Host (8a2):** `nexus/host/facade.py` (the verb list), `protocol.py`
+  (msgspec Command/Result structs), `supervisor.py` (concurrent-turn
+  scheduling/caps), `presence.py` (subscriber counts → derived attendance).
+- **Daemon + UDS (8b):** `nexus/host/daemon.py` and
+  `nexus/host/transports/uds.py`; auto-start, version handshake, stale-socket
+  cleanup, idle shutdown; `nexus daemon status|stop|logs`. The prompt_toolkit
+  CLI lives in `nexus/ui/cli/`; `nexus run`/`chat` are pure daemon clients with
+  no in-process fallback; `ui/native.py` is retired.
+- **CLI + JSONL (8b/8c):** `nexus/cli.py` rewritten as a client; `nexus/ui/cli/`
+  (`app`, `approve`, `client`, `commands`, `keys`, `render`, `run`, `stream`,
+  `theme`, `uds`); `nexus/ui/jsonl.py` `--json` passthrough. Slash commands as
+  data in `commands.py`. `nexus doctor`, `nexus models`, `nexus sessions`,
+  `nexus agents`, `nexus tools`, `nexus ext` implemented over the facade.
+- **HTTP/SSE (8c):** `nexus/host/transports/http_sse.py` — a **standalone**
+  transport wrapping `HostFacade` (commands as POST, events as SSE with
+  `Last-Event-ID` resume), loopback-only, constant-time bearer token, strict
+  `Origin` allowlist, allocation bounds. It is tested directly against a
+  `HostFacade` in `tests/test_http_sse_transport.py`; **the daemon does not start
+  or wire it** (see §16.5 gap 2).
+- **Docs:** `README.md` rewritten; `ARCHITECTURE.md` and `EXTENDING.md` added;
+  `SOUL.md` rewritten to describe the as-built harness.
+- **Legacy cutover:** `legacy_codex_cli.py`, the old `provider.py`, `agent.py`,
+  `store.py`, and `ui/native.py` are deleted; the root package drops the legacy
+  `Agent`/`CodexProvider` exports.
+- **UI layering:** `tests/test_ui_layering.py` enforces that `nexus/ui/**`
+  imports only `{nexus.host, nexus.view, nexus.events, stdlib}`.
+
+### 16.4 Verification evidence
+
+- **Full offline suite — reproduced by this ledger's author** on 2026-09-23 at
+  `2a159fb` + the uncommitted worktree:
+  `3007 passed, 311 skipped, 2 deselected, 2 xfailed in 57.16s`. The regenerated
+  (uncommitted) closeout report records the same figures at head `2a159fb`. The 2 deselected
+  are the credential-gated `live` tests (`addopts = -m 'not live'`); the 311
+  skips are gated (absent credentials / model features), not failures.
+- **The 2 xfailed are exactly the line-budget gates**, both `strict=False`:
+  `tests/test_phase3_exit.py::test_line_budget_core_model_spec_within_plan_cap`
+  and `::test_line_budget_host_view_ui_within_plan_cap`.
+- **Line budgets (from the regenerated report, measured at `2a159fb`):**
+  - `core/ + model/ + tools/spec.py` = **12476 physical / 10326 code** vs the
+    §11 cap of **2500** → over by 9976.
+  - `host/ + view/ + ui/` = **7468 physical / 6179 code** vs the §14.14 cap of
+    **2000** → over by 5468 (surface baseline: host=4140, view=1585, ui=1743).
+- **Security-review blockers:** `tests/test_security_regressions.py` pins the
+  ten mandatory Phase 2 fixes (duplicate tool-call ids refused; Bash env overlay
+  preserves the inherited environment; fs re-canonicalizes the permission key;
+  atomic writes refuse a swapped/symlinked parent; `*_ALWAYS` grants cannot
+  broaden; bounded killable Grep; symlink loop is a path-security failure; `~`
+  in a rule is rejected; job registry eviction; only owned managers are closed).
+  The approval-prompt tests were migrated to `nexus/ui/cli/approve.py` and pass.
+- **Import cost:** `import nexus` ≈ 10 ms, no heavy modules; `import
+  nexus.runtime` ≈ 99 ms.
+
+### 16.5 True acceptance gaps (separate from the ledger)
+
+These are the criteria not yet met; they are gaps, not waivers.
+
+1. **Line budgets unmet.** §12 criterion 10 (core < 2,500) and the §14.14
+   surface cap (host/view/ui < 2,000) are both exceeded by a wide margin
+   (12476 vs 2500; 7468 vs 2000). The gates remain xfail by design.
+2. **HTTP/SSE is not daemon-wired.** §14.9 describes two transports behind one
+   daemon; only UDS is served by `host/daemon.py`. The HTTP/SSE transport exists
+   and is unit-tested standalone but is not reachable from a running daemon, so
+   a network surface is not yet a live peer.
+3. **§14.15 criterion 11 is not demonstrated end-to-end.** Two *terminal*
+   clients sharing one live session (including first-responder approval) is
+   tested in `tests/test_ui_daemon_e2e.py`, but the terminal-plus-**HTTP** view
+   pairing cannot be shown while gap 2 stands. Criteria 12 (disconnect survives,
+   late attach reconstructs) and 13 (UI layering, proven by test) are met.
+4. **`/model` is cosmetic.** §14.11 lists `/model` as a session command, but the
+   facade has no per-session model override; `nexus/ui/cli/app.py:_cmd_model`
+   only lists selectable models and points the user at `[models] default` in
+   `nexus.toml`. It deliberately never repaints a model the daemon is not using.
+5. **`registry.mismatch` is not aggregated by `doctor`.** §15.5/§15.12 call for
+   `nexus doctor` to surface accumulated catalogue defects. The loop emits
+   `registry.mismatch` (with one capability retry), but `HostFacade.doctor`
+   reports only registry *status* (source/models/stale) and does not collect or
+   report the accumulated mismatches.
+6. **`nexus ext trash` is not implemented.** Phase 8c specifies `nexus ext`
+   list/validate/**trash**; the CLI implements list/reload/validate only. Session
+   trash exists (`nexus sessions delete|restore`); *extension* trash does not.
+   This is outstanding concurrent work outside this ledger's ownership: during
+   the recording of this section, `ExtensionTrashError` appeared in
+   `nexus/errors.py` and `ExtensionTrashError`/`ExtensionTrashOutcome`/
+   `ExtensionTrashRecord` plus a trash implementation appeared in
+   `nexus/ext/manager.py`. That work is in flight and is not reflected in the
+   checklist above, which describes the state the ledger inspected.
+7. **Live provider end-to-end is offline-excluded.** §12 criterion 1
+   (Anthropic + OpenAI-compatible + Gemini + Ollama, Codex absent) and the
+   network-gated conformance runs are `-m live` and deselected in the offline
+   suite; they were not exercised by the reproduced run. The offline conformance
+   fixtures pass.
+
+### 16.6 Additional material observations
+
+- **Web frontend** is deferred exactly as §14.1/§14.16 state; its absence is not
+  a gap.
+- **Phase 8 was budgeted at ~13 days (§14.13) plus Phase 3.5's 3**, against the
+  original §10 Phase 8's 5; §15.11 revised the total to ~59 working days.
+- The two `xfail` line-budget tests are the **only** expected failures in the
+  suite; everything else is green or gated.
+- The legacy Codex config section still loads through a compatibility shim in
+  `nexus/runtime.py` (`_is_legacy_codex_section`); this is config migration, not
+  a retained Codex code path.
