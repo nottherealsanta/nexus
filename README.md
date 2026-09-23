@@ -45,14 +45,18 @@ nexus --workspace /path/to/project run "Explain this repository"
 nexus --workspace /path/to/project chat          # interactive line-mode prompt
 ```
 
-`init` creates editable files without overwriting anything that exists. `run`
-takes a prompt, or `-` to read the prompt from stdin. `chat` is line-mode, not a
-full-screen app: scrollback and copy-paste keep working.
+`init` creates editable files without overwriting anything that exists; it is
+local and needs no daemon. `run` takes a prompt, or `-` to read the prompt from
+stdin. `chat` is line-mode, not a full-screen app: scrollback and copy-paste keep
+working.
 
-`nexus run` and `nexus chat` are **clients of a per-workspace daemon**. If no
-daemon is listening, the client starts one, waits (bounded) for readiness, and
-connects. The daemon owns the `Runtime`; the CLI never has an in-process
-fallback, so every surface sees identical semantics.
+Every command except `init` and `nexus daemon status|stop|logs` is a **client of
+a per-workspace daemon** — including `doctor`, `models`, `sessions`, `ext`,
+`tools`, `agents`, and `replay`. If no daemon is listening, the client starts
+one, waits (bounded) for readiness, and connects, so `nexus doctor` starts (or
+reuses) the daemon rather than checking the workspace in-process. The daemon owns
+the `Runtime`; the CLI never has an in-process fallback, so every surface sees
+identical semantics.
 
 ```sh
 nexus run "Inspect the failing tests and fix them" --session work
@@ -122,8 +126,34 @@ restorable from the CLI.
 
 ### Slash commands in `chat`
 
-`/new`, `/sessions`, `/model`, `/tools`, `/cancel`, `/fork`, `/export`, `/help`,
-`/exit`.
+`/new`, `/sessions`, `/model`, `/tools`, `/details`, `/reconnect`, `/cancel`,
+`/fork`, `/export`, `/help`, `/exit`.
+
+Every prompt is preceded by a one-line status bar built from the same pure
+view the transcript is: the phase, the **effective** model and provider (from
+the turn's `model.started`, or the session's durable `model.selected` until the
+next turn reports the actual one), token usage, context occupancy against the
+assembled input budget (`ctx used/budget (pct%)`), viewer count, and any queued
+inputs or live subagents. `/details` expands that into the context budget,
+compaction, queued inputs, pending approvals, and the subagent tree;
+`/reconnect` re-attaches from the last rendered `seq` and replays anything a
+dropped connection missed.
+
+Tool calls stream with their name, status, and duration, and a bounded preview
+where the event carries one (a permission request's key/preview, a tool's
+progress line, or a result/summary field); control characters and obvious
+credentials are escaped or redacted, and byte payloads are shown by size rather
+than dumped. Assistant text and thinking stream as plain prose, with the final
+`text` suppressed when deltas already printed so nothing renders twice.
+
+With the optional `nexus[cli]` extra the editor adds history, a live status
+toolbar, and `patch_stdout` so streaming output draws above the input line.
+`nexus chat` builds the editor through `run_chat`, so the toolbar and
+`patch_stdout` are active in the real prompt; captured buffers and explicit
+readers bypass both and stay byte-for-byte deterministic.
+Colour is opt-in: it is disabled for a non-TTY, when `NO_COLOR` is set, or when
+`TERM=dumb`, and `FORCE_COLOR` turns it on explicitly. Without the extra the
+prompt degrades to a plain stdin reader.
 
 ### Approval prompts
 
@@ -530,6 +560,14 @@ and the terminal CLI still speaks only the Unix socket.
 A UI may import only `nexus.host`, `nexus.view`, `nexus.events`, and the
 standard library. That boundary is enforced by a test, not by discipline.
 
+Two line budgets keep the harness small and are enforced by strict tests:
+`core/` + `model/` + `tools/spec.py` under 14,000 physical lines and `host/` +
+`view/` + `ui/` under 9,500, with modest headroom over the current tree. These
+revise the original 2,500/2,000 targets (PLAN §18); the closeout report
+regeneration refuses to record a baseline that reaches or exceeds a cap, so an
+overage (or a tree exactly at the cap) cannot be blessed by regenerating. See
+`ARCHITECTURE.md` and `tests/test_phase3_exit.py`.
+
 ## Offline and local
 
 Everything except a hosted model call works with no network:
@@ -585,6 +623,12 @@ Common checks:
 - **Protocol version mismatch** — upgrade the client and daemon together; the
   handshake will not retry.
 - **`daemon did not become ready`** — run `nexus daemon logs`.
+- **`AF_UNIX path too long` on a deep `$HOME`** — the socket is
+  `~/.nexus/daemon/<hash-of-workspace>.sock`, and a Unix socket path is capped
+  near 104 bytes (108 on Linux). A long home directory makes the daemon's bind
+  fail, and client auto-start then reports `daemon exited ... before readiness`.
+  Run the client with a shorter `HOME` (for example `HOME=/tmp/nx nexus doctor`),
+  which also relocates `~/.nexus` config and credentials to that shorter tree.
 - **A tool call is denied** — the error result names the rule to grant. `deny`
   rules cannot be overridden.
 - **Context overflow** — lower `context.max_tokens`, raise
@@ -629,6 +673,9 @@ hook, and MCP config samples.
 pip install -e '.[cli,dev]'
 pytest                       # full offline suite; live tests are deselected
 ANTHROPIC_API_KEY=... pytest -m live tests/test_anthropic_live.py
+
+# The linter is not part of the `dev` extra; install it separately.
+pip install ruff
 ruff check nexus tests
 ```
 

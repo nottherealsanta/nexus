@@ -63,7 +63,11 @@ def migrate_session(directory: str | Path, session: str) -> MigrationResult:
     """Convert ``<id>.json`` to ``<id>.jsonl`` if needed.
 
     Callers should hold the session's exclusive lock so concurrent opens do not
-    race; the manager does exactly that.
+    race; the manager does exactly that. This function acquires **no** lock of
+    its own, so it is reentrant-safe to call while the caller already holds the
+    session and/or trash locks (as the create path does): there is no nested
+    ``flock`` and no deadlock. The atomic publish still refuses to overwrite a
+    log another opener won.
     """
     directory = Path(directory)
     session_id = validate_session_id(session)

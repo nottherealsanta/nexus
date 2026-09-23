@@ -12,6 +12,7 @@ requirement, and one-shot and JSONL runs never build a prompt session at all.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -20,6 +21,9 @@ from typing import Any, TextIO
 
 #: ``read(prompt) -> str``; raises ``EOFError`` at end of input.
 Reader = Callable[[str], Awaitable[str]]
+
+#: ``() -> str``; the live status text for the bottom toolbar.
+Toolbar = Callable[[], str]
 
 
 class CliDependencyError(RuntimeError):
@@ -32,12 +36,14 @@ def _load() -> SimpleNamespace:
     from prompt_toolkit import PromptSession
     from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
     from prompt_toolkit.history import FileHistory
+    from prompt_toolkit.patch_stdout import patch_stdout
 
     return SimpleNamespace(
         version=getattr(prompt_toolkit, "__version__", "?"),
         PromptSession=PromptSession,
         FileHistory=FileHistory,
         AutoSuggestFromHistory=AutoSuggestFromHistory,
+        patch_stdout=patch_stdout,
     )
 
 
@@ -66,6 +72,7 @@ def build_prompt_session(
     theme: dict[str, str] | None = None,
     history_path: Path | None = None,
     stdout: TextIO | None = None,
+    bottom_toolbar: Toolbar | None = None,
 ) -> Any:
     """Build a configured ``PromptSession``; requires the ``cli`` extra."""
     from .theme import build_style
@@ -75,9 +82,22 @@ def build_prompt_session(
     return pt.PromptSession(
         history=history,
         auto_suggest=pt.AutoSuggestFromHistory(),
+        bottom_toolbar=bottom_toolbar,
         style=build_style(theme),
         output=stdout,
     )
+
+
+def stdout_patch() -> Any:
+    """A ``patch_stdout`` context, or a no-op when the extra is absent.
+
+    It draws streaming writes above the live input line instead of repainting
+    over it, which is what keeps rapid deltas from flickering.
+    """
+    try:
+        return _load().patch_stdout()
+    except Exception:  # noqa: BLE001 - fall back to an unpatched stream
+        return contextlib.nullcontext()
 
 
 class StdinReader:
@@ -109,23 +129,21 @@ def make_reader(
     history_path: Path | None = None,
     theme: dict[str, str] | None = None,
     stdout: TextIO | None = None,
+    bottom_toolbar: Toolbar | None = None,
 ) -> Reader:
     """Return the best available reader, degrading to stdin when needed."""
     if use_prompt_toolkit and available():
         session = build_prompt_session(
-            theme=theme, history_path=history_path, stdout=stdout
+            theme=theme,
+            history_path=history_path,
+            stdout=stdout,
+            bottom_toolbar=bottom_toolbar,
         )
         return PromptToolkitReader(session)
     return StdinReader(stdout)
 
 
 __all__ = [
-    "CliDependencyError",
-    "PromptToolkitReader",
-    "Reader",
-    "StdinReader",
-    "available",
-    "build_prompt_session",
-    "make_reader",
-    "require",
+    "CliDependencyError", "PromptToolkitReader", "Reader", "StdinReader", "Toolbar",
+    "available", "build_prompt_session", "make_reader", "require", "stdout_patch",
 ]

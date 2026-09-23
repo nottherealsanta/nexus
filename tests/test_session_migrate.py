@@ -133,6 +133,63 @@ def test_manager_open_migrates_legacy_session(tmp_path):
     assert backup_path(tmp_path, "legacy").exists()
 
 
+def test_migrate_session_is_reentrant_under_held_session_and_trash_locks(tmp_path):
+    """``migrate_session`` takes no lock, so it is safe with locks already held.
+
+    The manager's create path calls it while holding both the session and trash
+    locks; calling it directly with those locks held must migrate rather than
+    deadlock or re-acquire a lock it does not own.
+    """
+    from nexus.session.lock import SessionLock, TrashLock
+
+    _write_v1(tmp_path, "main", [{"user": "a", "assistant": "b"}])
+    session_lock = SessionLock.for_session(tmp_path, "main")
+    trash_lock = TrashLock.for_dir(tmp_path / "trash")
+    session_lock.acquire(shared=False, blocking=False)
+    try:
+        with trash_lock.guard():
+            result = migrate_session(tmp_path, "main")
+    finally:
+        session_lock.release()
+    assert result.migrated is True
+    assert jsonl_path(tmp_path, "main").exists()
+
+
+def test_migrate_waits_out_a_transient_unrelated_trash_lock(tmp_path, monkeypatch):
+    """A direct ``migrate`` shares the create path's bounded trash-lock retry.
+
+    A short, unrelated trash lock (another session's delete/purge finishing)
+    must not turn a migration into a spurious ``SessionBusy``; it is waited out
+    for the bounded window and the migration then proceeds.
+    """
+    import threading
+    import time
+
+    import nexus.session.manager as manager_mod
+    from nexus.session.lock import TrashLock
+
+    monkeypatch.setattr(manager_mod, "_TRASH_LOCK_WAIT_SECONDS", 0.5)
+    _write_v1(tmp_path, "main", [{"user": "a", "assistant": "b"}])
+    manager = SessionManager(tmp_path)
+
+    lock = TrashLock.for_dir(manager.trash_dir)
+    assert lock.acquire(blocking=False) is True
+
+    def release_soon():
+        time.sleep(0.05)
+        lock.release()
+
+    thread = threading.Thread(target=release_soon)
+    thread.start()
+    try:
+        result = manager.migrate("main")
+        assert result is not None
+        assert result.migrated is True
+        assert jsonl_path(tmp_path, "main").exists()
+    finally:
+        thread.join()
+
+
 def test_publish_reports_lost_race_without_overwriting(tmp_path):
     from nexus.session import migrate as migrate_module
 

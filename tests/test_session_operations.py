@@ -9,6 +9,12 @@ Markdown / JSONL, and that fork/replay stay consistent with the new surfaces.
 from __future__ import annotations
 
 import asyncio
+import subprocess
+import sys
+import textwrap
+import threading
+import time
+from pathlib import Path
 
 import msgspec
 import pytest
@@ -33,7 +39,7 @@ from nexus.model.request import ModelRequest
 from nexus.model.stream import MessageStart, MessageStop, TextDelta
 from nexus.session import SessionManager, SessionSummary, TrashRecord
 from nexus.session import export as export_mod
-from nexus.session.lock import SessionLock
+from nexus.session.lock import SessionLock, TrashLock
 
 
 def _manager(tmp_path, **kwargs) -> SessionManager:
@@ -64,6 +70,23 @@ class _Resolver:
 def _bind(session, provider):
     session.bind(assemble=_Assembler(), provider_for=_Resolver(provider))
     return session
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _wait_for(path: Path, proc: subprocess.Popen, *, timeout: float = 30.0) -> None:
+    """Block until a subprocess touches ``path``, failing if it dies first."""
+    deadline = time.monotonic() + timeout
+    while not path.exists():
+        if proc.poll() is not None:
+            _out, err = proc.communicate()
+            raise AssertionError(f"producer exited early rc={proc.returncode}: {err!r}")
+        if time.monotonic() > deadline:
+            proc.kill()
+            proc.communicate()
+            raise AssertionError("producer never reached the paused point")
+        time.sleep(0.005)
 
 
 # ---------------------------------------------------------------------------
@@ -1038,6 +1061,752 @@ def test_recover_trash_ignores_a_symlinked_staging_entry(tmp_path):
     assert not (manager.directory / "s.jsonl").exists()
 
 
+def test_recovery_is_skipped_while_the_trash_lock_is_held(tmp_path):
+    """A held trash lock makes recovery a no-op, never a rollback.
+
+    ``open``/``list`` run recovery non-blocking, so a producer mid-move must not
+    have its staging directory rolled back underneath it. This pins that the
+    whole sweep is skipped while the lock is held and only runs once it is free.
+    """
+    from nexus.session.lock import TrashLock
+
+    manager = _manager(tmp_path)
+    session = manager.open("s")
+    session.append_message(_msg("authoritative"))
+    record = manager.delete("s")
+    entry = manager.trash_dir / record.trash_id
+    staging = manager.trash_dir / ".staging-held"
+    entry.rename(staging)
+    (staging / "meta.json").unlink()  # crash between the move and the meta
+
+    lock = TrashLock.for_dir(manager.trash_dir)
+    assert lock.acquire(blocking=False) is True
+    try:
+        assert manager.list() == []  # skipped: the log is still staged out
+        assert staging.exists()
+        assert (staging / "s.jsonl").exists()
+        assert not (manager.directory / "s.jsonl").exists()
+    finally:
+        lock.release()
+
+    # Once the lock is free the sweep rolls the authoritative log back.
+    assert [item.id for item in manager.list()] == ["s"]
+    assert not staging.exists()
+    assert (manager.directory / "s.jsonl").exists()
+
+
+def test_recover_rolls_back_a_corrupt_or_partial_staging_meta(tmp_path):
+    """A partially written staging meta must restore, never discard, the log.
+
+    The session writer moves artifacts before it writes metadata, so a corrupt
+    or missing ``meta.json`` means the authoritative log is still in staging. The
+    sweep must return it to the sessions directory and never move the metadata
+    (or its atomic-write temp) beside it.
+    """
+    manager = _manager(tmp_path)
+    session = manager.open("s")
+    session.append_message(_msg("authoritative"))
+    record = manager.delete("s")
+    entry = manager.trash_dir / record.trash_id
+    staging = manager.trash_dir / ".staging-corrupt"
+    entry.rename(staging)
+    (staging / "meta.json").write_bytes(b'{"trash_id": "s-abc", "sess')
+    (staging / "meta.json.tmp").write_bytes(b'{"partial": true')
+
+    assert [item.id for item in manager.list()] == ["s"]
+    assert not staging.exists()
+    assert (manager.directory / "s.jsonl").exists()
+    assert not (manager.directory / "meta.json").exists()
+    assert not (manager.directory / "meta.json.tmp").exists()
+    assert manager.list_trashed() == []
+
+
+def test_recover_skips_while_another_process_holds_the_trash_lock(tmp_path):
+    """Deterministic two-process check: recovery never races a live producer.
+
+    A real ``delete`` runs in a child process and pauses *after* moving the
+    authoritative log into its staging directory, while still holding the
+    cross-process trash lock. The parent's ``list``/``list_trashed`` recovery
+    must skip (non-blocking) rather than roll the stage back, then resume the
+    producer and observe a clean publish.
+    """
+    manager = _manager(tmp_path)
+    session = manager.open("s")
+    session.append_message(_msg("authoritative"))
+    manager.evict("s")
+
+    sentinel = tmp_path / "paused"
+    resume = tmp_path / "resume"
+    script = textwrap.dedent(
+        """
+        import sys, time
+        from pathlib import Path
+        from nexus.session import SessionManager
+        from nexus.session import manager as m
+
+        sessions, trash, sentinel, resume = map(Path, sys.argv[1:5])
+        real = m._write_trash_meta
+
+        def paused(path, meta):
+            sentinel.write_text("paused")
+            deadline = time.monotonic() + 30
+            while not resume.exists():
+                if time.monotonic() > deadline:
+                    raise SystemExit("resume timeout")
+                time.sleep(0.005)
+            return real(path, meta)
+
+        m._write_trash_meta = paused
+        SessionManager(sessions, trash_dir=trash).delete("s")
+        """
+    )
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            script,
+            str(manager.directory),
+            str(manager.trash_dir),
+            str(sentinel),
+            str(resume),
+        ],
+        cwd=str(_REPO_ROOT),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        _wait_for(sentinel, proc)
+        staging = list(manager.trash_dir.glob(".staging-*"))
+        assert len(staging) == 1
+        assert (staging[0] / "s.jsonl").exists()
+        assert not (manager.directory / "s.jsonl").exists()
+
+        # Non-blocking recovery must leave the paused stage exactly as it is.
+        assert manager.list() == []
+        assert manager.list_trashed() == []
+        assert (staging[0] / "s.jsonl").exists()
+        assert not (manager.directory / "s.jsonl").exists()
+
+        # ``open(create=True)`` must refuse rather than publish a fresh empty
+        # log that would shadow the staged authoritative one.
+        with pytest.raises(SessionBusy):
+            manager.open("s")
+        assert not (manager.directory / "s.jsonl").exists()
+    finally:
+        resume.write_text("go")
+        proc.wait(timeout=30)
+    assert proc.returncode == 0
+
+    records = manager.list_trashed()
+    assert [item.session_id for item in records] == ["s"]
+    assert not (manager.directory / "s.jsonl").exists()
+    assert manager.restore(records[0].trash_id) == "s"
+    assert (manager.directory / "s.jsonl").exists()
+
+
+def test_open_create_refuses_while_a_concurrent_recoverer_holds_the_trash_lock(
+    tmp_path,
+):
+    """A recoverer holding **only** the trash lock cannot be shadowed by a create.
+
+    A crash left the authoritative log staged out of the sessions directory with
+    no metadata. A concurrent recoverer holds the cross-process trash lock and
+    takes no session lock. ``open(create=True)`` must not publish a fresh empty
+    log over the staged authoritative one: under the session lock it takes the
+    trash lock non-blocking, finds it busy, and refuses with a clear
+    ``SessionBusy``. Once the recoverer sweeps and releases, a retried ``open``
+    reads the rolled-back authoritative log.
+    """
+    staging = _crash_mid_delete(tmp_path)
+    manager = _manager(tmp_path)
+
+    held = tmp_path / "recoverer_held"
+    resume = tmp_path / "recoverer_resume"
+    script = textwrap.dedent(
+        """
+        import sys, time
+        from pathlib import Path
+        from nexus.session import SessionManager
+        from nexus.session.lock import TrashLock
+
+        sessions, trash, held, resume = map(Path, sys.argv[1:5])
+        lock = TrashLock.for_dir(trash)
+        assert lock.acquire(blocking=False) is True
+        held.write_text("1")
+        deadline = time.monotonic() + 30
+        while not resume.exists():
+            if time.monotonic() > deadline:
+                raise SystemExit("resume timeout")
+            time.sleep(0.005)
+        SessionManager(sessions, trash_dir=trash)._recover_trash_locked()
+        lock.release()
+        """
+    )
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            script,
+            str(manager.directory),
+            str(manager.trash_dir),
+            str(held),
+            str(resume),
+        ],
+        cwd=str(_REPO_ROOT),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        _wait_for(held, proc)
+        with pytest.raises(SessionBusy):
+            manager.open("s")
+        # No fresh empty log shadowed the staged authoritative one.
+        assert not (manager.directory / "s.jsonl").exists()
+        assert staging.exists()
+        assert (staging / "s.jsonl").exists()
+    finally:
+        resume.write_text("go")
+        proc.wait(timeout=30)
+    assert proc.returncode == 0
+
+    session = manager.open("s")
+    assert manager.summary("s").title == "authoritative"
+    assert [m.content[0].text for m in session.messages] == ["authoritative"]
+    assert not staging.exists()
+
+
+def test_three_process_recovery_create_interleaving_never_shadows(tmp_path):
+    """Three real processes: paused recoverer, concurrent creator, verifier.
+
+    The recoverer holds the trash lock while paused mid-sweep; a second process
+    concurrently asks ``open(create=True)`` for the same crash-staged session and
+    must report a clear busy without creating a shadow log; the parent then
+    resumes the recoverer and confirms the authoritative log is intact.
+    """
+    staging = _crash_mid_delete(tmp_path)
+    manager = _manager(tmp_path)
+    held = tmp_path / "held"
+    resume = tmp_path / "resume"
+
+    recoverer = textwrap.dedent(
+        """
+        import sys, time
+        from pathlib import Path
+        from nexus.session import SessionManager
+        from nexus.session.lock import TrashLock
+
+        sessions, trash, held, resume = map(Path, sys.argv[1:5])
+        lock = TrashLock.for_dir(trash)
+        assert lock.acquire(blocking=False) is True
+        held.write_text("1")
+        deadline = time.monotonic() + 30
+        while not resume.exists():
+            if time.monotonic() > deadline:
+                raise SystemExit("resume timeout")
+            time.sleep(0.005)
+        SessionManager(sessions, trash_dir=trash)._recover_trash_locked()
+        lock.release()
+        """
+    )
+    creator = textwrap.dedent(
+        """
+        import sys
+        from pathlib import Path
+        from nexus.session import SessionManager
+        from nexus.errors import SessionBusy
+
+        sessions, trash = map(Path, sys.argv[1:3])
+        try:
+            SessionManager(sessions, trash_dir=trash).open("s")
+        except SessionBusy:
+            print("busy")
+        else:
+            print("created")
+        """
+    )
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            recoverer,
+            str(manager.directory),
+            str(manager.trash_dir),
+            str(held),
+            str(resume),
+        ],
+        cwd=str(_REPO_ROOT),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        _wait_for(held, proc)
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                creator,
+                str(manager.directory),
+                str(manager.trash_dir),
+            ],
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "busy"
+        assert not (manager.directory / "s.jsonl").exists()
+        assert staging.exists()
+    finally:
+        resume.write_text("go")
+        proc.wait(timeout=30)
+    assert proc.returncode == 0
+
+    assert manager.open("s").id == "s"
+    assert manager.summary("s").title == "authoritative"
+    assert not staging.exists()
+
+
+def _migrated_legacy_with_staged_v2(tmp_path):
+    """A migrated legacy session whose authoritative v2 log a crash staged out.
+
+    Migration leaves the legacy ``.json`` and its ``.v1.bak`` in place while the
+    authoritative ``.jsonl`` carries a later v2 record. A crash mid-delete moved
+    *only* the ``.jsonl`` into an untrusted staging directory, so the sessions
+    directory still has the legacy ``.json`` and ``store.exists`` is false --
+    exactly the shape that used to let a stale re-migration shadow the staged
+    authoritative log.
+    """
+    manager = _manager(tmp_path)
+    directory = manager.directory
+    directory.mkdir(parents=True, exist_ok=True)
+    legacy = {"version": 1, "exchanges": [{"user": "legacy", "assistant": "stale"}]}
+    (directory / "s.json").write_bytes(msgspec.json.encode(legacy))
+    session = manager.open("s")
+    session.append_message(_msg("authoritative v2"))
+    manager.evict("s")
+
+    staging = manager.trash_dir / ".staging-v2"
+    staging.mkdir(parents=True, exist_ok=True)
+    (directory / "s.jsonl").rename(staging / "s.jsonl")
+    assert (directory / "s.json").exists()
+    assert not (directory / "s.jsonl").exists()
+    return manager, staging
+
+
+def test_migrate_never_shadows_a_staged_v2_log_with_stale_legacy_json(tmp_path):
+    """A stale legacy ``.json`` must not be re-migrated over a staged v2 log.
+
+    With the authoritative ``.jsonl`` crash-staged out and the legacy ``.json``
+    still present, ``should_migrate`` is true. A concurrent recoverer holds the
+    cross-process trash lock, so ``open``'s non-blocking sweep skips. Both
+    ``open`` and a direct ``migrate`` must refuse (``SessionBusy``) rather than
+    publish a stale re-migration that shadows the staged log; once the recoverer
+    resumes, the original v2 log is restored and no shadow remains.
+    """
+    manager, staging = _migrated_legacy_with_staged_v2(tmp_path)
+
+    held = tmp_path / "recoverer_held"
+    resume = tmp_path / "recoverer_resume"
+    script = textwrap.dedent(
+        """
+        import sys, time
+        from pathlib import Path
+        from nexus.session import SessionManager
+        from nexus.session.lock import TrashLock
+
+        sessions, trash, held, resume = map(Path, sys.argv[1:5])
+        lock = TrashLock.for_dir(trash)
+        assert lock.acquire(blocking=False) is True
+        held.write_text("1")
+        deadline = time.monotonic() + 30
+        while not resume.exists():
+            if time.monotonic() > deadline:
+                raise SystemExit("resume timeout")
+            time.sleep(0.005)
+        SessionManager(sessions, trash_dir=trash)._recover_trash_locked()
+        lock.release()
+        """
+    )
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            script,
+            str(manager.directory),
+            str(manager.trash_dir),
+            str(held),
+            str(resume),
+        ],
+        cwd=str(_REPO_ROOT),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        _wait_for(held, proc)
+        # The stale legacy bytes are present and recovery is blocked: ``open``
+        # must refuse, and write no shadow log, rather than re-migrate them.
+        with pytest.raises(SessionBusy):
+            manager.open("s")
+        assert not (manager.directory / "s.jsonl").exists()
+        assert staging.exists()
+        assert (staging / "s.jsonl").exists()
+
+        # A direct migrate is guarded identically, so a caller that migrates
+        # without opening is safe too.
+        with pytest.raises(SessionBusy):
+            manager.migrate("s")
+        assert not (manager.directory / "s.jsonl").exists()
+        assert staging.exists()
+    finally:
+        resume.write_text("go")
+        proc.wait(timeout=30)
+    assert proc.returncode == 0
+
+    # The recoverer restored the authoritative v2 log, and no stale shadow was
+    # ever written; the reopened session sees the full v2 history.
+    assert not staging.exists()
+    session = manager.open("s")
+    assert [m.content[0].text for m in session.messages] == [
+        "legacy",
+        "stale",
+        "authoritative v2",
+    ]
+    assert manager.summary("s").title == "legacy"
+
+
+def _legacy_only_crash_mid_delete(tmp_path):
+    """A legacy-only session whose ``.json`` a crash staged out of sessions.
+
+    The legacy ``.json`` is the only authoritative artifact; no ``.jsonl`` was
+    ever written. A crash mid-delete moved it into a staging directory with no
+    metadata, so ``store.exists`` is false and ``should_migrate`` is false while
+    it is staged -- the shape that used to let ``open(create=True)`` publish an
+    empty ``.jsonl`` that shadowed the restored history.
+    """
+    manager = _manager(tmp_path)
+    directory = manager.directory
+    directory.mkdir(parents=True, exist_ok=True)
+    legacy = {
+        "version": 1,
+        "exchanges": [
+            {"user": "hello", "assistant": "world"},
+            {"user": "second", "assistant": "reply"},
+        ],
+    }
+    (directory / "s.json").write_bytes(msgspec.json.encode(legacy))
+    manager.trash_dir.mkdir(parents=True, exist_ok=True)
+    staging = manager.trash_dir / ".staging-legacy"
+    staging.mkdir()
+    (directory / "s.json").rename(staging / "s.json")
+    assert not (directory / "s.json").exists()
+    assert not (directory / "s.jsonl").exists()
+    return manager, staging
+
+
+_LEGACY_ONLY_MESSAGES = ["hello", "world", "second", "reply"]
+
+
+def test_open_create_migrates_a_crash_restored_legacy_json_without_shadowing(
+    tmp_path,
+):
+    """A crash-restored legacy-only ``.json`` is migrated, never shadowed.
+
+    The outer best-effort sweep can be skipped while a concurrent recoverer holds
+    the trash lock and then find it free by the time the create path takes it.
+    ``_create_session_log`` must therefore re-evaluate ``should_migrate`` under
+    the session and trash locks: it migrates the restored legacy bytes to the
+    authoritative ``.jsonl`` instead of publishing an empty shadow.
+    """
+    manager, staging = _legacy_only_crash_mid_delete(tmp_path)
+    # Simulate the concurrent recoverer holding the lock across the outer sweep
+    # and the migrate decision, then releasing before the create path.
+    manager._recover_trash = lambda: None
+
+    session = manager.open("s")
+
+    assert not staging.exists()
+    assert (manager.directory / "s.jsonl").exists()
+    assert [m.content[0].text for m in session.messages] == _LEGACY_ONLY_MESSAGES
+    assert manager.summary("s").title == "hello"
+    assert (manager.directory / "s.v1.bak").exists()
+
+
+def test_open_create_migrate_false_still_migrates_a_restored_legacy_json(tmp_path):
+    """``migrate=False`` must not license an empty log over a restored legacy file.
+
+    The caller asked not to *pre*-migrate, but the create path still owns the
+    decision: publishing an empty ``.jsonl`` beside a restored legacy ``.json``
+    would permanently hide the authoritative history.
+    """
+    manager, staging = _legacy_only_crash_mid_delete(tmp_path)
+
+    session = manager.open("s", create=True, migrate=False)
+
+    assert not staging.exists()
+    assert [m.content[0].text for m in session.messages] == _LEGACY_ONLY_MESSAGES
+
+
+def test_open_create_refuses_a_staged_legacy_json_while_trash_locked(tmp_path):
+    """A held trash lock must fail closed, then a retry restores and migrates.
+
+    While a concurrent recoverer holds the cross-process trash lock, the create
+    path refuses (``SessionBusy``) and writes no shadow. Once it is released the
+    crash-staged legacy ``.json`` is rolled back and migrated, preserving the
+    full original content.
+    """
+    manager, staging = _legacy_only_crash_mid_delete(tmp_path)
+    lock = TrashLock.for_dir(manager.trash_dir)
+    assert lock.acquire(blocking=False) is True
+    try:
+        with pytest.raises(SessionBusy):
+            manager.open("s")
+        assert not (manager.directory / "s.jsonl").exists()
+        assert staging.exists()
+        assert (staging / "s.json").exists()
+    finally:
+        lock.release()
+
+    session = manager.open("s")
+    assert not staging.exists()
+    assert [m.content[0].text for m in session.messages] == _LEGACY_ONLY_MESSAGES
+
+
+def test_open_create_waits_out_a_transient_unrelated_trash_lock(tmp_path, monkeypatch):
+    """A short, unrelated trash lock must not turn a new open into a busy error.
+
+    The create path retries the trash lock for a bounded window, so a lock
+    released inside that window (an unrelated delete/purge finishing) is waited
+    out and the open proceeds.
+    """
+    import nexus.session.manager as manager_mod
+
+    monkeypatch.setattr(manager_mod, "_TRASH_LOCK_WAIT_SECONDS", 0.5)
+    manager = _manager(tmp_path)
+    lock = TrashLock.for_dir(manager.trash_dir)
+    assert lock.acquire(blocking=False) is True
+
+    import threading
+
+    def release_soon():
+        time.sleep(0.05)
+        lock.release()
+
+    thread = threading.Thread(target=release_soon)
+    thread.start()
+    try:
+        session = manager.open("brand-new")
+        assert session.id == "brand-new"
+        assert (manager.directory / "brand-new.jsonl").exists()
+    finally:
+        thread.join()
+
+
+def test_open_create_fails_closed_when_trash_lock_stays_held(tmp_path, monkeypatch):
+    """The trash-lock retry is bounded: a stuck lock still refuses, never waits.
+
+    A lock held past the (shortened) bound must produce a clear ``SessionBusy``
+    and no log, so a transient-wait optimization can never become an unbounded
+    hang or a shadowing create.
+    """
+    import nexus.session.manager as manager_mod
+
+    monkeypatch.setattr(manager_mod, "_TRASH_LOCK_WAIT_SECONDS", 0.1)
+    manager = _manager(tmp_path)
+    lock = TrashLock.for_dir(manager.trash_dir)
+    assert lock.acquire(blocking=False) is True
+    try:
+        with pytest.raises(SessionBusy):
+            manager.open("brand-new")
+        assert not (manager.directory / "brand-new.jsonl").exists()
+    finally:
+        lock.release()
+
+
+def test_concurrent_open_of_a_brand_new_session_both_succeed(tmp_path):
+    """Two brand-new openers must both succeed, not one spurious ``SessionBusy``.
+
+    The winner pauses while holding the session lock *before* it publishes the
+    empty log; the loser must wait out the short contention and then observe the
+    created log. This is the case a non-blocking session-lock guard alone turned
+    into a spurious refusal.
+    """
+    manager = _manager(tmp_path)
+    a_creating = tmp_path / "a_creating"
+    b_waiting = tmp_path / "b_waiting"
+    resume_a = tmp_path / "resume_a"
+
+    winner = textwrap.dedent(
+        """
+        import sys, time
+        from pathlib import Path
+        from nexus.session import SessionManager
+        from nexus.session import store as store_mod
+
+        sessions, trash, a_creating, resume_a = map(Path, sys.argv[1:5])
+        real_create = store_mod.SessionStore.create
+
+        def paused_create(self, session):
+            a_creating.write_text("1")
+            deadline = time.monotonic() + 30
+            while not resume_a.exists():
+                if time.monotonic() > deadline:
+                    raise SystemExit("resume timeout")
+                time.sleep(0.005)
+            return real_create(self, session)
+
+        store_mod.SessionStore.create = paused_create
+        print(SessionManager(sessions, trash_dir=trash).open("brand-new").id)
+        """
+    )
+    loser = textwrap.dedent(
+        """
+        import sys, time
+        from pathlib import Path
+        from nexus.session import SessionManager
+        import nexus.session.manager as manager_mod
+
+        sessions, trash, b_waiting = map(Path, sys.argv[1:4])
+        # Keep the loser waiting past any scheduling jitter until the winner
+        # releases; the wait only bounds a genuine delete in production.
+        manager_mod._CREATE_LOCK_WAIT_SECONDS = 30.0
+        real_sleep = time.sleep
+
+        def signalling_sleep(seconds):
+            b_waiting.write_text("1")
+            real_sleep(seconds)
+
+        manager_mod.time.sleep = signalling_sleep
+        print(SessionManager(sessions, trash_dir=trash).open("brand-new").id)
+        """
+    )
+    p_win = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            winner,
+            str(manager.directory),
+            str(manager.trash_dir),
+            str(a_creating),
+            str(resume_a),
+        ],
+        cwd=str(_REPO_ROOT),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    p_lose = None
+    try:
+        _wait_for(a_creating, p_win)
+        p_lose = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                loser,
+                str(manager.directory),
+                str(manager.trash_dir),
+                str(b_waiting),
+            ],
+            cwd=str(_REPO_ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        _wait_for(b_waiting, p_lose)
+        resume_a.write_text("go")
+        out_win, err_win = p_win.communicate(timeout=30)
+        out_lose, err_lose = p_lose.communicate(timeout=30)
+    finally:
+        resume_a.write_text("go")
+        for proc in (p_win, p_lose):
+            if proc is not None and proc.poll() is None:
+                proc.kill()
+                proc.communicate()
+    assert p_win.returncode == 0, err_win
+    assert p_lose.returncode == 0, err_lose
+    assert out_win.strip() == "brand-new"
+    assert out_lose.strip() == "brand-new"
+    assert (manager.directory / "brand-new.jsonl").exists()
+
+
+def test_open_create_false_waits_for_a_concurrent_in_process_create(
+    tmp_path, monkeypatch
+):
+    """``create=False`` must not report a spurious missing id mid-create.
+
+    A creator is paused inside the create after it registered its in-flight
+    marker (and released ``_handles_lock``). A concurrent ``create=False`` opener
+    must wait for that create and then return the same live handle instead of
+    raising ``SessionError``. This is the deterministic, same-process case the
+    manager-wide lock alone could not cover once the slow create moved outside
+    it.
+    """
+    manager = _manager(tmp_path)
+    started = threading.Event()
+    release = threading.Event()
+    real = SessionManager._create_or_migrate_locked
+
+    def paused(self, session_id):
+        started.set()
+        assert release.wait(30.0), "create was never released"
+        return real(self, session_id)
+
+    monkeypatch.setattr(SessionManager, "_create_or_migrate_locked", paused)
+
+    created: dict[str, object] = {}
+    creator = threading.Thread(
+        target=lambda: created.__setitem__("s", manager.open("s"))
+    )
+    creator.start()
+    try:
+        assert started.wait(10.0), "creator never reached the paused create"
+        # Release shortly, from a different thread, so the waiting open proceeds.
+        threading.Timer(0.1, release.set).start()
+        non_creator = manager.open("s", create=False)
+    finally:
+        release.set()
+        creator.join(timeout=10.0)
+    assert not creator.is_alive()
+    assert non_creator.id == "s"
+    assert non_creator is created["s"]
+
+
+def test_open_create_false_for_a_genuinely_missing_id_fails_promptly(tmp_path):
+    """A missing id with no create in flight still fails without waiting."""
+    manager = _manager(tmp_path)
+    started = time.monotonic()
+    with pytest.raises(SessionError):
+        manager.open("nope", create=False)
+    assert time.monotonic() - started < 1.0
+
+
+def test_open_create_false_after_a_failed_create_is_not_wedged(tmp_path, monkeypatch):
+    """A failed create clears its in-flight marker, so the id fails promptly.
+
+    The pending-create event is cleaned up in a ``finally``: a creator that
+    raises must not leave a later ``create=False`` opener waiting on a create
+    that will never complete.
+    """
+    manager = _manager(tmp_path)
+
+    def boom(self, session_id):
+        raise SessionBusy("create refused")
+
+    monkeypatch.setattr(SessionManager, "_create_session_log", boom)
+    with pytest.raises(SessionBusy):
+        manager.open("s")
+    assert "s" not in manager._pending_creates
+    started = time.monotonic()
+    with pytest.raises(SessionError):
+        manager.open("s", create=False)
+    assert time.monotonic() - started < 1.0
+
+
 async def test_export_while_turn_running_is_consistent(tmp_path):
     manager = _manager(tmp_path)
     provider = ScriptedProvider(text_response("quick"))
@@ -1051,3 +1820,123 @@ async def test_export_while_turn_running_is_consistent(tmp_path):
     assert [m["role"] for m in msgspec.json.decode(
         manager.export("s", format="json").encode()
     )["messages"]] == ["user", "assistant"]
+
+
+# ---------------------------------------------------------------------------
+# lock order: an open waiting on a session flock must not hold the manager-wide
+# ``_handles_lock`` (otherwise ``delete`` inverts and stalls every operation)
+# ---------------------------------------------------------------------------
+
+
+def _open_quietly(manager: SessionManager, session_id: str) -> None:
+    """Open, swallowing the bounded ``SessionBusy`` the held lock produces."""
+    try:
+        manager.open(session_id)
+    except SessionBusy:
+        pass
+
+
+def _park_open_on_a_held_session_lock(tmp_path, monkeypatch, session_id):
+    """Park an ``open`` deterministically inside its session-flock wait.
+
+    The create path's poll sleep is patched to block on an event, so the opener
+    is unambiguously waiting on a session lock we hold. Returns the held lock,
+    an event set once the opener is waiting, and the release event (plus the
+    lock itself) the caller must release in ``finally``.
+    """
+    import nexus.session.manager as manager_mod
+
+    monkeypatch.setattr(manager_mod, "_CREATE_LOCK_WAIT_SECONDS", 0.3)
+    held = SessionLock.for_session(tmp_path / "sessions", session_id)
+    held.acquire(shared=False, blocking=False)
+
+    waiting = threading.Event()
+    release = threading.Event()
+
+    def blocking_sleep(_seconds):
+        waiting.set()
+        release.wait(10.0)
+
+    monkeypatch.setattr(manager_mod.time, "sleep", blocking_sleep)
+    return held, waiting, release
+
+
+def test_open_does_not_hold_the_handle_lock_while_waiting_on_a_session_flock(
+    tmp_path, monkeypatch
+):
+    """The manager-wide ``_handles_lock`` stays free during an open's wait.
+
+    ``open`` polls the session flock in its create path. Holding
+    ``_handles_lock`` across that bounded wait would stall every other manager
+    operation (``open``/``evict``/``delete``/``list``) and invert the
+    session-flock -> ``_handles_lock`` order ``delete`` uses. A deterministic
+    same-process two-thread check.
+    """
+    manager = _manager(tmp_path)
+    held, waiting, release = _park_open_on_a_held_session_lock(
+        tmp_path, monkeypatch, "brand-new"
+    )
+    opener = threading.Thread(target=_open_quietly, args=(manager, "brand-new"))
+    opener.start()
+    try:
+        assert waiting.wait(5.0), "opener never reached the session-lock wait"
+        # While the opener is parked on the session flock, the global handle
+        # lock must be immediately available to an unrelated operation.
+        probe_done = threading.Event()
+
+        def probe():
+            manager.evict("unrelated")
+            probe_done.set()
+
+        probe_thread = threading.Thread(target=probe)
+        probe_thread.start()
+        assert probe_done.wait(2.0), (
+            "manager-wide _handles_lock was held across the session-lock wait"
+        )
+        probe_thread.join()
+    finally:
+        release.set()
+        opener.join(timeout=5.0)
+        held.release()
+
+
+def test_delete_is_not_stalled_by_an_unrelated_open_waiting_on_a_session_lock(
+    tmp_path, monkeypatch
+):
+    """A delete of an unrelated session proceeds while another open waits.
+
+    The global stall from the old lock order: one ``open`` parked on a session
+    flock held ``_handles_lock``, so ``delete``'s first ``_live_handle`` (which
+    takes ``_handles_lock``) blocked even for a different session. With the
+    create wait moved outside the lock the delete completes promptly.
+    """
+    manager = _manager(tmp_path)
+    live = manager.open("live")
+    live.append_message(_msg("x"))
+
+    held, waiting, release = _park_open_on_a_held_session_lock(
+        tmp_path, monkeypatch, "brand-new"
+    )
+    opener = threading.Thread(target=_open_quietly, args=(manager, "brand-new"))
+    opener.start()
+    try:
+        assert waiting.wait(5.0), "opener never reached the session-lock wait"
+        done = threading.Event()
+        record: dict[str, TrashRecord] = {}
+
+        def deleter():
+            record["value"] = manager.delete("live")
+            done.set()
+
+        delete_thread = threading.Thread(target=deleter)
+        delete_thread.start()
+        assert done.wait(2.0), (
+            "delete of an unrelated session stalled behind an open's wait"
+        )
+        delete_thread.join()
+        assert record["value"].session_id == "live"
+        assert not manager.exists("live")
+    finally:
+        release.set()
+        opener.join(timeout=5.0)
+        held.release()

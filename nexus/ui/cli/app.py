@@ -21,11 +21,11 @@ from typing import Any, TextIO
 
 from ...events import Event
 from ...view import ConversationView, apply, initial_state
-from . import commands
+from . import commands, details
 from .approve import Approver
-from .client import Client, ClientError
-from .keys import Reader, make_reader
-from .render import TERMINAL_EVENTS, TerminalRenderer
+from .client import Client, ClientError, TransportClosed
+from .keys import PromptToolkitReader, Reader, make_reader, stdout_patch
+from .render import TERMINAL_EVENTS, TerminalRenderer, sanitize
 from .stream import answer_permission, turn_events
 
 
@@ -43,6 +43,7 @@ class ChatSession:
         approver: Approver | None = None,
         renderer: TerminalRenderer | None = None,
         show_thinking: bool = False,
+        color: bool | None = None,
         cursor: int = 0,
     ) -> None:
         self.client = client
@@ -52,13 +53,9 @@ class ChatSession:
         self.stderr = stderr if stderr is not None else sys.stderr
         self.approver = approver
         self.renderer = renderer or TerminalRenderer(
-            self.stdout, stderr=self.stderr, show_thinking=show_thinking
+            self.stdout, stderr=self.stderr, show_thinking=show_thinking, color=color
         )
         self._views: dict[str, ConversationView] = {}
-        #: The most recent ``/model`` selection per session, so the status line
-        #: shows the chosen model before the next turn repaints it. Cleared when
-        #: a ``model.started`` event proves the turn's effective model.
-        self._selected_models: dict[str, dict[str, str]] = {}
         # Seed the cursor with the session's current end so the first turn of a
         # resumed/existing session subscribes strictly after it and never
         # replays an earlier turn's terminal event.
@@ -89,23 +86,7 @@ class ChatSession:
 
     def status_line(self, session: str | None = None) -> str:
         name = session or self.session
-        view = self.view(name)
-        selected = self._selected_models.get(name)
-        if selected and selected.get("model"):
-            model = selected["model"]
-            tier = selected.get("tier")
-            if tier:
-                model = f"{model} [{tier}]"
-        else:
-            model = (view.model or {}).get("model") or "-"
-        usage = view.usage
-        phase = view.phase
-        viewers = view.presence.viewers
-        tokens = f"{usage.input_tokens}\u2191 {usage.output_tokens}\u2193"
-        return (
-            f"[{name}] {phase} \u00b7 {model} \u00b7 {tokens} tok "
-            f"\u00b7 {viewers} viewer(s)"
-        )
+        return details.status_line(name, self.view(name))
 
     # -- loop --------------------------------------------------------------
 
@@ -132,7 +113,7 @@ class ChatSession:
         return 0
 
     async def _read_input(self) -> str:
-        lines = [await self.reader(f"{self.session}> ")]
+        lines = [await self.reader(f"{sanitize(self.session, 60)}> ")]
         while commands.is_continuation(lines[-1]):
             lines[-1] = commands.strip_continuation(lines[-1])
             try:
@@ -172,6 +153,9 @@ class ChatSession:
             with contextlib.suppress(Exception):
                 await self.client.cancel(self.session, reason="interrupted")
             self._error("\nCancelled.\n")
+        except TransportClosed as exc:
+            self._error(f"Connection lost: {exc}\n")
+            self._error("The turn may still be running; use /reconnect to resume.\n")
         except ClientError as exc:
             self._error(f"Error: {exc}\n")
         finally:
@@ -184,9 +168,6 @@ class ChatSession:
         self._views[self.session] = view
         if event.seq and event.seq > 0:
             self._cursors[self.session] = max(self.cursor(), event.seq)
-        if event.type == "model.started":
-            # The turn's effective model now drives the status line.
-            self._selected_models.pop(self.session, None)
         self._unread.discard(self.session)
 
     # -- commands ----------------------------------------------------------
@@ -194,7 +175,7 @@ class ChatSession:
     async def _handle(self, parsed: commands.ParsedCommand) -> None:
         name = parsed.name
         if name not in commands.BY_NAME:
-            self._error(f"unknown command {name}; try /help\n")
+            self._error(f"unknown command {sanitize(name, 40)}; try /help\n")
             return
         handler = getattr(self, f"_cmd_{name[1:]}", None)
         if handler is None:
@@ -212,32 +193,23 @@ class ChatSession:
         new_id = args[0] if args else f"session-{uuid.uuid4().hex[:8]}"
         summary = await self.client.open_session(new_id)
         self._switch(new_id, _summary_last_seq(summary))
-        self._write(f"started {new_id}\n")
+        self._write(f"started {sanitize(new_id, 60)}\n")
 
     async def _cmd_sessions(self, args: tuple[str, ...]) -> None:
         summaries = await self.client.list_sessions()
         if args:
-            match = self._match_session(summaries, args[0])
-            if match is None:
+            matched = self._match_session(summaries, args[0])
+            if matched is None:
                 self._error(f"no session matching {args[0]!r}\n")
                 return
-            matched = next(
-                (item for item in summaries if getattr(item, "id", "") == match),
-                None,
-            )
-            self._switch(match, _summary_last_seq(matched))
-        summaries = await self.client.list_sessions()
+            self._switch(matched.id, _summary_last_seq(matched))
         for line in self._session_lines(summaries):
             self._write(line + "\n")
 
-    def _match_session(self, summaries: list[Any], prefix: str) -> str | None:
-        for summary in summaries:
-            if getattr(summary, "id", "") == prefix:
-                return prefix
-        for summary in summaries:
-            if getattr(summary, "id", "").startswith(prefix):
-                return summary.id
-        return None
+    def _match_session(self, summaries: list[Any], prefix: str) -> Any | None:
+        ids = [(getattr(s, "id", ""), s) for s in summaries]
+        return next((s for i, s in ids if i == prefix),
+                    next((s for i, s in ids if i.startswith(prefix)), None))
 
     def _session_lines(self, summaries: list[Any]) -> list[str]:
         lines: list[str] = []
@@ -247,11 +219,11 @@ class ChatSession:
             if sid != self.session and last_seq > self._cursors.get(sid, 0):
                 self._unread.add(sid)
             marker = ">" if sid == self.session else ("*" if sid in self._unread else " ")
-            state = getattr(summary, "state", "idle")
+            state = sanitize(getattr(summary, "state", "idle"), 24)
             viewers = getattr(summary, "viewers", 0)
-            title = getattr(summary, "title", "")
+            title = sanitize(getattr(summary, "title", ""), 80)
             lines.append(
-                f"{marker} {sid} [{state}] {last_seq} seq \u00b7 {viewers}v {title}".rstrip()
+                f"{marker} {sanitize(sid, 60)} [{state}] {last_seq} seq \u00b7 {viewers}v {title}".rstrip()
             )
         return lines
 
@@ -277,25 +249,26 @@ class ChatSession:
             self._write("no models\n")
             return
         for model in models:
-            provider = model.get("provider") or "?"
-            identifier = model.get("id") or model.get("name") or "?"
+            provider = sanitize(model.get("provider") or "?", 40)
+            identifier = sanitize(model.get("id") or model.get("name") or "?", 80)
             tier = model.get("tier")
-            suffix = f" [{tier}]" if tier else ""
+            suffix = f" [{sanitize(tier, 24)}]" if tier else ""
             self._write(f"  {provider}/{identifier}{suffix}\n")
         if search is None:
             self._write("choose with /model <tier|provider/model|id>\n")
 
     async def _select_model(self, ref: str) -> None:
         result = await self.client.select_model(self.session, ref)
-        provider = getattr(result, "provider", "") or "?"
-        model = getattr(result, "model", "") or "?"
-        tier = getattr(result, "tier", "") or ""
-        self._selected_models[self.session] = {
-            "provider": provider,
-            "model": model,
-            "tier": tier,
-            "reference": getattr(result, "reference", ref) or ref,
-        }
+        provider = sanitize(getattr(result, "provider", "") or "?", 40)
+        model = sanitize(getattr(result, "model", "") or "?", 80)
+        tier = sanitize(getattr(result, "tier", "") or "", 24)
+        # Fold the accepted selection through the reducer the stream will
+        # replay, so the status bar shows the durable ``model.selected`` value,
+        # not a UI-side guess. No ``seq``: it never moves the cursor.
+        data = {"reference": getattr(result, "reference", ref) or ref, "provider": provider,
+                "model": model, "tier": tier, "tier_source": getattr(result, "tier_source", "") or "",
+                "clamped": bool(getattr(result, "clamped", False))}
+        self._ingest(Event(type="model.selected", data=data, session=self.session))
         line = f"model -> {provider}/{model}"
         if tier:
             line += f" [{tier}]"
@@ -303,7 +276,7 @@ class ChatSession:
         self._write(line)
         fallback = list(getattr(result, "fallback", ()) or ())
         if fallback:
-            self._write(f"fallback: {', '.join(fallback)}\n")
+            self._write(f"fallback: {', '.join(sanitize(f, 80) for f in fallback)}\n")
         self._write(self.status_line() + "\n")
 
     async def _current_selection(self) -> str | None:
@@ -315,10 +288,10 @@ class ChatSession:
         model = view.get("model") if isinstance(view, dict) else None
         if not isinstance(model, dict):
             return None
-        provider = model.get("provider") or "?"
-        identifier = model.get("model") or "?"
+        provider = sanitize(model.get("provider") or "?", 40)
+        identifier = sanitize(model.get("model") or "?", 80)
         tier = model.get("tier")
-        return f"{provider}/{identifier}" + (f" [{tier}]" if tier else "")
+        return f"{provider}/{identifier}" + (f" [{sanitize(tier, 24)}]" if tier else "")
 
     async def _cmd_tools(self, args: tuple[str, ...]) -> None:
         seen: list[str] = []
@@ -329,7 +302,29 @@ class ChatSession:
             self._write("no tools used in this transcript\n")
             return
         for name in seen:
-            self._write(f"  {name}\n")
+            self._write(f"  {sanitize(name, 80)}\n")
+
+    async def _cmd_details(self, args: tuple[str, ...]) -> None:
+        for line in details.detail_lines(self.session, self.view()):
+            self._write(line + "\n")
+
+    async def _cmd_reconnect(self, args: tuple[str, ...]) -> None:
+        # ``follow=False`` drains the durable tail and returns, so this never
+        # parks the prompt waiting for a turn that is not running.
+        from_seq = self.cursor()
+        replayed = 0
+        try:
+            async with aclosing(
+                self.client.stream(self.session, from_seq, follow=False)
+            ) as events:
+                async for event in events:
+                    self._ingest(event)
+                    replayed += 1
+        except ClientError as exc:
+            self._error(f"reconnect failed: {exc}\n")
+            return
+        self._write(f"reconnected from seq {from_seq} \u00b7 {replayed} new event(s)\n")
+        self._write(self.status_line() + "\n")
 
     async def _cmd_cancel(self, args: tuple[str, ...]) -> None:
         cancelled, dropped = await self.client.cancel(self.session)
@@ -341,7 +336,7 @@ class ChatSession:
         child = getattr(summary, "id", None)
         if child:
             self._switch(child, _summary_last_seq(summary))
-            self._write(f"forked to {child}\n")
+            self._write(f"forked to {sanitize(child, 60)}\n")
 
     async def _cmd_export(self, args: tuple[str, ...]) -> None:
         fmt = args[0] if args else "markdown"
@@ -352,19 +347,17 @@ class ChatSession:
 
     def _switch(self, session: str, last_seq: int | None = None) -> None:
         self.session = session
-        if last_seq is None:
-            self._cursors.setdefault(session, 0)
-        else:
-            self._cursors[session] = max(
-                self._cursors.get(session, 0), max(0, int(last_seq))
-            )
+        prior = self._cursors.get(session, 0)
+        end = prior if last_seq is None else max(prior, max(0, int(last_seq)))
+        self._cursors[session] = end
         self._unread.discard(session)
 
     def _banner(self) -> None:
         self._write(
-            f"Nexus \u00b7 session {self.session} \u00b7 /help for commands \u00b7 "
-            "/exit to quit\n"
+            f"Nexus \u00b7 session {sanitize(self.session, 60)} \u00b7 /help for commands \u00b7 "
+            "/details for status \u00b7 /exit to quit\n"
         )
+        self._write(self.status_line() + "\n")
 
     def _write(self, text: str) -> None:
         self.stdout.write(text)
@@ -393,32 +386,53 @@ async def run_chat(
     history_path: Any | None = None,
     use_prompt_toolkit: bool = True,
     handshake: bool = True,
+    color: bool | None = None,
 ) -> int:
-    """Open the interactive prompt against ``client`` and return an exit code."""
+    """Open the interactive prompt against ``client`` and return an exit code.
+
+    With the optional ``cli`` extra the editor gets history and a live status
+    toolbar, and streaming writes route through ``patch_stdout``.
+    """
+    holder: list[ChatSession] = []
     out = stdout if stdout is not None else sys.stdout
     err = stderr if stderr is not None else sys.stderr
+
+    def toolbar() -> str:
+        return holder[0].status_line() if holder else ""
+
     if reader is None:
         reader = make_reader(
             use_prompt_toolkit=use_prompt_toolkit,
             history_path=history_path,
             theme=theme,
-            stdout=out,
+            stdout=None if out is sys.stdout else out,
+            bottom_toolbar=toolbar,
         )
-    if approver is None:
-        approver = Approver(reader, stderr=err)
-    if handshake:
-        await client.handshake()
-    summary = await client.open_session(session)
-    app = ChatSession(
-        client,
-        session,
-        reader=reader,
-        stdout=out,
-        stderr=err,
-        approver=approver,
-        cursor=_summary_last_seq(summary),
-    )
-    return await app.run()
+
+    async def boot(out: TextIO, err: TextIO) -> ChatSession:
+        if handshake:
+            await client.handshake()
+        summary = await client.open_session(session)
+        app = ChatSession(
+            client,
+            session,
+            reader=reader,
+            stdout=out,
+            stderr=err,
+            approver=approver if approver is not None else Approver(reader, stderr=err),
+            color=color,
+            cursor=_summary_last_seq(summary),
+        )
+        holder.append(app)
+        return app
+
+    # ``patch_stdout`` rewrites ``sys.stdout``/``sys.stderr``; take that path only
+    # for the real terminal streams, so captured buffers and explicit readers
+    # stay byte-for-byte deterministic.
+    if isinstance(reader, PromptToolkitReader) and out is sys.stdout and err is sys.stderr:
+        with stdout_patch():
+            return await (await boot(sys.stdout, sys.stderr)).run()
+    return await (await boot(out, err)).run()
 
 
 __all__ = ["ChatSession", "run_chat"]

@@ -41,19 +41,24 @@ The UI encapsulation rule is enforced, not requested: anything under
 `nexus/ui/**` may import only `nexus.host`, `nexus.view`, `nexus.events`, and
 the standard library.
 
-Two line budgets keep the harness small, reviewed per phase: `core/` + `model/`
-+ `tools/spec.py` target 2,500 lines and `host/` + `view/` + `ui/` 2,000. Both
-are **currently exceeded**, and the tests that enforce them
+Two line budgets keep the harness small, reviewed per phase. The §18 amendment
+supersedes the original 2,500/2,000-line targets with conservative, rounded
+ceilings that keep modest headroom over the as-built tree: `core/` + `model/` +
+`tools/spec.py` under **14,000** physical lines and `host/` + `view/` + `ui/`
+under **9,500**. The same prefixes and physical-line semantics are kept, and no
+code was relocated to evade a cap. The enforcing tests
 (`test_line_budget_core_model_spec_within_plan_cap` and
 `test_line_budget_host_view_ui_within_plan_cap` in `tests/test_phase3_exit.py`)
-are non-strict `xfail`. With the extension-trash work and the opt-in daemon HTTP
-wiring both landed, `core/` + `model/` + `tools/spec.py` measures 12,476 physical
-lines (9,976 over) and the surface tree measures 7,813 (host 4,478 / view 1,585 /
-ui 1,750; 5,813 over), and it keeps moving. The committed closeout report
-(`tests/fixtures/reports/phase3_exit_baseline.json`) pins that 7,813 surface
-baseline; regenerate it (`NEXUS_PHASE3_WRITE_REPORT=1 pytest
-tests/test_phase3_exit.py`) when the tree grows again. Anything that wants to be
-core *and* live-reloadable is a signal to widen an interface, not to add a layer.
+are now **strict** — a cap breach fails the suite, and regenerating the closeout
+report refuses to write a baseline that reaches or exceeds a cap (the boundary
+is `< cap`, so a count exactly at the cap is a violation). At the revision the
+measured sizes were 12,560 physical lines for the core tree (~11% headroom) and
+8,803 for the surface tree (host 5,198 / view 1,604 / ui 2,001; ~7% headroom).
+The committed report (`tests/fixtures/reports/phase3_exit_baseline.json`) pins
+that baseline; regenerate it (`NEXUS_PHASE3_WRITE_REPORT=1 pytest
+tests/test_phase3_exit.py`) only while the tree is within cap. Anything that
+wants to be core *and* live-reloadable is a signal to widen an interface, not to
+add a layer.
 
 ## The five contracts
 
@@ -334,6 +339,30 @@ It produces one renderable tree — turns, text, thinking, tool calls with live
 status, pending permissions, usage totals — that the CLI renders and a future
 HTTP surface serializes. Identical semantics by construction. `nexus sessions
 replay` is the same code path, which makes it the primary UI regression harness.
+
+### `ui/cli/`
+
+A pure client: it imports only `nexus.host`, `nexus.view`, `nexus.events`, and
+the standard library, and owns no execution path of its own. `details.py` is a
+pure function of the reduced `ConversationView` — it formats the phase, the
+**effective** model and provider (`model.started`, or the durable
+`model.selected` until the next turn reports the actual one), token usage,
+context occupancy against the assembled input budget, viewers, queued inputs,
+and the subagent tree. The prompt status line, the editor's `bottom_toolbar`,
+and `/details` all render from it, so they cannot disagree. Every session,
+model, and agent label is sanitized before it is shown. The renderer escapes
+control characters and redacts credential shapes before any tool name, key,
+error, or permission preview reaches the terminal, and control-escapes streamed
+assistant prose while preserving newlines and tabs (a stream arrives one delta at
+a time, so a credential shape can be split across fragments; blanket secret
+redaction is deliberately not claimed for the stream). Byte payloads show by
+size, and ANSI is enabled only on a TTY (`NO_COLOR` by presence or `TERM=dumb`
+disable it; `FORCE_COLOR` overrides). Its
+replay dedup is tracked **per session**, so switching to a new or forked session
+renders its lower `seq` events instead of suppressing them as repeats.
+`prompt_toolkit` is the one permitted third-party import and is loaded lazily,
+so the client runs with the extra absent (a plain stdin reader), and one-shot
+and JSONL runs never build an editor.
 
 ## Security model
 

@@ -42,6 +42,8 @@ SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("/sessions", "list sessions and switch", "[id]"),
     CommandSpec("/model", "list models or set this session's model", "[list|tier|provider/model|id]"),
     CommandSpec("/tools", "list tools used in this transcript"),
+    CommandSpec("/details", "model, context, queue, approvals, and subagents"),
+    CommandSpec("/reconnect", "re-attach and replay missed events"),
     CommandSpec("/cancel", "cancel the active turn"),
     CommandSpec("/fork", "branch this session", "[at_seq]"),
     CommandSpec("/export", "export this session", "[json|markdown|jsonl]"),
@@ -81,13 +83,7 @@ def parse(text: str) -> ParsedCommand | None:
 
 
 def _trailing_backslashes(text: str) -> int:
-    count = 0
-    for char in reversed(text):
-        if char == "\\":
-            count += 1
-        else:
-            break
-    return count
+    return len(text) - len(text.rstrip("\\"))
 
 
 def is_continuation(text: str) -> bool:

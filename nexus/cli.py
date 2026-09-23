@@ -114,14 +114,14 @@ async def _chat(
     stdout: TextIO,
     stderr: TextIO,
 ) -> int:
-    from .ui.cli import make_reader, open_client, run_chat
+    from .ui.cli import open_client, run_chat
 
     client = await open_client(workspace)
     try:
-        reader = make_reader(stdout=stdout)
-        return await run_chat(
-            client, session=session, reader=reader, stdout=stdout, stderr=stderr
-        )
+        # Let ``run_chat`` build the editor so the live status toolbar and the
+        # ``patch_stdout`` wiring are active; the streams are the real terminal
+        # ones, so a captured buffer is never seen here.
+        return await run_chat(client, session=session, stdout=stdout, stderr=stderr)
     finally:
         await client.aclose()
 

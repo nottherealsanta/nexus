@@ -59,7 +59,7 @@ from ..events import Event
 from . import export as export_mod
 from . import snapshot as snapshot_mod
 from .ids import is_valid_session_id, validate_session_id
-from .lock import SessionLock
+from .lock import SessionLock, TrashLock
 from .migrate import MigrationResult, migrate_session, should_migrate
 from .session import DEFAULT_EVENT_BUFFER, Session
 from .store import EventRecord, ReadResult, SessionStore
@@ -81,6 +81,23 @@ TRASH_VERSION = 1
 
 #: Default retention: one week, matching the extension trash policy (plan §2.3).
 DEFAULT_RETENTION_SECONDS = 7 * 24 * 60 * 60
+
+#: How long ``open(create=True)`` waits for a competing creator's session lock
+#: before refusing. A creator holds the lock only across the atomic empty-log
+#: create, so a losing brand-new opener observes the winner's log instead of
+#: failing with a spurious ``SessionBusy``.
+_CREATE_LOCK_WAIT_SECONDS = 1.0
+
+#: Poll interval while waiting for the create lock.
+_CREATE_LOCK_POLL_SECONDS = 0.01
+
+#: How long the create path waits for a transient, *unrelated* trash lock (a
+#: short recovery sweep, another session's delete/purge) before refusing. A
+#: genuinely stuck lock still fails closed after this bound: the wait is short
+#: and bounded, never unbounded. Acquiring the lock always re-runs the crash
+#: sweep and re-evaluates ``should_migrate`` under it, so waiting can never let a
+#: staged authoritative log be shadowed.
+_TRASH_LOCK_WAIT_SECONDS = 1.0
 
 SessionState = Literal["idle", "running", "awaiting_input", "awaiting_permission"]
 
@@ -264,6 +281,11 @@ class SessionManager:
         #: several event loops); the asyncio side is naturally serialized by it.
         self._handles: dict[str, Session] = {}
         self._handles_lock = threading.RLock()
+        #: Per-id event set when an in-flight create for that id finishes (or
+        #: fails). A ``create=False`` opener that finds no log but an in-flight
+        #: create waits on it (bounded) and re-checks instead of reporting a
+        #: spurious "does not exist". Guarded by ``_handles_lock``.
+        self._pending_creates: dict[str, threading.Event] = {}
 
     def path(self, session_id: str) -> Path:
         return self.store.log_path(session_id)
@@ -318,57 +340,231 @@ class SessionManager:
         """
         session_id = validate_session_id(session_id)
         self.directory.mkdir(parents=True, exist_ok=True)
-        # Recover before any create/migrate: a staging directory left by a
-        # crash-mid-delete may still hold the only authoritative log. Recovering
-        # afterwards would let ``store.create`` publish a fresh empty log first.
-        # The recovery only reads the trash directory, takes no session/handle
-        # lock, and calls neither ``open`` nor ``list``, so it cannot recurse or
-        # deadlock the ``_handles_lock`` taken below.
+        # Best-effort recovery first: a staging directory left by a
+        # crash-mid-delete may still hold the only authoritative log. This sweep
+        # is non-blocking and may be skipped when a concurrent recoverer holds
+        # the trash lock, so it is not the last word: both ``migrate`` and
+        # ``_create_session_log`` re-run the same sweep under the session lock
+        # and the trash lock before any authoritative write, which is what stops
+        # a fresh empty or stale-migrated log from shadowing the staged one. The
+        # sweep only reads the trash directory, takes no session/handle lock, and
+        # calls neither ``open`` nor ``list``, so it cannot recurse or deadlock
+        # the ``_handles_lock`` taken below.
         self._recover_trash()
         if migrate:
             self.migrate(session_id)
-        with self._handles_lock:
-            cached = self._handles.get(session_id)
-            if cached is not None and (
-                getattr(cached, "_session_ended", False)
-                or getattr(cached, "retired", False)
-            ):
-                # A closed or retired handle must never be handed out again: drop
-                # it and build a fresh one so a reopened session gets a live bus.
-                self._handles.pop(session_id, None)
-                cached = None
-            if cached is not None:
-                # Re-opening an already-live handle still honors ``recover``:
-                # crash recovery is idempotent and never writes while this handle
-                # (or another process) holds the exclusive turn lock.
-                if recover:
-                    cached.recover_dangling_tool_uses()
-                return cached
-            if not self.store.exists(session_id):
-                if not create:
+        # Loop so exactly one handle is inserted even when several threads race
+        # to open the same id. The slow create path runs *outside*
+        # ``_handles_lock`` (see below); the loop re-checks the cache afterwards.
+        # ``create=False`` must not turn a concurrent create into a spurious
+        # "does not exist": a creator publishes a per-id event under
+        # ``_handles_lock`` before it drops the lock, so a non-creating opener
+        # that finds no log but an in-flight create waits (bounded) for it and
+        # re-checks. A genuinely missing id, with no create in flight, still fails
+        # promptly. The wait never holds ``_handles_lock``, so the session-lock
+        # -> ``_handles_lock`` order ``delete`` uses is never inverted.
+        deadline: float | None = None
+        while True:
+            with self._handles_lock:
+                cached = self._handles.get(session_id)
+                if cached is not None and (
+                    getattr(cached, "_session_ended", False)
+                    or getattr(cached, "retired", False)
+                ):
+                    # A closed or retired handle must never be handed out again:
+                    # drop it and build a fresh one so a reopened session gets a
+                    # live bus.
+                    self._handles.pop(session_id, None)
+                    cached = None
+                if cached is not None:
+                    # Re-opening an already-live handle still honors ``recover``:
+                    # crash recovery is idempotent and never writes while this
+                    # handle (or another process) holds the exclusive turn lock.
+                    if recover:
+                        cached.recover_dangling_tool_uses()
+                    return cached
+                if self.store.exists(session_id):
+                    # Another opener may have published the log while we were
+                    # outside the lock (or a crash-staged one was recovered).
+                    session = self._build_handle(session_id)
+                    if recover:
+                        session.recover_dangling_tool_uses()
+                    self._handles[session_id] = session
+                    return session
+                in_flight = self._pending_creates.get(session_id)
+                if in_flight is None and not create:
                     raise SessionError(f"Session {session_id!r} does not exist")
-                # Create only after migration so a legacy file is never shadowed.
-                self.store.create(session_id)
-            session = Session(
-                session_id,
-                store=self.store,
-                assemble=self._assemble,
-                provider_for=self._provider_for,
-                limits=self._limits,
-                tools=self._tools,
-                attended=self._attended,
-                event_buffer=self._event_buffer,
-                snapshot_every=self._snapshot_every,
-                unattended_decision=self._unattended_decision,
-                auto_start_queued=self._auto_start_queued,
-                ensure_ready=self._ensure_ready,
-                turn_cleanup=self._turn_cleanup,
-                hooks=self._hooks,
+                if in_flight is None:
+                    # This opener owns the create. Publish the marker *before*
+                    # releasing ``_handles_lock`` so a concurrent ``create=False``
+                    # opener cannot slip in and report a spurious missing id.
+                    in_flight = threading.Event()
+                    self._pending_creates[session_id] = in_flight
+                    owner = True
+                else:
+                    owner = False
+            if owner:
+                # No cached handle and no log: create it **outside**
+                # ``_handles_lock``. The create path may wait (bounded) on the
+                # session and trash flocks; holding the manager-wide lock across
+                # that wait would stall every other ``open``/``evict``/``delete``
+                # and invert the session-lock -> ``_handles_lock`` order
+                # ``delete`` uses. Looping re-checks the cache so exactly one
+                # handle is ever inserted. Create only after migration so a legacy
+                # file is never shadowed. A crash-interrupted delete may have
+                # staged the authoritative log out of the sessions directory; the
+                # recovery above can have been skipped if another process held the
+                # trash lock. The create path therefore takes the session lock
+                # and, under it, the trash lock, so a concurrent recoverer can
+                # never have a crash-staged authoritative log shadowed by a fresh
+                # empty one.
+                try:
+                    self._create_session_log(session_id)
+                finally:
+                    with self._handles_lock:
+                        event = self._pending_creates.pop(session_id, None)
+                        if event is not None:
+                            event.set()
+                continue
+            # Another opener is already creating this id. Wait for it, then
+            # re-check (a completed create is observed as a log or handle; a
+            # failed one leaves the id missing). ``create=True`` waits without a
+            # bound because it will itself become the owner if the creator failed;
+            # ``create=False`` is bounded so a genuinely missing id (or a wedged
+            # creator) still fails promptly rather than hanging.
+            if create:
+                in_flight.wait(2 * _CREATE_LOCK_WAIT_SECONDS)
+                continue
+            if deadline is None:
+                deadline = time.monotonic() + 2 * _CREATE_LOCK_WAIT_SECONDS
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise SessionError(f"Session {session_id!r} does not exist")
+            in_flight.wait(remaining)
+
+    def _build_handle(self, session_id: str) -> Session:
+        """Construct a live :class:`Session` handle for ``session_id``."""
+        return Session(
+            session_id,
+            store=self.store,
+            assemble=self._assemble,
+            provider_for=self._provider_for,
+            limits=self._limits,
+            tools=self._tools,
+            attended=self._attended,
+            event_buffer=self._event_buffer,
+            snapshot_every=self._snapshot_every,
+            unattended_decision=self._unattended_decision,
+            auto_start_queued=self._auto_start_queued,
+            ensure_ready=self._ensure_ready,
+            turn_cleanup=self._turn_cleanup,
+            hooks=self._hooks,
+        )
+
+    def _create_session_log(self, session_id: str) -> None:
+        """Create or migrate the log for ``session_id`` unless one must not exist.
+
+        Called only when ``store.exists`` was false and ``create`` was requested.
+        The session lock is taken first, then the trash lock, so the order is
+        always session file lock -> trash lock (the same order
+        ``delete``/``restore`` use) and no cycle is possible: recovery takes only
+        the trash lock, and never a session lock.
+
+        Two hazards are closed:
+
+        * **A crash-staged authoritative log.** A delete interrupted after moving
+          the log but before publishing its metadata leaves the only copy in a
+          staging directory. A *concurrent* recoverer in another process holds
+          only the trash lock; ``open``'s own non-blocking sweep would skip it.
+          Re-running the sweep while holding both locks rolls the log back before
+          ``store.create`` can publish a fresh empty one that shadows it.
+        * **A losing brand-new opener.** ``store.create`` is already an atomic,
+          non-truncating create, but two openers of a new id must both succeed
+          rather than one failing with a spurious ``SessionBusy``. A session-lock
+          contention waits briefly for the winner and then observes the created
+          log; it only refuses when a delete genuinely holds the lock.
+
+        The trash lock is retried only for a short, bounded window (a transient
+        unrelated sweep or another session's delete), then the call refuses
+        (``SessionBusy``) rather than waiting unbounded. The crash sweep and the
+        ``should_migrate`` decision are re-run under the acquired lock, so waiting
+        can never let a staged authoritative log be shadowed.
+        """
+        session_lock = SessionLock.for_session(self.directory, session_id)
+        deadline = time.monotonic() + _CREATE_LOCK_WAIT_SECONDS
+        while True:
+            try:
+                session_lock.acquire(shared=False, blocking=False)
+            except SessionBusy:
+                # The winner may have published the log already; a losing opener
+                # must observe it. Otherwise a delete (or a slow create) holds the
+                # lock: wait briefly, then refuse with a clear busy.
+                if self.store.exists(session_id):
+                    return
+                if time.monotonic() >= deadline:
+                    raise SessionBusy(
+                        f"Session {session_id!r} is locked (a delete or create is "
+                        "in progress); refusing to create over it"
+                    ) from None
+                time.sleep(_CREATE_LOCK_POLL_SECONDS)
+                continue
+            break
+        try:
+            if self.store.exists(session_id):
+                return
+            self._create_or_migrate_locked(session_id)
+        finally:
+            session_lock.release()
+
+    def _acquire_trash_lock(self) -> TrashLock | None:
+        """Take the trash lock with a short bounded retry, or return ``None``.
+
+        A transient, *unrelated* holder (a short recovery sweep, another
+        session's delete/purge) is waited out for at most
+        ``_TRASH_LOCK_WAIT_SECONDS``; a genuinely stuck lock still fails closed
+        rather than waiting unbounded. The caller already holds the session lock,
+        so the order is always session file lock -> trash lock.
+        """
+        lock = TrashLock.for_dir(self.trash_dir)
+        deadline = time.monotonic() + _TRASH_LOCK_WAIT_SECONDS
+        while not lock.acquire(blocking=False):
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(_CREATE_LOCK_POLL_SECONDS)
+        return lock
+
+    def _create_or_migrate_locked(self, session_id: str) -> None:
+        """Publish the log for ``session_id``; caller holds its session lock.
+
+        The trash lock is taken with a short bounded retry, preserving the
+        session file lock -> trash lock order. Under both locks the crash sweep
+        runs first. If it restored a legacy-only ``.json`` (so ``store.exists``
+        is still false while ``should_migrate`` is true), that file is migrated
+        to the authoritative ``.jsonl`` here -- under both locks -- instead of an
+        empty log being published over the restored history. ``migrate_session``
+        takes no lock of its own, so calling it with the session and trash locks
+        already held is reentrant-safe and cannot deadlock.
+        """
+        trash_lock = self._acquire_trash_lock()
+        if trash_lock is None:
+            raise SessionBusy(
+                f"Session {session_id!r} trash is busy (a recovery or delete is "
+                "in progress); refusing to create over it"
             )
-            if recover:
-                session.recover_dangling_tool_uses()
-            self._handles[session_id] = session
-            return session
+        try:
+            self._recover_trash_locked()
+            if self.store.exists(session_id):
+                return
+            # Recovery may have just restored a legacy-only session's ``.json``:
+            # it has no ``.jsonl`` yet, so ``store.exists`` is false. Migrate it
+            # rather than publish an empty log that would shadow the
+            # authoritative restored history.
+            if should_migrate(self.directory, session_id):
+                migrate_session(self.directory, session_id)
+                return
+            self.store.create(session_id)
+        finally:
+            trash_lock.release()
 
     def evict(self, session_id: str) -> Session | None:
         """Drop the cached live handle for an idle id; the log is untouched.
@@ -698,36 +894,46 @@ class SessionManager:
                 raise SessionError(
                     f"Session {session_id!r} already exists; refusing to overwrite"
                 )
-            moved: list[str] = []
-            try:
-                for name in meta.files:
-                    source = entry / name
-                    if source.is_symlink() or not source.is_file():
-                        raise SessionError(
-                            f"Trash entry {meta.trash_id!r} artifact {name!r} is "
-                            "missing or not a regular file; refusing to restore it"
-                        )
-                    destination = self.directory / name
-                    if destination.exists():
-                        raise SessionError(
-                            f"Session artifact {name!r} already exists; refusing to overwrite"
-                        )
-                    os.replace(source, destination)
-                    moved.append(name)
-                self._remove_trash_entry(entry)
-                _fsync_dir(self.trash_dir)
-                return session_id
-            except BaseException:
-                # A partial restore must not strand artifacts in the sessions
-                # directory: move back everything already restored so the trash
-                # entry stays authoritative and the operation can be retried.
-                for name in reversed(moved):
-                    source = self.directory / name
-                    destination = entry / name
-                    if source.exists() and not destination.exists():
-                        with contextlib.suppress(OSError):
-                            os.replace(source, destination)
-                raise
+            # Serialize the move with producers, recovery, and purges in other
+            # processes. The session lock is already held, so the order is
+            # session file lock -> trash lock.
+            with TrashLock.for_dir(self.trash_dir).guard():
+                if self._artifacts_exist(session_id):
+                    raise SessionError(
+                        f"Session {session_id!r} already exists; refusing to overwrite"
+                    )
+                moved: list[str] = []
+                try:
+                    for name in meta.files:
+                        source = entry / name
+                        if source.is_symlink() or not source.is_file():
+                            raise SessionError(
+                                f"Trash entry {meta.trash_id!r} artifact {name!r} is "
+                                "missing or not a regular file; refusing to restore it"
+                            )
+                        destination = self.directory / name
+                        if destination.exists():
+                            raise SessionError(
+                                f"Session artifact {name!r} already exists; "
+                                "refusing to overwrite"
+                            )
+                        os.replace(source, destination)
+                        moved.append(name)
+                    self._remove_trash_entry(entry)
+                    _fsync_dir(self.trash_dir)
+                    return session_id
+                except BaseException:
+                    # A partial restore must not strand artifacts in the sessions
+                    # directory: move back everything already restored so the
+                    # trash entry stays authoritative and the operation can be
+                    # retried.
+                    for name in reversed(moved):
+                        source = self.directory / name
+                        destination = entry / name
+                        if source.exists() and not destination.exists():
+                            with contextlib.suppress(OSError):
+                                os.replace(source, destination)
+                    raise
         finally:
             lock.release()
 
@@ -746,19 +952,22 @@ class SessionManager:
         self._recover_trash()
         moment = time.time() if now is None else float(now)
         removed: list[str] = []
-        for meta in self._trash_records():
-            if meta.delete_after > moment:
-                continue
-            entry = self.trash_dir / meta.trash_id
-            if entry.is_symlink():
-                # ``rmtree`` refuses a symlink; unlink the link itself so a
-                # crafted entry can never recurse outside the trash directory.
-                with contextlib.suppress(OSError):
-                    entry.unlink()
-            else:
-                with contextlib.suppress(OSError):
-                    shutil.rmtree(entry)
-            removed.append(meta.trash_id)
+        if not self.trash_dir.is_dir():
+            return removed
+        with TrashLock.for_dir(self.trash_dir).guard():
+            for meta in self._trash_records():
+                if meta.delete_after > moment:
+                    continue
+                entry = self.trash_dir / meta.trash_id
+                if entry.is_symlink():
+                    # ``rmtree`` refuses a symlink; unlink the link itself so a
+                    # crafted entry can never recurse outside the trash dir.
+                    with contextlib.suppress(OSError):
+                        entry.unlink()
+                else:
+                    with contextlib.suppress(OSError):
+                        shutil.rmtree(entry)
+                removed.append(meta.trash_id)
         return removed
 
     def _artifact_paths(self, session_id: str) -> list[Path]:
@@ -780,36 +989,41 @@ class SessionManager:
         loaded = snapshot_mod.load(self.directory, session_id, read)
         title = export_mod.derive_title(snapshot_mod.current_state(read, loaded).messages)
         trash_dir = self.trash_dir
-        trash_dir.mkdir(parents=True, exist_ok=True)
         token = secrets.token_hex(6)
-        staging = trash_dir / f"{_TRASH_STAGING_PREFIX}{token}"
-        staging.mkdir()
         now = time.time()
-        moved: list[str] = []
-        try:
-            for path in paths:
-                os.replace(path, staging / path.name)
-                moved.append(path.name)
-            meta = TrashRecord(
-                trash_id=f"{session_id}-{token}",
-                session_id=session_id,
-                trashed_at=now,
-                delete_after=now + self._retention_seconds,
-                files=tuple(moved),
-                title=title,
-                last_seq=read.next_seq,
-                reason=reason,
-            )
-            _write_trash_meta(staging / _TRASH_META, meta)
-            _fsync_dir(staging)
-            # Publish atomically: the staging directory becomes the trash entry
-            # only once its metadata is durable.
-            os.replace(staging, trash_dir / meta.trash_id)
-            _fsync_dir(trash_dir)
-            return meta
-        except BaseException:
-            self._rollback_staging(staging, moved)
-            raise
+        # Hold the trash lock across the entire stage/publish so a recovery
+        # sweep in another process can never roll the staging directory back
+        # mid-move. The caller already holds the session's exclusive lock, so the
+        # ordering is session file lock -> trash lock.
+        with TrashLock.for_dir(trash_dir).guard():
+            trash_dir.mkdir(parents=True, exist_ok=True)
+            staging = trash_dir / f"{_TRASH_STAGING_PREFIX}{token}"
+            staging.mkdir()
+            moved: list[str] = []
+            try:
+                for path in paths:
+                    os.replace(path, staging / path.name)
+                    moved.append(path.name)
+                meta = TrashRecord(
+                    trash_id=f"{session_id}-{token}",
+                    session_id=session_id,
+                    trashed_at=now,
+                    delete_after=now + self._retention_seconds,
+                    files=tuple(moved),
+                    title=title,
+                    last_seq=read.next_seq,
+                    reason=reason,
+                )
+                _write_trash_meta(staging / _TRASH_META, meta)
+                _fsync_dir(staging)
+                # Publish atomically: the staging directory becomes the trash
+                # entry only once its metadata is durable.
+                os.replace(staging, trash_dir / meta.trash_id)
+                _fsync_dir(trash_dir)
+                return meta
+            except BaseException:
+                self._rollback_staging(staging, moved)
+                raise
 
     def _rollback_staging(self, staging: Path, moved: list[str]) -> None:
         for name in moved:
@@ -818,10 +1032,9 @@ class SessionManager:
             if source.exists() and not destination.exists():
                 with contextlib.suppress(OSError):
                     os.replace(source, destination)
-        with contextlib.suppress(OSError):
-            meta = staging / _TRASH_META
-            if meta.exists():
-                meta.unlink()
+        for name in (_TRASH_META, _TRASH_META + ".tmp"):
+            with contextlib.suppress(OSError):
+                (staging / name).unlink(missing_ok=True)
         with contextlib.suppress(OSError):
             staging.rmdir()
 
@@ -866,8 +1079,9 @@ class SessionManager:
         return None
 
     def _remove_trash_entry(self, entry: Path) -> None:
-        with contextlib.suppress(FileNotFoundError):
-            (entry / _TRASH_META).unlink()
+        for name in (_TRASH_META, _TRASH_META + ".tmp"):
+            with contextlib.suppress(OSError):
+                (entry / name).unlink(missing_ok=True)
         with contextlib.suppress(OSError):
             entry.rmdir()
 
@@ -877,6 +1091,27 @@ class SessionManager:
         A staging directory with durable metadata is published; one without is
         rolled back so the authoritative log returns to the sessions directory.
         Best-effort: any failure leaves the artifacts intact for the next sweep.
+
+        The sweep takes the trash lock **non-blocking**, and takes no session
+        lock: if a producer is mid-stage (or a restore/purge is running) the whole
+        sweep is skipped rather than waiting, so ``open``/``list`` never block and
+        a partially moved stage is never touched by two processes at once.
+        """
+        if not self.trash_dir.is_dir():
+            return
+        lock = TrashLock.for_dir(self.trash_dir)
+        with lock.guard(blocking=False) as acquired:
+            if not acquired:
+                return
+            self._recover_trash_locked()
+
+    def _recover_trash_locked(self) -> None:
+        """Sweep the trash; the caller must already hold the trash lock.
+
+        Split from :meth:`_recover_trash` so the create path can re-run the very
+        same sweep while it holds the session lock *and* the trash lock, instead
+        of nesting a second non-blocking acquisition of the same lock (which the
+        OS would report as contention). Otherwise the two paths are identical.
         """
         try:
             entries = list(self.trash_dir.iterdir())
@@ -907,13 +1142,13 @@ class SessionManager:
                     with contextlib.suppress(OSError):
                         os.replace(entry, final)
                 continue
-            # No trustworthy metadata: roll the moved artifacts back. A symlinked
-            # child is unlinked, never moved into the sessions directory. The
-            # metadata document belongs to the staging directory, never to the
-            # sessions directory, so it is removed rather than moved: an
-            # untrusted ``meta.json`` must not land beside the session log.
+            # No trustworthy metadata: roll the moved artifacts back. A partially
+            # written ``meta.json`` (or its temp) is removed, never moved: the
+            # authoritative log must return to the sessions directory, and an
+            # untrusted metadata document must not land beside it. A symlinked
+            # child is unlinked, never followed.
             for child in list(entry.iterdir()):
-                if child.name == _TRASH_META:
+                if child.name in (_TRASH_META, _TRASH_META + ".tmp"):
                     with contextlib.suppress(OSError):
                         child.unlink(missing_ok=True)
                     continue
@@ -929,20 +1164,64 @@ class SessionManager:
                 entry.rmdir()
 
     def migrate(self, session_id: str) -> MigrationResult | None:
-        """Migrate one session if needed, serialized by the session lock."""
+        """Migrate one session if needed, serialized by the session lock.
+
+        The session lock is taken first and, under it, the trash lock; a
+        crash-interrupted delete is recovered **before** the migrate decision.
+        That re-run closes the shadowing hole ``open``'s best-effort sweep cannot
+        close: if a concurrent recoverer held the trash lock, the outer sweep
+        skipped, and a stale legacy ``.json`` could be migrated over the
+        authoritative ``.jsonl`` that a crash had staged out of the sessions
+        directory. Recovery restores that log first, so ``should_migrate``
+        re-checked under the lock is then false and no stale log is written.
+
+        Lock order is session file lock -> trash lock, matching
+        ``delete``/``restore``/``_create_session_log``; recovery takes only the
+        trash lock, so no cycle is possible. A trash lock a live producer or
+        recoverer still holds refuses (``SessionBusy``) rather than risk a
+        shadow. This holds for a direct :meth:`migrate` call as much as for the
+        ``open`` path, so a caller that migrates without opening is safe too.
+        """
         session_id = validate_session_id(session_id)
         if not should_migrate(self.directory, session_id):
             return None
         lock = SessionLock.for_session(self.directory, session_id)
         try:
             with lock.exclusive(blocking=False):
-                return migrate_session(self.directory, session_id)
+                return self._migrate_locked(session_id)
         except SessionBusy:
-            # Another opener is migrating or running. If it finished, we are
-            # done; otherwise surface the contention instead of corrupting.
+            # Another opener is migrating or running, or a producer/recoverer
+            # holds the trash lock. If another opener finished, we are done;
+            # otherwise surface the contention instead of risking a shadow.
             if should_migrate(self.directory, session_id):
                 raise
             return None
+
+    def _migrate_locked(self, session_id: str) -> MigrationResult | None:
+        """Recover, then migrate only if still needed; caller holds the session lock.
+
+        The trash lock is taken with the same short bounded retry as the create
+        path (never the reverse order, and recovery re-entered lock-free) so a
+        transient, unrelated holder is waited out without ever deadlocking or
+        recursing. When it stays busy past the bound the migration is refused:
+        an authoritative log may be staged out of the sessions directory and
+        migrating the stale legacy file would shadow it.
+        """
+        trash_lock = self._acquire_trash_lock()
+        if trash_lock is None:
+            raise SessionBusy(
+                f"Session {session_id!r} trash is busy (a recovery or delete "
+                "is in progress); refusing to migrate over a possibly staged log"
+            )
+        try:
+            self._recover_trash_locked()
+            if not should_migrate(self.directory, session_id):
+                # Recovery restored the authoritative JSONL (or another opener
+                # migrated): never shadow it with the stale legacy bytes.
+                return None
+            return migrate_session(self.directory, session_id)
+        finally:
+            trash_lock.release()
 
     # -- fork --------------------------------------------------------------
 
@@ -1111,12 +1390,22 @@ def _looks_like_legacy_session(path: Path) -> bool:
 
 
 def _write_trash_meta(path: Path, meta: TrashRecord) -> None:
-    """Durably write one trash entry's metadata before it is published."""
+    """Atomically and durably write one trash entry's metadata.
+
+    The bytes go to a sibling ``<meta>.tmp`` that is ``fsync``'d and then renamed
+    over ``path``, so a concurrent reader (a recovery sweep in another process)
+    never observes a half-written document: it sees either no metadata or the
+    complete record. The containing directory is ``fsync``'d so the rename is
+    durable before the staging entry is published.
+    """
     payload = msgspec.json.encode(meta) + b"\n"
-    with open(path, "wb") as handle:
+    temporary = path.with_name(path.name + ".tmp")
+    with open(temporary, "wb") as handle:
         handle.write(payload)
         handle.flush()
         os.fsync(handle.fileno())
+    os.replace(temporary, path)
+    _fsync_dir(path.parent)
 
 
 def _fsync_dir(directory: Path) -> None:

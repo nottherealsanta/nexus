@@ -1,7 +1,7 @@
 Nexus Phase 3 exit - baseline closeout evidence
 ================================================
-generated : 2026-09-23T10:33:18+0530
-head      : 4fd56175698c9566c1cdaeefef94e253a72d4c36
+generated : 2026-09-23T14:07:57+0530
+head      : db988822e897eb8da551e51e57009d53de37ca3d
 schema    : nexus.phase3_exit_baseline/1
 
 Phase 3 exit criteria (plan section 10)
@@ -26,25 +26,25 @@ Controlled prompt cache before/after
   boundaries (off) ......... []
   boundaries (on) .......... [{'position': 0, 'scope': 'system_tools'}, {'position': 58, 'scope': 'history'}]
 
-Line budgets (plan sections 11 / 14.14)
+Line budgets (plan sections 11 / 14.14, revised §18)
 ----------------------------------------
-  core+model+spec .......... 12560 physical / 10385 code (cap 2500, within=False, over=10060)
-  host+view+ui ............. 8620 physical / 7126 code (cap 2000, within=False, over=6620)
-  surface baseline ......... host=5198 view=1604 ui=1818
+  core+model+spec .......... 12560 physical / 10385 code (cap 14000, within=True, over=0)
+  host+view+ui ............. 8803 physical / 7253 code (cap 9500, within=True, over=0)
+  surface baseline ......... host=5198 view=1604 ui=2001
 
 Import cost (plan section 2.2)
 ----------------------------------------
-  import nexus ............. 10.04 ms, +40 modules, heavy=none
-  import nexus.runtime ..... 101.5 ms, 377 modules
+  import nexus ............. 9.37 ms, +40 modules, heavy=none
+  import nexus.runtime ..... 95.71 ms, 377 modules
 
 Phase 4 references (plan section 10)
 ----------------------------------------
-  result ................... passed in 1.18s
-  summary .................. 2 passed in 1.00s
+  result ................... passed in 1.1s
+  summary .................. 2 passed in 0.94s
     - tests/test_hot_extension_e2e.py::test_walkthrough_read_template_write_reload_call
     - tests/test_hot_extension_stress.py::test_two_hundred_reloads_do_not_leak
 
 Full suite
 ----------------------------------------
-  result ................... passed in 60.31s
-  summary .................. 3148 passed, 311 skipped, 2 deselected, 2 xfailed in 59.79s
+  result ................... passed in 66.16s
+  summary .................. 3197 passed, 311 skipped, 2 deselected in 65.75s (0:01:05)

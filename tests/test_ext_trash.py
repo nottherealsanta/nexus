@@ -20,7 +20,10 @@ require:
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import sys
+import textwrap
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -123,6 +126,23 @@ def make_manager(
 
 def tool_dir(root: Path) -> Path:
     return root / ".nexus" / "tools"
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _wait_for(path: Path, proc: subprocess.Popen, *, timeout: float = 30.0) -> None:
+    """Block until a subprocess touches ``path``, failing if it dies first."""
+    deadline = time.monotonic() + timeout
+    while not path.exists():
+        if proc.poll() is not None:
+            _out, err = proc.communicate()
+            raise AssertionError(f"producer exited early rc={proc.returncode}: {err!r}")
+        if time.monotonic() > deadline:
+            proc.kill()
+            proc.communicate()
+            raise AssertionError("producer never reached the paused point")
+        time.sleep(0.005)
 
 
 @pytest.fixture(autouse=True)
@@ -714,3 +734,133 @@ async def test_facade_trash_makes_the_tool_disappear_from_future_runs(tmp_path: 
     assert "Ping" not in tools
     assert facade.list_extensions() == ()
     await runtime.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Cross-process recovery safety: trash lock ordering and crash states
+# ---------------------------------------------------------------------------
+
+
+def test_recover_leaves_a_corrupt_staging_meta_intact(tmp_path: Path):
+    """Never delete the only copy when a staging record is unreadable.
+
+    Extension trash writes durable metadata *before* moving the file, so an
+    unreadable record cannot be trusted to mean "the file never moved". Recovery
+    must leave the staging directory alone rather than discard a possible only
+    copy.
+    """
+    manager, _box, _ws, _home = make_manager(tmp_path)
+    staging = manager.trash_dir / ".ext-staging-corrupt"
+    staging.mkdir(parents=True)
+    (staging / "meta.json").write_bytes(b'{"trash_id": "alpha-abc", "sou')
+    (staging / "meta.json.tmp").write_bytes(b'{"partial":')
+    only = staging / "alpha.py"
+    only.write_text(tool_source("Alpha"), encoding="utf-8")
+
+    assert manager.list_trashed() == ()
+    assert staging.exists()
+    assert only.exists()
+
+
+def test_recover_discards_a_staging_dir_that_never_moved_a_file(tmp_path: Path):
+    """No metadata and no staged file means the move never happened; discard."""
+    manager, _box, _ws, _home = make_manager(tmp_path)
+    staging = manager.trash_dir / ".ext-staging-empty"
+    staging.mkdir(parents=True)
+    (staging / "meta.json.tmp").write_bytes(b'{"partial":')
+
+    assert manager.list_trashed() == ()
+    assert not staging.exists()
+
+
+def test_recover_skips_while_a_producer_holds_the_trash_lock(tmp_path: Path):
+    """Deterministic two-process check: recovery never discards a live stage.
+
+    A real ``_publish_trash`` runs in a child process and pauses *after* writing
+    durable metadata but before moving the file, while holding the cross-process
+    trash lock. The parent's ``list_trashed`` recovery must skip (non-blocking)
+    rather than discard the staging directory, then resume the producer and see
+    a clean publish.
+    """
+    manager, _box, ws, home = make_manager(tmp_path)
+    alpha = write_tool(tool_dir(ws), "alpha", "Alpha")
+
+    sentinel = tmp_path / "paused"
+    resume = tmp_path / "resume"
+    script = textwrap.dedent(
+        """
+        import sys, time
+        from pathlib import Path
+        from nexus.config import Config
+        from nexus.config.schema import ConfigV2, ExtSection
+        from nexus.ext import ExtensionManager
+        from nexus.ext import manager as m
+
+        ws, home, target, trash, sentinel, resume = map(Path, sys.argv[1:7])
+        real = m._write_trash_meta
+
+        def paused(path, record):
+            real(path, record)
+            sentinel.write_text("paused")
+            deadline = time.monotonic() + 30
+            while not resume.exists():
+                if time.monotonic() > deadline:
+                    raise SystemExit("resume timeout")
+                time.sleep(0.005)
+
+        m._write_trash_meta = paused
+        cfg = Config(
+            v2=ConfigV2(
+                ext=ExtSection(
+                    enabled=True,
+                    watch_interval_ms=0,
+                    dirs=[".nexus/tools"],
+                    quarantine=False,
+                    max_file_bytes=100_000,
+                )
+            )
+        )
+        mgr = ExtensionManager(ws, home=home, config_loader=lambda: cfg, trash_dir=trash)
+        mgr._publish_trash(target, m._ext_section(cfg), reason="race")
+        """
+    )
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            script,
+            str(ws),
+            str(home),
+            str(alpha),
+            str(manager.trash_dir),
+            str(sentinel),
+            str(resume),
+        ],
+        cwd=str(_REPO_ROOT),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        _wait_for(sentinel, proc)
+        staging = list(manager.trash_dir.glob(".ext-staging-*"))
+        assert len(staging) == 1
+        assert (staging[0] / "meta.json").exists()
+        assert not (staging[0] / "alpha.py").exists()
+        assert alpha.exists()
+
+        # Recovery must skip, not discard the durable metadata out from under
+        # the paused producer.
+        assert manager.list_trashed() == ()
+        assert staging[0].is_dir()
+        assert alpha.exists()
+    finally:
+        resume.write_text("go")
+        proc.wait(timeout=30)
+    assert proc.returncode == 0
+
+    assert not alpha.exists()
+    records = manager.list_trashed()
+    assert [record.source_path for record in records] == [str(alpha)]
+    assert manager.restore(records[0].trash_id).trash_id == records[0].trash_id
+    assert alpha.exists()

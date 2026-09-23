@@ -59,8 +59,12 @@ What is present now:
 - `nexus/view/`, `nexus/host/` (UDS by default; opt-in HTTP/SSE),
   `nexus/ui/cli/`, and `nexus/ui/jsonl.py`
 
-The two line budgets stated in ARCHITECTURE.md are **currently over target**, and
-the enforcing tests are non-strict `xfail`; do not cite them as satisfied.
+The two line budgets stated in ARCHITECTURE.md were revised by the PLAN §18
+amendment to `core/` + `model/` + `tools/spec.py` under **14,000** physical lines
+and `host/` + `view/` + `ui/` under **9,500**. The enforcing tests are now strict
+(not `xfail`), and regenerating the closeout baseline refuses to record an
+overage, so a cap breach fails the suite rather than being blessed. The measured
+tree is within both revised caps; the two budgets are satisfied, not waived.
 
 When unsure whether something exists, read the code before claiming it does.
 

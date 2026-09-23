@@ -74,6 +74,7 @@ from ..errors import (
     StaleGenerationError,
 )
 from ..events import Event
+from ..session.lock import TrashLock
 from ..skills.manager import SkillManager
 from ..tools.loader import ModuleRecord, ToolLoader, build_default_quarantine
 from ..tools.spec import RegisteredTool
@@ -1120,11 +1121,22 @@ class ExtensionManager:
             raise ExtensionTrashError(
                 f"Trash entry {record.trash_id!r} is missing its file"
             )
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(source, destination)
-        _fsync_dir(destination.parent)
-        self._remove_trash_entry(entry)
-        _fsync_dir(self._trash_dir)
+        # Serialize the move with producers, recovery, and purges in another
+        # process, and re-check under the lock before touching either path.
+        with TrashLock.for_dir(self._trash_dir).guard():
+            if destination.exists():
+                raise ExtensionTrashError(
+                    f"Refusing to restore over existing file {record.source_path!r}"
+                )
+            if source.is_symlink() or not source.exists():
+                raise ExtensionTrashError(
+                    f"Trash entry {record.trash_id!r} is missing its file"
+                )
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(source, destination)
+            _fsync_dir(destination.parent)
+            self._remove_trash_entry(entry)
+            _fsync_dir(self._trash_dir)
         return record
 
     def purge_expired(self, *, now: float | None = None) -> list[str]:
@@ -1135,19 +1147,22 @@ class ExtensionManager:
         self._recover_trash()
         moment = time.time() if now is None else float(now)
         removed: list[str] = []
-        for record in self._trash_records():
-            if record.delete_after > moment:
-                continue
-            entry = self._trash_dir / record.trash_id
-            if entry.is_symlink():
-                # A symlinked entry is a link, never a directory to recurse
-                # into; unlink the link only. ``rmtree`` would refuse it anyway.
-                with contextlib.suppress(OSError):
-                    entry.unlink()
-            else:
-                with contextlib.suppress(OSError):
-                    shutil.rmtree(entry)
-            removed.append(record.trash_id)
+        if not self._trash_dir.is_dir():
+            return removed
+        with TrashLock.for_dir(self._trash_dir).guard():
+            for record in self._trash_records():
+                if record.delete_after > moment:
+                    continue
+                entry = self._trash_dir / record.trash_id
+                if entry.is_symlink():
+                    # A symlinked entry is a link, never a directory to recurse
+                    # into; unlink the link only. ``rmtree`` would refuse it.
+                    with contextlib.suppress(OSError):
+                        entry.unlink()
+                else:
+                    with contextlib.suppress(OSError):
+                        shutil.rmtree(entry)
+                removed.append(record.trash_id)
         return removed
 
     def _publish_trash(
@@ -1172,9 +1187,7 @@ class ExtensionManager:
                 sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
 
         trash_dir = self._trash_dir
-        trash_dir.mkdir(parents=True, exist_ok=True)
         staging = trash_dir / f"{_TRASH_STAGING_PREFIX}{secrets.token_hex(6)}"
-        staging.mkdir()
         now = time.time()
         record = ExtensionTrashRecord(
             trash_id=self._trash_id_for(path),
@@ -1197,66 +1210,75 @@ class ExtensionManager:
         # Captured before the metadata write so a rollback can prove the parent
         # is still the same real directory before moving the file back.
         parent_before = _dir_identity(path.parent)
-        try:
-            # Durable intent precedes the move: a crash between the two leaves a
-            # staging dir whose metadata names the original path, which recovery
-            # can discard safely (the file never moved) or publish.
-            _write_trash_meta(staging / _TRASH_META, record)
-            _fsync_dir(staging)
-            # TOCTOU close: re-verify the exact inode and parent directory right
-            # before the move, then confirm the moved entry is the same inode.
-            # A candidate swapped for a symlink, or a parent swapped for a link,
-            # is detected and rolled back rather than deleting the wrong file.
+        # Hold the trash lock across the whole stage/publish/rollback so a
+        # recovery sweep or discard in another process can never publish or
+        # delete this staging directory mid-move.
+        with TrashLock.for_dir(trash_dir).guard():
+            trash_dir.mkdir(parents=True, exist_ok=True)
+            staging.mkdir()
             try:
-                before = path.lstat()
-            except OSError as exc:
-                raise ExtensionTrashError(
-                    f"extension changed before the move: {exc}"
-                ) from exc
-            if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
-                raise ExtensionTrashError(
-                    f"refusing to trash a non-regular file: "
-                    f"{sanitize_text(str(path), limit=200)}"
+                # Durable intent precedes the move: a crash between the two
+                # leaves a staging dir whose metadata names the original path,
+                # which recovery can discard safely (the file never moved) or
+                # publish.
+                _write_trash_meta(staging / _TRASH_META, record)
+                _fsync_dir(staging)
+                # TOCTOU close: re-verify the exact inode and parent directory
+                # right before the move, then confirm the moved entry is the same
+                # inode. A candidate swapped for a symlink, or a parent swapped
+                # for a link, is detected and rolled back rather than deleting
+                # the wrong file.
+                try:
+                    before = path.lstat()
+                except OSError as exc:
+                    raise ExtensionTrashError(
+                        f"extension changed before the move: {exc}"
+                    ) from exc
+                if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+                    raise ExtensionTrashError(
+                        f"refusing to trash a non-regular file: "
+                        f"{sanitize_text(str(path), limit=200)}"
+                    )
+                # Re-verify the parent identity immediately before the rename:
+                # the identity captured before the metadata write must still
+                # hold, so a parent (including the managed root itself, which the
+                # symlink scan trusts as host layout) swapped during that window
+                # is caught before any file is moved rather than only after.
+                if parent_before is None or _dir_identity(path.parent) != parent_before:
+                    raise ExtensionTrashError(
+                        "parent directory changed before the move; refusing"
+                    )
+                self._reject_symlinked_components(
+                    path, self._managed_root_for(path, ext)
                 )
-            # Re-verify the parent identity immediately before the rename: the
-            # identity captured before the metadata write must still hold, so a
-            # parent (including the managed root itself, which the symlink scan
-            # trusts as host layout) swapped during that window is caught before
-            # any file is moved rather than only after.
-            if parent_before is None or _dir_identity(path.parent) != parent_before:
-                raise ExtensionTrashError(
-                    "parent directory changed before the move; refusing"
+                os.replace(path, staging / path.name)
+                moved = staging / path.name
+                after = moved.lstat()
+                if (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino):
+                    raise ExtensionTrashError(
+                        "extension changed during the move; refusing to trust it"
+                    )
+                if parent_before is None or _dir_identity(path.parent) != parent_before:
+                    raise ExtensionTrashError(
+                        "parent directory changed during the move; refusing"
+                    )
+                # Re-derive containment *again* after the swap for the narrow
+                # window between the pre-move check and the rename: a parent
+                # replaced by a symlink there would make the rollback (or a later
+                # restore) write outside the managed tree, so fail closed if it
+                # did.
+                self._reject_symlinked_components(
+                    path, self._managed_root_for(path, ext)
                 )
-            self._reject_symlinked_components(
-                path, self._managed_root_for(path, ext)
-            )
-            os.replace(path, staging / path.name)
-            moved = staging / path.name
-            after = moved.lstat()
-            if (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino):
-                raise ExtensionTrashError(
-                    "extension changed during the move; refusing to trust it"
-                )
-            if parent_before is None or _dir_identity(path.parent) != parent_before:
-                raise ExtensionTrashError(
-                    "parent directory changed during the move; refusing"
-                )
-            # Re-derive containment *again* after the swap for the narrow window
-            # between the pre-move check and the rename: a parent replaced by a
-            # symlink there would make the rollback (or a later restore) write
-            # outside the managed tree, so fail closed if it did.
-            self._reject_symlinked_components(
-                path, self._managed_root_for(path, ext)
-            )
-            # The moved bytes must be durable before the staging directory is
-            # renamed into place and the entry becomes authoritative.
-            _fsync_file(moved)
-            os.replace(staging, trash_dir / record.trash_id)
-            _fsync_dir(trash_dir)
-            return record
-        except BaseException:
-            self._rollback_staging(staging, path, parent_before)
-            raise
+                # The moved bytes must be durable before the staging directory
+                # is renamed into place and the entry becomes authoritative.
+                _fsync_file(moved)
+                os.replace(staging, trash_dir / record.trash_id)
+                _fsync_dir(trash_dir)
+                return record
+            except BaseException:
+                self._rollback_staging(staging, path, parent_before)
+                raise
 
     def _rollback_staging(
         self,
@@ -1296,19 +1318,22 @@ class ExtensionManager:
         entry = self._trash_dir / record.trash_id
         destination = Path(record.source_path)
         source = entry / destination.name
-        if not source.exists():
-            restored = True
-        elif destination.exists():
-            restored = False
-        else:
-            restored = False
-            with contextlib.suppress(OSError):
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                os.replace(source, destination)
+        # Serialize with recovery/restore/purge in another process so a
+        # concurrent sweep cannot observe a half-rolled-back entry.
+        with TrashLock.for_dir(self._trash_dir).guard():
+            if not source.exists():
                 restored = True
-        if restored:
-            self._remove_trash_entry(entry)
-        _fsync_dir(self._trash_dir)
+            elif destination.exists():
+                restored = False
+            else:
+                restored = False
+                with contextlib.suppress(OSError):
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(source, destination)
+                    restored = True
+            if restored:
+                self._remove_trash_entry(entry)
+            _fsync_dir(self._trash_dir)
 
     def _trash_records(self) -> list[ExtensionTrashRecord]:
         try:
@@ -1372,49 +1397,63 @@ class ExtensionManager:
         without metadata (the file never moved, or the metadata write itself was
         interrupted) and one whose file is absent are discarded. Best-effort:
         any failure leaves the artifacts for the next sweep.
+
+        The sweep takes the trash lock **non-blocking**: if a producer is
+        mid-stage (or a restore/purge is running) the whole sweep is skipped
+        rather than waiting, so ``list_trashed`` never blocks and a staging dir
+        is never published or discarded by two processes at once. A corrupt
+        metadata document is left untouched rather than discarded, so a staging
+        dir that somehow holds the only copy of a file is never deleted.
         """
-        try:
-            entries = list(self._trash_dir.iterdir())
-        except OSError:
+        if not self._trash_dir.is_dir():
             return
-        for entry in entries:
-            if (
-                entry.is_symlink()
-                or not entry.is_dir()
-                or not entry.name.startswith(_TRASH_STAGING_PREFIX)
-            ):
-                continue
-            meta_path = entry / _TRASH_META
-            if not meta_path.exists() or meta_path.is_symlink():
-                self._discard_staging(entry)
-                continue
+        lock = TrashLock.for_dir(self._trash_dir)
+        with lock.guard(blocking=False) as acquired:
+            if not acquired:
+                return
             try:
-                record = msgspec.json.decode(
-                    meta_path.read_bytes(), type=ExtensionTrashRecord
-                )
-            except (OSError, msgspec.DecodeError, msgspec.ValidationError):
-                continue
-            # Refuse untrusted metadata rather than publishing to a path derived
-            # from it: a crafted ``trash_id`` could rename the staging dir
-            # outside the trash tree, and a crafted source name could make the
-            # "did the file move?" probe read a path outside the staging dir.
-            if not _is_safe_trash_id(record.trash_id):
-                continue
-            if not _is_safe_name(Path(record.source_path).name):
-                continue
-            source = Path(record.source_path)
-            moved = entry / source.name
-            if not moved.exists() or moved.is_symlink():
-                # The metadata was durable but the file never moved (or was
-                # replaced by a link); discard rather than publish a link.
-                self._discard_staging(entry)
-                continue
-            final = self._trash_dir / record.trash_id
-            if not final.exists():
-                _fsync_file(moved)
-                with contextlib.suppress(OSError):
-                    os.replace(entry, final)
-                _fsync_dir(self._trash_dir)
+                entries = list(self._trash_dir.iterdir())
+            except OSError:
+                return
+            for entry in entries:
+                if (
+                    entry.is_symlink()
+                    or not entry.is_dir()
+                    or not entry.name.startswith(_TRASH_STAGING_PREFIX)
+                ):
+                    continue
+                meta_path = entry / _TRASH_META
+                if not meta_path.exists() or meta_path.is_symlink():
+                    self._discard_staging(entry)
+                    continue
+                try:
+                    record = msgspec.json.decode(
+                        meta_path.read_bytes(), type=ExtensionTrashRecord
+                    )
+                except (OSError, msgspec.DecodeError, msgspec.ValidationError):
+                    continue
+                # Refuse untrusted metadata rather than publishing to a path
+                # derived from it: a crafted ``trash_id`` could rename the
+                # staging dir outside the trash tree, and a crafted source name
+                # could make the "did the file move?" probe read a path outside
+                # the staging dir.
+                if not _is_safe_trash_id(record.trash_id):
+                    continue
+                if not _is_safe_name(Path(record.source_path).name):
+                    continue
+                source = Path(record.source_path)
+                moved = entry / source.name
+                if not moved.exists() or moved.is_symlink():
+                    # The metadata was durable but the file never moved (or was
+                    # replaced by a link); discard rather than publish a link.
+                    self._discard_staging(entry)
+                    continue
+                final = self._trash_dir / record.trash_id
+                if not final.exists():
+                    _fsync_file(moved)
+                    with contextlib.suppress(OSError):
+                        os.replace(entry, final)
+                    _fsync_dir(self._trash_dir)
 
     def _discard_staging(self, entry: Path) -> None:
         # A staging entry that is itself a symlink is unlinked, never recursed

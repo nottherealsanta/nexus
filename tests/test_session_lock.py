@@ -1,7 +1,9 @@
 import errno
 import json
+import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -9,7 +11,7 @@ import pytest
 from nexus.errors import SessionBusy
 from nexus.model.message import Message, ToolUse
 from nexus.session import migrate as migrate_module
-from nexus.session.lock import SessionLock
+from nexus.session.lock import SessionLock, TrashLock
 from nexus.session.manager import SessionManager
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -185,3 +187,103 @@ def test_migration_propagates_non_contention_error(tmp_path, monkeypatch):
     with pytest.raises(OSError) as excinfo:
         SessionManager(tmp_path).migrate("main")
     assert excinfo.value.errno == errno.EIO
+
+
+# ---------------------------------------------------------------------------
+# TrashLock hardening: a lock file is never a symlink or a blocking special
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not hasattr(os, "O_NOFOLLOW"), reason="O_NOFOLLOW unavailable")
+def test_trash_lock_refuses_a_symlinked_lock_file(tmp_path):
+    """A symlinked lock path is an error, never a followed lock.
+
+    Following the link would make ``flock`` guard an attacker-chosen file while
+    the real trash directory went unguarded. ``O_NOFOLLOW`` fails closed with
+    ``ELOOP``, and the error is a genuine I/O failure rather than contention.
+    """
+    trash = tmp_path / "trash"
+    trash.mkdir()
+    lock = TrashLock.for_dir(trash)
+    target = tmp_path / "elsewhere.lock"
+    target.write_text("", encoding="utf-8")
+    lock.path.symlink_to(target)
+
+    with pytest.raises(OSError) as excinfo:
+        lock.acquire(blocking=False)
+    assert excinfo.value.errno == errno.ELOOP
+    # A non-blocking guard must propagate it, not report it as contention.
+    with pytest.raises(OSError), TrashLock.for_dir(trash).guard(blocking=False):
+        pass
+
+
+@pytest.mark.skipif(not hasattr(os, "O_NOFOLLOW"), reason="O_NOFOLLOW unavailable")
+def test_session_lock_refuses_a_symlinked_lock_file(tmp_path):
+    """A session lock file is never followed through a symlink either.
+
+    ``SessionLock`` shares the hardened open used by ``TrashLock``: following a
+    planted link would make ``flock`` guard an attacker-chosen file while the
+    real session went unguarded. ``O_NOFOLLOW`` fails closed with ``ELOOP``.
+    """
+    lock = SessionLock(tmp_path / "s.lock")
+    target = tmp_path / "elsewhere.lock"
+    target.write_text("", encoding="utf-8")
+    lock.path.symlink_to(target)
+
+    with pytest.raises(OSError) as excinfo:
+        lock.acquire(shared=False, blocking=False)
+    assert excinfo.value.errno == errno.ELOOP
+    assert lock.held is False
+
+
+def test_open_lock_file_closes_the_descriptor_when_wrapping_fails(
+    tmp_path, monkeypatch
+):
+    """A failed ``fdopen`` must not leak the raw descriptor.
+
+    The hardened open is the single place a lock descriptor is created, so a
+    wrap failure there must close it rather than strand an fd for the process
+    lifetime.
+    """
+    import nexus.session.lock as lock_module
+
+    closed: list[int] = []
+    real_close = lock_module.os.close
+
+    def boom(fd, *args, **kwargs):
+        raise RuntimeError("cannot wrap descriptor")
+
+    def tracking_close(fd):
+        closed.append(fd)
+        return real_close(fd)
+
+    monkeypatch.setattr(lock_module.os, "fdopen", boom)
+    monkeypatch.setattr(lock_module.os, "close", tracking_close)
+    with pytest.raises(RuntimeError):
+        lock_module._open_lock_file(tmp_path / "x.lock")
+    assert closed
+
+
+def test_trash_lock_open_does_not_block_on_a_fifo(tmp_path):
+    """Opening the lock file never blocks on a special file.
+
+    ``O_NONBLOCK`` means a FIFO lock path cannot wedge acquisition. A platform
+    that refuses to lock a FIFO (macOS raises ``ENOTSUP``) fails closed with its
+    own error; a platform that permits it acquires and releases normally. Either
+    way acquisition returns promptly.
+    """
+    trash = tmp_path / "trash"
+    trash.mkdir()
+    lock = TrashLock.for_dir(trash)
+    os.mkfifo(lock.path)
+
+    started = time.monotonic()
+    try:
+        acquired = lock.acquire(blocking=False)
+    except OSError as exc:
+        assert exc.errno != errno.EACCES
+        acquired = False
+    elapsed = time.monotonic() - started
+    assert elapsed < 1.0
+    if acquired:
+        lock.release()
