@@ -1,0 +1,144 @@
+[
+  {
+    "data": {
+      "limits": {
+        "max_iterations": 8,
+        "max_seconds": 60.0
+      }
+    },
+    "id": "e001",
+    "seq": 1,
+    "session": "s1",
+    "ts": 1.0,
+    "turn": "t1",
+    "type": "turn.started"
+  },
+  {
+    "data": {
+      "attempt": 0,
+      "iteration": 0,
+      "model": "claude-x",
+      "provider": "anthropic",
+      "streaming": true,
+      "tools": true
+    },
+    "id": "e002",
+    "seq": 2,
+    "session": "s1",
+    "ts": 2.0,
+    "turn": "t1",
+    "type": "model.started"
+  },
+  {
+    "data": {
+      "text": "Let me "
+    },
+    "id": "e003",
+    "seq": 3,
+    "session": "s1",
+    "ts": 3.0,
+    "turn": "t1",
+    "type": "thinking.delta"
+  },
+  {
+    "data": {
+      "text": "think."
+    },
+    "id": "e004",
+    "seq": 4,
+    "session": "s1",
+    "ts": 4.0,
+    "turn": "t1",
+    "type": "thinking.delta"
+  },
+  {
+    "data": {
+      "signature": "sig-1",
+      "text": "Let me think."
+    },
+    "id": "e005",
+    "seq": 5,
+    "session": "s1",
+    "ts": 5.0,
+    "turn": "t1",
+    "type": "thinking"
+  },
+  {
+    "data": {
+      "text": "Hel"
+    },
+    "id": "e006",
+    "seq": 6,
+    "session": "s1",
+    "ts": 6.0,
+    "turn": "t1",
+    "type": "text.delta"
+  },
+  {
+    "data": {
+      "text": "lo"
+    },
+    "id": "e007",
+    "seq": 7,
+    "session": "s1",
+    "ts": 7.0,
+    "turn": "t1",
+    "type": "text.delta"
+  },
+  {
+    "data": {
+      "text": "Hello"
+    },
+    "id": "e008",
+    "seq": 8,
+    "session": "s1",
+    "ts": 8.0,
+    "turn": "t1",
+    "type": "text"
+  },
+  {
+    "data": {
+      "cache_read": 10,
+      "cache_write": 2,
+      "input": 20,
+      "output": 5,
+      "reasoning": 1
+    },
+    "id": "e009",
+    "seq": 9,
+    "session": "s1",
+    "ts": 9.0,
+    "turn": "t1",
+    "type": "model.usage"
+  },
+  {
+    "data": {
+      "stop_reason": "end_turn"
+    },
+    "id": "e010",
+    "seq": 10,
+    "session": "s1",
+    "ts": 10.0,
+    "turn": "t1",
+    "type": "model.stopped"
+  },
+  {
+    "data": {
+      "iterations": 0,
+      "stop_reason": "end_turn",
+      "usage": {
+        "cache_read_tokens": 10,
+        "cache_write_tokens": 2,
+        "input_tokens": 20,
+        "output_tokens": 5,
+        "reasoning_tokens": 1
+      }
+    },
+    "id": "e011",
+    "seq": 11,
+    "session": "s1",
+    "ts": 11.0,
+    "turn": "t1",
+    "type": "turn.completed"
+  }
+]

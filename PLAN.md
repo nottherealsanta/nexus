@@ -2060,11 +2060,13 @@ is required. Where it appears to conflict with a requirement section, the
 requirement section still states the intent; this section only reports progress
 against it. Nothing here relaxes a requirement.
 
-Recorded 2026-09-23. Base commit `2a159fb` (`feat: add multi-provider model
-adapters`) plus the **uncommitted** Phase 8 worktree. Evidence: direct source
-inspection, the **regenerated** (also uncommitted) closeout report
-`tests/fixtures/reports/phase3_exit_baseline.txt`, and a full offline suite run
-by this ledger's author (not taken on faith).
+Recorded 2026-09-23. Base commit `fc26db7` (`Remove obsolete test files for
+harness, legacy codex provider, native CLI, and provider tests`) plus the
+**uncommitted** Phase 8 worktree. Evidence: direct source inspection, the
+**regenerated** (also uncommitted) closeout report
+`tests/fixtures/reports/phase3_exit_baseline.txt`, a full offline suite run by
+this ledger's author (not taken on faith), the real-subprocess HTTP+UDS daemon
+tests, and a clean-workspace CLI smoke.
 
 ### 16.1 Committed vs. uncommitted
 
@@ -2106,8 +2108,9 @@ by this ledger's author (not taken on faith).
   `EXTENDING.md`, `examples/{nexus.toml,mcp.json,hooks.toml,skills/,agents/,tools/}`,
   and the Phase 8 tests (`test_view_reduce.py`, `test_host_facade.py`,
   `test_host_supervisor.py`, `test_host_daemon.py`, `test_uds_transport.py`,
-  `test_http_sse_transport.py`, `test_ui_cli.py`, `test_ui_daemon_e2e.py`,
-  `test_ui_layering.py`, `test_session_operations.py`, `test_examples_valid.py`).
+  `test_http_sse_transport.py`, `test_http_daemon_e2e.py`, `test_ext_trash.py`,
+  `test_ui_cli.py`, `test_ui_daemon_e2e.py`, `test_ui_layering.py`,
+  `test_session_operations.py`, `test_examples_valid.py`).
 
 This ledger's own edit to `PLAN.md` is the only file it touches; every Phase 8
 item above pre-existed it.
@@ -2126,7 +2129,7 @@ item above pre-existed it.
 | 5.5 Model registry | **Complete** (committed) | registry/tiers/ingest, degradation path |
 | 6 Subagents and hooks | **Complete** (committed) | `Task` modes, seeded roles, bounding, hooks |
 | 7 Provider breadth | **Complete** (committed) | Anthropic/OpenAI/Gemini/Ollama/opencode + conformance; legacy adapter deleted |
-| 8 Surfaces and polish | **Implemented, uncommitted, partial** | see §16.3; gaps in §16.5 |
+| 8 Surfaces and polish | **Implemented, uncommitted; line budgets unmet** | extension trash and opt-in daemon HTTP/SSE both landed (see §16.3); remaining gaps in §16.5 |
 
 ### 16.3 Phase 8 pieces as built (uncommitted)
 
@@ -2142,6 +2145,13 @@ item above pre-existed it.
 - **Host (8a2):** `nexus/host/facade.py` (the verb list), `protocol.py`
   (msgspec Command/Result structs), `supervisor.py` (concurrent-turn
   scheduling/caps), `presence.py` (subscriber counts → derived attendance).
+- **Extension trash (8c):** `ExtensionManager.trash` is scoped to the managed
+  extension roots, refuses symlinks/traversal/non-candidates, moves the file
+  atomically into a retention-recorded trash entry, and rebuilds; a failed
+  rebuild rolls the move back unless `force=True`, and a pinned generation keeps
+  the retired module alive until the last lease releases. `ExtensionTrashError` /
+  `ExtensionTrashRecord` / `ExtensionTrashOutcome` and the `nexus ext trash`
+  CLI action ride the facade. Tested in `tests/test_ext_trash.py`.
 - **Daemon + UDS (8b):** `nexus/host/daemon.py` and
   `nexus/host/transports/uds.py`; auto-start, version handshake, stale-socket
   cleanup, idle shutdown; `nexus daemon status|stop|logs`. The prompt_toolkit
@@ -2152,12 +2162,16 @@ item above pre-existed it.
   `theme`, `uds`); `nexus/ui/jsonl.py` `--json` passthrough. Slash commands as
   data in `commands.py`. `nexus doctor`, `nexus models`, `nexus sessions`,
   `nexus agents`, `nexus tools`, `nexus ext` implemented over the facade.
-- **HTTP/SSE (8c):** `nexus/host/transports/http_sse.py` — a **standalone**
-  transport wrapping `HostFacade` (commands as POST, events as SSE with
-  `Last-Event-ID` resume), loopback-only, constant-time bearer token, strict
-  `Origin` allowlist, allocation bounds. It is tested directly against a
-  `HostFacade` in `tests/test_http_sse_transport.py`; **the daemon does not start
-  or wire it** (see §16.5 gap 2).
+- **HTTP/SSE (8c):** `nexus/host/transports/http_sse.py` — a transport wrapping
+  `HostFacade` (commands as POST, events as SSE with `Last-Event-ID` resume),
+  loopback-only, constant-time bearer token, strict `Origin` allowlist,
+  allocation bounds. The **daemon now starts and wires it** over the same facade
+  the UDS socket serves when the surface is opted in (`NEXUS_HTTP=1`, the daemon
+  entrypoint's `--http` flag, or `Daemon(http=True)`); it publishes a mode-`0600`
+  `.http` discovery file (`default_http_path` / `read_http_endpoint`) and removes
+  it on shutdown. Unit tests in `tests/test_http_sse_transport.py`; the live
+  terminal-UDS-plus-HTTP pairing is a real-subprocess test in
+  `tests/test_http_daemon_e2e.py`.
 - **Docs:** `README.md` rewritten; `ARCHITECTURE.md` and `EXTENDING.md` added;
   `SOUL.md` rewritten to describe the as-built harness.
 - **Legacy cutover:** `legacy_codex_cli.py`, the old `provider.py`, `agent.py`,
@@ -2168,20 +2182,25 @@ item above pre-existed it.
 
 ### 16.4 Verification evidence
 
-- **Full offline suite — reproduced by this ledger's author** on 2026-09-23 at
-  `2a159fb` + the uncommitted worktree:
-  `3007 passed, 311 skipped, 2 deselected, 2 xfailed in 57.16s`. The regenerated
-  (uncommitted) closeout report records the same figures at head `2a159fb`. The 2 deselected
-  are the credential-gated `live` tests (`addopts = -m 'not live'`); the 311
-  skips are gated (absent credentials / model features), not failures.
+- **Full offline suite — re-reproduced after the Phase 8 delete/cancel
+  hardening** (see §16.8) on 2026-09-23 at `fc26db7` + the uncommitted worktree:
+  `3075 passed, 311 skipped, 2 deselected, 2 xfailed in 58.54s`, green
+  (`rc=0`). The regenerated closeout report records
+  `3075 passed, 311 skipped, 2 deselected, 2 xfailed in 57.69s` at head
+  `fc26db7` (the pre-hardening figure was 3063 passed; the +12 are the new
+  delete-refusal, parked-cancel, rollback, and trash-identity regressions). The
+  2 deselected are the credential-gated `live` tests (`addopts = -m 'not live'`);
+  the 311 skips are gated (absent credentials / model features), not failures.
 - **The 2 xfailed are exactly the line-budget gates**, both `strict=False`:
   `tests/test_phase3_exit.py::test_line_budget_core_model_spec_within_plan_cap`
   and `::test_line_budget_host_view_ui_within_plan_cap`.
-- **Line budgets (from the regenerated report, measured at `2a159fb`):**
+- **Line budgets (from the regenerated report, measured at `fc26db7` + tree):**
   - `core/ + model/ + tools/spec.py` = **12476 physical / 10326 code** vs the
-    §11 cap of **2500** → over by 9976.
-  - `host/ + view/ + ui/` = **7468 physical / 6179 code** vs the §14.14 cap of
-    **2000** → over by 5468 (surface baseline: host=4140, view=1585, ui=1743).
+    §11 cap of **2500** → over by 9976 (unchanged by the delete/cancel work).
+  - `host/ + view/ + ui/` = **7899 physical / 6543 code** vs the §14.14 cap of
+    **2000** → over by 5899 (surface baseline: host=4564, view=1585, ui=1750).
+    This re-pins the baseline after the delete/cancel hardening; it is *not* a
+    claim that any budget is met.
 - **Security-review blockers:** `tests/test_security_regressions.py` pins the
   ten mandatory Phase 2 fixes (duplicate tool-call ids refused; Bash env overlay
   preserves the inherited environment; fs re-canonicalizes the permission key;
@@ -2191,42 +2210,54 @@ item above pre-existed it.
   The approval-prompt tests were migrated to `nexus/ui/cli/approve.py` and pass.
 - **Import cost:** `import nexus` ≈ 10 ms, no heavy modules; `import
   nexus.runtime` ≈ 99 ms.
+- **HTTP + UDS on real subprocesses.** `tests/test_http_daemon_e2e.py` (6 tests)
+  and `tests/test_ui_daemon_e2e.py` (15 tests) were run together: **21 passed in
+  6.06s** (`rc=0`). They auto-start a *real* `python -m nexus.host.daemon`
+  subprocess around the offline scripted provider and prove the §14.15/11
+  end-to-end items: a terminal UDS view and an HTTP/SSE view subscribe to one
+  live session (`test_terminal_uds_and_http_views_share_one_session`), the bearer
+  token and `Origin` allowlist are enforced over real HTTP
+  (`test_http_auth_and_origin_are_enforced`), a zero-view turn is replayed to a
+  late SSE view (`test_zero_view_http_turn_is_replayed_to_a_late_sse_view`),
+  `Last-Event-ID` resumes with no gap
+  (`test_sse_last_event_id_resumes_without_a_gap`), and `SIGTERM` closes the
+  surface and removes the mode-`0600` token file
+  (`test_sigterm_closes_http_and_removes_the_token_file`,
+  `test_restart_mints_a_fresh_token_and_keeps_the_session`).
+- **Clean-workspace CLI smoke.** Against a throwaway workspace and `HOME`
+  (`nexus init` → `doctor --json` → `ext list` → `daemon status --json` →
+  `daemon stop`), the real `nexus` entrypoint exits cleanly; `doctor` reports an
+  empty registry/extension state with no diagnostics and the daemon reports
+  `running: true` with a live pid before `stop` returns `stopped`.
+- **Daemon entrypoint `--http` smoke.** `python -m nexus.host.daemon --workspace
+  ... --idle-timeout 3 --http --http-port 0` (no test harness) started, bound
+  `127.0.0.1` on an ephemeral port, and published a mode-`0600` `.http` file
+  carrying host/port/token/origins; a `SIGTERM` removed that file. This is the
+  concrete basis for the corrected docs: the switch exists on the daemon
+  entrypoint, not on the root `nexus` CLI.
 
 ### 16.5 True acceptance gaps (separate from the ledger)
 
-These are the criteria not yet met; they are gaps, not waivers.
+These are the criteria not yet met; they are gaps, not waivers. Two earlier
+entries — "HTTP/SSE is not daemon-wired" and "`nexus ext trash` is not
+implemented" — are now closed and moved to §16.3; the §14.15 criterion-11
+terminal-plus-HTTP pairing they blocked is now demonstrated by
+`tests/test_http_daemon_e2e.py`.
 
 1. **Line budgets unmet.** §12 criterion 10 (core < 2,500) and the §14.14
    surface cap (host/view/ui < 2,000) are both exceeded by a wide margin
-   (12476 vs 2500; 7468 vs 2000). The gates remain xfail by design.
-2. **HTTP/SSE is not daemon-wired.** §14.9 describes two transports behind one
-   daemon; only UDS is served by `host/daemon.py`. The HTTP/SSE transport exists
-   and is unit-tested standalone but is not reachable from a running daemon, so
-   a network surface is not yet a live peer.
-3. **§14.15 criterion 11 is not demonstrated end-to-end.** Two *terminal*
-   clients sharing one live session (including first-responder approval) is
-   tested in `tests/test_ui_daemon_e2e.py`, but the terminal-plus-**HTTP** view
-   pairing cannot be shown while gap 2 stands. Criteria 12 (disconnect survives,
-   late attach reconstructs) and 13 (UI layering, proven by test) are met.
-4. **`/model` is cosmetic.** §14.11 lists `/model` as a session command, but the
+   (12476 vs 2500; 7899 vs 2000). The gates remain non-strict `xfail` by design;
+   the regenerated report records the exact overage.
+2. **`/model` is cosmetic.** §14.11 lists `/model` as a session command, but the
    facade has no per-session model override; `nexus/ui/cli/app.py:_cmd_model`
    only lists selectable models and points the user at `[models] default` in
    `nexus.toml`. It deliberately never repaints a model the daemon is not using.
-5. **`registry.mismatch` is not aggregated by `doctor`.** §15.5/§15.12 call for
+3. **`registry.mismatch` is not aggregated by `doctor`.** §15.5/§15.12 call for
    `nexus doctor` to surface accumulated catalogue defects. The loop emits
    `registry.mismatch` (with one capability retry), but `HostFacade.doctor`
    reports only registry *status* (source/models/stale) and does not collect or
    report the accumulated mismatches.
-6. **`nexus ext trash` is not implemented.** Phase 8c specifies `nexus ext`
-   list/validate/**trash**; the CLI implements list/reload/validate only. Session
-   trash exists (`nexus sessions delete|restore`); *extension* trash does not.
-   This is outstanding concurrent work outside this ledger's ownership: during
-   the recording of this section, `ExtensionTrashError` appeared in
-   `nexus/errors.py` and `ExtensionTrashError`/`ExtensionTrashOutcome`/
-   `ExtensionTrashRecord` plus a trash implementation appeared in
-   `nexus/ext/manager.py`. That work is in flight and is not reflected in the
-   checklist above, which describes the state the ledger inspected.
-7. **Live provider end-to-end is offline-excluded.** §12 criterion 1
+4. **Live provider end-to-end is offline-excluded.** §12 criterion 1
    (Anthropic + OpenAI-compatible + Gemini + Ollama, Codex absent) and the
    network-gated conformance runs are `-m live` and deselected in the offline
    suite; they were not exercised by the reproduced run. The offline conformance
@@ -2236,6 +2267,16 @@ These are the criteria not yet met; they are gaps, not waivers.
 
 - **Web frontend** is deferred exactly as §14.1/§14.16 state; its absence is not
   a gap.
+- **The HTTP surface is a daemon-start decision, not a root-CLI switch.** The
+  daemon entrypoint (`python -m nexus.host.daemon`) exposes `--http`,
+  `--http-host`, `--http-port`, and repeatable `--http-origin`; the root `nexus`
+  CLI is a pure client with no such flag. Earlier README/ARCHITECTURE/SOUL text
+  said flatly "there is no CLI flag"; it has been corrected to distinguish the
+  root CLI from the daemon entrypoint.
+- **Extension trash is now landed** (see §16.3): `nexus/errors.py` and
+  `nexus/ext/manager.py` carry the completed implementation and
+  `tests/test_ext_trash.py` covers it. The in-flight note in an earlier revision
+  of §16.5 is superseded.
 - **Phase 8 was budgeted at ~13 days (§14.13) plus Phase 3.5's 3**, against the
   original §10 Phase 8's 5; §15.11 revised the total to ~59 working days.
 - The two `xfail` line-budget tests are the **only** expected failures in the
@@ -2243,3 +2284,215 @@ These are the criteria not yet met; they are gaps, not waivers.
 - The legacy Codex config section still loads through a compatibility shim in
   `nexus/runtime.py` (`_is_legacy_codex_section`); this is config migration, not
   a retained Codex code path.
+
+### 16.7 Phase 8 review hardening (Major findings)
+
+The first independent Phase 8 review raised six Major findings; all are fixed
+here with targeted regressions. The suite grew from 3043 to 3063 passed and the
+baseline report is regenerated (§16.4). No requirement was relaxed.
+
+- **`ext validate` no longer executes an arbitrary path.** `validate(target)`
+  now routes through the same strict scoping as `trash`
+  (`_scoped_candidate`): a target must be a discovered, in-root, non-symlink
+  `*.py` candidate under `[ext].dirs`, so a config file, credential,
+  `_`-prefixed file, traversal, or symlink is refused *before* the isolated
+  importer is invoked. Covered at the manager, facade, and live HTTP/SSE layers
+  (`test_ext_trash.py`, `test_http_sse_transport.py`). A latent
+  `self._config` typo in the same method is fixed to `self._last_config`.
+- **Trash metadata is no longer trusted.** Session and extension managers
+  sanitize every on-disk field that later becomes a path (`trash_id`,
+  `session_id`/source name, each artifact `files` entry), skip symlinked or
+  staging entries, and revalidate an extension restore's destination against the
+  managed roots. Malicious-metadata tests assert purge/restore/recovery never
+  write or remove outside the trash/session/extension trees
+  (`test_session_operations.py`, `test_ext_trash.py`).
+- **`_publish_trash` hardening.** The staging directory's metadata is fsynced
+  before the move and the moved file fsynced before publication/recovery;
+  containment is re-derived after the swap (a parent replaced by a symlink fails
+  closed); rollback only moves a file back when the original parent's identity
+  is unchanged. Regressions cover the parent-swap refusal and the pre-publish
+  fsync.
+- **`EventSubscription.finish` cannot abort.** A full bounded queue drains and
+  receives the terminal marker instead of raising `QueueFull`, so close, the
+  reader loop, and unsubscribe never abort and a blocked consumer is always
+  unblocked (`test_uds_transport.py`).
+- **Supervisor retains no handles forever.** `Supervisor.forget(session_id)`
+  drops a cached handle only when it has no active turn and no queued work; it
+  is called by the facade on session delete, by a queue-dropping cancel, and
+  when a watched turn finishes idle. A returning submission re-registers, so an
+  idle session is never broken (`test_host_supervisor.py`).
+- **Docs/policy.** The stale context-package comment was corrected; a missing
+  `Origin` on the HTTP surface is documented as a deliberate strict refusal
+  (already enforced and pinned by
+  `test_origin_is_required_and_allowlisted_on_every_request`). The reload/report
+  coalescing watermark now rolls back when a rebuild raises, so a later caller
+  is never handed a stale report for a rebuild that never ran.
+
+### 16.8 Phase 8 delete/cancel hardening (second review round)
+
+A second independent review found that a deleted session could resurrect through
+a durable queued submission or parked supervisor work, plus some trash-metadata
+and extension-trash rollback gaps. All are fixed with targeted regressions; the
+suite grew from 3063 to **3075 passed** and the baseline report is regenerated
+(§16.4). No requirement was relaxed.
+
+- **`HostFacade.delete` refuses scheduled/durable work.** It rejects a session
+  the supervisor still holds work for — a running turn or a parked submission —
+  and a live session with persisted queued input (`SessionManager.queued_depth`),
+  raising `SessionBusy` before delegating. Deleting under that work would let a
+  durable submission start against a trashed session. The refusal applies even
+  with `force=True`; the caller must cancel explicitly (dropping the queue)
+  first. Covered in `test_host_facade.py` with `max_concurrent_turns=1`: A
+  active, B parked, both deletes refused, then B cancelled while idle parked and
+  deleted and A allowed to finish with no second provider script ever consumed
+  (`provider.calls == 1`), plus a session-only-queued refusal.
+- **`SessionManager.delete` refuses queued input independently, including
+  `force`.** Before and under the exclusive lock it rejects a live handle with
+  `queue_depth > 0`, so a delete can never strand an `input.queued` that a later
+  open would rehydrate and run. The refusal leaves the log and the in-memory
+  FIFO intact and is repeatable after a reload; an explicit
+  `cancel(drop_queue=True)` is the only way through. Covered by
+  `test_session_operations.py` (force, reload/rehydrate, and the emitted
+  `input.dropped`).
+- **`Supervisor.cancel` on an idle parked session drops its durable queue.** When
+  no turn is in flight but the session's own FIFO holds pending input, the cancel
+  now routes through `session.cancel(drop_queue=True)` so it emits
+  `input.dropped`; previously only the supervisor's queue was dropped and a
+  reload could execute a submission a cancel explicitly dropped. Covered by
+  `test_host_supervisor.py` (a real session parked behind a gated holder;
+  rehydrate is empty and the pre-assigned turn id never started).
+- **Trash entry identity.** Session and extension trash listings now additionally
+  require `entry.name == record.trash_id`, so a crafted record whose `trash_id`
+  names a different entry is ignored by list/purge/restore rather than trusted.
+  Covered in `test_session_operations.py` and `test_ext_trash.py` with positive
+  (published name equals id) and mismatched (entry ignored, file untouched)
+  shapes.
+- **Extension-trash rollback on a raising/cancelled reload.** A `reload` that
+  raises or is cancelled now rolls the moved file back before the exception
+  propagates, and the rollback is best-effort so it never masks the original
+  error — a cancellation still propagates. Covered by `test_ext_trash.py`.
+- **`ext.enabled = false` guard.** `ExtensionManager.validate` returns a truthful
+  empty pass for a whole-tree check and refuses a named target;
+  `ExtensionManager.trash` refuses with `ExtensionTrashError`. Covered by
+  `test_ext_trash.py`.
+
+### 16.9 Phase 8 retirement/cancel hardening (third review round)
+
+A third independent review found two blockers and two minor items; all are fixed
+with targeted regressions. The full offline suite is green at **3083 passed, 311
+skipped, 2 deselected, 2 xfailed in 61.30s** (`rc=0`) and the closeout report
+`tests/fixtures/reports/phase3_exit_baseline.{json,txt}` is regenerated (its
+embedded full-suite run agrees: 3083 passed; surface baseline host=4640). No
+requirement was relaxed.
+
+- **A force-deleted session could resurrect through a late viewer cleanup.**
+  `SessionManager.delete` now **retires** the live handle before any artifact
+  moves, and a retired `Session` refuses every write path:
+  `append_event`/`append_message`/`append_summary`, `enqueue`,
+  `start_turn`/`send`, `recover_dangling_tool_uses`, and the unattended
+  fallback. `Session._emit` becomes a no-op once retired, so a disconnecting
+  viewer's `presence.left`/`presence.changed` cleanup — the exact path that used
+  to recreate the moved log as a presence-only file — cannot write. `begin_turn`
+  re-checks retirement under the exclusive lock, closing the window where an
+  in-flight start could append after the move. A failed delete rolls the
+  retirement back (`unretire`), so a refused/failed delete never strands a
+  usable handle. Regressions: `tests/test_session_operations.py` (force-delete
+  then view disconnect does not recreate the log; a failed move rolls back
+  retirement and the handle still writes; a retired handle refuses a late
+  `start_turn`) and `tests/test_host_facade.py` (the facade
+  delete→view-disconnect path).
+- **`Supervisor.cancel` racing `_start` before `session.active` existed lost the
+  cancellation.** The window between the supervisor marking a session active and
+  `session.start_turn` installing a lease (it yields in `ensure_ready`/hook
+  gates) made `cancel` observe `active is False` and drop the request, so the
+  turn ran to completion. The supervisor now records a cancel that lands while a
+  start is in flight (`_starting`/`_cancel_requested`) and `_start` honours it
+  the moment the lease exists, cancelling the just-started turn; the durable
+  queue is dropped then, so a queue-consuming start is consumed into the
+  cancelled turn rather than stranded or silently run. `forget` clears the
+  in-flight bookkeeping. `cancel`'s returned `dropped` count now also counts a
+  session-only durable queue that has no supervisor pending, without
+  double-counting mirrored entries. Regressions: `tests/test_host_supervisor.py`
+  — a deterministic `ensure_ready` barrier proves cancel-before-lease cancels
+  the turn; a queued consume stays consistent (`input.queued` + `input.consumed`,
+  no `input.dropped`, no rehydrate); and a session-only durable queue reports
+  `dropped == 2`.
+- **Minor: empty session-trash records are refused.** `_trustworthy_trash_record`
+  now rejects a record naming no artifacts, which this manager could not have
+  written and whose restore would silently move nothing
+  (`tests/test_session_operations.py`).
+
+### 16.10 Phase 8 consistency follow-up (fourth review round)
+
+A fourth, narrow follow-up review found three correctness bugs and one latent
+crash-recovery hazard; all are fixed with focused deterministic regressions. The
+full offline suite is green at **3092 passed, 311 skipped, 2 deselected, 2
+xfailed in 58.90s** (`rc=0`) and the closeout report
+`tests/fixtures/reports/phase3_exit_baseline.{json,txt}` is regenerated
+(`host=4694 view=1585 ui=1750`). No requirement was relaxed.
+
+- **First-responder lease key mismatch on detach.** `Presence.detach` released a
+  departing view's leases by the attachment **token**, but `claim` keys a lease
+  by the `client_id` the claimant passed. A view that claimed an approval and
+  then disconnected left the lease held by a ghost, so a live view still lost the
+  race against a dead one — the exact case PLAN §14.6 says must be robust. Detach
+  now releases `self._held[client_id]`, and only when the last attachment for
+  that client leaves (a shared `client_id` is not identity, so a still-attached
+  view keeps the lease). Regressions: `tests/test_host_facade.py`
+  (`test_presence_detach_releases_the_lease_the_view_held` and the
+  shared-client-id case).
+- **In-flight cancel dropped count was not authoritative.** A `Supervisor.cancel`
+  racing a start recorded a pre-honor estimate of `dropped`; if the in-flight
+  start then failed, its queued head was dropped rather than consumed and the
+  synchronous return was one short. `_start` now reconciles the count when it
+  honours the recorded cancel — reading the durable FIFO before and after
+  `session.cancel` and adding the exact delta to the supervisor-only submissions
+  already removed — and reports it on `daemon.session_cancelled`. The
+  synchronous return stays the documented pre-honor estimate. Regressions:
+  `tests/test_host_supervisor.py` (a gated start that fails reports `dropped == 1`
+  matching `input.dropped`; a start that succeeds reports `0` with
+  `input.consumed`).
+- **`restore` no longer claims success while moving nothing.** A trash record
+  listing an artifact that is missing or a symlink used to be *skipped*; if every
+  listed artifact was skipped the entry was removed and the session id returned —
+  reporting success while destroying the authoritative trash entry. `restore` now
+  refuses the whole operation when a listed artifact is absent or not a regular
+  file (re-checked under the lock), leaving the entry intact. Regressions:
+  `tests/test_session_operations.py` (missing and symlinked listed artifacts
+  refuse; the entry survives).
+- **Crash-mid-delete staging is recovered before `open`/`list`.** `delete` moves
+  artifacts into a `.staging-*` directory and publishes it atomically, but
+  `_recover_trash` only ran on trash operations. A crash before publication left
+  the authoritative log staged out of the sessions directory; the next
+  `open(..., create=True)` published a *fresh empty* `.jsonl` first and shadowed
+  it (title/records silently lost), and `list` simply skipped it. `SessionManager.open`
+  and `list` now call `_recover_trash` before create/migrate/enumerate.
+  `_recover_trash` only scans the trash directory and takes no session/handle
+  lock, so it cannot recurse or deadlock the `_handles_lock`. Regressions:
+  `tests/test_session_operations.py` (`open` recovers the authoritative log
+  instead of shadowing it; `list` surfaces it).
+- **Artifact enumeration is now consistent.** `_artifacts_exist` omitted the
+  `.v1.bak` backup that `_artifact_paths` moves and `_session_artifact_names`
+  trusts, so a session whose only surviving artifact was its migration backup was
+  refused by `summary`/`export`/`delete`/`restore` even though delete could move
+  it. `_artifacts_exist` now includes it. Regression:
+  `tests/test_session_operations.py` (`test_a_v1_backup_alone_is_a_deletable_restorable_session`).
+- **Rollback never writes staging metadata into the sessions directory.**
+  `_recover_trash`'s untrusted-metadata rollback moved every non-symlink staging
+  child — including `meta.json` — into the sessions directory. It now removes the
+  metadata document instead (pinned by the extended
+  `test_trash_staging_without_meta_is_rolled_back`).
+
+**Deliberately left for follow-up (not edited):** `_recover_trash` is not
+serialized by any cross-process lock. Two daemons recovering the same staging
+directory could each pass the `final.exists()`/`destination.exists()` checks and
+then race `os.replace`; since each artifact appears in exactly one staging
+directory the worst case is a redundant move of an already-existing destination,
+but a concurrent recoverer cannot restore cross-artifact atomicity. A safe fix
+(an exclusive recovery lock, or an owner-only recovery marker) would add locking
+to a function currently called lock-free from `open`/`list` and risks the very
+recursive-lock/deadlock class this round avoided, so it is described here rather
+than changed. Likewise, `supervisor.cancel`'s synchronous return remains a
+pre-honor *estimate* for the in-flight case (the authoritative count is on
+`daemon.session_cancelled`); refactoring `cancel` into a deferred async
+completion was out of scope for a narrow follow-up.

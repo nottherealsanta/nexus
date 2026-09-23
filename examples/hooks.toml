@@ -1,0 +1,29 @@
+# Example `.nexus/hooks.toml`. Copy it to your workspace's `.nexus/` directory.
+#
+# Command hooks receive the hook invocation as JSON on stdin and a bounded
+# NEXUS_* environment (NEXUS_HOOK_EVENT, NEXUS_TOOL_NAME, NEXUS_TOOL_KEY,
+# NEXUS_TOOL_PATH, NEXUS_TOOL_BUNDLE, NEXUS_SESSION_ID, NEXUS_TURN_ID), plus a
+# fixed safe OS environment. Commands are argv with no shell unless
+# `shell = true` is opted into. A non-zero exit is interpreted per `on_nonzero`.
+#
+# Matchers use the same grammar as permission rules: `Tool`, `Tool(pattern)`,
+# `Bundle:name`, or an `mcp__server__*` wildcard.
+
+[[hooks.PreToolUse]]
+name = "block-todo-writes"
+matcher = "Write(**)"
+type = "command"
+command = [
+  "python3",
+  "-c",
+  "import json,sys; d=json.load(sys.stdin); sys.exit(1 if 'TODO' in json.dumps(d.get('tool_input', {})) else 0)",
+]
+on_nonzero = "block"
+timeout_s = 10
+
+[[hooks.SessionStart]]
+name = "announce"
+type = "command"
+command = ["python3", "-c", "import sys; print('nexus session started', file=sys.stderr)"]
+on_nonzero = "ignore"
+timeout_s = 5

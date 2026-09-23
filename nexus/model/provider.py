@@ -1,9 +1,5 @@
-"""The provider protocol and the shared provider error taxonomy.
+"""The provider protocol and the shared provider error taxonomy."""
 
-The protocol lives here; the legacy root ``nexus.provider.Provider`` is a
-separate, narrower protocol used by the current Codex-backed agent and is kept
-untouched during Phase 0.
-"""
 from __future__ import annotations
 
 from collections.abc import AsyncIterator

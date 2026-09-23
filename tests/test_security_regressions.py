@@ -6,7 +6,6 @@ Each test pins one mandatory fix so it cannot regress silently:
 * the Bash environment overlay preserves the inherited environment;
 * fs execution re-canonicalizes and compares the permission-planned key;
 * atomic writes refuse a swapped/symlinked parent;
-* the native approval prompt cannot be control-injected and never deadlocks;
 * ``*_ALWAYS`` grants are exact-action rules that cannot broaden;
 * Grep's regex scan is bounded and runs in a killable worker;
 * a symlink loop is a path-security failure;
@@ -47,7 +46,6 @@ from nexus.model.providers.scripted import (
 )
 from nexus.model.stream import ToolCallAccumulator
 from nexus.runtime import Runtime
-from nexus.session.session import Session
 from nexus.tools import permissions
 from nexus.tools.builtin import _jobs, grep, write
 from nexus.tools.manager import ToolManager
@@ -68,7 +66,6 @@ from nexus.tools.permissions import (
     parse_rule,
 )
 from nexus.tools.spec import ToolCall, ToolContext, ToolSpec
-from nexus.ui import native
 
 SCRIPTED = "scripted/m"
 
@@ -452,37 +449,39 @@ async def test_atomic_write_refuses_symlinked_parent(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# 5. Native approval terminal safety
+# 5. Approval prompt terminal safety (canonical CLI client)
 # ---------------------------------------------------------------------------
 
 
 def test_describe_shows_exact_scope_or_once_only_fallback():
-    exact = native._describe(
+    from nexus.ui.cli.approve import describe
+
+    exact = describe(
         {
             "tool": "Bash",
             "key": "~/deploy.sh",
             "default_rule": 'Bash("~/deploy.sh")',
             "persistence_available": True,
-        },
-        1,
+        }
     )
     assert 'always persists: Bash("~/deploy.sh")' in exact
 
-    once = native._describe(
+    once = describe(
         {
             "tool": "Probe",
             "key": "x" * 9000,
-            "default_rule": "",
+            "default_rule": 'Probe("exact key")',
             "persistence_available": False,
-        },
-        2,
+        }
     )
-    assert "once only" in once
     assert "unavailable" in once
+    assert "once only" in once
     assert "Probe(" not in once  # never a whole-tool suggestion for a keyed ask
 
 
 def test_approver_sanitizes_control_injection():
+    from nexus.ui.cli.approve import Approver
+
     payload = {
         "tool": "Bash\x1b]0;pwned\x07",
         "bundle": "shell\x9b31m",
@@ -492,10 +491,14 @@ def test_approver_sanitizes_control_injection():
         "default_rule": 'Bash("\x1b[31m\u2066")',
     }
     stderr = io.StringIO()
-    approver = native.Approver(stderr=stderr, read_line=lambda prompt, stream: "n")
-    decision = asyncio.run(approver.prompt(payload))
 
-    assert decision is Decision.DENY_ONCE
+    async def reader(prompt: str) -> str:
+        return "n"
+
+    approver = Approver(reader, stderr=stderr)
+    decision = asyncio.run(approver.ask(payload))
+
+    assert decision == "deny_once"
     output = stderr.getvalue()
     for raw in ("\x1b", "\x07", "\x9b", "\x00", "\u202e", "\u202c", "\u200f", "\u2066"):
         assert raw not in output
@@ -504,40 +507,44 @@ def test_approver_sanitizes_control_injection():
     assert "\\u2066" in output
 
 
-def test_resolve_permission_false_cancels_instead_of_hanging(
-    tmp_path: Path, monkeypatch
-):
-    monkeypatch.setattr(Session, "resolve_permission", lambda self, rid, dec: False)
-    provider = ScriptedProvider(
-        tool_response(("c1", "Write", {"path": "out.txt", "content": "x"})),
-        text_response("done"),
-    )
-    runtime = Runtime(
-        tmp_path, config=make_config(mode="ask"), providers={"scripted": provider}
-    )
-    from nexus.cli import build_parser
+def test_run_once_resolving_a_stale_request_does_not_hang(tmp_path: Path):
+    # The daemon is the race arbiter: a losing/stale resolution returns False and
+    # the caller reports it rather than deadlocking on a prompt nobody owns.
+    from nexus.host import protocol as p
+    from nexus.ui.cli.client import Client
+    from nexus.ui.cli.stream import answer_permission
 
-    args = build_parser().parse_args(
-        ["--workspace", str(tmp_path), "native-run", "write"]
-    )
-    stderr = io.StringIO()
-    # Redirect stderr for the duration of the run.
-    import sys
+    class StaleTransport:
+        async def request(self, command):
+            assert isinstance(command, p.PermissionResolve)
+            return p.PermissionResolveResult(
+                session=command.session, request_id=command.request_id, resolved=False
+            )
 
-    original = sys.stderr
-    sys.stderr = stderr
-    try:
-        code = native.run_native(
-            args,
-            runtime_factory=lambda workspace: runtime,
-            read_line=lambda prompt, stream: "y",
+        async def aclose(self):
+            return None
+
+        def events(self, *args, **kwargs):  # pragma: no cover - unused here
+            raise NotImplementedError
+
+    async def reader(prompt: str) -> str:
+        return "y"
+
+    from nexus.ui.cli.approve import Approver
+
+    err = io.StringIO()
+    client = Client(StaleTransport())
+    resolved = asyncio.run(
+        answer_permission(
+            client,
+            "s",
+            {"id": "r1", "tool": "Write"},
+            Approver(reader, stderr=err),
+            err,
         )
-    finally:
-        sys.stderr = original
-
-    assert code == 130  # cancelled, not hung
-    assert "no longer pending" in stderr.getvalue()
-    assert not (tmp_path / "out.txt").exists()
+    )
+    assert resolved is False
+    assert "answered this request first" in err.getvalue()
 
 
 # ---------------------------------------------------------------------------

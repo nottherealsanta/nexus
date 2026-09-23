@@ -1,0 +1,121 @@
+{
+  "agent_order": [],
+  "agents": [],
+  "closed": false,
+  "context": null,
+  "diagnostics": [],
+  "errors": [],
+  "extensions": {},
+  "hooks": [],
+  "input_queue": [],
+  "last_seq": 11,
+  "mcp": {},
+  "messages": [
+    {
+      "attempt": 0,
+      "blocks": [
+        {
+          "finalized": true,
+          "kind": "thinking",
+          "signature": "sig-1",
+          "streamed": true,
+          "text": "Let me think."
+        },
+        {
+          "finalized": true,
+          "kind": "text",
+          "signature": null,
+          "streamed": true,
+          "text": "Hello"
+        }
+      ],
+      "done": true,
+      "iteration": 0,
+      "model": "claude-x",
+      "provider": "anthropic",
+      "role": "assistant",
+      "stop_reason": "end_turn"
+    }
+  ],
+  "model": {
+    "attempt": 0,
+    "iteration": 0,
+    "model": "claude-x",
+    "provider": "anthropic",
+    "streaming": true,
+    "tools": true
+  },
+  "opened": false,
+  "pending_permissions": [],
+  "permissions": [],
+  "phase": "idle",
+  "presence": {
+    "attended": false,
+    "viewers": 0
+  },
+  "registry": null,
+  "session_id": "s1",
+  "turns": [
+    {
+      "context": [],
+      "error": null,
+      "hooks": [],
+      "id": "t1",
+      "index": 0,
+      "iteration": 0,
+      "limits": {
+        "max_iterations": 8,
+        "max_seconds": 60.0
+      },
+      "messages": [
+        {
+          "attempt": 0,
+          "blocks": [
+            {
+              "finalized": true,
+              "kind": "thinking",
+              "signature": "sig-1",
+              "streamed": true,
+              "text": "Let me think."
+            },
+            {
+              "finalized": true,
+              "kind": "text",
+              "signature": null,
+              "streamed": true,
+              "text": "Hello"
+            }
+          ],
+          "done": true,
+          "iteration": 0,
+          "model": "claude-x",
+          "provider": "anthropic",
+          "role": "assistant",
+          "stop_reason": "end_turn"
+        }
+      ],
+      "permission_ids": [],
+      "phase": "completed",
+      "retries": [],
+      "skills": [],
+      "started_ts": 1.0,
+      "stop_reason": "end_turn",
+      "tools": [],
+      "updated_ts": 11.0,
+      "usage": {
+        "cache_read_tokens": 10,
+        "cache_write_tokens": 2,
+        "input_tokens": 20,
+        "output_tokens": 5,
+        "reasoning_tokens": 1
+      }
+    }
+  ],
+  "usage": {
+    "cache_read_tokens": 10,
+    "cache_write_tokens": 2,
+    "input_tokens": 20,
+    "output_tokens": 5,
+    "reasoning_tokens": 1
+  }
+}

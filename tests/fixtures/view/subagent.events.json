@@ -1,0 +1,318 @@
+[
+  {
+    "data": {
+      "limits": {}
+    },
+    "id": "e001",
+    "seq": 1,
+    "session": "s1",
+    "ts": 1.0,
+    "turn": "t1",
+    "type": "turn.started"
+  },
+  {
+    "data": {
+      "iteration": 0,
+      "model": "claude-x",
+      "provider": "anthropic",
+      "tools": true
+    },
+    "id": "e002",
+    "seq": 2,
+    "session": "s1",
+    "ts": 2.0,
+    "turn": "t1",
+    "type": "model.started"
+  },
+  {
+    "data": {
+      "call_id": "c1",
+      "tool": "Task"
+    },
+    "id": "e003",
+    "seq": 3,
+    "session": "s1",
+    "ts": 3.0,
+    "turn": "t1",
+    "type": "tool.requested"
+  },
+  {
+    "data": {
+      "agent": {
+        "depth": 1,
+        "id": "s1/sub/1",
+        "index": 1,
+        "parent": "s1",
+        "session": "s1/sub/1",
+        "task": "task-1",
+        "tier": "medium",
+        "type": "general"
+      },
+      "clamped": true,
+      "depth": 1,
+      "description": "explore the repo",
+      "dropped_tools": [
+        "Bash"
+      ],
+      "id": "s1/sub/1",
+      "index": 1,
+      "model": "claude-small",
+      "parent": "s1",
+      "requested_tier": "high",
+      "session": "s1/sub/1",
+      "task": "task-1",
+      "tier": "medium",
+      "tools": [
+        "Read",
+        "Grep"
+      ],
+      "type": "general"
+    },
+    "id": "e004",
+    "seq": 4,
+    "session": "s1",
+    "ts": 4.0,
+    "turn": "t1",
+    "type": "agent.spawned"
+  },
+  {
+    "data": {
+      "agent": {
+        "depth": 1,
+        "id": "s1/sub/1",
+        "index": 1,
+        "parent": "s1",
+        "session": "s1/sub/1",
+        "task": "task-1",
+        "tier": "medium",
+        "type": "general"
+      },
+      "depth": 1,
+      "diagnostics": [
+        "tier clamped"
+      ],
+      "id": "s1/sub/1",
+      "index": 1,
+      "max_tier": "medium",
+      "parent": "s1",
+      "requested_tier": "high",
+      "session": "s1/sub/1",
+      "task": "task-1",
+      "tier": "medium",
+      "type": "general"
+    },
+    "id": "e005",
+    "seq": 5,
+    "session": "s1",
+    "ts": 5.0,
+    "turn": "t1",
+    "type": "agent.clamped"
+  },
+  {
+    "data": {
+      "agent": {
+        "depth": 1,
+        "id": "s1/sub/1",
+        "index": 1,
+        "parent": "s1",
+        "session": "s1/sub/1",
+        "task": "task-1",
+        "tier": "medium",
+        "type": "general"
+      },
+      "iteration": 0,
+      "model": "claude-small",
+      "provider": "anthropic",
+      "tools": true
+    },
+    "id": "e006",
+    "seq": 6,
+    "session": "s1/sub/1",
+    "ts": 6.0,
+    "turn": null,
+    "type": "model.started"
+  },
+  {
+    "data": {
+      "agent": {
+        "depth": 1,
+        "id": "s1/sub/1",
+        "index": 1,
+        "parent": "s1",
+        "session": "s1/sub/1",
+        "task": "task-1",
+        "tier": "medium",
+        "type": "general"
+      },
+      "text": "Found "
+    },
+    "id": "e007",
+    "seq": 7,
+    "session": "s1/sub/1",
+    "ts": 7.0,
+    "turn": null,
+    "type": "text.delta"
+  },
+  {
+    "data": {
+      "agent": {
+        "depth": 1,
+        "id": "s1/sub/1",
+        "index": 1,
+        "parent": "s1",
+        "session": "s1/sub/1",
+        "task": "task-1",
+        "tier": "medium",
+        "type": "general"
+      },
+      "text": "it."
+    },
+    "id": "e008",
+    "seq": 8,
+    "session": "s1/sub/1",
+    "ts": 8.0,
+    "turn": null,
+    "type": "text.delta"
+  },
+  {
+    "data": {
+      "agent": {
+        "depth": 1,
+        "id": "s1/sub/1",
+        "index": 1,
+        "parent": "s1",
+        "session": "s1/sub/1",
+        "task": "task-1",
+        "tier": "medium",
+        "type": "general"
+      },
+      "text": "Found it."
+    },
+    "id": "e009",
+    "seq": 9,
+    "session": "s1/sub/1",
+    "ts": 9.0,
+    "turn": null,
+    "type": "text"
+  },
+  {
+    "data": {
+      "agent": {
+        "depth": 1,
+        "id": "s1/sub/1",
+        "index": 1,
+        "parent": "s1",
+        "session": "s1/sub/1",
+        "task": "task-1",
+        "tier": "medium",
+        "type": "general"
+      },
+      "cache_read": 0,
+      "cache_write": 0,
+      "input": 5,
+      "output": 2,
+      "reasoning": 0
+    },
+    "id": "e010",
+    "seq": 10,
+    "session": "s1/sub/1",
+    "ts": 10.0,
+    "turn": null,
+    "type": "model.usage"
+  },
+  {
+    "data": {
+      "agent": {
+        "depth": 1,
+        "id": "s1/sub/1",
+        "index": 1,
+        "parent": "s1",
+        "session": "s1/sub/1",
+        "task": "task-1",
+        "tier": "medium",
+        "type": "general"
+      },
+      "stop_reason": "end_turn"
+    },
+    "id": "e011",
+    "seq": 11,
+    "session": "s1/sub/1",
+    "ts": 11.0,
+    "turn": null,
+    "type": "model.stopped"
+  },
+  {
+    "data": {
+      "agent": {
+        "depth": 1,
+        "id": "s1/sub/1",
+        "index": 1,
+        "parent": "s1",
+        "session": "s1/sub/1",
+        "task": "task-1",
+        "tier": "medium",
+        "type": "general"
+      },
+      "clamped": true,
+      "depth": 1,
+      "dropped_tools": [],
+      "error": null,
+      "id": "s1/sub/1",
+      "index": 1,
+      "is_error": false,
+      "iterations": 1,
+      "ok": true,
+      "parent": "s1",
+      "session": "s1/sub/1",
+      "status": "completed",
+      "stop_reason": "end_turn",
+      "task": "task-1",
+      "tier": "medium",
+      "type": "general",
+      "usage": {
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "input_tokens": 5,
+        "output_tokens": 2,
+        "reasoning_tokens": 0
+      }
+    },
+    "id": "e012",
+    "seq": 12,
+    "session": "s1",
+    "ts": 12.0,
+    "turn": "t1",
+    "type": "agent.completed"
+  },
+  {
+    "data": {
+      "call_id": "c1",
+      "duration_ms": 40,
+      "executed": true,
+      "is_error": false,
+      "tool": "Task"
+    },
+    "id": "e013",
+    "seq": 13,
+    "session": "s1",
+    "ts": 13.0,
+    "turn": "t1",
+    "type": "tool.completed"
+  },
+  {
+    "data": {
+      "iterations": 0,
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 9,
+        "output_tokens": 3
+      }
+    },
+    "id": "e014",
+    "seq": 14,
+    "session": "s1",
+    "ts": 14.0,
+    "turn": "t1",
+    "type": "turn.completed"
+  }
+]

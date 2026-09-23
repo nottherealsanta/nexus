@@ -1,0 +1,304 @@
+{
+  "agent_order": [],
+  "agents": [],
+  "closed": false,
+  "context": null,
+  "diagnostics": [
+    {
+      "data": {
+        "payload": {
+          "a": [
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "event_id": "e032",
+      "seq": 32,
+      "ts": 32.0,
+      "type": "future.unclear_event"
+    }
+  ],
+  "errors": [],
+  "extensions": {},
+  "hooks": [],
+  "input_queue": [],
+  "last_seq": 32,
+  "mcp": {},
+  "messages": [
+    {
+      "attempt": 0,
+      "blocks": [
+        {
+          "finalized": true,
+          "kind": "text",
+          "signature": null,
+          "streamed": false,
+          "text": "run ls"
+        }
+      ],
+      "done": true,
+      "iteration": 0,
+      "model": null,
+      "provider": null,
+      "role": "user",
+      "stop_reason": null
+    },
+    {
+      "attempt": 0,
+      "blocks": [
+        {
+          "finalized": true,
+          "kind": "text",
+          "signature": null,
+          "streamed": true,
+          "text": "I will run that."
+        }
+      ],
+      "done": true,
+      "iteration": 0,
+      "model": "claude-x",
+      "provider": "anthropic",
+      "role": "assistant",
+      "stop_reason": "tool_use"
+    },
+    {
+      "attempt": 0,
+      "blocks": [
+        {
+          "finalized": true,
+          "kind": "text",
+          "signature": null,
+          "streamed": false,
+          "text": "Done."
+        }
+      ],
+      "done": true,
+      "iteration": 1,
+      "model": "claude-x",
+      "provider": "anthropic",
+      "role": "assistant",
+      "stop_reason": "end_turn"
+    },
+    {
+      "attempt": 0,
+      "blocks": [
+        {
+          "finalized": true,
+          "kind": "text",
+          "signature": null,
+          "streamed": false,
+          "text": "Second turn."
+        }
+      ],
+      "done": true,
+      "iteration": 0,
+      "model": "claude-x",
+      "provider": "anthropic",
+      "role": "assistant",
+      "stop_reason": "end_turn"
+    }
+  ],
+  "model": {
+    "attempt": 0,
+    "iteration": 0,
+    "model": "claude-x",
+    "provider": "anthropic",
+    "streaming": false,
+    "tools": false
+  },
+  "opened": false,
+  "pending_permissions": [],
+  "permissions": [
+    {
+      "bundle": null,
+      "call_id": "c1",
+      "decision": "allow_once",
+      "default_rule": "Bash(cmd:ls)",
+      "grant": null,
+      "id": "p1",
+      "key": "cmd:ls",
+      "persistence_available": true,
+      "preview": "ls",
+      "scope": "session",
+      "status": "resolved",
+      "suggestions": [
+        "Bash(cmd:ls)"
+      ],
+      "tool": "Bash",
+      "ts": 14.0
+    }
+  ],
+  "phase": "idle",
+  "presence": {
+    "attended": false,
+    "viewers": 0
+  },
+  "registry": {
+    "detail": {},
+    "error": null,
+    "generation": 1,
+    "models": 7997,
+    "source": "network",
+    "stale": false,
+    "status": "refreshed"
+  },
+  "session_id": "s1",
+  "turns": [
+    {
+      "context": [],
+      "error": null,
+      "hooks": [],
+      "id": "t1",
+      "index": 0,
+      "iteration": 1,
+      "limits": {
+        "max_iterations": 4,
+        "max_seconds": 60.0
+      },
+      "messages": [
+        {
+          "attempt": 0,
+          "blocks": [
+            {
+              "finalized": true,
+              "kind": "text",
+              "signature": null,
+              "streamed": false,
+              "text": "run ls"
+            }
+          ],
+          "done": true,
+          "iteration": 0,
+          "model": null,
+          "provider": null,
+          "role": "user",
+          "stop_reason": null
+        },
+        {
+          "attempt": 0,
+          "blocks": [
+            {
+              "finalized": true,
+              "kind": "text",
+              "signature": null,
+              "streamed": true,
+              "text": "I will run that."
+            }
+          ],
+          "done": true,
+          "iteration": 0,
+          "model": "claude-x",
+          "provider": "anthropic",
+          "role": "assistant",
+          "stop_reason": "tool_use"
+        },
+        {
+          "attempt": 0,
+          "blocks": [
+            {
+              "finalized": true,
+              "kind": "text",
+              "signature": null,
+              "streamed": false,
+              "text": "Done."
+            }
+          ],
+          "done": true,
+          "iteration": 1,
+          "model": "claude-x",
+          "provider": "anthropic",
+          "role": "assistant",
+          "stop_reason": "end_turn"
+        }
+      ],
+      "permission_ids": [
+        "p1"
+      ],
+      "phase": "completed",
+      "retries": [],
+      "skills": [],
+      "started_ts": 4.0,
+      "stop_reason": "end_turn",
+      "tools": [
+        {
+          "bundle": "shell",
+          "call_id": "c1",
+          "code": null,
+          "duration_ms": 5,
+          "error": null,
+          "executed": true,
+          "finished_ts": 17.0,
+          "is_error": false,
+          "name": "Bash",
+          "progress": [
+            "listing"
+          ],
+          "requested_ts": 12.0,
+          "started_ts": 15.0,
+          "status": "completed"
+        }
+      ],
+      "updated_ts": 22.0,
+      "usage": {
+        "cache_read_tokens": 5,
+        "cache_write_tokens": 0,
+        "input_tokens": 42,
+        "output_tokens": 7,
+        "reasoning_tokens": 0
+      }
+    },
+    {
+      "context": [],
+      "error": null,
+      "hooks": [],
+      "id": "t2",
+      "index": 1,
+      "iteration": 0,
+      "limits": {},
+      "messages": [
+        {
+          "attempt": 0,
+          "blocks": [
+            {
+              "finalized": true,
+              "kind": "text",
+              "signature": null,
+              "streamed": false,
+              "text": "Second turn."
+            }
+          ],
+          "done": true,
+          "iteration": 0,
+          "model": "claude-x",
+          "provider": "anthropic",
+          "role": "assistant",
+          "stop_reason": "end_turn"
+        }
+      ],
+      "permission_ids": [],
+      "phase": "completed",
+      "retries": [],
+      "skills": [],
+      "started_ts": 23.0,
+      "stop_reason": "end_turn",
+      "tools": [],
+      "updated_ts": 27.0,
+      "usage": {
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "input_tokens": 3,
+        "output_tokens": 2,
+        "reasoning_tokens": 0
+      }
+    }
+  ],
+  "usage": {
+    "cache_read_tokens": 5,
+    "cache_write_tokens": 0,
+    "input_tokens": 45,
+    "output_tokens": 9,
+    "reasoning_tokens": 0
+  }
+}

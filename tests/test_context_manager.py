@@ -6,7 +6,7 @@ import pytest
 
 from nexus.config import Config
 from nexus.config.schema import AgentSection, ConfigV2, ModelParams, ModelSection
-from nexus.context import IDENTITY_PREAMBLE, ContextManager, Exchange, build_context
+from nexus.context import IDENTITY_PREAMBLE, ContextManager
 from nexus.errors import ConfigError
 from nexus.model.message import Message, Text, ToolUse
 from nexus.model.request import ToolSchema
@@ -236,17 +236,6 @@ def test_config_loader_is_called_on_every_assemble(tmp_path):
     assert manager.assemble(FakeSession()).model == "a"
     assert manager.assemble(FakeSession()).model == "b"
     assert calls["n"] == 2
-
-
-# ---------------------------------------------------------------------------
-# Legacy builder preserved under the new package
-# ---------------------------------------------------------------------------
-
-
-def test_legacy_build_context_still_works():
-    context = build_context("rules", "notes", [Exchange("a", "b")], "new", 1000)
-    assert context.omitted_exchanges == 0
-    assert "rules" in context.prompt
 
 
 # ---------------------------------------------------------------------------

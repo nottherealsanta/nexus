@@ -1,0 +1,170 @@
+{
+  "agent_order": [],
+  "agents": [],
+  "closed": false,
+  "context": null,
+  "diagnostics": [
+    {
+      "data": {
+        "raw": {
+          "kind": "noise"
+        }
+      },
+      "event_id": "e006",
+      "seq": 6,
+      "ts": 6.0,
+      "type": "provider.raw"
+    }
+  ],
+  "errors": [
+    {
+      "data": {
+        "message": "a durable warning"
+      },
+      "message": "a durable warning",
+      "seq": 4,
+      "ts": 4.0,
+      "type": "error"
+    }
+  ],
+  "extensions": {
+    "echo": {
+      "diff": null,
+      "error": null,
+      "error_type": null,
+      "generation": 2,
+      "kind": null,
+      "name": "echo",
+      "origin": "workspace",
+      "previous_generation": null,
+      "sha256": "abc123",
+      "source": "/tmp/echo.py",
+      "status": "loaded",
+      "summary": null,
+      "trigger": null
+    }
+  },
+  "hooks": [],
+  "input_queue": [],
+  "last_seq": 12,
+  "mcp": {
+    "fs": {
+      "attempts": 2,
+      "cached": false,
+      "error": "boom",
+      "error_type": "TimeoutError",
+      "generation": 1,
+      "health": "degraded",
+      "reason": null,
+      "retry_in_s": 1.5,
+      "server": "fs",
+      "status": "failed",
+      "tool_count": 3,
+      "tools": [
+        "read",
+        "write",
+        "ls"
+      ],
+      "version": "1.0"
+    }
+  },
+  "messages": [
+    {
+      "attempt": 0,
+      "blocks": [
+        {
+          "finalized": true,
+          "kind": "text",
+          "signature": null,
+          "streamed": false,
+          "text": "reconnected"
+        }
+      ],
+      "done": true,
+      "iteration": 0,
+      "model": "claude-x",
+      "provider": "anthropic",
+      "role": "assistant",
+      "stop_reason": "end_turn"
+    }
+  ],
+  "model": {
+    "attempt": 0,
+    "iteration": 0,
+    "model": "claude-x",
+    "provider": "anthropic",
+    "streaming": false,
+    "tools": false
+  },
+  "opened": false,
+  "pending_permissions": [],
+  "permissions": [],
+  "phase": "idle",
+  "presence": {
+    "attended": false,
+    "viewers": 0
+  },
+  "registry": {
+    "detail": {},
+    "error": null,
+    "generation": null,
+    "models": 10,
+    "source": "cache",
+    "stale": true,
+    "status": "stale"
+  },
+  "session_id": "s1",
+  "turns": [
+    {
+      "context": [],
+      "error": null,
+      "hooks": [],
+      "id": "t1",
+      "index": 0,
+      "iteration": 0,
+      "limits": {},
+      "messages": [
+        {
+          "attempt": 0,
+          "blocks": [
+            {
+              "finalized": true,
+              "kind": "text",
+              "signature": null,
+              "streamed": false,
+              "text": "reconnected"
+            }
+          ],
+          "done": true,
+          "iteration": 0,
+          "model": "claude-x",
+          "provider": "anthropic",
+          "role": "assistant",
+          "stop_reason": "end_turn"
+        }
+      ],
+      "permission_ids": [],
+      "phase": "completed",
+      "retries": [],
+      "skills": [],
+      "started_ts": 7.0,
+      "stop_reason": "end_turn",
+      "tools": [],
+      "updated_ts": 11.0,
+      "usage": {
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "input_tokens": 1,
+        "output_tokens": 1,
+        "reasoning_tokens": 0
+      }
+    }
+  ],
+  "usage": {
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0,
+    "input_tokens": 1,
+    "output_tokens": 1,
+    "reasoning_tokens": 0
+  }
+}

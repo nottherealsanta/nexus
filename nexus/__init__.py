@@ -1,53 +1,63 @@
-"""Nexus public API (plan section 2.2: re-exports only, import cost matters).
+"""Nexus public API (PLAN section 2.2: re-exports only, import cost matters).
 
-Legacy exports stay eager so the pre-Phase-1 ``Agent``/CLI path is unchanged.
-Phase 1 exports are resolved lazily through PEP 562 ``__getattr__``: ``import
-nexus`` and ``import nexus.errors`` therefore do **not** load ``httpx``, the
-Anthropic provider, the runtime, the session layer, ``fcntl``, or other heavy
-Phase 1 modules. Accessing ``nexus.Runtime`` (and friends) still works exactly
-as if it were a normal attribute.
+The root package exposes the stable *contracts* a host application composes on:
+
+* :class:`~nexus.events.Event` — the UI boundary (eager, dependency-free);
+* :class:`~nexus.config.Config` — the layered configuration value;
+* :class:`~nexus.runtime.Runtime` — the object that owns the managers and wiring;
+* :class:`~nexus.session.Session` / :class:`~nexus.session.SessionManager`;
+* :class:`~nexus.context.ContextManager`;
+* :class:`~nexus.model.router.ModelRouter`;
+* :class:`~nexus.host.HostFacade` — the transport-neutral surface;
+* :class:`~nexus.view.ConversationView` and its pure reducer.
+
+Everything heavy resolves lazily through PEP 562 ``__getattr__``, so ``import
+nexus`` and ``import nexus.errors`` do not load ``httpx``, the provider
+adapters, the runtime, the session layer, ``fcntl``, ``nexus.host``, or the
+``view``/``model`` layers. Accessing ``nexus.Runtime`` (and friends) still works
+exactly as if it were a normal attribute, and the resolved name is cached.
 """
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from .agent import Agent
-from .config import Config
 from .errors import SessionBusy
 from .events import Event
-from .provider import CodexProvider, Provider, ProviderError
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime
+    from .config import Config
     from .context import ContextManager
+    from .host import HostFacade
     from .model.router import ModelRouter
     from .runtime import Runtime
     from .session import Session, SessionManager
+    from .view import ConversationView, apply
 
-# NOTE: ``Provider`` here is the legacy Codex prompt-stream protocol exported for
-# backwards compatibility. The new protocol lives at ``nexus.model.provider`` and
-# is deliberately not re-exported at the root to avoid the name collision.
 __all__ = [
-    "Agent",
-    "CodexProvider",
     "Config",
     "ContextManager",
+    "ConversationView",
     "Event",
+    "HostFacade",
     "ModelRouter",
-    "Provider",
-    "ProviderError",
     "Runtime",
     "Session",
     "SessionBusy",
     "SessionManager",
+    "apply",
 ]
 
-#: Phase 1 names, resolved on first access: ``name -> (module, attribute)``.
+#: Lazily resolved names: ``name -> (module, attribute)``.
 _LAZY = {
+    "Config": (".config", "Config"),
     "ContextManager": (".context", "ContextManager"),
+    "ConversationView": (".view", "ConversationView"),
+    "HostFacade": (".host", "HostFacade"),
     "ModelRouter": (".model.router", "ModelRouter"),
     "Runtime": (".runtime", "Runtime"),
     "Session": (".session", "Session"),
     "SessionManager": (".session", "SessionManager"),
+    "apply": (".view", "apply"),
 }
 
 

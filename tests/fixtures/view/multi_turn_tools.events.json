@@ -1,0 +1,442 @@
+[
+  {
+    "data": {
+      "viewers": 1
+    },
+    "id": "e001",
+    "seq": 1,
+    "session": "s1",
+    "ts": 1.0,
+    "turn": null,
+    "type": "presence.joined"
+  },
+  {
+    "data": {
+      "attended": true,
+      "viewers": 1
+    },
+    "id": "e002",
+    "seq": 2,
+    "session": "s1",
+    "ts": 2.0,
+    "turn": null,
+    "type": "presence.changed"
+  },
+  {
+    "data": {
+      "content": [
+        {
+          "text": "run ls",
+          "type": "text"
+        }
+      ],
+      "queue_depth": 1,
+      "queued_id": "q1"
+    },
+    "id": "e003",
+    "seq": 3,
+    "session": "s1",
+    "ts": 3.0,
+    "turn": null,
+    "type": "input.queued"
+  },
+  {
+    "data": {
+      "limits": {
+        "max_iterations": 4,
+        "max_seconds": 60.0
+      }
+    },
+    "id": "e004",
+    "seq": 4,
+    "session": "s1",
+    "ts": 4.0,
+    "turn": "t1",
+    "type": "turn.started"
+  },
+  {
+    "data": {
+      "queued_id": "q1",
+      "turn": "t1"
+    },
+    "id": "e005",
+    "seq": 5,
+    "session": "s1",
+    "ts": 5.0,
+    "turn": null,
+    "type": "input.consumed"
+  },
+  {
+    "data": {
+      "attempt": 0,
+      "iteration": 0,
+      "model": "claude-x",
+      "provider": "anthropic",
+      "streaming": true,
+      "tools": true
+    },
+    "id": "e006",
+    "seq": 6,
+    "session": "s1",
+    "ts": 6.0,
+    "turn": "t1",
+    "type": "model.started"
+  },
+  {
+    "data": {
+      "text": "I will run "
+    },
+    "id": "e007",
+    "seq": 7,
+    "session": "s1",
+    "ts": 7.0,
+    "turn": "t1",
+    "type": "text.delta"
+  },
+  {
+    "data": {
+      "text": "that."
+    },
+    "id": "e008",
+    "seq": 8,
+    "session": "s1",
+    "ts": 8.0,
+    "turn": "t1",
+    "type": "text.delta"
+  },
+  {
+    "data": {
+      "text": "I will run that."
+    },
+    "id": "e009",
+    "seq": 9,
+    "session": "s1",
+    "ts": 9.0,
+    "turn": "t1",
+    "type": "text"
+  },
+  {
+    "data": {
+      "cache_read": 0,
+      "cache_write": 0,
+      "input": 12,
+      "output": 4,
+      "reasoning": 0
+    },
+    "id": "e010",
+    "seq": 10,
+    "session": "s1",
+    "ts": 10.0,
+    "turn": "t1",
+    "type": "model.usage"
+  },
+  {
+    "data": {
+      "stop_reason": "tool_use"
+    },
+    "id": "e011",
+    "seq": 11,
+    "session": "s1",
+    "ts": 11.0,
+    "turn": "t1",
+    "type": "model.stopped"
+  },
+  {
+    "data": {
+      "call_id": "c1",
+      "tool": "Bash"
+    },
+    "id": "e012",
+    "seq": 12,
+    "session": "s1",
+    "ts": 12.0,
+    "turn": "t1",
+    "type": "tool.requested"
+  },
+  {
+    "data": {
+      "call_id": "c1",
+      "default_rule": "Bash(cmd:ls)",
+      "id": "p1",
+      "key": "cmd:ls",
+      "persistence_available": true,
+      "preview": "ls",
+      "suggestions": [
+        "Bash(cmd:ls)"
+      ],
+      "tool": "Bash"
+    },
+    "id": "e013",
+    "seq": 13,
+    "session": "s1",
+    "ts": 13.0,
+    "turn": "t1",
+    "type": "permission.requested"
+  },
+  {
+    "data": {
+      "bundle": null,
+      "call_id": "c1",
+      "decision": "allow_once",
+      "grant": null,
+      "id": "p1",
+      "key": "cmd:ls",
+      "scope": "session",
+      "tool": "Bash",
+      "ts": 14.0
+    },
+    "id": "e014",
+    "seq": 14,
+    "session": "s1",
+    "ts": 14.0,
+    "turn": "t1",
+    "type": "permission.resolved"
+  },
+  {
+    "data": {
+      "bundle": "shell",
+      "call_id": "c1",
+      "tool": "Bash"
+    },
+    "id": "e015",
+    "seq": 15,
+    "session": "s1",
+    "ts": 15.0,
+    "turn": "t1",
+    "type": "tool.started"
+  },
+  {
+    "data": {
+      "call_id": "c1",
+      "text": "listing",
+      "tool": "Bash"
+    },
+    "id": "e016",
+    "seq": 16,
+    "session": "s1",
+    "ts": 16.0,
+    "turn": "t1",
+    "type": "tool.progress"
+  },
+  {
+    "data": {
+      "call_id": "c1",
+      "duration_ms": 5,
+      "executed": true,
+      "is_error": false,
+      "tool": "Bash"
+    },
+    "id": "e017",
+    "seq": 17,
+    "session": "s1",
+    "ts": 17.0,
+    "turn": "t1",
+    "type": "tool.completed"
+  },
+  {
+    "data": {
+      "attempt": 0,
+      "iteration": 1,
+      "model": "claude-x",
+      "provider": "anthropic",
+      "streaming": true,
+      "tools": true
+    },
+    "id": "e018",
+    "seq": 18,
+    "session": "s1",
+    "ts": 18.0,
+    "turn": "t1",
+    "type": "model.started"
+  },
+  {
+    "data": {
+      "text": "Done."
+    },
+    "id": "e019",
+    "seq": 19,
+    "session": "s1",
+    "ts": 19.0,
+    "turn": "t1",
+    "type": "text"
+  },
+  {
+    "data": {
+      "cache_read": 5,
+      "cache_write": 0,
+      "input": 30,
+      "output": 3,
+      "reasoning": 0
+    },
+    "id": "e020",
+    "seq": 20,
+    "session": "s1",
+    "ts": 20.0,
+    "turn": "t1",
+    "type": "model.usage"
+  },
+  {
+    "data": {
+      "stop_reason": "end_turn"
+    },
+    "id": "e021",
+    "seq": 21,
+    "session": "s1",
+    "ts": 21.0,
+    "turn": "t1",
+    "type": "model.stopped"
+  },
+  {
+    "data": {
+      "iterations": 1,
+      "stop_reason": "end_turn",
+      "usage": {
+        "cache_read_tokens": 5,
+        "cache_write_tokens": 0,
+        "input_tokens": 42,
+        "output_tokens": 7,
+        "reasoning_tokens": 0
+      }
+    },
+    "id": "e022",
+    "seq": 22,
+    "session": "s1",
+    "ts": 22.0,
+    "turn": "t1",
+    "type": "turn.completed"
+  },
+  {
+    "data": {
+      "limits": {}
+    },
+    "id": "e023",
+    "seq": 23,
+    "session": "s1",
+    "ts": 23.0,
+    "turn": "t2",
+    "type": "turn.started"
+  },
+  {
+    "data": {
+      "iteration": 0,
+      "model": "claude-x",
+      "provider": "anthropic"
+    },
+    "id": "e024",
+    "seq": 24,
+    "session": "s1",
+    "ts": 24.0,
+    "turn": "t2",
+    "type": "model.started"
+  },
+  {
+    "data": {
+      "text": "Second turn."
+    },
+    "id": "e025",
+    "seq": 25,
+    "session": "s1",
+    "ts": 25.0,
+    "turn": "t2",
+    "type": "text"
+  },
+  {
+    "data": {
+      "stop_reason": "end_turn"
+    },
+    "id": "e026",
+    "seq": 26,
+    "session": "s1",
+    "ts": 26.0,
+    "turn": "t2",
+    "type": "model.stopped"
+  },
+  {
+    "data": {
+      "iterations": 0,
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 3,
+        "output_tokens": 2
+      }
+    },
+    "id": "e027",
+    "seq": 27,
+    "session": "s1",
+    "ts": 27.0,
+    "turn": "t2",
+    "type": "turn.completed"
+  },
+  {
+    "data": {
+      "content": [
+        {
+          "text": "later",
+          "type": "text"
+        }
+      ],
+      "queue_depth": 1,
+      "queued_id": "q2"
+    },
+    "id": "e028",
+    "seq": 28,
+    "session": "s1",
+    "ts": 28.0,
+    "turn": null,
+    "type": "input.queued"
+  },
+  {
+    "data": {
+      "queued_id": "q2",
+      "reason": "cancelled"
+    },
+    "id": "e029",
+    "seq": 29,
+    "session": "s1",
+    "ts": 29.0,
+    "turn": null,
+    "type": "input.dropped"
+  },
+  {
+    "data": {
+      "generation": 1,
+      "models": 7997,
+      "source": "network",
+      "stale": false
+    },
+    "id": "e030",
+    "seq": 30,
+    "session": "s1",
+    "ts": 30.0,
+    "turn": null,
+    "type": "registry.refreshed"
+  },
+  {
+    "data": {
+      "viewers": 0
+    },
+    "id": "e031",
+    "seq": 31,
+    "session": "s1",
+    "ts": 31.0,
+    "turn": null,
+    "type": "presence.left"
+  },
+  {
+    "data": {
+      "payload": {
+        "a": [
+          1,
+          2,
+          3
+        ]
+      }
+    },
+    "id": "e032",
+    "seq": 32,
+    "session": "s1",
+    "ts": 32.0,
+    "turn": null,
+    "type": "future.unclear_event"
+  }
+]

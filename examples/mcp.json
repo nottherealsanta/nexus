@@ -1,0 +1,21 @@
+{
+  "servers": {
+    "filesystem": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "${env:NEXUS_EXAMPLE_ROOT}"
+      ]
+    },
+    "internal": {
+      "transport": "http",
+      "url": "https://mcp.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${env:MCP_TOKEN}"
+      },
+      "connect_timeout_s": 20
+    }
+  }
+}

@@ -47,6 +47,15 @@ class ManagerClosed(ExtensionError, RuntimeError):
     """
 
 
+class ExtensionTrashError(ExtensionError, RuntimeError):
+    """An extension could not be safely moved to trash.
+
+    Raised for a target outside the managed extension roots, a symlinked or
+    non-regular path, a rollback after a failed rebuild, or a trash entry that
+    cannot be published or restored.
+    """
+
+
 class ManifestError(ExtensionError, ValueError):
     """A manifest is malformed, or a manifest operation is invalid."""
 

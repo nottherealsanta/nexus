@@ -583,15 +583,32 @@ async def test_conformance_aggregate_is_green():
 
 
 # ---------------------------------------------------------------------------
-# The legacy surfaces are retired later, not here
+# The canonical CLI is a pure daemon client (the legacy agent path is gone)
 # ---------------------------------------------------------------------------
 
 
-def test_legacy_agent_and_cli_remain_importable():
-    from nexus import agent, cli
+def test_canonical_cli_exposes_parser_and_no_legacy_agent():
+    from nexus import cli
 
-    assert hasattr(agent, "Agent")
-    assert hasattr(cli, "main")
+    parser = cli.build_parser()
+    actions = set(parser._subparsers._group_actions[0].choices)
+    assert {
+        "init",
+        "doctor",
+        "run",
+        "chat",
+        "replay",
+        "daemon",
+        "sessions",
+        "ext",
+        "models",
+        "agents",
+    } <= actions
+
+    import nexus
+
+    for legacy in ("Agent", "CodexProvider", "Provider"):
+        assert legacy not in nexus.__all__
 
 
 # ---------------------------------------------------------------------------

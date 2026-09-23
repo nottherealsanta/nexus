@@ -47,9 +47,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import inspect
 import json
 import os
+import secrets
+import shutil
+import stat
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -57,10 +61,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import msgspec
+
 from ..config import Config, resolve_within
 from ..config.schema import ExtSection
 from ..core.watch import DirectoryWatcher
-from ..errors import ConfigError, ManagerClosed, StaleGenerationError
+from ..errors import (
+    ConfigError,
+    ExtensionError,
+    ExtensionTrashError,
+    ManagerClosed,
+    StaleGenerationError,
+)
 from ..events import Event
 from ..skills.manager import SkillManager
 from ..tools.loader import ModuleRecord, ToolLoader, build_default_quarantine
@@ -79,7 +91,13 @@ from .manifest import (
 from .quarantine import Quarantine, QuarantineOutcome, StagedSource, sanitize_text
 from .template import ensure_tool_template
 
-__all__ = ["ExtensionManager", "LoadedExtension"]
+__all__ = [
+    "ExtensionManager",
+    "ExtensionTrashOutcome",
+    "ExtensionTrashRecord",
+    "LoadedExtension",
+    "ValidateReport",
+]
 
 #: Discovery precedence: workspace shadows user shadows anything else.
 _TIER_WORKSPACE = 2
@@ -92,6 +110,34 @@ _MCP_CONFIG_RELATIVE = ".nexus/mcp.json"
 #: A definition file larger than this is refused rather than read (it carries
 #: command/env/url strings, never a payload).
 _MCP_MAX_BYTES = 262_144
+
+# ---------------------------------------------------------------------------
+# Extension trash (PLAN sections 2.3 and 11)
+# ---------------------------------------------------------------------------
+
+#: Trash root, a sibling of the sessions directory under ``.nexus/``. Extensions
+#: live in a dedicated subdirectory so the session trash sweeper (which scans
+#: ``.nexus/trash`` for ``meta.json`` entries) never confuses the two formats.
+_TRASH_DIRNAME = "trash"
+_EXTENSION_TRASH_SUBDIR = "extensions"
+
+#: Trash metadata document name inside each trashed extension entry.
+_TRASH_META = "meta.json"
+
+#: Prefix for a trash staging directory that has not been atomically published.
+#: Deliberately distinct from the session trash's ``.staging-`` prefix so the
+#: session recovery sweep never touches extension staging.
+_TRASH_STAGING_PREFIX = ".ext-staging-"
+
+#: Trash metadata format version.
+EXTENSION_TRASH_VERSION = 1
+
+#: Default retention: one week, matching the session trash policy (PLAN section
+#: 2.3: "deleted extensions, kept for one week").
+DEFAULT_TRASH_RETENTION_SECONDS = 7 * 24 * 60 * 60
+
+#: Characters allowed verbatim in a trash-id slug.
+_TRASH_ID_SAFE = frozenset("-_.")
 
 
 def _strip_jsonc(text: str) -> str:
@@ -305,6 +351,108 @@ def _safe_skill_fingerprint(skill: object) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _canonical(path: Path) -> Path:
+    """Resolve a path's *parent* only, keeping the final component verbatim.
+
+    ``Path.resolve()`` follows a symlinked final component to its target, which
+    would make a symlinked candidate indistinguishable from the file it points
+    at (and would let a trash operation delete the target). Resolving just the
+    ancestry canonicalizes host layout (macOS ``/tmp`` -> ``/private/tmp``) while
+    leaving a final symlink visible to be refused. Non-strict, so a missing
+    ancestor falls back to the lexical spelling.
+    """
+    try:
+        return path.parent.resolve() / path.name
+    except OSError:  # pragma: no cover - non-strict resolve rarely raises
+        return path
+
+
+def _dir_identity(path: Path) -> tuple[int, int, int] | None:
+    """The device/inode/type identity of a directory, or ``None`` if missing.
+
+    Uses ``lstat`` so a directory swapped for a symlink is a different identity,
+    which is exactly the parent-swap race the atomic move must fail closed
+    against.
+    """
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return None
+    return (info.st_dev, info.st_ino, stat.S_IFMT(info.st_mode))
+
+
+def _fsync_dir(path: Path) -> None:
+    """Best-effort ``fsync`` of a directory so a rename is durable."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
+def _write_trash_meta(path: Path, record: ExtensionTrashRecord) -> None:
+    """Durably write one trash entry's metadata before it is published."""
+    data = msgspec.json.encode(record)
+    temporary = path.with_name(path.name + ".tmp")
+    with temporary.open("wb") as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+
+
+def _fsync_file(path: Path) -> None:
+    """Best-effort ``fsync`` of a regular file so its bytes are durable."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
+def _is_safe_name(value: object) -> bool:
+    """Whether ``value`` is a single, non-traversing path component.
+
+    Refuses empty, ``.``/``..``, NUL, and any embedded separator (including a
+    Windows backslash, which is a separator on that platform), so joining it
+    onto a directory can never escape that directory.
+    """
+    if not isinstance(value, str) or not value or value in (".", ".."):
+        return False
+    if "\x00" in value or "/" in value or "\\" in value:
+        return False
+    return os.path.basename(value) == value
+
+
+def _is_safe_trash_id(value: object) -> bool:
+    """Whether ``value`` is a single component drawn from the generated alphabet.
+
+    Mirrors :meth:`ExtensionManager._trash_id_for` exactly: alphanumerics (Unicode
+    included, since ``str.isalnum`` is Unicode-aware) plus ``-``, ``_``, and ``.``.
+    An on-disk value outside this shape was not written by this manager and is
+    refused rather than trusted.
+    """
+    if not isinstance(value, str) or not 0 < len(value) <= 128:
+        return False
+    if value in (".", ".."):
+        return False
+    if "/" in value or "\\" in value or "\x00" in value:
+        return False
+    if os.path.basename(value) != value:
+        return False
+    return all(ch.isalnum() or ch in "-_." for ch in value)
+
+
 # ---------------------------------------------------------------------------
 # Internal data
 # ---------------------------------------------------------------------------
@@ -318,6 +466,62 @@ class LoadedExtension:
     record: ModuleRecord
     tools: tuple[RegisteredTool, ...]
     staged: StagedSource | None = None
+
+
+class ExtensionTrashRecord(msgspec.Struct, frozen=True):
+    """Durable metadata for one trashed extension (retention + provenance).
+
+    Mirrors the session trash record: it carries a stable ``trash_id``, the
+    authoritative original path, retention bounds (``trashed_at`` /
+    ``delete_after``), and enough provenance (module name, tool names, content
+    hash, origin, generation) to audit and restore the exact removed version.
+    ``source_path`` is absolute and is the only path a restore acts on.
+    """
+
+    trash_id: str
+    source_path: str
+    relative_path: str = ""
+    origin: str = "ext"
+    source_id: str = ""
+    modules: tuple[str, ...] = ()
+    tools: tuple[str, ...] = ()
+    sha256: str = ""
+    generation: int = 0
+    trashed_at: float = 0.0
+    delete_after: float = 0.0
+    reason: str = ""
+    v: int = EXTENSION_TRASH_VERSION
+
+    @property
+    def expired(self) -> bool:
+        return self.delete_after <= time.time()
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = msgspec.structs.asdict(self)
+        payload["expired"] = self.expired
+        return payload
+
+
+@dataclass(frozen=True)
+class ExtensionTrashOutcome:
+    """The result of one :meth:`ExtensionManager.trash` call.
+
+    ``record`` is the durable trash entry; ``report`` is the rebuild that made
+    the removed extension disappear from future runs (``None`` if the manager
+    was closed before a report could be produced).
+    """
+
+    record: ExtensionTrashRecord
+    report: ReloadReport | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"record": self.record.to_dict()}
+        report = self.report
+        payload["reloaded"] = report is not None
+        payload["changed"] = bool(getattr(report, "changed", False))
+        payload["generation"] = getattr(report, "generation", 0)
+        payload["previous_generation"] = getattr(report, "previous_generation", 0)
+        return payload
 
 
 @dataclass
@@ -346,6 +550,19 @@ class _BuildResult:
         return (*self.newly_loaded, *self.skill_newly_loaded)
 
 
+@dataclass(frozen=True)
+class ValidateReport:
+    """The result of a read-only extension validation pass (no manifest swap).
+
+    ``results`` is one sanitized :class:`~nexus.ext.quarantine.QuarantineOutcome`
+    dict per checked candidate; the manifest is never touched.
+    """
+
+    valid: bool
+    results: tuple[dict[str, Any], ...]
+    checked: int
+
+
 class ExtensionManager:
     """Owns the extension world and performs the one serialized rebuild."""
 
@@ -364,9 +581,27 @@ class ExtensionManager:
         sink: Any | None = None,
         agents: Any | None = None,
         hooks: Any | None = None,
+        trash_dir: str | os.PathLike[str] | None = None,
+        retention_seconds: float = DEFAULT_TRASH_RETENTION_SECONDS,
     ) -> None:
         self._workspace = _absolute(Path(workspace))
         self._home = _absolute(Path(home)) if home is not None else Path.home()
+        #: Trash is a sibling of the sessions directory in production, under a
+        #: dedicated ``extensions`` subdirectory so the session sweeper and the
+        #: extension sweeper never read each other's metadata. An explicit
+        #: override keeps tests hermetic (and lets a host relocate it).
+        self._trash_dir = (
+            _absolute(Path(trash_dir))
+            if trash_dir is not None
+            else self._workspace / ".nexus" / _TRASH_DIRNAME / _EXTENSION_TRASH_SUBDIR
+        )
+        if (
+            isinstance(retention_seconds, bool)
+            or not isinstance(retention_seconds, (int, float))
+            or retention_seconds <= 0
+        ):
+            raise ValueError("retention_seconds must be a positive number")
+        self._retention_seconds = float(retention_seconds)
         self._config_loader = config_loader or self._default_config_loader
         self._loader = loader or ToolLoader()
         self._quarantine = quarantine
@@ -468,6 +703,16 @@ class ExtensionManager:
         return self._home
 
     @property
+    def trash_dir(self) -> Path:
+        """Directory holding trashed extension files and their metadata."""
+        return self._trash_dir
+
+    @property
+    def retention_seconds(self) -> float:
+        """How long a trashed extension is retained before ``purge_expired``."""
+        return self._retention_seconds
+
+    @property
     def ref(self) -> ManifestRef:
         return self._ref
 
@@ -502,14 +747,25 @@ class ExtensionManager:
         return self._ref.cleanup_failures
 
     def list_extensions(self) -> tuple[dict[str, Any], ...]:
-        """A sanitized, JSON-safe view of the live external modules."""
+        """A sanitized, JSON-safe view of the live external modules.
+
+        ``source`` is the authoritative original file path (what ``ext trash``
+        accepts); ``path`` remains the private staged copy the loader imported,
+        kept for backward compatibility and debugging.
+        """
         manifest = self.manifest
+        with self._state_lock:
+            source_by_module = {
+                item.record.handle.name: item.source_id
+                for item in (*self._loaded.values(), *self._skill_loaded.values())
+            }
         rows: list[dict[str, Any]] = []
         for name in sorted(manifest.modules):
             handle = manifest.modules[name]
             rows.append(
                 {
                     "name": name,
+                    "source": sanitize_text(source_by_module.get(name, ""), limit=400),
                     "path": sanitize_text(handle.path, limit=200),
                     "sha256": handle.sha256,
                     "generation": handle.generation,
@@ -548,6 +804,635 @@ class ExtensionManager:
         rows.extend(dict(row) for row in self._agent_diagnostics)
         rows.extend(dict(row) for row in self._hook_diagnostics)
         return tuple(rows)
+
+    def validate(self, target: str | None = None) -> ValidateReport:
+        """Quarantine-check candidate files without importing or swapping.
+
+        ``target`` names one file that must be a discoverable candidate under a
+        configured ``[ext].dirs`` root (the same strict scoping
+        :meth:`trash` uses); anything else -- a config file, a credential, a
+        ``_``-prefixed file, an arbitrary path, or a symlink -- is refused
+        before it is read, so a caller of this read-only surface can never make
+        the manager execute unmanaged Python. ``None`` checks every candidate in
+        the configured hot directories. The manifest generation and the live
+        modules are never touched, so a broken file cannot break a turn.
+        """
+        config = self._load_config_or_none() or self._last_config or Config()
+        ext = _ext_section(config)
+        if not ext.enabled:
+            # Discovery/execution is off, so there is nothing to check. A named
+            # target would otherwise be made a managed candidate despite the
+            # switch, so refuse it; a whole-tree check is a truthful empty pass.
+            if target:
+                raise ExtensionError("extensions are disabled; cannot validate a target")
+            return ValidateReport(valid=True, results=(), checked=0)
+        quarantine = self._quarantine or build_default_quarantine(
+            config,
+            root=self._workspace,
+            stage_root=self._workspace / ".nexus" / "stage",
+        )
+        candidates = self._validate_candidates(ext, target)
+        results: list[dict[str, Any]] = []
+        valid = True
+        for path in candidates:
+            try:
+                staged = quarantine.open(path)
+                outcome = quarantine.inspect(staged)
+                if outcome.ok:
+                    outcome = quarantine.run_isolated(staged)
+                row = outcome.to_dict()
+                ok = bool(outcome.ok)
+            except Exception as exc:  # noqa: BLE001 - a refusal is a result
+                failure = _refusal_failure(path, exc)
+                row = dict(failure.to_dict())
+                row.setdefault("detail", row.pop("error", ""))
+                ok = False
+            row["ok"] = ok
+            results.append(row)
+            if not ok:
+                valid = False
+        return ValidateReport(valid=valid, results=tuple(results), checked=len(results))
+
+    def _validate_candidates(self, ext: ExtSection, target: str | None) -> list[Path]:
+        if target:
+            # Validation runs the isolated importer on the file, so a caller
+            # must not be able to point it at arbitrary Python. Scope the
+            # target exactly like trash: a discovered, in-root, non-symlink
+            # candidate only.
+            return [self._scoped_candidate(target, ext, error_cls=ExtensionError)]
+        return [path for path, _tier in self._candidate_files(ext)]
+
+    # -- trash / restore ---------------------------------------------------
+
+    def _managed_roots(self, ext: ExtSection) -> tuple[Path, ...]:
+        """Every configured extension root, expanded and absolute."""
+        return tuple(
+            _expand_dir(raw, self._workspace, self._home) for raw in ext.dirs
+        )
+
+    def _managed_root_for(self, path: Path, ext: ExtSection) -> Path | None:
+        """The configured root that lexically contains ``path``, or ``None``."""
+        for root in self._managed_roots(ext):
+            try:
+                if path.is_relative_to(root):
+                    return root
+            except ValueError:  # pragma: no cover - is_relative_to rarely raises
+                continue
+        return None
+
+    def _reject_symlinked_components(self, path: Path, root: Path | None) -> None:
+        """Refuse a symlinked component strictly below the managed root.
+
+        A symlinked ancestor of (or equal to) the root is trusted host layout
+        (macOS ``/tmp`` -> ``/private/tmp``); any link inside the root could
+        redirect a delete outside the managed tree, so it fails closed.
+        """
+        for component in reversed(path.parents):
+            if root is not None:
+                try:
+                    if component == root or not component.is_relative_to(root):
+                        continue
+                except ValueError:  # pragma: no cover
+                    continue
+            try:
+                mode = component.lstat().st_mode
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                raise ExtensionTrashError(
+                    f"cannot inspect path component {component.name!r}: {exc}"
+                ) from exc
+            if stat.S_ISLNK(mode):
+                raise ExtensionTrashError(
+                    f"path component {component.name!r} is a symlink; refusing"
+                )
+
+    def _scoped_candidate(
+        self,
+        target: str,
+        ext: ExtSection,
+        *,
+        error_cls: type[Exception] = ExtensionTrashError,
+    ) -> Path:
+        """Resolve ``target`` to a discoverable, in-root extension file or refuse.
+
+        The check is deliberately strict: the lexical absolute path must equal a
+        candidate the manager itself discovered (a non-underscore ``*.py`` under
+        a configured ``[ext].dirs`` root), so a caller cannot name an arbitrary
+        path -- not a config file, credential, ``_template.py``, or anything
+        outside the managed roots. A final symlink is refused, and any symlinked
+        component below the root is refused. ``error_cls`` lets a read-only
+        caller (validation) refuse with its own taxonomy while sharing the check.
+        """
+        if not isinstance(target, str) or not target.strip():
+            raise error_cls("extension target must be a non-empty path")
+        try:
+            raw = Path(target)
+        except (TypeError, ValueError) as exc:
+            raise error_cls(f"invalid extension path: {exc}") from exc
+        if not raw.is_absolute():
+            raw = self._workspace / raw
+        absolute = _absolute(raw)
+
+        candidates: dict[str, Path] = {}
+        for path, _tier in self._candidate_files(ext):
+            candidates.setdefault(str(path), path)
+            candidates.setdefault(str(_canonical(path)), path)
+        matched = candidates.get(str(absolute)) or candidates.get(
+            str(_canonical(absolute))
+        )
+        if matched is None:
+            raise error_cls(
+                "refusing a path outside the managed extension roots "
+                "(or not a discoverable .py candidate): "
+                f"{sanitize_text(str(absolute), limit=200)}"
+            )
+        try:
+            info = matched.lstat()
+        except FileNotFoundError as exc:
+            raise error_cls(
+                f"extension file does not exist: {sanitize_text(str(matched), limit=200)}"
+            ) from exc
+        except OSError as exc:
+            raise error_cls(
+                f"cannot stat extension file: {sanitize_text(str(exc), limit=200)}"
+            ) from exc
+        if stat.S_ISLNK(info.st_mode):
+            raise error_cls(
+                f"refusing a symlink: {sanitize_text(str(matched), limit=200)}"
+            )
+        if not stat.S_ISREG(info.st_mode):
+            raise error_cls(
+                "refusing a non-regular file: "
+                f"{sanitize_text(str(matched), limit=200)}"
+            )
+        self._reject_symlinked_components(matched, self._managed_root_for(matched, ext))
+        return matched
+
+    def _scoped_target(self, target: str, ext: ExtSection) -> Path:
+        """Trash-scoped alias of :meth:`_scoped_candidate`."""
+        return self._scoped_candidate(target, ext, error_cls=ExtensionTrashError)
+
+    def _managed_destination(self, source_path: str, ext: ExtSection) -> Path:
+        """Validate a trash record's original path as a restore destination.
+
+        The destination must be an absolute, non-symlinked ``*.py`` candidate
+        lexically under a configured ``[ext].dirs`` root. On-disk metadata is
+        untrusted (it is just a file in the trash directory), so a crafted
+        ``source_path`` that escapes the managed roots, names a config or
+        credential file, or routes through a symlinked component is refused
+        before any bytes are written.
+        """
+        if not isinstance(source_path, str) or not source_path:
+            raise ExtensionTrashError("trash record has no source path")
+        try:
+            raw = Path(source_path)
+        except (TypeError, ValueError) as exc:
+            raise ExtensionTrashError(f"invalid restore path: {exc}") from exc
+        if not raw.is_absolute():
+            raise ExtensionTrashError(
+                "refusing a restore destination that is not absolute: "
+                f"{sanitize_text(source_path, limit=200)}"
+            )
+        absolute = _absolute(raw)
+        root = self._managed_root_for(absolute, ext)
+        if root is None:
+            raise ExtensionTrashError(
+                "refusing a restore destination outside the managed extension "
+                f"roots: {sanitize_text(str(absolute), limit=200)}"
+            )
+        if absolute.suffix != ".py" or absolute.name.startswith("_"):
+            raise ExtensionTrashError(
+                "refusing a restore destination that is not a discoverable "
+                f".py candidate: {sanitize_text(str(absolute), limit=200)}"
+            )
+        self._reject_symlinked_components(absolute, root)
+        return absolute
+
+    def _loaded_for(self, path: Path) -> LoadedExtension | None:
+        """The live extension whose original source is ``path``, if any."""
+        key = str(_canonical(path))
+        with self._state_lock:
+            loaded = self._loaded.get(key)
+            if loaded is None:
+                loaded = self._skill_loaded.get(key)
+        return loaded
+
+    def _relative_source(self, path: Path) -> str:
+        try:
+            return str(path.relative_to(self._workspace))
+        except ValueError:
+            return ""
+
+    @staticmethod
+    def _trash_id_for(path: Path) -> str:
+        slug = "".join(
+            ch if (ch.isalnum() or ch in _TRASH_ID_SAFE) else "_" for ch in path.stem
+        )[:40] or "ext"
+        return f"{slug}-{secrets.token_hex(6)}"
+
+    async def trash(
+        self,
+        target: str,
+        *,
+        reason: str = "",
+        force: bool = False,
+    ) -> ExtensionTrashOutcome:
+        """Safely move one loaded extension file to trash and rebuild.
+
+        The move is atomic and rolls back on any failure. After a successful
+        move the manager rebuilds, so the removed extension disappears from the
+        next manifest generation: a pinned generation (an in-flight turn) keeps
+        its module until the last lease releases, then retirement releases it.
+        Nothing is ever released directly, so an active lease is *safe-reloaded*,
+        not clobbered.
+
+        If the rebuild aborts (a *different* candidate is broken, so the previous
+        manifest must be retained) the file move is rolled back and
+        :class:`~nexus.errors.ExtensionTrashError` is raised, keeping disk and the
+        live manifest consistent. ``force=True`` keeps the trash entry instead,
+        for an operator who wants the file gone regardless.
+        """
+        if self._closed:
+            raise ManagerClosed("extension manager is closed")
+        config = self._load_config_or_none() or self._last_config
+        ext = _ext_section(config)
+        if not ext.enabled:
+            raise ExtensionTrashError("extensions are disabled; nothing to trash")
+        path = self._scoped_target(target, ext)
+        record = self._publish_trash(path, ext, reason=reason)
+        try:
+            report = await self.reload(trigger="trash")
+        except BaseException:
+            # A rebuild that raises (or is cancelled) leaves the file in trash
+            # while the live manifest is unchanged. Roll the move back so disk
+            # and manifest stay consistent, then re-raise unchanged: a
+            # cancellation must never be masked by the rollback.
+            with contextlib.suppress(Exception):
+                self._rollback_entry(record)
+            raise
+        if report.failed and not report.changed and not force:
+            self._rollback_entry(record)
+            failure = report.failed[0]
+            raise ExtensionTrashError(
+                f"extension rebuild failed; trashing {path.name!r} was rolled back: "
+                f"{failure.error}"
+            )
+        return ExtensionTrashOutcome(record=record, report=report)
+
+    def list_trashed(self) -> tuple[ExtensionTrashRecord, ...]:
+        """Retention metadata for every trashed extension, newest first."""
+        self._recover_trash()
+        records = self._trash_records()
+        records.sort(key=lambda item: (-item.trashed_at, item.trash_id))
+        return tuple(records)
+
+    def restore(self, trash_id: str) -> ExtensionTrashRecord:
+        """Move a trashed extension file back to its original path.
+
+        The trash entry's metadata is authoritative for the destination, which
+        is never overwritten: a file already at the original path refuses the
+        restore. This only puts the bytes back; the watcher (or the next turn's
+        rebuild) re-imports it into a fresh generation.
+        """
+        if not isinstance(trash_id, str) or not trash_id:
+            raise ExtensionTrashError("trash_id must be a non-empty string")
+        self._recover_trash()
+        record = self._find_trash(trash_id)
+        if record is None:
+            raise ExtensionTrashError(f"No trashed extension {trash_id!r}")
+        config = self._load_config_or_none() or self._last_config
+        ext = _ext_section(config)
+        # The destination comes from untrusted on-disk metadata, so re-derive
+        # and re-check it against the managed roots before writing anything.
+        destination = self._managed_destination(record.source_path, ext)
+        entry = self._trash_dir / record.trash_id
+        if entry.is_symlink() or not entry.is_dir():
+            raise ExtensionTrashError(
+                f"Trash entry {record.trash_id!r} is not a directory"
+            )
+        if destination.exists():
+            raise ExtensionTrashError(
+                f"Refusing to restore over existing file {record.source_path!r}"
+            )
+        source = entry / destination.name
+        if source.is_symlink() or not source.exists():
+            raise ExtensionTrashError(
+                f"Trash entry {record.trash_id!r} is missing its file"
+            )
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(source, destination)
+        _fsync_dir(destination.parent)
+        self._remove_trash_entry(entry)
+        _fsync_dir(self._trash_dir)
+        return record
+
+    def purge_expired(self, *, now: float | None = None) -> list[str]:
+        """Remove trash entries past ``delete_after``; returns their ids.
+
+        Cleanup is explicit so a listing never mutates state as a side effect.
+        """
+        self._recover_trash()
+        moment = time.time() if now is None else float(now)
+        removed: list[str] = []
+        for record in self._trash_records():
+            if record.delete_after > moment:
+                continue
+            entry = self._trash_dir / record.trash_id
+            if entry.is_symlink():
+                # A symlinked entry is a link, never a directory to recurse
+                # into; unlink the link only. ``rmtree`` would refuse it anyway.
+                with contextlib.suppress(OSError):
+                    entry.unlink()
+            else:
+                with contextlib.suppress(OSError):
+                    shutil.rmtree(entry)
+            removed.append(record.trash_id)
+        return removed
+
+    def _publish_trash(
+        self, path: Path, ext: ExtSection, *, reason: str
+    ) -> ExtensionTrashRecord:
+        """Atomically move ``path`` into a new trash entry, or roll back."""
+        loaded = self._loaded_for(path)
+        sha256 = ""
+        modules: tuple[str, ...] = ()
+        tools: tuple[str, ...] = ()
+        generation = 0
+        origin = "ext"
+        if loaded is not None:
+            handle = loaded.record.handle
+            sha256 = handle.sha256
+            modules = (handle.name,)
+            tools = tuple(loaded.record.tool_names)
+            generation = handle.generation
+            origin = handle.origin
+        else:
+            with contextlib.suppress(OSError):
+                sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+
+        trash_dir = self._trash_dir
+        trash_dir.mkdir(parents=True, exist_ok=True)
+        staging = trash_dir / f"{_TRASH_STAGING_PREFIX}{secrets.token_hex(6)}"
+        staging.mkdir()
+        now = time.time()
+        record = ExtensionTrashRecord(
+            trash_id=self._trash_id_for(path),
+            # ``source_path``/``source_id`` are authoritative identities that a
+            # restore moves back, so they are stored verbatim: sanitizing a path
+            # (the generic diagnostic scrubber redacts long path-like runs) would
+            # corrupt the destination. Display boundaries sanitize instead.
+            source_path=str(path),
+            relative_path=self._relative_source(path),
+            origin=origin,
+            source_id=str(_canonical(path)),
+            modules=modules,
+            tools=tools,
+            sha256=sha256,
+            generation=generation,
+            trashed_at=now,
+            delete_after=now + self._retention_seconds,
+            reason=sanitize_text(reason, limit=300),
+        )
+        # Captured before the metadata write so a rollback can prove the parent
+        # is still the same real directory before moving the file back.
+        parent_before = _dir_identity(path.parent)
+        try:
+            # Durable intent precedes the move: a crash between the two leaves a
+            # staging dir whose metadata names the original path, which recovery
+            # can discard safely (the file never moved) or publish.
+            _write_trash_meta(staging / _TRASH_META, record)
+            _fsync_dir(staging)
+            # TOCTOU close: re-verify the exact inode and parent directory right
+            # before the move, then confirm the moved entry is the same inode.
+            # A candidate swapped for a symlink, or a parent swapped for a link,
+            # is detected and rolled back rather than deleting the wrong file.
+            try:
+                before = path.lstat()
+            except OSError as exc:
+                raise ExtensionTrashError(
+                    f"extension changed before the move: {exc}"
+                ) from exc
+            if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+                raise ExtensionTrashError(
+                    f"refusing to trash a non-regular file: "
+                    f"{sanitize_text(str(path), limit=200)}"
+                )
+            # Re-verify the parent identity immediately before the rename: the
+            # identity captured before the metadata write must still hold, so a
+            # parent (including the managed root itself, which the symlink scan
+            # trusts as host layout) swapped during that window is caught before
+            # any file is moved rather than only after.
+            if parent_before is None or _dir_identity(path.parent) != parent_before:
+                raise ExtensionTrashError(
+                    "parent directory changed before the move; refusing"
+                )
+            self._reject_symlinked_components(
+                path, self._managed_root_for(path, ext)
+            )
+            os.replace(path, staging / path.name)
+            moved = staging / path.name
+            after = moved.lstat()
+            if (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino):
+                raise ExtensionTrashError(
+                    "extension changed during the move; refusing to trust it"
+                )
+            if parent_before is None or _dir_identity(path.parent) != parent_before:
+                raise ExtensionTrashError(
+                    "parent directory changed during the move; refusing"
+                )
+            # Re-derive containment *again* after the swap for the narrow window
+            # between the pre-move check and the rename: a parent replaced by a
+            # symlink there would make the rollback (or a later restore) write
+            # outside the managed tree, so fail closed if it did.
+            self._reject_symlinked_components(
+                path, self._managed_root_for(path, ext)
+            )
+            # The moved bytes must be durable before the staging directory is
+            # renamed into place and the entry becomes authoritative.
+            _fsync_file(moved)
+            os.replace(staging, trash_dir / record.trash_id)
+            _fsync_dir(trash_dir)
+            return record
+        except BaseException:
+            self._rollback_staging(staging, path, parent_before)
+            raise
+
+    def _rollback_staging(
+        self,
+        staging: Path,
+        original: Path,
+        parent_before: tuple[int, int, int] | None,
+    ) -> None:
+        """Undo a half-finished trash move so the authoritative file returns.
+
+        Only moves the file back when the original's parent directory is still
+        the same real directory it was before; a parent swapped for a symlink is
+        left alone so the rollback cannot itself write outside the managed tree.
+        """
+        moved = staging / original.name
+        if (
+            moved.exists()
+            and not original.exists()
+            and parent_before is not None
+            and _dir_identity(original.parent) == parent_before
+        ):
+            with contextlib.suppress(OSError):
+                os.replace(moved, original)
+        for name in (_TRASH_META, _TRASH_META + ".tmp"):
+            with contextlib.suppress(OSError):
+                (staging / name).unlink(missing_ok=True)
+        with contextlib.suppress(OSError):
+            staging.rmdir()
+
+    def _rollback_entry(self, record: ExtensionTrashRecord) -> None:
+        """Restore a published trash entry after a failed rebuild.
+
+        The entry (and its durable metadata) is removed only once the file is
+        provably back at its original path; if the destination reappeared and the
+        move cannot proceed, the trash entry is kept intact rather than dropping
+        the only copy.
+        """
+        entry = self._trash_dir / record.trash_id
+        destination = Path(record.source_path)
+        source = entry / destination.name
+        if not source.exists():
+            restored = True
+        elif destination.exists():
+            restored = False
+        else:
+            restored = False
+            with contextlib.suppress(OSError):
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(source, destination)
+                restored = True
+        if restored:
+            self._remove_trash_entry(entry)
+        _fsync_dir(self._trash_dir)
+
+    def _trash_records(self) -> list[ExtensionTrashRecord]:
+        try:
+            entries = list(self._trash_dir.iterdir())
+        except OSError:
+            return []
+        records: list[ExtensionTrashRecord] = []
+        for entry in entries:
+            # Only a real (non-symlink) published entry directory is trusted:
+            # a symlinked entry could make a restore move a file outside trash,
+            # and a staging dir has no durable ``trash_id`` identity yet.
+            if entry.is_symlink() or not entry.is_dir():
+                continue
+            if entry.name.startswith(_TRASH_STAGING_PREFIX):
+                continue
+            meta_path = entry / _TRASH_META
+            if meta_path.is_symlink():
+                continue
+            try:
+                record = msgspec.json.decode(
+                    meta_path.read_bytes(), type=ExtensionTrashRecord
+                )
+            except (OSError, msgspec.DecodeError, msgspec.ValidationError):
+                continue
+            # On-disk metadata is untrusted: a crafted ``trash_id`` would let a
+            # purge or recovery rename/remove a path outside the trash dir, and
+            # a crafted ``source_path`` would redirect a restore. Drop the
+            # record rather than ever acting on a value this code could not
+            # itself have written.
+            if not _is_safe_trash_id(record.trash_id):
+                continue
+            if not _is_safe_name(Path(record.source_path).name):
+                continue
+            # The entry directory's name is authoritative for its identity: a
+            # record whose ``trash_id`` names a different entry is a mismatch
+            # this manager never wrote, so it is ignored rather than trusted.
+            if entry.name != record.trash_id:
+                continue
+            records.append(record)
+        return records
+
+    def _find_trash(self, trash_id: str) -> ExtensionTrashRecord | None:
+        for record in self._trash_records():
+            if record.trash_id == trash_id or record.source_id == trash_id:
+                return record
+        return None
+
+    def _remove_trash_entry(self, entry: Path) -> None:
+        with contextlib.suppress(FileNotFoundError):
+            (entry / _TRASH_META).unlink()
+        with contextlib.suppress(OSError):
+            (entry / (_TRASH_META + ".tmp")).unlink()
+        with contextlib.suppress(OSError):
+            entry.rmdir()
+
+    def _recover_trash(self) -> None:
+        """Finish or discard a trash move interrupted before publication.
+
+        Recovery is keyed on durable metadata: a staging dir whose metadata is
+        present and whose named file actually moved is published; a staging dir
+        without metadata (the file never moved, or the metadata write itself was
+        interrupted) and one whose file is absent are discarded. Best-effort:
+        any failure leaves the artifacts for the next sweep.
+        """
+        try:
+            entries = list(self._trash_dir.iterdir())
+        except OSError:
+            return
+        for entry in entries:
+            if (
+                entry.is_symlink()
+                or not entry.is_dir()
+                or not entry.name.startswith(_TRASH_STAGING_PREFIX)
+            ):
+                continue
+            meta_path = entry / _TRASH_META
+            if not meta_path.exists() or meta_path.is_symlink():
+                self._discard_staging(entry)
+                continue
+            try:
+                record = msgspec.json.decode(
+                    meta_path.read_bytes(), type=ExtensionTrashRecord
+                )
+            except (OSError, msgspec.DecodeError, msgspec.ValidationError):
+                continue
+            # Refuse untrusted metadata rather than publishing to a path derived
+            # from it: a crafted ``trash_id`` could rename the staging dir
+            # outside the trash tree, and a crafted source name could make the
+            # "did the file move?" probe read a path outside the staging dir.
+            if not _is_safe_trash_id(record.trash_id):
+                continue
+            if not _is_safe_name(Path(record.source_path).name):
+                continue
+            source = Path(record.source_path)
+            moved = entry / source.name
+            if not moved.exists() or moved.is_symlink():
+                # The metadata was durable but the file never moved (or was
+                # replaced by a link); discard rather than publish a link.
+                self._discard_staging(entry)
+                continue
+            final = self._trash_dir / record.trash_id
+            if not final.exists():
+                _fsync_file(moved)
+                with contextlib.suppress(OSError):
+                    os.replace(entry, final)
+                _fsync_dir(self._trash_dir)
+
+    def _discard_staging(self, entry: Path) -> None:
+        # A staging entry that is itself a symlink is unlinked, never recursed
+        # into: following it could delete files outside the trash directory.
+        if entry.is_symlink():
+            with contextlib.suppress(OSError):
+                entry.unlink()
+            return
+        with contextlib.suppress(OSError):
+            for child in list(entry.iterdir()):
+                if child.is_symlink():
+                    child.unlink(missing_ok=True)
+                elif child.is_dir():
+                    shutil.rmtree(child, ignore_errors=True)
+                else:
+                    child.unlink(missing_ok=True)
+        with contextlib.suppress(OSError):
+            entry.rmdir()
 
     # -- agents / hooks ----------------------------------------------------
 
@@ -813,8 +1698,17 @@ class ExtensionManager:
                 raise ManagerClosed("extension manager is closed")
             if self._served_seq >= mine and self._last_report is not None:
                 return self._last_report
+            served_before = self._served_seq
             self._served_seq = self._request_seq
-            report = await self._rebuild(trigger, sink)
+            try:
+                report = await self._rebuild(trigger, sink)
+            except BaseException:
+                # This request produced no report, so it is not "served": a
+                # later caller must not be handed a stale ``_last_report`` for a
+                # rebuild that never ran. Roll the watermark back so the next
+                # request rebuilds instead of coalescing onto nothing.
+                self._served_seq = served_before
+                raise
             self._last_report = report
             return report
 

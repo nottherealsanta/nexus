@@ -412,6 +412,12 @@ class Session:
         #: idempotent.
         self._session_started = False
         self._session_ended = False
+        #: Set once a session's artifacts have been (or are about to be) moved to
+        #: trash. A retired handle is permanently unwritable: no append, no
+        #: enqueue, and no turn start. This is what stops a late viewer cleanup,
+        #: an unattended fallback, or a scheduled turn from recreating the
+        #: deleted log after ``SessionManager.delete`` moved it away.
+        self._retired = False
         #: The single shared close task. Every ``aclose``/manager close awaits
         #: this same task, so ``SessionEnd`` runs exactly once and the bus is
         #: closed before any caller returns.
@@ -557,7 +563,7 @@ class Session:
         already resolved by a UI is gone from ``_pending_permissions``, and the
         gate rejects a second resolution.
         """
-        if not self._pending_permissions:
+        if self._retired or not self._pending_permissions:
             return
         gate = getattr(self._active_tools, "gate", None)
         if gate is None:
@@ -654,6 +660,37 @@ class Session:
         """Whether the currently active/next turn is the session's first."""
         return self._turn_is_new
 
+    @property
+    def retired(self) -> bool:
+        """Whether this handle has been retired for a delete (unwritable)."""
+        return self._retired
+
+    def retire(self) -> bool:
+        """Permanently retire this handle; returns whether it changed state.
+
+        ``SessionManager.delete`` retires the live handle **before** it moves
+        any artifact, so a concurrent or late writer — a disconnecting viewer's
+        presence cleanup, an unattended fallback, a scheduled turn start — is
+        blocked from recreating the deleted log. Retirement is idempotent. The
+        manager rolls it back with :meth:`unretire` if the delete fails before
+        the move, so a refused/failed delete never strands a usable session.
+        """
+        if self._retired:
+            return False
+        self._retired = True
+        return True
+
+    def unretire(self) -> None:
+        """Roll back a retirement after a delete that failed before the move."""
+        self._retired = False
+
+    def _ensure_writable(self) -> None:
+        """Refuse any durable write once this handle is retired."""
+        if self._retired:
+            raise SessionError(
+                f"Session {self._id!r} has been deleted; refusing to write"
+            )
+
     # -- history -----------------------------------------------------------
 
     def read(self, *, force: bool = False) -> ReadResult:
@@ -691,11 +728,13 @@ class Session:
         return self._store.next_seq(self._id)
 
     def append_message(self, message: Message, *, seq: int | None = None) -> MessageRecord:
+        self._ensure_writable()
         record = self._store.append_message(self._id, message, seq=seq)
         self._read = None
         return record
 
     def append_event(self, event: Event, *, seq: int | None = None) -> EventRecord:
+        self._ensure_writable()
         if event.session is None:
             event = msgspec.structs.replace(event, session=self._id)
         record = self._store.append_event(self._id, event, seq=seq)
@@ -718,6 +757,7 @@ class Session:
         model: str | None = None,
     ) -> SummaryRecord:
         """Append one durable summary/compaction artifact (never a transcript turn)."""
+        self._ensure_writable()
         record = self._store.append_summary(
             self._id,
             text=text,
@@ -797,6 +837,9 @@ class Session:
         opaque metadata for a later context packet: it is cached here but its
         authority must live in the log.
         """
+        # A snapshot is a session artifact too: never recreate one for a deleted
+        # session (``_artifacts_exist`` treats a stray ``.snap.json`` as one).
+        self._ensure_writable()
         read = self.read(force=True)
         seq = read.next_seq if through_seq is None else through_seq
         if type(seq) is not int or seq < 0:
@@ -853,13 +896,21 @@ class Session:
         """Fan one persisted event out to every live subscriber."""
         self._bus.publish(event)
 
-    def _emit(self, event_type: str, data: dict[str, Any] | None = None) -> EventRecord:
+    def _emit(
+        self, event_type: str, data: dict[str, Any] | None = None
+    ) -> EventRecord | None:
         """Persist and publish a session-scoped event (presence/input).
 
         These transitions are not part of a turn, so they carry no turn id; they
         still get a monotonic ``seq`` and are durable, so a late subscriber can
         reconstruct them from the log.
+
+        Once the handle is retired for a delete this is a **no-op**: a session
+        transition such as presence cleanup or a dropped queue must never
+        recreate a log that has already been moved to the trash.
         """
+        if self._retired:
+            return None
         event = Event(type=event_type, data=dict(data or {}), session=self._id)
         record = self.append_event(event)
         self._observe_event(event)
@@ -962,6 +1013,7 @@ class Session:
         completes, emitting ``input.consumed``; if it can never run it emits
         ``input.dropped``.
         """
+        self._ensure_writable()
         content = _coerce_user_input(user_input)
         queued_id = new_id()
         self._queue.append(_QueuedInput(queued_id, content))
@@ -1045,8 +1097,15 @@ class Session:
         if self._active is not None:
             raise SessionBusy(f"Session {self._id!r} already has an active turn")
         self._lock.acquire(shared=False, blocking=False)
-        self._idle.clear()
         try:
+            # Re-check under the lock: a concurrent delete retires the handle and
+            # moves the log while holding the same exclusive lock, so acquiring it
+            # after the delete must fail closed rather than recreate the log.
+            if self._retired:
+                raise SessionError(
+                    f"Session {self._id!r} has been deleted; refusing to start a turn"
+                )
+            self._idle.clear()
             token = CancelToken()
             state = TurnState.new(
                 turn_id=turn_id or new_id(), session_id=self._id
@@ -1103,6 +1162,9 @@ class Session:
         non-blocking; if another process is actively running the session the
         method returns an empty list rather than racing it.
         """
+        if self._retired:
+            # A deleted session is never recovered: its log belongs to the trash.
+            return []
         if lock:
             if self._lock.held:
                 # This handle already owns the active turn; never write while it runs.
@@ -1607,8 +1669,12 @@ class Session:
                 "Session.start_turn requires an assembler and provider resolver; "
                 "open the session through Runtime.session() or call bind() first"
             )
+        self._ensure_writable()
         if self._ensure_ready is not None:
             await self._ensure_ready()
+        # Re-check after the await: a delete can retire the handle while the
+        # readiness seam yields, and a retired handle must never write.
+        self._ensure_writable()
         content, queued_item = self._resolve_turn_input(user_input)
         content, block_reason = await self._gate_user_prompt(content)
         if block_reason is not None:
@@ -1632,6 +1698,41 @@ class Session:
             lease.release()
             raise
         return lease.turn_id
+
+    def fail_turn(
+        self,
+        turn_id: str,
+        error: str,
+        *,
+        reason: str = "",
+    ) -> None:
+        """Persist a synthetic terminal ``turn.failed`` for a turn that never ran.
+
+        The host supervisor schedules a turn by calling :meth:`start_turn`; if
+        that raises (a bad config snapshot, an unwired session, a readiness
+        failure, ...) no producer ever runs, so a follower would stream forever
+        waiting for a terminal event. This makes the failure durable and
+        session-scoped — carrying the pre-assigned ``turn_id`` — so ``run``,
+        ``chat``, and JSONL terminate, and a late subscriber reconstructs the
+        same failed turn from the log.
+
+        Idempotence is the caller's concern: it is called exactly once by the
+        supervisor for a submission whose start raised.
+        """
+        event = Event(
+            type="turn.failed",
+            data={
+                "error": error,
+                "reason": reason or error,
+                "iterations": 0,
+                "turn_id": turn_id,
+            },
+            session=self._id,
+            turn=turn_id,
+        )
+        record = self.append_event(event)
+        self._observe_event(event)
+        self._publish(record.event)
 
     async def wait_turn(self, turn_id: str | None = None) -> None:
         """Await the current detached turn (optionally a specific ``turn_id``).
@@ -1701,8 +1802,10 @@ class Session:
                 "Session.send requires an assembler and provider resolver; "
                 "open the session through Runtime.session() or call bind() first"
             )
+        self._ensure_writable()
         if self._ensure_ready is not None:
             await self._ensure_ready()
+        self._ensure_writable()
         content = _coerce_user_input(user_input)
         # ``UserPromptSubmit`` runs before anything is durable; capture the log
         # watermark so the blocked path can yield exactly the events it emitted.

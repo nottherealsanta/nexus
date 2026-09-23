@@ -1,8 +1,9 @@
 """Root package import hygiene (plan section 2.2: import cost matters).
 
-``import nexus`` and ``import nexus.errors`` must not pull the heavy Phase 1
-machinery: httpx, the Anthropic adapter, the runtime, the session layer, the
-router, or core. Phase 1 exports stay available lazily.
+``import nexus`` and ``import nexus.errors`` must not pull the heavy runtime
+machinery: httpx, the provider adapters, the runtime, the session layer, the
+router, the host/facade, the model layer, or core. Every public contract stays
+available lazily through PEP 562 and resolves to its real home on first access.
 """
 from __future__ import annotations
 
@@ -25,6 +26,12 @@ HEAVY_MODULES = [
     "nexus.model.router",
     "nexus.core",
     "nexus.core.loop",
+    "nexus.host",
+    "nexus.host.facade",
+    "nexus.host.daemon",
+    "nexus.view",
+    "nexus.config",
+    "nexus.context",
 ]
 
 
@@ -39,7 +46,7 @@ def _run(script: str) -> subprocess.CompletedProcess:
     )
 
 
-def test_import_nexus_does_not_load_heavy_phase1_modules():
+def test_import_nexus_does_not_load_heavy_modules():
     script = f"""
         import sys
         before = set(sys.modules)
@@ -59,27 +66,31 @@ def test_import_nexus_does_not_load_heavy_phase1_modules():
     assert result.stdout.strip() == "ok"
 
 
-def test_lazy_root_exports_resolve_and_legacy_exports_stay_eager():
+def test_lazy_root_exports_resolve_to_their_real_homes():
     script = """
         import nexus
-        # Legacy exports are present immediately.
-        assert nexus.Agent is not None
-        assert nexus.Config is not None
-        assert nexus.Provider is not None
-        assert nexus.CodexProvider is not None
-        assert nexus.ProviderError is not None
+        # Eager contracts are present immediately and are dependency-free.
+        assert nexus.Event is not None
         assert nexus.SessionBusy is not None
-        # Phase 1 exports resolve lazily (PEP 562) and match their real homes.
-        from nexus.context import ContextManager as C
+        # Heavy contracts resolve lazily (PEP 562) and match their real homes.
+        from nexus.config import Config as C
+        from nexus.context import ContextManager as CM
+        from nexus.host import HostFacade as H
         from nexus.model.router import ModelRouter as M
         from nexus.runtime import Runtime as R
         from nexus.session import Session as S
         from nexus.session import SessionManager as SM
-        assert nexus.ContextManager is C
+        from nexus.view import ConversationView as V
+        from nexus.view import apply as A
+        assert nexus.Config is C
+        assert nexus.ContextManager is CM
+        assert nexus.HostFacade is H
         assert nexus.ModelRouter is M
         assert nexus.Runtime is R
         assert nexus.Session is S
         assert nexus.SessionManager is SM
+        assert nexus.ConversationView is V
+        assert nexus.apply is A
         # Unknown attributes still raise AttributeError.
         try:
             nexus.DoesNotExist
@@ -87,6 +98,24 @@ def test_lazy_root_exports_resolve_and_legacy_exports_stay_eager():
             pass
         else:
             raise AssertionError("expected AttributeError")
+        print("ok")
+    """
+    result = _run(script)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
+def test_legacy_codex_exports_are_gone():
+    script = """
+        import nexus
+        for name in ("Agent", "CodexProvider", "Provider", "ProviderError"):
+            assert name not in nexus.__all__, name
+            try:
+                getattr(nexus, name)
+            except AttributeError:
+                pass
+            else:
+                raise AssertionError(f"{name} still exported")
         print("ok")
     """
     result = _run(script)

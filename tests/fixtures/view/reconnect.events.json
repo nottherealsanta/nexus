@@ -1,0 +1,164 @@
+[
+  {
+    "data": {
+      "generation": 2,
+      "name": "echo",
+      "origin": "workspace",
+      "sha256": "abc123",
+      "source": "/tmp/echo.py"
+    },
+    "id": "e001",
+    "seq": 1,
+    "session": "s1",
+    "ts": 1.0,
+    "turn": null,
+    "type": "ext.loaded"
+  },
+  {
+    "data": {
+      "cached": false,
+      "generation": 1,
+      "server": "fs",
+      "tools": 3,
+      "version": "1.0"
+    },
+    "id": "e002",
+    "seq": 2,
+    "session": "s1",
+    "ts": 2.0,
+    "turn": null,
+    "type": "mcp.connected"
+  },
+  {
+    "data": {
+      "generation": 1,
+      "server": "fs",
+      "tools": [
+        "read",
+        "write",
+        "ls"
+      ]
+    },
+    "id": "e003",
+    "seq": 3,
+    "session": "s1",
+    "ts": 3.0,
+    "turn": null,
+    "type": "mcp.tools_changed"
+  },
+  {
+    "data": {
+      "message": "a durable warning"
+    },
+    "id": "e004",
+    "seq": 4,
+    "session": "s1",
+    "ts": 4.0,
+    "turn": null,
+    "type": "error"
+  },
+  {
+    "data": {
+      "models": 10,
+      "source": "cache",
+      "stale": true
+    },
+    "id": "e005",
+    "seq": 5,
+    "session": "s1",
+    "ts": 5.0,
+    "turn": null,
+    "type": "registry.stale"
+  },
+  {
+    "data": {
+      "raw": {
+        "kind": "noise"
+      }
+    },
+    "id": "e006",
+    "seq": 6,
+    "session": "s1",
+    "ts": 6.0,
+    "turn": null,
+    "type": "provider.raw"
+  },
+  {
+    "data": {
+      "limits": {}
+    },
+    "id": "e007",
+    "seq": 7,
+    "session": "s1",
+    "ts": 7.0,
+    "turn": "t1",
+    "type": "turn.started"
+  },
+  {
+    "data": {
+      "iteration": 0,
+      "model": "claude-x",
+      "provider": "anthropic"
+    },
+    "id": "e008",
+    "seq": 8,
+    "session": "s1",
+    "ts": 8.0,
+    "turn": "t1",
+    "type": "model.started"
+  },
+  {
+    "data": {
+      "text": "reconnected"
+    },
+    "id": "e009",
+    "seq": 9,
+    "session": "s1",
+    "ts": 9.0,
+    "turn": "t1",
+    "type": "text"
+  },
+  {
+    "data": {
+      "stop_reason": "end_turn"
+    },
+    "id": "e010",
+    "seq": 10,
+    "session": "s1",
+    "ts": 10.0,
+    "turn": "t1",
+    "type": "model.stopped"
+  },
+  {
+    "data": {
+      "iterations": 0,
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 1,
+        "output_tokens": 1
+      }
+    },
+    "id": "e011",
+    "seq": 11,
+    "session": "s1",
+    "ts": 11.0,
+    "turn": "t1",
+    "type": "turn.completed"
+  },
+  {
+    "data": {
+      "attempts": 2,
+      "error": "boom",
+      "error_type": "TimeoutError",
+      "health": "degraded",
+      "retry_in_s": 1.5,
+      "server": "fs"
+    },
+    "id": "e012",
+    "seq": 12,
+    "session": "s1",
+    "ts": 12.0,
+    "turn": null,
+    "type": "mcp.failed"
+  }
+]

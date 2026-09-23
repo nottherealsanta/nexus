@@ -1,10 +1,9 @@
 """Runtime composition root (plan section 2.1, layer L4).
 
 ``Runtime`` wires the pieces together — configuration, providers, the model
-router, the context manager, the session manager, and the native tool
-infrastructure — without changing the pre-existing ``Agent``/CLI path. It is
-additive: nothing imports it by default, and the CLI keeps using
-:class:`nexus.agent.Agent`.
+router, the context manager, the session manager, and the tool infrastructure.
+It is the object a workspace daemon owns; surfaces reach it only through
+``nexus.host`` and never import it directly.
 
 Design rules:
 
@@ -1533,6 +1532,44 @@ class Runtime:
             return None
         await self._ensure_registry(force=True)
         return self._registry.status()
+
+    async def list_tools(self) -> list[dict[str, Any]]:
+        """The model-facing tool catalog for the current config and manifest.
+
+        Read-only: it never opens a session, starts a turn, or mutates the
+        manifest. It refreshes the manifest once (the same cheap, serialized
+        rebuild a turn boundary does) so a just-added external tool is visible,
+        then reports each selected tool's name, description, bundle, whether it
+        mutates, and its JSON input schema. Descriptions are advisory data, never
+        authority.
+        """
+        await self.ensure_started()
+        config = self._load_config()
+        if self._tools is not None:
+            manager = self._tools
+        elif self.extensions is not None:
+            manager = self._build_iteration_manager(config, self.manifest)
+        else:
+            manager = ToolManager(
+                config,
+                workspace=self.workspace,
+                job_registry=self._job_registry,
+                todo_store=self._todo_store,
+            )
+        specs = {spec.name: spec for spec in manager.specs}
+        rows: list[dict[str, Any]] = []
+        for schema in manager.schemas():
+            spec = specs.get(schema.name)
+            rows.append(
+                {
+                    "name": schema.name,
+                    "description": schema.description,
+                    "bundle": str(getattr(spec, "bundle", "") or ""),
+                    "mutates": bool(getattr(spec, "mutates", False)),
+                    "input_schema": dict(schema.input_schema),
+                }
+            )
+        return rows
 
     def _publish_registry_event(self, event_type: str, data: dict[str, Any]) -> None:
         """Publish a registry lifecycle event on the runtime event bus."""

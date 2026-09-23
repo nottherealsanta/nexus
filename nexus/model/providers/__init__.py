@@ -14,9 +14,6 @@ One adapter per wire protocol (plan section 8):
   llama.cpp server, native NDJSON or an OpenAI-compatible endpoint.
 * :class:`~nexus.model.providers.scripted.ScriptedProvider` — a deterministic,
   offline provider for tests and examples.
-* :class:`~nexus.model.providers.legacy_codex_cli.LegacyCodexCLIProvider` — the
-  retiring facade over the legacy Codex CLI subprocess route, kept working until
-  the provider-breadth phase removes it.
 
 A vendor that already speaks one of these protocols is added with a config
 block; a new provider object can be dropped in ``.nexus/providers/`` and is
@@ -33,7 +30,6 @@ its credential store.
 """
 from .anthropic import AnthropicProvider
 from .gemini import GeminiProvider
-from .legacy_codex_cli import LegacyCodexCLIProvider, request_to_prompt
 from .ollama import OllamaProvider
 from .openai import OpenAIProvider
 from .opencode import OpenCodeProvider, SubprocessAgentProvider
@@ -42,11 +38,9 @@ from .scripted import ScriptedProvider
 __all__ = [
     "AnthropicProvider",
     "GeminiProvider",
-    "LegacyCodexCLIProvider",
     "OllamaProvider",
     "OpenAIProvider",
     "OpenCodeProvider",
     "ScriptedProvider",
     "SubprocessAgentProvider",
-    "request_to_prompt",
 ]

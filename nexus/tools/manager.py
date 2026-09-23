@@ -650,7 +650,7 @@ class ToolManager:
         """Ordered profile selection intersected with the registered catalog.
 
         Order is the profile's bundle order (then ``include``), so ``schemas()``
-        is deterministic. Bundle tools not yet implemented (``Task``) are simply
+        is deterministic. A declared-but-unregistered bundle tool is simply
         absent, not an error; an explicit ``tool_names`` request for one *is*.
 
         A registered tool that declares a bundle (an external, hot-loaded tool)

@@ -1,0 +1,110 @@
+# Example workspace configuration. Copy to `<workspace>/nexus.toml`.
+#
+# Layered precedence (low to high): built-in defaults, ~/.nexus/config.toml,
+# this file, NEXUS_* environment, CLI flags. Unknown keys are hard errors.
+# Secrets may only be referenced (${env:VAR} / ${keychain:service}), never
+# written here.
+
+config_version = 2
+
+[agent]
+profile = "coding"                 # coding | research | chat | ops
+instructions_file = "SOUL.md"
+memory_file = "MEMORY.md"
+max_iterations = 60
+max_turn_seconds = 1800
+
+[models]
+default = "medium"                 # a tier name, "provider/model", or a bare id
+refresh_ttl_days = 7
+catalogue_url = "https://models.dev/api.json"
+offline = false
+
+[models.tiers]
+high = ["anthropic/claude-opus-5", "openai/gpt-5.6"]
+medium = ["anthropic/claude-sonnet-5"]
+low = ["anthropic/claude-haiku-4-5"]
+
+[model.params]
+temperature = 1.0
+max_output_tokens = 32000
+thinking_budget = 10000
+
+[providers.anthropic]
+api_key = "${env:ANTHROPIC_API_KEY}"
+
+[providers.openai]
+api_key = "${env:OPENAI_API_KEY}"
+api = "responses"                  # responses | chat
+
+# Any OpenAI-compatible vendor is a config block, not a code change.
+[providers.groq]
+kind = "openai_compatible"
+base_url = "https://api.groq.com/openai/v1"
+api_key = "${env:GROQ_API_KEY}"
+
+[providers.ollama]
+base_url = "http://localhost:11434"
+api = "ollama"                     # ollama | openai
+
+[context]
+max_tokens = 180000
+safety_margin_tokens = 4000
+compaction = "hybrid"              # drop_oldest | evict_tool_results | summarize | hybrid
+compact_at_fraction = 0.85
+
+[context.limits]
+memory = 8000
+skills_index = 4000
+environment = 2000
+attachments = 20000
+
+[permissions]
+mode = "ask"                       # default for unmatched: allow | ask | deny
+allow = ["Read(**)", "Glob(**)", "Grep(**)", "LS(**)", "Bash(git status)", "Bash(git diff*)"]
+ask = ["Write(**)", "Edit(**)"]
+deny = ["Bash(rm -rf*)", "Read(**/.env)", "Read(**/credentials*)"]
+write_roots = ["./"]               # hard boundary for any mutating fs tool
+read_denyroots = ["~/.ssh", "~/.nexus/credentials.json"]
+on_unattended = "deny"             # deny | allow | fail_turn
+
+[tools]
+bash_timeout_s = 120
+grep_timeout_s = 5.0
+max_result_tokens = 25000
+max_parallel = 8
+
+[ext]
+enabled = true
+watch_interval_ms = 500            # 0 disables the directory watcher
+dirs = [".nexus/tools", "~/.nexus/tools"]
+quarantine = true
+max_file_bytes = 262144
+
+[agents]
+enabled = true
+default_type = "general"
+max_tier = "medium"                # requested tiers clamp, never widen
+max_concurrent = 4
+max_depth = 3
+max_fanout = 16
+token_budget = 2000000
+cost_budget = 5.0
+seed_roles = true
+
+[hooks]
+enabled = true
+
+[mcp]
+enabled = true
+connect_timeout_s = 20
+restart_max = 5
+
+[session]
+store = "jsonl"
+snapshot_every = 20
+
+[telemetry]
+log_level = "info"
+log_file = ".nexus/logs/nexus.log"
+redact = ["api_key", "token", "authorization", "password", "secret"]
