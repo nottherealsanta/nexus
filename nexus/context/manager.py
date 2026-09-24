@@ -589,6 +589,7 @@ class ContextManager:
         skills_index: Any | None = None,
         skills: Any | None = None,
         mcp_index: Any | None = None,
+        agent_definition: Any | None = None,
     ) -> ContextManager:
         """Return a snapshot manager with config and rendered inputs frozen.
 
@@ -642,6 +643,7 @@ class ContextManager:
         pre_compact: PreCompactGate | None = None,
         turn_id: str | None = None,
         iteration: int | None = None,
+        agent_definition: Any | None = None,
     ) -> ContextManager:
         """Build a sibling snapshot sharing this manager's frozen inputs.
 
@@ -724,6 +726,7 @@ class ContextManager:
         pre_compact: PreCompactGate | None = None,
         turn_id: str | None = None,
         iteration: int | None = None,
+        agent_definition: Any | None = None,
     ) -> ContextManager:
         """Return a sibling snapshot for one loop iteration.
 
@@ -770,6 +773,13 @@ class ContextManager:
             turn_id=turn_id,
             iteration=iteration,
         )
+        if agent_definition is not None:
+            # _spawn keeps a shared frozen environment when config is supplied;
+            # iteration snapshots must own a copy before extending instructions.
+            if snapshot._env is not None:
+                snapshot._env = replace(snapshot._env)
+            else:
+                snapshot._env = snapshot._build_env(config or snapshot.effective_config())
         if config is not None and (
             system_files is not None
             or soul_text is not None
@@ -792,6 +802,8 @@ class ContextManager:
             )
         elif config is not None:
             snapshot._env = snapshot._build_env(config)
+        if agent_definition is not None:
+            snapshot.append_agent_prompt(agent_definition.load_body())
         return snapshot
 
     def freeze_skills(self, snapshot: Any) -> None:
@@ -916,6 +928,16 @@ class ContextManager:
             keep_recent=self.keep_recent,
             min_content_chars=self.min_content_chars,
         )
+
+    def append_agent_prompt(self, prompt: str) -> None:
+        """Compose a selected agent prompt after configured instructions."""
+        if not isinstance(prompt, str) or not prompt:
+            return
+        env = self._env
+        if env is None:
+            raise ConfigError("agent prompt requires a frozen context snapshot")
+        combined = "\n\n--- Selected agent instructions ---\n" + prompt
+        self._env = replace(env, soul_text=env.soul_text + combined)
 
     @staticmethod
     def _profile(config: Config) -> str | None:

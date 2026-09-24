@@ -35,6 +35,7 @@ import contextlib
 import hashlib
 import inspect
 import re
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -74,6 +75,7 @@ from .model.registry import (
 from .model.request import ModelRequest, ToolSchema
 from .model.router import ModelRouter
 from .model.selection import ModelSelection
+from .session.agent_selection import AgentSelection
 from .model.tiers import DEFAULT_TIER, TierTable
 from .session import Session, SessionManager
 from .tools.builtin._jobs import JobRegistry
@@ -98,9 +100,7 @@ __all__ = ["Runtime", "ToolTurn"]
 
 #: Provider section names that name a shipped adapter directly. ``codex`` is
 #: here so a Codex model reference (``codex/gpt-5-codex``) routes to the OpenAI
-#: adapter's Responses dialect; a legacy ``[providers.codex]`` section that only
-#: carries an ``executable`` is *not* a model provider and is skipped (see
-#: :meth:`Runtime._is_legacy_codex_section`).
+#: adapter's Responses dialect.
 _CORE_ADAPTERS: dict[str, str] = {
     "anthropic": ADAPTER_ANTHROPIC,
     "openai": ADAPTER_OPENAI,
@@ -356,10 +356,12 @@ class _ContextCoordinator:
         resolver: Any,
         *,
         token_cache: TokenCountCache | None = None,
+        agents: Any | None = None,
     ) -> None:
         self._context = context
         self._resolver = resolver
         self._token_cache = token_cache
+        self._agents = agents
         #: Marker read by :meth:`Session._assemble_for_turn`: this coordinator
         #: accepts a ``session`` so it can freeze that session's model override.
         self.session_aware = True
@@ -393,6 +395,7 @@ class _ContextCoordinator:
         *,
         session: Any | None = None,
         model_selection: ModelSelection | None = None,
+        agent_definition: Any | None = None,
     ) -> Any:
         """Freeze one turn's assembler, honoring a session model override.
 
@@ -407,6 +410,27 @@ class _ContextCoordinator:
         if not callable(for_turn):
             return manager
         config = self.effective_config()
+        selection = getattr(session, "agent_selection", None) if session is not None else None
+        configured_name = getattr(
+            getattr(getattr(config, "v2", None), "agent", None), "name", "general"
+        )
+        if self._agents is not None:
+            self._agents.refresh()
+        if agent_definition is None and self._agents is not None:
+            name = getattr(selection, "name", None)
+            if name is None:
+                name = configured_name
+            try:
+                agent_definition = self._agents.resolve(name, context="root")
+            except Exception as exc:
+                raise ConfigError(f"cannot prepare root agent {name!r}: {exc}") from exc
+        if selection is not None and self._agents is not None:
+            try:
+                self._agents.resolve(selection.name, context="root")
+            except Exception as exc:
+                raise ConfigError(
+                    f"cannot prepare selected root agent {selection.name!r}: {exc}"
+                ) from exc
         provider_name: str | None = None
         model: str | None = None
         capabilities = None
@@ -452,12 +476,30 @@ class _ContextCoordinator:
                         cache=self._token_cache,
                         provider_name=provider_name,
                     )
-        return for_turn(
+        assembler = for_turn(
             capabilities=capabilities,
             request_counter=request_counter,
             model=model,
             provider=provider_name,
         )
+        if agent_definition is not None:
+            append_prompt = getattr(assembler, "append_agent_prompt", None)
+            if callable(append_prompt):
+                append_prompt(agent_definition.load_body())
+            assembler.agent_definition = agent_definition
+            assembler.agent_selection_source = (
+                "session" if getattr(session, "agent_selection", None) is not None else
+                "config" if self._agents.get(configured_name) is not None else
+                "default"
+            )
+            assembler.agent_selection_source = (
+                "session" if getattr(session, "agent_selection", None) is not None else
+                "config" if self._agents.get(configured_name) is not None else
+                "default"
+            )
+            if session is not None:
+                session._turn_agent_definition = agent_definition
+        return assembler
 
     def assemble(self, session: Any) -> Any:
         for_turn = getattr(self._context, "for_turn", None)
@@ -476,6 +518,7 @@ class _ContextCoordinator:
         turn_id: str | None = None,
         iteration: int = 0,
         model_selection: ModelSelection | None = None,
+        agent_definition: Any | None = None,
     ) -> Any:
         """Build one iteration's assembler from a pinned manifest generation.
 
@@ -541,7 +584,7 @@ class _ContextCoordinator:
                         cache=self._token_cache,
                         provider_name=provider_name,
                     )
-        return for_iteration(
+        assembler = for_iteration(
             config=config,
             system_files=system_files,
             skills_index=skills_index,
@@ -553,7 +596,9 @@ class _ContextCoordinator:
             pre_compact=pre_compact,
             turn_id=turn_id,
             iteration=iteration,
+            agent_definition=agent_definition,
         )
+        return assembler
 
 
 @dataclass(frozen=True)
@@ -596,6 +641,7 @@ class _ManifestEnvironmentFactory:
         permissions: Any | None = None,
         budget: Any | None = None,
         model_selection: ModelSelection | None = None,
+        agent_definition: Any | None = None,
     ) -> None:
         self._runtime = runtime
         self._session = session
@@ -604,6 +650,7 @@ class _ManifestEnvironmentFactory:
         #: configured default). Reused for every iteration and never re-read, so
         #: a selection made mid-turn cannot change the running turn.
         self._model_selection = model_selection
+        self._agent_definition = agent_definition
         #: The turn-scoped gate (engine + grants + attended + broker). Reused for
         #: every iteration, so a reload cannot detach a pending approval.
         self._gate = gate
@@ -661,6 +708,7 @@ class _ManifestEnvironmentFactory:
             turn_id=self._turn_id,
             iteration=iteration,
             model_selection=self._model_selection,
+            agent_definition=self._agent_definition,
         )
         activation = self._activation_for(session)
         skill_tools = self._skill_tools_for(manifest, activation)
@@ -671,7 +719,13 @@ class _ManifestEnvironmentFactory:
         )
         restrict = self._restrict_for(activation, skill_tools)
         runner = self._subagent_runner(
-            runtime, config, base_catalog, session_id, restrict, hooks_service
+            runtime,
+            config,
+            base_catalog,
+            session_id,
+            restrict,
+            hooks_service,
+            agent_definition=self._agent_definition,
         )
         catalog = base_catalog
         if runner is not None:
@@ -684,6 +738,36 @@ class _ManifestEnvironmentFactory:
             restrict=restrict,
             catalog=catalog,
             path_guard=self._path_guard,
+        )
+        if self._agent_definition is not None:
+            from .tools.bundles import BUNDLES, profile_tools
+
+            manager_names = manager.names
+            profile = (
+                profile_tools(self._agent_definition.profile)
+                if self._agent_definition.profile
+                else manager_names
+            )
+            selected = runtime._agents.select_tools(
+                self._agent_definition,
+                available=manager_names,
+                profile=profile,
+                bundle_map={name: bundle.tools for name, bundle in BUNDLES.items()},
+                mutating=tuple(
+                    spec.name
+                    for spec in manager.specs
+                    if getattr(spec, "mutates", False)
+                ),
+            )
+            manager = runtime._build_iteration_manager(
+                config,
+                manifest,
+                restrict=tuple(name for name in manager_names if name in selected.selected),
+                catalog=catalog,
+                path_guard=self._path_guard,
+            )
+        manager._agent_selection_source = getattr(
+            self._session, "_turn_agent_selection_source", "default"
         )
         # Freeze this iteration's schemas into the iteration's context snapshot
         # so the model request advertises exactly the catalog the dispatcher can
@@ -718,6 +802,7 @@ class _ManifestEnvironmentFactory:
         session_id: str,
         restrict: tuple[str, ...] | None,
         hooks: Any | None = None,
+        agent_definition: Any | None = None,
     ) -> Any | None:
         if runtime._agents is None:
             return None
@@ -735,6 +820,28 @@ class _ManifestEnvironmentFactory:
             path_guard=self._path_guard,
         )
         parent_tools = list(provisional.names)
+        if agent_definition is not None:
+            from .tools.bundles import BUNDLES, profile_tools
+
+            root_profile = (
+                profile_tools(agent_definition.profile)
+                if agent_definition.profile
+                else provisional.names
+            )
+            root_selection = runtime._agents.select_tools(
+                agent_definition,
+                available=provisional.names,
+                profile=root_profile,
+                bundle_map={name: bundle.tools for name, bundle in BUNDLES.items()},
+                mutating=tuple(
+                    spec.name
+                    for spec in provisional.specs
+                    if getattr(spec, "mutates", False)
+                ),
+            )
+            parent_tools = [
+                name for name in parent_tools if name in root_selection.selected
+            ]
         authority = _ChildAuthority(
             engine=self._gate.engine, path_guard=self._path_guard
         )
@@ -747,6 +854,7 @@ class _ManifestEnvironmentFactory:
             session_id=session_id,
             parent_tools=parent_tools,
             parent_tier=parent_tier,
+            root_turn_id=self._turn_id,
             permissions=authority,
             grants=tuple(getattr(self._gate, "_grants", ())),
             config=config,
@@ -1063,6 +1171,8 @@ class _ChildSessionFacade:
     def __init__(self, directory: Path) -> None:
         self._directory = Path(directory)
         self._manager = SessionManager(self._directory)
+        self._allocation_lock = threading.Lock()
+        self._allocated: dict[str, int] = {}
 
     @property
     def manager(self) -> SessionManager:
@@ -1070,6 +1180,18 @@ class _ChildSessionFacade:
 
     def child_id(self, parent_id: str, index: int) -> str:
         return f"{parent_id}/sub/{int(index)}"
+
+    def allocate_child_id(self, parent_id: str) -> tuple[int, str]:
+        # Tree-local, parent-session scoped monotonic allocation prevents
+        # concurrent Task calls in separate iterations/runners colliding.
+        with self._allocation_lock:
+            index = self._allocated.get(parent_id, 0) + 1
+            while self._manager.store.exists(
+                _child_session_id(self.child_id(parent_id, index))
+            ):
+                index += 1
+            self._allocated[parent_id] = index
+            return index, self.child_id(parent_id, index)
 
     async def aclose(self, session_id: str) -> None:
         with contextlib.suppress(Exception):
@@ -1181,6 +1303,7 @@ class _ChildRuntime:
                 lease=lease,
                 persist_user_message=True,
                 hooks=spec.hooks,
+                relay_transcript=True,
             )
         finally:
             with contextlib.suppress(Exception):
@@ -1235,6 +1358,7 @@ class Runtime:
         owns_agents: bool | None = None,
         hooks: Any | None = None,
         owns_hooks: bool | None = None,
+        codex_auth_factory: Callable[..., Any] | None = None,
     ) -> None:
         self.workspace = Path(workspace).resolve()
         self._home = Path(home) if home is not None else None
@@ -1249,6 +1373,7 @@ class Runtime:
         self._owns_shared_client = False
         self._mcp_client_factory = mcp_client_factory
         self._closed = False
+        self._codex_auth_factory = codex_auth_factory
 
         # Tool infrastructure. A caller may inject a ready ToolManager, a
         # PermissionEngine, or a full per-turn factory; otherwise the runtime
@@ -1369,6 +1494,7 @@ class Runtime:
         # world together. Agent construction seeds the workspace roles once (if
         # enabled); hook construction is inert until the first rebuild.
         self._agents = self._build_agent_manager(initial, agents, owns_agents)
+        self._assembler._agents = self._agents
         self._hooks = self._build_hook_manager(initial, hooks, owns_hooks)
         self._child_sessions: _ChildSessionFacade | None = None
 
@@ -1693,6 +1819,37 @@ class Runtime:
         handle.select_model(selection)
         return selection
 
+    def select_session_agent(
+        self, session_id: str, name: str | None, *, create: bool = True
+    ) -> tuple[str, str]:
+        """Validate and persist a root-agent selection for its next turn."""
+        if name is not None:
+            if self._agents is None:
+                raise ConfigError("agent definitions are disabled")
+            self._agents.refresh()
+            definition = self._agents.resolve(name, context="root")
+        else:
+            definition = None
+        handle = self._sessions.open(session_id, create=create, recover=True)
+        if name is None:
+            handle.reset_agent()
+            return self.effective_session_agent(handle)
+        handle.select_agent(AgentSelection(name=definition.name))
+        return definition.name, "session"
+
+    def effective_session_agent(self, handle: Session) -> tuple[str, str]:
+        selection = getattr(handle, "agent_selection", None)
+        if selection is not None:
+            return selection.name or "general", "session"
+        config = self._load_config()
+        name = getattr(getattr(getattr(config, "v2", None), "agent", None), "name", "general")
+        if self._agents is not None:
+            try:
+                name = self._agents.resolve(name, context="root").name
+            except Exception:
+                pass
+        return str(name or "general"), "config"
+
     def _validate_model_selection(self, reference: str) -> ModelSelection:
         """Resolve and validate one model/tier reference, or raise ``ConfigError``.
 
@@ -1856,6 +2013,7 @@ class Runtime:
         # both environment paths. The running turn therefore cannot observe a
         # selection made after this point.
         model_selection = getattr(session, "model_selection", None)
+        agent_definition = getattr(session, "_turn_agent_definition", None)
         parent_tier = (
             model_selection.tier if model_selection is not None else None
         )
@@ -1869,6 +2027,42 @@ class Runtime:
             )
             if self._owns_tools:
                 self._owned_tools = [manager]
+        if agent_definition is not None:
+            from .tools.bundles import BUNDLES, profile_tools
+
+            profile = (
+                profile_tools(agent_definition.profile)
+                if agent_definition.profile
+                else manager.names
+            )
+            selected = self._agents.select_tools(
+                agent_definition,
+                available=manager.names,
+                profile=profile,
+                bundle_map={name: bundle.tools for name, bundle in BUNDLES.items()},
+                mutating=tuple(
+                    spec.name for spec in manager.specs if getattr(spec, "mutates", False)
+                ),
+            )
+            manager = (
+                ToolManager(
+                    config,
+                    workspace=self.workspace,
+                    tools=manager.tools,
+                    restrict=tuple(name for name in manager.names if name in selected.selected),
+                    job_registry=self._job_registry,
+                    todo_store=self._todo_store,
+                    path_guard=manager.path_guard,
+                )
+                if self._extensions is None
+                else self._build_iteration_manager(
+                    config,
+                    self.manifest,
+                    catalog=manager.tools,
+                    restrict=tuple(name for name in manager.names if name in selected.selected),
+                    path_guard=manager.path_guard,
+                )
+            )
         engine = self._permissions
         if engine is None:
             permissions = getattr(getattr(config, "v2", None), "permissions", None)
@@ -1897,6 +2091,7 @@ class Runtime:
                 session_id=session.id,
                 parent_tools=manager.names,
                 parent_tier=parent_tier,
+                root_turn_id=turn_id,
                 permissions=authority,
                 grants=grants,
                 config=config,
@@ -1933,6 +2128,7 @@ class Runtime:
                 permissions=getattr(getattr(config, "v2", None), "permissions", None),
                 budget=self._new_subagent_budget(config),
                 model_selection=model_selection,
+                agent_definition=agent_definition,
             )
         return ToolTurn(
             manager=manager,
@@ -2018,6 +2214,7 @@ class Runtime:
             return None
         sections = getattr(v2, "providers", None) or {}
         providers_cfg = {name: section for name, section in sections.items()}
+        provider_aliases = {"codex": "openai"} if (codex := sections.get("codex")) and not self._is_legacy_codex_section(codex) else {}
         cache_path = self.workspace / ".nexus" / "cache" / "models.dev.json"
         return ModelRegistry(
             providers=providers_cfg,
@@ -2027,6 +2224,7 @@ class Runtime:
             ttl_days=models.refresh_ttl_days,
             offline=models.offline,
             tier_table=self._tiers,
+            provider_aliases=provider_aliases,
         )
 
     def _provider_transport_kwargs(self) -> dict[str, Any]:
@@ -2058,7 +2256,7 @@ class Runtime:
         """
         if section is None:
             return False
-        return bool(getattr(section, "executable", None)) and not getattr(
+        return bool(getattr(section, "executable", None)) and not getattr(section, "auth", None) and not getattr(
             section, "base_url", None
         )
 
@@ -2107,6 +2305,7 @@ class Runtime:
         api_key = getattr(section, "api_key", None)
         base_url = getattr(section, "base_url", None) or None
         api = getattr(section, "api", None)
+        auth = getattr(section, "auth", None)
         if kind == OPENAI_COMPATIBLE and not base_url:
             raise ConfigError(
                 f"providers.{name}: kind 'openai_compatible' requires a base_url "
@@ -2133,6 +2332,13 @@ class Runtime:
         if kind in (ADAPTER_OPENAI, OPENAI_COMPATIBLE):
             if not api:
                 api = "chat" if kind == OPENAI_COMPATIBLE else "responses"
+            if auth == "chatgpt_oauth":
+                if name != "codex": raise ConfigError("chatgpt_oauth is supported only by providers.codex")
+                from .auth.codex import CODEX_BASE_URL, ChatGPTOAuthHeaders, CodexOAuthManager
+                factory = self._codex_auth_factory or CodexOAuthManager
+                manager = factory(profile=getattr(section, "profile", None) or "default")
+                # The private endpoint requires transient Responses without an output limit.
+                kwargs.update(base_url=CODEX_BASE_URL, api_key=None, auth_headers=ChatGPTOAuthHeaders(manager), default_max_tokens=None)
             provider = OpenAIProvider(api=api, **kwargs)
             # The adapter class is ``openai`` for every OpenAI-compatible wire,
             # but the router key is the configured vendor id. Relabel so the
@@ -2568,12 +2774,15 @@ class Runtime:
         parent_tools: Sequence[str],
         parent_depth: int = 0,
         parent_session: str | None = None,
+        parent_agent_id: str | None = None,
         parent_tier: str | None = None,
+        root_turn_id: str = "",
         budget: Any | None = None,
         permissions: Any | None = None,
         grants: Sequence[Any] = (),
         config: Config | None = None,
         catalog: Sequence[Any] | None = None,
+        profile_for: Callable[[str], Any] | None = None,
         event_sink: Any | None = None,
         hooks: Any | None = None,
     ) -> Any | None:
@@ -2590,6 +2799,8 @@ class Runtime:
         section = self._agents_section(effective)
         if section is None or not getattr(section, "enabled", True):
             return None
+        from .tools.bundles import profile_tools
+
         max_tier = str(getattr(section, "max_tier", "medium"))
         if self._tiers.rank(max_tier) is None:
             max_tier = self._tiers.default
@@ -2599,6 +2810,8 @@ class Runtime:
                 runtime_factory=self._build_child_runtime,
                 workspace=self.workspace,
                 parent_session=parent_session or session_id,
+                parent_agent_id=parent_agent_id,
+                root_turn_id=root_turn_id,
                 tiers=self._tiers,
                 sessions=self._ensure_child_sessions(),
                 parent_tools=tuple(parent_tools or ()),
@@ -2614,6 +2827,7 @@ class Runtime:
                 token_budget=getattr(section, "token_budget", None),
                 cost_budget=getattr(section, "cost_budget", None),
                 default_type=str(getattr(section, "default_type", "general")),
+                profile_for=profile_for or profile_tools,
                 config=effective,
                 event_sink=event_sink,
                 bundle_map=self._bundle_map(catalog),
@@ -2631,7 +2845,10 @@ class Runtime:
             parent_tools=spec.tools,
             parent_depth=spec.depth,
             parent_session=spec.session_id,
+            parent_agent_id=spec.agent_id,
             parent_tier=spec.tier,
+            root_turn_id=spec.root_turn_id,
+            event_sink=spec.emit,
             budget=spec.budget,
             permissions=spec.permissions,
             grants=spec.grants,

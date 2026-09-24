@@ -56,6 +56,7 @@ from ..model.message import (
     ToolUse,
 )
 from ..model.selection import ModelSelection
+from .agent_selection import AgentSelection
 from ..util import new_id
 from . import snapshot as snapshot_mod
 from .ids import validate_session_id
@@ -108,6 +109,7 @@ _QUEUED_BYTES_TAG = "__nexus_bytes__"
 #: monotonic ``seq``, so a late subscriber and a reopened handle both rebuild the
 #: same selection from the log.
 _MODEL_SELECTED_EVENT = "model.selected"
+_AGENT_SELECTED_EVENT = "agent.selected"
 
 
 def _decode_queued_content(raw: object) -> list[ContentBlock] | None:
@@ -449,11 +451,14 @@ class Session:
         #: on open and refreshed as the event is observed, so a mid-turn selection
         #: is visible to the *next* turn without reading the whole log again.
         self._model_selection: ModelSelection | None = None
+        self._agent_selection: AgentSelection | None = None
+        self._turn_agent_definition: Any | None = None
         # A crash can leave a submission durable as ``input.queued`` but absent
         # from memory; rebuilding the FIFO here means a reopened handle resumes
         # exactly where the previous process stopped.
         self._rehydrate_queue()
         self._rehydrate_model_selection()
+        self._rehydrate_agent_selection()
 
     # -- wiring ------------------------------------------------------------
 
@@ -627,6 +632,13 @@ class Session:
             parsed = ModelSelection.from_dict(event.data)
             if parsed is not None:
                 self._model_selection = parsed
+        elif event.type == _AGENT_SELECTED_EVENT:
+            if isinstance(event.data, Mapping) and event.data.get("name") is None:
+                self._agent_selection = None
+                return
+            parsed = AgentSelection.from_dict(event.data)
+            if parsed is not None:
+                self._agent_selection = parsed
         elif event.type in TERMINAL_EVENTS:
             # A terminal turn can never resolve another approval; leaving stale
             # ids behind would let a later viewer-drop "resolve" a dead request.
@@ -685,6 +697,33 @@ class Session:
             if parsed is not None:
                 latest = parsed
         self._model_selection = latest
+
+    @property
+    def agent_selection(self) -> AgentSelection | None:
+        """The durable root-agent override, or ``None`` for config/default."""
+        return self._agent_selection
+
+    def select_agent(self, selection: AgentSelection) -> EventRecord | None:
+        """Persist a root-agent choice for the next turn only."""
+        self._ensure_writable()
+        return self._emit(_AGENT_SELECTED_EVENT, selection.to_dict())
+
+    def reset_agent(self) -> EventRecord | None:
+        """Clear the session override and return to config/default resolution."""
+        self._ensure_writable()
+        return self._emit(_AGENT_SELECTED_EVENT, {"name": None})
+
+    def _rehydrate_agent_selection(self) -> None:
+        latest: AgentSelection | None = None
+        for event in self.read().events():
+            if event.type == _AGENT_SELECTED_EVENT:
+                if isinstance(event.data, Mapping) and event.data.get("name") is None:
+                    latest = None
+                else:
+                    parsed = AgentSelection.from_dict(event.data)
+                    if parsed is not None:
+                        latest = parsed
+        self._agent_selection = latest
 
     # -- identity ----------------------------------------------------------
 
@@ -1549,13 +1588,36 @@ class Session:
         self._turn_unattended = self._live_unattended_policy()
         try:
             self._turn_is_new = not self.read().records
+            self._turn_agent_definition = None
+            self._turn_agent_selection_source = None
             assembler = self._assemble_for_turn()
             # An explicit per-turn ``limits`` argument wins over the config
             # snapshot; only derive from the snapshot when the caller passed none.
             if limits is None:
                 lease.limits = self._limits_for_turn(assembler)
             tool_turn = self._tool_turn_for(assembler, lease, attended)
+            agent = getattr(assembler, "agent_definition", None)
+            if agent is not None:
+                manager = getattr(tool_turn, "manager", None)
+                self._turn_agent_selection_source = getattr(
+                    assembler, "agent_selection_source", "default"
+                )
+                self._turn_agent_metadata = {
+                    "name": agent.name,
+                    "source": getattr(
+                        getattr(assembler, "agent_selection_source", None),
+                        "value",
+                        getattr(assembler, "agent_selection_source", "default"),
+                    ),
+                    "fingerprint": agent.fingerprint(),
+                    "read_only": bool(agent.read_only),
+                    "profile": agent.profile or getattr(manager, "profile", None),
+                    "tools": list(getattr(manager, "names", ())),
+                }
+            else:
+                self._turn_agent_metadata = {}
         except BaseException:
+            self._turn_agent_definition = None
             self._turn_unattended = None
             lease.release()
             raise
@@ -1581,6 +1643,7 @@ class Session:
             # From here the log may be partially written; still release ownership
             # so the session is not wedged by a failed preparation.
             self._active_tools = None
+            self._turn_agent_definition = None
             self._turn_unattended = None
             lease.release()
             raise
@@ -1626,6 +1689,7 @@ class Session:
             return
         self._turn_task = None
         self._active_tools = None
+        self._turn_agent_definition = None
         # Defensive lease release. ``run_turn`` releases in its own ``finally``
         # on every normal path, but a task cancelled before it first runs (for
         # example during loop shutdown) never reaches that block. Releasing here

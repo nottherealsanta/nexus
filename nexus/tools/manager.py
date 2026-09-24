@@ -1403,6 +1403,7 @@ class ToolManager:
             display=display,
             metrics=self._safe_metrics(merged_metrics),
             context_note=context_note,
+            diff=result.diff,
         )
 
     @staticmethod

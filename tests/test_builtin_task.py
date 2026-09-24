@@ -60,10 +60,11 @@ class FakeService:
     def resolve_tier(self, request: object) -> str:
         return self._key.partition(":")[2] or "medium"
 
-    async def spawn(self, request, /, *, cancel=None, emit=None):
+    async def spawn(self, request, /, *, cancel=None, emit=None, call_id=""):
         self.requests.append(dict(request))
         self.cancel = cancel
         self.emit = emit
+        self.call_id = call_id
         if self._error is not None:
             raise self._error
         return self._outcome
@@ -136,6 +137,7 @@ def test_static_permission_key(data, expected):
 
 def test_bound_spec_uses_the_service_permission_key():
     service = FakeService(outcome(), key="explore:low")
+    service.default_type = "explore"
     spec = task.make_task_spec(service)
     assert spec.resolve_permission_key({"prompt": "x"}) == "explore:low"
 
@@ -170,7 +172,7 @@ async def test_run_passes_the_request_and_context_seams(tmp_path):
     def sink(event_type, data):
         emitted.append((event_type, data))
 
-    ctx = make_ctx(tmp_path, subagents=service, cancel_token=token, emit=sink)
+    ctx = make_ctx(tmp_path, subagents=service, cancel_token=token, emit=sink, call_id="task-call-7")
     await task.run(
         {
             "prompt": "search the repo",
@@ -191,6 +193,18 @@ async def test_run_passes_the_request_and_context_seams(tmp_path):
     }
     assert service.cancel is token
     assert service.emit is sink
+    assert service.call_id == "task-call-7"
+
+
+async def test_bound_service_default_type_applies_to_spawn(tmp_path):
+    service = FakeService(outcome(), key="explore:low")
+    service.default_type = "explore"
+    ctx = make_ctx(tmp_path, subagents=service)
+
+    result = await task.run({"prompt": "search the repo"}, ctx)
+
+    assert result.is_error is False
+    assert service.requests[-1]["subagent_type"] == "explore"
 
 
 async def test_run_converts_the_outcome_with_notes_and_metrics(tmp_path):

@@ -736,6 +736,7 @@ def _fallback_capabilities(model: str) -> Capabilities:
         json_schema_strict=False,
         max_context_tokens=0,
         max_output_tokens=0,
+        default_max_output_tokens=DEFAULT_MAX_TOKENS or 0,
         degradation={
             "thinking": "drop",
             "vision": "to_text",

@@ -148,9 +148,9 @@ active. Precedence is workspace > user > builtin.
 ## A custom agent
 
 `.nexus/agents/<name>.md`. The frontmatter grammar is deliberately restricted
-(no YAML library): the seven keys are `name`, `description`, `bundles`, `tools`,
-`model`, `max_iterations`, `context_tokens`. A `tools` item may carry a leading
-`-` to exclude.
+(no YAML library): the keys are `name`, `description`, `bundles`, `tools`,
+`model`, `max_iterations`, `context_tokens`, `contexts`, and `profile`. A
+`tools` item may carry a leading `-` to exclude.
 
 ```markdown
 ---
@@ -171,8 +171,9 @@ The parent spawns it with `Task(subagent_type="security-reviewer", prompt="...")
 or as an ad-hoc agent with an explicit `tools=` list. A child can never exceed
 its parent: tools intersect, permissions inherit, `deny` stays absolute, the
 tier is clamped by `agents.max_tier`, and depth/fan-out are bounded. The
-`explore` and `planner` roles are structurally read-only; naming one of those
-names makes a definition read-only regardless of what it declares.
+`explore` and `plan` roles are structurally read-only; naming one of those names
+makes a definition read-only regardless of what it declares. The legacy
+`planner` name remains structurally read-only for compatibility.
 
 ## A custom hook
 

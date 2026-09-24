@@ -42,7 +42,8 @@ import asyncio
 import contextlib
 import inspect
 import math
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+import threading
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol
@@ -50,9 +51,10 @@ from typing import Any, Protocol
 from ..errors import ConfigError, NexusError, OperationCancelled
 from ..events import Event
 from ..model.tiers import DEFAULT_TIER, TierResolution, TierTable
-from ..util import new_id
+from ..util import new_id, redact_secrets
 from .manager import AgentManager, AgentToolSelection
 from .model import (
+    AgentNotFoundError,
     MODEL_INHERIT,
     MUTATING_FS_TOOLS,
 )
@@ -589,6 +591,10 @@ class ChildSpec:
     #: PreToolUse block). ``None`` disables child hooks.
     hooks: object | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    agent_id: str = ""
+    parent_agent_id: str | None = None
+    parent_call_id: str = ""
+    root_turn_id: str = ""
 
 
 class ChildRuntime(Protocol):
@@ -612,6 +618,8 @@ class SessionFacade(Protocol):
 
     def child_id(self, parent_id: str, index: int) -> str: ...
 
+    def allocate_child_id(self, parent_id: str) -> tuple[int, str]: ...
+
     async def aclose(self, session_id: str) -> None: ...
 
 
@@ -622,9 +630,17 @@ class DefaultSessionFacade:
         if not isinstance(segment, str) or not segment:
             raise SubagentError("child session segment must be a non-empty string")
         self._segment = segment
+        self._indices: dict[str, int] = {}
+        self._index_lock = threading.Lock()
 
     def child_id(self, parent_id: str, index: int) -> str:
         return f"{parent_id}/{self._segment}/{int(index)}"
+
+    def allocate_child_id(self, parent_id: str) -> tuple[int, str]:
+        with self._index_lock:
+            index = self._indices.get(parent_id, 0) + 1
+            self._indices[parent_id] = index
+        return index, self.child_id(parent_id, index)
 
     async def aclose(self, session_id: str) -> None:
         return None
@@ -677,6 +693,7 @@ class _ChildRelay:
     ) -> None:
         self._sink = sink
         self._meta = dict(meta)
+        self._meta["id"] = self._meta.get("agent_id", self._meta.get("id"))
         self._session = session
 
     @property
@@ -687,7 +704,34 @@ class _ChildRelay:
         self, event_type: str, data: dict[str, Any] | None = None
     ) -> None:
         payload = dict(data or {})
-        payload["agent"] = dict(self._meta)
+        for key in ("error", "text"):
+            value = payload.get(key)
+            if isinstance(value, str):
+                payload[key] = redact_secrets(value)[:4000]
+        result = payload.get("result")
+        if isinstance(result, Mapping):
+            safe_result = dict(result)
+            content = safe_result.get("content")
+            if isinstance(content, list):
+                safe_result["content"] = [
+                    {**dict(item), "text": redact_secrets(item["text"])[:100_000]}
+                    if isinstance(item, Mapping) and isinstance(item.get("text"), str)
+                    else item
+                    for item in content[:256]
+                ]
+            payload["result"] = safe_result
+        # A descendant event arrives already tagged by its own relay. Preserve
+        # that identity; only direct child events receive this relay's metadata.
+        nested = payload.get("agent")
+        if isinstance(nested, Mapping):
+            inner = dict(nested)
+            if event_type == AGENT_SPAWNED:
+                inner.setdefault("parent_agent_id", self._meta.get("id"))
+                inner.setdefault("parent_session", self._meta.get("session"))
+                inner.setdefault("root_turn_id", self._meta.get("root_turn_id"))
+            payload["agent"] = inner
+        else:
+            payload["agent"] = dict(self._meta)
         await _forward(self._sink, event_type, payload, session=self._session)
 
 
@@ -706,6 +750,8 @@ class SubagentRunner:
         runtime_factory: RuntimeFactory,
         workspace: str | Path,
         parent_session: str,
+        parent_agent_id: str | None = None,
+        root_turn_id: str = "",
         tiers: TierTable | None = None,
         sessions: SessionFacade | None = None,
         parent_tools: Sequence[str] = (),
@@ -721,6 +767,7 @@ class SubagentRunner:
         token_budget: int | None = None,
         cost_budget: float | None = None,
         default_type: str = DEFAULT_CHILD_TYPE,
+        profile_for: Callable[[str], Iterable[str]] | None = None,
         config: object | None = None,
         event_sink: object | None = None,
         bundle_map: Mapping[str, Sequence[str]] | None = None,
@@ -752,6 +799,8 @@ class SubagentRunner:
         self._factory = runtime_factory
         self._workspace = Path(workspace)
         self._parent_session = parent_session
+        self._parent_agent_id = parent_agent_id
+        self._root_turn_id = root_turn_id
         self._parent_tools = frozenset(
             str(name) for name in parent_tools if isinstance(name, str)
         )
@@ -780,11 +829,15 @@ class SubagentRunner:
             str(name) for name in mutating_tools
         ) | MUTATING_FS_TOOLS
         self._default_type = default_type
+        self._profile_for = profile_for
         self._reserved_tokens = int(reserved_tokens)
         self._reserved_cost = float(reserved_cost)
         #: The parent iteration's pinned hook runner (opaque), forwarded to every
         #: child so a subagent enforces the same lifecycle policy.
         self._hooks = hooks
+
+        self._counter_lock = asyncio.Lock()
+        self._counter = 0
 
         #: A shared tree budget passed to children; the root creates it.
         self._budget = (
@@ -798,8 +851,6 @@ class SubagentRunner:
                 cost_budget=cost_budget,
             )
         )
-        self._counter_lock = asyncio.Lock()
-        self._counter = 0
 
     # -- introspection -----------------------------------------------------
 
@@ -838,7 +889,10 @@ class SubagentRunner:
         req = TaskRequest.from_value(request)
         if req.model:
             return req.model
-        role = self._agents.get(req.subagent_type)
+        try:
+            role = self._agents.resolve(req.subagent_type, context="subagent")
+        except AgentNotFoundError:
+            role = None
         if role is not None and role.model:
             return role.model
         return None
@@ -874,9 +928,15 @@ class SubagentRunner:
     ) -> AgentToolSelection:
         """``parent_tools & role_tools & requested_tools`` (never a grant)."""
         req = TaskRequest.from_value(request)
+        profile = (
+            self._profile_for(role.profile)
+            if role.profile and self._profile_for is not None
+            else None
+        )
         selection = self._agents.select_tools(
             role,
             available=self._parent_tools,
+            profile=profile,
             bundle_map=self._bundle_map_or_default(),
             mutating=self._mutating_tools,
         )
@@ -908,9 +968,17 @@ class SubagentRunner:
     # -- child session -----------------------------------------------------
 
     async def _next_child_id(self) -> tuple[int, str]:
+        allocator = getattr(self._sessions, "allocate_child_id", None)
+        if callable(allocator):
+            allocated = allocator(self._parent_session)
+            if inspect.isawaitable(allocated):
+                return await allocated
+            return allocated
         async with self._counter_lock:
             self._counter += 1
             index = self._counter
+        # Indices are scoped by the session facade as before. The shared tree
+        # budget is shared independently of identity allocation.
         return index, self._sessions.child_id(self._parent_session, index)
 
     # -- spawn -------------------------------------------------------------
@@ -921,6 +989,7 @@ class SubagentRunner:
         *,
         cancel: object | None = None,
         emit: object | None = None,
+        call_id: str = "",
     ) -> SubagentOutcome:
         """Spawn one child, bounded and authority-intersected.
 
@@ -939,7 +1008,10 @@ class SubagentRunner:
         if _is_cancelled(cancel):
             raise OperationCancelled(_cancel_reason(cancel) or "cancelled")
 
-        role = self._agents.get(req.subagent_type)
+        try:
+            role = self._agents.resolve(req.subagent_type, context="subagent")
+        except AgentNotFoundError:
+            role = None
         if role is None:
             available = ", ".join(self._agents.names) or "(none)"
             return self._refusal(
@@ -973,12 +1045,20 @@ class SubagentRunner:
         sink = emit if emit is not None else self._event_sink
         index, session_id = await self._next_child_id()
         task_id = new_id()
+        # Session ids are stable identities inside a parent log and globally
+        # unique within the persistent session facade's allocation scope.
+        agent_id = session_id
         meta = {
-            "id": session_id,
-            "parent": self._parent_session,
+            "id": agent_id,
+            "parent": self._parent_agent_id or self._parent_session,
+            "parent_session": self._parent_session,
+            "parent_agent_id": self._parent_agent_id,
+            "parent_call_id": call_id if isinstance(call_id, str) else "",
+            "root_turn_id": self._root_turn_id,
             "depth": depth,
             "type": role.name,
             "task": task_id,
+            "agent_id": agent_id,
             "tier": tier,
             "index": index,
             "session": session_id,
@@ -1005,6 +1085,7 @@ class SubagentRunner:
                 sink,
                 AGENT_CLAMPED,
                 {
+                    "agent": dict(meta),
                     **meta,
                     "requested_tier": resolution.reference or self._parent_tier,
                     "max_tier": self._max_tier,
@@ -1040,12 +1121,16 @@ class SubagentRunner:
             system_prompt = self._agents.load_body(role)
             spec = ChildSpec(
                 task_id=task_id,
+                agent_id=agent_id,
                 agent=role.name,
                 description=req.description or role.description,
                 system_prompt=system_prompt,
                 prompt=req.prompt,
                 session_id=session_id,
                 parent_session=self._parent_session,
+                parent_agent_id=self._parent_agent_id,
+                parent_call_id=call_id if isinstance(call_id, str) else "",
+                root_turn_id=self._root_turn_id,
                 depth=depth,
                 tools=tuple(sorted(selection.selected)),
                 dropped_tools=dropped,
@@ -1162,7 +1247,7 @@ class SubagentRunner:
                 "stop_reason": outcome.stop_reason,
                 "dropped_tools": list(outcome.dropped_tools),
                 "clamped": outcome.clamped,
-                "error": outcome.error,
+                "error": redact_secrets(outcome.error)[:500] if outcome.error else None,
             },
             session=self._parent_session,
         )
@@ -1209,6 +1294,8 @@ class SubagentRunner:
             runtime_factory=self._factory,
             workspace=self._workspace,
             parent_session=spec.session_id,
+            parent_agent_id=spec.agent_id,
+            root_turn_id=spec.root_turn_id,
             tiers=self._tiers,
             sessions=self._sessions,
             parent_tools=(
@@ -1223,6 +1310,7 @@ class SubagentRunner:
             budget=self._budget,
             max_tier=self._max_tier,
             default_type=self._default_type,
+            profile_for=self._profile_for,
             config=self._config,
             event_sink=self._event_sink,
             bundle_map=self._bundle_map,

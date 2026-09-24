@@ -235,6 +235,7 @@ class SubagentServiceView(Protocol):
         *,
         cancel: object = ...,
         emit: object = ...,
+        call_id: str = ...,
     ) -> object: ...
 
 
@@ -461,6 +462,9 @@ class ToolExecutionResult(msgspec.Struct, forbid_unknown_fields=True):
     display: str | None = None
     metrics: dict[str, Any] | None = None
     context_note: str | None = None
+    #: Harness/transcript-only structured file-change preview.  Tool runners
+    #: must keep it bounded; the loop validates it again before event emission.
+    diff: dict[str, Any] | None = None
 
     @classmethod
     def text(
@@ -471,6 +475,7 @@ class ToolExecutionResult(msgspec.Struct, forbid_unknown_fields=True):
         display: str | None = None,
         context_note: str | None = None,
         metrics: dict[str, Any] | None = None,
+        diff: dict[str, Any] | None = None,
     ) -> ToolExecutionResult:
         """Convenience constructor for the common single-text-block result."""
         body = str(text)
@@ -480,6 +485,7 @@ class ToolExecutionResult(msgspec.Struct, forbid_unknown_fields=True):
             display=body if display is None else display,
             context_note=context_note,
             metrics=metrics,
+            diff=diff,
         )
 
     def to_tool_result(self, tool_use_id: str) -> ToolResult:
@@ -494,6 +500,9 @@ class ToolExecutionResult(msgspec.Struct, forbid_unknown_fields=True):
             content=list(self.content),
             is_error=self.is_error,
             context_note=self.context_note,
+            display=self.display,
+            metrics=self.metrics,
+            diff=self.diff,
         )
 
 

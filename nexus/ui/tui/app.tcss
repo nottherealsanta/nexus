@@ -1,0 +1,281 @@
+Screen {
+    background: #0c0b0b;
+    color: #d6d3d1;
+    scrollbar-background: #0c0b0b;
+    scrollbar-color: #3b342f;
+    scrollbar-color-hover: #5c4d40;
+    scrollbar-color-active: #d18a38;
+}
+
+#shell-header {
+    height: 2;
+    padding: 0 2;
+    background: #0c0b0b;
+    border-bottom: tall #211d1b;
+}
+
+#app-title {
+    width: 1fr;
+    color: #a78bfa;
+    text-style: bold;
+}
+
+#root-agent {
+    width: auto;
+    color: #827b91;
+    padding: 0;
+}
+
+#conversation {
+    height: 1fr;
+    width: 100%;
+    padding: 1 3;
+    scrollbar-gutter: stable;
+}
+
+.turn {
+    width: 100%;
+    height: auto;
+}
+
+.timeline-user {
+    width: 100%;
+    height: auto;
+    margin: 1 0 1 0;
+    padding: 0 2;
+    border-left: thick #d18a38;
+    background: #171312;
+    color: #f1ede8;
+}
+
+.timeline-assistant {
+    width: 100%;
+    height: auto;
+    margin: 1 0 1 0;
+    padding: 0 1;
+    color: #d6d3d1;
+}
+
+.tool-card {
+    width: 100%;
+    height: auto;
+    margin: 1 0 0 1;
+    padding: 0 1;
+    border-left: tall #443a34;
+    background: #121010;
+    color: #958d86;
+}
+
+.tool-card:hover, .tool-card:focus {
+    background: #1d1816;
+    border-left: tall #d18a38;
+}
+
+.tool-card #tool-header {
+    width: 100%;
+    height: auto;
+    color: #d18a38;
+    text-style: bold;
+}
+
+.tool-card #tool-detail, .tool-card #tool-expanded {
+    width: 100%;
+    height: auto;
+    color: #958d86;
+    padding-left: 1;
+}
+
+.tool-card #tool-expanded {
+    max-height: 14;
+    overflow-y: auto;
+}
+
+.tool-diff-view {
+    width: 100%;
+    height: auto;
+    max-height: 24;
+    margin: 0 0 1 0;
+}
+
+.task-child {
+    width: 1fr;
+    height: auto;
+    min-height: 1;
+    margin: 0 0 0 2;
+    padding: 0 1;
+    background: transparent;
+    border: none;
+    color: #958d86;
+    text-align: left;
+}
+
+.task-child:focus, .task-child:hover {
+    background: #241d19;
+    color: #d6d3d1;
+    border-left: tall #86b97a;
+}
+
+#agent-inspector {
+    width: 95%;
+    max-width: 112;
+    height: 86%;
+    padding: 1 2;
+    background: #141212;
+    border: tall #58463a;
+}
+
+#agent-inspector-heading {
+    height: auto;
+    max-height: 3;
+    color: #a78bfa;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#agent-inspector-scroll {
+    height: 1fr;
+    width: 1fr;
+    scrollbar-gutter: stable;
+}
+
+#agent-inspector-transcript {
+    width: 1fr;
+    padding: 0 1;
+}
+
+#agent-inspector-help {
+    height: 1;
+    color: #827b91;
+    margin-top: 1;
+}
+
+#chat-input {
+    height: auto;
+    max-height: 10;
+    padding: 1 3 0 3;
+    border-top: tall #211d1b;
+    background: #0c0b0b;
+}
+
+#chat-editor {
+    height: 4;
+    min-height: 3;
+    border-left: thick #59483b;
+    border-top: tall #28211e;
+    border-right: tall #28211e;
+    border-bottom: tall #28211e;
+    background: #171312;
+    color: #f1ede8;
+}
+
+#chat-editor:focus {
+    border-left: thick #d18a38;
+    border-top: tall #5c4634;
+    border-right: tall #5c4634;
+    border-bottom: tall #5c4634;
+}
+
+#input-actions {
+    height: 2;
+    align: left middle;
+}
+
+#send, #cancel {
+    min-width: 0;
+    width: auto;
+    height: 1;
+    padding: 0 1;
+    margin: 0 1 0 0;
+    background: transparent;
+    border: none;
+    color: #827b91;
+}
+
+#send:hover, #send:focus, #cancel:hover, #cancel:focus {
+    background: #241d19;
+    color: #d18a38;
+}
+
+#send:disabled {
+    color: #504a45;
+}
+
+#input-help {
+    width: 1fr;
+    content-align: right middle;
+    color: #827b91;
+}
+
+#connection-status {
+    height: 1;
+    padding: 0 2;
+    background: #0c0b0b;
+    color: #6f6862;
+}
+
+#connection-status.error {
+    color: #d77b72;
+}
+
+#agent-picker-dialog, #permission-dialog {
+    width: 72;
+    max-width: 90%;
+    height: auto;
+    max-height: 78%;
+    padding: 1 2;
+    background: #141212;
+    border: tall #58463a;
+}
+
+#agent-search, #agent-options {
+    margin-bottom: 1;
+}
+
+#agent-options {
+    height: 1fr;
+}
+
+#agent-search {
+    border: tall #3a302b;
+    background: #0c0b0b;
+    color: #f1ede8;
+}
+
+#agent-search:focus {
+    border: tall #d18a38;
+}
+
+OptionList {
+    background: #0c0b0b;
+    color: #b8b0a9;
+}
+
+OptionList > .option-list--option-highlighted {
+    background: #241d19;
+    color: #f1ede8;
+}
+
+#permission-description {
+    height: auto;
+    max-height: 12;
+    margin-bottom: 1;
+    color: #d6d3d1;
+}
+
+#permission-dialog Button {
+    width: 100%;
+    height: 1;
+    min-height: 1;
+    margin: 0;
+    padding: 0 1;
+    border: none;
+    background: transparent;
+    color: #b8b0a9;
+    text-align: left;
+}
+
+#permission-dialog Button:hover, #permission-dialog Button:focus {
+    background: #241d19;
+    color: #d18a38;
+    border-left: tall #d18a38;
+}

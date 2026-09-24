@@ -9,58 +9,13 @@ lands, and only then starts the turn.
 """
 from __future__ import annotations
 
-import asyncio
-import contextlib
-from collections.abc import AsyncIterator, Mapping
-from contextlib import aclosing
+from collections.abc import Mapping
 from typing import Any, TextIO
 
 from ...events import Event
+from ..turn_stream import turn_events
 from .approve import Approver
 from .client import Client, ClientError
-
-_SENTINEL: Event | None = None
-
-
-async def turn_events(
-    client: Client,
-    session: str,
-    content: str,
-    from_seq: int = 0,
-    *,
-    follow: bool = True,
-) -> AsyncIterator[Event]:
-    """Yield a turn's events, attaching the view before starting the turn."""
-    queue: asyncio.Queue[Event | None] = asyncio.Queue()
-
-    async def pump() -> None:
-        try:
-            # ``aclosing`` guarantees the subscription is released when the pump
-            # is cancelled (the turn ended, or the surface went away), so the
-            # daemon sees a view leave instead of holding the stream open.
-            async with aclosing(
-                client.stream(session, from_seq, follow=follow)
-            ) as events:
-                async for event in events:
-                    await queue.put(event)
-        finally:
-            await queue.put(_SENTINEL)
-
-    task = asyncio.create_task(pump())
-    try:
-        # Let the pump reach its first await so the subscription is attached.
-        await asyncio.sleep(0)
-        await client.start_turn(session, content)
-        while True:
-            event = await queue.get()
-            if event is None:
-                return
-            yield event
-    finally:
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-
 
 async def answer_permission(
     client: Client,

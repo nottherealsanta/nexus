@@ -55,6 +55,7 @@ from .model import (
     MAX_AGENT_FILE_BYTES,
     MAX_FRONTMATTER_BYTES,
     READ_ONLY_ROLES,
+    READ_ONLY_TOOLS,
     AgentDef,
     AgentDiagnostic,
     AgentDiagnosticCode,
@@ -95,8 +96,9 @@ DATA_DIR_NAME = "data"
 SEED_MARKER_NAME = ".seeded"
 #: Bumped only when the seeding contract itself changes.
 SEED_VERSION = 1
-#: The three roles seeded into every fresh workspace (plan section 15.7).
-SEEDED_ROLES = ("explore", "general", "planner")
+#: Canonical builtins seeded into fresh workspaces. Legacy planner files are
+#: retained when already present, but are not newly created by the seeder.
+SEEDED_ROLES = ("build", "explore", "general", "plan")
 
 #: A ``(tier, path)`` discovery root.
 RootSpec = tuple[AgentSource, Path]
@@ -159,6 +161,7 @@ def _seed_candidates(source: Path) -> list[Path]:
         if entry.is_file()
         and not entry.name.startswith(".")
         and entry.suffix.lower() == AGENT_FILE_SUFFIX
+        and entry.stem.casefold() != "planner"
     ]
     candidates.sort(key=lambda p: (p.name.casefold(), p.name))
     return candidates
@@ -186,10 +189,26 @@ def seed_workspace_roles(
     agents_dir = Path(workspace) / ".nexus" / "agents"
     marker = agents_dir / marker_name
 
+    previously_seeded: set[str] | None = None
     if marker.exists() and not overwrite:
-        return SeedReport(
-            already_seeded=True, source=source_dir, marker=marker
-        )
+        # Version-1 markers predate the canonical ``plan``/``build`` additions.
+        # Seed only the new names absent from that marker; names previously
+        # seeded are never recreated if a user intentionally deleted them.
+        try:
+            state = json.loads(marker.read_text(encoding="utf-8"))
+            seeded = state.get("seeded") if isinstance(state, dict) else None
+            if not isinstance(seeded, list) and not (isinstance(state, dict) and "version" in state):
+                return SeedReport(already_seeded=True, source=source_dir, marker=marker)
+            if isinstance(seeded, list) and all(isinstance(name, str) for name in seeded):
+                previously_seeded = set(seeded)
+                legacy_marker = "planner" in previously_seeded or not {"build", "plan"} <= previously_seeded
+            else:
+                previously_seeded = {"explore", "general", "planner"}
+                legacy_marker = True
+        except (OSError, ValueError):
+            return SeedReport(already_seeded=True, source=source_dir, marker=marker)
+    else:
+        legacy_marker = False
     if not source_dir.is_dir():
         return SeedReport(
             already_seeded=False,
@@ -200,9 +219,17 @@ def seed_workspace_roles(
     written: list[str] = []
     skipped: list[str] = []
     failed: list[str] = []
+    covered: set[str] = set(previously_seeded or ())
 
     for entry in _seed_candidates(source_dir):
         name = entry.stem
+        if previously_seeded is not None and name in previously_seeded:
+            continue
+        if previously_seeded is not None and name not in {"build", "plan"}:
+            continue
+        if previously_seeded is None and name == "planner":
+            continue
+        covered.add(name)
         try:
             validate_agent_name(name)
             data = read_agent_bytes(entry, max_file_bytes=max_file_bytes)
@@ -228,9 +255,12 @@ def seed_workspace_roles(
             continue
         written.append(name)
 
+    if previously_seeded is not None and not legacy_marker and not written:
+        return SeedReport(already_seeded=True, source=source_dir, marker=marker)
+
     payload = {
         "version": SEED_VERSION,
-        "seeded": written,
+        "seeded": sorted(covered),
         "source": source_dir.name,
     }
     try:
@@ -519,6 +549,27 @@ class AgentManager:
             raise AgentNotFoundError(name)
         return agent
 
+    def resolve(self, name: object, *, context: str = "subagent") -> AgentDef:
+        """Resolve an eligible definition; legacy ``planner`` falls back to plan.
+
+        Exact non-builtin ``planner`` files are intentionally preserved. The
+        packaged pre-migration planner is ignored as a selection alias so the
+        canonical built-in is ``plan``.
+        """
+        agent = None
+        if isinstance(name, str) and name.casefold() == "planner":
+            agent = self.get("planner")
+            if agent is not None and agent.eligible_in(context):
+                return agent
+            agent = self.get("plan")
+        else:
+            agent = self.get(name)
+        if agent is None:
+            raise AgentNotFoundError(name)
+        if not agent.eligible_in(context):
+            raise AgentNotFoundError(name)
+        return agent
+
     def __contains__(self, name: object) -> bool:
         return self.get(name) is not None
 
@@ -652,6 +703,20 @@ class AgentManager:
             )
             stripped = selected & forbidden
             selected = selected - forbidden
+            # A planner/explorer must not inherit tools that alter execution
+            # context (for example Skill or extension controls) merely because
+            # their current spec is marked non-mutating. Keep the ceiling to the
+            # pure workspace inspection tools.
+            outside_read_only = selected - READ_ONLY_TOOLS
+            stripped = stripped | outside_read_only
+            selected = selected & READ_ONLY_TOOLS
+        else:
+            forbidden = frozenset()
+        if resolved.name.casefold() in {"plan", "planner"}:
+            # Planning agents may delegate read-only investigation but never a
+            # child with write access. The Task tool itself is not a grant.
+            selected = selected - frozenset({"Task"})
+            stripped = stripped | (requested_set & frozenset({"Task"}))
 
         return AgentToolSelection(
             agent=resolved.name,
@@ -693,6 +758,8 @@ class AgentManager:
                     continue
                 if entry.suffix.lower() != AGENT_FILE_SUFFIX:
                     continue
+                if tier is AgentSource.BUILTIN and entry.stem.casefold() == "planner":
+                    continue
                 if entry.is_file():
                     candidates.append((tier, entry))
 
@@ -717,6 +784,19 @@ class AgentManager:
                 continue
 
             key = agent.name.casefold()
+            if key == "planner" and tier is not AgentSource.BUILTIN:
+                diagnostics.append(
+                    AgentDiagnostic(
+                        code=AgentDiagnosticCode.DEPRECATED_PLANNER,
+                        message=(
+                            "custom agent 'planner' is deprecated; rename it to "
+                            "'plan'. Exact custom planner definitions remain supported."
+                        ),
+                        tier=tier,
+                        path=str(path),
+                        name=agent.name,
+                    )
+                )
             existing = winners.get(key)
             if existing is None:
                 winners[key] = agent
@@ -838,6 +918,8 @@ class AgentManager:
             model=parsed.model,
             max_iterations=parsed.max_iterations,
             context_tokens=parsed.context_tokens,
+            contexts=parsed.contexts,
+            profile=parsed.profile,
             body=agent_file.body,
             body_sha256=agent_file.body_sha256,
             body_size=agent_file.body_size,
@@ -921,3 +1003,16 @@ class AgentManager:
                             name=parsed.name,
                         )
                     )
+            if parsed.tools and "Task" in parsed.tools:
+                diagnostics.append(
+                    AgentDiagnostic(
+                        code=AgentDiagnosticCode.FORBIDDEN_TOOL,
+                        message=(
+                            f"read-only agent {parsed.name!r} declares forbidden "
+                            "tool 'Task'; it will never hold it"
+                        ),
+                        tier=tier,
+                        path=str(path),
+                        name=parsed.name,
+                    )
+                )

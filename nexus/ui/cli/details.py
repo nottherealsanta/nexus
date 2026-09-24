@@ -1,6 +1,6 @@
-"""Pure, deterministic plain-text details of a reduced conversation view.
+"""Pure, deterministic details of a reduced conversation view.
 
-The status bar, bottom toolbar, ``/details``, and tests all render from here.
+The Textual status bar, ``/details``, and tests all render from here.
 Values come only from the ``ConversationView`` the reducer built --
 ``model.started``/``model.selected`` and ``context.assembled`` -- never guessed,
 and every untrusted label is sanitized before it can reach a terminal.

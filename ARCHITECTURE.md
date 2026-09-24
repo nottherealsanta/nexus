@@ -16,7 +16,7 @@ boundary is enforced by tests (`tests/test_layering.py`,
 `tests/test_ui_layering.py`), not by convention.
 
 ```
-    L5  ui/            cli (prompt_toolkit), jsonl           <- surfaces
+    L5  ui/            Textual chat, one-shot CLI, JSONL     <- surfaces
         ----------------------------------------------------
     L4½ host/          facade, protocol, supervisor, presence, transports
         ----------------------------------------------------
@@ -45,7 +45,9 @@ Two line budgets keep the harness small, reviewed per phase. The §18 amendment
 supersedes the original 2,500/2,000-line targets with conservative, rounded
 ceilings that keep modest headroom over the as-built tree: `core/` + `model/` +
 `tools/spec.py` under **14,000** physical lines and `host/` + `view/` + `ui/`
-under **9,500**. The same prefixes and physical-line semantics are kept, and no
+under **10,500**. The surface ceiling was reviewed and raised for the first-class
+Textual chat shell; the previous 9,500 ceiling reflected the retired line UI.
+The same prefixes and physical-line semantics are kept, and no
 code was relocated to evade a cap. The enforcing tests
 (`test_line_budget_core_model_spec_within_plan_cap` and
 `test_line_budget_host_view_ui_within_plan_cap` in `tests/test_phase3_exit.py`)
@@ -53,7 +55,7 @@ are now **strict** — a cap breach fails the suite, and regenerating the closeo
 report refuses to write a baseline that reaches or exceeds a cap (the boundary
 is `< cap`, so a count exactly at the cap is a violation). At the revision the
 measured sizes were 12,560 physical lines for the core tree (~11% headroom) and
-8,803 for the surface tree (host 5,198 / view 1,604 / ui 2,001; ~7% headroom).
+10,054 for the surface tree before final cleanup (host 5,301 / view 1,820 / ui 2,933; ~4% headroom).
 The committed report (`tests/fixtures/reports/phase3_exit_baseline.json`) pins
 that baseline; regenerate it (`NEXUS_PHASE3_WRITE_REPORT=1 pytest
 tests/test_phase3_exit.py`) only while the tree is within cap. Anything that
@@ -282,7 +284,8 @@ exposes it; `nexus ext restore` is not wired to the CLI.
 - **Skills** discover `SKILL.md`, validate frontmatter, snapshot bodies, and
   expose only `name: description` to the index. Bodies load on invocation.
 - **Agents** parse a restricted frontmatter grammar (no YAML dependency), seed
-  `general` / `explore` / `planner`, and enforce read-only roles structurally.
+  `general` / `build` / `explore` / `plan`, and enforce read-only roles
+  structurally. `planner` remains a compatibility alias for `plan`.
 - **Hooks** run command hooks (argv, no shell by default, bounded env) and
   in-process Python hooks (quarantine/loader seam). Events: `hook.fired`,
   `hook.blocked`.
@@ -348,8 +351,8 @@ pure function of the reduced `ConversationView` — it formats the phase, the
 **effective** model and provider (`model.started`, or the durable
 `model.selected` until the next turn reports the actual one), token usage,
 context occupancy against the assembled input budget, viewers, queued inputs,
-and the subagent tree. The prompt status line, the editor's `bottom_toolbar`,
-and `/details` all render from it, so they cannot disagree. Every session,
+and the subagent tree. The Textual status line and `/details` render from it, so
+they cannot disagree. Every session,
 model, and agent label is sanitized before it is shown. The renderer escapes
 control characters and redacts credential shapes before any tool name, key,
 error, or permission preview reaches the terminal, and control-escapes streamed
@@ -360,9 +363,16 @@ size, and ANSI is enabled only on a TTY (`NO_COLOR` by presence or `TERM=dumb`
 disable it; `FORCE_COLOR` overrides). Its
 replay dedup is tracked **per session**, so switching to a new or forked session
 renders its lower `seq` events instead of suppressing them as repeats.
-`prompt_toolkit` is the one permitted third-party import and is loaded lazily,
-so the client runs with the extra absent (a plain stdin reader), and one-shot
-and JSONL runs never build an editor.
+Textual, Rich, and `textual-diff-view` imports are confined to `nexus/ui/tui`. The host client and
+one-shot/JSONL modules remain importable without loading Textual at module import
+time; Textual and `textual-diff-view` are normal runtime dependencies because
+Textual is the only chat shell. The shell projects `ConversationView` as a
+single-column chronological timeline keyed by turn/message/call IDs, and keeps
+all Task/subagent activity inline at the initiating call. It never reads files
+to render an Edit: the bounded durable `ToolCallView.diff` is the only source
+for its optional diff widget and plain unified fallback. `nexus chat` requires
+stdin/stdout TTYs and never silently switches to a line reader; noninteractive
+callers use `nexus run` or JSONL.
 
 ## Security model
 

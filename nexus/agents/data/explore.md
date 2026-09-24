@@ -1,6 +1,7 @@
 ---
 name: explore
 description: Read-only search agent for broad fan-out searches. Returns findings, not file dumps.
+contexts: [root, subagent]
 bundles: [fs]
 tools: [-Write, -Edit, -MultiEdit]
 model: low

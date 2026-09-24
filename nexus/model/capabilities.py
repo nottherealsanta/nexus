@@ -78,6 +78,7 @@ class Capabilities(msgspec.Struct, frozen=True):
     json_schema_strict: bool = False
     max_context_tokens: int = 0
     max_output_tokens: int = 0
+    default_max_output_tokens: int = 0
     degradation: dict[str, DegradationPolicy] = msgspec.field(default_factory=dict)
 
     @classmethod

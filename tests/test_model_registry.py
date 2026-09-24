@@ -266,6 +266,38 @@ def test_configured_provider_is_retained_without_env():
     assert [s.id for s in reg.providers()] == ["openai"]
 
 
+def test_provider_alias_projects_openai_catalogue_as_configured_codex_route():
+    raw = json.dumps(
+        {"openai": {"models": {"gpt-5.6-luna": {
+            "modalities": {"output": ["text"]},
+            "limit": {"context": 1_050_000, "output": 128_000},
+        }}}}
+    ).encode()
+    registry = ModelRegistry(
+        providers={"codex": {"kind": "openai"}},
+        provider_aliases={"codex": "openai"},
+        env={}, snapshot_path=MISSING,
+    )
+    registry.install_raw(raw)
+    info = registry.resolve("codex/gpt-5.6-luna")
+    assert info.ref == "codex/gpt-5.6-luna"
+    assert info.catalogue_provider == "openai"
+    assert (info.context, info.max_output) == (1_050_000, 128_000)
+    assert registry.get("openai/gpt-5.6-luna") is None
+    assert [status.id for status in registry.providers()] == ["codex"]
+    # There is one bare id and it routes to the configured provider.
+    assert registry.get("gpt-5.6-luna").provider == "codex"
+
+
+def test_provider_alias_does_not_project_arbitrary_compatible_vendor():
+    registry = make_registry(
+        raw=catalogue_bytes(),
+        env={},
+        providers={"acme": {"kind": "openai_compatible", "base_url": "https://x"}},
+    )
+    assert registry.list() == []
+
+
 def test_reachable_provider_is_retained_by_env_name_only():
     env = {"ANTHROPIC_API_KEY": "secret-value", "MYSTERY_API_KEY": "x"}
     reg = make_registry(raw=catalogue_bytes(), env=env)

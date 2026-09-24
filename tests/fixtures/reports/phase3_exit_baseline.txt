@@ -1,7 +1,7 @@
 Nexus Phase 3 exit - baseline closeout evidence
 ================================================
-generated : 2026-09-23T14:07:57+0530
-head      : db988822e897eb8da551e51e57009d53de37ca3d
+generated : 2026-09-24T16:14:44+0530
+head      : 810f3845e053ff2ae05066a38754bfb0f15d6ab8
 schema    : nexus.phase3_exit_baseline/1
 
 Phase 3 exit criteria (plan section 10)
@@ -10,41 +10,41 @@ Phase 3 exit criteria (plan section 10)
   turns .................... 100
   messages ................. 200
   model calls .............. 100
-  compacted assemblies ..... 29
+  compacted assemblies ..... 33
   input budget ............. 5744 tokens
-  peak used ................ 4866 tokens
+  peak used ................ 4869 tokens
   log message lines ........ 200
   contiguous suffix ........ True
   current turn once ........ True
 
 Controlled prompt cache before/after
   turns .................... 30
-  uncached input tokens .... 69415
-  cached input tokens ...... 13606.0
-  savings .................. 80.4%
+  uncached input tokens .... 69625
+  cached input tokens ...... 13635.1
+  savings .................. 80.42%
   rates .................... read 0.1x / write 1.25x
   boundaries (off) ......... []
   boundaries (on) .......... [{'position': 0, 'scope': 'system_tools'}, {'position': 58, 'scope': 'history'}]
 
 Line budgets (plan sections 11 / 14.14, revised §18)
 ----------------------------------------
-  core+model+spec .......... 12560 physical / 10385 code (cap 14000, within=True, over=0)
-  host+view+ui ............. 8803 physical / 7253 code (cap 9500, within=True, over=0)
-  surface baseline ......... host=5198 view=1604 ui=2001
+  core+model+spec .......... 12743 physical / 10547 code (cap 14000, within=True, over=0)
+  host+view+ui ............. 10472 physical / 8668 code (cap 10500, within=True, over=0)
+  surface baseline ......... host=5301 view=1934 ui=3237
 
 Import cost (plan section 2.2)
 ----------------------------------------
-  import nexus ............. 9.37 ms, +40 modules, heavy=none
-  import nexus.runtime ..... 95.71 ms, 377 modules
+  import nexus ............. 12.06 ms, +40 modules, heavy=none
+  import nexus.runtime ..... 124.68 ms, 440 modules
 
 Phase 4 references (plan section 10)
 ----------------------------------------
-  result ................... passed in 1.1s
-  summary .................. 2 passed in 0.94s
+  result ................... passed in 2.56s
+  summary .................. 2 passed in 2.37s
     - tests/test_hot_extension_e2e.py::test_walkthrough_read_template_write_reload_call
     - tests/test_hot_extension_stress.py::test_two_hundred_reloads_do_not_leak
 
 Full suite
 ----------------------------------------
-  result ................... passed in 66.16s
-  summary .................. 3197 passed, 311 skipped, 2 deselected in 65.75s (0:01:05)
+  result ................... passed in 250.24s
+  summary .................. 3221 passed, 311 skipped, 3 deselected in 249.81s (0:04:09)

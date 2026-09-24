@@ -100,6 +100,7 @@ def test_parser_exposes_the_canonical_command_set():
         "models",
         "agents",
         "tools",
+        "auth",
     } == choices
 
     for action, expected in (
@@ -159,6 +160,29 @@ def test_parser_accepts_every_documented_invocation(argv):
     assert args.command is not None
 
 
+def test_chat_rejects_mode_flags():
+    parser = cli.build_parser()
+    for flag in ("--tui", "--line"):
+        with pytest.raises(SystemExit):
+            parser.parse_args(["chat", flag])
+
+
+def test_chat_non_tty_fails_without_opening_client(monkeypatch):
+    class Stream(io.StringIO):
+        def isatty(self):
+            return False
+
+    out, err = Stream(), Stream()
+    monkeypatch.setattr(cli.sys, "stdin", Stream())
+    monkeypatch.setattr(cli.sys, "stdout", out)
+    monkeypatch.setattr(cli.sys, "stderr", err)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.setattr(cli, "_chat_entry", lambda *_args, **_kwargs: pytest.fail("must not launch Textual"))
+    assert cli.main(["chat"]) == 2
+    assert "interactive terminal" in err.getvalue()
+    assert "nexus run" in err.getvalue()
+
+
 def test_init_creates_defaults_without_overwriting(tmp_path):
     (tmp_path / "SOUL.md").write_text("custom", encoding="utf-8")
     cli.initialize(tmp_path)
@@ -173,6 +197,27 @@ def test_main_init_and_help(tmp_path):
     with pytest.raises(SystemExit) as info:
         cli.main(["--help"])
     assert info.value.code == 0
+
+
+@pytest.mark.parametrize(
+    ("argv", "cwd"),
+    [
+        ([str(REPO_ROOT / "nexus"), "--help"], None),
+        (["-m", "nexus", "--help"], REPO_ROOT),
+    ],
+)
+def test_package_entrypoint_help_supports_directory_and_module_execution(tmp_path, argv, cwd):
+    result = subprocess.run(
+        [sys.executable, "-E", *argv],
+        cwd=str(tmp_path if cwd is None else cwd),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "usage: nexus" in result.stdout
+    assert "attempted relative import" not in result.stderr
 
 
 def test_render_view_is_transcript_like():
@@ -445,11 +490,10 @@ def test_replay_reconstructs_the_transcript(cli_env):
     assert "pong" in replayed.stdout
 
 
-def test_no_codex_binary_is_needed():
-    # The canonical path must not reference the Codex CLI anywhere: the daemon
-    # owns a Nexus Runtime and providers are adapters.
+def test_no_codex_binary_or_acp_is_needed_for_regular_commands():
+    # Auth is local-only. The daemon-backed path must not invoke a Codex CLI/ACP.
     source = (REPO_ROOT / "nexus" / "cli.py").read_text(encoding="utf-8")
-    assert "codex" not in source.lower()
+    assert "opencode acp" not in source.lower()
     daemon_source = (REPO_ROOT / "nexus" / "host" / "daemon.py").read_text(encoding="utf-8")
     assert "codex" not in daemon_source.lower()
     # The legacy modules are gone from the package tree.

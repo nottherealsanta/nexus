@@ -368,6 +368,7 @@ def _fallback_capabilities(model: str) -> Capabilities:
         json_schema_strict=False,
         max_context_tokens=200_000,
         max_output_tokens=_max_output_for(model),
+        default_max_output_tokens=DEFAULT_MAX_TOKENS,
         degradation={"thinking": "drop"},
     )
 

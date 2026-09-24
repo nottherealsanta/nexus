@@ -41,6 +41,7 @@ SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("/new", "start a new session", "[id]"),
     CommandSpec("/sessions", "list sessions and switch", "[id]"),
     CommandSpec("/model", "list models or set this session's model", "[list|tier|provider/model|id]"),
+    CommandSpec("/agent", "list or select this session's root agent", "[list|current|reset|NAME]"),
     CommandSpec("/tools", "list tools used in this transcript"),
     CommandSpec("/details", "model, context, queue, approvals, and subagents"),
     CommandSpec("/reconnect", "re-attach and replay missed events"),
@@ -112,4 +113,8 @@ def help_text() -> str:
     for spec in SPECS:
         usage = f" {spec.usage}" if spec.usage else ""
         lines.append(f"  {spec.name:<{width}}{usage}  {spec.summary}")
+    lines.append(
+        "Controls: Ctrl+P commands; Ctrl+Enter submits; Enter inserts a line; "
+        "Ctrl+C cancels; Ctrl+Q quits."
+    )
     return "\n".join(lines)

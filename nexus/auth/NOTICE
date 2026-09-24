@@ -1,0 +1,10 @@
+Nexus ChatGPT OAuth protocol constants and selected flow behavior are adapted from
+anomalyco/opencode, packages/opencode/src/plugin/openai/codex.ts,
+commit 18ef3cc7c5a25b82114c953a80ccc09f4988f74e.
+
+Copyright (c) Anomaly Innovations Inc.
+Licensed under the MIT License.
+
+Nexus retains ownership of prompts, tool schemas, permissions, execution,
+hooks, sessions, cancellation, and tool-result replay. This is an experimental
+client for a private endpoint and may stop working without notice.

@@ -6,6 +6,7 @@ rather than a silently ignored setting. Field defaults are the built-in layer.
 from __future__ import annotations
 
 import math
+import re
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -75,6 +76,7 @@ class ModelParams(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
 
 class AgentSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    name: str = "general"
     profile: str = "coding"
     instructions_file: str = "SOUL.md"
     memory_file: str = "MEMORY.md"
@@ -82,6 +84,12 @@ class AgentSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     max_turn_seconds: float = 1800
     # Carried so a flat v1 layer can be bridged into v2 without losing it.
     sandbox: SandboxMode = "workspace-write"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not self.name.strip():
+            raise ValueError("agent.name must be a nonempty string")
+        if not isinstance(self.profile, str) or not self.profile.strip():
+            raise ValueError("agent.profile must be a nonempty string")
 
 
 class ModelSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -229,6 +237,8 @@ class ProviderSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     api_key: str | None = None
     base_url: str | None = None
     api: str | None = None
+    auth: str | None = None
+    profile: str | None = None
     executable: str | None = None
     timeout_seconds: float | None = None
     # -- OpenCode ACP subprocess agent (``kind = "opencode_agent"``) ---------
@@ -245,6 +255,27 @@ class ProviderSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     env: dict[str, str] | None = None
 
     def __post_init__(self) -> None:
+        if self.auth is not None and self.auth != "chatgpt_oauth":
+            raise ValueError("providers.*.auth must be 'chatgpt_oauth'")
+        if self.profile is not None and (
+            not isinstance(self.profile, str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", self.profile)
+        ):
+            raise ValueError("providers.*.profile must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+        if self.auth == "chatgpt_oauth":
+            if self.api_key is not None or self.base_url is not None or self.api != "responses":
+                raise ValueError("chatgpt_oauth requires api='responses' and cannot use api_key or base_url")
+            if any(value is not None for value in (self.executable, self.command, self.args, self.env, self.inherit_env, self.permission_policy)):
+                raise ValueError("chatgpt_oauth cannot be combined with executable or agent fields")
+            if self.kind not in (None, "openai", "codex"):
+                raise ValueError("chatgpt_oauth is supported only by the codex/OpenAI provider")
+        if self.timeout_seconds is not None and (
+            isinstance(self.timeout_seconds, bool)
+            or not isinstance(self.timeout_seconds, (int, float))
+            or not math.isfinite(self.timeout_seconds)
+            or self.timeout_seconds <= 0
+        ):
+            raise ValueError("providers.*.timeout_seconds must be a positive finite number")
         for name, value in (
             ("command", self.command),
             ("args", self.args),
@@ -297,7 +328,7 @@ class ProviderSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
         )
         return (
             f"ProviderSection(kind={self.kind!r}, api_key={api_key!r}, "
-            f"base_url={base_url!r}, api={self.api!r}, "
+            f"base_url={base_url!r}, api={self.api!r}, auth={self.auth!r}, profile={self.profile!r}, "
             f"executable={executable!r}, "
             f"timeout_seconds={self.timeout_seconds!r}, "
             f"command={command!r}, args={args!r}, "
@@ -469,6 +500,9 @@ class ConfigV2(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     telemetry: TelemetrySection = msgspec.field(default_factory=TelemetrySection)
 
     def __post_init__(self) -> None:
+        for provider_name, provider in self.providers.items():
+            if provider.auth == "chatgpt_oauth" and provider_name != "codex":
+                raise ValueError("chatgpt_oauth is supported only by providers.codex")
         # ``[models]`` is canonical and ``[model]`` is compatibility. A field
         # both sections set must agree; disagreement is a conflict, not a
         # precedence puzzle (plan section 15.9).

@@ -11,6 +11,8 @@ from nexus.config.layers import (
 )
 from nexus.errors import ConfigError
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 
 def _home(tmp_path: Path) -> Path:
     home = tmp_path / "home"
@@ -107,12 +109,31 @@ timeout_seconds = 42
     assert config.version == 2
     assert config.v2 is not None
     assert config.v2.agent.max_iterations == 12
+    assert config.v2.agent.name == "general"
     assert config.v2.context.max_tokens == 100000
     assert config.instructions_file == "GUIDE.md"
     assert config.memory_file == "NOTES.md"
     assert config.model == "anthropic/claude-opus-5"
     assert config.timeout_seconds == 42
     assert config.context_chars == 400000
+
+
+def test_checked_in_workspace_config_uses_codex_responses_api(tmp_path):
+    config = Config.load(REPO_ROOT, home=_home(tmp_path), environ={})
+
+    assert config.version == 2
+    assert config.v2 is not None
+    assert config.v2.models.default == "codex/gpt-5.6-luna"
+    assert config.v2.agent.sandbox == "workspace-write"
+    assert config.v2.agent.instructions_file == "SOUL.md"
+    assert config.v2.agent.memory_file == "MEMORY.md"
+    assert config.v2.context.max_tokens == 16_000
+    provider = config.v2.providers["codex"]
+    assert provider.api_key is None
+    assert provider.api == "responses"
+    assert provider.auth == "chatgpt_oauth"
+    assert provider.profile == "default"
+    assert provider.executable is None
 
 
 def test_v2_unknown_key_rejected(tmp_path):

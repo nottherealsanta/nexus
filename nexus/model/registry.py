@@ -180,6 +180,7 @@ class ModelInfo(msgspec.Struct, frozen=True):
 
     provider: str
     id: str
+    catalogue_provider: str = ""
     name: str = ""
     family: str | None = None
     aliases: tuple[str, ...] = ()
@@ -595,6 +596,7 @@ def build_index(
     tier_table: object | None = None,
     default_tier: str = "low",
     source: Literal["catalogue", "config", "builtin"] = "catalogue",
+    provider_aliases: Mapping[str, str] | None = None,
 ) -> _ModelIndex:
     """Filter, canonicalize, and index a validated catalogue.
 
@@ -603,35 +605,39 @@ def build_index(
     re-listings collapse onto the direct provider, with the others recorded as
     aliases.
     """
-    provider_cfg = providers_config or {}
-    env_map: Mapping[str, str] = os.environ if env is None else env
+    provider_cfg, aliases, env_map = providers_config or {}, provider_aliases or {}, os.environ if env is None else env
     known_providers = {p.id for p in catalogue.providers}
-
-    statuses: list[ProviderStatus] = []
-    retained: set[str] = set()
+    statuses: list[ProviderStatus] = []; retained: set[str] = set()
+    catalogue_by_id = {provider.id: provider for provider in catalogue.providers}
+    runtime_catalogue: dict[str, str] = {}
     for provider in catalogue.providers:
         cfg = provider_cfg.get(provider.id)
         configured = cfg is not None
         reachable = any(_env_present(env_map, name) for name in provider.env)
-        if not (configured or reachable):
-            continue
-        statuses.append(
-            _provider_status(
-                provider, cfg, configured=configured, reachable=reachable
-            )
-        )
-        retained.add(provider.id)
-
+        if configured or reachable:
+            runtime_catalogue[provider.id] = provider.id
+    for runtime_id, catalogue_id in aliases.items():
+        if catalogue_by_id.get(catalogue_id) is not None and (cfg := provider_cfg.get(runtime_id)) is not None:
+            runtime_catalogue[runtime_id] = catalogue_id
+    for runtime_id, catalogue_id in runtime_catalogue.items():
+        provider = catalogue_by_id[catalogue_id]
+        cfg = provider_cfg.get(runtime_id)
+        configured = cfg is not None
+        reachable = any(_env_present(env_map, name) for name in provider.env)
+        status = _provider_status(provider, cfg, configured=configured, reachable=reachable)
+        if runtime_id != catalogue_id:
+            status = msgspec.structs.replace(status, id=runtime_id)
+        statuses.append(status); retained.add(runtime_id)
     raw_models: list[ModelInfo] = []
-    for provider in catalogue.providers:
-        if provider.id not in retained:
+    for runtime_id, catalogue_id in runtime_catalogue.items():
+        if runtime_id not in retained:
             continue
+        provider = catalogue_by_id[catalogue_id]
         for model in provider.models:
             if "text" not in model.output_modalities:
                 continue
             info = ModelInfo(
-                provider=provider.id,
-                id=model.id,
+                runtime_id, model.id, catalogue_id,
                 name=model.name,
                 family=model.family,
                 context=model.context,
@@ -651,15 +657,12 @@ def build_index(
                 if len(tier) <= _MAX_TIER_LEN:
                     info = msgspec.structs.replace(info, tier=tier)
             raw_models.append(info)
-
     groups: dict[tuple[str, str], list[ModelInfo]] = {}
     for info in raw_models:
         key = _canonical_key(info.provider, info.id, known_providers)
         groups.setdefault(key, []).append(info)
-
     selectable = {status.id: status.selectable for status in statuses}
-    models: list[ModelInfo] = []
-    aliases: dict[str, ModelInfo] = {}
+    models: list[ModelInfo] = []; aliases: dict[str, ModelInfo] = {}
     for key, items in groups.items():
         winner = max(items, key=lambda item: _preference(item, key, selectable))
         loser_refs = tuple(
@@ -670,20 +673,12 @@ def build_index(
         models.append(winner)
         for ref in loser_refs:
             aliases[ref] = winner
-
     models.sort(key=lambda info: (info.provider, info.id))
     by_ref = {info.ref: info for info in models}
     by_id: dict[str, list[ModelInfo]] = {}
     for info in models:
         by_id.setdefault(info.id, []).append(info)
-    return _ModelIndex(
-        models=tuple(models),
-        providers=tuple(statuses),
-        by_ref=by_ref,
-        by_id={key: tuple(value) for key, value in by_id.items()},
-        aliases=aliases,
-    )
-
+    return _ModelIndex(tuple(models), tuple(statuses), by_ref, {key: tuple(value) for key, value in by_id.items()}, aliases)
 
 @runtime_checkable
 class CatalogueFetcher(Protocol):
@@ -805,6 +800,7 @@ class ModelRegistry:
         now: Callable[[], float] = time.time,
         tier_table: object | None = None,
         default_tier: str = "low",
+        provider_aliases: Mapping[str, str] | None = None,
     ) -> None:
         if (
             isinstance(ttl_days, bool)
@@ -844,8 +840,7 @@ class ModelRegistry:
         self._now = now
         self._tier_table = tier_table
         self._default_tier = default_tier
-
-        self._index = _ModelIndex((), (), {}, {}, {})
+        self._provider_aliases, self._index = dict(provider_aliases or {}), _ModelIndex((), (), {}, {}, {})
         self._loaded = False
         #: Single-flight guard so N concurrent turn boundaries share one
         #: acquisition instead of racing duplicate network fetches and duplicate
@@ -1086,6 +1081,7 @@ class ModelRegistry:
             tier_table=self._tier_table,
             default_tier=self._default_tier,
             source=model_source,
+            provider_aliases=self._provider_aliases,
         )
         self._index = index
         self._loaded = True

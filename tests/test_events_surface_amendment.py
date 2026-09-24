@@ -108,7 +108,7 @@ def test_compat_aliases_are_known_but_outside_groups():
 
 def test_event_types_is_exactly_groups_plus_legacy_plus_compat():
     grouped = {name for members in EVENT_GROUPS.values() for name in members}
-    assert EVENT_TYPES == grouped | set(LEGACY_EVENTS) | set(COMPAT_EVENTS)
+    assert EVENT_TYPES == grouped | set(LEGACY_EVENTS) | set(COMPAT_EVENTS) | {"agent.selected"}
 
 
 def test_event_type_names_are_well_formed():

@@ -167,6 +167,20 @@ def test_streamed_deltas_and_final_text_do_not_duplicate():
     assert message.blocks[0].finalized is True
 
 
+def test_visible_text_orders_after_prior_tool_not_model_placeholder():
+    view = fold(
+        [
+            _ev(1, "turn.started", {}, turn="t"),
+            _ev(2, "model.started", {}, turn="t"),
+            _ev(3, "tool.requested", {"call_id": "c", "tool": "Read"}, turn="t"),
+            _ev(4, "text.delta", {"text": "answer"}, turn="t"),
+        ]
+    )
+    message = view.messages[0]
+    tool = view.tools[0]
+    assert tool.event_seq < message.event_seq
+
+
 def test_final_text_without_deltas_is_appended_once():
     view = fold(
         [
@@ -217,6 +231,59 @@ def test_tool_lifecycle_status_transitions():
     assert tools["c2"].status == "failed"
     assert tools["c2"].executed is False
     assert tools["c2"].code == "unknown_tool"
+
+
+def test_tool_transcript_events_are_order_tolerant_and_old_events_stay_renderable():
+    view = fold(
+        [
+            _ev(1, "tool.result", {"tool_use_id": "late", "is_error": False, "content": [{"type": "text", "text": "ok"}]}, turn="t"),
+            _ev(2, "tool.input", {"call_id": "late", "input": {"path": "a.txt"}}, turn="t"),
+            _ev(3, "tool.requested", {"call_id": "late", "tool": "Read"}, turn="t"),
+            # Legacy tool lifecycle data had neither input/result nor a diff.
+            _ev(4, "tool.requested", {"call_id": "old", "tool": "Bash"}, turn="t"),
+            _ev(5, "tool.completed", {"call_id": "old", "tool": "Bash", "executed": True}, turn="t"),
+        ]
+    )
+    tools = {tool.call_id: tool for tool in view.tools}
+    assert tools["late"].name == "Read"
+    assert tools["late"].input == {"path": "a.txt"}
+    assert tools["late"].result == [{"type": "text", "text": "ok"}]
+    assert tools["late"].status == "completed"
+    assert tools["old"].status == "completed"
+    assert tools["old"].diff is None
+
+
+@pytest.mark.parametrize("spawn_first", [False, True])
+def test_task_calls_link_parallel_and_nested_agents_in_any_event_order(spawn_first):
+    root = {
+        "id": "s/sub/1", "parent": "s", "parent_call_id": "root-task",
+        "depth": 1, "task": "root-child", "session": "s/sub/1",
+    }
+    sibling = {
+        "id": "s/sub/2", "parent": "s", "parent_call_id": "root-task",
+        "depth": 1, "task": "root-sibling", "session": "s/sub/2",
+    }
+    nested = {
+        "id": "s/sub/1/sub/1", "parent": "s/sub/1", "parent_agent_id": "s/sub/1",
+        "parent_call_id": "inner-task", "depth": 2, "task": "nested",
+        "session": "s/sub/1/sub/1",
+    }
+    requested = _ev(2, "tool.requested", {"call_id": "root-task", "tool": "Task"}, turn="t")
+    events = [
+        _ev(1, "turn.started", {}, turn="t"),
+        *(
+                [_ev(2, "agent.spawned", {"agent": root, **root}, turn="t"), _ev(3, "agent.spawned", {"agent": sibling, **sibling}, turn="t"), _ev(4, "tool.requested", {"call_id": "root-task", "tool": "Task"}, turn="t")]
+            if spawn_first
+            else [requested, _ev(3, "agent.spawned", {"agent": root, **root}, turn="t"), _ev(4, "agent.spawned", {"agent": sibling, **sibling}, turn="t")]
+        ),
+        _ev(5, "tool.requested", {"agent": root, "call_id": "inner-task", "tool": "Task"}, session=root["session"]),
+        _ev(6, "agent.spawned", {"agent": nested, **nested}, session=root["session"]),
+    ]
+    view = fold(events)
+    root_task = next(tool for tool in view.tools if tool.call_id == "root-task")
+    assert root_task.child_agent_ids == [root["id"], sibling["id"]]
+    inner_task = next(tool for tool in view.agents[root["id"]].body.tools if tool.call_id == "inner-task")
+    assert inner_task.child_agent_ids == [nested["id"]]
 
 
 def test_permission_pending_then_resolved():

@@ -1,4 +1,4 @@
-"""The prompt_toolkit CLI client over the host facade (PLAN sections 14.3, 14.11).
+"""The host-protocol client and one-shot renderer used by terminal surfaces.
 
 This package is the *pure client* half of the Phase 8 surfaces: it speaks the
 canonical
@@ -12,14 +12,12 @@ Entry points:
 * :func:`~nexus.ui.cli.uds.open_client` — connect to a daemon socket, auto-start
   one with :func:`nexus.host.ensure_daemon`, and complete the version handshake;
 * :func:`~nexus.ui.cli.run.run_once` — one turn, human or JSONL;
-* :func:`~nexus.ui.cli.app.run_chat` — the interactive line-mode surface.
+* :func:`~nexus.ui.cli.run.run_once` — one-shot runs, human or JSONL.
 
-``prompt_toolkit`` is an optional extra (``nexus[cli]``) loaded lazily by
-:mod:`nexus.ui.cli.keys`; importing this package must not import it.
+Interactive chat is the Textual shell in :mod:`nexus.ui.tui`.
 """
 from __future__ import annotations
 
-from .app import ChatSession, run_chat
 from .approve import Approver
 from .client import (
     Client,
@@ -29,15 +27,13 @@ from .client import (
     Transport,
     TransportClosed,
 )
-from .keys import CliDependencyError, StdinReader, available, make_reader
 from .render import TERMINAL_EVENTS, TerminalRenderer, exit_code
 from .run import run_once
 from .uds import DaemonUnavailable, UdsTransport, connect, open_client
 
 __all__ = [
-    "TERMINAL_EVENTS", "Approver", "ChatSession", "CliDependencyError", "Client",
+    "TERMINAL_EVENTS", "Approver", "Client",
     "ClientError", "DaemonUnavailable", "FacadeError", "ProtocolVersionError",
-    "StdinReader", "TerminalRenderer", "Transport", "TransportClosed", "UdsTransport",
-    "available", "connect", "exit_code", "make_reader", "open_client", "run_chat",
-    "run_once",
+    "TerminalRenderer", "Transport", "TransportClosed", "UdsTransport",
+    "connect", "exit_code", "open_client", "run_once",
 ]

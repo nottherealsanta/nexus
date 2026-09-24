@@ -44,12 +44,37 @@ def _clip(value: object) -> str:
 
 def _dump(value: object) -> Any:
     """Deep-convert any view value to JSON-native types, never raising."""
-    if value is None or isinstance(value, (str, bool, int, float)):
+    if isinstance(value, str):
+        return _clip(value)
+    if value is None or isinstance(value, (bool, int, float)):
         return value
     if isinstance(value, (bytes, bytearray, memoryview)):
         return bytes(value).hex()
     if is_dataclass(value) and not isinstance(value, type):
-        return {f.name: _dump(getattr(value, f.name)) for f in fields(value)}
+        result = {}
+        for item in fields(value):
+            field_value = getattr(value, item.name)
+            # UI reconciliation identifiers are reducer-local implementation
+            # detail, preserving the established daemon projection wire shape.
+            if item.name in {"id", "event_seq"} and isinstance(value, (MessageView, ToolCallView)):
+                continue
+            # Additive Phase 2 transcript/correlation fields stay absent when
+            # reducing older events, preserving the established golden wire
+            # snapshots while real values serialize normally.
+            if item.name in {
+                "input", "result", "display", "context_note", "metrics",
+                "child_agent_ids",
+                "parent_session", "parent_agent_id", "parent_call_id", "root_turn_id",
+            } and field_value in (None, "", 0, {}, []):
+                continue
+            if (
+                item.name == "diff"
+                and isinstance(value, ToolCallView)
+                and field_value is None
+            ):
+                continue
+            result[item.name] = _dump(field_value)
+        return result
     if isinstance(value, Mapping):
         return {str(key): _dump(item) for key, item in value.items()}
     if isinstance(value, (list, tuple, set, frozenset)):
@@ -127,6 +152,8 @@ class BlockView(_View):
 class MessageView(_View):
     """One message reconstructed from the event stream."""
 
+    id: str = ""
+    event_seq: int = 0
     role: str = "assistant"
     blocks: list[BlockView] = field(default_factory=list)
     iteration: int = 0
@@ -149,6 +176,7 @@ class ToolCallView(_View):
     """A tool invocation with live status, result metadata, and progress."""
 
     call_id: str = ""
+    event_seq: int = 0
     name: str = ""
     status: str = "requested"  # requested|running|completed|failed
     bundle: str | None = None
@@ -161,6 +189,15 @@ class ToolCallView(_View):
     requested_ts: float | None = None
     started_ts: float | None = None
     finished_ts: float | None = None
+    input: dict[str, Any] = field(default_factory=dict)
+    result: list[dict[str, Any]] = field(default_factory=list)
+    display: str | None = None
+    context_note: str | None = None
+    metrics: dict[str, Any] | None = None
+    #: Bounded transcript-only preview emitted for a successful Edit.
+    diff: dict[str, Any] | None = None
+    #: Direct Task children, linked from each agent's durable parent_call_id.
+    child_agent_ids: list[str] = field(default_factory=list)
 
 @dataclass
 class PermissionView(_View):
@@ -352,6 +389,10 @@ class AgentView(_View):
     body: ConversationView = field(default_factory=lambda: ConversationView())
     spawned_ts: float | None = None
     completed_ts: float | None = None
+    parent_session: str | None = None
+    parent_agent_id: str | None = None
+    parent_call_id: str | None = None
+    root_turn_id: str | None = None
 
 @dataclass
 class ConversationView(_View):
@@ -414,6 +455,31 @@ class ConversationView(_View):
         ]
 
     def children_of(self, agent_id: str) -> list[AgentView]:
+        direct = [
+            self.agents[aid]
+            for aid in self.agent_order
+            if aid in self.agents and self.agents[aid].parent == agent_id
+        ]
+        if direct:
+            return direct
+        parent = self.agents.get(agent_id)
+        if parent is not None:
+            return [parent.body.agents[aid] for aid in parent.body.agent_order if aid in parent.body.agents]
+        for candidate in self.agents.values():
+            nested_parent = candidate.body.agents.get(agent_id)
+            if nested_parent is not None:
+                return [
+                    nested_parent.body.agents[aid]
+                    for aid in nested_parent.body.agent_order
+                    if aid in nested_parent.body.agents
+                ]
+            for nested in candidate.body.agents.values():
+                if nested.id == agent_id:
+                    return [
+                        nested.body.agents[aid]
+                        for aid in nested.body.agent_order
+                        if aid in nested.body.agents
+                    ]
         return [
             self.agents[aid]
             for aid in self.agent_order
@@ -422,11 +488,17 @@ class ConversationView(_View):
 
     def to_dict(self) -> dict[str, Any]:
         payload = _dump(self)
-        # Derived, UI-facing fields overlaid on the dataclass snapshot.
-        payload["agents"] = [
-            _dump(self.agents[aid]) for aid in self.agent_order if aid in self.agents
-        ]
-        payload["messages"] = [_dump(m) for m in self.messages]
+        payload["messages"] = [_dump(message) for message in self.messages]
         payload["usage"] = _dump(self.usage)
         payload["pending_permissions"] = [p.id for p in self.pending_permissions]
+        # Derived, UI-facing fields overlaid on the dataclass snapshot.
+        serialized_agents = []
+        for aid in self.agent_order:
+            agent = self.agents.get(aid)
+            if agent is None:
+                continue
+            serialized = _dump(agent)
+            serialized["body"] = _dump(agent.body)
+            serialized_agents.append(serialized)
+        payload["agents"] = serialized_agents
         return payload

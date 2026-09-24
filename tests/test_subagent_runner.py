@@ -562,6 +562,8 @@ async def test_event_relay_carries_agent_metadata_and_replays(tmp_path):
     spawned = recorder.of("agent.spawned")
     completed = recorder.of("agent.completed")
     assert len(spawned) == 2 and len(completed) == 2
+    assert {agent_meta(data)["parent_call_id"] for data in spawned} == {""}
+    assert {agent_meta(data)["root_turn_id"] for data in spawned} == {""}
 
     # The tree: every spawned id has the root as parent and a distinct session.
     parent_of = {agent_meta(d)["id"]: agent_meta(d)["parent"] for d in spawned}
@@ -600,6 +602,26 @@ async def test_emit_override_isolates_this_spawn(tmp_path):
     await runner.spawn(TaskRequest(prompt="x"), emit=override)
     assert base.events == []
     assert "agent.spawned" in override.types()
+
+
+async def test_nested_correlation_has_immediate_parent_and_root_turn(tmp_path):
+    recorder = Recorder()
+    factory = Factory()
+    root = make_runner(
+        tmp_path,
+        factory,
+        event_sink=recorder,
+        root_turn_id="root-turn-9",
+    )
+    await root.spawn(TaskRequest(prompt="outer"), call_id="parent-call")
+    child_runner = root.for_child(factory.specs[-1])
+    await child_runner.spawn(TaskRequest(prompt="inner"), call_id="child-call")
+    spawned = recorder.of("agent.spawned")
+    nested = next(data for data in spawned if agent_meta(data)["depth"] == 2)
+    meta = agent_meta(nested)
+    assert meta["parent_agent_id"] == agent_meta(spawned[0])["id"]
+    assert meta["parent_call_id"] == "child-call"
+    assert meta["root_turn_id"] == "root-turn-9"
 
 
 # ---------------------------------------------------------------------------

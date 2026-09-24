@@ -35,6 +35,7 @@ from nexus.runtime import Runtime
 from nexus.tools.manager import ToolManager
 from nexus.tools.permissions import Decision
 from nexus.tools.spec import RegisteredTool, ToolExecutionResult, ToolSpec
+from nexus.view import fold
 
 FIXTURES = Path(__file__).parent / "fixtures" / "anthropic"
 
@@ -166,6 +167,61 @@ async def test_native_read_write_bash_flow(tmp_path):
     # Schemas reached every request in the turn.
     assert [len(req.tools) for req in provider.requests] == [16, 16, 16, 16]
     assert {t.name for t in provider.requests[0].tools} >= {"Read", "Write", "Bash"}
+    await runtime.aclose()
+
+
+async def test_root_tool_transcript_replays_redacted_bounded_presentations(tmp_path):
+    provider = ScriptedProvider(
+        tool_response(("write-call", "Write", {"path": "secret.txt", "content": "sk-live-secret-value"})),
+        tool_response(("bash-call", "Bash", {"command": "printf 'api_key=sk-live-secret-value'"})),
+        text_response("done"),
+    )
+    runtime = make_runtime(tmp_path, provider, make_config())
+    session = runtime.session("root-transcript")
+    live = await drain(session.send("go"))
+    replay = list(session.events)
+    assert [event.type for event in live] == [event.type for event in replay]
+    assert str(live) == str(replay)
+    assert "sk-live-secret-value" not in str(replay)
+    view = fold(replay)
+    tools = {tool.call_id: tool for tool in view.tools}
+    write_call = tools["write-call"]
+    assert write_call.input["path"] == "secret.txt"
+    assert write_call.input["content"] == "[write content omitted: 20 chars]"
+    assert "sk-live-secret-value" not in str(write_call)
+    assert write_call.result and write_call.display and write_call.metrics
+    bash_call = tools["bash-call"]
+    assert bash_call.result
+    assert "sk-live-secret-value" not in str(bash_call)
+    assert fold(live).to_dict() == fold(replay).to_dict()
+    await runtime.aclose()
+
+
+async def test_root_edit_result_carries_durable_transcript_diff(tmp_path):
+    (tmp_path / "f.txt").write_text("one\ntwo\n", encoding="utf-8")
+    provider = ScriptedProvider(
+        tool_response(("edit-call", "Edit", {"path": "f.txt", "old_string": "two", "new_string": "three"})),
+        text_response("done"),
+    )
+    runtime = make_runtime(tmp_path, provider, make_config())
+    session = runtime.session("root-edit")
+    events = await drain(session.send("go"))
+    event = next(
+        event for event in events
+        if event.type == "tool.result" and event.data["tool_use_id"] == "edit-call"
+    )
+    assert event.data["diff"] == {
+        "path": "f.txt",
+        "hunk": "--- a/f.txt\n+++ b/f.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+three",
+        "added_lines": 1,
+        "removed_lines": 1,
+        "truncated": False,
+    }
+    tool = next(tool for tool in fold(session.events).tools if tool.call_id == "edit-call")
+    assert tool.diff == event.data["diff"]
+    assert tool.input["old_string"].startswith("[edit text omitted")
+    assert tool.input["new_string"].startswith("[edit text omitted")
+    assert (tmp_path / "f.txt").read_text(encoding="utf-8") == "one\nthree\n"
     await runtime.aclose()
 
 
@@ -658,8 +714,10 @@ async def test_exact_persisted_event_and_message_order(tmp_path):
         "model.started",
         "model.stopped",
         "tool.requested",
+        "tool.input",
         "tool.started",
         "tool.completed",
+        "tool.result",
         "context.assembled",
         "model.started",
         "text.delta",

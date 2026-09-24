@@ -1,39 +1,39 @@
 {
   "full_suite": {
-    "command": "/Users/santa/repos/nexus/.venv/bin/python -m pytest -q -p no:cacheprovider",
+    "command": "/Users/santosh.rajan/repos/nexus/.venv/bin/python3 -m pytest -q -p no:cacheprovider",
     "returncode": 0,
-    "seconds": 66.16,
-    "summary": "3197 passed, 311 skipped, 2 deselected in 65.75s (0:01:05)"
+    "seconds": 250.24,
+    "summary": "3221 passed, 311 skipped, 3 deselected in 249.81s (0:04:09)"
   },
-  "generated_at": "2026-09-23T14:07:57+0530",
-  "head": "db988822e897eb8da551e51e57009d53de37ca3d",
+  "generated_at": "2026-09-24T16:14:44+0530",
+  "head": "810f3845e053ff2ae05066a38754bfb0f15d6ab8",
   "import_cost": {
     "heavy_loaded": [],
-    "import_nexus_ms": 9.37,
+    "import_nexus_ms": 12.06,
     "import_nexus_new_modules": 40,
-    "import_runtime_modules": 377,
-    "import_runtime_ms": 95.71
+    "import_runtime_modules": 440,
+    "import_runtime_ms": 124.68
   },
   "line_budgets": {
     "core_model_spec": {
-      "code_lines": 10385,
+      "code_lines": 10547,
       "files": 28,
       "overage": 0,
-      "physical_lines": 12560,
+      "physical_lines": 12743,
       "plan_cap": 14000,
       "within_plan_cap": true
     },
     "host_view_ui": {
       "baseline_by_dir": {
-        "host": 5198,
-        "ui": 2001,
-        "view": 1604
+        "host": 5301,
+        "ui": 3237,
+        "view": 1934
       },
-      "code_lines": 7253,
-      "files": 28,
+      "code_lines": 8668,
+      "files": 38,
       "overage": 0,
-      "physical_lines": 8803,
-      "plan_cap": 9500,
+      "physical_lines": 10472,
+      "plan_cap": 10500,
       "within_plan_cap": true
     }
   },
@@ -52,34 +52,34 @@
       "boundaries_without_caching": [],
       "cache_read_rate": 0.1,
       "cache_write_rate": 1.25,
-      "cached_input_tokens": 13606.0,
-      "savings_pct": 80.4,
+      "cached_input_tokens": 13635.1,
+      "savings_pct": 80.42,
       "turns": 30,
-      "uncached_input_tokens": 69415
+      "uncached_input_tokens": 69625
     },
     "session_200": {
-      "compacted_assemblies": 29,
+      "compacted_assemblies": 33,
       "contiguous_suffix": true,
       "current_turn_appears_once": true,
-      "final_request_messages": 142,
+      "final_request_messages": 134,
       "input_budget": 5744,
       "log_message_lines": 200,
       "messages": 200,
       "model_calls": 100,
-      "peak_used_tokens": 4866,
+      "peak_used_tokens": 4869,
       "turns": 100
     }
   },
   "phase4": {
-    "command": "/Users/santa/repos/nexus/.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_hot_extension_e2e.py::test_walkthrough_read_template_write_reload_call tests/test_hot_extension_stress.py::test_two_hundred_reloads_do_not_leak",
+    "command": "/Users/santosh.rajan/repos/nexus/.venv/bin/python3 -m pytest -q -p no:cacheprovider tests/test_hot_extension_e2e.py::test_walkthrough_read_template_write_reload_call tests/test_hot_extension_stress.py::test_two_hundred_reloads_do_not_leak",
     "nodeids": [
       "tests/test_hot_extension_e2e.py::test_walkthrough_read_template_write_reload_call",
       "tests/test_hot_extension_stress.py::test_two_hundred_reloads_do_not_leak"
     ],
-    "output_tail": "..                                                                       [100%]\n2 passed in 0.94s",
+    "output_tail": "..                                                                       [100%]\n2 passed in 2.37s",
     "returncode": 0,
-    "seconds": 1.1,
-    "summary": "2 passed in 0.94s"
+    "seconds": 2.56,
+    "summary": "2 passed in 2.37s"
   },
   "schema": "nexus.phase3_exit_baseline/1"
 }

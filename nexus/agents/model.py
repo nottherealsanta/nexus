@@ -11,6 +11,7 @@ whose head is a tiny frontmatter block::
     model: low
     max_iterations: 30
     context_tokens: 100000
+    contexts: [root, subagent]
     ---
 
     System prompt for this agent.
@@ -30,10 +31,11 @@ scalars, flow mappings, comments, nested indentation, block sequences, typed
 scalars, duplicate keys, unknown keys, and wrong value types. One bad line
 rejects the whole declaration.
 
-The seven supported keys are exactly ``name``, ``description``, ``bundles``,
-``tools``, ``model``, ``max_iterations``, and ``context_tokens``. ``name`` and
-``description`` are required; ``bundles`` and ``tools`` are the list-valued
-fields. A ``tools`` item may carry a leading ``-`` to *exclude* a tool, which is
+The supported keys are exactly ``name``, ``description``, ``bundles``,
+``tools``, ``model``, ``max_iterations``, ``context_tokens``, and ``contexts``.
+``name`` and ``description`` are required; ``bundles``, ``tools``, and
+``contexts`` are the list-valued fields. Missing ``contexts`` preserves the
+legacy subagent-only behavior. A ``tools`` item may carry a leading ``-`` to *exclude* a tool, which is
 the only way a declaration can narrow a set -- declarations never grant.
 
 ``model`` is deliberately **opaque**: it is validated for shape only and is never
@@ -79,10 +81,12 @@ __all__ = [
     "MAX_MODEL_CHARS",
     "MAX_NAME_CHARS",
     "MAX_TOOLS",
+    "AGENT_CONTEXTS",
     "MODEL_INHERIT",
     "MODEL_TIERS",
     "MUTATING_FS_TOOLS",
     "READ_ONLY_ROLES",
+    "READ_ONLY_TOOLS",
     "SHELL_TOOLS",
     "SOURCE_PRECEDENCE",
     "AgentDef",
@@ -182,11 +186,14 @@ MUTATING_FS_TOOLS = frozenset({"Write", "Edit", "MultiEdit"})
 #: The shell bundle tools; a read-only role may never hold one.
 SHELL_TOOLS = frozenset({"Bash", "BashOutput", "KillShell"})
 #: Everything the read-only roles are structurally denied.
-FORBIDDEN_ROLE_TOOLS = SHELL_TOOLS | MUTATING_FS_TOOLS
+FORBIDDEN_ROLE_TOOLS = SHELL_TOOLS | MUTATING_FS_TOOLS | frozenset({"Task"})
 #: Bundles the read-only roles are structurally denied.
 FORBIDDEN_ROLE_BUNDLES = frozenset({"shell"})
 #: Roles with no write path at all, regardless of what their file declares.
-READ_ONLY_ROLES = frozenset({"explore", "planner"})
+READ_ONLY_ROLES = frozenset({"explore", "plan", "planner"})
+#: Tools permitted to structurally read-only roles.
+READ_ONLY_TOOLS = frozenset({"Read", "Glob", "Grep", "LS"})
+AGENT_CONTEXTS = frozenset({"root", "subagent"})
 
 _NAME_RE = re.compile(rf"[A-Za-z0-9][A-Za-z0-9._-]{{0,{MAX_NAME_CHARS - 1}}}\Z")
 _BUNDLE_RE = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
@@ -204,8 +211,10 @@ _FIELDS = (
     "model",
     "max_iterations",
     "context_tokens",
+    "contexts",
+    "profile",
 )
-_LIST_FIELDS = frozenset({"bundles", "tools"})
+_LIST_FIELDS = frozenset({"bundles", "tools", "contexts"})
 _REQUIRED_FIELDS = frozenset({"name", "description"})
 
 #: A value may not *begin* with one of these: each is a YAML structural marker.
@@ -263,6 +272,7 @@ class AgentDiagnosticCode(StrEnum):
     FORBIDDEN_TOOL = "forbidden_tool"
     FORBIDDEN_BUNDLE = "forbidden_bundle"
     SEED_ERROR = "seed_error"
+    DEPRECATED_PLANNER = "deprecated_planner"
 
 
 @dataclass(frozen=True)
@@ -311,6 +321,8 @@ class ParsedFrontmatter:
     model: str | None
     max_iterations: int | None
     context_tokens: int | None
+    contexts: tuple[str, ...]
+    profile: str | None
     raw: bytes
 
 
@@ -459,6 +471,8 @@ def _parse_list(
         if item not in seen:
             seen.add(item)
             ordered.append(item)
+        elif field == "contexts":
+            raise AgentParseError(f"{field}: duplicate list item {item!r}")
     return tuple(ordered)
 
 
@@ -569,6 +583,22 @@ def _parse_raw(raw: bytes) -> ParsedFrontmatter:
         if "context_tokens" in fields
         else None
     )
+    contexts = (
+        _parse_list(fields["contexts"], "contexts", re.compile(r"[a-z]+\Z"), "context")
+        if "contexts" in fields
+        else ("subagent",)
+    )
+    if not contexts or len(set(contexts)) != len(contexts) or set(contexts) - AGENT_CONTEXTS:
+        invalid = sorted(set(contexts) - AGENT_CONTEXTS)
+        raise AgentParseError(
+            "contexts must contain one or more of: root, subagent"
+            + (f" (unknown: {', '.join(invalid)})" if invalid else "")
+        )
+    profile = (
+        validate_agent_name(_parse_scalar(fields["profile"], "profile"))
+        if "profile" in fields
+        else None
+    )
 
     return ParsedFrontmatter(
         name=name,
@@ -579,6 +609,8 @@ def _parse_raw(raw: bytes) -> ParsedFrontmatter:
         model=model,
         max_iterations=max_iterations,
         context_tokens=context_tokens,
+        contexts=contexts,
+        profile=profile,
         raw=raw,
     )
 
@@ -737,6 +769,8 @@ class AgentDef:
     model: str | None = None
     max_iterations: int | None = None
     context_tokens: int | None = None
+    contexts: tuple[str, ...] = ("subagent",)
+    profile: str | None = None
     # -- refresh-time snapshot (progressive disclosure keeps it out of the index)
     body: bytes | None = None
     body_sha256: str = ""
@@ -785,6 +819,10 @@ class AgentDef:
         """
         return self.name.casefold() in READ_ONLY_ROLES
 
+    def eligible_in(self, context: str) -> bool:
+        """Whether the declaration can be selected in a root/subagent context."""
+        return context in self.contexts
+
     def forbidden_role_declarations(self) -> tuple[str, ...]:
         """Declared positive tools/bundles a read-only role may never hold."""
         if not self.read_only:
@@ -816,6 +854,8 @@ class AgentDef:
             "model": self.model,
             "max_iterations": self.max_iterations,
             "context_tokens": self.context_tokens,
+            "contexts": list(self.contexts),
+            "profile": self.profile,
             "read_only": self.read_only,
             "declaration": self.provenance.declaration_sha256,
             "body": self.body_sha256,

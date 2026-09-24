@@ -57,6 +57,14 @@ class ToolResult(msgspec.Struct, tag="tool_result"):
     #: it directly to evict large content from an **assembled copy** while the
     #: durable log keeps the original content and this note.
     context_note: str | None = None
+    #: Bounded harness display metadata retained for reducer-backed transcripts.
+    display: str | None = None
+    metrics: dict[str, Any] | None = None
+    #: Bounded, transcript-only file-change metadata.  It is deliberately not
+    #: represented in ``content``: providers receive the concise result text,
+    #: while transcript consumers can render the durable preview without
+    #: re-reading a workspace file.
+    diff: dict[str, Any] | None = None
 
 
 ContentBlock = Text | Thinking | ToolUse | ToolResult | Image | Document

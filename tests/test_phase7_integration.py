@@ -12,8 +12,7 @@ Covered:
   ``google``/``gemini``, and Ollama/llama.cpp;
 * one shared HTTP client owned by the runtime, closed exactly once;
 * request-time secrets (``${env:VAR}`` never resolved at construction);
-* Codex model ids routing to the OpenAI Responses dialect while a legacy
-  ``[providers.codex]`` executable section is left to the CLI;
+* Codex model ids routing to the OpenAI Responses dialect;
 * the ``model.fallback`` chain, tried only on a provider-level failure before
   any output, with visible ``model.retrying``/``context.degraded`` -- never on
   a refusal or after partial output;
@@ -26,6 +25,7 @@ plan step, not this one.
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -49,9 +49,10 @@ from nexus.model.providers.ollama import OllamaProvider
 from nexus.model.providers.openai import API_CHAT, API_RESPONSES, OpenAIProvider
 from nexus.model.providers.opencode import OpenCodeProvider
 from nexus.model.providers.scripted import ScriptedProvider, text_response
-from nexus.model.registry import ADAPTER_OPENAI, map_provider
-from nexus.model.request import ModelRequest
-from nexus.model.stream import MessageStart, MessageStop, TextDelta
+from nexus.model.registry import ADAPTER_OPENAI, ModelRegistry, map_provider
+from nexus.model.message import Message, Text
+from nexus.model.request import ModelRequest, ToolSchema
+from nexus.model.stream import MessageStart, MessageStop, TextDelta, ToolCallEnd
 from nexus.runtime import Runtime
 
 # ---------------------------------------------------------------------------
@@ -241,38 +242,160 @@ def test_codex_provider_id_maps_to_openai_adapter():
     assert map_provider("codex", None) == ADAPTER_OPENAI
 
 
-async def test_codex_model_reference_builds_openai_responses(tmp_path):
+async def test_codex_model_reference_uses_responses_system_tools_and_normalized_calls(
+    tmp_path,
+):
+    captured: dict[str, object] = {}
+    body = b"".join(
+        (
+            b"event: response.created\n",
+            b'data: {"type":"response.created","response":{"id":"r1","model":"gpt-5.6-luna","status":"in_progress"}}\n\n',
+            b"event: response.output_item.added\n",
+            b'data: {"type":"response.output_item.added","item":{"type":"function_call","id":"fc1","call_id":"call1","name":"Read","arguments":"{\\\"path\\\":\\\"a.txt\\\"}"}}\n\n',
+            b"event: response.output_item.done\n",
+            b'data: {"type":"response.output_item.done","item":{"type":"function_call","id":"fc1","call_id":"call1","name":"Read","arguments":"{\\\"path\\\":\\\"a.txt\\\"}"}}\n\n',
+            b"event: response.completed\n",
+            b'data: {"type":"response.completed","response":{"id":"r1","status":"completed","usage":{}}}\n\n',
+        )
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, content=body)
+
     config = make_config(
-        default="codex/gpt-5-codex",
+        default="codex/gpt-5.6-luna",
         providers={
-            "acme": ProviderSection(
-                kind="openai_compatible", base_url="https://api.acme.test/v1"
-            )
+            "codex": ProviderSection(api_key="${env:OPENAI_API_KEY}", api="responses")
         },
     )
-    runtime = Runtime(tmp_path, config=config, environ={})
+    runtime = Runtime(
+        tmp_path,
+        config=config,
+        environ={"OPENAI_API_KEY": "test-key"},
+        http_transport=httpx.MockTransport(handler),
+    )
     try:
         provider = runtime.providers["codex"]
         assert isinstance(provider, OpenAIProvider)
         assert provider.api == API_RESPONSES
+        events = [
+            event
+            async for event in provider.stream(
+                ModelRequest(
+                    messages=[Message("user", [Text("inspect")])],
+                    system="Nexus system prompt",
+                    tools=[ToolSchema("Read", "Read a file", {"type": "object"})],
+                )
+            )
+        ]
+        assert captured["url"] == "https://api.openai.com/v1/responses"
+        assert captured["body"] == {
+            "model": "gpt-5.6-luna",
+            "instructions": "Nexus system prompt",
+            "input": [
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "inspect"}],
+                }
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "Read",
+                    "description": "Read a file",
+                    "parameters": {"type": "object"},
+                }
+            ],
+            "stream": True,
+            "max_output_tokens": 4096,
+        }
+        calls = [event for event in events if isinstance(event, ToolCallEnd)]
+        assert calls == [ToolCallEnd(id="call1", input={"path": "a.txt"})]
     finally:
         await runtime.aclose()
 
 
-async def test_legacy_codex_executable_section_is_not_a_model_provider(tmp_path):
+async def test_codex_oauth_runtime_uses_private_endpoint_and_disables_response_storage(tmp_path):
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, content=b"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{}}}\n\n")
+
+    class OAuthManager:
+        def __init__(self, *, profile):
+            assert profile == "default"
+
+        async def headers(self):
+            return {"authorization": "Bearer test-token"}
+
     config = make_config(
-        default="acme/llama-3",
-        providers={
-            "codex": ProviderSection(executable="codex", timeout_seconds=900),
-            "acme": ProviderSection(
-                kind="openai_compatible", base_url="https://api.acme.test/v1"
-            ),
-        },
+        default="codex/gpt-5.6-luna",
+        providers={"codex": ProviderSection(auth="chatgpt_oauth", profile="default", api="responses")},
     )
-    runtime = Runtime(tmp_path, config=config, environ={})
+    runtime = Runtime(
+        tmp_path,
+        config=config,
+        codex_auth_factory=OAuthManager,
+        http_transport=httpx.MockTransport(handler),
+    )
     try:
-        assert "codex" not in runtime.providers
-        assert isinstance(runtime.providers["acme"], OpenAIProvider)
+        provider = runtime.providers["codex"]
+        assert isinstance(provider, OpenAIProvider)
+        [event async for event in provider.stream(ModelRequest(messages=[Message("user", [Text("ping")])]))]
+    finally:
+        await runtime.aclose()
+
+    assert captured["url"] == "https://chatgpt.com/backend-api/codex/responses"
+    assert captured["body"]["store"] is False
+    assert "max_output_tokens" not in captured["body"]
+
+
+async def test_codex_registry_projection_routes_first_turn_with_default_output_limit(tmp_path):
+    captured: dict[str, object] = {}
+    body = b"".join((
+        b"event: response.created\n",
+        b'data: {"type":"response.created","response":{"id":"r1","status":"in_progress"}}\n\n',
+        b"event: response.output_text.delta\n",
+        b'data: {"type":"response.output_text.delta","delta":"ok"}\n\n',
+        b"event: response.completed\n",
+        b'data: {"type":"response.completed","response":{"id":"r1","status":"completed","usage":{}}}\n\n',
+    ))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, content=body)
+
+    section = ProviderSection(api_key="${env:OPENAI_API_KEY}", api="responses")
+    registry = ModelRegistry(
+        providers={"codex": section}, provider_aliases={"codex": "openai"},
+        env={}, snapshot_path=tmp_path / "missing.json",
+    )
+    registry.install_raw(json.dumps({"openai": {"models": {"gpt-5.6-luna": {
+        "modalities": {"output": ["text"]},
+        "limit": {"context": 1_050_000, "output": 128_000},
+        "tool_call": True,
+    }}}}).encode())
+    config = make_config(
+        default="codex/gpt-5.6-luna", providers={"codex": section}
+    )
+    runtime = Runtime(
+        tmp_path, config=config, registry=registry,
+        environ={"OPENAI_API_KEY": "test-key"},
+        http_transport=httpx.MockTransport(handler),
+    )
+    try:
+        assert [model.ref for model in registry.list()] == ["codex/gpt-5.6-luna"]
+        assert runtime.router.resolve(ModelRequest(messages=[])).provider.name == "codex"
+        await drain(runtime.session("codex-projection"))
+        sent = captured["body"]
+        assert sent["model"] == "gpt-5.6-luna"
+        assert sent["max_output_tokens"] == 4096
+        assert sent["instructions"]
+        assert sent["tools"]
     finally:
         await runtime.aclose()
 
@@ -1008,6 +1131,3 @@ async def test_hot_provider_modules_are_not_retained(tmp_path):
             await runtime.aclose()
     after = {name for name in sys.modules if name.startswith("nexus_hot_provider_")}
     assert after == before
-
-
-

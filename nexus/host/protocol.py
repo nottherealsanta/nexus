@@ -69,6 +69,13 @@ class SessionState(msgspec.Struct, tag=True, frozen=True):
     from_seq: int = 0
 
 
+class AgentTranscript(msgspec.Struct, tag=True, frozen=True):
+    """Request the reducer-backed transcript for one child agent."""
+
+    session: str
+    agent_id: str
+
+
 class SessionFork(msgspec.Struct, tag=True, frozen=True):
     session: str
     at_seq: int | None = None
@@ -165,6 +172,19 @@ class AgentsList(msgspec.Struct, tag=True, frozen=True):
     """The discovered subagent definitions (sanitized index rows)."""
 
 
+class AgentCurrent(msgspec.Struct, tag=True, frozen=True):
+    session: str
+
+
+class AgentSelect(msgspec.Struct, tag=True, frozen=True):
+    session: str
+    name: str
+
+
+class AgentReset(msgspec.Struct, tag=True, frozen=True):
+    session: str
+
+
 class ToolsList(msgspec.Struct, tag=True, frozen=True):
     """The model-facing tool catalog for the current config and manifest."""
 
@@ -195,6 +215,7 @@ Command = (
     | SessionCancel
     | SessionSubscribe
     | SessionState
+    | AgentTranscript
     | SessionFork
     | SessionDelete
     | SessionRestore
@@ -210,6 +231,9 @@ Command = (
     | ModelTiers
     | ModelSelect
     | AgentsList
+    | AgentCurrent
+    | AgentSelect
+    | AgentReset
     | ToolsList
     | Doctor
     | Health
@@ -224,6 +248,7 @@ COMMANDS: tuple[type, ...] = (
     SessionCancel,
     SessionSubscribe,
     SessionState,
+    AgentTranscript,
     SessionFork,
     SessionDelete,
     SessionRestore,
@@ -239,6 +264,9 @@ COMMANDS: tuple[type, ...] = (
     ModelTiers,
     ModelSelect,
     AgentsList,
+    AgentCurrent,
+    AgentSelect,
+    AgentReset,
     ToolsList,
     Doctor,
     Health,
@@ -289,6 +317,14 @@ class SessionSubscribeResult(msgspec.Struct, tag=True, frozen=True):
 class SessionStateResult(msgspec.Struct, tag=True, frozen=True):
     session: str
     seq: int = 0
+    view: dict[str, Any] = msgspec.field(default_factory=dict)
+
+
+class AgentTranscriptResult(msgspec.Struct, tag=True, frozen=True):
+    session: str
+    agent_id: str
+    found: bool = True
+    status: str = "running"
     view: dict[str, Any] = msgspec.field(default_factory=dict)
 
 
@@ -410,6 +446,19 @@ class AgentsListResult(msgspec.Struct, tag=True, frozen=True):
     agents: list[dict[str, Any]] = msgspec.field(default_factory=list)
 
 
+class AgentCurrentResult(msgspec.Struct, tag=True, frozen=True):
+    session: str
+    name: str = "general"
+    source: str = "default"
+
+
+class AgentSelectResult(msgspec.Struct, tag=True, frozen=True):
+    session: str
+    name: str = "general"
+    source: str = "session"
+    apply_next_turn: bool = True
+
+
 class ToolsListResult(msgspec.Struct, tag=True, frozen=True):
     count: int = 0
     tools: list[dict[str, Any]] = msgspec.field(default_factory=list)
@@ -452,6 +501,7 @@ Result = (
     | SessionCancelResult
     | SessionSubscribeResult
     | SessionStateResult
+    | AgentTranscriptResult
     | SessionForkResult
     | SessionDeleteResult
     | SessionRestoreResult
@@ -467,6 +517,8 @@ Result = (
     | ModelTiersResult
     | ModelSelectResult
     | AgentsListResult
+    | AgentCurrentResult
+    | AgentSelectResult
     | ToolsListResult
     | DoctorResult
     | HealthResult
@@ -482,6 +534,7 @@ RESULTS: tuple[type, ...] = (
     SessionCancelResult,
     SessionSubscribeResult,
     SessionStateResult,
+    AgentTranscriptResult,
     SessionForkResult,
     SessionDeleteResult,
     SessionRestoreResult,
@@ -497,6 +550,8 @@ RESULTS: tuple[type, ...] = (
     ModelTiersResult,
     ModelSelectResult,
     AgentsListResult,
+    AgentCurrentResult,
+    AgentSelectResult,
     ToolsListResult,
     DoctorResult,
     HealthResult,
@@ -536,6 +591,13 @@ __all__ = [
     "RESULTS",
     "AgentsList",
     "AgentsListResult",
+    "AgentCurrent",
+    "AgentCurrentResult",
+    "AgentTranscript",
+    "AgentTranscriptResult",
+    "AgentReset",
+    "AgentSelect",
+    "AgentSelectResult",
     "Command",
     "Doctor",
     "DoctorResult",

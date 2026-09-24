@@ -119,8 +119,21 @@ def test_parse_all_fields():
     assert parsed.model == "low"
     assert parsed.max_iterations == 30
     assert parsed.context_tokens == 100_000
+    assert parsed.contexts == ("subagent",)
     assert b"name: explorer" in parsed.raw
     assert b"BODY" not in parsed.raw
+
+
+def test_contexts_parse_and_legacy_defaults_to_subagent():
+    assert parse_frontmatter(doc(
+        "name: both", "description: d", "contexts: [root, subagent]"
+    )).contexts == ("root", "subagent")
+    assert parse_frontmatter(doc(
+        "name: root", "description: d", "contexts: [root]"
+    )).contexts == ("root",)
+    for value in ("[]", "[unknown]", "[root, root]"):
+        with pytest.raises(AgentParseError):
+            parse_frontmatter(doc("name: bad", "description: d", f"contexts: {value}"))
 
 
 def test_parse_requires_name_and_description():
@@ -373,10 +386,10 @@ def test_marker_and_non_markdown_files_are_ignored(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_for_workspace_seeds_the_three_roles_once(tmp_path):
+def test_for_workspace_seeds_the_canonical_roles_once(tmp_path):
     workspace = tmp_path / "ws"
     mgr = AgentManager.for_workspace(workspace)
-    assert mgr.names == SEEDED_ROLES
+    assert set(mgr.names) == set(SEEDED_ROLES)
     agents_dir = workspace / ".nexus" / "agents"
     assert (agents_dir / SEED_MARKER_NAME).is_file()
     for role in SEEDED_ROLES:
@@ -491,12 +504,24 @@ def test_for_workspace_roots_are_builtin_user_workspace(tmp_path):
 def test_seeded_roles_match_the_read_only_contract(tmp_path):
     mgr = AgentManager.for_workspace(tmp_path / "ws")
     explore = mgr.require("explore")
-    planner = mgr.require("planner")
+    planner = mgr.require("plan")
     assert explore.read_only and planner.read_only
     assert not mgr.require("general").read_only
     assert explore.model == "low"
     assert planner.model == "high"
     assert mgr.require("general").model == "medium"
+    assert {"general", "build", "explore", "plan"} <= set(mgr.names)
+    assert all(mgr.require(name).contexts == ("root", "subagent") for name in ("general", "build", "explore", "plan"))
+
+
+def test_planner_alias_keeps_custom_definition_and_uses_plan_when_absent(tmp_path):
+    mgr = AgentManager.for_workspace(tmp_path / "builtins")
+    assert mgr.resolve("planner", context="root").name == "plan"
+    workspace_root = tmp_path / "custom" / ".nexus" / "agents"
+    write_agent(workspace_root, "planner", body="CUSTOM")
+    custom = AgentManager.for_workspace(tmp_path / "custom")
+    assert custom.resolve("planner", context="subagent").source is AgentSource.WORKSPACE
+    assert any(d.code is AgentDiagnosticCode.DEPRECATED_PLANNER for d in custom.diagnostics)
 
 
 # ---------------------------------------------------------------------------
@@ -807,7 +832,7 @@ def _provenance(tmp_path: Path, name: str):
 def test_read_only_roles_constant_covers_shell_and_mutating_fs():
     assert {"Bash", "BashOutput", "KillShell"} <= FORBIDDEN_ROLE_TOOLS
     assert {"Write", "Edit", "MultiEdit"} <= FORBIDDEN_ROLE_TOOLS
-    assert READ_ONLY_ROLES == frozenset({"explore", "planner"})
+    assert READ_ONLY_ROLES == frozenset({"explore", "plan", "planner"})
 
 
 def test_seed_error_is_an_agent_error(tmp_path, monkeypatch):

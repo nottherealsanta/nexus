@@ -76,20 +76,20 @@ def char_counter():
 
 
 def test_input_budget_exact_formula():
-    # min(1000, 800) - min(100, 200) - 50
-    assert compute_input_budget(1000, 800, 100, 200, 50) == 650
+    # min(1000, 800) - min(100, 200 hard max) - 50
+    assert compute_input_budget(1000, 800, 100, 4096, 200, 50) == 650
 
 
 def test_input_budget_ignores_unknown_capability_ceiling():
-    assert compute_input_budget(1000, 0, None, None, 0) == 1000
+    assert compute_input_budget(1000, 0, None, None, None, 0) == 1000
 
 
-def test_effective_output_is_the_smallest_known_positive():
-    assert effective_max_output_tokens(100, 200) == 100
-    assert effective_max_output_tokens(None, 200) == 200
-    assert effective_max_output_tokens(100, None) == 100
-    assert effective_max_output_tokens(None, None) == 0
-    assert effective_max_output_tokens(0, -5) == 0
+def test_effective_output_uses_request_or_provider_default_not_hard_max():
+    assert effective_max_output_tokens(100, 4096, 200) == 100
+    assert effective_max_output_tokens(None, 4096, 200) == 200
+    assert effective_max_output_tokens(100, None, 200) == 100
+    assert effective_max_output_tokens(None, None, 200) == 0
+    assert effective_max_output_tokens(0, -5, 200) == 0
 
 
 def test_budget_inputs_properties():
@@ -97,11 +97,36 @@ def test_budget_inputs_properties():
         config_max_tokens=10_000,
         caps_max_context_tokens=8_000,
         config_max_output_tokens=1_000,
+        provider_default_max_output_tokens=4_096,
         caps_max_output_tokens=2_000,
         safety_margin_tokens=500,
     )
     assert inputs.effective_max_output_tokens == 1_000
     assert inputs.input_budget == 6_500
+
+
+def test_default_output_reserve_is_clamped_to_hard_max_and_leaves_expected_budget():
+    inputs = BudgetInputs(
+        config_max_tokens=16_000,
+        config_max_output_tokens=None,
+        provider_default_max_output_tokens=4_096,
+        caps_max_output_tokens=128_000,
+        safety_margin_tokens=4_000,
+    )
+    assert inputs.effective_max_output_tokens == 4_096
+    assert inputs.input_budget == 7_904
+
+
+def test_explicit_output_reserve_is_clamped_and_unknown_default_reserves_nothing():
+    assert BudgetInputs(
+        config_max_tokens=10_000,
+        config_max_output_tokens=10_000,
+        provider_default_max_output_tokens=4_096,
+        caps_max_output_tokens=2_000,
+    ).effective_max_output_tokens == 2_000
+    assert BudgetInputs(
+        config_max_tokens=10_000, caps_max_output_tokens=2_000
+    ).effective_max_output_tokens == 0
 
 
 def test_budget_inputs_from_legacy_v1_config():

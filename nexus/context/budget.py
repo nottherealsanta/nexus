@@ -35,29 +35,21 @@ __all__ = [
     "fit_suffix_count",
     "part_caps",
 ]
-
-
 class ContextOverflow(NexusError):
     """Required (priority 0) context does not fit the input budget."""
-
-
 def effective_max_output_tokens(
-    config_max_output_tokens: int | None, caps_max_output_tokens: int | None
+    config_max_output_tokens: int | None, provider_default_max_output_tokens: int | None, caps_max_output_tokens: int | None,
 ) -> int:
-    """The smallest known positive output reserve, or 0 when none is known."""
-    candidates = [
-        value
-        for value in (config_max_output_tokens, caps_max_output_tokens)
-        if type(value) is int and value > 0
-    ]
-    return min(candidates) if candidates else 0
-
-
+    requested = config_max_output_tokens if type(config_max_output_tokens) is int and config_max_output_tokens > 0 else provider_default_max_output_tokens
+    if type(requested) is not int or requested <= 0:
+        return 0
+    if type(caps_max_output_tokens) is int and caps_max_output_tokens > 0:
+        return min(requested, caps_max_output_tokens)
+    return requested
 def compute_input_budget(
     config_max_tokens: int,
     caps_max_context_tokens: int,
-    config_max_output_tokens: int | None,
-    caps_max_output_tokens: int | None,
+    config_max_output_tokens: int | None, provider_default_max_output_tokens: int | None, caps_max_output_tokens: int | None,
     safety_margin_tokens: int,
 ) -> int:
     """Exact input-budget formula (may be negative for a misconfigured setup)."""
@@ -67,15 +59,7 @@ def compute_input_budget(
     if type(caps_max_context_tokens) is int and caps_max_context_tokens > 0:
         context_limit = min(context_limit, caps_max_context_tokens)
     margin = max(0, safety_margin_tokens) if type(safety_margin_tokens) is int else 0
-    return (
-        context_limit
-        - effective_max_output_tokens(
-            config_max_output_tokens, caps_max_output_tokens
-        )
-        - margin
-    )
-
-
+    return context_limit - effective_max_output_tokens(config_max_output_tokens, provider_default_max_output_tokens, caps_max_output_tokens) - margin
 @dataclass(frozen=True)
 class BudgetInputs:
     """Everything the allocation algorithm needs, frozen for one assembly."""
@@ -83,25 +67,17 @@ class BudgetInputs:
     config_max_tokens: int
     caps_max_context_tokens: int = 0
     config_max_output_tokens: int | None = None
+    provider_default_max_output_tokens: int | None = None
     caps_max_output_tokens: int | None = None
     safety_margin_tokens: int = 0
-
     @property
     def effective_max_output_tokens(self) -> int:
         return effective_max_output_tokens(
-            self.config_max_output_tokens, self.caps_max_output_tokens
+            self.config_max_output_tokens, self.provider_default_max_output_tokens, self.caps_max_output_tokens
         )
-
     @property
     def input_budget(self) -> int:
-        return compute_input_budget(
-            self.config_max_tokens,
-            self.caps_max_context_tokens,
-            self.config_max_output_tokens,
-            self.caps_max_output_tokens,
-            self.safety_margin_tokens,
-        )
-
+        return compute_input_budget(self.config_max_tokens, self.caps_max_context_tokens, self.config_max_output_tokens, self.provider_default_max_output_tokens, self.caps_max_output_tokens, self.safety_margin_tokens)
     @classmethod
     def from_config_and_caps(
         cls, config: Any, capabilities: Any
@@ -109,22 +85,14 @@ class BudgetInputs:
         """Build inputs from a :class:`~nexus.config.Config` and capabilities."""
         v2 = getattr(config, "v2", None)
         context = getattr(v2, "context", None)
-        if context is not None:
-            config_max = context.max_tokens
-            safety = context.safety_margin_tokens
-        else:
+        if context is None:
             # Legacy v1 bridge: the old budget was measured in characters.
             config_max = max(1, int(getattr(config, "context_chars", 0)) // 4)
             safety = 0
+        else: config_max, safety = context.max_tokens, context.safety_margin_tokens
         params = getattr(getattr(v2, "model", None), "params", None)
         config_output = getattr(params, "max_output_tokens", None)
-        return cls(
-            config_max_tokens=config_max,
-            caps_max_context_tokens=int(getattr(capabilities, "max_context_tokens", 0) or 0),
-            config_max_output_tokens=config_output,
-            caps_max_output_tokens=int(getattr(capabilities, "max_output_tokens", 0) or 0),
-            safety_margin_tokens=safety,
-        )
+        return cls(config_max, int(getattr(capabilities, "max_context_tokens", 0) or 0), config_output, int(getattr(capabilities, "default_max_output_tokens", 0) or 0), int(getattr(capabilities, "max_output_tokens", 0) or 0), safety)
 
 
 @dataclass(frozen=True)
@@ -279,4 +247,3 @@ def fit_suffix_count(costs: Sequence[int], budget: int) -> int:
         total += cost
         keep += 1
     return keep
-

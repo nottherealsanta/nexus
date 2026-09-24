@@ -44,6 +44,7 @@ from .manager import (
     seed_workspace_roles,
 )
 from .model import (
+    AGENT_CONTEXTS,
     DEFAULT_MAX_BODY_BYTES,
     DELIMITER,
     FORBIDDEN_ROLE_BUNDLES,
@@ -115,6 +116,7 @@ from .runner import (
 )
 
 __all__ = [
+    "AGENT_CONTEXTS",
     "AGENT_CLAMPED",
     "AGENT_COMPLETED",
     "AGENT_FILE_SUFFIX",

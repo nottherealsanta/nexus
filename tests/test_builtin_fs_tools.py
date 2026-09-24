@@ -390,6 +390,13 @@ async def test_edit_single_replacement(workspace: Path):
     )
     assert result.is_error is False
     assert (workspace / "f.txt").read_text(encoding="utf-8") == "hello there"
+    assert result.diff == {
+        "path": "f.txt",
+        "hunk": "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-hello world\n+hello there",
+        "added_lines": 1,
+        "removed_lines": 1,
+        "truncated": False,
+    }
 
 
 async def test_edit_no_match_leaves_file_untouched(workspace: Path):
@@ -400,6 +407,7 @@ async def test_edit_no_match_leaves_file_untouched(workspace: Path):
         make_ctx(workspace),
     )
     assert result.is_error is True
+    assert result.diff is None
     assert target.read_text(encoding="utf-8") == "hello"
 
 
@@ -420,6 +428,7 @@ async def test_edit_replace_all(workspace: Path):
         make_ctx(workspace),
     )
     assert result.metrics["replacements"] == 3
+    assert result.diff["added_lines"] == result.diff["removed_lines"] == 1
     assert (workspace / "f.txt").read_text(encoding="utf-8") == "y y y"
 
 
@@ -491,6 +500,28 @@ async def test_edit_size_cap(workspace: Path, monkeypatch: pytest.MonkeyPatch):
         {"path": "f.txt", "old_string": "0", "new_string": "z"}, make_ctx(workspace)
     )
     assert result.is_error is True
+
+
+async def test_edit_diff_preview_is_bounded_and_redacted(workspace: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(edit, "_MAX_DIFF_LINES", 3)
+    monkeypatch.setattr(edit, "_MAX_DIFF_CHARS", 100)
+    before = "\n".join(f"old-{index}" for index in range(20))
+    after = "\n".join(
+        "api_key=sk-live-secret-value" if index == 10 else f"new-{index}"
+        for index in range(20)
+    )
+    (workspace / "f.txt").write_text(before, encoding="utf-8")
+    result = await edit.run(
+        {"path": "f.txt", "old_string": before, "new_string": after},
+        make_ctx(workspace),
+    )
+    assert result.is_error is False
+    assert result.diff["added_lines"] == 20
+    assert result.diff["removed_lines"] == 20
+    assert result.diff["truncated"] is True
+    assert len(result.diff["hunk"].splitlines()) <= 4
+    assert len(result.diff["hunk"]) <= 100
+    assert "sk-live-secret-value" not in result.diff["hunk"]
 
 
 # ---------------------------------------------------------------------------

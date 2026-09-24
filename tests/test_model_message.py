@@ -60,6 +60,24 @@ def test_message_meta_defaults_and_roundtrip():
     assert decoded.meta.turn_id == "t1"
 
 
+def test_tool_result_diff_roundtrips_without_entering_content():
+    block = ToolResult(
+        "call-1",
+        [Text("Edited f.txt: replaced 1 occurrence(s)")],
+        diff={
+            "path": "f.txt",
+            "hunk": "-old\n+new",
+            "added_lines": 1,
+            "removed_lines": 1,
+            "truncated": False,
+        },
+    )
+    decoded = msgspec.json.Decoder(ContentBlock).decode(msgspec.json.encode(block))
+    assert decoded == block
+    assert isinstance(decoded, ToolResult)
+    assert decoded.content[0].text == "Edited f.txt: replaced 1 occurrence(s)"
+
+
 def test_no_system_role_in_message_ir():
     for block in BLOCKS:
         assert isinstance(block, (Text, Thinking, ToolUse, ToolResult, Image, Document))

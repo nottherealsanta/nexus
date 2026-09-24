@@ -91,6 +91,7 @@ from ..model.stream import (
     ToolCallEnd,
     ToolCallStart,
 )
+from ..util import redact_secrets
 from ..model.stream import Usage as StreamUsage
 from ..util import redact_url_userinfo
 from .cancel import CancelToken
@@ -1292,6 +1293,142 @@ def _error_result(tool_use_id: str, name: str, detail: str) -> ToolResult:
     )
 
 
+_MAX_TRANSCRIPT_ARGUMENT_CHARS = 8192
+_MAX_TRANSCRIPT_ARGUMENT_DEPTH = 8
+_MAX_TRANSCRIPT_ARGUMENT_ITEMS = 256
+_MAX_TRANSCRIPT_RESULT_CHARS = 100_000
+_MAX_TRANSCRIPT_RESULT_BLOCKS = 256
+_MAX_TRANSCRIPT_DIFF_CHARS = 24_000
+_MAX_TRANSCRIPT_DIFF_LINES = 240
+
+
+def _safe_tool_input(value: object, *, tool: str | None = None) -> dict[str, Any]:
+    """Bound and redact tool arguments before including them in durable events."""
+    def clean(item: object, depth: int = 0) -> object:
+        if depth >= _MAX_TRANSCRIPT_ARGUMENT_DEPTH:
+            return "[nested value omitted]"
+        if isinstance(item, str):
+            text = redact_secrets(item)
+            return text if len(text) <= _MAX_TRANSCRIPT_ARGUMENT_CHARS else text[:_MAX_TRANSCRIPT_ARGUMENT_CHARS] + "…"
+        if isinstance(item, Mapping):
+            return {
+                redact_secrets(str(key))[:200]: (
+                    "***"
+                    if re.search(r"(?i)(api[-_]?key|authorization|access[-_]?token|refresh[-_]?token|client[-_]?secret|password|secret|token)", str(key))
+                    else clean(value, depth + 1)
+                )
+                for key, value in list(item.items())[:_MAX_TRANSCRIPT_ARGUMENT_ITEMS]
+            }
+        if isinstance(item, (list, tuple)):
+            return [clean(value, depth + 1) for value in item[:_MAX_TRANSCRIPT_ARGUMENT_ITEMS]]
+        if item is None or isinstance(item, (bool, int, float)):
+            return item
+        return f"<{type(item).__name__}>"
+
+    safe = clean(value)
+    # A Write input is the complete file body.  Keeping even a small body in a
+    # transcript is unnecessary for rendering and turns the transcript into a
+    # second durable copy of the file.  Edit text is similarly represented by
+    # its bounded post-execution diff rather than raw replacement arguments.
+    if isinstance(safe, dict) and tool == "Write" and "content" in safe:
+        original = value.get("content") if isinstance(value, Mapping) else None
+        size = len(original) if isinstance(original, str) else 0
+        safe["content"] = f"[write content omitted: {size} chars]"
+    if isinstance(safe, dict) and tool == "Edit":
+        for key in ("old_string", "new_string"):
+            if key in safe:
+                safe[key] = "[edit text omitted; see diff preview when available]"
+    encoded = msgspec.json.encode(safe)
+    if len(encoded) > _MAX_TRANSCRIPT_ARGUMENT_CHARS:
+        return {"_truncated": encoded[: _MAX_TRANSCRIPT_ARGUMENT_CHARS - 4].decode("utf-8", "ignore") + "…"}
+    return safe if isinstance(safe, dict) else {}
+
+
+def _safe_tool_diff(value: object) -> dict[str, Any] | None:
+    """Defensively bound the Edit transcript artifact from a persisted result."""
+    if not isinstance(value, Mapping):
+        return None
+    path = value.get("path")
+    hunk = value.get("hunk")
+    added = value.get("added_lines")
+    removed = value.get("removed_lines")
+    if not isinstance(path, str) or not isinstance(hunk, str):
+        return None
+    safe_lines: list[str] = []
+    used = 0
+    truncated = bool(value.get("truncated"))
+    for line in redact_secrets(hunk).splitlines():
+        separator = 1 if safe_lines else 0
+        if (
+            len(safe_lines) >= _MAX_TRANSCRIPT_DIFF_LINES
+            or used + separator + len(line) > _MAX_TRANSCRIPT_DIFF_CHARS
+        ):
+            truncated = True
+            break
+        safe_lines.append(line)
+        used += separator + len(line)
+    safe_hunk = "\n".join(safe_lines)
+    return {
+        "path": redact_secrets(path)[:2000],
+        "hunk": safe_hunk,
+        "added_lines": added if isinstance(added, int) and added >= 0 else 0,
+        "removed_lines": removed if isinstance(removed, int) and removed >= 0 else 0,
+        "truncated": truncated or safe_hunk != hunk,
+    }
+
+
+def _tool_result_event_view(result: ToolResult) -> dict[str, Any]:
+    """Bounded/redacted event representation of an already-persisted result."""
+    content: list[dict[str, Any]] = []
+    remaining = _MAX_TRANSCRIPT_RESULT_CHARS
+    for block in result.content[:_MAX_TRANSCRIPT_RESULT_BLOCKS]:
+        if isinstance(block, Text):
+            text = redact_secrets(block.text)
+            clipped = text[:remaining]
+            if clipped:
+                content.append({"type": "text", "text": clipped})
+                remaining -= len(clipped)
+            if len(clipped) < len(text) or remaining == 0:
+                content.append({"type": "text", "text": "[result truncated]"})
+                break
+        elif isinstance(block, Image):
+            content.append({"type": "image", "text": "[image omitted]"})
+    if len(result.content) > _MAX_TRANSCRIPT_RESULT_BLOCKS and remaining:
+        content.append({"type": "text", "text": "[result blocks omitted]"})
+    return {
+        "tool_use_id": result.tool_use_id,
+        "is_error": result.is_error,
+        "content": content,
+        "context_note": redact_secrets(result.context_note)[:2000] if result.context_note else None,
+        "display": redact_secrets(result.display)[:2000] if result.display else None,
+        "metrics": _safe_transcript_metrics(result.metrics),
+        "diff": _safe_tool_diff(result.diff),
+    }
+
+
+def _safe_transcript_metrics(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    safe: dict[str, Any] = {}
+    for key, item in list(value.items())[:32]:
+        if item is None or isinstance(item, (bool, int)):
+            safe[str(key)[:100]] = item
+        elif isinstance(item, float):
+            safe[str(key)[:100]] = item if item == item and abs(item) != float("inf") else None
+        elif isinstance(item, str):
+            safe[str(key)[:100]] = redact_secrets(item)[:200]
+        elif isinstance(item, (list, tuple)):
+            safe[str(key)[:100]] = [redact_secrets(str(part))[:200] for part in item[:64]]
+        else:
+            safe[str(key)[:100]] = f"<{type(item).__name__}>"
+    return safe
+
+
+async def _emit_tool_results(emitter: _Emitter, results: Sequence[ToolResult]) -> None:
+    for result in results:
+        await emitter.emit("tool.result", _tool_result_event_view(result))
+
+
 def _hook_missing_result(block: ToolUse) -> ToolResult:
     """A defensive result for a call the dispatcher did not return a result for."""
     return ToolResult(
@@ -1489,6 +1626,7 @@ async def run_turn(
     environment_for: EnvironmentFactory | None = None,
     hooks: HookRunner | None = None,
     clock: Callable[[], float] = time.monotonic,
+    relay_transcript: bool = False,
 ) -> TurnOutcome:
     """Run one turn to a terminal state and return its outcome.
 
@@ -1564,7 +1702,8 @@ async def run_turn(
             lease_to_release.release()
 
     try:
-        await emitter.emit("turn.started", {"limits": _limits_data(limits)})
+        agent_metadata = getattr(session, "_turn_agent_metadata", None)
+        await emitter.emit("turn.started", {"limits": _limits_data(limits), **({"agent": dict(agent_metadata)} if isinstance(agent_metadata, Mapping) and agent_metadata else {})})
         # ``SessionStart``/``UserPromptSubmit`` run in the session layer, before
         # the user message is persisted, so a block leaves no orphan prompt and a
         # modify is durable. The loop only fires the per-iteration/turn hooks.
@@ -1862,6 +2001,22 @@ async def run_turn(
 
             tool_uses = [b for b in blocks if isinstance(b, ToolUse)]
 
+            # Every root and child call gets the same bounded presentation
+            # events.  These remain separate from the model's durable ToolUse
+            # block, so no raw invocation input is duplicated into the event
+            # log.
+            for block in tool_uses:
+                await emitter.emit(
+                    "tool.requested", {"call_id": block.id, "tool": block.name}
+                )
+                await emitter.emit(
+                    "tool.input",
+                    {
+                        "call_id": block.id,
+                        "input": _safe_tool_input(block.input, tool=block.name),
+                    },
+                )
+
             if iteration_tools is None or iteration_gate is None:
                 # Phase 1: no dispatcher. Answer every call with a durable,
                 # model-visible error result and let the model self-correct.
@@ -1874,6 +2029,10 @@ async def run_turn(
                         meta=MessageMeta(turn_id=turn_id),
                     )
                 )
+                await _emit_tool_results(
+                    emitter,
+                    _synthetic_results(tool_uses, malformed, duplicate_calls),
+                    )
                 state = state.model_responded(
                     has_tool_use=True, stop_reason="tool_use"
                 )
@@ -1896,11 +2055,6 @@ async def run_turn(
             # already durable, so a crash can never orphan a tool call. Every
             # call is announced, then the *whole* batch is prepared and planned
             # before anything executes.
-            for block in tool_uses:
-                await emitter.emit(
-                    "tool.requested", {"call_id": block.id, "tool": block.name}
-                )
-
             if not capabilities.tools:
                 provider_name = resolved.provider.name
                 for block in tool_uses:
@@ -1928,6 +2082,17 @@ async def run_turn(
                         meta=MessageMeta(turn_id=turn_id),
                     )
                 )
+                await _emit_tool_results(
+                    emitter,
+                    [
+                        _error_result(
+                            block.id,
+                            block.name,
+                            f"provider {provider_name!r} does not support tool calls; the call was not run",
+                        )
+                        for block in tool_uses
+                    ],
+                    )
                 state = state.model_responded(
                     has_tool_use=True, stop_reason="tool_use"
                 )
@@ -2075,6 +2240,7 @@ async def run_turn(
                         meta=MessageMeta(turn_id=turn_id),
                     )
                 )
+                await _emit_tool_results(emitter, _merge_results(content))
                 terminal = state.fail(
                     f"unattended policy fails the turn: {reason}"
                 )
@@ -2178,6 +2344,7 @@ async def run_turn(
                     meta=MessageMeta(turn_id=turn_id),
                 )
             )
+            await _emit_tool_results(emitter, final_results)
             if malformed_total > malformed_budget:
                 terminal = state.fail(
                     "malformed tool call budget exceeded "

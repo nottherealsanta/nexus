@@ -172,6 +172,24 @@ def test_frozen_tool_schemas_reach_the_request_not_the_system(tmp_path):
     assert "Read a file from disk" not in (request.system or "")
 
 
+def test_model_only_context_never_becomes_a_persisted_system_message(tmp_path):
+    schema = ToolSchema(name="Read", description="Read a file", input_schema={"type": "object"})
+    session = FakeSession(Message(role="user", content=[Text("hi")]))
+    manager = ContextManager(
+        tmp_path,
+        config=v2_config(),
+        skills_index=[("inspect", "Inspect a repository")],
+        mcp_index={"server": {"connected": True, "resources": [{"uri": "repo://docs"}]}},
+    )
+    snapshot = manager.for_turn()
+    snapshot.freeze_tools([schema])
+    request = snapshot.assemble(session)
+    assert request.tools == [schema]
+    assert "inspect: Inspect a repository" in request.system
+    assert "server" in request.system
+    assert [message.role for message in session.messages] == ["user"]
+
+
 def test_for_turn_copies_existing_tool_schemas(tmp_path):
     schema = ToolSchema(name="Glob", description="glob", input_schema={"type": "object"})
     manager = ContextManager(tmp_path, config=v2_config())

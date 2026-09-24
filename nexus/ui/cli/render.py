@@ -1,19 +1,16 @@
-"""Terminal rendering of the event stream (PLAN section 14.11).
+"""Plain one-shot/JSONL human rendering of the event stream (PLAN section 14.11).
 
 Semantics live in the pure ``view/`` reducer; this module only turns an event
-into terminal text. Tests pin dedup and safety, and plain text unless
-:func:`~nexus.ui.cli.theme.color_enabled` says otherwise.
+into terminal text. Textual chat renders through Markdown widgets instead.
 """
 from __future__ import annotations
 
 import re
-import sys
 import unicodedata
 from collections.abc import Mapping
 from typing import Any, TextIO
 
 from ...events import Event
-from .theme import color_enabled, paint
 
 #: Event types that terminate a turn, shared by every runner.
 TERMINAL_EVENTS = frozenset({"turn.completed", "turn.failed", "turn.cancelled"})
@@ -77,19 +74,17 @@ class TerminalRenderer:
 
     def __init__(
         self,
-        stdout: TextIO | None = None,
+        stdout: TextIO,
         *,
         stderr: TextIO | None = None,
         show_thinking: bool = False,
         color: bool | None = None,
         environ: Mapping[str, str] | None = None,
     ) -> None:
-        self.stdout = stdout if stdout is not None else sys.stdout
-        self.stderr = stderr if stderr is not None else sys.stderr
+        self.stdout = stdout
+        self.stderr = stderr if stderr is not None else stdout
         self.show_thinking = show_thinking
-        self.color = (
-            color_enabled(self.stdout, environ) if color is None else bool(color)
-        )
+        self.color = False if color is None else bool(color)
         #: Highest rendered ``seq`` per session, so a switch still renders.
         self._last_seq: dict[str, int] = {}
         self._seen: set[str] = set()
@@ -112,11 +107,11 @@ class TerminalRenderer:
     # -- IO ----------------------------------------------------------------
 
     def _out(self, text: str, role: str = "") -> None:
-        self.stdout.write(paint(text, role, self.color) if role else text)
+        self.stdout.write(text)
         self.stdout.flush()
 
     def _err(self, text: str, role: str = "") -> None:
-        self.stderr.write(paint(text, role, self.color) if role else text)
+        self.stderr.write(text)
         self.stderr.flush()
 
     # -- public API --------------------------------------------------------

@@ -1,9 +1,11 @@
 """Built-in ``Edit``: exact, single-commit string replacement."""
 from __future__ import annotations
 
+import difflib
 from typing import Any
 
 from ...errors import ToolError
+from ...util import redact_secrets
 from ..permissions import PathSecurityError
 from ..spec import ToolContext, ToolExecutionResult, ToolSpec
 from .read import (
@@ -20,6 +22,11 @@ from .read import (
 from .write import atomic_write_bytes
 
 _MAX_EDIT_BYTES = 5 * 1024 * 1024
+# Transcript previews must stay comfortably below the event and snapshot caps.
+# The complete source text is never retained merely to render an Edit later.
+_MAX_DIFF_LINES = 240
+_MAX_DIFF_CHARS = 24_000
+_MAX_DIFF_LINE_CHARS = 1_000
 
 
 def _nth_index(text: str, needle: str, occurrence: int) -> int:
@@ -27,6 +34,49 @@ def _nth_index(text: str, needle: str, occurrence: int) -> int:
     for _ in range(occurrence):
         index = text.index(needle, index + 1)
     return index
+
+
+def _diff_preview(path: str, before: str, after: str) -> dict[str, Any]:
+    """Build the bounded, JSON-safe transcript artifact for a successful edit.
+
+    Counts cover the actual full-file diff even when the displayed unified hunk
+    is clipped.  Redaction happens after comparison so a secret cannot be
+    preserved solely because it occurred in a file edit.
+    """
+    hunk: list[str] = []
+    added = 0
+    removed = 0
+    chars = 0
+    truncated = False
+    for line in difflib.unified_diff(
+        before.splitlines(), after.splitlines(),
+        fromfile=f"a/{path}", tofile=f"b/{path}", lineterm="",
+        n=3,
+    ):
+        if line.startswith("+") and not line.startswith("+++"):
+            added += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            removed += 1
+        safe = redact_secrets(line)
+        if len(safe) > _MAX_DIFF_LINE_CHARS:
+            safe = safe[:_MAX_DIFF_LINE_CHARS] + "... [line truncated]"
+            truncated = True
+        separator = 1 if hunk else 0
+        if (
+            len(hunk) >= _MAX_DIFF_LINES
+            or chars + separator + len(safe) > _MAX_DIFF_CHARS
+        ):
+            truncated = True
+            continue
+        hunk.append(safe)
+        chars += separator + len(safe)
+    return {
+        "path": redact_secrets(path),
+        "hunk": "\n".join(hunk),
+        "added_lines": added,
+        "removed_lines": removed,
+        "truncated": truncated,
+    }
 
 
 _EDIT_SCHEMA: dict[str, Any] = {
@@ -148,6 +198,7 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
         body,
         display=f"Edit {resolved.display}: {replaced} replacement(s)",
         metrics={"replacements": replaced, "bytes": len(data), "path": resolved.key},
+        diff=_diff_preview(resolved.display, text, updated),
     )
 
 

@@ -143,7 +143,16 @@ def make_task_spec(service: SubagentServiceView | None = None) -> ToolSpec:
     ``<subagent_type>:<tier>`` (so ``deny = ["Task(*:high)"]`` catches a role
     whose *declared* model is high even when the call names no model).
     """
-    key = service.permission_key if service is not None else _static_permission_key
+    if service is None:
+        key = _static_permission_key
+    else:
+        # The bound service owns the configured default. Apply it before the
+        # permission key is resolved so omitting ``subagent_type`` cannot route
+        # around a rule for a non-general default role.
+        def key(data: Mapping[str, Any]) -> str:
+            request = dict(data)
+            request.setdefault("subagent_type", service.default_type)
+            return service.permission_key(request)
     return ToolSpec(
         name="Task",
         description=_TASK_DESCRIPTION,
@@ -273,9 +282,21 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
     service = _service(ctx)
     if service is not None:
         try:
-            outcome = await service.spawn(
-                request, cancel=ctx.cancel_token, emit=ctx.emit
-            )
+            request.setdefault("subagent_type", service.default_type)
+            spawn = service.spawn
+            kwargs = {"cancel": ctx.cancel_token, "emit": ctx.emit}
+            # Keep structural test doubles and older internal callers working;
+            # production SubagentRunner accepts the exact model tool call id.
+            try:
+                signature = inspect.signature(spawn)
+                if "call_id" in signature.parameters or any(
+                    parameter.kind is inspect.Parameter.VAR_KEYWORD
+                    for parameter in signature.parameters.values()
+                ):
+                    kwargs["call_id"] = ctx.call_id
+            except (TypeError, ValueError):
+                kwargs["call_id"] = ctx.call_id
+            outcome = await spawn(request, **kwargs)
         except OperationCancelled:
             raise
         except Exception as exc:  # noqa: BLE001 - tool failures are model-visible

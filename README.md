@@ -4,7 +4,8 @@ A small, provider-agnostic Python agent harness. Nexus owns the agentic loop,
 the message and tool contracts, permissions, sessions, context, and the
 extension system; model providers are pluggable adapters behind one protocol.
 
-Runtime dependencies are `httpx`, `msgspec`, and `mcp`. Python 3.11+ on macOS or
+Runtime dependencies are `httpx`, `msgspec`, `mcp`, `keyring`, `textual`, and
+`textual-diff-view`. Python 3.11+ on macOS or
 Linux. No vendor SDK, no agent framework, no OS sandbox.
 
 New here? Read [ARCHITECTURE.md](ARCHITECTURE.md) for the design and
@@ -18,12 +19,14 @@ From a clean checkout:
 ```sh
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e '.[cli,dev]'
+pip install -e .
+# To run tests/build wheels:
+pip install -e '.[dev]'
 ```
 
-`nexus[cli]` adds `prompt_toolkit` for the interactive line editor. It is
-optional and imported lazily: a one-shot or `--json` run never needs it, and the
-chat prompt degrades to a plain stdin reader when it is absent.
+The Textual chat shell is installed with the normal CLI runtime dependencies.
+`nexus chat` requires an interactive terminal; use `nexus run` for piped or
+non-interactive prompts.
 
 Set at least one provider credential through the environment. Nexus never wants
 a literal key in a config file:
@@ -42,15 +45,17 @@ skip the key entirely — see [Offline and local](#offline-and-local).
 nexus --workspace /path/to/project init          # create nexus.toml, SOUL.md, MEMORY.md
 nexus --workspace /path/to/project doctor        # validate config, providers, extensions, MCP
 nexus --workspace /path/to/project run "Explain this repository"
-nexus --workspace /path/to/project chat          # interactive line-mode prompt
+nexus --workspace /path/to/project chat          # interactive Textual shell
 ```
 
 `init` creates editable files without overwriting anything that exists; it is
 local and needs no daemon. `run` takes a prompt, or `-` to read the prompt from
-stdin. `chat` is line-mode, not a full-screen app: scrollback and copy-paste keep
-working.
+stdin. `chat` is the full-screen Textual shell; `Ctrl+P` opens chat commands,
+`Ctrl+N` starts a session, `Ctrl+O` lists sessions, `Ctrl+F` forks, and
+`Shift+Tab` cycles root agents. `Ctrl+Enter` submits the multiline editor. A non-TTY invocation fails with guidance to use `nexus
+run` instead of silently changing interaction modes.
 
-Every command except `init` and `nexus daemon status|stop|logs` is a **client of
+Every command except `init`, `auth`, and `nexus daemon status|stop|logs` is a **client of
 a per-workspace daemon** — including `doctor`, `models`, `sessions`, `ext`,
 `tools`, `agents`, and `replay`. If no daemon is listening, the client starts
 one, waits (bounded) for readiness, and connects, so `nexus doctor` starts (or
@@ -102,7 +107,7 @@ nexus daemon stop        # graceful shutdown
 | `nexus init` | Create `nexus.toml`, `SOUL.md`, `MEMORY.md` without overwriting. |
 | `nexus doctor [--explain-reload] [--json]` | Validate config, providers, registry, extensions, MCP, and state what is hot vs. restart-only. |
 | `nexus run <prompt\|->` | One turn. `--session NAME`, `--json` for headless JSONL. |
-| `nexus chat` | Interactive line-mode prompt. `--session NAME`. |
+| `nexus chat` | Interactive Textual shell. `--session NAME`. Requires stdin/stdout TTY. |
 | `nexus replay <id> [--json]` | Re-render a session from its log (same path as `sessions replay`). |
 | `nexus daemon status\|stop\|logs` | Manage the workspace daemon. `status --json`; `logs --lines N`. |
 | `nexus sessions list` | List sessions with state, `last_seq`, viewers, title. |
@@ -118,42 +123,43 @@ nexus daemon stop        # graceful shutdown
 | `nexus models list [--provider P] [--tier T] [--selectable] [--search Q]` | Reachable models from the registry. |
 | `nexus models show <id>` / `refresh` / `tiers` | Inspect a model, force a catalogue refresh, list tiers. |
 | `nexus agents list` | Discovered subagent definitions. |
+| `nexus auth codex login [--profile NAME] [--headless]` | Experimental local ChatGPT OAuth device login; never contacts the daemon. |
+| `nexus auth codex status [--profile NAME]` / `logout` | Check credential presence / delete the local credential without exposing identity or tokens. |
 
 `--workspace PATH` is a global flag (defaults to the current directory). There is
 no CLI `ext restore`: `ext trash` moves the file under the extension trash with
 a `delete_after` retention record and rebuilds the manifest, but it is not
 restorable from the CLI.
 
-### Slash commands in `chat`
+### Commands in `chat`
 
-`/new`, `/sessions`, `/model`, `/tools`, `/details`, `/reconnect`, `/cancel`,
-`/fork`, `/export`, `/help`, `/exit`.
+`/new`, `/sessions`, `/model`, `/agent`, `/tools`, `/details`, `/reconnect`,
+`/cancel`, `/fork`, `/export`, `/help`, `/exit`. They are available in the
+multiline editor and the searchable `Ctrl+P` command palette. Model selection,
+root-agent selection, session switching, fork, export, details, and reconnect
+remain daemon operations through the host client.
 
-Every prompt is preceded by a one-line status bar built from the same pure
-view the transcript is: the phase, the **effective** model and provider (from
-the turn's `model.started`, or the session's durable `model.selected` until the
-next turn reports the actual one), token usage, context occupancy against the
-assembled input budget (`ctx used/budget (pct%)`), viewer count, and any queued
-inputs or live subagents. `/details` expands that into the context budget,
-compaction, queued inputs, pending approvals, and the subagent tree;
-`/reconnect` re-attaches from the last rendered `seq` and replays anything a
-dropped connection missed.
+The status bar is reducer-backed and shows session phase, root-agent identity,
+and event sequence. `/details` expands the same `ConversationView` into model,
+usage, context budget/compaction, queued inputs, pending approvals, and the
+subagent tree. `/reconnect` re-attaches from the last reduced `seq`, replays the
+missed tail, and resumes an active turn without polling.
 
 Tool calls stream with their name, status, and duration, and a bounded preview
 where the event carries one (a permission request's key/preview, a tool's
 progress line, or a result/summary field); control characters and obvious
 credentials are escaped or redacted, and byte payloads are shown by size rather
-than dumped. Assistant text and thinking stream as plain prose, with the final
-`text` suppressed when deltas already printed so nothing renders twice.
+than dumped. Assistant prose is rendered as Markdown with terminal controls
+escaped, and the final `text` event is reduced without duplicating streamed
+deltas.
 
-With the optional `nexus[cli]` extra the editor adds history, a live status
-toolbar, and `patch_stdout` so streaming output draws above the input line.
-`nexus chat` builds the editor through `run_chat`, so the toolbar and
-`patch_stdout` are active in the real prompt; captured buffers and explicit
-readers bypass both and stay byte-for-byte deterministic.
-Colour is opt-in: it is disabled for a non-TTY, when `NO_COLOR` is set, or when
-`TERM=dumb`, and `FORCE_COLOR` turns it on explicitly. Without the extra the
-prompt degrades to a plain stdin reader.
+The single-column transcript is a reducer-backed chronological timeline. User
+messages, streamed assistant prose, and stable tool cards reconcile by their
+durable turn/message/call IDs, so replay and reconnect update in place rather
+than duplicate content. `Task` cards render their linked child agents inline;
+Enter or click opens a live reducer-backed child transcript, including nested
+agents. Scrolling away pauses tail-follow until the conversation is returned to
+the bottom. New and empty sessions intentionally show no transcript chrome.
 
 ### Approval prompts
 
@@ -211,7 +217,9 @@ same field to different values, that is an error, not a precedence puzzle.
 Config values may reference a secret; they may never contain one:
 
 - `${env:VAR}` — resolved from the environment at request time.
-- `${keychain:service}` — resolved from the OS keychain.
+
+Generic `${keychain:...}` config references are not implemented. The experimental
+ChatGPT OAuth route uses the OS keychain directly; no token is ever in config.
 
 Secrets are never written to the session log, never rendered into context, and
 are scrubbed from logs and events. `~/.nexus/credentials.json` is created `0600`
@@ -242,6 +250,46 @@ api_key = "${env:GROQ_API_KEY}"
 
 An OpenAI-compatible provider **must** set `base_url`; Nexus will not silently
 default a vendor to `api.openai.com`.
+
+### Experimental ChatGPT OAuth for Codex
+
+This optional route uses a private ChatGPT Codex endpoint, not a documented
+public API. It is experimental and can change or stop working without notice.
+It uses HTTP/SSE only, never Codex CLI, OpenCode ACP, or daemon RPC. Nexus keeps
+ownership of prompts, Nexus tool schemas, permissions, tool execution, hooks,
+sessions, cancellation, and tool-result replay; the provider only transports
+Responses requests and normalizes model output.
+
+```toml
+[models]
+default = "codex/gpt-5.6-luna"
+
+[providers.codex]
+auth = "chatgpt_oauth"
+profile = "default"
+api = "responses"
+```
+
+Do not set `api_key`, `base_url`, executable/ACP fields, or `OPENAI_API_KEY` for
+this route; OAuth ignores that environment variable. API-key Codex remains
+supported by omitting `auth` and setting `api_key = "${env:OPENAI_API_KEY}"`.
+Run `nexus auth codex login --headless` from a terminal, open the printed URL,
+and enter the displayed device code. Credentials are one bounded versioned JSON
+ record in macOS Keychain or a Secret Service-compatible Linux keyring. Nexus
+ refuses null, plaintext, file, and fail keyring backends and has no plaintext
+ fallback. Access and ID tokens remain in memory only.
+
+The deliberately gated live OAuth smoke test makes one real, text-only Codex
+request through this provider path. It consumes a real subscription request and
+the OAuth refresh may rotate the stored refresh token. Run it only when intended:
+
+```sh
+NEXUS_CODEX_OAUTH_LIVE=1 pytest -m live tests/test_codex_oauth_live.py
+```
+
+The final `-m live` overrides the repository's default `-m 'not live'` pytest
+selection. Without `NEXUS_CODEX_OAUTH_LIVE=1`, the test skips before touching
+the keychain or network.
 
 Provider-level failure (a connection error, 429, or 5xx before any output)
 falls back through `models.fallback` with a visible `model.retrying` event. A
@@ -416,18 +464,20 @@ max_fanout = 16
 default_type = "general"
 ```
 
-Three roles seed into `.nexus/agents/` on first run and are ordinary, editable,
-deletable extensions:
+Four roles seed into `.nexus/agents/` on first run and are ordinary, editable,
+deletable extensions. `plan` is the canonical planning role; the legacy
+`planner` spelling remains a compatibility alias.
 
 | Role | Tools | Model | Purpose |
 | --- | --- | --- | --- |
 | `general` | inherits the parent's set | `medium` | Catch-all delegation; the only role that can write. |
+| `build` | inherits the parent's set | `medium` | Implements focused changes and verifies them. |
 | `explore` | read-only | `low` | Broad fan-out search; returns findings, not file dumps. |
-| `planner` | read-only | `high` | Designs an approach; cannot execute it. |
+| `plan` | read-only | `high` | Designs an approach; cannot execute it. |
 
 A child can never exceed its parent: tool sets intersect, permissions inherit,
 `deny` stays absolute, tier is capped by `agents.max_tier`, and fan-out/depth
-are bounded. `explore` and `planner` have no write path at all, enforced
+are bounded. `explore` and `plan` have no write path at all, enforced
 structurally rather than by prompt.
 
 ## Hooks
@@ -562,8 +612,10 @@ standard library. That boundary is enforced by a test, not by discipline.
 
 Two line budgets keep the harness small and are enforced by strict tests:
 `core/` + `model/` + `tools/spec.py` under 14,000 physical lines and `host/` +
-`view/` + `ui/` under 9,500, with modest headroom over the current tree. These
-revise the original 2,500/2,000 targets (PLAN §18); the closeout report
+`view/` + `ui/` under 10,500, with modest headroom over the current tree. The
+surface ceiling was reviewed and raised for the first-class Textual chat shell;
+the previous 9,500 ceiling reflected the retired line UI. These revise the
+original 2,500/2,000 targets (PLAN §18); the closeout report
 regeneration refuses to record a baseline that reaches or exceeds a cap, so an
 overage (or a tree exactly at the cap) cannot be blessed by regenerating. See
 `ARCHITECTURE.md` and `tests/test_phase3_exit.py`.
@@ -670,13 +722,16 @@ hook, and MCP config samples.
 ## Development
 
 ```sh
-pip install -e '.[cli,dev]'
+pip install -e '.[dev]'
 pytest                       # full offline suite; live tests are deselected
 ANTHROPIC_API_KEY=... pytest -m live tests/test_anthropic_live.py
 
 # The linter is not part of the `dev` extra; install it separately.
 pip install ruff
 ruff check nexus tests
+
+# Textual web rendering plus browser screenshots (writes ignored artifacts/visual-tui/).
+python tests/visual_tui_check.py
 ```
 
 Tests use temporary workspaces and recorded fixtures; they need no network and

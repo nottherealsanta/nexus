@@ -1374,7 +1374,7 @@ Settled before writing this section; treated as fixed the same way §0 is.
 
 | Decision | Choice |
 | --- | --- |
-| Surfaces | Core is exposed through a transport-neutral **facade**. A prompt_toolkit CLI and an HTTP surface are peers over it. Neither is privileged. |
+| Surfaces | Core is exposed through a transport-neutral **facade**. The Textual chat shell, one-shot CLI, and HTTP surface are peers over it. None is privileged. |
 | Process model | **Daemon always.** The daemon owns every `Runtime`. The CLI is a pure client with no in-process fallback. |
 | Concurrency | Multiple sessions run turns **concurrently in one daemon**. A session's turn outlives every view of it. |
 | Views | **Single user, many views.** No multi-user identity, no per-user auth, no collaborative editing. Presence is a subscriber *count*. |
@@ -1413,7 +1413,7 @@ same case, and so is `nexus replay`.
 ### 14.3 New layers
 
 ```
-    L5  ui/            cli (prompt_toolkit), web         <- surfaces
+    L5  ui/            Textual chat, one-shot CLI, web   <- surfaces
         ------------------------------------------------
     L4½ host/          facade, protocol, supervisor, transports
         ------------------------------------------------
@@ -1452,8 +1452,8 @@ nexus/
       http_sse.py             HTTP commands + SSE event stream
 
   ui/
-    cli/                      prompt_toolkit line-mode client   [extra: nexus[cli]]
-      app.py  render.py  commands.py  keys.py  theme.py
+    cli/                      host client, approval and one-shot renderer
+    tui/                      Textual interactive chat (runtime dependency)
     jsonl.py                  --json passthrough
 ```
 
@@ -1632,8 +1632,9 @@ walks the AST to assert `nexus/model/**` never imports `nexus.core` and above.
 Extend that same machinery: anything under `nexus/ui/**` may import only
 `nexus.host`, `nexus.view`, `nexus.events`, and the standard library. An import
 of `nexus.runtime`, `nexus.core`, `nexus.tools`, `nexus.session`, or
-`nexus.model` from a UI fails CI. Surfaces additionally ship as extras
-(`nexus[cli]`, `nexus[web]`) so the dependency cannot run backwards either.
+`nexus.model` from a UI fails CI. Textual is a normal CLI runtime dependency
+because it is the sole interactive chat shell, while noninteractive commands
+load it lazily.
 
 **Customizability is declarative**, mirroring §0's rule for tools:
 
@@ -1646,19 +1647,18 @@ of `nexus.runtime`, `nexus.core`, `nexus.tools`, `nexus.session`, or
 A bad renderer breaks a pane, never a turn. There is deliberately no UI plugin
 API that receives a `Runtime`, a manager, or a tool.
 
-**The CLI is line-mode**, not a full-screen application: prompt_toolkit owns the
-input line, `patch_stdout()` keeps streaming output from scrambling it, and
-terminal scrollback and copy-paste keep working. `prompt_async` also removes the
-`asyncio.to_thread(input)` workaround the current approver relies on. A
-full-screen TUI, if ever wanted, is a separate surface over the same facade.
+**Interactive `nexus chat` is Textual-only.** It requires stdin/stdout TTYs and
+fails with guidance to use `nexus run` when invoked noninteractively. The root
+Historical: transcript was primary, with a reducer-backed current/recent agent tracker and
+full child transcript inspector. `nexus run`, JSONL, replay, and export remain
+usable without a terminal. Textual never owns the runtime/session; it is a host
+client over `nexus.host` and `nexus.view`.
 
-Basic elements, identical on every surface because they render one view model:
-session switcher with state and unread marker; transcript with streaming text,
-collapsible thinking, and tool calls showing name, argument preview, status, and
-expandable result; approval prompt with the four `Decision` values; input with
-history, multi-line, and cancel; status bar with model, usage, turn state, and
-viewer count; slash commands `/new /sessions /model /tools /cancel /fork
-/export`.
+The Textual shell provides session switching/new/fork/export, model and agent
+selection, tools/details/help/reconnect/cancel, attended approval, multiline
+input, the command palette, and subagent inspection. Agent detail is rendered
+from the canonical `ConversationView`/`AgentTranscript` projection; no separate
+activity store is maintained.
 
 ### 14.12 Security
 
@@ -1699,7 +1699,7 @@ the unattended policy instead of hanging.
 | Phase | Build | Days |
 | --- | --- | --- |
 | **8a** | `view/` reducer + golden-log tests; `host/facade.py`, `host/protocol.py`, `host/supervisor.py`, `host/presence.py`; the UI layering test; `nexus replay` | ~4 |
-| **8b** | `host/daemon.py` + `transports/uds.py`; auto-start, handshake, stale-socket cleanup, idle shutdown; `nexus daemon status\|stop\|logs`; prompt_toolkit CLI over it; retire `ui/native.py` | ~5 |
+| **8b** | `host/daemon.py` + `transports/uds.py`; auto-start, handshake, stale-socket cleanup, idle shutdown; `nexus daemon status\|stop\|logs`; daemon-backed terminal surfaces; retire `ui/native.py` | ~5 |
 | **8c** | `transports/http_sse.py` + token auth + Origin checks; `nexus doctor`, `nexus sessions`, `nexus ext`; README / `ARCHITECTURE.md` / `EXTENDING.md` / `SOUL.md` rewrite | ~4 |
 
 ~13 days against the 5 originally budgeted for Phase 8, plus Phase 3.5's 3.
@@ -1764,9 +1764,9 @@ earlier one, this section wins.
 | Catalogue source | **models.dev** (`https://models.dev/api.json`). Fetched on first use, cached with a TTL, with a small vendored snapshot as the offline fallback. |
 | Tier assignment | **Curated defaults, cost-based fallback, user override.** Shipped map wins for known models; blended cost classifies the rest; `[models.tiers]` overrides both. |
 | Capabilities | **The registry is authoritative.** No per-adapter override table. A provider rejection that contradicts the registry degrades the turn and is logged as a data defect (§15.5). |
-| Subagent invocation | Two modes: a **named type** (`general`, `explore`, `planner`, or any `.nexus/agents/<name>.md`) or an **ad-hoc** spawn with a task prompt and an explicit tool list. |
+| Subagent invocation | Two modes: a **named type** (`general`, `build`, `explore`, `plan`, or any `.nexus/agents/<name>.md`) or an **ad-hoc** spawn with a task prompt and an explicit tool list. `planner` remains a compatibility alias for `plan`. |
 | Subagent authority | **A child can never exceed its parent.** Tool lists intersect, permissions inherit, `deny` stays absolute, tier and fan-out are capped by config. |
-| Role definitions | The three roles are **seeded files** in `.nexus/agents/`, editable and deletable like any other extension. |
+| Role definitions | The four builtins are **seeded files** in `.nexus/agents/`, editable and deletable like any other extension. |
 
 ### 15.2 What the catalogue actually contains
 
@@ -1930,7 +1930,7 @@ Everything else from §5.6 is unchanged: nested Runtime, child session at
 re-emitted on the parent bus with an `agent` field, final report returned as a
 `ToolResult`.
 
-### 15.7 The three seeded roles
+### 15.7 The four seeded roles
 
 Written into `.nexus/agents/` on first run, then ordinary hot-loaded extensions
 — editable, forkable, deletable. A deleted file re-seeds only in a fresh
@@ -1939,12 +1939,15 @@ workspace. Shadowing precedence is §2.3's: workspace > user > builtin.
 | Role | Tools | Model | Purpose |
 | --- | --- | --- | --- |
 | `general` | inherits the parent's set | `medium` | Catch-all delegation. The only role that can write. |
+| `build` | inherits the parent's set | `medium` | Implements focused changes and verifies them. |
 | `explore` | `fs` bundle minus every mutating tool; `Grep`, `Glob`, `Read`, `LS` | `low` | Broad fan-out search. Returns findings, not file dumps. |
-| `planner` | same read-only set | `high` | Designs an approach and returns a plan. Cannot execute it. |
+| `plan` | same read-only set | `high` | Designs an approach and returns a plan. Cannot execute it. |
 
-`explore` and `planner` have **no write path at all** — not `Write`, `Edit`,
+`explore` and `plan` have **no write path at all** — not `Write`, `Edit`,
 `MultiEdit`, or `Bash`. This is enforced structurally by the same profile
 machinery as §5.3's `research` profile, not by system-prompt instruction.
+`planner` remains a compatibility alias for `plan` and is also structurally
+read-only.
 
 The tier assignments are the point of the whole feature: fan out ten `low`-tier
 explorers cheaply, spend `high` on the single planning call, keep `medium` for
@@ -2154,8 +2157,8 @@ item above pre-existed it.
   CLI action ride the facade. Tested in `tests/test_ext_trash.py`.
 - **Daemon + UDS (8b):** `nexus/host/daemon.py` and
   `nexus/host/transports/uds.py`; auto-start, version handshake, stale-socket
-  cleanup, idle shutdown; `nexus daemon status|stop|logs`. The prompt_toolkit
-  CLI lives in `nexus/ui/cli/`; `nexus run`/`chat` are pure daemon clients with
+  cleanup, idle shutdown; `nexus daemon status|stop|logs`. The host client and
+  one-shot renderer live in `nexus/ui/cli/`; `nexus run`/`chat` are pure daemon clients with
   no in-process fallback; `ui/native.py` is retired.
 - **CLI + JSONL (8b/8c):** `nexus/cli.py` rewritten as a client; `nexus/ui/cli/`
   (`app`, `approve`, `client`, `commands`, `keys`, `render`, `run`, `stream`,
@@ -3076,7 +3079,7 @@ the interactive-surface work that landed after §19 and the two integration
 defects found while wiring it to the real `nexus chat` entrypoint. No commit was
 made.
 
-### 20.1 What this amends
+### 20.1 What this amends (superseded by Phase 4/5 below)
 
 | Section | Amendment |
 | --- | --- |
@@ -3084,7 +3087,7 @@ made.
 | §14.14 (surface budget) | The strict combined gate holds at **8,803** physical lines (host 5,198 / view 1,604 / ui 2,001) against the §18 cap of 9,500. The UI client keeps its own `test_ui_layering` budget: **1,989 < 2,000** after the refactors in §20.3 and §20.7. |
 | §19 ledger | No recovery guarantee changes; the still-open live-provider item (§18.4 item 1) remains open. |
 
-### 20.2 What was built (interactive surface)
+### 20.2 What was built (retired line surface)
 
 All of it renders the one pure `view/` reducer; no UI module interprets the
 event stream on its own.
@@ -3120,7 +3123,7 @@ event stream on its own.
   `keys._load`; the client runs with the extra absent (a plain stdin reader),
   and one-shot/JSONL runs never build an editor.
 
-### 20.3 Integration fixes
+### 20.3 Integration fixes (historical line-surface fixes)
 
 Two defects made the polished path unreachable or silently lossy; both are fixed
 without moving any behavior out of `ui/`.
@@ -3146,7 +3149,7 @@ dedup line. The §20.7 review follow-ups then refactored `commands`, `app`,
 `render`, and `details` while tightening security, landing the `test_ui_layering`
 client at **1,989 < 2,000**.
 
-### 20.4 Guarantees held
+### 20.4 Guarantees held (historical line-surface verification)
 
 - **One renderer, one source.** The status line, toolbar, `/details`, and tests
   all call the same `details` functions over the same reduced view; there is no
@@ -3168,7 +3171,7 @@ client at **1,989 < 2,000**.
   tool/permission text, not on the event log; the wire and the session log are
   unchanged. Streamed deltas are control-escaped only (see the bullet above).
 
-### 20.5 Verification
+### 20.5 Verification (historical line-surface closeout)
 
 - **New UI regressions.** `tests/test_ui_render.py` pins colour opt-in and the
   `NO_COLOR` override (including presence with an empty value), secret/byte/
@@ -3202,7 +3205,7 @@ client at **1,989 < 2,000**.
   surface baseline `host=5198 view=1604 ui=2001`, full-suite summary
   `3197 passed, 311 skipped, 2 deselected`).
 
-### 20.6 As-built status ledger (delta)
+### 20.6 As-built status ledger (superseded)
 
 | Item | Status |
 | --- | --- |
@@ -3213,7 +3216,7 @@ client at **1,989 < 2,000**.
 The open item is stated so this ledger is not read as a claim of completion; it
 is unchanged from §19.
 
-### 20.7 Review follow-ups
+### 20.7 Review follow-ups (historical)
 
 The §20.1-§20.4 work was reviewed; these are the fixes, none of which relax a
 requirement.
@@ -3252,3 +3255,29 @@ requirement.
   that returns the summary), and `render` (`_on_context_compacted`) were
   tightened while the security work landed, at **1,989 < 2,000**; the cap was not
   moved or bypassed.
+
+### 20.8 Textual-only chat rollout (Phase 4/5)
+
+The approved rollout is Textual-only. `nexus chat` launches the full-screen
+client when stdin/stdout are TTYs and returns actionable guidance to use
+`nexus run` otherwise. There is no `--tui`, `--line`, prompt_toolkit extra, or
+fallback reader. Textual is a normal runtime dependency; it remains lazily
+imported by the noninteractive CLI. The old `ChatSession`, editor reader,
+prompt completion, and line-chat tests were retired. Framework-neutral `Client`,
+one-shot `run_once`, approval, renderer, details, slash-command parsing, and the
+subscribe-before-start helper remain.
+
+The Textual migration provides `/new`, `/sessions`, `/model`, `/agent`, `/tools`,
+`/details`, `/reconnect`, `/cancel`, `/fork`, `/export`, `/help`, and `/exit` in
+the multiline input and Ctrl+P palette, plus Ctrl+N/O/F shortcuts. Current-turn
+agents remain prominent; older active tasks remain in “Active · earlier turns”;
+completed older work moves under collapsed Recent. Agent transcript inspection
+uses the host `AgentTranscript` contract for validation and the canonical
+`ConversationView` reducer for live rendering, nested navigation, and the
+bounded tool/text detail. No activity side store or polling loop exists.
+
+The former 9,500 surface cap reflected a 2,001-line line UI. After retiring it,
+the shipped Textual-only surface measures **10,058** lines, so the reviewed cap
+is **10,500** (about 4% headroom). The guarded full-report path was run to refresh
+the checked-in baseline after the cap revision; it records **3,201 passed, 311
+skipped, 3 deselected**. Current strict budget gates pass.

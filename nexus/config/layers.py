@@ -189,6 +189,8 @@ def normalize_v1_to_v2(doc: Mapping[str, Any]) -> dict[str, Any]:
     if "model" in doc:
         result["model"] = {"default": doc["model"]}
     agent: dict[str, Any] = {}
+    if "agent_name" in doc:
+        agent["name"] = doc["agent_name"]
     if "sandbox" in doc:
         agent["sandbox"] = doc["sandbox"]
     if "instructions_file" in doc:

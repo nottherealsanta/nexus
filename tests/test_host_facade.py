@@ -246,6 +246,7 @@ class _FakeRuntime:
                     read_only=True,
                 ),
             ),
+            get=lambda name: SimpleNamespace(contexts=("subagent",)),
         )
         self.closed = False
         self.refreshed = 0
@@ -299,6 +300,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.SessionCancel(session="s"),
         p.SessionSubscribe(session="s", from_seq=3),
         p.SessionState(session="s", from_seq=1),
+        p.AgentTranscript(session="s", agent_id="s/sub/1"),
         p.SessionFork(session="s", at_seq=2, new_id="c"),
         p.SessionDelete(session="s", force=True),
         p.SessionRestore(trash_id="t"),
@@ -314,6 +316,9 @@ def test_protocol_round_trips_every_command_and_result():
         p.ModelTiers(),
         p.ModelSelect(session="s", ref="high"),
         p.AgentsList(),
+        p.AgentCurrent(session="s"),
+        p.AgentSelect(session="s", name="general"),
+        p.AgentReset(session="s"),
         p.ToolsList(),
         p.Doctor(explain_reload=True),
         p.Health(),
@@ -332,6 +337,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.SessionCancelResult(session="s", cancelled=True, dropped=2),
         p.SessionSubscribeResult(session="s", from_seq=0),
         p.SessionStateResult(session="s", seq=4, view={"session_id": "s"}),
+        p.AgentTranscriptResult(session="s", agent_id="s/sub/1", view={"id": "s/sub/1"}),
         p.SessionForkResult(session=summary),
         p.SessionDeleteResult(session="s", trash_id="t", delete_after=2.0),
         p.SessionRestoreResult(session="s"),
@@ -347,6 +353,8 @@ def test_protocol_round_trips_every_command_and_result():
         p.ModelTiersResult(order=["low", "medium", "high"], default="medium"),
         p.ModelSelectResult(session="s", provider="p", model="m", tier="high"),
         p.AgentsListResult(generation=3, agents=[{"name": "explore"}]),
+        p.AgentCurrentResult(session="s", name="general", source="config"),
+        p.AgentSelectResult(session="s", name="build"),
         p.ToolsListResult(count=1, tools=[{"name": "Read"}]),
         p.DoctorResult(ok=True, report={"workspace": "/tmp/ws"}),
         p.HealthResult(ok=True, version=PROTOCOL_VERSION),

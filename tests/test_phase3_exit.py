@@ -21,7 +21,7 @@ Evidence covered
   green closeout proves they still hold.
 * **Line budgets** (plan §11 / §14.14, revised by the §18 amendment):
   ``core/ + model/ + tools/spec.py`` under 14,000 physical lines and
-  ``host/ + view/ + ui/`` under 9,500 physical lines, with the current baseline
+  ``host/ + view/ + ui/`` under 10,500 physical lines, with the current baseline
   recorded. The gates are strict; the same prefixes and physical-line semantics
   are kept, and a baseline report that records a cap violation is refused at
   write time.
@@ -58,9 +58,11 @@ REPORT_TXT = REPORTS_DIR / "phase3_exit_baseline.txt"
 #: Plan §18 supersedes the §11 cap: ``core/`` + ``model/`` + ``tools/spec.py``
 #: stays under 14,000 physical lines (measured 12,560 at revision, ~11% headroom).
 CORE_BUDGET_CAP = 14000
-#: Plan §18 supersedes the §14.14 cap: ``host/`` + ``view/`` + ``ui/`` stays
-#: under 9,500 physical lines (measured 8,803 at revision, ~7% headroom).
-SURFACE_BUDGET_CAP = 9500
+#: Revised for Phase 5: the host + reducer + first-class Textual chat + retained
+#: host client surfaces stay under 10,500 physical lines (measured ~10,054 with
+#: the obsolete line editor removed, ~4% headroom). This is a reviewed cap
+#: increase, not a baseline-only ratchet update.
+SURFACE_BUDGET_CAP = 10500
 
 #: The Phase 4 gates re-run as evidence: the §6.5 money path and the 200-reload
 #: leak bound.

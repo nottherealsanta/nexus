@@ -59,6 +59,8 @@ TOOL_EVENTS = (
     "tool.progress",
     "tool.completed",
     "tool.failed",
+    "tool.input",
+    "tool.result",
 )
 PERMISSION_EVENTS = ("permission.requested", "permission.resolved")
 EXT_EVENTS = (
@@ -152,7 +154,7 @@ EVENT_GROUPS: dict[str, tuple[str, ...]] = {
 
 EVENT_TYPES = frozenset(
     name for group in EVENT_GROUPS.values() for name in group
-).union(LEGACY_EVENTS, COMPAT_EVENTS)
+).union(LEGACY_EVENTS, COMPAT_EVENTS, {"agent.selected"})
 
 __all__ = [
     "AGENT_EVENTS",

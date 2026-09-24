@@ -34,15 +34,18 @@ from nexus.config.schema import (
     PermissionsSection,
     ToolsSection,
 )
-from nexus.model.message import Message, Text
+from nexus.model.message import Message, Text, ToolResult
 from nexus.model.providers.scripted import (
     ScriptedProvider,
+    Wait,
     text_response,
     tool_response,
 )
 from nexus.model.registry import Cost
 from nexus.model.stream import Usage
 from nexus.runtime import Runtime
+from nexus.host import HostFacade
+from nexus.view import fold
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -107,6 +110,14 @@ async def drain(session):
     return [event async for event in session.send("go")]
 
 
+async def wait_for(predicate, *, timeout: float = 5.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not predicate():
+        if asyncio.get_running_loop().time() >= deadline:
+            raise TimeoutError("condition not reached")
+        await asyncio.sleep(0.005)
+
+
 def tool_results(session) -> list:
     results = []
     for message in session.messages:
@@ -158,7 +169,7 @@ async def test_manifest_discovers_seeded_agents_and_hooks(tmp_path):
     await runtime.ensure_started()
 
     manifest = runtime.manifest
-    assert {"general", "explore", "planner"} <= set(manifest.agents)
+    assert {"general", "build", "explore", "plan"} <= set(manifest.agents)
     assert "SessionStart" in manifest.hooks
     assert [spec.name for spec in manifest.hooks["SessionStart"]] == ["observer"]
     # The roles are real, editable workspace files.
@@ -249,10 +260,18 @@ async def test_named_task_runs_a_child_and_replays_nested_events(tmp_path):
     meta = spawned[0].data["agent"]
     assert meta["parent"] == "root"
     assert meta["session"] == "root/sub/1"
+    assert meta["parent_call_id"] == "t1"
+    assert meta["parent_session"] == "root"
+    assert meta["parent_agent_id"] is None
+    assert meta["root_turn_id"]
     child_text = [
         e for e in events if e.type == "text" and isinstance(e.data.get("agent"), dict)
     ]
     assert child_text and child_text[0].data["agent"]["id"] == "root/sub/1"
+    transcript = HostFacade(runtime).agent_transcript("root", meta["id"])
+    assert transcript["found"] is True
+    assert transcript["status"] == "completed"
+    assert transcript["view"]["body"]["messages"][-1]["blocks"][-1]["text"] == "child findings"
 
     # A real, replayable child session was written under the agents directory.
     assert (tmp_path / ".nexus" / "sessions" / "agents").is_dir()
@@ -286,6 +305,11 @@ async def test_parallel_tasks_both_run(tmp_path):
     assert {e.data["agent"]["session"] for e in spawned} == {
         "root/sub/1",
         "root/sub/2",
+    }
+    assert {e.data["agent"]["parent_call_id"] for e in spawned} == {"t1", "t2"}
+    assert {e.data["agent"]["id"]: e.data["agent"]["parent_call_id"] for e in spawned} == {
+        "root/sub/1": "t1",
+        "root/sub/2": "t2",
     }
     await runtime.aclose()
 
@@ -367,6 +391,175 @@ async def test_depth_limit_refuses_a_grandchild(tmp_path):
         if e.type == "tool.completed" and e.data.get("call_id") == "t2"
     ]
     assert grandchild and grandchild[0].data.get("is_error") is True
+    await runtime.aclose()
+
+
+async def test_nested_agents_keep_immediate_parent_and_root_turn(tmp_path):
+    provider = ScriptedProvider(
+        tool_response(("outer-call", "Task", {"prompt": "outer", "subagent_type": "general"})),
+        tool_response(("inner-call", "Task", {"prompt": "inner", "subagent_type": "general"})),
+        text_response("inner report"),
+        text_response("outer report"),
+        text_response("root report"),
+    )
+    runtime = make_runtime(tmp_path, provider)
+    session = runtime.session("root")
+    live = await drain(session)
+    state = fold(list(session.events))
+    assert state.to_dict() == fold(live).to_dict()
+    top = state.agents["root/sub/1"]
+    assert set(top.body.agents) == {"root/sub/1/sub/1"}
+    nested = top.body.agents["root/sub/1/sub/1"]
+    assert nested.parent_agent_id == top.id
+    assert nested.parent_call_id == "inner-call"
+    assert nested.root_turn_id == top.root_turn_id
+    transcript = HostFacade(runtime).agent_transcript("root", nested.id)
+    assert transcript["found"] is True
+    assert any(
+        "inner report" in "".join(block["text"] for block in message["blocks"] if block["kind"] == "text")
+        for message in transcript["view"]["body"]["messages"]
+    )
+    await runtime.aclose()
+
+
+async def test_parallel_agents_complete_out_of_order_and_stay_correlated(tmp_path):
+    slow = asyncio.Event()
+    fast = asyncio.Event()
+    provider = ScriptedProvider(
+        tool_response(
+            ("slow-call", "Task", {"prompt": "slow", "subagent_type": "general"}),
+            ("fast-call", "Task", {"prompt": "fast", "subagent_type": "general"}),
+        ),
+        [Wait(event=slow), *text_response("slow report")],
+        [Wait(event=fast), *text_response("fast report")],
+        text_response("root done"),
+    )
+    runtime = make_runtime(tmp_path, provider)
+    session = runtime.session("root")
+    running = asyncio.create_task(session.send("go").__anext__())
+    await wait_for(lambda: len([event for event in session.events if event.type == "agent.spawned"]) == 2)
+    # Release the second Task's provider request first; provider scripts are
+    # consumed in order, so both gates are released before asserting order.
+    fast.set()
+    await asyncio.sleep(0.02)
+    slow.set()
+    await running
+    await wait_for(lambda: any(event.type == "turn.completed" for event in session.events))
+    events = list(session.events)
+    spawned = [event for event in events if event.type == "agent.spawned"]
+    completed = [event for event in events if event.type == "agent.completed"]
+    assert {e.data["agent"]["parent_call_id"] for e in spawned} == {"slow-call", "fast-call"}
+    assert len(completed) == 2
+    by_parent_call = {event.data["agent"]["parent_call_id"]: event for event in completed}
+    assert events.index(by_parent_call["fast-call"]) < events.index(by_parent_call["slow-call"])
+    await runtime.aclose()
+
+
+async def test_child_tool_arguments_results_and_errors_replay_and_host_view(tmp_path):
+    provider = ScriptedProvider(
+        tool_response(("task-call", "Task", {"prompt": "inspect", "subagent_type": "general"})),
+        tool_response(("read-call", "Read", {"path": "missing.txt"})),
+        text_response("child report"),
+        text_response("done"),
+    )
+    runtime = make_runtime(tmp_path, provider)
+    session = runtime.session("root")
+    live_events = await drain(session)
+    replayed = list(session.events)
+    live_view = fold(live_events)
+    replay_view = fold(replayed)
+    assert live_view.to_dict() == replay_view.to_dict()
+    agent = next(iter(replay_view.agents.values()))
+    child_tool = next(tool for tool in agent.body.tools if tool.call_id == "read-call")
+    assert child_tool.input == {"path": "missing.txt"}
+    assert child_tool.status == "completed"
+    assert child_tool.result and "missing.txt" in child_tool.result[0]["text"]
+    assert child_tool.is_error
+    result_event = next(
+        event for event in live_events
+        if event.type == "tool.result" and event.data.get("tool_use_id") == "read-call"
+    )
+    assert result_event.data["is_error"] is True
+    from nexus.host.protocol import AgentTranscript
+
+    result = await HostFacade(runtime).handle(AgentTranscript(session="root", agent_id=agent.id))
+    assert result.found and result.status == "completed"
+    missing = await HostFacade(runtime).handle(AgentTranscript(session="root", agent_id="unknown"))
+    assert not missing.found and missing.status == "not_found"
+    await runtime.aclose()
+
+
+async def test_agent_transcript_obeys_fork_boundary(tmp_path):
+    provider = ScriptedProvider(
+        tool_response(("t1", "Task", {"prompt": "inspect", "subagent_type": "general"})),
+        text_response("child report"),
+        text_response("root report"),
+    )
+    runtime = make_runtime(tmp_path, provider)
+    session = runtime.session("root")
+    await drain(session)
+    spawn = next(event for event in session.events if event.type == "agent.spawned")
+    completed = next(event for event in session.events if event.type == "agent.completed")
+    fork = runtime.sessions.fork("root", spawn.seq, new_id="fork-at-spawn")
+    partial = HostFacade(runtime).agent_transcript(fork.id, spawn.data["agent"]["id"])
+    assert partial["found"] is True
+    assert partial["status"] == "spawned"
+    assert partial["view"]["body"]["messages"] == []
+    assert completed.seq > spawn.seq
+    await runtime.aclose()
+
+
+async def test_child_transcript_caps_results_and_redacts_argument_secrets(tmp_path):
+    oversized = "x" * (25_000 * 4)
+    provider = ScriptedProvider(
+        tool_response(("t1", "Task", {"prompt": "inspect", "subagent_type": "general"})),
+        tool_response(("bash-call", "Bash", {"command": "echo ok", "api_key": "sk-live-secret-value"})),
+        text_response(oversized),
+        text_response("root"),
+    )
+    runtime = make_runtime(tmp_path, provider)
+    session = runtime.session("root")
+    events = await drain(session)
+    agent = next(iter(fold(events).agents.values()))
+    tool = next(tool for tool in agent.body.tools if tool.call_id == "bash-call")
+    assert tool.input["api_key"] == "***"
+    assert tool.result
+    assert sum(len(item.get("text", "")) for item in tool.result) <= 25_000 * 4 + 200
+    assert "sk-live-secret-value" not in str(events)
+    await runtime.aclose()
+
+
+def test_child_transcript_event_result_payload_is_bounded():
+    from nexus.core.loop import _tool_result_event_view
+
+    result = _tool_result_event_view(
+        ToolResult(
+            tool_use_id="read-call",
+            content=[Text(text="z" * 500_000)],
+        )
+    )
+    assert sum(len(item.get("text", "")) for item in result["content"]) <= 100_000 + 32
+
+
+async def test_running_child_transcript_is_partial(tmp_path):
+    gate = asyncio.Event()
+    provider = ScriptedProvider(
+        tool_response(("t1", "Task", {"prompt": "wait", "subagent_type": "general"})),
+        [Wait(event=gate), *text_response("finished")],
+        text_response("parent"),
+    )
+    runtime = make_runtime(tmp_path, provider)
+    facade = HostFacade(runtime)
+    session = runtime.session("root")
+    task = asyncio.create_task(session.send("go").__anext__())
+    await wait_for(lambda: any(e.type == "agent.spawned" for e in session.events))
+    view, _ = facade.state("root")
+    agent = next(iter(view.agents.values()))
+    assert agent.status == "spawned"
+    assert agent.body.messages or agent.body.turns
+    gate.set()
+    await task
+    await facade.wait_idle(timeout=5)
     await runtime.aclose()
 
 

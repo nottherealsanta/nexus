@@ -1,6 +1,7 @@
 ---
 name: planner
 description: Read-only planning agent. Designs an approach and returns a plan; cannot execute it.
+contexts: [root, subagent]
 bundles: [fs]
 tools: [-Write, -Edit, -MultiEdit]
 model: high

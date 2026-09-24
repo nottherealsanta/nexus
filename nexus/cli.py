@@ -17,6 +17,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import importlib.util
+import os
 import sys
 from pathlib import Path
 from typing import Any, TextIO
@@ -26,6 +28,7 @@ DEFAULT_CONFIG = '''# Nexus reloads configuration before each turn. Unknown keys
 config_version = 2
 
 [agent]
+name = "general"
 profile = "coding"
 instructions_file = "SOUL.md"
 memory_file = "MEMORY.md"
@@ -107,23 +110,27 @@ async def _run(
         await client.aclose()
 
 
-async def _chat(
-    workspace: Path,
-    *,
-    session: str,
-    stdout: TextIO,
-    stderr: TextIO,
-) -> int:
-    from .ui.cli import open_client, run_chat
+async def _chat(workspace: Path, *, session: str) -> int:
+    """Launch the only interactive chat shell over the host client."""
+    from .ui.cli import open_client
+    from .ui.tui.run import run
 
     client = await open_client(workspace)
     try:
-        # Let ``run_chat`` build the editor so the live status toolbar and the
-        # ``patch_stdout`` wiring are active; the streams are the real terminal
-        # ones, so a captured buffer is never seen here.
-        return await run_chat(client, session=session, stdout=stdout, stderr=stderr)
+        async def reconnect():
+            return await open_client(workspace)
+
+        return await run(client, session=session, reconnect=reconnect)
     finally:
         await client.aclose()
+
+
+def _chat_entry(workspace: Path, *, session: str) -> int:
+    """KeyboardInterrupt boundary for Textual's guaranteed terminal restore."""
+    try:
+        return asyncio.run(_chat(workspace, session=session))
+    except KeyboardInterrupt:
+        return 130
 
 
 async def _session_command(
@@ -321,6 +328,18 @@ async def _agents_command(
 
     client = await open_client(workspace)
     try:
+        if args.agents_action == "current":
+            result = await client.current_agent(args.session)
+            stdout.write(f"{result.name} ({result.source})\n")
+            return 0
+        if args.agents_action == "select":
+            result = await client.select_agent(args.session, args.name)
+            stdout.write(f"{result.name} (session {args.session}; applies next turn)\n")
+            return 0
+        if args.agents_action == "reset":
+            result = await client.reset_agent(args.session)
+            stdout.write(f"{result.name} ({result.source}; applies next turn)\n")
+            return 0
         rows = await client.list_agents()
         for row in rows:
             kind = "read-only" if row.get("read_only") else "write"
@@ -404,6 +423,29 @@ async def _daemon_command(
         stdout.write(text if text.endswith("\n") or not text else text + "\n")
         return 0
     raise ValueError(f"unknown daemon action {action!r}")
+
+
+async def _auth_command(args: argparse.Namespace, stdout: TextIO) -> int:
+    """Credential operations are deliberately local: never open a daemon RPC."""
+    from .auth.codex import CodexOAuthManager
+
+    manager = CodexOAuthManager(profile=args.profile)
+    if args.auth_action == "status":
+        logged_in = await manager.status()
+        stdout.write("logged in\n" if logged_in else "not logged in\n")
+        return 0 if logged_in else 1
+    if args.auth_action == "logout":
+        await manager.logout()
+        stdout.write("logged out\n")
+        return 0
+    if args.auth_action == "login":
+        if args.headless:
+            await manager.device_login(notify=stdout.write)
+        else:
+            await manager.browser_login(notify=stdout.write)
+        stdout.write("\nlogin complete\n")
+        return 0
+    raise ValueError(f"unknown auth action {args.auth_action!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -605,7 +647,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--session", default="default")
     run.add_argument("--json", action="store_true", help="Stream JSONL event envelopes")
 
-    chat = sub.add_parser("chat", help="Open an interactive line-mode prompt")
+    chat = sub.add_parser("chat", help="Open the interactive Textual chat")
     chat.add_argument("--session", default="default")
 
     replay = sub.add_parser("replay", help="Re-render a session from its log")
@@ -619,6 +661,18 @@ def build_parser() -> argparse.ArgumentParser:
     daemon_sub.add_parser("stop", help="Gracefully stop the daemon")
     daemon_logs = daemon_sub.add_parser("logs", help="Tail the daemon log")
     daemon_logs.add_argument("--lines", type=int, default=200)
+
+    auth = sub.add_parser("auth", help="Manage local provider credentials")
+    auth_sub = auth.add_subparsers(dest="auth_provider", required=True)
+    codex_auth = auth_sub.add_parser("codex", help="Experimental ChatGPT OAuth")
+    codex_sub = codex_auth.add_subparsers(dest="auth_action", required=True)
+    login = codex_sub.add_parser("login", help="Log in locally (no daemon RPC)")
+    login.add_argument("--profile", default="default")
+    login.add_argument("--headless", action="store_true", help="Use device flow")
+    status = codex_sub.add_parser("status", help="Check local credential presence")
+    status.add_argument("--profile", default="default")
+    logout = codex_sub.add_parser("logout", help="Delete local credential")
+    logout.add_argument("--profile", default="default")
 
     sessions = sub.add_parser("sessions", help="List, fork, replay, export, delete, restore")
     sessions_sub = sessions.add_subparsers(dest="session_action", required=True)
@@ -678,6 +732,13 @@ def build_parser() -> argparse.ArgumentParser:
     agents = sub.add_parser("agents", help="List discovered subagent definitions")
     agents_sub = agents.add_subparsers(dest="agents_action", required=True)
     agents_sub.add_parser("list", help="List subagent definitions")
+    agent_select = agents_sub.add_parser("select", help="Select root agent for a session")
+    agent_select.add_argument("name")
+    agent_select.add_argument("--session", default="default")
+    agent_current = agents_sub.add_parser("current", help="Show the session's root agent")
+    agent_current.add_argument("--session", default="default")
+    agent_reset = agents_sub.add_parser("reset", help="Clear root-agent override")
+    agent_reset.add_argument("--session", default="default")
 
     tools = sub.add_parser("tools", help="List the model-facing tool catalog")
     tools_sub = tools.add_subparsers(dest="tools_action", required=True)
@@ -707,9 +768,12 @@ def main(argv: list[str] | None = None) -> int:
             message = sys.stdin.read() if args.message == "-" else args.message
             approver = None
             if not args.json:
-                from .ui.cli import Approver, make_reader
+                from .ui.cli.approve import Approver
 
-                approver = Approver(make_reader(stdout=stdout), stderr=stderr)
+                async def read_approval(prompt: str) -> str:
+                    return await asyncio.to_thread(input, prompt)
+
+                approver = Approver(read_approval, stderr=stderr)
             return asyncio.run(
                 _run(
                     workspace,
@@ -722,11 +786,32 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
         if args.command == "chat":
-            return asyncio.run(_chat(workspace, session=args.session, stdout=stdout, stderr=stderr))
+            if not (
+                sys.stdin.isatty()
+                and sys.stdout.isatty()
+                and os.environ.get("TERM", "dumb") != "dumb"
+            ):
+                stderr.write(
+                    "Error: `nexus chat` requires an interactive terminal (stdin and stdout TTYs). "
+                    "Use `nexus run <prompt>` for piped or non-interactive input.\n"
+                )
+                return 2
+            if importlib.util.find_spec("textual") is None:
+                stderr.write("Error: Textual is required for `nexus chat`; reinstall Nexus with its runtime dependencies.\n")
+                return 1
+            try:
+                return _chat_entry(workspace, session=args.session)
+            except ModuleNotFoundError as exc:
+                if exc.name == "textual":
+                    stderr.write("Error: Textual is required for chat; reinstall Nexus with its runtime dependencies.\n")
+                    return 1
+                raise
         if args.command == "replay":
             return asyncio.run(_replay(workspace, args, stdout))
         if args.command == "daemon":
             return asyncio.run(_daemon_command(workspace, args, stdout, stderr))
+        if args.command == "auth":
+            return asyncio.run(_auth_command(args, stdout))
         if args.command == "sessions":
             return asyncio.run(
                 _session_command(workspace, args, stdout, stderr)
@@ -744,6 +829,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"unknown command {args.command!r}")
         return 2
     except KeyboardInterrupt:
+        if args.command == "chat":
+            return 130
         stderr.write("Cancelled. Workspace changes may already have occurred.\n")
         return 130
     except Exception as exc:  # noqa: BLE001 - the CLI boundary reports, never tracebacks

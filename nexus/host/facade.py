@@ -220,6 +220,26 @@ class HostFacade:
                 view = apply(view, event)
         return view, view.last_seq
 
+    def agent_transcript(self, session_id: str, agent_id: str) -> dict[str, Any]:
+        """Return one view-safe child transcript from the parent event log."""
+        view, _seq = self.state(session_id)
+        def locate(conversation: ConversationView):
+            candidate = conversation.agents.get(agent_id)
+            if candidate is not None:
+                return candidate
+            for nested in conversation.agents.values():
+                found = locate(nested.body)
+                if found is not None:
+                    return found
+            return None
+
+        agent = locate(view)
+        if agent is None:
+            return {"found": False, "status": "not_found", "view": {}}
+        payload = agent.to_dict()
+        payload["body"] = agent.body.to_dict()
+        return {"found": True, "status": agent.status, "view": payload}
+
     def resolve_permission(
         self,
         session_id: str,
@@ -449,18 +469,21 @@ class HostFacade:
         agents = self.runtime.agents
         if agents is None:
             return []
-        rows: list[dict[str, Any]] = []
-        for entry in agents.index:
-            rows.append(
-                {
-                    "name": entry.name,
-                    "description": entry.description,
-                    "source": str(entry.source),
-                    "model": entry.model,
-                    "read_only": bool(entry.read_only),
-                }
-            )
-        return rows
+        entries = agents.index
+        return [{"name": e.name, "description": e.description, "source": str(e.source), "model": e.model, "read_only": bool(e.read_only), "contexts": list(getattr(agents.get(e.name), "contexts", ("subagent",))) if callable(getattr(agents, "get", None)) else ["subagent"]} for e in entries]
+
+    def _refresh_agents(self) -> Any:
+        agents = self.runtime.agents
+        if agents is not None:
+            agents.refresh()
+        return agents
+
+    def current_agent(self, session_id: str) -> tuple[str, str]:
+        handle = self._session(session_id)
+        return self.runtime.effective_session_agent(handle)
+
+    def select_agent(self, session_id: str, name: str | None) -> tuple[str, str]:
+        return self.runtime.select_session_agent(session_id, name)
 
     async def list_tools(self) -> list[dict[str, Any]]:
         """The model-facing tool catalog for the current config and manifest."""
@@ -552,6 +575,15 @@ class HostFacade:
             view, seq = self.state(command.session, command.from_seq)
             return p.SessionStateResult(
                 session=command.session, seq=seq, view=view.to_dict()
+            )
+        if isinstance(command, p.AgentTranscript):
+            result = self.agent_transcript(command.session, command.agent_id)
+            return p.AgentTranscriptResult(
+                session=command.session,
+                agent_id=command.agent_id,
+                found=result["found"],
+                status=result["status"],
+                view=result["view"],
             )
         if isinstance(command, p.SessionFork):
             return p.SessionForkResult(
@@ -656,6 +688,15 @@ class HostFacade:
                 generation=getattr(agents, "generation", 0),
                 agents=self.list_agents(),
             )
+        if isinstance(command, p.AgentCurrent):
+            name, source = self.current_agent(command.session)
+            return p.AgentCurrentResult(session=command.session, name=name, source=source)
+        if isinstance(command, p.AgentSelect):
+            name, source = self.select_agent(command.session, command.name)
+            return p.AgentSelectResult(session=command.session, name=name, source=source)
+        if isinstance(command, p.AgentReset):
+            name, source = self.select_agent(command.session, None)
+            return p.AgentSelectResult(session=command.session, name=name, source=source)
         if isinstance(command, p.ToolsList):
             tools = await self.list_tools()
             return p.ToolsListResult(count=len(tools), tools=tools)

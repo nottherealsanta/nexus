@@ -458,10 +458,11 @@ def _responses_content(
 
 
 def _build_responses_body(
-    req: ModelRequest, *, model: str, default_max_tokens: int
+    req: ModelRequest, *, model: str, default_max_tokens: int | None
 ) -> dict[str, Any]:
     body = _responses_content(req, model=model)
     body["stream"] = True
+    if default_max_tokens is None: body["store"] = False
     params = req.params
     max_output = params.max_output_tokens or default_max_tokens
     if max_output:
@@ -489,9 +490,7 @@ def build_request_body(
     if api == API_CHAT:
         return _build_chat_body(req, model=model, default_max_tokens=default_max_tokens)
     if api == API_RESPONSES:
-        return _build_responses_body(
-            req, model=model, default_max_tokens=default_max_tokens
-        )
+        return _build_responses_body(req, model=model, default_max_tokens=default_max_tokens)
     raise ProviderError(f"openai: unknown api dialect {api!r}")
 
 
@@ -904,6 +903,7 @@ def _fallback_capabilities(model: str) -> Capabilities:
         json_schema_strict=True,
         max_context_tokens=400_000,
         max_output_tokens=128_000,
+        default_max_output_tokens=DEFAULT_MAX_TOKENS,
         degradation={
             "thinking": "drop",
             "vision": "to_text",
@@ -938,6 +938,7 @@ class OpenAIProvider:
         environ: Mapping[str, str] | None = None,
         default_max_tokens: int = DEFAULT_MAX_TOKENS,
         extra_headers: Mapping[str, str] | None = None,
+        auth_headers: Any | None = None,
     ) -> None:
         if api not in (API_RESPONSES, API_CHAT):
             raise ProviderError(f"openai: unknown api dialect {api!r}")
@@ -947,7 +948,7 @@ class OpenAIProvider:
         self._base_url = (base_url or self.DEFAULT_BASE_URL).rstrip("/")
         self._environ = environ
         self._default_max_tokens = default_max_tokens
-        self._extra_headers = dict(extra_headers or {})
+        self._extra_headers, self._auth_headers = dict(extra_headers or {}), auth_headers
         self._capabilities = capabilities
         self._capability_source = capability_source
         self._closed = False
@@ -1041,13 +1042,12 @@ class OpenAIProvider:
             )
         return spec
 
-    def _headers(self) -> dict[str, str]:
-        headers = {
-            "content-type": "application/json",
-            "accept": "text/event-stream",
-        }
-        headers.update(self._extra_headers)
-        headers["authorization"] = f"Bearer {self._resolve_api_key()}"
+    async def _headers(self) -> dict[str, str]:
+        headers = {"content-type": "application/json", "accept": "text/event-stream", **self._extra_headers}
+        if self._auth_headers is not None:
+            headers.update(await self._auth_headers.headers())
+        else:
+            headers["authorization"] = f"Bearer {self._resolve_api_key()}"
         return headers
 
     def _endpoint(self, suffix: str) -> str:
@@ -1078,7 +1078,7 @@ class OpenAIProvider:
 
     def supports_count_tokens(self) -> bool:
         """Whether the configured endpoint publishes an input-token counter."""
-        return self._api == API_RESPONSES and _is_openai_host(self._base_url)
+        return self._api == API_RESPONSES and (self._auth_headers is not None or _is_openai_host(self._base_url))
 
     async def count_tokens(self, req: ModelRequest) -> int | None:
         """Count input tokens via ``/v1/responses/input_tokens``.
@@ -1098,7 +1098,7 @@ class OpenAIProvider:
         response = await self._transport.request(
             "POST",
             self._endpoint("responses/input_tokens"),
-            headers=self._headers(),
+            headers=await self._headers(),
             json=body,
         )
         try:
@@ -1131,7 +1131,7 @@ class OpenAIProvider:
             api=self._api,
             default_max_tokens=self._default_max_tokens,
         )
-        headers = self._headers()
+        headers = await self._headers()
         usage = _UsageTotals()
         accumulator = ToolCallAccumulator()
 

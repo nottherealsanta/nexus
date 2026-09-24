@@ -173,6 +173,19 @@ class Client:
         result = await self._request(p.SessionState(session=session, from_seq=from_seq))
         return dict(result.view), result.seq  # type: ignore[union-attr]
 
+    async def agent_transcript(
+        self, session: str, agent_id: str
+    ) -> dict[str, Any]:
+        """Fetch a view-safe child transcript; unknown ids return found=False."""
+        result = await self._request(
+            p.AgentTranscript(session=session, agent_id=agent_id)
+        )
+        return {
+            "found": result.found,  # type: ignore[union-attr]
+            "status": result.status,  # type: ignore[union-attr]
+            "view": dict(result.view),  # type: ignore[union-attr]
+        }
+
     async def resolve_permission(
         self, session: str, request_id: str, decision: str
     ) -> bool:
@@ -243,6 +256,15 @@ class Client:
     async def list_agents(self) -> list[dict[str, Any]]:
         result = await self._request(p.AgentsList())
         return list(result.agents)  # type: ignore[union-attr]
+
+    async def current_agent(self, session: str) -> Any:
+        return await self._request(p.AgentCurrent(session=session))
+
+    async def select_agent(self, session: str, name: str) -> Any:
+        return await self._request(p.AgentSelect(session=session, name=name))
+
+    async def reset_agent(self, session: str) -> Any:
+        return await self._request(p.AgentReset(session=session))
 
     async def list_tools(self) -> list[dict[str, Any]]:
         result = await self._request(p.ToolsList())

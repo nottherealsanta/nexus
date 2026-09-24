@@ -131,6 +131,8 @@ def _ensure_assistant(
     if messages and messages[-1].role == "assistant" and not messages[-1].done:
         return turn, len(messages) - 1
     message = MessageView(
+        id=event.id or f"message@{event.seq}",
+        event_seq=event.seq,
         role="assistant",
         iteration=_as_int(data.get("iteration"), turn.iteration),
         provider=_as_str(data.get("provider")),
@@ -149,6 +151,56 @@ def _update_tool(turn: TurnView, call_id: str, **changes: Any) -> TurnView:
         if tool.call_id == call_id:
             return replace(turn, tools=_replace_at(turn.tools, i, replace(tool, **changes)))
     return turn
+
+
+def _ensure_tool(
+    turn: TurnView, call_id: str, *, name: str = "", ts: float | None = None, seq: int = 0
+) -> TurnView:
+    """Create an event-order-tolerant tool placeholder when needed."""
+    if any(tool.call_id == call_id for tool in turn.tools):
+        return turn
+    return replace(
+        turn,
+        tools=[
+            *turn.tools,
+            ToolCallView(
+                call_id=call_id,
+                event_seq=seq,
+                name=name,
+                requested_ts=ts,
+            ),
+        ],
+    )
+
+
+def _child_agents_for_call(state: ConversationView, call_id: str) -> list[str]:
+    return [
+        agent_id
+        for agent_id, agent in state.agents.items()
+        if agent.parent_call_id == call_id
+    ]
+
+
+def _link_agent_to_call(
+    state: ConversationView, call_id: str, agent_id: str
+) -> ConversationView:
+    """Link a direct child regardless of whether its Task event arrived first."""
+    if not call_id or not agent_id:
+        return state
+    changed = False
+    turns: list[TurnView] = []
+    for turn in state.turns:
+        tools: list[ToolCallView] = []
+        turn_changed = False
+        for tool in turn.tools:
+            if tool.call_id == call_id and agent_id not in tool.child_agent_ids:
+                tools.append(replace(tool, child_agent_ids=[*tool.child_agent_ids, agent_id]))
+                turn_changed = True
+            else:
+                tools.append(tool)
+        turns.append(replace(turn, tools=tools) if turn_changed else turn)
+        changed = changed or turn_changed
+    return replace(state, turns=turns) if changed else state
 
 def _diagnostic(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
     entry = DiagnosticView(
@@ -325,6 +377,8 @@ def _on_model_started(state: ConversationView, event: Event, data: Mapping[str, 
     else:
         messages.append(
             MessageView(
+                id=event.id or f"message@{event.seq}",
+                event_seq=event.seq,
                 role="assistant",
                 iteration=iteration,
                 provider=provider,
@@ -348,7 +402,10 @@ def _on_text_delta(state: ConversationView, event: Event, data: Mapping[str, Any
     turn, message_index = _ensure_assistant(state.turns[index], event, data)
     message = turn.messages[message_index]
     blocks = accumulate(message.blocks, "text", _text(data))
-    turn = _with_message(turn, message_index, replace(message, blocks=blocks))
+    # ``model.started`` may create an empty placeholder before tool activity.
+    # The transcript order belongs to the first visible text, not that placeholder.
+    event_seq = event.seq if not message.text and _text(data) else message.event_seq
+    turn = _with_message(turn, message_index, replace(message, blocks=blocks, event_seq=event_seq))
     return _put(state, index, replace(turn, updated_ts=event.ts))
 
 def _on_text(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
@@ -356,7 +413,8 @@ def _on_text(state: ConversationView, event: Event, data: Mapping[str, Any]) -> 
     turn, message_index = _ensure_assistant(state.turns[index], event, data)
     message = turn.messages[message_index]
     blocks = finalize_text(message.blocks, _text(data))
-    turn = _with_message(turn, message_index, replace(message, blocks=blocks))
+    event_seq = event.seq if not message.text and _text(data) else message.event_seq
+    turn = _with_message(turn, message_index, replace(message, blocks=blocks, event_seq=event_seq))
     return _put(state, index, replace(turn, updated_ts=event.ts))
 
 def _on_thinking_delta(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
@@ -418,6 +476,7 @@ def _on_tool_requested(state: ConversationView, event: Event, data: Mapping[str,
     turn = state.turns[index]
     call_id = _as_str(data.get("call_id")) or ""
     name = _as_str(data.get("tool")) or ""
+    tool_input = _key_map(data, "input") or {}
     existing = next((t for t in turn.tools if t.call_id == call_id), None)
     if existing is None:
         turn = replace(
@@ -426,7 +485,10 @@ def _on_tool_requested(state: ConversationView, event: Event, data: Mapping[str,
                 *turn.tools,
                 ToolCallView(
                     call_id=call_id,
+                    event_seq=event.seq,
                     name=name,
+                    input=tool_input,
+                    child_agent_ids=_child_agents_for_call(state, call_id),
                     status="requested",
                     requested_ts=event.ts,
                 ),
@@ -434,13 +496,24 @@ def _on_tool_requested(state: ConversationView, event: Event, data: Mapping[str,
             updated_ts=event.ts,
         )
     else:
-        turn = _update_tool(turn, call_id, name=name, status="requested")
+        turn = _update_tool(
+            turn,
+            call_id,
+            name=name or existing.name,
+            input=tool_input or existing.input,
+            status=(
+                "requested"
+                if existing.status in ("requested", "running")
+                else existing.status
+            ),
+        )
     return _put(state, index, turn)
 
 def _on_tool_started(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
     state, index = _turn_for(state, event)
     turn = state.turns[index]
     call_id = _as_str(data.get("call_id")) or ""
+    turn = _ensure_tool(turn, call_id, name=_as_str(data.get("tool")) or "", ts=event.ts, seq=event.seq)
     turn = _update_tool(
         turn,
         call_id,
@@ -455,6 +528,7 @@ def _on_tool_progress(state: ConversationView, event: Event, data: Mapping[str, 
     state, index = _turn_for(state, event)
     turn = state.turns[index]
     call_id = _as_str(data.get("call_id")) or ""
+    turn = _ensure_tool(turn, call_id, ts=event.ts, seq=event.seq)
     for i, tool in enumerate(turn.tools):
         if tool.call_id == call_id:
             progress = [*tool.progress, _text(data)] if _text(data) else tool.progress
@@ -466,6 +540,10 @@ def _on_tool_completed(state: ConversationView, event: Event, data: Mapping[str,
     state, index = _turn_for(state, event)
     turn = state.turns[index]
     call_id = _as_str(data.get("call_id")) or ""
+    turn = _ensure_tool(turn, call_id, name=_as_str(data.get("tool")) or "", ts=event.ts, seq=event.seq)
+    result = data.get("result")
+    result_data = result if isinstance(result, Mapping) else {}
+    content = result_data.get("content")
     turn = _update_tool(
         turn,
         call_id,
@@ -475,14 +553,65 @@ def _on_tool_completed(state: ConversationView, event: Event, data: Mapping[str,
         executed=bool(data.get("executed", True)),
         duration_ms=data.get("duration_ms") if isinstance(data.get("duration_ms"), int) else None,
         finished_ts=event.ts,
+        result=jsonable(content) if isinstance(content, list) else [],
+        display=_as_str(result_data.get("display")),
+        context_note=_as_str(result_data.get("context_note")),
+        metrics=_key_map(result_data, "metrics"),
+        diff=_key_map(result_data, "diff"),
     )
+    return _put(state, index, replace(turn, updated_ts=event.ts))
+
+def _on_tool_result(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
+    state, index = _turn_for(state, event)
+    turn = state.turns[index]
+    call_id = _as_str(data.get("tool_use_id")) or ""
+    turn = _ensure_tool(turn, call_id, ts=event.ts, seq=event.seq)
+    for i, tool in enumerate(turn.tools):
+        if tool.call_id == call_id:
+            content = data.get("content")
+            turn = replace(
+                turn,
+                tools=_replace_at(
+                    turn.tools,
+                    i,
+                    replace(
+                        tool,
+                        status=(
+                            tool.status
+                            if tool.status != "requested"
+                            else ("failed" if bool(data.get("is_error")) else "completed")
+                        ),
+                        is_error=bool(data.get("is_error")),
+                        result=jsonable(content) if isinstance(content, list) else [],
+                        context_note=_as_str(data.get("context_note")),
+                        display=_as_str(data.get("display")),
+                        metrics=_key_map(data, "metrics"),
+                        diff=_key_map(data, "diff"),
+                    ),
+                ),
+                updated_ts=event.ts,
+            )
+            break
+    return _put(state, index, turn)
+
+def _on_tool_input(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
+    state, index = _turn_for(state, event)
+    turn = state.turns[index]
+    call_id = _as_str(data.get("call_id")) or ""
+    tool_input = _key_map(data, "input") or {}
+    turn = _ensure_tool(turn, call_id, ts=event.ts, seq=event.seq)
+    turn = _update_tool(turn, call_id, input=tool_input)
     return _put(state, index, replace(turn, updated_ts=event.ts))
 
 def _on_tool_failed(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
     state, index = _turn_for(state, event)
     turn = state.turns[index]
     call_id = _as_str(data.get("call_id")) or ""
+    turn = _ensure_tool(turn, call_id, name=_as_str(data.get("tool")) or "", ts=event.ts, seq=event.seq)
     error = _as_str(data.get("error"))
+    result = data.get("result")
+    result_data = result if isinstance(result, Mapping) else {}
+    content = result_data.get("content")
     turn = _update_tool(
         turn,
         call_id,
@@ -493,6 +622,12 @@ def _on_tool_failed(state: ConversationView, event: Event, data: Mapping[str, An
         executed=bool(data.get("executed")),
         duration_ms=data.get("duration_ms") if isinstance(data.get("duration_ms"), int) else None,
         finished_ts=event.ts,
+        is_error=bool(result_data.get("is_error", True)),
+        result=jsonable(content) if isinstance(content, list) else [],
+        display=_as_str(result_data.get("display")),
+        context_note=_as_str(result_data.get("context_note")),
+        metrics=_key_map(result_data, "metrics"),
+        diff=_key_map(result_data, "diff"),
     )
     return _put(state, index, replace(turn, updated_ts=event.ts))
 
@@ -647,7 +782,14 @@ def _on_input(state: ConversationView, event: Event, data: Mapping[str, Any]) ->
         if turn_id:
             state, index = _turn_for(state, _with_turn(event, turn_id))
             turn = state.turns[index]
-            message = MessageView(role="user", blocks=[], iteration=turn.iteration, done=True)
+            message = MessageView(
+                id=event.id or f"message@{event.seq}",
+                event_seq=event.seq,
+                role="user",
+                blocks=[],
+                iteration=turn.iteration,
+                done=True,
+            )
             if pending_content:
                 message = replace(
                     message,
@@ -736,10 +878,31 @@ def _on_registry(state: ConversationView, event: Event, data: Mapping[str, Any])
 # ---------------------------------------------------------------------------
 
 def _on_agent_spawned(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
-    meta = _agent_meta(data) or {}
+    meta = _agent_meta(data) or dict(data)
     agent_id = _as_str(meta.get("id")) or _as_str(data.get("id"))
     if not agent_id:
         return _diagnostic(state, event, data)
+    if agent_id in state.agents:
+        agent = state.agents[agent_id]
+        merged = replace(
+            agent,
+            parent=_as_str(meta.get("parent")) or agent.parent,
+            parent_session=_as_str(meta.get("parent_session")) or agent.parent_session,
+            parent_agent_id=_as_str(meta.get("parent_agent_id")) or agent.parent_agent_id,
+            parent_call_id=_as_str(meta.get("parent_call_id")) or agent.parent_call_id,
+            root_turn_id=_as_str(meta.get("root_turn_id")) or agent.root_turn_id,
+            type=_as_str(meta.get("type")) or agent.type,
+            task=_as_str(meta.get("task")) or agent.task,
+            session=_as_str(meta.get("session")) or agent.session,
+            depth=_as_int(meta.get("depth"), agent.depth),
+        )
+        agents = dict(state.agents)
+        agents[agent_id] = merged
+        order = list(state.agent_order)
+        if agent_id not in order:
+            order.append(agent_id)
+        state = replace(state, agents=agents, agent_order=order)
+        return _link_agent_to_call(state, merged.parent_call_id or "", agent_id)
     turn_id = str(meta.get("task") or agent_id)
     body = ConversationView(session_id=_as_str(meta.get("session")))
     body = replace(
@@ -749,6 +912,10 @@ def _on_agent_spawned(state: ConversationView, event: Event, data: Mapping[str, 
     agent = AgentView(
         id=agent_id,
         parent=_as_str(meta.get("parent")),
+        parent_session=_as_str(meta.get("parent_session")),
+        parent_agent_id=_as_str(meta.get("parent_agent_id")),
+        parent_call_id=_as_str(meta.get("parent_call_id")),
+        root_turn_id=_as_str(meta.get("root_turn_id")),
         type=_as_str(meta.get("type")),
         task=_as_str(meta.get("task")),
         session=_as_str(meta.get("session")),
@@ -770,10 +937,11 @@ def _on_agent_spawned(state: ConversationView, event: Event, data: Mapping[str, 
     order = list(state.agent_order)
     if agent_id not in order:
         order.append(agent_id)
-    return replace(state, agents=agents, agent_order=order)
+    state = replace(state, agents=agents, agent_order=order)
+    return _link_agent_to_call(state, agent.parent_call_id or "", agent_id)
 
 def _on_agent_completed(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
-    meta = _agent_meta(data) or {}
+    meta = _agent_meta(data) or dict(data)
     agent_id = _as_str(meta.get("id")) or _as_str(data.get("id"))
     if not agent_id or agent_id not in state.agents:
         return _diagnostic(state, event, data)
@@ -807,7 +975,7 @@ def _on_agent_completed(state: ConversationView, event: Event, data: Mapping[str
     return replace(state, agents=agents, agent_order=list(state.agent_order))
 
 def _on_agent_clamped(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
-    meta = _agent_meta(data) or {}
+    meta = _agent_meta(data) or dict(data)
     agent_id = _as_str(meta.get("id")) or _as_str(data.get("id"))
     if not agent_id or agent_id not in state.agents:
         return _diagnostic(state, event, data)
@@ -822,6 +990,58 @@ def _on_agent_clamped(state: ConversationView, event: Event, data: Mapping[str, 
     agents = dict(state.agents)
     agents[agent_id] = agent
     return replace(state, agents=agents, agent_order=list(state.agent_order))
+
+
+def _find_agent(state: ConversationView, agent_id: str) -> AgentView | None:
+    direct = state.agents.get(agent_id)
+    if direct is not None:
+        return direct
+    for parent in state.agents.values():
+        nested = _find_agent(parent.body, agent_id)
+        if nested is not None:
+            return nested
+    return None
+
+
+def _update_agent_body(
+    state: ConversationView,
+    agent_id: str,
+    event: Event,
+    *,
+    spawn: bool = False,
+    complete: bool = False,
+    clamp: bool = False,
+) -> ConversationView:
+    """Route lifecycle/content events to their owning conversation recursively."""
+    if agent_id in state.agents:
+        owner = state.agents[agent_id]
+        body_event = _without_agent(event)
+        if spawn:
+            body = _on_agent_spawned(owner.body, event, event.data)
+        elif complete:
+            body = _on_agent_completed(owner.body, event, event.data)
+        elif clamp:
+            body = _on_agent_clamped(owner.body, event, event.data)
+        else:
+            body = apply(owner.body, body_event)
+        agents = dict(state.agents)
+        agents[agent_id] = replace(owner, body=body)
+        return replace(state, agents=agents)
+
+    for parent_id, parent in state.agents.items():
+        updated = _update_agent_body(
+            parent.body,
+            agent_id,
+            event,
+            spawn=spawn,
+            complete=complete,
+            clamp=clamp,
+        )
+        if updated is not parent.body:
+            agents = dict(state.agents)
+            agents[parent_id] = replace(parent, body=updated)
+            return replace(state, agents=agents)
+    return state
 
 def _apply_agent(
     state: ConversationView, event: Event, meta: Mapping[str, Any]
@@ -846,6 +1066,10 @@ def _apply_agent(
         agent = AgentView(
             id=agent_id,
             parent=_as_str(meta.get("parent")),
+            parent_session=_as_str(meta.get("parent_session")),
+            parent_agent_id=_as_str(meta.get("parent_agent_id")),
+            parent_call_id=_as_str(meta.get("parent_call_id")),
+            root_turn_id=_as_str(meta.get("root_turn_id")),
             type=_as_str(meta.get("type")),
             task=_as_str(meta.get("task")),
             session=_as_str(meta.get("session")),
@@ -855,13 +1079,21 @@ def _apply_agent(
             body=body,
         )
     body = apply(agent.body, _without_agent(event))
-    agent = replace(agent, body=body)
+    agent = replace(
+        agent,
+        body=body,
+        parent_session=_as_str(meta.get("parent_session")) or agent.parent_session,
+        parent_agent_id=_as_str(meta.get("parent_agent_id")) or agent.parent_agent_id,
+        parent_call_id=_as_str(meta.get("parent_call_id")) or agent.parent_call_id,
+        root_turn_id=_as_str(meta.get("root_turn_id")) or agent.root_turn_id,
+    )
     agents = dict(state.agents)
     agents[agent_id] = agent
     order = list(state.agent_order)
     if agent_id not in order:
         order.append(agent_id)
-    return replace(state, agents=agents, agent_order=order)
+    state = replace(state, agents=agents, agent_order=order)
+    return _link_agent_to_call(state, agent.parent_call_id or "", agent_id)
 
 # ---------------------------------------------------------------------------
 # Legacy / unknown
@@ -921,6 +1153,8 @@ _HANDLERS: dict[str, Any] = {
     "tool.progress": _on_tool_progress,
     "tool.completed": _on_tool_completed,
     "tool.failed": _on_tool_failed,
+    "tool.result": _on_tool_result,
+    "tool.input": _on_tool_input,
     "permission.requested": _on_permission_requested,
     "permission.resolved": _on_permission_resolved,
     "context.assembled": lambda s, e, d: _on_context(s, e, d, "assembled"),
@@ -956,14 +1190,38 @@ def _apply(state: ConversationView, event: Event) -> ConversationView:
     event_type = event.type
 
     if event_type == "agent.spawned":
+        meta = _agent_meta(data) or dict(data)
+        owner = _as_str(meta.get("parent_agent_id")) or _as_str(meta.get("parent"))
+        if owner and _find_agent(state, owner) is not None:
+            routed = _update_agent_body(state, owner, event, spawn=True)
+            if routed is not state:
+                return routed
         return _on_agent_spawned(state, event, data)
     if event_type == "agent.completed":
+        meta = _agent_meta(data) or {}
+        owner = _as_str(meta.get("parent_agent_id")) or _as_str(meta.get("parent"))
+        agent_id = _as_str(meta.get("id"))
+        if owner and agent_id and _find_agent(state, owner) is not None:
+            routed = _update_agent_body(state, owner, event, complete=True)
+            if routed is not state:
+                return routed
+        if agent_id and agent_id not in state.agents and _find_agent(state, agent_id):
+            return _update_agent_body(state, agent_id, event, complete=True)
         return _on_agent_completed(state, event, data)
     if event_type == "agent.clamped":
+        meta = _agent_meta(data) or {}
+        owner = _as_str(meta.get("parent_agent_id")) or _as_str(meta.get("parent"))
+        if owner and _find_agent(state, owner) is not None:
+            routed = _update_agent_body(state, owner, event, clamp=True)
+            if routed is not state:
+                return routed
         return _on_agent_clamped(state, event, data)
 
     meta = _agent_meta(data)
     if meta is not None:
+        agent_id = _as_str(meta.get("id"))
+        if agent_id and _find_agent(state, agent_id) is not None:
+            return _update_agent_body(state, agent_id, event)
         return _apply_agent(state, event, meta)
 
     handler = _HANDLERS.get(event_type)
