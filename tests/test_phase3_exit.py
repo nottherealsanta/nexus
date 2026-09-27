@@ -20,11 +20,10 @@ Evidence covered
   and the "200 reload cycles leak nothing" gate) are re-run as subprocesses so a
   green closeout proves they still hold.
 * **Line budgets** (plan §11 / §14.14, revised by the §18 amendment):
-  ``core/ + model/ + tools/spec.py`` under 14,000 physical lines and
-  ``host/ + view/ + ui/`` under 10,500 physical lines, with the current baseline
-  recorded. The gates are strict; the same prefixes and physical-line semantics
-  are kept, and a baseline report that records a cap violation is refused at
-  write time.
+  ``core/ + model/ + tools/spec.py`` under 14,000 physical lines and separate
+  reviewed physical-line budgets for ``host/``, ``view/``, and ``ui/``. The gates
+  are strict; the same prefixes and physical-line semantics are kept, and a
+  baseline report that records a cap violation is refused at write time.
 * **Import cost** (plan §2.2): ``import nexus`` stays lazy (no runtime/session/
   model/core) and bounded, because subagents spawn nested runtimes.
 
@@ -58,11 +57,14 @@ REPORT_TXT = REPORTS_DIR / "phase3_exit_baseline.txt"
 #: Plan §18 supersedes the §11 cap: ``core/`` + ``model/`` + ``tools/spec.py``
 #: stays under 14,000 physical lines (measured 12,560 at revision, ~11% headroom).
 CORE_BUDGET_CAP = 14000
-#: Revised for Phase 5: the host + reducer + first-class Textual chat + retained
-#: host client surfaces stay under 10,500 physical lines (measured ~10,054 with
-#: the obsolete line editor removed, ~4% headroom). This is a reviewed cap
-#: increase, not a baseline-only ratchet update.
-SURFACE_BUDGET_CAP = 10500
+#: Separate reviewed budgets by independently owned package. The host allocation
+#: is 7,000 after adding the browser routes/projection, bounded file completion,
+#: agent metadata, and redacted diagnostics alongside its daemon transports.
+#: Its former 6,500 cap no longer covered those distinct host responsibilities;
+#: the view allocation is unchanged; the UI allocation is 5,000 for the
+#: distinct web client and expanded Textual composition, including the right
+#: drawer, composer/picker, and diagnostics surface.
+SURFACE_BUDGET_CAPS = {"host": 7000, "view": 2200, "ui": 5000}
 
 #: The Phase 4 gates re-run as evidence: the §6.5 money path and the 200-reload
 #: leak bound.
@@ -142,20 +144,44 @@ def _core_line_budget() -> dict[str, object]:
     }
 
 
+def test_surface_aggregate_totals_equal_directory_sum() -> None:
+    surface = _surface_line_budget()
+    for name in ("physical_lines", "code_lines", "files"):
+        assert surface[name] == sum(item[name] for item in surface["budgets_by_dir"].values())
+
+
+def test_recorded_surface_aggregate_totals_equal_directory_sum() -> None:
+    recorded = json.loads(REPORT_JSON.read_text(encoding="utf-8"))
+    surface = recorded["line_budgets"]["host_view_ui"]
+    for metric in ("physical_lines", "code_lines", "files"):
+        assert surface[metric] == sum(item[metric] for item in surface["budgets_by_dir"].values())
+
+
 def _surface_line_budget() -> dict[str, object]:
-    per_dir = {
-        name: _line_counts(_tree_blobs((f"nexus/{name}/",)))["physical_lines"]
-        for name in ("host", "view", "ui")
-    }
-    counts = _line_counts(_tree_blobs(("nexus/host/", "nexus/view/", "nexus/ui/")))
-    overage = max(0, counts["physical_lines"] - SURFACE_BUDGET_CAP)
+    budgets = {}
+    for name, cap in SURFACE_BUDGET_CAPS.items():
+        counts = _line_counts(_tree_blobs((f"nexus/{name}/",)))
+        budgets[name] = {
+            **counts,
+            "plan_cap": cap,
+            "within_plan_cap": counts["physical_lines"] < cap,
+            "overage": max(0, counts["physical_lines"] - cap),
+        }
     return {
-        **counts,
-        "plan_cap": SURFACE_BUDGET_CAP,
-        "within_plan_cap": counts["physical_lines"] < SURFACE_BUDGET_CAP,
-        "overage": overage,
-        "baseline_by_dir": per_dir,
+        "physical_lines": sum(item["physical_lines"] for item in budgets.values()),
+        "code_lines": sum(item["code_lines"] for item in budgets.values()),
+        "files": sum(item["files"] for item in budgets.values()),
+        "budgets_by_dir": budgets,
     }
+
+
+def _assert_surface_totals(surfaces: dict[str, object]) -> None:
+    directories = surfaces["budgets_by_dir"]
+    for metric in ("physical_lines", "code_lines", "files"):
+        if metric in surfaces:
+            assert surfaces[metric] == sum(
+                item[metric] for item in directories.values()
+            ), metric
 
 
 # ---------------------------------------------------------------------------
@@ -510,16 +536,16 @@ def test_phase4_money_path_and_leak_tests_pass() -> None:
 
 def test_line_budget_host_view_ui_within_plan_cap() -> None:
     budget = _surface_line_budget()
+    _assert_surface_totals(budget)
     assert budget["files"] > 0
-    # Phase 8a2 implemented host/; view/ (Phase 8a1) and ui/ already existed.
-    assert budget["baseline_by_dir"]["host"] > 0
-    assert budget["baseline_by_dir"]["view"] > 0
-    assert budget["baseline_by_dir"]["ui"] > 0
-    assert budget["within_plan_cap"] is True, (
-        f"host+view+ui measures {budget['physical_lines']} physical lines, "
-        f"exceeding the §18 cap of {SURFACE_BUDGET_CAP}"
-    )
-    assert budget["physical_lines"] < SURFACE_BUDGET_CAP
+    for name, cap in SURFACE_BUDGET_CAPS.items():
+        directory = budget["budgets_by_dir"][name]
+        assert directory["files"] > 0
+        assert directory["within_plan_cap"] is True, (
+            f"nexus/{name} measures {directory['physical_lines']} physical lines, "
+            f"exceeding its reviewed cap of {cap}"
+        )
+        assert directory["physical_lines"] < cap
 
 
 def test_line_budget_core_model_spec_within_plan_cap() -> None:
@@ -566,7 +592,7 @@ async def _collect_report(workspace: Path, *, full: bool) -> dict[str, object]:
         },
         "line_budgets": {
             "core_model_spec": _core_line_budget(),
-            "host_view_ui": _surface_line_budget(),
+        "host_view_ui": _surface_line_budget(),
         },
         "import_cost": _measure_import_cost(),
     }
@@ -605,6 +631,7 @@ def _render_report_text(report: dict[str, object]) -> str:
     cache = report["phase3"]["prompt_cache"]  # type: ignore[index]
     core = report["line_budgets"]["core_model_spec"]  # type: ignore[index]
     surfaces = report["line_budgets"]["host_view_ui"]  # type: ignore[index]
+    _assert_surface_totals(surfaces)
     imports = report["import_cost"]  # type: ignore[index]
     lines = [
         "Nexus Phase 3 exit - baseline closeout evidence",
@@ -635,23 +662,18 @@ def _render_report_text(report: dict[str, object]) -> str:
         f"  boundaries (off) ......... {cache['boundaries_without_caching']}",
         f"  boundaries (on) .......... {cache['boundaries_with_caching']}",
         "",
-        "Line budgets (plan sections 11 / 14.14, revised §18)",
+        "Line budgets (separate host/view/ui allocations)",
         "-" * 40,
         (
             f"  core+model+spec .......... {core['physical_lines']} physical / "
             f"{core['code_lines']} code (cap {core['plan_cap']}, "
             f"within={core['within_plan_cap']}, over={core['overage']})"
         ),
-        (
-            f"  host+view+ui ............. {surfaces['physical_lines']} physical / "
-            f"{surfaces['code_lines']} code (cap {surfaces['plan_cap']}, "
-            f"within={surfaces['within_plan_cap']}, over={surfaces['overage']})"
-        ),
-        (
-            f"  surface baseline ......... host={surfaces['baseline_by_dir']['host']} "
-            f"view={surfaces['baseline_by_dir']['view']} "
-            f"ui={surfaces['baseline_by_dir']['ui']}"
-        ),
+        *[
+            f"  {name:<25} {item['physical_lines']} physical / {item['code_lines']} code "
+            f"(cap {item['plan_cap']}, within={item['within_plan_cap']}, over={item['overage']})"
+            for name, item in surfaces["budgets_by_dir"].items()
+        ],
         "",
         "Import cost (plan section 2.2)",
         "-" * 40,
@@ -706,7 +728,7 @@ def _cap_violations(report: dict[str, object]) -> list[str]:
     ones the strict gates measure.
 
     The overage is **recomputed** from ``physical_lines`` against the enforced
-    ``CORE_BUDGET_CAP``/``SURFACE_BUDGET_CAP`` **code constants** rather than read
+    ``CORE_BUDGET_CAP``/``SURFACE_BUDGET_CAPS`` **code constants** rather than read
     from the recorded ``plan_cap``/``within_plan_cap``/``overage`` fields, so a
     hand-edited (or corrupted) fixture that flips the flag -- or inflates the
     recorded cap -- cannot smuggle an over-cap tree past regeneration.
@@ -716,12 +738,15 @@ def _cap_violations(report: dict[str, object]) -> list[str]:
     regenerated baseline can never record a tree that merely touches the cap.
     """
     budgets = report["line_budgets"]  # type: ignore[index]
+    _assert_surface_totals(budgets["host_view_ui"])
     violations: list[str] = []
-    for name, cap in (
-        ("core_model_spec", CORE_BUDGET_CAP),
-        ("host_view_ui", SURFACE_BUDGET_CAP),
+    for name, cap, physical in (
+        ("core_model_spec", CORE_BUDGET_CAP, budgets["core_model_spec"]["physical_lines"]),
+        *[
+            (f"surface_{directory}", directory_cap, budgets["host_view_ui"]["budgets_by_dir"][directory]["physical_lines"])
+            for directory, directory_cap in SURFACE_BUDGET_CAPS.items()
+        ],
     ):
-        physical = budgets[name]["physical_lines"]
         if physical >= cap:
             violations.append(
                 f"{name}: {physical} physical lines at or over cap {cap} "
@@ -731,6 +756,7 @@ def _cap_violations(report: dict[str, object]) -> list[str]:
 
 
 def _write_report(report: dict[str, object]) -> None:
+    _assert_surface_totals(report["line_budgets"]["host_view_ui"])
     violations = _cap_violations(report)
     if violations:
         raise AssertionError(
@@ -748,6 +774,8 @@ def _write_report(report: dict[str, object]) -> None:
 async def test_phase3_exit_baseline_report(tmp_path: Path) -> None:
     if os.environ.get("NEXUS_PHASE3_WRITE_REPORT") == "1":
         report = await _collect_report(tmp_path, full=True)
+        assert report["phase4"]["returncode"] == 0, report["phase4"]["summary"]
+        assert report["full_suite"]["returncode"] == 0, report["full_suite"]["summary"]
         _write_report(report)
         assert REPORT_JSON.exists() and REPORT_TXT.exists()
         return
@@ -765,35 +793,46 @@ async def test_phase3_exit_baseline_report(tmp_path: Path) -> None:
     live_surfaces = _surface_line_budget()
     rec_core = recorded["line_budgets"]["core_model_spec"]
     rec_surfaces = recorded["line_budgets"]["host_view_ui"]
+    _assert_surface_totals(live_surfaces)
+    _assert_surface_totals(rec_surfaces)
     assert live_core["within_plan_cap"] is True, (
         f"core+model+spec measures {live_core['physical_lines']} physical lines, "
         f"exceeding the §18 cap of {CORE_BUDGET_CAP}"
     )
-    assert live_surfaces["within_plan_cap"] is True, (
-        f"host+view+ui measures {live_surfaces['physical_lines']} physical lines, "
-        f"exceeding the §18 cap of {SURFACE_BUDGET_CAP}"
-    )
+    for directory, cap in SURFACE_BUDGET_CAPS.items():
+        assert live_surfaces["budgets_by_dir"][directory]["within_plan_cap"] is True, (
+            f"nexus/{directory} measures "
+            f"{live_surfaces['budgets_by_dir'][directory]['physical_lines']} physical lines, "
+            f"exceeding its reviewed cap of {cap}"
+        )
     # Recompute the recorded budgets from their own numbers rather than trusting
     # the fixture's ``within_plan_cap`` boolean, and bind the recorded cap to the
     # enforced constant: a hand-edited over-cap fixture must fail, not pass.
     assert rec_core["plan_cap"] == CORE_BUDGET_CAP
-    assert rec_surfaces["plan_cap"] == SURFACE_BUDGET_CAP
+    for directory, cap in SURFACE_BUDGET_CAPS.items():
+        assert rec_surfaces["budgets_by_dir"][directory]["plan_cap"] == cap
     assert rec_core["physical_lines"] < rec_core["plan_cap"], (
         "the recorded core baseline itself violates the §18 cap; the tree must be "
         "within cap before the report is regenerated"
     )
-    assert rec_surfaces["physical_lines"] < rec_surfaces["plan_cap"], (
-        "the recorded surface baseline itself violates the §18 cap; the tree must "
-        "be within cap before the report is regenerated"
-    )
+    for directory, item in rec_surfaces["budgets_by_dir"].items():
+        assert item["physical_lines"] < item["plan_cap"], (
+            f"the recorded nexus/{directory} baseline itself violates its cap; "
+            "the tree must be within cap before the report is regenerated"
+        )
     assert live_core["physical_lines"] <= rec_core["physical_lines"], (
         "core+model+spec grew past the recorded baseline; review the budget and "
         "regenerate the report"
     )
-    assert live_surfaces["physical_lines"] <= rec_surfaces["physical_lines"], (
-        "host+view+ui grew past the recorded baseline; review the budget and "
-        "regenerate the report"
-    )
+    for directory in SURFACE_BUDGET_CAPS:
+        assert (
+            live_surfaces["budgets_by_dir"][directory]["physical_lines"]
+            <= rec_surfaces["budgets_by_dir"][directory]["physical_lines"]
+        ), f"nexus/{directory} grew past the recorded baseline; review its budget and regenerate the report"
+    recorded_sum = sum(item["physical_lines"] for item in rec_surfaces["budgets_by_dir"].values())
+    live_sum = sum(item["physical_lines"] for item in live_surfaces["budgets_by_dir"].values())
+    assert live_surfaces["physical_lines"] == live_sum
+    assert rec_surfaces["physical_lines"] == recorded_sum
 
     live_import = _measure_import_cost()
     rec_import = recorded["import_cost"]
@@ -871,12 +910,10 @@ def test_baseline_write_refuses_to_mask_a_cap_violation(
                 "within_plan_cap": False,
                 "overage": 1,
             },
-            "host_view_ui": {
-                "physical_lines": SURFACE_BUDGET_CAP - 1,
-                "plan_cap": SURFACE_BUDGET_CAP,
-                "within_plan_cap": True,
-                "overage": 0,
-            },
+            "host_view_ui": {"budgets_by_dir": {
+                name: {"physical_lines": cap - 1, "plan_cap": cap}
+                for name, cap in SURFACE_BUDGET_CAPS.items()
+            }},
         }
     }
     assert _cap_violations(over_cap) == [
@@ -898,12 +935,10 @@ def test_baseline_write_refuses_to_mask_a_cap_violation(
                 "within_plan_cap": True,
                 "overage": 0,
             },
-            "host_view_ui": {
-                "physical_lines": SURFACE_BUDGET_CAP - 1,
-                "plan_cap": SURFACE_BUDGET_CAP,
-                "within_plan_cap": True,
-                "overage": 0,
-            },
+            "host_view_ui": {"budgets_by_dir": {
+                name: {"physical_lines": cap - 1, "plan_cap": cap}
+                for name, cap in SURFACE_BUDGET_CAPS.items()
+            }},
         }
     }
     assert _cap_violations(within_cap) == []
@@ -932,12 +967,15 @@ def test_cap_violations_recompute_and_reject_a_forged_within_cap_flag(
                 "within_plan_cap": True,
                 "overage": 0,
             },
-            "host_view_ui": {
-                "physical_lines": SURFACE_BUDGET_CAP + 3,
-                "plan_cap": SURFACE_BUDGET_CAP * 10,
-                "within_plan_cap": True,
-                "overage": 0,
-            },
+            "host_view_ui": {"budgets_by_dir": {
+                name: {
+                    "physical_lines": cap + 3,
+                    "plan_cap": cap * 10,
+                    "within_plan_cap": True,
+                    "overage": 0,
+                }
+                for name, cap in SURFACE_BUDGET_CAPS.items()
+            }},
         }
     }
     assert _cap_violations(forged) == [
@@ -945,10 +983,10 @@ def test_cap_violations_recompute_and_reject_a_forged_within_cap_flag(
             f"core_model_spec: {CORE_BUDGET_CAP + 5} physical lines at or over "
             f"cap {CORE_BUDGET_CAP} (overage 5)"
         ),
-        (
-            f"host_view_ui: {SURFACE_BUDGET_CAP + 3} physical lines at or over "
-            f"cap {SURFACE_BUDGET_CAP} (overage 3)"
-        ),
+        *[
+            f"surface_{name}: {cap + 3} physical lines at or over cap {cap} (overage 3)"
+            for name, cap in SURFACE_BUDGET_CAPS.items()
+        ],
     ]
     with pytest.raises(AssertionError, match="masks a cap violation"):
         _write_report(forged)
@@ -978,12 +1016,10 @@ def test_cap_violations_treat_the_cap_boundary_as_strict(
                 "within_plan_cap": False,
                 "overage": 0,
             },
-            "host_view_ui": {
-                "physical_lines": SURFACE_BUDGET_CAP,
-                "plan_cap": SURFACE_BUDGET_CAP,
-                "within_plan_cap": False,
-                "overage": 0,
-            },
+            "host_view_ui": {"budgets_by_dir": {
+                name: {"physical_lines": cap, "plan_cap": cap}
+                for name, cap in SURFACE_BUDGET_CAPS.items()
+            }},
         }
     }
     assert _cap_violations(at_cap) == [
@@ -991,10 +1027,10 @@ def test_cap_violations_treat_the_cap_boundary_as_strict(
             f"core_model_spec: {CORE_BUDGET_CAP} physical lines at or over cap "
             f"{CORE_BUDGET_CAP} (overage 0)"
         ),
-        (
-            f"host_view_ui: {SURFACE_BUDGET_CAP} physical lines at or over cap "
-            f"{SURFACE_BUDGET_CAP} (overage 0)"
-        ),
+        *[
+            f"surface_{name}: {cap} physical lines at or over cap {cap} (overage 0)"
+            for name, cap in SURFACE_BUDGET_CAPS.items()
+        ],
     ]
     with pytest.raises(AssertionError, match="masks a cap violation"):
         _write_report(at_cap)
@@ -1018,10 +1054,11 @@ def test_baseline_write_accepts_an_in_cap_report(
     core = report["line_budgets"]["core_model_spec"]  # type: ignore[index]
     surfaces = report["line_budgets"]["host_view_ui"]  # type: ignore[index]
     assert core["physical_lines"] < CORE_BUDGET_CAP
-    assert surfaces["physical_lines"] < SURFACE_BUDGET_CAP
+    for directory, cap in SURFACE_BUDGET_CAPS.items():
+        assert surfaces["budgets_by_dir"][directory]["physical_lines"] < cap
     assert _cap_violations(report) == []
 
     _write_report(report)
     assert (tmp_path / "r.json").exists()
     assert (tmp_path / "r.txt").exists()
-    assert "revised §18" in (tmp_path / "r.txt").read_text(encoding="utf-8")
+    assert "separate host/view/ui allocations" in (tmp_path / "r.txt").read_text(encoding="utf-8")

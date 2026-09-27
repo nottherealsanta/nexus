@@ -473,6 +473,14 @@ class PermissionGate(Protocol):
 
     def resolution(self, request_id: str, /) -> Mapping[str, Any] | None: ...
 
+    def authorize(
+        self,
+        prepared: PreparedBatchView,
+        plan: BatchPlanView,
+        decisions: Sequence[tuple[str, object]],
+        /,
+    ) -> PreparedBatchView: ...
+
     def resolve(self, request_id: str, decision: object, /) -> bool: ...
 
     def cancel_pending(self) -> None: ...
@@ -1627,6 +1635,8 @@ async def run_turn(
     hooks: HookRunner | None = None,
     clock: Callable[[], float] = time.monotonic,
     relay_transcript: bool = False,
+    input_id: str | None = None,
+    input_content: list[object] | None = None,
 ) -> TurnOutcome:
     """Run one turn to a terminal state and return its outcome.
 
@@ -1704,6 +1714,13 @@ async def run_turn(
     try:
         agent_metadata = getattr(session, "_turn_agent_metadata", None)
         await emitter.emit("turn.started", {"limits": _limits_data(limits), **({"agent": dict(agent_metadata)} if isinstance(agent_metadata, Mapping) and agent_metadata else {})})
+        if input_id is not None and input_content is not None:
+            direct_input = {
+                "input_id": input_id,
+                "content": input_content,
+            }
+        else:
+            direct_input = None
         # ``SessionStart``/``UserPromptSubmit`` run in the session layer, before
         # the user message is persisted, so a block leaves no orphan prompt and a
         # modify is durable. The loop only fires the per-iteration/turn hooks.
@@ -1715,6 +1732,8 @@ async def run_turn(
                     meta=MessageMeta(turn_id=turn_id),
                 )
             )
+        if direct_input is not None:
+            await emitter.emit("input.started", direct_input)
 
         while terminal is None:
             reason = limits.exceeded(
@@ -1889,6 +1908,7 @@ async def run_turn(
                         "tools": capabilities.tools,
                         "streaming": capabilities.streaming,
                         "attempt": index,
+                        "reasoning_effort": streaming_request.params.reasoning_effort,
                     },
                 )
                 collector = _BlockCollector()
@@ -2288,6 +2308,10 @@ async def run_turn(
                 decisions.append((evaluation.call.id, decision))
             if decisions:
                 prepared = prepared.with_decisions(decisions)
+
+            authorize = getattr(iteration_gate, "authorize", None)
+            if callable(authorize):
+                prepared = authorize(prepared, plan, decisions)
 
             results = await iteration_tools.dispatch(
                 prepared,

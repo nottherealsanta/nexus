@@ -6,7 +6,7 @@ and this package bundles them into ready-to-register ``RegisteredTool`` pairs.
 Importing is cheap and side-effect free.
 
 The catalog order is the bundle order declared in
-:mod:`nexus.tools.bundles` (``fs``, ``shell``, ``task``, ``meta``, ``ext``),
+:mod:`nexus.tools.bundles` (``fs``, ``patch``, ``shell``, ``task``, ``meta``, ``ext``),
 which keeps ``schemas()`` deterministic. ``Task`` (subagents, Phase 6) is built
 per turn by the runtime (its permission key and authority are bound to the live
 ``SubagentRunner``), so ``BUILTIN_TOOLS`` ships the static ``TodoWrite`` only and
@@ -19,6 +19,7 @@ from types import MappingProxyType
 from ..spec import RegisteredTool
 from . import (
     _jobs,
+    apply_patch,
     bash,
     bash_output,
     edit,
@@ -31,8 +32,11 @@ from . import (
     read,
     skill,
     todo,
+    webfetch,
+    websearch,
     write,
 )
+from .apply_patch import SPEC as APPLY_PATCH_SPEC
 from .bash import SPEC as BASH_SPEC
 from .bash_output import SPEC as BASH_OUTPUT_SPEC
 from .edit import SPEC as EDIT_SPEC
@@ -45,17 +49,17 @@ from .multiedit import SPEC as MULTIEDIT_SPEC
 from .read import SPEC as READ_SPEC
 from .skill import SKILL_SPEC
 from .todo import TODO_SPEC
+from .webfetch import SPEC as WEBFETCH_SPEC
+from .websearch import SPEC as WEBSEARCH_SPEC
 from .write import SPEC as WRITE_SPEC
 
 #: Bundle order, matching ``nexus.tools.bundles.bundle_tools("fs")``.
 FS_SPECS = (
     READ_SPEC,
-    WRITE_SPEC,
-    EDIT_SPEC,
-    MULTIEDIT_SPEC,
     GLOB_SPEC,
     GREP_SPEC,
-    LS_SPEC,
+    EDIT_SPEC,
+    WRITE_SPEC,
 )
 
 FS_RUNNERS = MappingProxyType(
@@ -63,10 +67,8 @@ FS_RUNNERS = MappingProxyType(
         READ_SPEC.name: read.run,
         WRITE_SPEC.name: write.run,
         EDIT_SPEC.name: edit.run,
-        MULTIEDIT_SPEC.name: multiedit.run,
         GLOB_SPEC.name: glob.run,
         GREP_SPEC.name: grep.run,
-        LS_SPEC.name: ls.run,
     }
 )
 
@@ -76,8 +78,21 @@ FS_TOOLS = tuple(
     for spec in FS_SPECS
 )
 
+PATCH_SPECS = (APPLY_PATCH_SPEC,)
+PATCH_TOOLS = tuple(
+    RegisteredTool(spec=spec, run=apply_patch.run, origin="builtin")
+    for spec in PATCH_SPECS
+)
+
+# Legacy/opt-in implementations remain registered for explicit callers, but
+# their bundles are not part of the base public profiles.
+LEGACY_FS_TOOLS = (
+    RegisteredTool(spec=MULTIEDIT_SPEC, run=multiedit.run, origin="builtin"),
+    RegisteredTool(spec=LS_SPEC, run=ls.run, origin="builtin"),
+)
+
 #: Bundle order, matching ``nexus.tools.bundles.bundle_tools("shell")``.
-SHELL_SPECS = (BASH_SPEC, BASH_OUTPUT_SPEC, KILL_SHELL_SPEC)
+SHELL_SPECS = (BASH_SPEC,)
 
 SHELL_RUNNERS = MappingProxyType(
     {
@@ -90,6 +105,10 @@ SHELL_RUNNERS = MappingProxyType(
 SHELL_TOOLS = tuple(
     RegisteredTool(spec=spec, run=SHELL_RUNNERS[spec.name], origin="builtin")
     for spec in SHELL_SPECS
+)
+LEGACY_SHELL_TOOLS = (
+    RegisteredTool(spec=BASH_OUTPUT_SPEC, run=bash_output.run, origin="builtin"),
+    RegisteredTool(spec=KILL_SHELL_SPEC, run=kill_shell.run, origin="builtin"),
 )
 
 #: Bundle order, matching ``nexus.tools.bundles.bundle_tools("task")`` minus
@@ -129,13 +148,26 @@ EXT_TOOLS = tuple(
     for spec in EXT_SPECS
 )
 
-#: The full built-in catalog in bundle order (fs, shell, task, meta, ext).
-BUILTIN_SPECS = FS_SPECS + SHELL_SPECS + TASK_SPECS + META_SPECS + EXT_SPECS
-BUILTIN_TOOLS = FS_TOOLS + SHELL_TOOLS + TASK_TOOLS + META_TOOLS + EXT_TOOLS
+WEB_SPECS = (WEBFETCH_SPEC, WEBSEARCH_SPEC)
+WEB_TOOLS = (
+    RegisteredTool(spec=WEBFETCH_SPEC, run=webfetch.run, origin="builtin"),
+    RegisteredTool(spec=WEBSEARCH_SPEC, run=websearch.run, origin="builtin"),
+)
+
+# Static default public catalog. Runtime injects the live ``subagent`` tool;
+# extension-management tools stay out of the base vocabulary.
+BUILTIN_SPECS = FS_SPECS + PATCH_SPECS + SHELL_SPECS + TASK_SPECS + EXT_SPECS
+BUILTIN_TOOLS = FS_TOOLS + PATCH_TOOLS + SHELL_TOOLS + TASK_TOOLS + EXT_TOOLS
+
+OPT_IN_TOOLS = LEGACY_FS_TOOLS + LEGACY_SHELL_TOOLS
+META_TOOLS_OPT_IN = META_TOOLS
+BUILTIN_CATALOG = BUILTIN_TOOLS
 
 __all__ = [
+    "APPLY_PATCH_SPEC",
     "BASH_OUTPUT_SPEC",
     "BASH_SPEC",
+    "BUILTIN_CATALOG",
     "BUILTIN_SPECS",
     "BUILTIN_TOOLS",
     "EDIT_SPEC",
@@ -154,6 +186,9 @@ __all__ = [
     "META_SPECS",
     "META_TOOLS",
     "MULTIEDIT_SPEC",
+    "OPT_IN_TOOLS",
+    "PATCH_SPECS",
+    "PATCH_TOOLS",
     "READ_SPEC",
     "RELOAD_EXTENSIONS_SPEC",
     "SHELL_RUNNERS",
@@ -164,9 +199,14 @@ __all__ = [
     "TASK_SPECS",
     "TASK_TOOLS",
     "TODO_SPEC",
+    "WEBFETCH_SPEC",
+    "WEBSEARCH_SPEC",
+    "WEB_SPECS",
+    "WEB_TOOLS",
     "WRITE_SPEC",
     "WRITE_TOOL_SPEC",
     "_jobs",
+    "apply_patch",
     "bash",
     "bash_output",
     "edit",
@@ -179,5 +219,7 @@ __all__ = [
     "read",
     "skill",
     "todo",
+    "webfetch",
+    "websearch",
     "write",
 ]

@@ -27,6 +27,7 @@ from typing import Any
 import msgspec
 import pytest
 
+import nexus.host.daemon as daemon_module
 from nexus.config import Config
 from nexus.config.schema import (
     AgentSection,
@@ -522,6 +523,156 @@ async def test_idle_shutdown_waits_for_the_last_viewer(short_dir):
         await client.close()
         await wait_for(lambda: not sock.exists(), timeout=5.0)
         assert daemon.stopped
+
+
+async def test_idle_shutdown_completes_with_an_idle_connected_client(short_dir):
+    """A connected-but-quiet client must not wedge idle shutdown.
+
+    Regression: since Python 3.12's ``asyncio.Server.wait_closed`` does not
+    return while an accepted connection is still open, so a daemon that closed
+    its listener before tearing down live connections never reached
+    ``daemon.stopped``. It kept the exclusive ``flock`` and removed its socket,
+    so the next ``nexus chat`` auto-start saw exit code 3 (``another daemon
+    already owns ...``) and failed with ``daemon exited with code 3 before
+    readiness``.
+    """
+    async with running_daemon(short_dir, idle_timeout=0.4) as (daemon, sock, _workspace):
+        # Connect, then stop feeding the subscription: the connection is idle yet
+        # live, exactly like a shell parked on the prompt past its idle window.
+        client = await UDSClient.connect(sock)
+        subscription = await client.subscribe("s", 0, follow=True)
+        await wait_for(lambda: daemon.client_count == 1, timeout=2.0)
+        await asyncio.sleep(0.8)
+        assert not daemon.stopped, "a follower should keep the daemon alive"
+        # Stop viewing without closing the connection: no viewer remains, so the
+        # idle policy fires, but the accepted socket is still open. ``aclose`` must
+        # still return promptly -- not block on ``wait_closed`` behind the live
+        # connection -- and release the socket so the next start can proceed.
+        await subscription.aclose()
+        await asyncio.wait_for(_wait_stopped(daemon, sock), timeout=3.0)
+        assert daemon.stopped
+        assert daemon._lock_fd is None, "the exclusive lock must be released"
+        # A fresh daemon must be able to take the workspace over: this is the
+        # exact observable failure of the regression (auto-start got exit 3).
+        replacement = Daemon(
+            daemon.workspace,
+            socket_path=sock,
+            idle_timeout=0.4,
+            runtime_factory=_factory(),
+        )
+        await asyncio.wait_for(replacement.start(), timeout=3.0)
+        try:
+            assert replacement.started
+        finally:
+            await replacement.aclose()
+        await client.close()
+
+
+async def _wait_stopped(daemon: Daemon, sock: Path) -> None:
+    # Socket removal is no longer a release proxy: since Python 3.13
+    # ``asyncio.Server.close()`` unlinks the Unix socket path before the
+    # daemon has finished shutting the facade down. Wait for the lock itself,
+    # which is what the assertions below actually pin.
+    while not (daemon.stopped and daemon._lock_fd is None and not sock.exists()):
+        await asyncio.sleep(0.01)
+
+
+async def test_shutdown_releases_lock_when_teardown_raises(short_dir, monkeypatch):
+    """A raising per-connection teardown must not skip ``_release``.
+
+    Regression: ``aclose`` awaited each connection in one unguarded loop, so a
+    single ``_teardown`` exception escaped before ``_release`` and leaked the
+    exclusive ``flock``.
+    """
+    async with running_daemon(short_dir) as (daemon, sock, _workspace):
+        client = await UDSClient.connect(sock)
+        await wait_for(lambda: daemon.client_count == 1, timeout=2.0)
+        connection = next(iter(daemon._clients))
+
+        async def boom():
+            raise RuntimeError("teardown exploded")
+
+        monkeypatch.setattr(connection, "_teardown", boom)
+        await asyncio.wait_for(daemon.aclose(), timeout=2.0)
+        assert daemon._lock_fd is None, "the exclusive lock must be released"
+        assert not sock.exists()
+        await client.close()
+
+
+async def test_shutdown_bounds_a_stuck_writer_close(short_dir, monkeypatch):
+    """A peer that never finishes closing must not pin shutdown.
+
+    The per-connection teardown time-boxes ``writer.wait_closed``; a wedged
+    transport is logged and abandoned so ``aclose`` still returns and releases
+    the lock.
+    """
+    monkeypatch.setattr(daemon_module, "TEARDOWN_TIMEOUT", 0.05)
+    async with running_daemon(short_dir) as (daemon, sock, _workspace):
+        client = await UDSClient.connect(sock)
+        await wait_for(lambda: daemon.client_count == 1, timeout=2.0)
+        connection = next(iter(daemon._clients))
+
+        async def never_closes():
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(connection.writer, "wait_closed", never_closes)
+        await asyncio.wait_for(daemon.aclose(), timeout=1.0)
+        assert daemon._lock_fd is None, "the exclusive lock must be released"
+        assert not sock.exists()
+        await client.close()
+
+
+async def test_shutdown_cancellation_still_releases_lock(short_dir, monkeypatch):
+    """Cancelling ``aclose`` mid-teardown must still release the lock."""
+    async with running_daemon(short_dir) as (daemon, sock, _workspace):
+        client = await UDSClient.connect(sock)
+        await wait_for(lambda: daemon.client_count == 1, timeout=2.0)
+        connection = next(iter(daemon._clients))
+        entered = asyncio.Event()
+
+        async def wedged():
+            entered.set()
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(connection, "_teardown", wedged)
+        task = asyncio.ensure_future(daemon.aclose())
+        await asyncio.wait_for(entered.wait(), timeout=2.0)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=2.0)
+        assert daemon._lock_fd is None, "the exclusive lock must be released"
+        assert not sock.exists()
+        await client.close()
+
+
+async def test_late_handshake_after_shutdown_is_not_left_active(short_dir):
+    """A handshake completing after ``aclose`` must not register a client.
+
+    Regression: ``aclose`` snapshotted and cleared ``_clients``, so a
+    connection finishing its handshake in that window could call
+    ``_client_joined`` afterwards and be left active with the lock already
+    released.
+    """
+    workspace = short_dir / "ws"
+    workspace.mkdir()
+    sock = short_dir / "late.sock"
+    daemon = Daemon(workspace, socket_path=sock, runtime_factory=_factory())
+    await daemon.start()
+    reader, writer = await asyncio.open_unix_connection(str(sock))
+    try:
+        # Accepted but not yet handshaked: not a registered client.
+        assert daemon.client_count == 0
+        await daemon.aclose()
+        assert daemon._lock_fd is None
+        # Completing the handshake now must not register an active client.
+        await t.write_frame(writer, t.Hello(version=p.PROTOCOL_VERSION))
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(reader.read(), timeout=2.0)
+        assert daemon.client_count == 0
+    finally:
+        writer.close()
+        with contextlib.suppress(Exception):
+            await writer.wait_closed()
 
 
 # ---------------------------------------------------------------------------

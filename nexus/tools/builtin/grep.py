@@ -51,6 +51,8 @@ from .read import (
 
 #: Longest accepted file glob.
 _MAX_GLOB_CHARS = 1024
+#: Bound directory entries passed through the Grep worker's recursive walk.
+_MAX_SCAN_ENTRIES = 5000 * 20
 #: Fallback strict deadline for the worker when config is unavailable; on expiry
 #: the worker is SIGKILLed and reaped. The effective value comes from
 #: ``tools.grep_timeout_s``.
@@ -113,7 +115,7 @@ _GREP_SCHEMA: dict[str, Any] = {
 }
 
 SPEC = ToolSpec(
-    name="Grep",
+    name="grep",
     description=(
         "Search workspace text files for a literal or regular-expression "
         "pattern, returning deterministic path:line matches. Binary files and "
@@ -139,22 +141,38 @@ def live_workers() -> tuple[int, ...]:
     )
 
 
+def _worker_environment() -> dict[str, str]:
+    """Return only interpreter/process settings needed by the worker."""
+    env = {
+        "PATH": os.defpath,
+        "PYTHONSAFEPATH": "1",
+    }
+    if os.name == "nt" and (system_root := os.environ.get("SystemRoot")):
+        env["SystemRoot"] = system_root
+    return env
+
+
 async def _spawn_worker() -> asyncio.subprocess.Process:
-    env = dict(os.environ)
+    # -I removes cwd, PYTHONPATH, and other environment-controlled import roots.
+    # Add only the package location containing this trusted module so the worker's
+    # relative imports work for both editable installs and installed packages.
     package_parent = str(Path(__file__).resolve().parents[3])
-    existing = env.get("PYTHONPATH")
-    env["PYTHONPATH"] = (
-        package_parent if not existing else package_parent + os.pathsep + existing
+    bootstrap = (
+        "import runpy, sys; "
+        f"sys.path.insert(0, {package_parent!r}); "
+        "runpy.run_module('nexus.tools.builtin._grep_scan', run_name='__main__')"
     )
     try:
         proc = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-m",
-            "nexus.tools.builtin._grep_scan",
+            str(Path(sys.executable).absolute()),
+            "-I",
+            "-c",
+            bootstrap,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=env,
+            env=_worker_environment(),
+            cwd=Path(sys.executable).resolve().anchor,
             start_new_session=True,
         )
     except OSError as exc:
@@ -288,6 +306,7 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
         "regex": regex,
         "case_insensitive": case_insensitive,
         "max_matches": max_matches,
+        "max_scan_entries": _MAX_SCAN_ENTRIES,
     }
     timeout = _grep_timeout(ctx)
     _check_cancel(ctx)
@@ -318,6 +337,9 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
         for rel, lineno, line in raw_matches
     ]
     match_count = int(response.get("total_matches", len(matches)))
+    total_matches_exact = bool(response.get("total_matches_exact", True))
+    files_count = int(response.get("files", 0))
+    files_exact = total_matches_exact
     max_bytes = _byte_budget(ctx, 128 * 1024)
     lines = [f"{rel}:{lineno}:{line}" for rel, lineno, line in matches]
     shown, byte_truncated = _cap_lines(lines, max_bytes)
@@ -328,23 +350,31 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
     body = "\n".join(shown)
     context_note: str | None = None
     if truncated:
-        marker = _truncation_marker(
-            "Grep",
-            len(shown),
-            match_count,
-            "matches",
-            "narrow the pattern, path, or glob",
-        )
+        if total_matches_exact:
+            marker = _truncation_marker(
+                "Grep",
+                len(shown),
+                match_count,
+                "matches",
+                "narrow the pattern, path, or glob",
+            )
+        else:
+            marker = (
+                f"[Grep: truncated, showing {len(shown)} of at least "
+                f"{match_count} matches; narrow the pattern, path, or glob]"
+            )
         body = f"{body}\n{marker}" if body else marker
         context_note = marker
     elif match_count or shown:
         context_note = (
             f"[Grep {pattern!r}: {match_count} match(es) in "
-            f"{int(response.get('files', 0))} file(s); re-run Grep to see them]"
+            f"{files_count} file(s); re-run Grep to see them]"
         )
+    total_label = f"at least {match_count}" if not total_matches_exact else str(match_count)
+    files_label = f"at least {files_count}" if not files_exact else str(files_count)
     display = (
-        f"Grep {pattern!r}: {len(shown)} of {match_count} matches in "
-        f"{int(response.get('files', 0))} file(s)"
+        f"Grep {pattern!r}: {len(shown)} of {total_label} matches in "
+        f"{files_label} file(s)"
     )
     if truncated:
         display += " (truncated)"
@@ -355,13 +385,16 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
         metrics={
             "matches": len(shown),
             "total_matches": match_count,
-            "files": int(response.get("files", 0)),
+            "total_matches_exact": total_matches_exact,
+            "files": files_count,
+            "files_exact": files_exact,
             "files_scanned": int(response.get("files_scanned", 0)),
             "binary_skipped": int(response.get("binary_skipped", 0)),
             "truncated": truncated,
             "input_truncated": bool(response.get("input_truncated")),
             "line_truncated": bool(response.get("line_truncated")),
             "scan_truncated": bool(response.get("scan_truncated")),
+            "walk_truncated": bool(response.get("walk_truncated")),
             "store_truncated": bool(response.get("store_truncated")),
             "root": root.key,
         },

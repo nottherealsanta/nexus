@@ -93,6 +93,7 @@ def test_parser_exposes_the_canonical_command_set():
         "doctor",
         "run",
         "chat",
+        "web",
         "replay",
         "daemon",
         "sessions",
@@ -100,6 +101,7 @@ def test_parser_exposes_the_canonical_command_set():
         "models",
         "agents",
         "tools",
+        "worktrees",
         "auth",
     } == choices
 
@@ -110,6 +112,7 @@ def test_parser_exposes_the_canonical_command_set():
         ("models", {"list", "show", "refresh", "tiers"}),
         ("agents", {"list"}),
         ("tools", {"list"}),
+        ("worktrees", {"list", "inspect", "review", "acknowledge", "integrate", "discard"}),
     ):
         # Nested subparsers are registered on the child parser; assert via a full parse.
         argv = {
@@ -119,6 +122,7 @@ def test_parser_exposes_the_canonical_command_set():
             "models": ["models", "list"],
             "agents": ["agents", "list"],
             "tools": ["tools", "list"],
+        "worktrees": ["worktrees", "list"],
         }[action]
         assert parser.parse_args(argv).command == action
         assert expected  # documented in the parser; full coverage below
@@ -152,6 +156,13 @@ def test_parser_exposes_the_canonical_command_set():
         ["replay", "s"],
         ["run", "hi", "--json"],
         ["chat"],
+        ["worktrees", "list"],
+        ["worktrees", "inspect", "child"],
+        ["worktrees", "review", "child", "--cursor", "8", "--json"],
+        ["worktrees", "review", "child", "--all"],
+        ["worktrees", "acknowledge", "child", "a" * 32, "b" * 64],
+        ["worktrees", "integrate", "child", "a" * 32, "b" * 64],
+        ["worktrees", "discard", "child", "--force", "--review", "a" * 32],
     ],
 )
 def test_parser_accepts_every_documented_invocation(argv):
@@ -197,6 +208,134 @@ def test_main_init_and_help(tmp_path):
     with pytest.raises(SystemExit) as info:
         cli.main(["--help"])
     assert info.value.code == 0
+
+
+class _WorktreeClient:
+    def __init__(self, *, mutation_status="committed", pages=None):
+        self.calls = []
+        self.mutation_status = mutation_status
+        self.pages = list(pages or [])
+
+    async def integrate_worktree(self, child_id, review_id, digest, *, confirmation_token=""):
+        self.calls.append(("integrate", child_id, review_id, digest, confirmation_token))
+        from nexus.host.protocol import WorktreeMutationResult
+
+        if not confirmation_token:
+            return WorktreeMutationResult(
+                child_id, "requires_confirmation", operation="integrate",
+                confirmation_token="fresh-token", impact={"parent_clean": True},
+            )
+        if confirmation_token != "fresh-token":
+            raise RuntimeError("stale token rejected")
+        return WorktreeMutationResult(child_id, self.mutation_status, operation="integrate")
+
+    async def discard_worktree(self, child_id, *, force=False, review_id=None, confirmation_token=""):
+        self.calls.append(("discard", child_id, force, review_id, confirmation_token))
+        from nexus.host.protocol import WorktreeMutationResult
+
+        if not confirmation_token:
+            return WorktreeMutationResult(
+                child_id, "requires_confirmation", operation="discard",
+                confirmation_token="fresh-token",
+                impact={"child_dirty": True, "force": force, "summary": "Remove child"},
+            )
+        return WorktreeMutationResult(child_id, "committed", operation="discard")
+
+    async def review_worktree(self, child_id, *, review_id=None, cursor=0, limit=8):
+        self.calls.append(("review", child_id, review_id, cursor, limit))
+        return self.pages.pop(0)
+
+
+def _review_page(cursor, has_more):
+    from nexus.host.protocol import WorktreeReviewResult
+
+    return WorktreeReviewResult(
+        child_id="child", status="finalized", entries=[{"path": "changed.txt", "change": "modified"}],
+        diff=[{"path": "changed.txt", "patch": "+updated\n"}], cursor=cursor,
+        has_more=has_more, review_id="a" * 32, digest="b" * 64,
+    )
+
+
+@pytest.mark.asyncio
+async def test_worktree_integrate_requires_preview_and_typed_confirmation(monkeypatch):
+    client = _WorktreeClient(pages=[_review_page(0, False)])
+    args = cli.build_parser().parse_args(["worktrees", "integrate", "child", "a" * 32, "b" * 64])
+    out, err = io.StringIO(), io.StringIO()
+
+    class TTY(io.StringIO):
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr(cli.sys, "stdin", TTY("confirm integrate child " + "b" * 64 + "\n"))
+    monkeypatch.setattr(cli.sys, "stdout", TTY())
+    assert await cli._dispatch_worktrees(client, args, out, err) == 0
+    assert client.calls[0][-1] == ""
+    assert client.calls[-1][-1] == "fresh-token"
+    assert "operation: integrate" in out.getvalue()
+    assert "changed.txt" in out.getvalue()
+    assert "digest: " + "b" * 64 in out.getvalue()
+    assert "Type exactly: confirm integrate child " + "b" * 64 in err.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_worktree_force_discard_warns_and_non_tty_refuses(monkeypatch):
+    args = cli.build_parser().parse_args(["worktrees", "discard", "child", "--force"])
+    client = _WorktreeClient()
+    out, err = io.StringIO(), io.StringIO()
+
+    class NonTTY(io.StringIO):
+        def isatty(self):
+            return False
+
+    monkeypatch.setattr(cli.sys, "stdin", NonTTY())
+    monkeypatch.setattr(cli.sys, "stdout", NonTTY())
+    assert await cli._dispatch_worktrees(client, args, out, err) == 2
+    assert client.calls == [("discard", "child", True, None, "")]
+    assert "force: yes" in out.getvalue()
+    assert "WARNING: force discard" in out.getvalue()
+    assert "interactive typed confirmation" in err.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_worktree_review_is_bounded_and_prints_next_cursor():
+    client = _WorktreeClient(pages=[_review_page(0, True)])
+    args = cli.build_parser().parse_args(["worktrees", "review", "child", "--limit", "2"])
+    out = io.StringIO()
+    assert await cli._dispatch_worktrees(client, args, out, io.StringIO()) == 0
+    assert client.calls == [("review", "child", None, 0, 2)]
+    assert "next cursor: 2" in out.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_worktree_review_all_paginates_bounded_requests():
+    client = _WorktreeClient(pages=[_review_page(0, True), _review_page(8, False)])
+    args = cli.build_parser().parse_args(["worktrees", "review", "child", "--all"])
+    out = io.StringIO()
+    assert await cli._dispatch_worktrees(client, args, out, io.StringIO()) == 0
+    assert [call[3:] for call in client.calls] == [(0, 8), (8, 8)]
+    assert out.getvalue().count("+updated") == 2
+
+
+@pytest.mark.asyncio
+async def test_worktree_mutation_partial_status_and_stale_confirmation_fail(monkeypatch):
+    client = _WorktreeClient(mutation_status="recovery_required", pages=[_review_page(0, False)])
+    args = cli.build_parser().parse_args(["worktrees", "integrate", "child", "a" * 32, "b" * 64, "--confirm-token"])
+    out, err = io.StringIO(), io.StringIO()
+    assert await cli._dispatch_worktrees(client, args, out, err) == 1
+    assert "status: recovery_required" in out.getvalue()
+
+    class StaleClient(_WorktreeClient):
+        async def integrate_worktree(self, child_id, review_id, digest, *, confirmation_token=""):
+            self.calls.append(("integrate", child_id, review_id, digest, confirmation_token))
+            if not confirmation_token:
+                from nexus.host.protocol import WorktreeMutationResult
+
+                return WorktreeMutationResult(child_id, "requires_confirmation", operation="integrate", confirmation_token="fresh-token")
+            raise RuntimeError("stale token rejected")
+
+    stale = StaleClient(pages=[_review_page(0, False)])
+    with pytest.raises(RuntimeError, match="stale token"):
+        await cli._dispatch_worktrees(stale, args, io.StringIO(), io.StringIO())
 
 
 @pytest.mark.parametrize(

@@ -19,6 +19,7 @@ batch entry is exported as :data:`ManagerPreparedCall` to avoid the collision.
 from __future__ import annotations
 
 from .bundles import (
+    BASE_TOOL_AVAILABILITY,
     BUNDLE_NAMES,
     BUNDLES,
     DEFAULT_PROFILE,
@@ -83,6 +84,7 @@ from .spec import (
 )
 
 __all__ = [
+    "BASE_TOOL_AVAILABILITY",
     "BUNDLES",
     "BUNDLE_NAMES",
     "CHARS_PER_TOKEN",

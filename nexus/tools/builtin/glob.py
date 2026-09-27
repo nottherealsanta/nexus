@@ -19,11 +19,12 @@ from .read import (
     _resolve_directory,
     _truncation_marker,
     _walk_entries,
+    _WalkStatus,
     canonical_root_key,
     glob_pattern_error,
 )
 
-_DEFAULT_MAX_MATCHES = 1000
+_DEFAULT_MAX_MATCHES = 100
 _MAX_SCAN_ENTRIES = 50_000
 _DEFAULT_MAX_BYTES = 128 * 1024
 #: Bound the pattern so matching cost and recursion stay finite.
@@ -51,7 +52,7 @@ _GLOB_SCHEMA: dict[str, Any] = {
 }
 
 SPEC = ToolSpec(
-    name="Glob",
+    name="glob",
     description=(
         "List workspace files and directories matching a shell glob, sorted "
         "deterministically. Symlinks escaping the workspace are pruned."
@@ -112,12 +113,14 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
     matches: list[tuple[str, bool]] = []
     total_matches = 0
     truncated = False
+    walk_status = _WalkStatus()
     for _path, rel, is_dir, _is_symlink in _walk_entries(
         root.absolute,
         include_hidden=include_hidden,
         denied_roots=guard.read_denyroots,
         max_entries=_MAX_SCAN_ENTRIES,
         ctx=ctx,
+        status=walk_status,
     ):
         _check_cancel(ctx)
         if _glob_match(rel, pattern, is_dir=is_dir, dir_only=dir_only):
@@ -130,25 +133,34 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
     matches.sort(key=lambda item: (item[0], item[1]))
     lines = [f"{rel}/" if is_dir else rel for rel, is_dir in matches]
     shown, byte_truncated = _cap_lines(lines, max_bytes)
-    truncated = truncated or byte_truncated or len(shown) < total_matches
+    truncated = (
+        truncated or byte_truncated or len(shown) < total_matches or walk_status.truncated
+    )
 
     body = "\n".join(shown)
     context_note: str | None = None
     if truncated:
-        marker = _truncation_marker(
-            "Glob",
-            len(shown),
-            total_matches,
-            "matches",
-            "narrow the pattern or path",
-        )
+        if walk_status.truncated:
+            marker = (
+                f"[Glob: truncated, showing {len(shown)} of at least "
+                f"{total_matches} matches; narrow the pattern or path]"
+            )
+        else:
+            marker = _truncation_marker(
+                "Glob",
+                len(shown),
+                total_matches,
+                "matches",
+                "narrow the pattern or path",
+            )
         body = f"{body}\n{marker}" if body else marker
         context_note = marker
     elif total_matches or shown:
         context_note = (
             f"[Glob {pattern!r}: {total_matches} match(es); re-run Glob to see them]"
         )
-    display = f"Glob {pattern!r}: {len(shown)} of {total_matches} matches"
+    total_label = f"at least {total_matches}" if walk_status.truncated else str(total_matches)
+    display = f"Glob {pattern!r}: {len(shown)} of {total_label} matches"
     if truncated:
         display += " (truncated)"
     return ToolExecutionResult.text(
@@ -158,6 +170,8 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
         metrics={
             "matches": len(shown),
             "total_matches": total_matches,
+            "total_matches_exact": not walk_status.truncated,
+            "walk_truncated": walk_status.truncated,
             "truncated": truncated,
             "root": root.key,
         },

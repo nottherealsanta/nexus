@@ -5,6 +5,7 @@ rather than a silently ignored setting. Field defaults are the built-in layer.
 """
 from __future__ import annotations
 
+import ipaddress
 import math
 import re
 from typing import Literal
@@ -21,6 +22,9 @@ SandboxMode = Literal["read-only", "workspace-write"]
 
 _PERMISSION_MODES = frozenset({"allow", "ask", "deny"})
 _UNATTENDED_MODES = frozenset({"deny", "allow", "fail_turn"})
+_REASONING_EFFORT_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+_MAX_MODEL_REFERENCE_LEN = 2 * 256 + 1
+_MAX_REASONING_EFFORT_OVERRIDES = 20_000
 
 #: Hosts for which plain ``http`` is tolerated (a loopback dev server such as
 #: Ollama). Any remote endpoint must use TLS.
@@ -61,6 +65,61 @@ def _validate_base_url(value: str) -> None:
                 "providers.*.base_url may use plain http only for a loopback "
                 "host; use https for a remote endpoint"
             )
+
+
+def _validate_public_web_host(host: str, label: str) -> None:
+    """Reject local/private literal addresses and local-only DNS names.
+
+    DNS answers are deliberately not resolved here: the outbound service must
+    repeat the address check at connection time to protect against rebinding.
+    """
+    normalized = host.rstrip(".").lower()
+    if not normalized or normalized == "localhost" or normalized.endswith(
+        (".localhost", ".local", ".internal", ".lan", ".home", ".test")
+    ):
+        raise ValueError(f"{label} must not use a localhost or private host")
+    try:
+        address = ipaddress.ip_address(normalized)
+    except ValueError:
+        labels = normalized.split(".")
+        numeric_address = all(
+            re.fullmatch(r"(?:[0-9]+|0x[0-9a-f]+)", part) for part in labels
+        )
+        if (
+            len(normalized) > 253
+            or "." not in normalized
+            or numeric_address
+            or not all(
+            re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label_part)
+                for label_part in labels
+            )
+        ):
+            raise ValueError(f"{label} must use a valid public host name")
+        return
+    if not address.is_global:
+        raise ValueError(f"{label} must not use a localhost or private host")
+
+
+def _parse_web_url(value: str, label: str):
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ValueError(f"{label} must be a canonical URL")
+    try:
+        parts = urlsplit(value)
+        port = parts.port
+    except ValueError as exc:
+        raise ValueError(f"{label} is not a valid URL: {exc}") from exc
+    if (
+        parts.scheme.lower() not in ("http", "https")
+        or not parts.hostname
+        or parts.username is not None
+        or parts.password is not None
+        or parts.fragment
+    ):
+        raise ValueError(f"{label} must be an http(s) URL without credentials or fragment")
+    _validate_public_web_host(parts.hostname, label)
+    if port is not None and not 1 <= port <= 65535:
+        raise ValueError(f"{label} port must be between 1 and 65535")
+    return parts
 
 #: Canonical model-registry defaults (plan section 15.9). Kept as literals here
 #: so ``nexus.config`` never imports the model layer (``import nexus`` stays
@@ -114,6 +173,13 @@ class ModelsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     ``[model]`` remains the compatibility section; the two are reconciled in
     :class:`ConfigV2`, which rejects a field the two set to different values.
     ``tiers`` is the ``[models.tiers]`` table: ``tier -> [reference, ...]``.
+    ``reasoning_efforts`` is an optional exact override table, for example::
+
+        [models.reasoning_efforts]
+        "openai/o3" = ["low", "high"]
+
+    Keys must be explicit ``provider/model`` references. Efforts use the
+    canonical Nexus vocabulary and are normalized to its canonical order.
     """
 
     default: str | None = None
@@ -123,6 +189,7 @@ class ModelsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     catalogue_url: str = DEFAULT_CATALOGUE_URL
     offline: bool = False
     tiers: dict[str, list[str]] = msgspec.field(default_factory=dict)
+    reasoning_efforts: dict[str, list[str]] = msgspec.field(default_factory=dict)
     #: Ordered provider/model references tried only on a provider-level failure
     #: *before* any output has streamed (plan section 8). A refusal or a partial
     #: stream never falls back.
@@ -164,6 +231,43 @@ class ModelsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
                 raise ValueError(
                     f"models.tiers.{tier} must be a nonempty list of references"
                 )
+        if len(self.reasoning_efforts) > _MAX_REASONING_EFFORT_OVERRIDES:
+            raise ValueError("models.reasoning_efforts has too many model references")
+        for reference, efforts in self.reasoning_efforts.items():
+            if (
+                not isinstance(reference, str)
+                or len(reference) > _MAX_MODEL_REFERENCE_LEN
+                or reference.strip() != reference
+                or any(ord(char) < 32 or char.isspace() for char in reference)
+            ):
+                raise ValueError("models.reasoning_efforts keys must be bounded model references")
+            provider, separator, model_id = reference.partition("/")
+            if (
+                not separator
+                or not provider
+                or not model_id
+                or any(not part for part in reference.split("/"))
+                or len(provider) > 256
+                or any(len(part) > 256 for part in model_id.split("/"))
+            ):
+                raise ValueError(
+                    f"models.reasoning_efforts key {reference!r} must be provider/model"
+                )
+            if not isinstance(efforts, list) or len(efforts) > len(_REASONING_EFFORT_ORDER):
+                raise ValueError(
+                    f"models.reasoning_efforts.{reference} must be a bounded list"
+                )
+            seen: set[str] = set()
+            for effort in efforts:
+                if not isinstance(effort, str) or effort not in _REASONING_EFFORT_ORDER:
+                    raise ValueError(
+                        f"models.reasoning_efforts.{reference} contains an unknown effort {effort!r}"
+                    )
+                if effort in seen:
+                    raise ValueError(
+                        f"models.reasoning_efforts.{reference} contains duplicate effort {effort!r}"
+                    )
+                seen.add(effort)
 
 
 class AgentsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -424,6 +528,7 @@ class ToolsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     grep_timeout_s: float = 5.0
     max_result_tokens: int = 25000
     max_parallel: int = 8
+    web: WebSection = msgspec.field(default_factory=lambda: WebSection())
 
     def __post_init__(self) -> None:
         if (
@@ -452,6 +557,89 @@ class ToolsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
             or self.max_parallel <= 0
         ):
             raise ValueError("tools.max_parallel must be a positive integer")
+
+
+class WebSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """Limits and destinations for web tools (``[tools.web]``).
+
+    Search is available only when an HTTPS SearXNG instance is configured, and
+    each configured SearXNG origin must also appear in ``allowed_origins``.
+    HTTP instances are never accepted through config; tests that need an
+    insecure local service must inject that service directly. ``allowed_origins``
+    is an optional public HTTP(S) origin allowlist for WebFetch: when empty, any
+    safe public origin may be fetched directly; when set, it limits requested
+    origins. Fetch approvals permit same-origin redirects only. DNS results
+    still require runtime validation by the outbound service.
+    """
+
+    searxng_instances: list[str] = msgspec.field(default_factory=list)
+    allowed_origins: list[str] = msgspec.field(default_factory=list)
+    fetch_enabled: bool = True
+    search_timeout_s: float = 10.0
+    fetch_timeout_s: float = 15.0
+    max_results: int = 5
+    max_query_length: int = 512
+    max_output_bytes: int = 512_000
+
+    @property
+    def search_available(self) -> bool:
+        return bool(self.searxng_instances)
+
+    @property
+    def search_unavailable_reason(self) -> str | None:
+        if not self.searxng_instances:
+            return "No HTTPS SearXNG instance is configured in tools.web.searxng_instances."
+        return None
+
+    def __post_init__(self) -> None:
+        for label, urls in (
+            ("tools.web.searxng_instances", self.searxng_instances),
+            ("tools.web.allowed_origins", self.allowed_origins),
+        ):
+            if not isinstance(urls, list) or len(urls) > 100:
+                raise ValueError(f"{label} must be a list of at most 100 URLs")
+            if any(not isinstance(url, str) or not url for url in urls):
+                raise ValueError(f"{label} entries must be non-empty URLs")
+
+        for instance in self.searxng_instances:
+            parts = _parse_web_url(instance, "tools.web.searxng_instances entries")
+            if parts.scheme.lower() != "https":
+                raise ValueError("tools.web.searxng_instances must use HTTPS")
+            if parts.path not in ("/", "/search") or parts.query:
+                raise ValueError(
+                    "tools.web.searxng_instances paths must be canonical '/' or '/search' URLs without a query"
+                )
+
+        for origin in self.allowed_origins:
+            parts = _parse_web_url(origin, "tools.web.allowed_origins entries")
+            if parts.path not in ("", "/") or parts.query:
+                raise ValueError(
+                    "tools.web.allowed_origins entries must be origins without a path or query"
+                )
+
+        for name in ("search_timeout_s", "fetch_timeout_s"):
+            value = getattr(self, name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or not 0 < value <= 20
+            ):
+                raise ValueError(f"tools.web.{name} must be finite and in (0, 20]")
+        for name, maximum in (
+            ("max_results", 10),
+            ("max_query_length", 4096),
+            ("max_output_bytes", 2_000_000),
+        ):
+            value = getattr(self, name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or not 1 <= value <= maximum
+            ):
+                raise ValueError(
+                    f"tools.web.{name} must be an integer in [1, {maximum}]"
+                )
 
 
 class ExtSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -564,4 +752,5 @@ __all__ = [
     "SessionSection",
     "TelemetrySection",
     "ToolsSection",
+    "WebSection",
 ]

@@ -21,6 +21,7 @@ The child runtime is always a fake: the runner is tested through its injected
 from __future__ import annotations
 
 import asyncio
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,7 @@ from nexus.agents import (
     SubagentRunner,
     SubagentUsage,
     TaskRequest,
+    worktrees,
 )
 from nexus.core.cancel import CancelToken
 from nexus.errors import OperationCancelled
@@ -152,9 +154,12 @@ def agent_meta(data: dict) -> dict:
 def test_task_request_defaults_and_mapping_coercion():
     req = TaskRequest.from_value({"prompt": "go", "tools": ["Read"]})
     assert req.subagent_type == "general"
-    assert req.tools == ("Read",)
+    assert req.tools == ("read",)
     assert req.model is None
-    assert req.to_dict()["tools"] == ["Read"]
+    assert req.to_dict()["tools"] == ["read"]
+    assert req.worktree is False
+    assert req.to_dict()["worktree"] is False
+    assert TaskRequest.from_value({"prompt": "go", "worktree": True}).worktree is True
 
 
 @pytest.mark.parametrize(
@@ -166,6 +171,7 @@ def test_task_request_defaults_and_mapping_coercion():
         {"prompt": "x", "tools": [""]},
         {"prompt": "x", "model": "two words"},
         {"prompt": "x", "description": ""},
+        {"prompt": "x", "worktree": "yes"},
     ],
 )
 def test_task_request_rejects_invalid(payload):
@@ -189,8 +195,8 @@ async def test_named_spawn_intersects_and_reports_drops(tmp_path):
     )
     assert outcome.ok
     spec = factory.specs[-1]
-    assert spec.tools == ("Read",)  # Write is not a parent tool
-    assert "Write" in spec.dropped_tools
+    assert spec.tools == ("read",)  # write is not a parent tool
+    assert "write" in spec.dropped_tools
     assert "dropped" in outcome.render()
     # Permissions/grants are the parent's own objects, passed through verbatim.
     assert spec.permissions is permissions
@@ -207,8 +213,9 @@ async def test_ad_hoc_defaults_to_general_and_inherits_the_ceiling(tmp_path):
     assert outcome.ok
     spec = factory.specs[-1]
     assert spec.agent == "general"
-    assert set(spec.tools) == {"Read", "Grep"}
+    assert set(spec.tools) == {"read", "grep"}
     assert spec.dropped_tools == ()
+    assert spec.workspace == tmp_path
 
 
 async def test_parent_tools_are_a_hard_ceiling(tmp_path):
@@ -219,7 +226,7 @@ async def test_parent_tools_are_a_hard_ceiling(tmp_path):
     )
     spec = factory.specs[-1]
     assert spec.tools == ()
-    assert set(spec.dropped_tools) == {"Write", "Edit"}
+    assert set(spec.dropped_tools) == {"write", "edit"}
     assert not outcome.is_error  # a narrowed child is not a failure
 
 
@@ -230,10 +237,80 @@ async def test_read_only_parent_cannot_write(tmp_path):
         TaskRequest(prompt="mutate", tools=("Read", "Write", "Bash"))
     )
     spec = factory.specs[-1]
-    assert spec.tools == ("Read",)
-    assert not (set(spec.tools) & {"Write", "Edit", "MultiEdit", "Bash"})
-    assert "Write" in spec.dropped_tools and "Bash" in spec.dropped_tools
+    assert spec.tools == ("read",)
+    assert not (set(spec.tools) & {"write", "edit", "multiedit", "bash"})
+    assert "write" in spec.dropped_tools and "bash" in spec.dropped_tools
     assert not outcome.is_error
+
+
+async def test_worktree_scope_excludes_unreviewed_tools_and_inherits(tmp_path):
+    factory = Factory()
+
+    class WorktreeService:
+        def create(self, _parent, _child_id, **_kwargs):
+            child = tmp_path / "worktree"
+            child.mkdir(exist_ok=True)
+            return {"path": child}
+
+        def mark_finished(self, _child_id, outcome, **_kwargs):
+            return {
+                "path": tmp_path / "worktree",
+                "dirty_status": "",
+                "final_dirty_status": "",
+                "final_status": outcome.status,
+                "lifecycle": "finalized",
+            }
+
+    runner = make_runner(
+        tmp_path,
+        factory,
+        worktree_service=WorktreeService(),
+        worktree_root=tmp_path / "daemon",
+        runtime_supports_workspace=True,
+        parent_tools={
+            "read", "glob", "grep", "ls", "edit", "write", "apply_patch",
+            "subagent", "todowrite", "skill", "webfetch", "websearch",
+            "bash", "bash_output", "kill_shell", "CustomWriter", "mcp__srv__write",
+        },
+    )
+
+    outcome = await runner.spawn(
+        TaskRequest(
+            prompt="isolated",
+            tools=("bash", "CustomWriter", "read"),
+            worktree=True,
+        )
+    )
+
+    spec = factory.specs[-1]
+    assert outcome.ok
+    assert spec.tools == ("read",)
+    assert {"bash", "CustomWriter"} <= set(spec.dropped_tools)
+    assert spec.worktree_scope is True
+    assert "worktree safety" in outcome.render()
+
+    nested = runner.for_child(spec)
+    assert nested._worktree_scope is True
+    assert nested._worktree_service is runner._worktree_service
+    assert nested._worktree_root == runner._worktree_root
+    nested_outcome = await nested.spawn(
+        TaskRequest(prompt="nested", tools=("bash", "CustomWriter", "read"))
+    )
+    assert nested_outcome.ok
+    grandchild_spec = factory.specs[-1]
+    assert grandchild_spec.tools == ("read",)
+    assert grandchild_spec.worktree_scope is True
+
+
+async def test_normal_child_keeps_parent_bash_authority(tmp_path):
+    factory = Factory()
+    runner = make_runner(tmp_path, factory, parent_tools={"read", "bash"})
+
+    outcome = await runner.spawn(TaskRequest(prompt="ordinary"))
+
+    assert outcome.ok
+    assert "bash" in factory.specs[-1].tools
+    assert factory.specs[-1].worktree_scope is False
 
 
 async def test_read_only_role_strips_write_even_when_parent_has_it(tmp_path):
@@ -241,14 +318,14 @@ async def test_read_only_role_strips_write_even_when_parent_has_it(tmp_path):
     runner = make_runner(
         tmp_path,
         factory,
-        parent_tools={"Read", "Write", "Edit", "Bash", "Grep"},
+        parent_tools={"read", "write", "edit", "bash", "grep"},
     )
     outcome = await runner.spawn(
         TaskRequest(prompt="explore", subagent_type="explore")
     )
     spec = factory.specs[-1]
-    assert set(spec.tools) <= {"Read", "Glob", "Grep", "LS"}
-    assert not (set(spec.tools) & {"Write", "Edit", "MultiEdit", "Bash"})
+    assert set(spec.tools) <= {"read", "glob", "grep", "todowrite", "skill"}
+    assert not (set(spec.tools) & {"write", "edit", "multiedit", "bash", "subagent"})
     assert not outcome.is_error
 
 
@@ -526,6 +603,251 @@ async def test_parent_cancel_propagates_and_closes_the_child(tmp_path):
     assert factory.children and factory.children[-1].closed is True
     assert sessions.closed == ["root/sub/1"]
     assert runner.budget.active == 0  # the concurrency slot was released
+
+
+def _git(path: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args], cwd=path, check=True, stdin=subprocess.DEVNULL,
+        capture_output=True, text=True
+    )
+    return result.stdout.strip()
+
+
+def _git_repo(path: Path) -> Path:
+    path.mkdir()
+    _git(path, "init", "-q")
+    _git(path, "config", "user.name", "Runner Test")
+    _git(path, "config", "user.email", "runner-test@example.invalid")
+    (path / "tracked.txt").write_text("base\n", encoding="utf-8")
+    _git(path, "add", "tracked.txt")
+    _git(path, "commit", "-qm", "initial")
+    return path
+
+
+async def test_worktree_uses_service_record_and_child_workspace(tmp_path):
+    parent = _git_repo(tmp_path / "parent")
+    factory = Factory()
+    service = worktrees.WorktreeService()
+    recorder = Recorder()
+    runner = make_runner(
+        tmp_path,
+        factory,
+        workspace=parent,
+        worktree_service=service,
+        worktree_root=tmp_path / "daemon",
+        worktree_root_for=lambda workspace: (
+            tmp_path / "daemon"
+            if Path(workspace) == parent
+            else tmp_path / "daemon" / "worktrees" / "child-registry"
+        ),
+        runtime_supports_workspace=True,
+        event_sink=recorder,
+    )
+
+    outcome = await runner.spawn(TaskRequest(prompt="isolated", worktree=True))
+
+    spec = factory.specs[-1]
+    record = service.inspect(spec.session_id, root=tmp_path / "daemon")
+    assert outcome.ok
+    restarted_record = worktrees.WorktreeService().get(
+        spec.session_id, root=tmp_path / "daemon"
+    )
+    assert spec.workspace == record.path
+    assert spec.worktree["path"] == str(record.path)
+    assert spec.worktree["branch"] == record.branch
+    assert spec.worktree["base"] == record.base_commit
+    assert spec.worktree["owner"] == record.owner_uid
+    assert outcome.worktree["dirty"] is False
+    assert record.lifecycle == "finalized"
+    assert record.final_status == "completed"
+    assert restarted_record == record
+    assert recorder.of("agent.spawned")[-1]["worktree"]["path"] == str(record.path)
+    assert recorder.of("agent.completed")[-1]["worktree"]["dirty"] is False
+
+    nested = runner.for_child(spec)
+    assert nested._workspace == record.path
+    assert nested._worktree_scope is True
+    nested_outcome = await nested.spawn(
+        TaskRequest(prompt="nested", worktree=True)
+    )
+    assert nested_outcome.ok
+    nested_spec = factory.specs[-1]
+    nested_root = tmp_path / "daemon" / "worktrees" / "child-registry"
+    nested_record = service.get(nested_spec.session_id, root=nested_root)
+    assert nested_spec.workspace == nested_record.path
+    assert nested_record.parent_workspace == record.path
+    assert nested_record.base_commit == _git(record.path, "rev-parse", "HEAD")
+    nested_reopened = worktrees.WorktreeService().get(
+        nested_spec.session_id, root=nested_root
+    )
+    assert nested_reopened.lifecycle == "finalized"
+    assert nested_reopened.final_status == "completed"
+
+
+async def test_dirty_worktree_parent_is_refused_before_spawn_event(tmp_path):
+    parent = _git_repo(tmp_path / "parent")
+    (parent / "tracked.txt").write_text("keep my change\n", encoding="utf-8")
+    before = _git(parent, "status", "--porcelain", "--untracked-files=all")
+    recorder = Recorder()
+    factory = Factory()
+    runner = make_runner(
+        tmp_path,
+        factory,
+        workspace=parent,
+        worktree_service=worktrees.WorktreeService(),
+        worktree_root=tmp_path / "daemon",
+        runtime_supports_workspace=True,
+        event_sink=recorder,
+    )
+
+    outcome = await runner.spawn(TaskRequest(prompt="isolated", worktree=True))
+
+    assert outcome.is_error
+    assert "clean" in outcome.text
+    assert "agent.spawned" not in recorder.types()
+    assert factory.specs == []
+    assert _git(parent, "status", "--porcelain", "--untracked-files=all") == before
+
+
+async def test_worktree_is_retained_and_inspected_on_cancellation(tmp_path):
+    parent = _git_repo(tmp_path / "parent")
+    started = asyncio.Event()
+
+    async def behavior(spec: ChildSpec) -> SubagentOutcome:
+        (spec.workspace / "child-output.txt").write_text("kept\n", encoding="utf-8")
+        started.set()
+        await asyncio.sleep(30)
+        return SubagentOutcome(agent=spec.agent, session_id=spec.session_id)
+
+    root = tmp_path / "daemon"
+    service = worktrees.WorktreeService()
+    factory = Factory(behavior)
+    recorder = Recorder()
+    runner = make_runner(
+        tmp_path,
+        factory,
+        workspace=parent,
+        worktree_service=service,
+        worktree_root=root,
+        runtime_supports_workspace=True,
+        event_sink=recorder,
+    )
+    token = CancelToken()
+
+    async def cancel_child() -> None:
+        await started.wait()
+        token.cancel("stop")
+
+    cancel_task = asyncio.create_task(cancel_child())
+    with pytest.raises(OperationCancelled):
+        await runner.spawn(TaskRequest(prompt="cancel", worktree=True), cancel=token)
+    await cancel_task
+
+    record = service.inspect("root/sub/1", root=root)
+    assert record.path.is_dir()
+    assert (record.path / "child-output.txt").read_text(encoding="utf-8") == "kept\n"
+    completed = recorder.of("agent.completed")[-1]
+    assert completed["worktree"]["dirty"] is True
+    assert "child-output.txt" in completed["worktree"]["dirty_status"]
+    assert service.get("root/sub/1", root=root).final_status == "cancelled"
+
+
+async def test_worktree_finalization_failure_is_reported_and_releases_budget(tmp_path):
+    parent = _git_repo(tmp_path / "parent")
+    factory = Factory()
+
+    class FailingFinalizer:
+        def create(self, _parent, _child_id, **_kwargs):
+            child = tmp_path / "retained-worktree"
+            child.mkdir()
+            return {"path": child}
+
+        def mark_finished(self, *_args, **_kwargs):
+            raise RuntimeError("registry unavailable")
+
+    runner = make_runner(
+        tmp_path,
+        factory,
+        workspace=parent,
+        worktree_service=FailingFinalizer(),
+        worktree_root=tmp_path / "daemon",
+        runtime_supports_workspace=True,
+    )
+
+    outcome = await runner.spawn(TaskRequest(prompt="keep checkout", worktree=True))
+
+    assert outcome.is_error
+    assert outcome.status == "failed"
+    assert "worktree finalization failed" in outcome.text
+    assert "registry unavailable" in outcome.error
+    assert (tmp_path / "retained-worktree").is_dir()
+    assert runner.budget.active == 0
+
+
+async def test_task_cancellation_shields_worktree_finalization(tmp_path):
+    parent = _git_repo(tmp_path / "parent")
+    started = asyncio.Event()
+
+    async def behavior(spec: ChildSpec) -> SubagentOutcome:
+        started.set()
+        await asyncio.sleep(30)
+        return SubagentOutcome(agent=spec.agent, session_id=spec.session_id)
+
+    root = tmp_path / "daemon"
+    service = worktrees.WorktreeService()
+    runner = make_runner(
+        tmp_path,
+        Factory(behavior),
+        workspace=parent,
+        worktree_service=service,
+        worktree_root=root,
+        runtime_supports_workspace=True,
+    )
+    spawn = asyncio.create_task(
+        runner.spawn(TaskRequest(prompt="cancel task", worktree=True))
+    )
+    await started.wait()
+    spawn.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await spawn
+
+    record = service.get("root/sub/1", root=root)
+    assert record.lifecycle == "finalized"
+    assert record.final_status == "cancelled"
+    assert record.path.is_dir()
+    assert runner.budget.active == 0
+
+
+async def test_unknown_runtime_capability_refuses_worktree_request(tmp_path):
+    class TrackingService:
+        def __init__(self):
+            self.called = False
+
+        def create(self, *_args, **_kwargs):
+            self.called = True
+            raise AssertionError("unsupported runtime must fail before creation")
+
+        def mark_finished(self, *_args, **_kwargs):
+            raise AssertionError("no record exists")
+
+    service = TrackingService()
+    recorder = Recorder()
+    factory = Factory()
+    runner = make_runner(
+        tmp_path,
+        factory,
+        worktree_service=service,
+        worktree_root=tmp_path / "daemon",
+        event_sink=recorder,
+    )
+
+    outcome = await runner.spawn(TaskRequest(prompt="isolated", worktree=True))
+
+    assert outcome.is_error
+    assert "workspace isolation support" in outcome.text
+    assert not service.called
+    assert "agent.spawned" not in recorder.types()
+    assert factory.specs == []
 
 
 async def test_already_cancelled_token_raises_before_building(tmp_path):

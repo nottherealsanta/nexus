@@ -41,26 +41,22 @@ The UI encapsulation rule is enforced, not requested: anything under
 `nexus/ui/**` may import only `nexus.host`, `nexus.view`, `nexus.events`, and
 the standard library.
 
-Two line budgets keep the harness small, reviewed per phase. The §18 amendment
-supersedes the original 2,500/2,000-line targets with conservative, rounded
-ceilings that keep modest headroom over the as-built tree: `core/` + `model/` +
-`tools/spec.py` under **14,000** physical lines and `host/` + `view/` + `ui/`
-under **10,500**. The surface ceiling was reviewed and raised for the first-class
-Textual chat shell; the previous 9,500 ceiling reflected the retired line UI.
-The same prefixes and physical-line semantics are kept, and no
-code was relocated to evade a cap. The enforcing tests
-(`test_line_budget_core_model_spec_within_plan_cap` and
-`test_line_budget_host_view_ui_within_plan_cap` in `tests/test_phase3_exit.py`)
-are now **strict** — a cap breach fails the suite, and regenerating the closeout
-report refuses to write a baseline that reaches or exceeds a cap (the boundary
-is `< cap`, so a count exactly at the cap is a violation). At the revision the
-measured sizes were 12,560 physical lines for the core tree (~11% headroom) and
-10,054 for the surface tree before final cleanup (host 5,301 / view 1,820 / ui 2,933; ~4% headroom).
-The committed report (`tests/fixtures/reports/phase3_exit_baseline.json`) pins
-that baseline; regenerate it (`NEXUS_PHASE3_WRITE_REPORT=1 pytest
-tests/test_phase3_exit.py`) only while the tree is within cap. Anything that
-wants to be core *and* live-reloadable is a signal to widen an interface, not to
-add a layer.
+Strict tests enforce independent physical-line budgets. `core/` + `model/` +
+`tools/spec.py` must stay under **14,000** lines; `host/` under **7,000**;
+`view/` under **2,200**; and `ui/` under **5,000**. The host allocation was
+raised from 6,500 to accommodate the distinct browser routes/projection, bounded
+file completion, richer agent metadata, and redacted daemon/session diagnostics
+alongside the existing daemon transports. The UI allocation was raised from
+4,500 to 5,000 for the browser client and expanded Textual composition, including
+the right drawer, composer/picker, session diagnostics, and completion. The host,
+view, and UI budgets are separate reviewed allocations and ratchets, not a
+combined surface allowance.
+The same physical-line measure is used by each gate, and no code was relocated
+to evade a cap. The gates in `tests/test_phase3_exit.py` are strict; baseline
+generation refuses to record any budget at or above its cap. The committed
+report (`tests/fixtures/reports/phase3_exit_baseline.json`) records each
+directory separately. Anything that wants to be core *and* live-reloadable is a
+signal to widen an interface, not to add a layer.
 
 ## The five contracts
 

@@ -52,8 +52,48 @@ nexus --workspace /path/to/project chat          # interactive Textual shell
 local and needs no daemon. `run` takes a prompt, or `-` to read the prompt from
 stdin. `chat` is the full-screen Textual shell; `Ctrl+P` opens chat commands,
 `Ctrl+N` starts a session, `Ctrl+O` lists sessions, `Ctrl+F` forks, and
-`Shift+Tab` cycles root agents. `Ctrl+Enter` submits the multiline editor. A non-TTY invocation fails with guidance to use `nexus
-run` instead of silently changing interaction modes.
+`Shift+Tab` cycles root agents. `Enter` sends the prompt, and `Shift+Enter` (or
+`Ctrl+Enter`) inserts a newline; `Alt+Enter` does the same only when the
+terminal's key protocol preserves the modifier; `Ctrl+J` inserts one too, which
+is the fallback for terminals that cannot report a modified Enter. A non-TTY
+invocation fails with guidance to use `nexus run` instead of silently changing
+interaction modes.
+
+The chat keeps its append-only session/event history unchanged. In the visible
+timeline, completed setup/configuration/provider-auth failures are compacted out
+after a later successful turn; a current or otherwise unresolved failure remains
+visible. Generic historical event errors and failed turns remain available from
+`/details` and the session export/replay. The canned “Hi! How can I help?” and
+“I’m Nexus …” assistant greetings are omitted when they precede the first user
+prompt. Routine ready/completed status text is not shown. Runtime/model metadata
+sits below the composer, and errors/status feedback remain there when actionable.
+
+`tests/browser_serve.py` is a development/test helper, not a shipped surface: it
+is not installed with the package, `nexus` never imports it, and it is not a
+supported serving path. It exists because plain `textual serve`'s bundled xterm
+frontend reports every Enter variant as a bare carriage return, so Shift+Enter
+would submit instead of newlining; the helper adds a small serving-layer keyboard
+bridge that reports Shift/Ctrl+Enter as Kitty CSI-u, which the app already
+understands, and nothing else. Use it only to serve a local checkout with the
+contract intact, as `python tests/browser_serve.py --command "nexus chat"` does.
+
+**Terminal support and limitations.** The terminal decides how Enter and
+Shift+Enter are encoded. `nexus chat` works wherever the terminal speaks the
+Kitty keyboard protocol — kitty, WezTerm, foot, Ghostty, recent iTerm2 — because
+Textual negotiates it and resolves `CSI 13;2u` to `Shift+Enter`. The Nexus
+key-protocol driver (`nexus/ui/tui/keys.py`) additionally decodes the older xterm
+`modifyOtherKeys` form (`CSI 27;2;13~`) for terminals or tmux setups that already
+emit it; that mode is not force-enabled, because doing so re-encodes printable
+shifted keys in a way Textual's parser does not preserve. `Alt+Enter` is only a
+newline where the terminal encodes it distinctly (`CSI 13;3u`, or the
+`modifyOtherKeys` form the driver rewrites); terminals that map it to `ESC CR`
+lose the modifier, and the app cannot recover it. Terminals that send a bare
+carriage return for *every* Enter cannot be distinguished — those bytes mean
+Enter — so there `Shift+Enter` submits and `Ctrl+J` (the `LF` byte) inserts the
+newline. `tests/test_tui_keys.py` pins the decoder against the real byte
+sequences, runs the driver under a pseudo-terminal, and drives the real
+`NexusTextualApp`/`ChatEditor` through that driver to assert Shift+Enter drafts a
+newline and Enter then sends it.
 
 Every command except `init`, `auth`, and `nexus daemon status|stop|logs` is a **client of
 a per-workspace daemon** — including `doctor`, `models`, `sessions`, `ext`,
@@ -340,6 +380,19 @@ then `low` when no cost data exists. Custom tier names are allowed; the three
 built-ins always resolve. A tier name works in `models.default`, a skill's
 `model:`, an agent definition's `model:`, and `Task(model=...)`.
 
+An optional exact supported-effort override can be declared per explicit model
+reference. Values use the canonical Nexus effort vocabulary (`none`, `minimal`,
+`low`, `medium`, `high`, `xhigh`) and are exposed in that canonical order:
+
+```toml
+[models.reasoning_efforts]
+"openai/o3" = ["low", "high"]
+"anthropic/claude-sonnet-5" = ["none", "medium", "high"]
+```
+
+An override replaces catalogue metadata, including with an empty list. Catalogue
+`reasoning = true` alone does not imply supported effort levels.
+
 Capabilities are authoritative from the registry. If a provider rejects a
 feature the registry claimed, the loop emits `context.degraded`, retries once
 without the feature, and emits a `registry.mismatch` event. `nexus doctor`
@@ -350,6 +403,32 @@ aggregates those durable mismatch events so a bad upstream entry can be fixed.
 Tools execute **on the host** under the permission engine. There is **no OS
 sandbox and no container isolation**: an approved `Bash` call runs with your
 user's privileges.
+
+### Local document reading
+
+`read` converts supported local documents to Markdown with
+[Firecrawl AnyDoc](https://github.com/firecrawl/anydoc). Install the optional
+dependency with:
+
+```sh
+pip install 'nexus-harness[documents]'
+```
+
+Supported extensions are `.pdf`, `.doc`, `.docx`, `.docm`, `.ppt`, `.pptx`,
+`.pptm`, `.pps`, `.pot`, `.ppsx`, `.ppsm`, `.xls`, `.xlsx`, `.xlsm`, `.xlsb`,
+`.odt`, `.ods`, `.odp`, `.rtf`, and `.epub`. CSV conversion is available only
+when requested with `csv_as_markdown: true`; otherwise `.csv` is read as
+ordinary raw UTF-8 text. Source documents are limited to 16 MiB and converted
+Markdown to 4 MiB, with the normal configured result and line limits applied
+after conversion. A scanned PDF that needs OCR returns a clear error: conversion
+is local-only, does not call hosted OCR, and makes no conversion network request.
+
+Document reads remain non-mutating and pass through path-keyed `read` permission
+checks and hard `read_denyroots`. Individual file reads are not globally confined
+to the workspace; directory listing is limited to the workspace. The conversion
+worker runs as the same OS user as Nexus with a scrubbed environment, not inside
+a strong OS sandbox. Images remain a separate future goal and are not attached
+or converted by this document feature.
 
 Bundles group tools; profiles compose bundles. Nothing in `core/` knows what
 "coding" means.
@@ -610,14 +689,15 @@ and the terminal CLI still speaks only the Unix socket.
 A UI may import only `nexus.host`, `nexus.view`, `nexus.events`, and the
 standard library. That boundary is enforced by a test, not by discipline.
 
-Two line budgets keep the harness small and are enforced by strict tests:
-`core/` + `model/` + `tools/spec.py` under 14,000 physical lines and `host/` +
-`view/` + `ui/` under 10,500, with modest headroom over the current tree. The
-surface ceiling was reviewed and raised for the first-class Textual chat shell;
-the previous 9,500 ceiling reflected the retired line UI. These revise the
-original 2,500/2,000 targets (PLAN §18); the closeout report
-regeneration refuses to record a baseline that reaches or exceeds a cap, so an
-overage (or a tree exactly at the cap) cannot be blessed by regenerating. See
+Strict tests enforce independent physical-line budgets: `core/` + `model/` +
+`tools/spec.py` under 14,000; `host/` under 7,000; `view/` under 2,200; and `ui/`
+under 5,000. The host allocation was raised from 6,500 for the added browser,
+file-completion, metadata, and redacted-diagnostics surfaces; the UI allocation
+was raised from 4,500 to 5,000 for the browser client and expanded Textual
+composition, including the right drawer, composer/picker, session diagnostics,
+and completion. The host/view/ui values are separate reviewed budgets and
+ratchets, not a combined allowance.
+The closeout report refuses to record any directory at or above its cap. See
 `ARCHITECTURE.md` and `tests/test_phase3_exit.py`.
 
 ## Offline and local
@@ -721,6 +801,12 @@ hook, and MCP config samples.
 
 ## Development
 
+The live agent benchmark has two scenarios and requires a configured provider;
+its workspaces and run logs are written under ignored `artifacts/benchmark/`.
+See the [benchmark guide](benchmark/README.md) for commands, grading, and safety
+notes. The `shell-command` scenario requires `--allow-shell` and is
+**UNSANDBOXED**; live runs may consume tokens.
+
 ```sh
 pip install -e '.[dev]'
 pytest                       # full offline suite; live tests are deselected
@@ -730,8 +816,20 @@ ANTHROPIC_API_KEY=... pytest -m live tests/test_anthropic_live.py
 pip install ruff
 ruff check nexus tests
 
+# Terminal key-protocol regression: raw Shift+Enter / Ctrl+Enter / Ctrl+J bytes
+# through the real decoder, a pseudo-terminal driver run, and an end-to-end PTY
+# run of the real NexusTextualApp/ChatEditor over that driver.
+pytest tests/test_tui_keys.py
+
 # Textual web rendering plus browser screenshots (writes ignored artifacts/visual-tui/).
 python tests/visual_tui_check.py
+
+# Real-browser functional check of the Textual shell: types into the editor,
+# asserts Shift+Enter newlines before Enter submits the multiline draft, opens
+# Commands, and captures screenshots. Uses the deterministic fixture transport
+# (no daemon or model) served through tests/browser_serve.py. Install the browser
+# once with `python -m playwright install chromium`.
+python tests/playwright_tui_check.py
 ```
 
 Tests use temporary workspaces and recorded fixtures; they need no network and

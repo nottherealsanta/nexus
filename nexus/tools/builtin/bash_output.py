@@ -16,6 +16,8 @@ from . import _jobs
 
 __all__ = ["SPEC", "run"]
 
+_MAX_WAIT_S = 30.0
+
 _JOB_ID = {
     "type": "string",
     "description": "A job_id previously returned by Bash.",
@@ -36,9 +38,10 @@ _STDERR_OFFSET = {
 }
 _WAIT = {
     "type": "number",
+    "maximum": _MAX_WAIT_S,
     "description": (
         "Optional seconds to wait for new output or completion before "
-        "returning. Bounded and non-blocking for the harness."
+        f"returning. Must be no greater than {_MAX_WAIT_S:g} seconds."
     ),
 }
 
@@ -59,7 +62,7 @@ SPEC = ToolSpec(
         "required": ["job_id"],
         "additionalProperties": False,
     },
-    bundle="shell",
+    bundle="legacy_shell",
     mutates=False,
     concurrency="parallel",
     permission_key=lambda data: str(data.get("job_id", "")),
@@ -77,23 +80,31 @@ def _offset(args: dict[str, Any], key: str) -> int:
     return value
 
 
-async def run(
-    args: dict[str, Any], ctx: ToolContext
+async def _read_job_output(
+    args: dict[str, Any],
+    ctx: ToolContext,
+    *,
+    tool_name: str = "BashOutput",
+    max_wait_s: float | None = None,
 ) -> ToolExecutionResult:
-    """Return buffered output from a registry-owned job."""
+    """Return buffered output from a registry-owned job.
+
+    ``max_wait_s`` lets the unified ``bash`` action apply the same limit; the
+    legacy ``BashOutput`` entry point is bounded by ``_MAX_WAIT_S`` directly.
+    """
     job_id = args.get("job_id") if isinstance(args, dict) else None
     if not isinstance(job_id, str) or not job_id:
-        return _error("BashOutput: 'job_id' must be a non-empty string")
+        return _error(f"{tool_name}: 'job_id' must be a non-empty string")
 
     registry = _jobs.registry_for(ctx)
     try:
         session_id = _jobs.require_session_id(ctx.session_id)
     except _jobs.JobRegistryError as exc:
-        return _error(f"BashOutput: {exc}")
+        return _error(f"{tool_name}: {exc}")
     job = registry.job(job_id, session_id=session_id)
     if job is None:
         return _error(
-            f"BashOutput: unknown job_id {job_id!r}; only jobs started by "
+            f"{tool_name}: unknown job_id {job_id!r}; only jobs started by "
             "Bash in this session are valid"
         )
 
@@ -102,7 +113,7 @@ async def run(
         stderr_offset = _offset(args, "stderr_offset")
         wait_s = args.get("wait_s")
     except ValueError as exc:
-        return _error(f"BashOutput: {exc}")
+        return _error(f"{tool_name}: {exc}")
 
     if ctx.cancel_token is not None:
         ctx.cancel_token.raise_if_cancelled()
@@ -111,10 +122,15 @@ async def run(
         if (
             isinstance(wait_s, bool)
             or not isinstance(wait_s, (int, float))
-            or not math.isfinite(wait_s)
+            or (isinstance(wait_s, float) and not math.isfinite(wait_s))
             or wait_s <= 0
         ):
-            return _error("BashOutput: wait_s must be a positive number")
+            return _error(f"{tool_name}: wait_s must be a positive finite number")
+        wait_limit = max_wait_s if max_wait_s is not None else _MAX_WAIT_S
+        if wait_s > wait_limit:
+            return _error(
+                f"{tool_name}: wait_s must not exceed {wait_limit:g} seconds"
+            )
         await _wait_for_output(
             job, stdout_offset, stderr_offset, float(wait_s), ctx
         )
@@ -127,10 +143,17 @@ async def run(
             show_offsets=True,
         ),
         context_note=(
-            f"[BashOutput {job_id}: output evicted; call BashOutput again with "
+            f"[{tool_name} {job_id}: output evicted; call {tool_name} again with "
             "the recorded offsets to re-read it]"
         ),
     )
+
+
+async def run(
+    args: dict[str, Any], ctx: ToolContext
+) -> ToolExecutionResult:
+    """Legacy entry point for reading buffered output."""
+    return await _read_job_output(args, ctx)
 
 
 async def _wait_for_output(

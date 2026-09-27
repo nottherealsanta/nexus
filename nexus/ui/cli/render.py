@@ -5,69 +5,14 @@ into terminal text. Textual chat renders through Markdown widgets instead.
 """
 from __future__ import annotations
 
-import re
-import unicodedata
 from collections.abc import Mapping
 from typing import Any, TextIO
 
 from ...events import Event
+from ...ui_support.text import escape_controls, redact, sanitize
 
 #: Event types that terminate a turn, shared by every runner.
 TERMINAL_EVENTS = frozenset({"turn.completed", "turn.failed", "turn.cancelled"})
-
-_LIMIT = 240
-
-#: Credential shapes blanked before untrusted text reaches a terminal.
-_KEY = (r"(?i)\b(api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret"
-        r"|token|secret|password|passwd|bearer)\b\s*[:=]\s*\S+")
-_SECRETS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(_KEY), r"\1=" + "\u2026"),
-    (re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{6,}"), "sk-ant-\u2026"),
-    (re.compile(r"\bsk-[A-Za-z0-9_\-]{6,}"), "sk-\u2026"),
-    (re.compile(r"\bAKIA[0-9A-Z]{12,}\b"), "AKIA\u2026"),
-    (re.compile(r"\bghp_[A-Za-z0-9]{12,}\b"), "ghp_\u2026"),
-    (re.compile(r"\bAIza[0-9A-Za-z_\-]{12,}\b"), "AIza\u2026"),
-)
-
-
-def redact(text: str) -> str:
-    for pattern, replacement in _SECRETS:
-        text = pattern.sub(replacement, text)
-    return text
-
-
-#: C0/C1 control characters, except tab and newline.
-_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
-
-
-def _escaped(text: str) -> str:
-    """Escape controls (tab/newline excepted) and Unicode format characters."""
-    text = _CONTROL.sub(lambda m: f"\\x{ord(m.group()):02x}", text)
-    return "".join(
-        f"\\u{ord(c):04x}" if unicodedata.category(c) == "Cf" else c for c in text
-    )
-
-
-def escape_controls(text: str) -> str:
-    """Control-escape streaming prose, preserving newlines/tabs.
-
-    A stream arrives one delta at a time, so an escape or credential shape can be
-    split across two deltas; blanket secret redaction is not feasible for the
-    stream and is not claimed. This guarantees no terminal control character is
-    injected while legitimate newlines and tabs survive.
-    """
-    return _escaped(text)
-
-
-def sanitize(value: object, limit: int = _LIMIT) -> str:
-    """Control-free, redacted, length-capped text; bytes by size, struct by type."""
-    if isinstance(value, (bytes, bytearray, memoryview)):
-        return f"<{len(bytes(value))} bytes>"
-    if value is not None and not isinstance(value, (str, int, float, bool)):
-        value = type(value).__name__
-    text = redact(re.sub(r"[\t\n]", " ", _escaped(str(value))))
-    return text if len(text) <= limit else text[:limit] + "\u2026"
-
 
 class TerminalRenderer:
     """Render one event at a time to a terminal, deduping replays."""
@@ -192,6 +137,15 @@ class TerminalRenderer:
 
     def _on_permission_requested(self, data: Mapping[str, Any]) -> None:
         tool = sanitize(data.get("tool") or "?", 80)
+        if "targets" in data:
+            targets = data.get("targets")
+            summary = (
+                f"{len(targets)} targets — open details"
+                if isinstance(targets, list)
+                else "targets unavailable — open details"
+            )
+            self._out(f"[permission] {tool} awaiting approval \u00b7 {summary}\n", "permission")
+            return
         detail = data.get("key") or data.get("preview")
         shown = sanitize(detail, 100) if detail else ""
         self._out(f"[permission] {tool} awaiting approval" + (f" \u00b7 {shown}" if shown else "") + "\n", "permission")

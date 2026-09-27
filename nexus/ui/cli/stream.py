@@ -13,9 +13,9 @@ from collections.abc import Mapping
 from typing import Any, TextIO
 
 from ...events import Event
-from ..turn_stream import turn_events
+from ...client.turn_stream import turn_events
 from .approve import Approver
-from .client import Client, ClientError
+from ...client.protocol import Client, ClientError
 
 async def answer_permission(
     client: Client,

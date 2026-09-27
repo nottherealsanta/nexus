@@ -80,7 +80,7 @@ def test_example_agent_frontmatter_is_valid():
     )
     assert parsed.name == "researcher"
     assert parsed.model == "low"
-    assert "Write" in parsed.excluded_tools
+    assert "write" in parsed.excluded_tools
 
 
 def test_example_tool_module_loads_and_runs():

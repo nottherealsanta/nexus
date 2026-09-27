@@ -12,9 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from textual.events import Click
-from textual.command import Provider
-from textual.widgets import Input, TextArea
+from textual.widgets import TextArea
 
 from nexus.events import Event
 from nexus.host import protocol as p
@@ -22,10 +20,15 @@ from nexus.session.manager import SessionSummary
 from nexus.ui.cli.client import Client, TransportClosed
 from nexus.ui.tui.agent_picker import AgentPicker
 from nexus.ui.tui.agent_transcript import AgentTranscriptScreen, render_agent
-from nexus.ui.tui.app import ChatCommandProvider, NexusTextualApp
-from nexus.ui.tui.messages import AgentOpenRequested, EventReceived, StreamDisconnected
-from nexus.ui.tui.permission import PermissionScreen
-from nexus.ui.tui.timeline import AgentActivityLink, ConversationTimeline, TaskActivityWidget, ToolActivityWidget, format_arguments
+from nexus.ui.tui.app import NexusTextualApp
+from nexus.ui.tui.messages import AgentOpenRequested, EventReceived
+from nexus.ui.tui.timeline import (
+    AgentActivityLink,
+    ConversationTimeline,
+    TaskActivityWidget,
+    ToolActivityWidget,
+    format_arguments,
+)
 
 
 class FakeTransport:
@@ -40,6 +43,8 @@ class FakeTransport:
         self.permission_decision: str | None = None
         self.permission_wins = True
         self.last_input: str | None = None
+        self.agent_name = "general"
+        self.agent_source = "default"
 
     async def request(self, command):
         self.trace.append(type(command).__name__)
@@ -55,9 +60,44 @@ class FakeTransport:
                 seq=len(self.events_log),
                 view=_view(self.events_log),
             )
+        if isinstance(command, p.LogsRead):
+            return p.LogsReadResult(
+                daemon=p.DaemonLogPage(next_cursor=f"{'a' * 32}:0"),
+                session=p.SessionLogPage(),
+            )
         if isinstance(command, p.AgentCurrent):
             return p.AgentCurrentResult(
-                session=command.session, name="general", source="default"
+                session=command.session,
+                name=self.agent_name,
+                source=self.agent_source,
+            )
+        if isinstance(command, p.ContextInspect):
+            return p.ContextInspectResult(
+                session=command.session,
+                mode="next_turn_preview",
+                actually_sent=False,
+                redacted_for_display=True,
+                agent={"name": "general", "source": "default", "instructions_included": True},
+                provider="fake",
+                model="preview-model",
+                system_files={
+                    "soul": {"configured": True, "loaded": True, "included": True, "included_nonempty": True, "source": "SOUL.md"},
+                    "memory": {"configured": True, "loaded": True, "included": True, "included_nonempty": True, "source": "MEMORY.md"},
+                },
+                system_text="Selected system prompt",
+                included_parts=[
+                    {"name": "system", "text": "Selected system prompt"},
+                    {"name": "soul", "text": "SOUL instructions"},
+                    {"name": "memory", "text": "MEMORY notes"},
+                ],
+                tools=[{"name": "Read", "description": "Read a file", "input_schema": {"type": "object"}}],
+                messages=[{"role": "user", "blocks": [{"type": "text", "text": "Earlier request"}]}],
+                history_included=True,
+                request_context={"used_tokens": 23500, "input_budget": 100000},
+                skills_index=[{"name": "search", "description": "Search workspace", "included": True}],
+                mcp_index="mcp__docs__search: Search documentation",
+                budget={"used_tokens": 23500, "input_budget": 100000},
+                omitted=["draft input", "conversation history"],
             )
         if isinstance(command, p.AgentsList):
             return p.AgentsListResult(agents=[
@@ -93,13 +133,25 @@ class FakeTransport:
             self.cancelled = True
             return p.SessionCancelResult(session=command.session, cancelled=True)
         if isinstance(command, p.AgentSelect):
-            return p.AgentSelectResult(session=command.session, name=command.name, source="session")
+            self.agent_name = command.name
+            self.agent_source = "session"
+            return p.AgentSelectResult(
+                session=command.session, name=self.agent_name, source=self.agent_source
+            )
         if isinstance(command, p.AgentReset):
-            return p.AgentSelectResult(session=command.session, name="general", source="default")
+            self.agent_name = "general"
+            self.agent_source = "default"
+            return p.AgentSelectResult(
+                session=command.session, name=self.agent_name, source=self.agent_source
+            )
         if isinstance(command, p.ModelsList):
             return p.ModelsListResult(models=[{"provider": "fake", "id": "m", "tier": "medium"}])
         if isinstance(command, p.ModelSelect):
             return p.ModelSelectResult(session=command.session, provider="fake", model=command.ref)
+        if isinstance(command, p.ReasoningEffortSelect):
+            return p.ReasoningEffortSelectResult(
+                session=command.session, effort=command.effort, supported_levels=[]
+            )
         if isinstance(command, p.SessionExport):
             return p.SessionExportResult(session=command.session, format=command.format, content="# export")
         if isinstance(command, p.SessionFork):
@@ -188,7 +240,7 @@ async def test_pilot_multiline_stream_finalization_and_subscribe_before_start():
         transport.events_log.extend(events)
         editor = app.query_one("#chat-editor", TextArea)
         editor.text = "hello\nworld"
-        await pilot.press("ctrl+enter")
+        await pilot.press("enter")
         await pilot.pause(0.1)
         subscribe = next(i for i, row in enumerate(transport.trace) if isinstance(row, tuple) and row[0] == "subscribe" and row[1] == "s" and row[2] == 0 and row[3])
         assert subscribe < transport.trace.index("start_turn")
@@ -242,6 +294,29 @@ async def test_cancel_quit_and_connection_feedback():
 
 
 @pytest.mark.asyncio
+async def test_composer_is_keyboard_only_without_send_or_cancel_buttons():
+    from textual.widgets import Button
+
+    from nexus.ui.tui.widgets import ChatEditor, ChatInput
+
+    transport = FakeTransport()
+    app = NexusTextualApp(_client(transport), session="s")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        composer = app.query_one(ChatInput)
+        assert list(composer.query(Button)) == []
+        assert list(app.query("#send")) == []
+        assert list(app.query("#cancel")) == []
+        editor = app.query_one(ChatEditor)
+        assert app.focused is editor
+        # Enter still submits even though no Send control exists.
+        editor.text = "keyboard only"
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+        assert transport.last_input == "keyboard only"
+
+
+@pytest.mark.asyncio
 async def test_root_agent_picker_mouse_and_next_turn_feedback():
     transport = FakeTransport()
     app = NexusTextualApp(_client(transport))
@@ -249,7 +324,8 @@ async def test_root_agent_picker_mouse_and_next_turn_feedback():
         await pilot.pause()
         await pilot.press("ctrl+g")
         await pilot.pause()
-        app.screen.query_one("#agent-search", Input).value = "plan"
+        for key in "plan":
+            await pilot.press(key)
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause(0.05)
@@ -258,13 +334,51 @@ async def test_root_agent_picker_mouse_and_next_turn_feedback():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("command", "selection"),
+    [("/agent", "mouse"), ("/agent list", "keyboard")],
+)
+async def test_agent_command_opens_picker_from_exact_editor_command(command, selection):
+
+    from nexus.ui.tui.widgets import ChatEditor
+
+    transport = FakeTransport()
+    app = NexusTextualApp(_client(transport), session="s")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        editor = app.query_one(ChatEditor)
+        editor.focus()
+        for key in command:
+            await pilot.press(key)
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+        assert app.query_one("#inline-picker").display
+        assert "AgentsList" in transport.trace
+        assert transport.trace.count("AgentsList") == 2  # bootstrap and command
+
+        if selection == "mouse":
+            await pilot.click("#agent-options", offset=(2, 1))
+        else:
+            for key in "plan":
+                await pilot.press(key)
+            await pilot.pause()
+            await pilot.press("enter")
+        await pilot.pause(0.1)
+        assert transport.agent_name == "plan"
+        assert "AgentSelect" in transport.trace
+
+
+@pytest.mark.asyncio
 async def test_command_palette_and_migrated_chat_command_parity():
     transport = FakeTransport()
     app = NexusTextualApp(_client(transport))
     async with app.run_test() as pilot:
         await pilot.pause()
-        provider_type = next(iter(NexusTextualApp.COMMANDS))()
-        provider = provider_type(app.screen)
+        provider_classes = [factory() for factory in NexusTextualApp.COMMANDS]
+        provider_class = next(
+            cls for cls in provider_classes if cls.__name__ == "ChatCommandProvider"
+        )
+        provider = provider_class(app.screen)
         hits = [hit async for hit in provider.search("details")]
         assert hits and "details" in str(hits[0].match_display).lower()
 
@@ -288,6 +402,527 @@ async def test_fresh_session_is_empty_and_editor_focused_without_agent_panel():
         assert not list(timeline.children)
         assert app.focused is app.query_one("#chat-editor", TextArea)
         assert not app.query("#agent-tracker")
+        assert app.query_one("#context-preview").display
+        await pilot.pause()
+        current = app.query_one("#context-preview-content").render().plain
+        assert "SYSTEM PROMPT · request.system" in current
+        assert "TOOLS · structured request.tools" in current
+        assert "MESSAGES · ordered request.messages" in current
+
+
+@pytest.mark.asyncio
+async def test_context_entry_opens_readable_next_turn_preview_and_is_keyboard_accessible():
+    from nexus.ui.tui.widgets import ContextDetailsScreen
+
+    transport = FakeTransport()
+    app = NexusTextualApp(_client(transport), session="new-session")
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        entry = app.query_one("#context-usage")
+        assert entry.render().plain == "Preview"
+        await pilot.press("ctrl+i")
+        await pilot.pause()
+        assert isinstance(app.screen, ContextDetailsScreen)
+        assert "Provider call: No" in app.screen.query_one("#context-details").render().plain
+        details = app.screen.query_one("#context-details").render().plain
+        for expected in (
+            "CURRENT REQUEST", "SYSTEM PROMPT · request.system", "Selected system prompt",
+            "SOUL.md", "MEMORY.md", "TOOLS · structured request.tools", "Read a file",
+            "SKILLS INDEX", "Search workspace", "MCP INDEX", "mcp__docs__search",
+            "Earlier request", "MESSAGES · ordered request.messages", "Provider call: No",
+        ):
+            assert expected in details
+        assert "ContextInspect" in transport.trace
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, ContextDetailsScreen)
+
+
+@pytest.mark.asyncio
+async def test_empty_context_preview_shows_ten_lines_then_full_details_with_safe_controls():
+    from nexus.ui.tui.widgets import ContextDetailsScreen
+
+    transport = FakeTransport()
+    original_request = transport.request
+
+    async def request(command):
+        result = await original_request(command)
+        if isinstance(command, p.ContextInspect):
+            return p.ContextInspectResult(
+                session=command.session,
+                mode="next_turn_preview",
+                actually_sent=False,
+                redacted_for_display=True,
+                agent={"name": "general", "source": "default", "instructions_included": True},
+                provider="fake-provider",
+                model="fake-model",
+                system_text="first\nsecond\nthird\nfourth\nfifth\nsixth\nseventh\neighth\nninth\ntenth\neleventh\x1b[31munsafe",
+                tools=[{"name": "Read", "description": "Read files", "input_schema": {"type": "object", "properties": {f"field-{index}": {"type": "string"} for index in range(12)}}}],
+                messages=[{"role": "user", "blocks": [{"type": "text", "text": "\n".join(f"Request line {index}" for index in range(1, 13))}]},
+                          {"role": "assistant", "blocks": [{"type": "text", "text": "Earlier reply"}]}],
+                history_included=True,
+                request_context={"used_tokens": 800, "input_budget": 8000},
+                skills_index=[
+                    {"name": "available-skill", "description": "Available", "included": False},
+                    {"name": "active-skill", "description": "Included", "included": True},
+                ],
+                included_parts=[{"name": "long-part", "text": "\n".join(f"Part line {index}" for index in range(1, 13))}],
+                mcp_index="docs-search",
+                omitted=["conversation history"],
+            )
+        return result
+
+    transport.request = request
+    app = NexusTextualApp(_client(transport), session="new-session")
+    async with app.run_test(size=(100, 38)) as pilot:
+        await pilot.pause()
+        preview = app.query_one("#context-preview-content").render().plain
+        for expected in (
+            "CURRENT REQUEST CONTEXT", "fake-provider/fake-model", "SYSTEM PROMPT · request.system",
+            "first", "ninth", "TOOLS · structured request.tools · 1", "Read",
+            "MESSAGES · ordered request.messages · 2", "Earlier reply", "800 / 8000 tokens",
+                "...",
+            "field-0",
+        ):
+            assert expected in preview
+        assert "tenth" not in preview
+        assert "eleventh\\x1b[31munsafe" not in preview
+        assert "Request line 12" not in preview and "Part line 12" not in preview
+        assert preview.count("...") >= 3
+        assert not app.query("#context-preview-scroll")
+        assert not list(app.query_one("#conversation").children)
+        assert app.query_one("#context-preview-agent").render().plain == "Agent · general"
+        assert app.query_one("#context-preview-model").render().plain == "Model · fake-provider/fake-model"
+
+        await pilot.click("#context-preview-model")
+        await pilot.pause()
+        assert app._inline_picker_kind == "model"
+        assert app.query_one("#inline-picker").display
+        await pilot.press("escape")
+        await pilot.pause()
+
+        await pilot.click("#context-preview-content")
+        await pilot.pause()
+        assert isinstance(app.screen, ContextDetailsScreen)
+        details = app.screen.query_one("#context-details").render().plain
+        assert "Provider call: No" in details
+        assert "DISPLAY LIMITATIONS" in details
+        assert "eleventh\\x1b[31munsafe" in details
+        assert "Input schema:" in details
+        assert "field-11" in details and "Request line 12" in details and "Part line 12" in details
+        assert "available, not included" in details
+        assert "TOOLS · structured request.tools" in details
+        assert "Request line 12" in details
+
+
+@pytest.mark.asyncio
+async def test_context_main_pane_stays_available_for_existing_conversation():
+    from nexus.view import apply
+
+    client = _client(FakeTransport())
+    app = NexusTextualApp(client, session="existing")
+    async with app.run_test(size=(100, 35)) as pilot:
+        await pilot.pause()
+        view = app.controller.view
+        app.controller.view = apply(view, _event("turn.started", 1))
+        app.controller.view = apply(app.controller.view, _event("text", 2, {"text": "Done"}))
+        app.controller.view = apply(app.controller.view, _event("turn.completed", 3))
+        await app._sync_timeline()
+        await pilot.pause()
+        assert app.query_one("#context-preview").display
+        content = app.query_one("#context-preview-content").render().plain
+        assert "CURRENT REQUEST CONTEXT" in content
+        assert "SYSTEM PROMPT · request.system" in content
+        assert "MESSAGES · ordered request.messages" in content
+
+
+@pytest.mark.asyncio
+async def test_agent_selection_refreshes_cached_context_request():
+    transport = FakeTransport()
+    app = NexusTextualApp(_client(transport), session="selection-context")
+    async with app.run_test(size=(100, 35)) as pilot:
+        await pilot.pause()
+        assert app._context_preview is not None
+        prior = app._context_preview
+        before = transport.trace.count("ContextInspect")
+        await app._agent_command(("plan",))
+        await pilot.pause()
+        assert transport.trace.count("ContextInspect") > before
+        assert app._context_preview is not prior
+        assert app._context_preview_session == "selection-context"
+
+
+@pytest.mark.asyncio
+async def test_inline_context_preview_discards_late_response_after_session_switch():
+    entered_old, release_old = asyncio.Event(), asyncio.Event()
+    client = _client(FakeTransport())
+
+    async def inspect_context(session):
+        if session == "old":
+            entered_old.set()
+            await release_old.wait()
+            prompt = "stale old prompt"
+        else:
+            prompt = f"prompt for {session}"
+        return p.ContextInspectResult(
+            session=session,
+            system_text=prompt,
+            provider="fake",
+            model=session,
+        )
+
+    client.inspect_context = inspect_context
+    app = NexusTextualApp(client, session="old")
+    async with app.run_test(size=(90, 30)) as pilot:
+        await entered_old.wait()
+        await app._switch_session("new")
+        await pilot.pause()
+        assert "prompt for new" in app.query_one("#context-preview-content").render().plain
+        release_old.set()
+        await pilot.pause()
+        rendered = app.query_one("#context-preview-content").render().plain
+        assert "prompt for new" in rendered
+        assert "stale old prompt" not in rendered
+        assert app.controller.session == "new"
+
+
+@pytest.mark.asyncio
+async def test_context_preview_refusal_shows_graceful_error_and_retry_hint():
+    from nexus.ui.cli.client import ClientError
+    from nexus.ui.tui.widgets import ContextDetailsScreen
+
+    client = _client(FakeTransport())
+
+    async def inspect_context(session):
+        raise ClientError("context preview is unavailable while the session is active")
+
+    client.inspect_context = inspect_context
+    app = NexusTextualApp(client, session="s")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.action_open_context()
+        await pilot.pause()
+        assert isinstance(app.screen, ContextDetailsScreen)
+        rendered = app.screen.query_one("#context-details").render().plain
+        assert "Preview unavailable" in rendered
+        assert "session is active" in rendered
+        assert "Try again after the active turn finishes" in rendered
+        assert "Actually sent" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_empty_turn_render_lines_are_blank_and_current_failed_turn_shows_error():
+    from textual.geometry import Region
+    from textual.widgets import Static
+
+    from nexus.view import apply, initial_state
+
+    view = apply(initial_state("s"), _event("turn.started", 1))
+    app = NexusTextualApp(_client(FakeTransport()))
+    async with app.run_test(size=(60, 24)) as pilot:
+        await pilot.pause()
+        timeline = app.query_one("#conversation", ConversationTimeline)
+        await timeline.set_view(view)
+        await pilot.pause()
+        turn_widget = timeline._turns["turn-1"]
+        area = Region(0, 0, turn_widget.size.width, turn_widget.size.height)
+        active_lines = turn_widget.render_lines(area)
+        assert not any(line.text.strip() for line in active_lines)
+
+        view = apply(
+            view,
+            _event("input.queued", 2, {
+                "queued_id": "queued-1",
+                "content": [{"type": "text", "text": "keep my prompt"}],
+            }),
+        )
+        view = apply(
+            view,
+            _event("input.consumed", 3, {"queued_id": "queued-1", "turn": "turn-1"}),
+        )
+        error = "ConfigError: No model was specified and no default model is configured"
+        view = apply(view, _event("turn.failed", 4, {"error": error}))
+        await timeline.set_view(view)
+        await pilot.pause()
+
+        turn_widget = timeline._turns["turn-1"]
+        area = Region(0, 0, turn_widget.size.width, turn_widget.size.height)
+        failed_lines = turn_widget.render_lines(area)
+        assert not any("turn-1" in line.text for line in failed_lines)
+        error_widget = turn_widget.query_one(".timeline-error", Static)
+        error_area = Region(0, 0, error_widget.size.width, error_widget.size.height)
+        rendered_error = " ".join(
+            "".join(line.text for line in error_widget.render_lines(error_area)).split()
+        )
+        assert rendered_error == error
+        user_message = turn_widget.query_one(".timeline-user", Static)
+        rendered_user = user_message.render().plain
+        assert "keep my prompt" in rendered_user
+
+
+@pytest.mark.asyncio
+async def test_completed_turn_summary_uses_frozen_replayed_metadata_and_is_idempotent():
+    from textual.widgets import Static
+
+    from nexus.view import apply_many, initial_state
+
+    events = [
+        Event(
+            type="turn.started",
+            data={"agent": {"name": "plan"}},
+            seq=1,
+            ts=10.0,
+            session="s",
+            turn="summary-turn",
+        ),
+        Event(
+            type="input.started",
+            data={"input_id": "input-1", "content": [{"type": "text", "text": "prompt"}]},
+            seq=2,
+            ts=10.0,
+            session="s",
+            turn="summary-turn",
+        ),
+        Event(
+            type="model.started",
+            data={"provider": "saved-provider", "model": "saved-model", "reasoning_effort": "high"},
+            seq=3,
+            ts=11.0,
+            session="s",
+            turn="summary-turn",
+        ),
+        Event(
+            type="text",
+            data={"text": "done"},
+            seq=4,
+            ts=12.0,
+            session="s",
+            turn="summary-turn",
+        ),
+        Event(
+            type="turn.completed",
+            data={},
+            seq=5,
+            ts=13.0,
+            session="s",
+            turn="summary-turn",
+        ),
+        # A later selection must not be mistaken for the completed turn's
+        # frozen metadata.
+        Event(
+            type="model.selected",
+            data={"provider": "later-provider", "model": "later-model"},
+            seq=6,
+            ts=14.0,
+            session="s",
+        ),
+        Event(
+            type="agent.selected",
+            data={"name": "later-agent"},
+            seq=7,
+            ts=15.0,
+            session="s",
+        ),
+        Event(
+            type="reasoning_effort.selected",
+            data={"effort": "low"},
+            seq=8,
+            ts=16.0,
+            session="s",
+        ),
+    ]
+    pending_view = apply_many(initial_state("s"), events[:3])
+    view = apply_many(initial_state("s"), events)
+    app = NexusTextualApp(_client(FakeTransport()))
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        timeline = app.query_one(ConversationTimeline)
+        await timeline.set_view(pending_view)
+        await pilot.pause()
+        assert not timeline._turns["summary-turn"].query(".timeline-summary")
+
+        await timeline.set_view(view)
+        await pilot.pause()
+
+        summary = timeline._turns["summary-turn"].query_one(
+            ".timeline-summary", Static
+        ).render().plain
+        assert "Model saved-provider/saved-model" in summary
+        assert "later-model" not in summary
+        assert "2.0s" in summary
+        assert "Elapsed" not in summary
+        assert "Agent Plan" in summary
+        assert "later-agent" not in summary
+        assert "Effort high" in summary
+        assert "Effort low" not in summary
+
+        # Re-rendering the same replayed state updates the single summary card
+        # instead of duplicating it.
+        await timeline.set_view(view)
+        await pilot.pause()
+        assert len(timeline._turns["summary-turn"].query(".timeline-summary")) == 1
+
+
+@pytest.mark.asyncio
+async def test_completed_turn_summary_omits_unknown_duration_and_describes_unset_metadata():
+    from textual.widgets import Static
+
+    from nexus.view import apply_many, initial_state
+
+    events = [
+        Event(
+            type="turn.started", data={}, seq=1, ts=100.0, session="s", turn="missing-ts"
+        ),
+        Event(
+            type="input.started",
+            data={"input_id": "input-1", "content": [{"type": "text", "text": "prompt"}]},
+            seq=2,
+            ts=float("nan"),
+            session="s",
+            turn="missing-ts",
+        ),
+        Event(
+            type="model.started",
+            data={},
+            seq=3,
+            ts=102.0,
+            session="s",
+            turn="missing-ts",
+        ),
+        Event(
+            type="text", data={"text": "answer"}, seq=4, ts=float("nan"), session="s", turn="missing-ts"
+        ),
+        Event(
+            type="turn.completed", data={}, seq=5, ts=145.0, session="s", turn="missing-ts"
+        ),
+    ]
+    view = apply_many(initial_state("s"), events)
+    app = NexusTextualApp(_client(FakeTransport()))
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        timeline = app.query_one(ConversationTimeline)
+        await timeline.set_view(view)
+        await pilot.pause()
+
+        summary = timeline._turns["missing-ts"].query_one(
+            ".timeline-summary", Static
+        ).render().plain
+        assert "Elapsed" not in summary
+        assert "45.0s" not in summary and "44.0s" not in summary
+        assert "Model unknown" in summary
+        assert "Agent No agent" in summary
+        assert "Effort Default" in summary
+
+
+@pytest.mark.asyncio
+async def test_superseded_setup_errors_and_pre_prompt_greetings_are_hidden_only_in_timeline():
+    from nexus.view import apply, initial_state
+
+    view = initial_state("s")
+    seq = 0
+
+    def emit(kind, turn_id, data=None):
+        nonlocal seq, view
+        seq += 1
+        view = apply(
+            view,
+            Event(type=kind, data=data or {}, seq=seq, session="s", turn=turn_id),
+        )
+
+    # This exact canned assistant greeting is historical setup noise only
+    # because it precedes the first submitted prompt.
+    emit("turn.started", "welcome")
+    emit("text", "welcome", {"text": "Hi! How can I help?"})
+    emit("turn.completed", "welcome")
+
+    failed_prompts = {
+        "config": "Please search my notes for credentials and unauthorized access.",
+        "provider": "Explain why the credentials document says unauthorized.",
+    }
+    for turn_id, error in (
+        ("config", "ConfigError: No model was specified"),
+        ("provider", "ProviderError: authentication_error"),
+    ):
+        emit("turn.started", turn_id)
+        emit("input.queued", turn_id, {
+            "queued_id": f"q-{turn_id}",
+            "content": [{"text": failed_prompts[turn_id]}],
+        })
+        emit("input.consumed", turn_id, {"queued_id": f"q-{turn_id}", "turn": turn_id})
+        emit("tool.requested", turn_id, {
+            "call_id": f"preview-{turn_id}",
+            "tool": "Read",
+            "input": {"path": "notes.txt"},
+        })
+        emit("tool.completed", turn_id, {
+            "call_id": f"preview-{turn_id}",
+            "tool": "Read",
+            "result": {
+                "content": [{"type": "text", "text": "credentials reference: unauthorized"}],
+                "display": "credentials reference: unauthorized",
+            },
+        })
+        emit("text", turn_id, {"text": "I’m Nexus, your assistant. I found the requested note."})
+        emit("turn.failed", turn_id, {"error": error})
+
+    emit("turn.started", "fixed")
+    emit("input.queued", "fixed", {"queued_id": "q-fixed", "content": [{"text": "real request"}]})
+    emit("input.consumed", "fixed", {"queued_id": "q-fixed", "turn": "fixed"})
+    emit("text", "fixed", {"text": "I’m Nexus, ready to help with the real request."})
+    emit("turn.completed", "fixed")
+
+    app = NexusTextualApp(_client(FakeTransport()))
+    async with app.run_test(size=(72, 26)) as pilot:
+        await pilot.pause()
+        timeline = app.query_one(ConversationTimeline)
+        await timeline.set_view(view)
+        await pilot.pause()
+        assert len(view.turns) == len(timeline._turns) == 4
+        messages = [
+            widget for turn in timeline._turns.values() for widget in turn._items.values()
+        ]
+        rendered = "\n".join(
+            getattr(widget, "_rendered", str(widget.render())) for widget in messages
+        )
+        assert "ConfigError" not in rendered and "ProviderError" not in rendered
+        assert "Hi! How can I help?" not in rendered
+        assert "I’m Nexus, your assistant. I found the requested note." in rendered
+        assert "I’m Nexus, ready to help" in rendered
+        for prompt in failed_prompts.values():
+            assert prompt in rendered
+        for turn_id in ("config", "provider"):
+            tool = timeline._turns[turn_id]._items[f"tool:preview-{turn_id}"]
+            assert "credentials reference: unauthorized" in str(
+                tool.query_one("#tool-detail").render()
+            )
+        assert view.turns[1].error and view.turns[2].error
+        # The canonical reducer still owns every failed turn for inspection/export.
+        assert [turn.phase for turn in view.turns] == ["completed", "failed", "failed", "completed"]
+        from nexus.ui.cli.details import detail_lines
+        details = "\n".join(detail_lines("s", view))
+        assert "ConfigError: No model was specified" in details
+        assert "ProviderError: authentication_error" in details
+
+
+@pytest.mark.asyncio
+async def test_unresolved_error_event_stays_in_status_and_details():
+    from nexus.ui.cli.details import detail_lines
+    from nexus.view import apply, initial_state
+
+    event = Event(
+        type="error",
+        data={"message": "ProviderError: live authentication rejected"},
+        seq=1,
+        session="s",
+    )
+    view = apply(initial_state("s"), event)
+    app = NexusTextualApp(_client(FakeTransport()))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app._event_received(EventReceived(event, None))
+        status = str(app.query_one("#connection-status").render())
+        assert "ProviderError" in status and "live authentication rejected" in status
+        assert "ProviderError" in "\n".join(detail_lines("s", view))
 
 
 @pytest.mark.asyncio
@@ -353,6 +988,118 @@ async def test_permission_attended_reply_and_first_responder_loss():
 
 
 @pytest.mark.asyncio
+async def test_permission_modal_shows_all_multi_target_paths():
+    from textual.containers import VerticalScroll
+    from textual.widgets import Static
+
+    targets = [
+        {"role": "source", "path": f"src/{index:02}.py", "reason": "Read required."}
+        for index in range(64)
+    ]
+    app = NexusTextualApp(_client(FakeTransport()))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        app.post_message(EventReceived(_event(
+            "permission.requested", 1, {"id": "many", "tool": "Move", "targets": targets}
+        )))
+        await pilot.pause()
+        description = app.screen.query_one("#permission-description", Static).render().plain
+        assert "targets (64)" in description
+        for target in targets:
+            assert target["path"] in description
+        scroll = app.screen.query_one("#permission-details-scroll", VerticalScroll)
+        assert scroll.max_scroll_y > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "targets",
+    [
+        [{"role": "source", "path": "src/a.py"}],
+        [{"role": "source", "path": "p" * 4097, "reason": "Read required."}],
+    ],
+    ids=["incomplete", "huge-path"],
+)
+@pytest.mark.parametrize("key", ["y", "a"])
+async def test_permission_unavailable_targets_fail_closed_for_keyboard_allow(targets, key):
+    from textual.widgets import Button, Static
+
+    transport = FakeTransport()
+    app = NexusTextualApp(_client(transport))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.post_message(EventReceived(_event(
+            "permission.requested", 1,
+            {"id": "invalid-targets", "tool": "Move", "targets": targets},
+        )))
+        await pilot.pause()
+        screen = app.screen
+        description = screen.query_one("#permission-description", Static).render().plain
+        assert "targets: unavailable" in description
+        assert "approval: unavailable; this request will be denied" in description
+        assert screen.query_one("#allow-once", Button).disabled
+        assert screen.query_one("#allow-always", Button).disabled
+
+        await pilot.press(key)
+        await pilot.pause()
+        assert transport.permission_decision == "deny_once"
+
+
+@pytest.mark.asyncio
+async def test_permission_unavailable_targets_preserve_explicit_deny():
+    transport = FakeTransport()
+    app = NexusTextualApp(_client(transport))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.post_message(EventReceived(_event(
+            "permission.requested", 1,
+            {"id": "invalid-targets", "tool": "Move", "targets": []},
+        )))
+        await pilot.pause()
+        await pilot.press("n")
+        await pilot.pause()
+        assert transport.permission_decision == "deny_once"
+
+
+@pytest.mark.asyncio
+async def test_permission_valid_complete_multi_target_list_allows_normal_choice():
+    transport = FakeTransport()
+    app = NexusTextualApp(_client(transport))
+    targets = [
+        {"role": "source", "path": "src/a.py", "reason": "Read required."},
+        {"role": "destination", "path": "src/b.py", "reason": "Write required."},
+    ]
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.post_message(EventReceived(_event(
+            "permission.requested", 1,
+            {"id": "valid-targets", "tool": "Move", "targets": targets},
+        )))
+        await pilot.pause()
+        assert not app.screen.query_one("#allow-once").disabled
+        assert not app.screen.query_one("#allow-always").disabled
+        await pilot.press("a")
+        await pilot.pause()
+        assert transport.permission_decision == "allow_always"
+
+
+@pytest.mark.asyncio
+async def test_permission_scalar_approval_still_allows_once():
+    transport = FakeTransport()
+    app = NexusTextualApp(_client(transport))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.post_message(EventReceived(_event(
+            "permission.requested", 1,
+            {"id": "scalar", "tool": "Write", "key": "file"},
+        )))
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+        assert transport.permission_decision == "allow_once"
+
+
+@pytest.mark.asyncio
 async def test_task_cards_are_inline_and_open_their_linked_live_child():
     from nexus.view import apply, initial_state
 
@@ -375,7 +1122,14 @@ async def test_task_cards_are_inline_and_open_their_linked_live_child():
 
 
 def test_child_transcript_safe_bounded_content():
-    from nexus.view import AgentView, BlockView, ConversationView, MessageView, ToolCallView, TurnView
+    from nexus.view import (
+        AgentView,
+        BlockView,
+        ConversationView,
+        MessageView,
+        ToolCallView,
+        TurnView,
+    )
 
     body = ConversationView(turns=[TurnView(
         id="child",
@@ -477,6 +1231,30 @@ async def test_shift_tab_cycles_host_root_agents_and_wraps_from_active_editor():
         await pilot.pause()
         assert app.controller.agent_name == "general"
         assert transport.trace.count("AgentSelect") == 5
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX driver only")
+def test_app_installs_the_terminal_key_protocol_driver():
+    from nexus.ui.tui.keys import NexusDriver
+
+    app = NexusTextualApp(_client(FakeTransport()))
+    assert app.driver_class is NexusDriver
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX driver only")
+def test_app_get_driver_class_honors_textual_driver_override(monkeypatch):
+    # An explicit TEXTUAL_DRIVER must win over the Nexus key-protocol driver, as
+    # it does for Textual's own App.get_driver_class.
+    from textual import constants
+
+    from nexus.ui.tui.keys import NexusDriver
+
+    app = NexusTextualApp(_client(FakeTransport()))
+    assert app.get_driver_class() is NexusDriver
+    monkeypatch.setattr(
+        constants, "DRIVER", "textual.drivers.headless_driver:HeadlessDriver"
+    )
+    assert app.get_driver_class().__name__ == "HeadlessDriver"
 
 
 def test_cli_chat_textual_only_tty_guard_and_noninteractive_run():
@@ -639,4 +1417,1196 @@ def test_textual_command_palette_uses_command_registry():
     from nexus.ui.cli import commands
 
     assert commands.BY_NAME["/details"].summary
-    assert any(getattr(provider, "__name__", "") == "ChatCommandProvider" for provider in (item() for item in NexusTextualApp.COMMANDS))
+    providers = {factory().__name__ for factory in NexusTextualApp.COMMANDS}
+    assert "ChatCommandProvider" in providers
+    assert "ShortcutsCommandProvider" in providers
+
+
+@pytest.mark.asyncio
+async def test_enter_sends_shift_enter_newlines_and_editor_clears():
+    from nexus.ui.tui.widgets import ChatEditor
+
+    transport = FakeTransport()
+    app = NexusTextualApp(_client(transport), session="s")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        editor = app.query_one(ChatEditor)
+        assert app.focused is editor
+        editor.text = "first line"
+        await pilot.press("shift+enter")
+        editor.insert("second line")
+        await pilot.pause()
+        assert "\n" in editor.text and transport.last_input is None
+        editor.text = "send\nme"
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+        assert transport.last_input == "send\nme"
+        assert editor.text == ""
+        assert app.focused is editor
+
+
+@pytest.mark.asyncio
+async def test_enter_while_turn_running_restores_draft_and_shows_not_sent_notice():
+    from nexus.ui.tui.widgets import ChatEditor
+
+    transport = FakeTransport()
+    app = NexusTextualApp(_client(transport), session="s")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        editor = app.query_one(ChatEditor)
+        editor.text = "keep this unsent draft"
+        app.controller.running = True
+        before = list(transport.trace)
+
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+
+        assert editor.text == "keep this unsent draft"
+        assert "start_turn" not in transport.trace
+        assert "SessionStart" not in transport.trace
+        assert "SessionEnqueue" not in transport.trace
+        assert transport.trace == before
+        assert "Turn running · message not sent" in app.query_one(
+            "#connection-status"
+        ).render().plain
+
+
+@pytest.mark.asyncio
+async def test_empty_enter_does_not_submit_or_insert_newline():
+    from nexus.ui.tui.widgets import ChatEditor
+
+    transport = FakeTransport()
+    app = NexusTextualApp(_client(transport), session="s")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        editor = app.query_one(ChatEditor)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert editor.text == ""
+        assert transport.last_input is None
+
+
+@pytest.mark.asyncio
+async def test_shift_enter_keeps_existing_draft_across_a_newline():
+    from nexus.ui.tui.widgets import ChatEditor
+
+    transport = FakeTransport()
+    app = NexusTextualApp(_client(transport), session="s")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        editor = app.query_one(ChatEditor)
+        editor.text = "alpha"
+        editor.move_cursor((0, 5))
+        await pilot.press("shift+enter")
+        editor.insert("beta")
+        await pilot.pause()
+        assert editor.text == "alpha\nbeta"
+        assert transport.last_input is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("effective", "expected"),
+    [("high", "low"), (None, "low")],
+)
+async def test_ctrl_t_cycles_root_reasoning_effort_and_preserves_draft(effective, expected):
+    from nexus.ui.tui.widgets import ChatEditor
+
+    client = _client(FakeTransport())
+    current_calls = 0
+    selected = []
+    metadata = SimpleNamespace(
+        name="general",
+        source="default",
+        color=None,
+        provider="fake",
+        model="m",
+        reasoning_effort=effective,
+        supported_levels=["low", "high"],
+        stored_override=effective,
+        reasoning_effort_source="session" if effective else None,
+        thinking_budget=None,
+    )
+
+    async def current_agent(session):
+        nonlocal current_calls
+        current_calls += 1
+        return metadata
+
+    async def select_reasoning_effort(session, effort):
+        selected.append((session, effort))
+        metadata.reasoning_effort = effort
+        metadata.stored_override = effort
+        metadata.reasoning_effort_source = "session"
+        return SimpleNamespace(effective_effort=effort)
+
+    client.current_agent = current_agent
+    client.select_reasoning_effort = select_reasoning_effort
+    app = NexusTextualApp(client, session="s")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        editor = app.query_one(ChatEditor)
+        editor.text = "keep this draft"
+        editor.move_cursor((0, 5))
+        await pilot.press("ctrl+t")
+        await pilot.pause()
+
+        assert editor.text == "keep this draft"
+        assert app.query_one("#inline-picker").display
+        from textual.widgets import OptionList
+
+        assert app.focused is app.query_one("#agent-options", OptionList)
+        assert selected == []
+        if effective == "high":
+            await pilot.press("down", "enter")
+        else:
+            await pilot.press("enter")
+        await pilot.pause()
+        assert app.focused is editor
+        assert selected == [("s", expected)]
+        assert current_calls == 3  # bootstrap, picker query, then metadata refresh
+        assert app.controller.reasoning_effort == expected
+        assert expected in str(app.query_one("#root-agent").render())
+        assert "applies next turn" in str(app.query_one("#connection-status").render())
+
+
+@pytest.mark.asyncio
+async def test_ctrl_t_with_no_supported_effort_leaves_status_and_host_unchanged():
+    from nexus.ui.tui.widgets import ChatEditor
+
+    transport = FakeTransport()
+    client = _client(transport)
+    client.current_agent = _async_value(
+        SimpleNamespace(name="general", supported_levels=[], reasoning_effort=None)
+    )
+    selections = []
+
+    async def select_reasoning_effort(session, effort):
+        selections.append((session, effort))
+
+    client.select_reasoning_effort = select_reasoning_effort
+    app = NexusTextualApp(client, session="s")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        editor = app.query_one(ChatEditor)
+        editor.text = "unchanged"
+        status_before = str(app.query_one("#connection-status").render())
+        commands_before = list(transport.trace)
+        await pilot.press("ctrl+t")
+        await pilot.pause()
+        assert selections == []
+        assert transport.trace == commands_before
+        assert editor.text == "unchanged"
+        assert app.focused is editor
+        assert str(app.query_one("#connection-status").render()) == status_before
+
+
+@pytest.mark.asyncio
+async def test_ctrl_t_reports_host_selection_errors():
+    from nexus.ui.cli.client import ClientError
+    from nexus.ui.tui.widgets import ChatEditor
+
+    client = _client(FakeTransport())
+
+    async def current_agent(session):
+        return SimpleNamespace(
+            name="general", supported_levels=["low", "high"], reasoning_effort="low"
+        )
+
+    async def select_reasoning_effort(session, effort):
+        raise ClientError("selection rejected")
+
+    client.current_agent = current_agent
+    client.select_reasoning_effort = select_reasoning_effort
+    app = NexusTextualApp(client, session="s")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        editor = app.query_one(ChatEditor)
+        editor.text = "keep me"
+        await pilot.press("ctrl+t")
+        await pilot.pause()
+        assert editor.text == "keep me"
+        assert app.query_one("#inline-picker").display
+        await pilot.press("down", "enter")
+        await pilot.pause()
+        assert app.focused is editor
+        status = str(app.query_one("#connection-status").render())
+        assert "Reasoning effort selection failed" in status
+        assert "selection rejected" in status
+
+
+@pytest.mark.asyncio
+async def test_ctrl_t_ignores_rapid_duplicate_while_current_agent_is_delayed():
+    from nexus.ui.tui.widgets import ChatEditor
+
+    client = _client(FakeTransport())
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    selection_entered = asyncio.Event()
+    release_selection = asyncio.Event()
+    calls = []
+    selected = []
+    metadata = SimpleNamespace(
+        name="general", supported_levels=["low", "high"], reasoning_effort="low"
+    )
+
+    async def current_agent(session):
+        calls.append(session)
+        if len(calls) > 1:
+            entered.set()
+            await release.wait()
+        return metadata
+
+    async def select_reasoning_effort(session, effort):
+        selected.append((session, effort))
+        selection_entered.set()
+        await release_selection.wait()
+
+    client.current_agent = current_agent
+    client.select_reasoning_effort = select_reasoning_effort
+    app = NexusTextualApp(client, session="s")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        editor = app.query_one(ChatEditor)
+        editor.text = "draft stays"
+        editor.move_cursor((0, 5))
+
+        first = asyncio.create_task(app.action_cycle_reasoning_effort())
+        await entered.wait()
+        await app.action_cycle_reasoning_effort()
+        assert calls == ["s", "s"]  # bootstrap plus the one in-flight cycle
+        release.set()
+        await selection_entered.wait()
+        await app.action_cycle_reasoning_effort()
+        assert len(selected) == 1
+        release_selection.set()
+        await first
+
+        assert selected == [("s", "high")]
+        assert editor.text == "draft stays"
+        assert app.focused is editor
+        assert not app._reasoning_effort_in_flight
+
+
+@pytest.mark.asyncio
+async def test_ctrl_t_aborts_when_session_switches_during_current_agent_lookup():
+    from nexus.ui.tui.widgets import ChatEditor
+
+    client = _client(FakeTransport())
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    selected = []
+
+    current_calls = 0
+
+    async def current_agent(session):
+        nonlocal current_calls
+        current_calls += 1
+        if session == "s" and current_calls > 1:
+            entered.set()
+            await release.wait()
+        return SimpleNamespace(
+            name="general", supported_levels=["low", "high"], reasoning_effort="low"
+        )
+
+    async def select_reasoning_effort(session, effort):
+        selected.append((session, effort))
+
+    client.current_agent = current_agent
+    client.select_reasoning_effort = select_reasoning_effort
+    app = NexusTextualApp(client, session="s")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        editor = app.query_one(ChatEditor)
+        editor.text = "keep draft"
+        task = asyncio.create_task(app.action_cycle_reasoning_effort())
+        await entered.wait()
+        await app.controller.switch_session("other")
+        release.set()
+        await task
+
+        assert app.controller.session == "other"
+        assert selected == []
+        assert not str(app.query_one("#connection-status").render()).strip()
+        assert editor.text == "keep draft"
+        assert app.focused is editor
+        assert not app._reasoning_effort_in_flight
+
+
+@pytest.mark.asyncio
+async def test_ctrl_t_error_clears_in_flight_guard_for_retry():
+    from nexus.ui.cli.client import ClientError
+
+    client = _client(FakeTransport())
+    attempts = 0
+    selected = []
+
+    async def current_agent(session):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 2:
+            raise ClientError("temporary lookup failure")
+        return SimpleNamespace(
+            name="general", supported_levels=["low", "high"], reasoning_effort="low"
+        )
+
+    async def select_reasoning_effort(session, effort):
+        selected.append((session, effort))
+
+    client.current_agent = current_agent
+    client.select_reasoning_effort = select_reasoning_effort
+    app = NexusTextualApp(client, session="s")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.action_cycle_reasoning_effort()
+        assert not app._reasoning_effort_in_flight
+        assert "temporary lookup failure" in str(
+            app.query_one("#connection-status").render()
+        )
+
+        await app.action_cycle_reasoning_effort()
+        assert not app._reasoning_effort_in_flight
+        assert attempts == 4  # bootstrap, failed lookup, retry, metadata refresh
+        assert selected == [("s", "high")]
+
+
+def _async_value(value):
+    async def result(*_args, **_kwargs):
+        return value
+
+    return result
+
+
+@pytest.mark.asyncio
+async def test_ctrl_t_is_only_handled_by_main_composer():
+    from nexus.ui.tui.app import KEYBOARD_SHORTCUTS, SHORTCUTS
+    from nexus.ui.tui.widgets import ChatEditor
+
+    client = _client(FakeTransport())
+    selections = []
+
+    async def current_agent(session):
+        return SimpleNamespace(
+            name="general", supported_levels=["low", "high"], reasoning_effort="low"
+        )
+
+    async def select_reasoning_effort(session, effort):
+        selections.append((session, effort))
+
+    client.current_agent = current_agent
+    client.select_reasoning_effort = select_reasoning_effort
+    app = NexusTextualApp(client, session="s")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert not any(binding[0] == "ctrl+t" for binding in app.BINDINGS)
+        assert next(row for row in SHORTCUTS if row[0] == "ctrl+t")[1] is None
+        assert "Ctrl+T" in "\n".join(KEYBOARD_SHORTCUTS)
+
+        picker = AgentPicker([], current="general")
+        app.push_screen(picker)
+        await pilot.pause()
+        from textual.widgets import OptionList
+
+        picker.query_one("#agent-options", OptionList).focus()
+        await pilot.press("ctrl+t")
+        await pilot.pause()
+        assert selections == []
+
+        picker.dismiss(None)
+        await pilot.pause()
+        assert isinstance(app.focused, ChatEditor)
+
+        await pilot.press("ctrl+p")
+        await pilot.pause()
+        palette = app.screen
+        palette_dialog = palette.query_one("#--container")
+        assert palette_dialog.region.width < app.size.width
+        assert palette_dialog.region.height < app.size.height
+        await pilot.press("ctrl+t")
+        await pilot.pause()
+        assert selections == []
+        await pilot.press("escape")
+        await pilot.pause()
+
+        from nexus.view import AgentView
+        app.push_screen(AgentTranscriptScreen(AgentView(id="child")))
+        await pilot.pause()
+        await pilot.press("ctrl+t")
+        await pilot.pause()
+        assert selections == []
+        app.action_back_from_agent()
+        await pilot.pause()
+        assert isinstance(app.focused, ChatEditor)
+
+        await pilot.press("ctrl+t")
+        await pilot.pause()
+        assert selections == []
+        assert app.query_one("#inline-picker").display
+        await pilot.press("down", "enter")
+        await pilot.pause()
+        assert selections == [("s", "high")]
+
+
+async def _feed_terminal(app, sequence: str, parser=None):
+    """Deliver raw terminal bytes the way the driver does after decoding.
+
+    The bytes go through the real ``NexusXTermParser`` and the resulting events
+    are posted to the app, exercising decode + focused-widget routing without a
+    terminal. The PTY test in ``tests/test_tui_keys.py`` covers the OS read.
+    """
+    from nexus.ui.tui.keys import NexusXTermParser
+
+    parser = NexusXTermParser() if parser is None else parser
+    for event in list(parser.feed(sequence)) + list(parser.tick()):
+        event.set_sender(app)
+        app.post_message(event)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "newline_sequence",
+    [
+        "\x1b[13;2u",  # Kitty CSI-u Shift+Enter
+        "\x1b[13;3u",  # Kitty CSI-u Alt+Enter
+        "\x1b[27;2;13~",  # xterm modifyOtherKeys Shift+Enter
+        "\x1b[27;3;13~",  # xterm modifyOtherKeys Alt+Enter
+        "\x1b[27;5;13~",  # xterm modifyOtherKeys Ctrl+Enter
+        "\n",  # legacy Ctrl+J (LF): the fallback when Shift+Enter is bare CR
+    ],
+)
+async def test_raw_terminal_newline_keeps_draft_then_enter_sends(newline_sequence):
+    from nexus.ui.tui.widgets import ChatEditor
+
+    transport = FakeTransport()
+    app = NexusTextualApp(_client(transport), session="s")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        editor = app.query_one(ChatEditor)
+        assert app.focused is editor
+
+        await _feed_terminal(app, "alpha")
+        await pilot.pause()
+        await _feed_terminal(app, newline_sequence)
+        await pilot.pause()
+        assert editor.text == "alpha\n", "modified Enter did not insert a newline"
+        assert transport.last_input is None, "a newline must not submit the draft"
+
+        await _feed_terminal(app, "beta")
+        await pilot.pause()
+        assert editor.text == "alpha\nbeta"
+        assert transport.last_input is None
+
+        await _feed_terminal(app, "\r")  # Enter is always a bare CR
+        await pilot.pause(0.1)
+        assert transport.last_input == "alpha\nbeta"
+        assert editor.text == ""
+        assert app.focused is editor
+
+
+@pytest.mark.asyncio
+async def test_bare_carriage_return_is_indistinguishable_and_submits():
+    # Documents the hard limit: a legacy terminal sends CR for both Enter and
+    # Shift+Enter, so the shell must treat CR as submit; Ctrl+J is the newline.
+    from nexus.ui.tui.widgets import ChatEditor
+
+    transport = FakeTransport()
+    app = NexusTextualApp(_client(transport), session="s")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        editor = app.query_one(ChatEditor)
+        await _feed_terminal(app, "one line")
+        await pilot.pause()
+        await _feed_terminal(app, "\r")
+        await pilot.pause(0.1)
+        assert transport.last_input == "one line"
+        assert editor.text == ""
+
+
+@pytest.mark.asyncio
+async def test_show_keyboard_shortcuts_provider_action_opens_full_reference():
+    from textual.widgets import Static
+
+    from nexus.ui.tui.app import KEYBOARD_SHORTCUTS, ShortcutsScreen
+    from nexus.ui.tui.widgets import ChatInput
+
+    transport = FakeTransport()
+    app = NexusTextualApp(_client(transport), session="s")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # The shortcut hints are not painted anywhere on the normal screen.
+        assert not app.query("#input-help")
+        agent_bar = app.query_one("#root-agent")
+        assert "Ctrl+" not in str(agent_bar.render())
+        # They are reachable through Commands → Show keyboard shortcuts, and the
+        # palette entry actually opens the reference (not just matches a query).
+        provider_class = next(
+            factory() for factory in NexusTextualApp.COMMANDS
+            if factory().__name__ == "ShortcutsCommandProvider"
+        )
+        provider = provider_class(app.screen)
+        hits = [hit async for hit in provider.search("shortcuts")]
+        assert hits and "shortcuts" in str(hits[0].match_display).lower()
+
+        hits[0].command()
+        await pilot.pause()
+        assert isinstance(app.screen, ShortcutsScreen)
+        shown = str(app.screen.query_one("#shortcuts", Static).render())
+        for expected in ("Enter", "Shift+Enter", "Ctrl+P", "Ctrl+N", "Ctrl+O", "Ctrl+F", "Ctrl+G"):
+            assert expected in shown, f"{expected!r} missing from the shortcut reference"
+        assert "Send message" in shown
+        for line in KEYBOARD_SHORTCUTS:
+            assert line in shown
+        app.screen.dismiss(None)
+        await pilot.pause()
+        assert not isinstance(app.screen, ShortcutsScreen)
+        assert app.query_one(ChatInput) is not None
+
+
+def test_keyboard_reference_and_bindings_share_one_source():
+    from nexus.ui.tui.app import KEYBOARD_SHORTCUTS, SHORTCUTS
+
+    # The rendered reference is exactly one line per shortcut, same order, with
+    # the same description; and every actionable entry is a live binding.
+    assert KEYBOARD_SHORTCUTS[0] == "Keyboard shortcuts"
+    rendered = KEYBOARD_SHORTCUTS[1:]
+    assert len(rendered) == len(SHORTCUTS)
+    for line, (key, action, description) in zip(rendered, SHORTCUTS):
+        assert line.strip().startswith(key.title())
+        assert line.split(maxsplit=1)[1] == description
+    assert list(NexusTextualApp.BINDINGS) == [
+        (key, action, description)
+        for key, action, description in SHORTCUTS
+        if action is not None
+    ]
+    # The keys the prior reference omitted are present.
+    reference = "\n".join(KEYBOARD_SHORTCUTS)
+    for key in ("Ctrl+N", "Ctrl+O", "Ctrl+F", "Ctrl+G"):
+        assert key in reference
+
+
+def test_visual_demo_functional_state_drives_real_read_edit_turn():
+    import runpy
+
+    demo = runpy.run_path(Path(__file__).with_name("visual_tui_demo.py"))
+    _functional_turn = demo["_functional_turn"]
+    from nexus.view import apply, initial_state
+
+    view = initial_state("visual")
+    for event in _functional_turn("read and edit a file"):
+        view = apply(view, event)
+    # The prompt and the assistant/tool output share one turn, in order.
+    assert [turn.id for turn in view.turns] == ["turn-live"]
+    assert [message.role for message in view.messages] == ["user", "assistant"]
+    assert view.messages[0].text == "read and edit a file"
+    tools = view.tools
+    assert [tool.name for tool in tools] == ["Read", "Edit"]
+    assert tools[0].display == "3 lines"
+    assert tools[1].diff and tools[1].diff["hunk"]
+
+
+@pytest.mark.asyncio
+async def test_real_backend_read_edit_enqueue_renders_user_and_tool_cards(tmp_path):
+    """The real host+runtime read/edit path drives the TUI render projection.
+
+    The browser fixtures replay a scripted transport; this test instead runs the
+    real builtin Read/Edit tools against a real file through the host facade's
+    queued-input path and folds the resulting protocol events through the same
+    ``nexus.view`` reducer the Textual shell renders. It pins that the prompt,
+    the real tool display text, and the durable Edit diff all reach the view.
+    """
+    from nexus.config import Config
+    from nexus.config.schema import (
+        AgentSection,
+        ConfigV2,
+        ModelSection,
+        PermissionsSection,
+        ToolsSection,
+    )
+    from nexus.host import HostFacade
+    from nexus.model.providers.scripted import (
+        ScriptedProvider,
+        text_response,
+        tool_response,
+    )
+    from nexus.runtime import Runtime
+    from nexus.view import fold
+
+    target = tmp_path / "note.md"
+    target.write_text("hello\nworld\n", encoding="utf-8")
+    provider = ScriptedProvider(
+        tool_response(("read-1", "Read", {"path": "note.md"})),
+        tool_response(
+            ("edit-1", "Edit", {"path": "note.md", "old_string": "world", "new_string": "nexus"})
+        ),
+        text_response("done"),
+    )
+    config = Config(
+        model="scripted/m",
+        version=2,
+        v2=ConfigV2(
+            model=ModelSection(default="scripted/m"),
+            agent=AgentSection(profile="coding"),
+            permissions=PermissionsSection(mode="allow", on_unattended="allow"),
+            tools=ToolsSection(),
+        ),
+    )
+    runtime = Runtime(tmp_path, config=config, providers={"scripted": provider})
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+    try:
+        await facade.enqueue("s", "read then edit note.md")
+        await facade.wait_idle(timeout=10.0)
+        events = [event async for event in facade.subscribe("s", 0, follow=False)]
+    finally:
+        await runtime.aclose()
+
+    # A real file was read and edited, not a replayed fixture.
+    assert target.read_text(encoding="utf-8") == "hello\nnexus\n"
+    view = fold(events)
+    assert len(view.turns) == 1 and view.input_queue == []
+    assert view.messages[0].role == "user"
+    assert view.messages[0].text == "read then edit note.md"
+    assert {message.role for message in view.messages[1:]} == {"assistant"}
+    assert view.messages[-1].text == "done"
+    tools = {tool.call_id: tool for tool in view.tools}
+    assert tools["read-1"].name == "read" and tools["read-1"].status == "completed"
+    assert tools["read-1"].display == "Read note.md: 2 of 2 lines"
+    edit = tools["edit-1"]
+    assert edit.name == "edit" and edit.status == "completed"
+    assert edit.display == "Edit note.md: 1 replacement(s)"
+    assert edit.diff and edit.diff["hunk"].endswith("-world\n+nexus")
+
+
+@pytest.mark.asyncio
+async def test_worktrees_review_and_mutation_confirmation_modal_are_host_backed():
+    from nexus.ui.tui.widgets import WorktreeConfirmScreen, WorktreesScreen
+
+    client = _client(FakeTransport())
+    commands = []
+    record = {
+        "child_id": "child-1",
+        "lifecycle": "finalized",
+        "dirty": True,
+        "review_id": "a" * 32,
+        "digest": "b" * 64,
+        "acknowledged": False,
+    }
+    ack_state = {"acknowledged": False}
+
+    async def list_worktrees():
+        commands.append("list")
+        return SimpleNamespace(worktrees=[record], has_more=False)
+
+    async def inspect_worktree(child_id):
+        commands.append(("inspect", child_id))
+        inspected_record = dict(record)
+        inspected_record["acknowledged"] = ack_state["acknowledged"]
+        return SimpleNamespace(child_id=child_id, status="finalized", record=inspected_record)
+
+    async def review_worktree(child_id, *, review_id=None, cursor=0, limit=1):
+        commands.append(("review", child_id, review_id, cursor, limit))
+        return SimpleNamespace(
+            child_id=child_id,
+            status="finalized",
+            review_id="a" * 32,
+            digest="b" * 64,
+            entries=[{"path": "src/safe.py", "change": "modified"}, {"path": "notes\x1b[2J.txt", "change": "added"}],
+            diff=[{
+                "path": "src/safe.py" if cursor == 0 else "notes\x1b[2J.txt",
+                "patch": "@@ -1 +1 @@\n-old\n+new" if cursor == 0 else "@@ -0,0 +1 @@\n+note",
+                "binary": False,
+            }],
+            cursor=cursor,
+            has_more=cursor == 0,
+        )
+
+    async def integrate_worktree(child_id, review_id, digest, *, confirmation_token=""):
+        commands.append(("integrate", child_id, review_id, digest, confirmation_token))
+        return SimpleNamespace(
+            child_id=child_id,
+            status="requires_confirmation" if not confirmation_token else "recovery_required",
+            operation="integrate",
+            review_id=review_id,
+            digest=digest,
+            confirmation_token="host-preview-token",
+            impact={"parent_clean": True, "child_dirty": True, "summary": "host preview"},
+            transaction_id="txn-1",
+            changed_paths=["src/safe.py"],
+            error="manual recovery required" if confirmation_token else None,
+        )
+
+    async def acknowledge_worktree(child_id, review_id, digest):
+        commands.append(("acknowledge", child_id, review_id, digest))
+        ack_state["acknowledged"] = True
+        return SimpleNamespace(child_id=child_id, status="acknowledged", review_id=review_id, digest=digest)
+
+    async def discard_worktree(child_id, *, force=False, review_id=None, confirmation_token=""):
+        commands.append(("discard", child_id, force, review_id, confirmation_token))
+        return SimpleNamespace(
+            child_id=child_id,
+            status="requires_confirmation" if not confirmation_token else "cleanup_pending",
+            operation="discard",
+            review_id=review_id,
+            digest=None,
+            confirmation_token="discard-preview-token",
+            impact={"child_dirty": True, "summary": "host discard preview"},
+            transaction_id="txn-discard",
+            changed_paths=[],
+            error=None,
+        )
+
+    client.list_worktrees = list_worktrees
+    client.inspect_worktree = inspect_worktree
+    client.review_worktree = review_worktree
+    client.acknowledge_worktree = acknowledge_worktree
+    client.integrate_worktree = integrate_worktree
+    client.discard_worktree = discard_worktree
+    app = NexusTextualApp(client, session="s")
+    async with app.run_test(size=(120, 36)) as pilot:
+        await pilot.pause()
+        await app._dispatch_chat_command("/worktrees")
+        await pilot.pause(0.1)
+        screen = app.screen
+        assert isinstance(screen, WorktreesScreen)
+        assert screen.selected_id is None
+        await pilot.click("#worktree-row-0")
+        await pilot.pause(0.1)
+        detail = app.screen.query_one("#worktrees-detail").render().plain
+        assert "lifecycle: finalized" in detail
+        assert "Digest: " + "b" * 64 in detail
+        assert "src/safe.py" in detail
+        assert "notes\\x1b[2J.txt" in detail
+        assert "@@ -1 +1 @@" in detail and "+new" in detail
+        assert screen.query_one("#worktrees-next").disabled is False
+        await pilot.click("#worktrees-next")
+        await pilot.pause(0.1)
+        detail = app.screen.query_one("#worktrees-detail").render().plain
+        assert "Review cursor: 1" in detail
+        assert "@@ -0,0 +1 @@" in detail and "+note" in detail
+        assert ("review", "child-1", "a" * 32, 1, 8) in commands
+        assert screen.query_one("#worktrees-ack").disabled is False
+        # Acknowledgement has not occurred just by opening or reading a review.
+        assert not any(isinstance(call, tuple) and call[0] == "acknowledge" for call in commands)
+        await pilot.click("#worktrees-ack")
+        await pilot.pause(0.1)
+        assert ("acknowledge", "child-1", "a" * 32, "b" * 64) in commands
+        assert screen.query_one("#worktrees-integrate").disabled is False
+        await pilot.click("#worktrees-integrate")
+        await pilot.pause(0.1)
+        assert isinstance(app.screen, WorktreeConfirmScreen)
+        modal_text = app.screen.query_one("#worktree-confirm-description").render().plain
+        assert "Operation: integrate" in modal_text
+        assert "parent_clean: True" in modal_text
+        assert "src/safe.py" in modal_text
+        assert "Confirm" in app.screen.query_one("#worktree-confirm-accept").label.plain
+        assert commands[-1] == ("integrate", "child-1", "a" * 32, "b" * 64, "")
+
+        await pilot.click("#worktree-confirm-accept")
+        await pilot.pause(0.2)
+        assert ("integrate", "child-1", "a" * 32, "b" * 64, "host-preview-token") in commands
+        assert "recovery_required" in app.screen.query_one("#worktrees-detail").render().plain
+        assert "manual recovery required" in app.screen.query_one("#worktrees-detail").render().plain
+        assert "host may have completed" not in app.screen.query_one("#worktrees-status").render().plain
+
+        await pilot.click("#worktree-row-0")
+        await pilot.pause(0.1)
+        await pilot.click("#worktrees-force-discard")
+        await pilot.pause(0.1)
+        assert isinstance(app.screen, WorktreeConfirmScreen)
+        discard_modal = app.screen.query_one("#worktree-confirm-description").render().plain
+        assert "WARNING: force discard removes the child worktree, including dirty files." in discard_modal
+        assert "child_dirty: True" in discard_modal
+        await pilot.click("#worktree-confirm-cancel")
+        await pilot.pause()
+        assert not any(
+            isinstance(call, tuple) and call[0] == "discard" and call[-1] == "discard-preview-token"
+            for call in commands
+        )
+
+
+def _logs_result(daemon=(), session=(), *, daemon_truncated=False, session_truncated=False, daemon_more=False, session_more=False, daemon_cursor=None, session_cursor=0):
+    if daemon_cursor is None:
+        daemon_cursor = f"{'a' * 32}:0"
+    return p.LogsReadResult(
+        daemon=p.DaemonLogPage(
+            entries=list(daemon), next_cursor=daemon_cursor,
+            truncated=daemon_truncated, has_more=daemon_more,
+        ),
+        session=p.SessionLogPage(
+            entries=list(session), next_cursor=session_cursor,
+            truncated=session_truncated, has_more=session_more,
+        ),
+    )
+
+
+def _log_entry(source, seq, *, level="info", kind="daemon.started", summary="safe summary"):
+    return p.LogEntry(source=source, seq=seq, ts=1_700_000_000.0 + seq, level=level, kind=kind, summary=summary)
+
+
+@pytest.mark.asyncio
+async def test_ctrl_e_opens_closes_right_logs_drawer_and_preserves_composer_state():
+    from nexus.ui.tui.widgets import ChatEditor, LogsDrawer
+
+    app = NexusTextualApp(_client(FakeTransport()), session="s")
+    calls = []
+
+    async def read_logs(**kwargs):
+        calls.append(kwargs)
+        return _logs_result()
+
+    app.controller.client.read_logs = read_logs
+    async with app.run_test(size=(100, 28)) as pilot:
+        await pilot.pause()
+        editor = app.query_one(ChatEditor)
+        timeline = app.query_one(ConversationTimeline)
+        timeline.scroll_to(y=3, animate=False)
+        await pilot.pause()
+        saved_scroll = timeline.scroll_offset.y
+        editor.text = "draft remains"
+        editor.move_cursor((0, 5))
+        await pilot.press("ctrl+e")
+        await pilot.pause(0.05)
+        drawer = app.query_one(LogsDrawer)
+        assert drawer.display
+        assert drawer.region.x >= 60
+        assert drawer.region.right == app.size.width
+        assert app.focused is editor
+        assert editor.text == "draft remains"
+        assert timeline.scroll_offset.y == saved_scroll
+        assert len(calls) == 1 and calls[0]["session"] == "s"
+
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        assert not drawer.display
+        assert app.focused is editor
+        assert timeline.scroll_offset.y == saved_scroll
+        await pilot.pause(1.1)
+        assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_ctrl_e_narrow_drawer_keeps_conversation_and_draft_bounded_visible():
+    from nexus.ui.tui.widgets import ChatEditor, LogsDrawer
+
+    app = NexusTextualApp(_client(FakeTransport(_baseline_events())), session="s")
+    async with app.run_test(size=(48, 24)) as pilot:
+        await pilot.pause()
+        editor = app.query_one(ChatEditor)
+        editor.text = "draft survives narrow drawer"
+        editor.move_cursor((0, 6))
+        await pilot.press("ctrl+e")
+        await pilot.pause(0.05)
+
+        drawer = app.query_one(LogsDrawer)
+        main = app.query_one("#main-column")
+        timeline = app.query_one("#conversation", ConversationTimeline)
+        assert drawer.region.x >= 24
+        assert drawer.region.right == app.size.width
+        assert main.region.x == 0 and main.region.right <= drawer.region.x
+        assert timeline.region.width >= 20
+        assert timeline.region.right <= drawer.region.x
+        assert editor.region.width >= 20
+        assert editor.region.right <= drawer.region.x
+        assert app.focused is editor
+        assert editor.text == "draft survives narrow drawer"
+        assert any(
+            getattr(item, "_rendered", "") == "prior answer"
+            for item in timeline._turns["turn-1"]._items.values()
+        )
+
+
+@pytest.mark.asyncio
+async def test_ctrl_e_works_from_non_editor_focus_but_not_modal_or_child_transcript():
+    from nexus.ui.tui.widgets import RootAgentBar
+    from nexus.view import AgentView
+
+    app = NexusTextualApp(_client(FakeTransport()))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.query_one(RootAgentBar).focus()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        assert app.query_one("#logs-drawer").display
+
+        app.action_close_logs()
+        app.push_screen(AgentPicker([], current="general"))
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        assert not app.query_one("#logs-drawer").display
+        app.screen.dismiss(None)
+        await pilot.pause()
+
+        app.push_screen(AgentTranscriptScreen(AgentView(id="child")))
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        assert not app.query_one("#logs-drawer").display
+        assert isinstance(app.screen, AgentTranscriptScreen)
+
+
+@pytest.mark.asyncio
+async def test_logs_pages_render_separately_and_bound_rows_and_statuses():
+    from nexus.ui.tui.widgets import LogsDrawer
+
+    app = NexusTextualApp(_client(FakeTransport()), session="s")
+    async with app.run_test(size=(48, 24)) as pilot:
+        await pilot.pause()
+        drawer = app.query_one(LogsDrawer)
+        drawer.display = True
+        app._sync_logs_layout()
+        await pilot.pause()
+        drawer.set_session("s")
+        drawer.add_page(_logs_result(
+            daemon=[_log_entry("daemon", 1, level="warning", summary="daemon note")],
+            session=[_log_entry("session", 2, level="error", kind="turn.failed", summary="session note")],
+            daemon_truncated=True,
+            session_more=True,
+        ))
+        rendered = app.query_one("#logs-content").render().plain
+        assert "DAEMON" in rendered and "SESSION · s" in rendered
+        assert "WARNING" in rendered and "ERROR" in rendered
+        assert "daemon note" in rendered and "session note" in rendered
+        assert "Earlier entries unavailable" in rendered
+        assert "More entries available" in rendered
+        assert drawer.size.width <= 32
+        assert drawer.region.right == app.size.width
+
+        drawer.add_page(_logs_result(daemon=[_log_entry("daemon", seq) for seq in range(2, 90)]))
+        assert len(drawer.daemon_entries) == LogsDrawer.ROW_LIMIT
+        drawer.set_session("other")
+        assert len(drawer.daemon_entries) == LogsDrawer.ROW_LIMIT
+        assert drawer.session_entries == []
+        rendered = app.query_one("#logs-content").render().plain
+        assert "No log entries" in rendered
+
+        drawer.set_error("temporarily unavailable")
+        rendered = app.query_one("#logs-content").render().plain
+        assert "Read error" in rendered
+        assert "2023-11-15" in rendered
+
+
+@pytest.mark.asyncio
+async def test_truncated_daemon_page_replaces_old_generation_only():
+    from nexus.ui.tui.widgets import LogsDrawer
+
+    app = NexusTextualApp(_client(FakeTransport()), session="s")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        drawer = app.query_one(LogsDrawer)
+        drawer.set_session("s")
+        drawer.add_page(_logs_result(
+            daemon=[_log_entry("daemon", 9, summary="old generation")],
+            session=[_log_entry("session", 1, summary="keep session")],
+        ))
+        drawer.add_page(_logs_result(
+            daemon=[_log_entry("daemon", 1, summary="new generation")],
+            daemon_truncated=True,
+        ))
+
+        rendered = app.query_one("#logs-content").render().plain
+        assert [row.summary for row in drawer.daemon_entries] == ["new generation"]
+        assert [row.summary for row in drawer.session_entries] == ["keep session"]
+        assert "old generation" not in rendered and "new generation" in rendered
+        assert "keep session" in rendered and "Earlier entries unavailable" in rendered
+
+
+@pytest.mark.asyncio
+async def test_transient_logs_poll_error_keeps_rows_and_clears_after_recovery():
+    from nexus.ui.tui.widgets import LogsDrawer
+
+    app = NexusTextualApp(_client(FakeTransport()), session="s")
+    app.LOGS_POLL_INTERVAL = 0.01
+    attempts = 0
+    failed = asyncio.Event()
+    recovered = asyncio.Event()
+
+    async def read_logs(**kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("temporary poll failure")
+        recovered.set()
+        return _logs_result(daemon=[_log_entry("daemon", 1, summary="retained daemon row")])
+
+    app.controller.client.read_logs = read_logs
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        drawer = app.query_one(LogsDrawer)
+        drawer.set_session("s")
+        drawer.add_page(_logs_result(
+            daemon=[_log_entry("daemon", 1, summary="retained daemon row")],
+            session=[_log_entry("session", 1, summary="retained session row")],
+        ))
+        # Let the first read fail, and observe its banner before the recovery poll.
+        async def wait_failure():
+            while not drawer.poll_error:
+                await asyncio.sleep(0)
+            failed.set()
+
+        watcher = asyncio.create_task(wait_failure())
+        app.action_toggle_logs()
+        await failed.wait()
+        rendered = app.query_one("#logs-content").render().plain
+        assert "Read error · temporary poll failure" in rendered
+        assert "retained daemon row" in rendered and "retained session row" in rendered
+        await recovered.wait()
+        await pilot.pause()
+        rendered = app.query_one("#logs-content").render().plain
+        assert "Read error" not in rendered
+        assert "retained daemon row" in rendered and "retained session row" in rendered
+        watcher.cancel()
+
+
+@pytest.mark.asyncio
+async def test_logs_poll_discards_late_old_session_page_and_keeps_daemon_history():
+    from nexus.ui.tui.widgets import LogsDrawer
+
+    app = NexusTextualApp(_client(FakeTransport()), session="s")
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = []
+
+    async def read_logs(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            entered.set()
+            await release.wait()
+            return _logs_result(
+                daemon=[_log_entry("daemon", 1)],
+                session=[_log_entry("session", 1, kind="old.session")],
+            )
+        return _logs_result()
+
+    app.controller.client.read_logs = read_logs
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await entered.wait()
+        drawer = app.query_one(LogsDrawer)
+        drawer.add_page(_logs_result(
+            daemon=[_log_entry("daemon", 1)],
+            session=[_log_entry("session", 1)],
+            daemon_truncated=True,
+        ))
+        await app._switch_session("other")
+        release.set()
+        await pilot.pause(0.05)
+        assert not any(getattr(row, "kind", "") == "old.session" for row in drawer.session_entries)
+        assert len(drawer.daemon_entries) == 1
+        assert drawer.session_entries == []
+        assert calls[-1]["session"] == "other"
+        assert calls[-1]["session_cursor"] is None
+        assert drawer.daemon_truncated
+        assert not drawer.session_truncated
+
+
+@pytest.mark.asyncio
+async def test_logs_poll_ignores_response_after_drawer_closes():
+    from nexus.ui.tui.widgets import LogsDrawer
+
+    app = NexusTextualApp(_client(FakeTransport()), session="s")
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def read_logs(**kwargs):
+        entered.set()
+        await release.wait()
+        return _logs_result(daemon=[_log_entry("daemon", 1)])
+
+    app.controller.client.read_logs = read_logs
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+e")
+        await entered.wait()
+        app.action_close_logs()
+        release.set()
+        await pilot.pause(0.05)
+        drawer = app.query_one(LogsDrawer)
+        assert not drawer.display
+        assert drawer.daemon_entries == []
+
+
+@pytest.mark.asyncio
+async def test_cancelled_late_logs_read_cannot_block_or_overwrite_reopened_drawer():
+    from nexus.ui.tui.widgets import LogsDrawer
+
+    app = NexusTextualApp(_client(FakeTransport()), session="s")
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = 0
+
+    async def read_logs(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            entered.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                # Model an uninterruptible transport that completes after drawer close.
+                await release.wait()
+            return _logs_result(daemon=[_log_entry("daemon", 1, summary="stale result")])
+        return _logs_result(daemon=[_log_entry("daemon", 2, summary="fresh result")])
+
+    app.controller.client.read_logs = read_logs
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.action_toggle_logs()
+        await entered.wait()
+        app.action_close_logs()
+        app.action_toggle_logs()
+        await pilot.pause(0.05)
+
+        drawer = app.query_one(LogsDrawer)
+        rendered = app.query_one("#logs-content").render().plain
+        assert calls >= 2
+        assert "fresh result" in rendered
+        assert "stale result" not in rendered
+        release.set()
+        await pilot.pause(0.05)
+        rendered = app.query_one("#logs-content").render().plain
+        assert "fresh result" in rendered
+        assert "stale result" not in rendered
+        assert drawer.display
+
+
+@pytest.mark.asyncio
+async def test_reopen_resets_stale_poll_status_and_cursors_but_retains_session_history():
+    from nexus.ui.tui.widgets import LogsDrawer
+
+    app = NexusTextualApp(_client(FakeTransport()), session="s")
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def read_logs(**kwargs):
+        if kwargs["daemon_cursor"] is None:
+            entered.set()
+            await release.wait()
+            return _logs_result(daemon_truncated=True, session_truncated=True)
+        return _logs_result()
+
+    app.controller.client.read_logs = read_logs
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        drawer = app.query_one(LogsDrawer)
+        drawer.set_session("s")
+        drawer.add_page(_logs_result(
+            daemon=[_log_entry("daemon", 1)],
+            session=[_log_entry("session", 1)],
+            daemon_truncated=True,
+            session_truncated=True,
+        ))
+        drawer.set_error("old transient failure")
+        app._logs_daemon_cursor = f"{'b' * 32}:4"
+        app._logs_session_cursor = 7
+        app.action_toggle_logs()
+        await entered.wait()
+        app.action_close_logs()
+        app.action_toggle_logs()
+        await pilot.pause()
+
+        assert app._logs_daemon_cursor is None
+        assert app._logs_session_cursor is None
+        assert drawer.daemon_entries and drawer.session_entries
+        assert not drawer.daemon_truncated and not drawer.session_truncated
+        rendered = app.query_one("#logs-content").render().plain
+        assert "old transient failure" not in rendered
+        assert "Earlier entries unavailable" not in rendered
+        release.set()

@@ -153,7 +153,7 @@ def make_extension_manager(workspace: Path, tool_names: list[str]) -> ExtensionM
 
 
 def test_skill_spec_shape():
-    assert SKILL_SPEC.name == "Skill"
+    assert SKILL_SPEC.name == "skill"
     assert SKILL_SPEC.bundle == "ext"
     assert SKILL_SPEC.mutates is False
     assert SKILL_SPEC.concurrency == "parallel"
@@ -270,29 +270,29 @@ async def test_body_is_bounded_by_config_budget(workspace: Path):
 
 async def test_activation_narrows_to_declared_tools(workspace: Path):
     write_skill(
-        workspace, "demo", frontmatter="allowed-tools: [Read]\n"
+        workspace, "demo", frontmatter="allowed-tools: [read]\n"
     )
     skills = SkillManager.for_workspace(workspace, home=workspace / "home")
-    extensions = make_extension_manager(workspace, ["Read", "Write"])
+    extensions = make_extension_manager(workspace, ["read", "write"])
     ctx = make_ctx(workspace, skills=skills, extensions=extensions)
     result = await skillmod.run({"name": "demo"}, ctx)
     assert result.is_error is False
     activation = result.metrics["activation"]
-    assert activation["active"] == ["Read"]
-    assert activation["authority"] == ["Read", "Write"]
+    assert activation["active"] == ["read"]
+    assert activation["authority"] == ["read", "write"]
     assert activation["narrowed"] is True
 
 
 async def test_activation_never_expands_authority(workspace: Path):
     write_skill(
-        workspace, "demo", frontmatter="allowed-tools: [Read, Ghost]\n"
+        workspace, "demo", frontmatter="allowed-tools: [read, Ghost]\n"
     )
     skills = SkillManager.for_workspace(workspace, home=workspace / "home")
-    extensions = make_extension_manager(workspace, ["Read"])
+    extensions = make_extension_manager(workspace, ["read"])
     ctx = make_ctx(workspace, skills=skills, extensions=extensions)
     result = await skillmod.run({"name": "demo"}, ctx)
     activation = result.metrics["activation"]
-    assert activation["active"] == ["Read"]
+    assert activation["active"] == ["read"]
     assert "Ghost" in activation["unavailable"]
     assert set(activation["active"]) <= set(activation["authority"])
 
@@ -300,7 +300,7 @@ async def test_activation_never_expands_authority(workspace: Path):
 async def test_unknown_bundle_fails_closed_to_empty(workspace: Path):
     write_skill(workspace, "demo", frontmatter="bundles: [nope]\n")
     skills = SkillManager.for_workspace(workspace, home=workspace / "home")
-    extensions = make_extension_manager(workspace, ["Read", "Write"])
+    extensions = make_extension_manager(workspace, ["read", "write"])
     ctx = make_ctx(workspace, skills=skills, extensions=extensions)
     result = await skillmod.run({"name": "demo"}, ctx)
     activation = result.metrics["activation"]
@@ -311,7 +311,7 @@ async def test_unknown_bundle_fails_closed_to_empty(workspace: Path):
 async def test_no_declaration_does_not_narrow(workspace: Path):
     write_skill(workspace, "demo")
     skills = SkillManager.for_workspace(workspace, home=workspace / "home")
-    extensions = make_extension_manager(workspace, ["Read", "Write"])
+    extensions = make_extension_manager(workspace, ["read", "write"])
     ctx = make_ctx(workspace, skills=skills, extensions=extensions)
     result = await skillmod.run({"name": "demo"}, ctx)
     activation = result.metrics["activation"]
@@ -320,7 +320,7 @@ async def test_no_declaration_does_not_narrow(workspace: Path):
 
 
 async def test_absent_extension_service_keeps_authority_empty(workspace: Path):
-    write_skill(workspace, "demo", frontmatter="allowed-tools: [Read]\n")
+    write_skill(workspace, "demo", frontmatter="allowed-tools: [read]\n")
     skills = SkillManager.for_workspace(workspace, home=workspace / "home")
     ctx = make_ctx(workspace, skills=skills, extensions=None)
     result = await skillmod.run({"name": "demo"}, ctx)
@@ -331,9 +331,9 @@ async def test_absent_extension_service_keeps_authority_empty(workspace: Path):
 
 
 async def test_activation_object_is_an_immutable_subset(workspace: Path):
-    write_skill(workspace, "demo", frontmatter="allowed-tools: [Read]\n")
+    write_skill(workspace, "demo", frontmatter="allowed-tools: [read]\n")
     skills = SkillManager.for_workspace(workspace, home=workspace / "home")
-    extensions = make_extension_manager(workspace, ["Read", "Write"])
+    extensions = make_extension_manager(workspace, ["read", "write"])
     ctx = make_ctx(workspace, skills=skills, extensions=extensions)
     await skillmod.run({"name": "demo"}, ctx)
     # A hand-built activation outside the authority is refused by the contract.
@@ -341,8 +341,8 @@ async def test_activation_object_is_an_immutable_subset(workspace: Path):
         SkillActivation(
             skill="x",
             active=frozenset({"Ghost"}),
-            available=frozenset({"Read"}),
-            profile=frozenset({"Read"}),
+            available=frozenset({"read"}),
+            profile=frozenset({"read"}),
         )
 
 
@@ -364,9 +364,9 @@ async def test_emits_invoked_and_completed(workspace: Path):
 
 
 async def test_records_activation_into_sink(workspace: Path):
-    write_skill(workspace, "demo", frontmatter="allowed-tools: [Read]\n")
+    write_skill(workspace, "demo", frontmatter="allowed-tools: [read]\n")
     skills = SkillManager.for_workspace(workspace, home=workspace / "home")
-    extensions = make_extension_manager(workspace, ["Read", "Write"])
+    extensions = make_extension_manager(workspace, ["read", "write"])
     recorder = Recorder()
     ctx = make_ctx(
         workspace, skills=skills, extensions=extensions, recorder=recorder
@@ -375,15 +375,15 @@ async def test_records_activation_into_sink(workspace: Path):
     assert len(recorder.activations) == 1
     activation = recorder.activations[0]
     assert isinstance(activation, SkillActivation)
-    assert activation.active == frozenset({"Read"})
+    assert activation.active == frozenset({"read"})
     assert activation.session == "s1"
     assert activation.turn == 1
 
 
 async def test_activation_log_is_session_and_turn_scoped(workspace: Path):
-    write_skill(workspace, "demo", frontmatter="allowed-tools: [Read]\n")
+    write_skill(workspace, "demo", frontmatter="allowed-tools: [read]\n")
     skills = SkillManager.for_workspace(workspace, home=workspace / "home")
-    extensions = make_extension_manager(workspace, ["Read", "Write"])
+    extensions = make_extension_manager(workspace, ["read", "write"])
     log = SkillActivationLog()
     await skillmod.run(
         {"name": "demo"},
@@ -402,17 +402,17 @@ async def test_activation_log_is_session_and_turn_scoped(workspace: Path):
     assert set(log.to_dict()) == {"s1:1", "s2:9"}
     assert len(log.active("s1")) == 1
     assert len(log.active("s2")) == 1
-    assert log.get("s1", 1).active == frozenset({"Read"})
+    assert log.get("s1", 1).active == frozenset({"read"})
 
 
 async def test_invoking_a_skill_never_mutates_the_manifest(workspace: Path):
-    write_skill(workspace, "demo", frontmatter="allowed-tools: [Read]\n")
+    write_skill(workspace, "demo", frontmatter="allowed-tools: [read]\n")
     skills = SkillManager.for_workspace(workspace, home=workspace / "home")
-    extensions = make_extension_manager(workspace, ["Read", "Write"])
+    extensions = make_extension_manager(workspace, ["read", "write"])
     before = extensions.manifest
     generation = extensions.generation
     ctx = make_ctx(workspace, skills=skills, extensions=extensions)
     await skillmod.run({"name": "demo"}, ctx)
     assert extensions.manifest is before
     assert extensions.generation == generation
-    assert set(extensions.manifest.tools) == {"Read", "Write"}
+    assert set(extensions.manifest.tools) == {"read", "write"}

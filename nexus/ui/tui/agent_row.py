@@ -8,20 +8,21 @@ from textual.widgets import Button
 from ...view import AgentView
 from ..cli.render import sanitize
 from .messages import AgentOpenRequested
+from .timeline import format_arguments, tool_status, tool_summary
 
 
 def latest_activity(agent: AgentView) -> str:
     """Compact latest reducer-visible activity; never stores a parallel log."""
     for turn in reversed(agent.body.turns):
         if turn.tools:
-            tool = turn.tools[-1]
-            result_summary = ""
-            if tool.result and isinstance(tool.result[0], dict):
-                result_summary = str(tool.result[0].get("text") or tool.result[0].get("content") or "")
-            detail = tool.progress[-1] if tool.progress else (
-                tool.display or tool.error or result_summary or tool.status
+            tool = max(turn.tools, key=lambda item: item.event_seq)
+            args = format_arguments(tool)
+            detail = tool_summary(tool)
+            state = tool_status(tool)
+            activity = (
+                f"{tool.name or 'tool'}" + (f" {args}" if args else "") + f" · {state}"
             )
-            return f"{tool.name or 'tool'}: {detail}"
+            return activity + (f": {detail}" if detail else "")
         for message in reversed(turn.messages):
             if message.role == "assistant" and (message.model or message.provider):
                 return f"model: {message.provider or '?'} / {message.model or '?'}"

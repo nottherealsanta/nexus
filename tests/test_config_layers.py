@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from nexus.config import Config
 from nexus.config.layers import (
     build_v2,
@@ -123,7 +125,7 @@ def test_checked_in_workspace_config_uses_codex_responses_api(tmp_path):
 
     assert config.version == 2
     assert config.v2 is not None
-    assert config.v2.models.default == "codex/gpt-5.6-luna"
+    assert config.v2.models.default == "codex/gpt-6-luna"
     assert config.v2.agent.sandbox == "workspace-write"
     assert config.v2.agent.instructions_file == "SOUL.md"
     assert config.v2.agent.memory_file == "MEMORY.md"
@@ -144,6 +146,44 @@ def test_v2_unknown_key_rejected(tmp_path):
         assert False
     except ConfigError as exc:
         assert "Invalid v2" in str(exc)
+
+
+def test_models_reasoning_effort_overrides_are_optional_and_validated(tmp_path):
+    home = _home(tmp_path)
+    (tmp_path / "nexus.toml").write_text("config_version = 2\n")
+    config = Config.load(tmp_path, home=home, environ={})
+    assert config.v2.models.reasoning_efforts == {}
+
+    (tmp_path / "nexus.toml").write_text(
+        '''config_version = 2
+[models.reasoning_efforts]
+"openai/o3" = ["max", "xhigh", "low"]
+'''
+    )
+    config = Config.load(tmp_path, home=home, environ={})
+    assert config.v2.models.reasoning_efforts == {
+        "openai/o3": ["max", "xhigh", "low"]
+    }
+
+
+@pytest.mark.parametrize(
+    "mapping",
+    [
+        {"o3": ["low"]},
+        {"/o3": ["low"]},
+        {"openai/": ["low"]},
+        {"openai/o3": "low"},
+        {"openai/o3": ["ultra"]},
+        {"openai/o3": ["MAX"]},
+        {"openai/o3": ["none", "minimal", "low", "medium", "high", "xhigh", "low"]},
+        {"openai/o3": ["low", "low"]},
+    ],
+)
+def test_models_reasoning_effort_overrides_reject_invalid_entries(tmp_path, mapping):
+    from nexus.config.layers import build_v2
+
+    with pytest.raises(ConfigError, match="reasoning_efforts"):
+        build_v2({"config_version": 2, "models": {"reasoning_efforts": mapping}})
 
 
 def test_mixed_v1_v2_in_one_document_rejected(tmp_path):
@@ -476,3 +516,94 @@ def test_tool_section_defaults_unchanged_for_legacy(tmp_path):
     assert config.v2.tools.bash_timeout_s == 120
     assert config.v2.tools.max_result_tokens == 25000
     assert config.v2.tools.max_parallel == 8
+
+
+def test_web_tool_config_defaults_and_availability_reason():
+    web = build_v2({"config_version": 2}).tools.web
+    assert web.searxng_instances == []
+    assert web.allowed_origins == []
+    assert web.fetch_enabled is True
+    assert web.search_timeout_s == 10.0
+    assert web.fetch_timeout_s == 15.0
+    assert web.max_results == 5
+    assert web.max_query_length == 512
+    assert web.max_output_bytes == 512_000
+    assert web.search_available is False
+    assert "No HTTPS SearXNG instance" in web.search_unavailable_reason
+
+
+def test_web_tool_config_toml_and_env_overrides(tmp_path):
+    home = _home(tmp_path)
+    (tmp_path / "nexus.toml").write_text(
+        '''config_version = 2
+[tools.web]
+searxng_instances = ["https://search.example/search"]
+allowed_origins = ["https://docs.example", "https://docs.example:8443"]
+search_timeout_s = 8.5
+fetch_timeout_s = 12
+max_results = 8
+max_query_length = 700
+max_output_bytes = 64000
+'''
+    )
+    config = Config.load(
+        tmp_path,
+        home=home,
+        environ={
+            "NEXUS_TOOLS__WEB__FETCH_ENABLED": "false",
+            "NEXUS_TOOLS__WEB__SEARCH_TIMEOUT_S": "6.5",
+            "NEXUS_TOOLS__WEB__FETCH_TIMEOUT_S": "20",
+            "NEXUS_TOOLS__WEB__MAX_RESULTS": "10",
+            "NEXUS_TOOLS__WEB__MAX_QUERY_LENGTH": "1200",
+            "NEXUS_TOOLS__WEB__MAX_OUTPUT_BYTES": "80000",
+        },
+    )
+    web = config.v2.tools.web
+    assert web.searxng_instances == ["https://search.example/search"]
+    assert web.allowed_origins == ["https://docs.example", "https://docs.example:8443"]
+    assert web.fetch_enabled is False
+    assert web.search_timeout_s == 6.5
+    assert web.fetch_timeout_s == 20
+    assert web.max_results == 10
+    assert web.max_query_length == 1200
+    assert web.max_output_bytes == 80000
+    assert web.search_available is True
+    assert web.search_unavailable_reason is None
+
+
+@pytest.mark.parametrize(
+    "web",
+    [
+        {"searxng_instances": ["http://search.example"]},
+        {"searxng_instances": ["https://user:pass@search.example"]},
+        {"searxng_instances": ["https://search.example/#fragment"]},
+        {"searxng_instances": ["https://search.example/search/extra"]},
+        {"searxng_instances": ["https://search.example/?q=secret"]},
+        {"searxng_instances": ["https://localhost/search"]},
+        {"searxng_instances": ["https://127.0.0.1/search"]},
+        {"searxng_instances": ["https://192.168.1.2/search"]},
+        {"allowed_origins": ["https://user:pass@example.com"]},
+        {"allowed_origins": ["https://example.com/path"]},
+        {"allowed_origins": ["https://example.com?q=1"]},
+        {"allowed_origins": ["http://127.0.0.1"]},
+        {"search_timeout_s": 20.01},
+        {"fetch_timeout_s": 0},
+        {"max_results": 11},
+        {"max_query_length": 4097},
+        {"max_output_bytes": 2_000_001},
+        {"fetch_enabled": "false"},
+    ],
+)
+def test_web_tool_config_rejects_invalid_values(web):
+    with pytest.raises(ConfigError, match="Invalid v2"):
+        build_v2({"config_version": 2, "tools": {"web": web}})
+
+
+def test_web_tool_numeric_environment_values_are_type_checked():
+    with pytest.raises(ConfigError, match="Invalid v2"):
+        build_v2(
+            {
+                "config_version": 2,
+                "tools": {"web": {"search_timeout_s": "invalid"}},
+            }
+        )

@@ -51,12 +51,13 @@ from typing import Any, Protocol
 from ..errors import ConfigError, NexusError, OperationCancelled
 from ..events import Event
 from ..model.tiers import DEFAULT_TIER, TierResolution, TierTable
+from ..tools.names import canonical_tool_name
 from ..util import new_id, redact_secrets
 from .manager import AgentManager, AgentToolSelection
 from .model import (
-    AgentNotFoundError,
     MODEL_INHERIT,
     MUTATING_FS_TOOLS,
+    AgentNotFoundError,
 )
 
 __all__ = [
@@ -69,6 +70,7 @@ __all__ = [
     "DEFAULT_MAX_DEPTH",
     "DEFAULT_MAX_FANOUT",
     "DEFAULT_MAX_TIER",
+    "WORKTREE_CHILD_TOOLS",
     "ChildRuntime",
     "ChildSpec",
     "DefaultSessionFacade",
@@ -98,12 +100,32 @@ DEFAULT_MAX_DEPTH = 3
 DEFAULT_MAX_FANOUT = 16
 #: The role an ad-hoc ``Task`` request uses when none is named.
 DEFAULT_CHILD_TYPE = "general"
+# First-release worktree profile: only reviewed, shipped tools are exposed.
+WORKTREE_CHILD_TOOLS = frozenset(
+    {
+        "read",
+        "glob",
+        "grep",
+        "edit",
+        "write",
+        "apply_patch",
+        "subagent",
+        "todowrite",
+        "skill",
+        "webfetch",
+        "websearch",
+    }
+)
 #: The child session path segment: ``<parent>/sub/<n>``.
 CHILD_SESSION_SEGMENT = "sub"
 
 
 class SubagentError(NexusError, ValueError):
     """A subagent request, definition, or bounding rule is invalid."""
+
+
+class _WorktreeRefusal(SubagentError):
+    """A requested worktree could not safely be created or honored."""
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +147,7 @@ class TaskRequest:
     tools: tuple[str, ...] | None = None
     model: str | None = None
     description: str | None = None
+    worktree: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.prompt, str) or not self.prompt.strip():
@@ -141,7 +164,7 @@ class TaskRequest:
             for item in self.tools:
                 if not isinstance(item, str) or not item.strip():
                     raise SubagentError("tools entries must be non-empty strings")
-                cleaned.append(item.strip())
+                cleaned.append(canonical_tool_name(item.strip()))
             object.__setattr__(self, "tools", tuple(cleaned))
         if self.description is not None and (
             not isinstance(self.description, str) or not self.description.strip()
@@ -155,6 +178,8 @@ class TaskRequest:
             raise SubagentError(
                 "model must be a non-empty reference without whitespace"
             )
+        if not isinstance(self.worktree, bool):
+            raise SubagentError("worktree must be a boolean")
 
     @classmethod
     def from_value(cls, value: object) -> TaskRequest:
@@ -173,6 +198,7 @@ class TaskRequest:
                 tools=tools,
                 model=value.get("model"),
                 description=value.get("description"),
+                worktree=value.get("worktree", False),
             )
         if value is None:
             raise SubagentError("a Task request is required")
@@ -182,6 +208,7 @@ class TaskRequest:
             tools=_tuple_or_none(getattr(value, "tools", None)),
             model=getattr(value, "model", None),
             description=getattr(value, "description", None),
+            worktree=getattr(value, "worktree", False),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -191,6 +218,7 @@ class TaskRequest:
             "tools": list(self.tools) if self.tools is not None else None,
             "model": self.model,
             "description": self.description,
+            "worktree": self.worktree,
         }
 
 
@@ -296,6 +324,8 @@ class SubagentOutcome:
     requested_tier: str | None = None
     error: str | None = None
     metrics: Mapping[str, Any] = field(default_factory=dict)
+    worktree: Mapping[str, Any] | None = None
+    worktree_scope: bool = False
 
     @property
     def ok(self) -> bool:
@@ -316,6 +346,7 @@ class SubagentOutcome:
             "tier": self.tier,
             "requested_tier": self.requested_tier,
             "error": self.error,
+            "worktree": dict(self.worktree) if self.worktree is not None else None,
         }
 
     def render(self) -> str:
@@ -332,6 +363,12 @@ class SubagentOutcome:
                 "[note: tools not available to this subagent and thus dropped: "
                 + ", ".join(self.dropped_tools)
                 + "]"
+            )
+        if self.worktree_scope and self.dropped_tools:
+            lines.append(
+                "[worktree safety: excluded tools are unavailable in worktree "
+                "subagents and their descendants because they are outside the "
+                "reviewed worktree tool profile]"
             )
         body = self.text.strip()
         if body:
@@ -574,12 +611,18 @@ class ChildSpec:
     tools: tuple[str, ...]
     dropped_tools: tuple[str, ...]
     model: str | None
+    requested_model: str | None
+    parent_model: str | None
+    provider: str | None
+    reasoning_effort: str | None
     tier: str
     requested_tier: str
     clamped: bool
     max_iterations: int
     context_tokens: int | None
     workspace: Path
+    worktree: Mapping[str, Any] | None
+    worktree_scope: bool
     config: object | None
     permissions: object | None
     grants: tuple[object, ...]
@@ -776,6 +819,12 @@ class SubagentRunner:
         reserved_cost: float = 0.0,
         child_session_segment: str = CHILD_SESSION_SEGMENT,
         hooks: object | None = None,
+        parent_model: str | None = None,
+        worktree_service: object | None = None,
+        worktree_root: str | Path | None = None,
+        worktree_root_for: Callable[[str | Path], str | Path] | None = None,
+        runtime_supports_workspace: bool = False,
+        worktree_scope: bool = False,
     ) -> None:
         if not callable(runtime_factory):
             raise SubagentError("runtime_factory must be callable")
@@ -798,6 +847,11 @@ class SubagentRunner:
         self._agents = agents
         self._factory = runtime_factory
         self._workspace = Path(workspace)
+        self._worktree_service = worktree_service
+        self._worktree_root = Path(worktree_root) if worktree_root is not None else None
+        self._worktree_root_for = worktree_root_for
+        self._runtime_supports_workspace = runtime_supports_workspace is True
+        self._worktree_scope = bool(worktree_scope)
         self._parent_session = parent_session
         self._parent_agent_id = parent_agent_id
         self._root_turn_id = root_turn_id
@@ -805,6 +859,8 @@ class SubagentRunner:
             str(name) for name in parent_tools if isinstance(name, str)
         )
         self._parent_tier = parent_tier or DEFAULT_TIER
+        self._parent_model = parent_model
+        self._parent_model_ref = parent_model
         self._tiers: TierTable = tiers if tiers is not None else TierTable()
         if self._tiers.rank(max_tier) is None:
             raise ConfigError(
@@ -888,14 +944,41 @@ class SubagentRunner:
         """The reference to resolve: the request's, else the role's, else inherit."""
         req = TaskRequest.from_value(request)
         if req.model:
+            if "/" not in req.model and req.model not in self._tiers.order:
+                try:
+                    role = self._agents.resolve(req.subagent_type, context="subagent")
+                except AgentNotFoundError:
+                    role = None
+                if role is not None and role.provider:
+                    return f"{role.provider}/{req.model}"
             return req.model
         try:
             role = self._agents.resolve(req.subagent_type, context="subagent")
         except AgentNotFoundError:
             role = None
         if role is not None and role.model:
+            if role.model in self._tiers.order or "/" in role.model:
+                return role.model
+            if role.provider:
+                return f"{role.provider}/{role.model}"
             return role.model
+        if role is not None and role.provider and self._parent_model:
+            inherited_model = self._parent_model.rsplit("/", 1)[-1]
+            return f"{role.provider}/{inherited_model}"
         return None
+
+    def role_provider(self, request: object) -> str | None:
+        """Provider supplied by a role default, unless Task.model overrides it."""
+        req = TaskRequest.from_value(request)
+        if req.model and "/" in req.model:
+            return req.model.split("/", 1)[0]
+        try:
+            role = self._agents.resolve(req.subagent_type, context="subagent")
+        except AgentNotFoundError:
+            return None
+        if req.model and "/" in req.model:
+            return req.model.split("/", 1)[0]
+        return role.provider
 
     def resolve_tier(self, request: object) -> TierResolution:
         """Resolve and clamp the effective tier for a request."""
@@ -940,6 +1023,15 @@ class SubagentRunner:
             bundle_map=self._bundle_map_or_default(),
             mutating=self._mutating_tools,
         )
+        if self._worktree_scope or req.worktree:
+            selected = selection.selected & WORKTREE_CHILD_TOOLS
+            excluded = selection.selected - selected
+            selection = replace(
+                selection,
+                selected=frozenset(selected),
+                dropped=selection.dropped | excluded,
+                stripped=selection.stripped | excluded,
+            )
         if req.tools is None:
             return selection
         requested = frozenset(req.tools)
@@ -1039,6 +1131,19 @@ class SubagentRunner:
         tier = resolution.tier
         reference = self.role_model_reference(req)
         child_model = self._child_model(reference, resolution)
+        if (
+            self._parent_model
+            and (req.model is None or req.model == MODEL_INHERIT)
+            and (not role.model or role.model == MODEL_INHERIT)
+        ):
+            child_model = (
+                f"{role.provider}/{self._parent_model.rsplit('/', 1)[-1]}"
+                if role.provider
+                else self._parent_model
+            )
+        child_provider = self.role_provider(req)
+        if child_model in self._tiers.order:
+            child_provider = None
         clamped = bool(resolution.clamped)
         dropped = tuple(sorted(selection.dropped))
 
@@ -1064,36 +1169,6 @@ class SubagentRunner:
             "session": session_id,
         }
         relay = _ChildRelay(sink, meta, session_id)
-
-        await _forward(
-            sink,
-            AGENT_SPAWNED,
-            {
-                "agent": dict(meta),
-                **meta,
-                "description": req.description or role.description,
-                "model": child_model,
-                "requested_tier": resolution.reference or self._parent_tier,
-                "clamped": clamped,
-                "tools": sorted(selection.selected),
-                "dropped_tools": list(dropped),
-            },
-            session=self._parent_session,
-        )
-        if clamped:
-            await _forward(
-                sink,
-                AGENT_CLAMPED,
-                {
-                    "agent": dict(meta),
-                    **meta,
-                    "requested_tier": resolution.reference or self._parent_tier,
-                    "max_tier": self._max_tier,
-                    "diagnostics": list(resolution.diagnostics),
-                },
-                session=self._parent_session,
-            )
-
         reservation = await self._budget.reserve(
             tokens=self._reserved_tokens, cost=self._reserved_cost
         )
@@ -1112,8 +1187,79 @@ class SubagentRunner:
 
         acquired = False
         reservation_done = False
+        release_reservation_on_exit = False
         outcome: SubagentOutcome | None = None
+        worktree: Mapping[str, Any] | None = None
+        child_workspace = self._workspace
+        cancellation: OperationCancelled | None = None
+        task_cancelled = False
+        mark_finished = None
         try:
+            if req.worktree:
+                if not self._runtime_supports_workspace:
+                    raise _WorktreeRefusal(
+                        "worktree requested but the child runtime does not declare "
+                        "workspace isolation support"
+                    )
+                if self._worktree_service is None or self._worktree_root is None:
+                    raise _WorktreeRefusal(
+                        "worktree requested but no WorktreeService/root is configured"
+                    )
+                create_worktree = getattr(self._worktree_service, "create", None)
+                mark_finished = getattr(self._worktree_service, "mark_finished", None)
+                if not callable(create_worktree) or not callable(mark_finished):
+                    raise _WorktreeRefusal("configured WorktreeService is incomplete")
+                try:
+                    worktree_root = self._worktree_root
+                    if self._worktree_root_for is not None:
+                        worktree_root = Path(self._worktree_root_for(self._workspace))
+                    record = await _maybe_await(
+                        create_worktree(
+                            self._workspace, session_id, root=worktree_root
+                        )
+                    )
+                    worktree = _worktree_record(record)
+                except OperationCancelled:
+                    raise
+                except Exception as exc:
+                    raise _WorktreeRefusal(
+                        f"worktree creation refused: {type(exc).__name__}: {_safe(exc)}"
+                    ) from exc
+                worktree.update(
+                    base=worktree.get("base_commit"),
+                    owner=worktree.get("owner_uid"),
+                )
+                child_workspace = Path(str(worktree["path"]))
+                meta["worktree"] = dict(worktree)
+            await _forward(
+                sink,
+                AGENT_SPAWNED,
+                {
+                    "agent": dict(meta),
+                    **meta,
+                    "description": req.description or role.description,
+                    "model": child_model,
+                    "requested_tier": resolution.reference or self._parent_tier,
+                    "clamped": clamped,
+                    "tools": sorted(selection.selected),
+                    "dropped_tools": list(dropped),
+                    "worktree": dict(worktree) if worktree is not None else None,
+                },
+                session=self._parent_session,
+            )
+            if clamped:
+                await _forward(
+                    sink,
+                    AGENT_CLAMPED,
+                    {
+                        "agent": dict(meta),
+                        **meta,
+                        "requested_tier": resolution.reference or self._parent_tier,
+                        "max_tier": self._max_tier,
+                        "diagnostics": list(resolution.diagnostics),
+                    },
+                    session=self._parent_session,
+                )
             await self._budget.acquire()
             acquired = True
             if _is_cancelled(cancel):
@@ -1135,12 +1281,18 @@ class SubagentRunner:
                 tools=tuple(sorted(selection.selected)),
                 dropped_tools=dropped,
                 model=child_model,
+                requested_model=req.model,
+                parent_model=self._parent_model,
+                provider=child_provider,
+                reasoning_effort=role.reasoning_effort,
                 tier=tier,
                 requested_tier=resolution.reference or self._parent_tier,
                 clamped=clamped,
                 max_iterations=role.max_iterations or 0,
                 context_tokens=role.context_tokens,
-                workspace=self._workspace,
+                workspace=child_workspace,
+                worktree=worktree,
+                worktree_scope=self._worktree_scope or req.worktree,
                 config=self._config,
                 permissions=self._permissions,
                 grants=self._grants,
@@ -1151,21 +1303,54 @@ class SubagentRunner:
                 metadata={
                     "agent": dict(meta),
                     "selection": _selection_dict(selection),
+                    "workspace": str(child_workspace),
+                    "worktree": dict(worktree) if worktree is not None else None,
                 },
             )
             outcome = await self._run_child(spec, cancel)
         except OperationCancelled:
-            await self._budget.release_reservation(reservation)
-            reservation_done = True
-            raise
+            release_reservation_on_exit = True
+            cancellation = OperationCancelled(
+                _cancel_reason(cancel) or "cancelled"
+            )
+            outcome = SubagentOutcome(
+                agent=role.name,
+                session_id=session_id,
+                status="cancelled",
+                is_error=True,
+                text=f"Task: subagent {role.name!r} was cancelled",
+                error="OperationCancelled",
+                dropped_tools=dropped,
+                clamped=clamped,
+                tier=tier,
+                requested_tier=resolution.reference,
+            )
+        except asyncio.CancelledError:
+            release_reservation_on_exit = True
+            task_cancelled = True
+            outcome = SubagentOutcome(
+                agent=role.name,
+                session_id=session_id,
+                status="cancelled",
+                is_error=True,
+                text=f"Task: subagent {role.name!r} was cancelled",
+                error="CancelledError",
+                dropped_tools=dropped,
+                clamped=clamped,
+                tier=tier,
+                requested_tier=resolution.reference,
+            )
         except Exception as exc:  # noqa: BLE001 - a factory/tool failure is visible
             outcome = SubagentOutcome(
                 agent=role.name,
                 session_id=session_id,
-                status="failed",
+                status=(
+                    "refused" if isinstance(exc, _WorktreeRefusal) else "failed"
+                ),
                 is_error=True,
                 text=(
-                    f"Task: subagent {role.name!r} failed to start: "
+                    f"Task: subagent {role.name!r} "
+                    f"{'was refused' if isinstance(exc, _WorktreeRefusal) else 'failed to start'}: "
                     f"{type(exc).__name__}: {_safe(exc)}"
                 ),
                 error=type(exc).__name__,
@@ -1175,18 +1360,109 @@ class SubagentRunner:
                 requested_tier=resolution.reference,
             )
         finally:
+            if worktree is not None:
+                try:
+                    mark_finished = mark_finished or self._worktree_service.mark_finished
+                    final_outcome = outcome or {
+                        "status": "cancelled"
+                        if cancellation is not None
+                        else "failed"
+                    }
+                    finalized, interrupted = await _shielded(
+                        _maybe_await(
+                            mark_finished(
+                                session_id,
+                                final_outcome,
+                                root=worktree_root,
+                            )
+                        )
+                    )
+                    if interrupted:
+                        task_cancelled = True
+                        if outcome is not None and outcome.status == "completed":
+                            outcome = replace(
+                                outcome,
+                                status="cancelled",
+                                is_error=True,
+                                error="subagent cancelled during worktree finalization",
+                                text=(outcome.text + "\nsubagent cancelled during worktree finalization").strip(),
+                            )
+                        cancellation = cancellation or OperationCancelled(
+                            _cancel_reason(cancel) or "cancelled"
+                        )
+                    finalized_record = _worktree_record(finalized)
+                    status = str(finalized_record.get("final_dirty_status", ""))
+                    worktree = {
+                        **worktree,
+                        **finalized_record,
+                        "dirty": bool(status),
+                        "dirty_status": status,
+                    }
+                    meta["worktree"] = dict(worktree)
+                except (Exception, asyncio.CancelledError) as exc:  # noqa: BLE001 - retain checkout on finalization failure
+                    task_cancelled = task_cancelled or isinstance(
+                        exc, asyncio.CancelledError
+                    )
+                    worktree = {
+                        **worktree,
+                        "finalization_error": f"{type(exc).__name__}: {_safe(exc)}",
+                    }
+                    meta["worktree"] = dict(worktree)
+                    message = f"worktree finalization failed: {type(exc).__name__}: {_safe(exc)}"
+                    if outcome is None:
+                        outcome = SubagentOutcome(
+                            agent=role.name,
+                            session_id=session_id,
+                            status=(
+                                "cancelled"
+                                if cancellation is not None
+                                else "failed"
+                            ),
+                            is_error=True,
+                            text=message,
+                            error=message,
+                            dropped_tools=dropped,
+                            clamped=clamped,
+                            tier=tier,
+                            requested_tier=resolution.reference,
+                        )
+                    else:
+                        outcome = replace(
+                            outcome,
+                            status=(
+                                "failed"
+                                if outcome.status == "completed"
+                                else outcome.status
+                            ),
+                            is_error=True,
+                            text=(outcome.text + "\n" + message).strip(),
+                            error=(outcome.error + "; " if outcome.error else "") + message,
+                        )
+            if outcome is not None and worktree is not None:
+                outcome = replace(
+                    outcome,
+                    worktree=dict(worktree),
+                    metrics={**dict(outcome.metrics), "worktree": dict(worktree)},
+                )
             if acquired:
                 self._budget.release()
             if not reservation_done:
-                if outcome is not None:
-                    await self._budget.settle(reservation, outcome.usage)
-                else:
-                    await self._budget.release_reservation(reservation)
+                accounting = (
+                    self._budget.release_reservation(reservation)
+                    if release_reservation_on_exit or outcome is None
+                    else self._budget.settle(reservation, outcome.usage)
+                )
+                _accounted, interrupted = await _shielded(accounting)
+                task_cancelled = task_cancelled or interrupted
                 reservation_done = True
 
         if outcome is None:  # pragma: no cover - a BaseException path never reaches
             raise SubagentError("subagent run produced no outcome")
         await self._emit_completed(sink, meta, outcome)
+        if task_cancelled:
+            raise asyncio.CancelledError
+        if cancellation is not None:
+            raise cancellation
         return outcome
 
     async def _run_child(
@@ -1247,7 +1523,14 @@ class SubagentRunner:
                 "stop_reason": outcome.stop_reason,
                 "dropped_tools": list(outcome.dropped_tools),
                 "clamped": outcome.clamped,
-                "error": redact_secrets(outcome.error)[:500] if outcome.error else None,
+                "error": (
+                    redact_secrets(outcome.error)[:500] if outcome.error else None
+                ),
+                "worktree": (
+                    dict(outcome.worktree)
+                    if outcome.worktree is not None
+                    else None
+                ),
             },
             session=self._parent_session,
         )
@@ -1292,7 +1575,7 @@ class SubagentRunner:
         return SubagentRunner(
             agents=self._agents,
             runtime_factory=self._factory,
-            workspace=self._workspace,
+            workspace=spec.workspace,
             parent_session=spec.session_id,
             parent_agent_id=spec.agent_id,
             root_turn_id=spec.root_turn_id,
@@ -1318,6 +1601,12 @@ class SubagentRunner:
             reserved_tokens=self._reserved_tokens,
             reserved_cost=self._reserved_cost,
             hooks=self._hooks,
+            parent_model=spec.model,
+            worktree_service=self._worktree_service,
+            worktree_root=self._worktree_root,
+            worktree_root_for=self._worktree_root_for,
+            runtime_supports_workspace=self._runtime_supports_workspace,
+            worktree_scope=self._worktree_scope or spec.worktree_scope,
         )
 
 
@@ -1367,10 +1656,54 @@ def _safe(value: object, *, limit: int = 300) -> str:
     return text if len(text) <= limit else text[:limit] + "…"
 
 
+def _worktree_record(record: object) -> dict[str, Any]:
+    """Normalize an owned worktree record for child metadata and tool results."""
+    fields = (
+        "child_id",
+        "parent_workspace",
+        "base_commit",
+        "branch",
+        "path",
+        "owner_uid",
+        "created_at",
+        "dirty_status",
+        "lifecycle",
+        "final_status",
+        "final_dirty_status",
+        "finalized_at",
+    )
+    if isinstance(record, Mapping):
+        values = {name: record.get(name) for name in fields}
+    else:
+        values = {name: getattr(record, name, None) for name in fields}
+    if not isinstance(values["path"], (str, Path)):
+        raise SubagentError("WorktreeService returned a record without a path")
+    return {
+        name: str(value) if isinstance(value, Path) else value
+        for name, value in values.items()
+        if value is not None
+    }
+
+
 async def _maybe_await(value: object) -> Any:
     if inspect.isawaitable(value):
         return await value
     return value
+
+
+async def _shielded(awaitable: Awaitable[Any]) -> tuple[Any, bool]:
+    """Finish a lifecycle operation even if its caller is cancelled."""
+    task = asyncio.ensure_future(awaitable)
+    interrupted = False
+    while True:
+        try:
+            return await asyncio.shield(task), interrupted
+        except asyncio.CancelledError:
+            interrupted = True
+            if task.done():
+                if task.cancelled():
+                    raise
+                return task.result(), interrupted
 
 
 async def _cancel_and_drain(run_task: asyncio.Task) -> None:
@@ -1389,6 +1722,7 @@ def _coerce_outcome(value: object, spec: ChildSpec) -> SubagentOutcome:
             clamped=value.clamped or spec.clamped,
             tier=value.tier or spec.tier,
             requested_tier=value.requested_tier or spec.requested_tier,
+            worktree_scope=value.worktree_scope or spec.worktree_scope,
         )
     if value is None:
         raise SubagentError("child runtime returned no outcome")

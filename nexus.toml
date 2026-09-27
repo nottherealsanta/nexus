@@ -6,7 +6,7 @@ instructions_file = "SOUL.md"
 memory_file = "MEMORY.md"
 
 [models]
-default = "codex/gpt-5.6-luna"
+default = "codex/gpt-6-luna"
 
 [context]
 max_tokens = 16000

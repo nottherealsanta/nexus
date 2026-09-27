@@ -26,9 +26,16 @@ hands a surface a ``Runtime``, a manager, or a tool.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
+import hashlib
+import hmac
+import os  # noqa: F401 - preserves the facade's historical scandir patch seam
+import secrets
+import threading
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
+from pathlib import Path
 from typing import Any
 
 import msgspec
@@ -36,15 +43,52 @@ import msgspec
 from ..errors import ExtensionTrashError, SessionBusy
 from ..events import Event
 from ..ext.quarantine import sanitize_text
+from ..host_support.browser_view import json_patch as _json_patch
+from ..host_support.browser_view import web_view as _web_view
+from ..host_support.context_preview import (
+    project_context_preview,
+)
+from ..host_support.context_preview import (
+    safe_text as _worktree_text,
+)
+from ..host_support.workspace import search_files as _search_files
+from ..host_support.worktree_projection import (
+    worktree_diff_row as _worktree_diff_row,
+)
+from ..host_support.worktree_projection import (
+    worktree_record as _worktree_record,
+)
+from ..host_support.worktree_projection import (
+    worktree_review_entry as _worktree_review_entry,
+)
 from ..model.message import ContentBlock
+from ..model.reasoning_effort import ReasoningEffortSelection
+from ..model.request import REASONING_EFFORTS
 from ..model.selection import ModelSelection
+from ..observability.session import (
+    read_session_page,
+    session_records,
+    validate_daemon_cursor,
+    validate_logs_read,
+)
 from ..session.manager import SessionSummary, TrashRecord
 from ..util import redact_secrets
-from ..view import ConversationView, apply, initial_state
+from ..view import (
+    ConversationView,
+    apply,
+    initial_state,
+    jsonable,
+)
 from . import protocol as p
 from .doctor import mismatch_summary
 from .presence import Presence
 from .supervisor import Supervisor
+
+_MAX_WORKTREE_LIST = 100
+_MAX_WORKTREE_REVIEW_PAGE = 8
+_MAX_WORKTREE_REVIEW_BYTES = 8 * 128 * 1024
+_WORKTREE_CONFIRMATION_TTL = 120
+_MAX_FILE_SEARCH_ENTRIES = 50_000
 
 #: Default global cap when the caller does not supply one.
 DEFAULT_MAX_CONCURRENT_TURNS = 4
@@ -68,6 +112,10 @@ class HostFacade:
         self._started = time.time()
         self._closed = False
         self._managed: set[str] = set()
+        self._worktree_confirmation_key = secrets.token_bytes(32)
+        self._worktree_lock = threading.Lock()
+        self._worktree_confirmation_lock = threading.Lock()
+        self._worktree_used_tokens: dict[str, int] = {}
 
     @property
     def max_concurrent_turns(self) -> int:
@@ -82,6 +130,363 @@ class HostFacade:
     def list_sessions(self) -> list[SessionSummary]:
         """Every session, newest activity first (PLAN §14.4)."""
         return list(self.runtime.sessions.list())
+
+    def search_files(self, query: str, limit: int = 30) -> list[str]:
+        """Return bounded, visible workspace-relative file path matches."""
+        return _search_files(
+            self.runtime, query, limit, max_entries=_MAX_FILE_SEARCH_ENTRIES
+        )
+
+    def _file_search_denied_roots(self) -> tuple[Path, ...]:
+        """Read current hard read boundaries without exposing other config."""
+        from ..host_support.workspace import _file_search_denied_roots
+
+        return _file_search_denied_roots(self.runtime)
+
+    def list_worktrees(self) -> tuple[list[dict[str, Any]], bool]:
+        """Return a bounded allowlisted view of runtime-owned worktree records."""
+        records = tuple(self.runtime.list_worktrees())
+        rows = [_worktree_record(record) for record in records[:_MAX_WORKTREE_LIST]]
+        return rows, len(records) > _MAX_WORKTREE_LIST
+
+    def inspect_worktree(self, child_id: str) -> dict[str, Any]:
+        """Inspect one authenticated runtime-owned child without exposing paths."""
+        record = self.runtime.inspect_worktree(child_id)
+        return _worktree_record(record)
+
+    def review_worktree(
+        self,
+        child_id: str,
+        *,
+        review_id: str | None = None,
+        cursor: int = 0,
+        limit: int = 1,
+    ) -> dict[str, Any]:
+        """Read one bounded review page and project only sanitized metadata."""
+        if not isinstance(child_id, str) or not child_id or len(child_id) > 256:
+            raise ValueError("child_id must be a non-empty string of at most 256 characters")
+        if review_id is not None and (
+            not isinstance(review_id, str)
+            or len(review_id) != 32
+            or any(char not in "0123456789abcdef" for char in review_id)
+        ):
+            raise ValueError("invalid review id")
+        if isinstance(cursor, bool) or not isinstance(cursor, int) or cursor < 0:
+            raise ValueError("review cursor must be a non-negative integer")
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= _MAX_WORKTREE_REVIEW_PAGE
+        ):
+            raise ValueError(
+                f"review page limit must be between 1 and {_MAX_WORKTREE_REVIEW_PAGE}"
+            )
+
+        page = self.runtime.review_worktree(
+            child_id,
+            review_id=review_id,
+            cursor=cursor,
+            limit=limit,
+        )
+        raw_entries = page.manifest.get("entries", ())
+        entries = [
+            _worktree_review_entry(item)
+            for item in (raw_entries[:500] if isinstance(raw_entries, list) else ())
+            if isinstance(item, Mapping)
+        ]
+        remaining = _MAX_WORKTREE_REVIEW_BYTES
+        diff: list[dict[str, Any]] = []
+        diff_bytes = b"".join(
+            raw_page
+            for raw_page in page.diff_pages[:_MAX_WORKTREE_REVIEW_PAGE]
+            if isinstance(raw_page, bytes)
+        )[:remaining]
+        for line in diff_bytes.splitlines()[:500]:
+            try:
+                row = msgspec.json.decode(line, type=dict[str, Any])
+            except (msgspec.DecodeError, TypeError):
+                continue
+            diff.append(_worktree_diff_row(row, remaining))
+            remaining -= len(line)
+        if (
+            not isinstance(page.review_id, str)
+            or not isinstance(page.digest, str)
+        ):
+            raise TypeError("worktree review returned invalid identifiers")
+        if (
+            len(page.review_id) != 32
+            or any(char not in "0123456789abcdef" for char in page.review_id)
+            or len(page.digest) != 64
+            or any(char not in "0123456789abcdef" for char in page.digest)
+        ):
+            raise ValueError("worktree review returned invalid identifiers")
+        record = self.inspect_worktree(child_id)
+        return {
+            "record": record,
+            "status": record["lifecycle"] or "unknown",
+            "entries": entries,
+            "diff": diff,
+            "cursor": page.cursor,
+            "has_more": page.next_cursor is not None,
+            "review_id": _worktree_text(page.review_id, 32),
+            "digest": _worktree_text(page.digest, 64),
+        }
+
+    def acknowledge_worktree(
+        self, child_id: str, review_id: str, digest: str
+    ) -> dict[str, Any]:
+        child_id = _validate_worktree_child_id(child_id)
+        if not _hex_id(review_id, 32) or not _hex_id(digest, 64):
+            raise ValueError("invalid worktree review identifier or digest")
+        acknowledged = self.runtime.acknowledge_worktree(child_id, review_id, digest)
+        del acknowledged
+        return {"review_id": review_id, "digest": digest, "status": "acknowledged"}
+
+    def _worktree_state(self, child_id: str) -> dict[str, Any]:
+        reader = getattr(self.runtime, "worktree_confirmation_state", None)
+        if not callable(reader):
+            raise TypeError("runtime cannot prove worktree confirmation state; mutation refused")
+        state = reader(child_id)
+        if not isinstance(state, dict):
+            raise TypeError("runtime returned invalid worktree confirmation state")
+        return state
+
+    def _confirmation_token(
+        self, operation: str, child_id: str, state: dict[str, Any], options: dict[str, Any]
+    ) -> str:
+        expires = int(time.time()) + _WORKTREE_CONFIRMATION_TTL
+        payload = {
+            "operation": operation,
+            "child_id": child_id,
+            "state": hashlib.sha256(_canonical_json(state)).hexdigest(),
+            "options": options,
+            "expires": expires,
+            "nonce": secrets.token_hex(16),
+        }
+        encoded = msgspec.json.encode(payload)
+        signature = hmac.new(self._worktree_confirmation_key, encoded, hashlib.sha256).hexdigest()
+        return f"{_b64url(encoded)}.{signature}"
+
+    def _consume_confirmation(
+        self,
+        token: str,
+        operation: str,
+        child_id: str,
+        state: dict[str, Any],
+        options: dict[str, Any],
+    ) -> None:
+        if not isinstance(token, str) or len(token) > 2048 or token.count(".") != 1:
+            raise ValueError("missing or invalid confirmation token")
+        encoded_text, signature = token.split(".", 1)
+        try:
+            encoded = _b64url_decode(encoded_text)
+            payload = msgspec.json.decode(encoded, type=dict[str, Any])
+        except Exception as exc:
+            raise ValueError("invalid confirmation token") from exc
+        expected = hmac.new(self._worktree_confirmation_key, encoded, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature, expected):
+            raise ValueError("invalid confirmation token")
+        token_digest = hashlib.sha256(token.encode("ascii", errors="ignore")).hexdigest()
+        with self._worktree_confirmation_lock:
+            self._worktree_used_tokens = {
+                digest: expiry
+                for digest, expiry in self._worktree_used_tokens.items()
+                if expiry >= int(time.time())
+            }
+            if token_digest in self._worktree_used_tokens:
+                raise ValueError("confirmation token has already been used")
+        if (
+            payload.get("operation") != operation
+            or payload.get("child_id") != child_id
+            or payload.get("options") != options
+            or isinstance(payload.get("expires"), bool)
+            or not isinstance(payload.get("expires"), int)
+            or payload["expires"] < int(time.time())
+        ):
+            raise ValueError("confirmation token is expired or does not match this operation")
+        state_digest = hashlib.sha256(_canonical_json(state)).hexdigest()
+        if not hmac.compare_digest(str(payload.get("state", "")), state_digest):
+            raise ValueError("worktree state changed since confirmation preview")
+        with self._worktree_confirmation_lock:
+            if token_digest in self._worktree_used_tokens:
+                raise ValueError("confirmation token has already been used")
+            if len(self._worktree_used_tokens) >= 8192:
+                raise ValueError("confirmation token capacity reached; retry with a fresh preview")
+            self._worktree_used_tokens[token_digest] = payload["expires"]
+
+    def mutate_worktree(
+        self,
+        operation: str,
+        child_id: str,
+        *,
+        review_id: str | None = None,
+        digest: str | None = None,
+        force: bool = False,
+        confirmation_token: str = "",
+        cancel: object | None = None,
+    ) -> dict[str, Any]:
+        child_id = _validate_worktree_child_id(child_id)
+        if operation not in {"integrate", "discard"}:
+            raise ValueError("unsupported worktree operation")
+        if not isinstance(force, bool):
+            raise TypeError("force must be an explicit boolean")
+        if operation == "integrate":
+            if not _hex_id(review_id, 32) or not _hex_id(digest, 64):
+                raise ValueError("integrate requires a valid review id and digest")
+            options = {"review_id": review_id, "digest": digest, "force": False}
+        else:
+            if review_id is not None and not _hex_id(review_id, 32):
+                raise ValueError("invalid review id")
+            options = {"review_id": review_id, "digest": None, "force": force}
+
+        with self._worktree_lock:
+            state = self._worktree_state(child_id)
+            record = state.get("record", {})
+            if not isinstance(record, dict):
+                raise TypeError("runtime cannot authenticate worktree record state")
+            if operation == "integrate":
+                if (
+                    record.get("lifecycle") != "finalized"
+                    or record.get("current_review_id") != review_id
+                    or record.get("current_review_digest") != digest
+                    or record.get("acknowledged_review_id") != review_id
+                    or record.get("acknowledged_digest") != digest
+                ):
+                    raise ValueError("integration requires the current acknowledged review")
+                parent_state = state.get("parent", {})
+                if (
+                    not isinstance(parent_state, dict)
+                    or parent_state.get("dirty")
+                    or parent_state.get("head") != record.get("base_commit")
+                ):
+                    raise ValueError("integration requires a clean parent at the recorded base commit")
+            elif not force and (
+                record.get("lifecycle") != "finalized"
+                or record.get("current_review_id")
+                != (review_id or record.get("acknowledged_review_id"))
+                or record.get("acknowledged_review_id")
+                != (review_id or record.get("acknowledged_review_id"))
+                or record.get("current_review_digest") != record.get("acknowledged_digest")
+            ):
+                raise ValueError("discard requires the current acknowledged review")
+            effective_review_id = (
+                review_id or record.get("acknowledged_review_id")
+                if operation == "discard" and not force
+                else review_id
+            )
+
+            impact = {
+                "parent_clean": not bool(state.get("parent", {}).get("dirty")),
+                "parent_head_matches_base": state.get("parent", {}).get("head") == record.get("base_commit"),
+                "child_dirty": bool(state.get("child", {}).get("dirty")),
+                "lifecycle": str(record.get("lifecycle", "unknown"))[:32],
+            }
+            if operation == "integrate":
+                impact["review_digest"] = str(digest)
+                impact["summary"] = "Apply the acknowledged frozen review to a clean parent checkout"
+            else:
+                impact["force"] = force
+                impact["summary"] = (
+                    "Remove this owned child worktree, including dirty files"
+                    if force
+                    else "Remove this owned clean child worktree"
+                )
+
+            if not confirmation_token:
+                token = self._confirmation_token(operation, child_id, state, options)
+                return {
+                    "status": "requires_confirmation",
+                    "operation": operation,
+                    "review_id": review_id,
+                    "digest": digest,
+                    "confirmation_token": token,
+                    "impact": impact,
+                }
+
+            self._consume_confirmation(
+                confirmation_token, operation, child_id, state, options
+            )
+            try:
+                if operation == "integrate":
+                    outcome = self.runtime.integrate_worktree(
+                        child_id, review_id, digest, cancel=cancel
+                    )
+                    status_map = {
+                        "integrated": "committed",
+                        "rolled_back": "rolled_back",
+                        "recovery_required": "recovery_required",
+                    }
+                    status = status_map.get(outcome.status, "recovery_required")
+                    return {
+                        "status": status,
+                        "operation": operation,
+                        "review_id": review_id,
+                        "digest": digest,
+                        "impact": impact,
+                        "transaction_id": outcome.transaction_id,
+                        "changed_paths": [
+                            _worktree_text(path, 1024)
+                            for path in outcome.changed_paths[:500]
+                        ],
+                        "error": (
+                            redact_secrets(outcome.error)[:500]
+                            if outcome.error
+                            else None
+                        ),
+                    }
+                outcome = self.runtime.discard_worktree(
+                    child_id,
+                    force=force,
+                    review_id=effective_review_id,
+                    cancel=cancel,
+                )
+                return {
+                    "status": "committed" if outcome.lifecycle == "discarded" else "cleanup_pending",
+                    "operation": operation,
+                    "review_id": review_id,
+                    "impact": impact,
+                }
+            except Exception as exc:
+                if operation == "discard":
+                    try:
+                        fresh = self._worktree_state(child_id)
+                        current = fresh.get("record", {})
+                        status = (
+                            "cleanup_pending"
+                            if isinstance(current, dict) and current.get("lifecycle") == "cleanup_pending"
+                            else "committed"
+                            if isinstance(current, dict) and current.get("lifecycle") == "discarded"
+                            else None
+                        )
+                    except Exception:  # noqa: BLE001 - unknown cleanup state fails closed
+                        status = "cleanup_pending"
+                    if status is None:
+                        if isinstance(exc, _WorktreeMutationCancelled):
+                            raise
+                        raise ValueError(redact_secrets(str(exc))[:500]) from exc
+                else:
+                    try:
+                        fresh = self._worktree_state(child_id)
+                        changed = _canonical_json(fresh) != _canonical_json(state)
+                    except Exception:  # noqa: BLE001 - unknown transaction state fails closed
+                        changed = True
+                    if isinstance(exc, _WorktreeMutationCancelled):
+                        if changed:
+                            status = "rolled_back"
+                        else:
+                            raise
+                    elif changed:
+                        status = "recovery_required"
+                    else:
+                        raise ValueError(redact_secrets(str(exc))[:500]) from exc
+                return {
+                    "status": status,
+                    "operation": operation,
+                    "review_id": review_id,
+                    "digest": digest,
+                    "impact": impact,
+                    "error": redact_secrets(str(exc))[:500],
+                }
 
     def open_session(
         self,
@@ -145,6 +550,52 @@ class HostFacade:
     def export(self, session_id: str, *, format: str = "json") -> str:
         """Render a consistent log prefix (json/markdown/jsonl)."""
         return self.runtime.sessions.export(session_id, format=format)
+
+    def read_logs(
+        self,
+        *,
+        session_id: str | None = None,
+        daemon_cursor: str | None = None,
+        session_cursor: int | None = None,
+        limit: int = 50,
+        daemon_diagnostics: Any | None = None,
+    ) -> dict[str, Any]:
+        """Read independent daemon/session diagnostic pages without mutations."""
+        limit, session_cursor = validate_logs_read(limit, session_cursor)
+        daemon_cursor = validate_daemon_cursor(daemon_cursor)
+        daemon = (
+            daemon_diagnostics.read(daemon_cursor, limit)
+            if daemon_diagnostics is not None
+            else _empty_log_page(daemon_cursor)
+        )
+        if session_id is None:
+            session_page = _empty_log_page(
+                session_cursor if session_cursor is not None else 0
+            )
+        else:
+            if not isinstance(session_id, str):
+                raise ValueError("session must be a string")
+            # SessionManager validates the identifier and existence. No client
+            # value is ever combined with a filesystem path in the facade.
+            sessions = getattr(self.runtime, "sessions", None)
+            opener = getattr(sessions, "open", None)
+            if not callable(opener):
+                raise ValueError("session manager is unavailable")
+            from ..session.ids import validate_session_id
+
+            session_id = validate_session_id(session_id)
+            if not sessions.store.exists(session_id):
+                raise ValueError(f"Session {session_id!r} does not exist")
+            handle = getattr(sessions, "_live_handle", lambda _sid: None)(session_id)
+            records, clipped, latest_seq = session_records(
+                handle, store=sessions.store, session_id=session_id
+            )
+            session_page = read_session_page(
+                records, cursor=session_cursor, limit=limit, latest_seq=latest_seq
+            )
+            if clipped and session_cursor is None:
+                session_page["truncated"] = True
+        return {"daemon": daemon, "session": session_page}
 
     def list_trashed(self) -> list[TrashRecord]:
         return list(self.runtime.sessions.list_trashed())
@@ -219,6 +670,78 @@ class HostFacade:
             if event.seq > from_seq:
                 view = apply(view, event)
         return view, view.last_seq
+
+    def web_snapshot(self, session_id: str, from_seq: int = 0) -> dict[str, Any]:
+        """Return a reload-safe browser snapshot with stable transcript IDs.
+
+        The established protocol projection intentionally omits reducer-local
+        reconciliation IDs. The browser contract includes them so DOM rows can
+        retain identity while events are replayed or a stream is reconnected.
+        """
+        # A browser snapshot is always complete and current. ``from_seq`` is
+        # accepted for call-site symmetry, but cursors belong to subscribe_web.
+        view, seq = self.state(session_id)
+        return {
+            "schema_version": 1,
+            "session": session_id,
+            "seq": seq,
+            "view": _web_view(view),
+        }
+
+    async def subscribe_web(
+        self,
+        session_id: str,
+        from_seq: int = 0,
+        client_id: str | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Follow canonical reducer changes as compact, ordered view patches.
+
+        A caller obtains a snapshot first, then subscribes at snapshot ``seq``.
+        The session log closes that race by replaying events after the cursor.
+        Event sequence numbers are monotonic but need not be contiguous here:
+        message/snapshot records share the session sequence and are not event
+        frames. ``Session.subscribe`` already heals dropped event-bus messages
+        from the log before yielding the next event.
+        """
+        handle = self._session(session_id, create=False, recover=False)
+        view = initial_state(session_id)
+        for event in handle.events:
+            if event.seq <= from_seq:
+                view = apply(view, event)
+        cursor = from_seq
+        projected = _web_view(view)
+        async for event in self.subscribe(session_id, cursor, client_id=client_id):
+            if event.seq <= cursor:
+                continue
+            previous_view = view
+            view = apply(view, event)
+            after = _web_view(view, previous_view, projected)
+            yield {
+                "schema_version": 1,
+                "session": session_id,
+                "seq": event.seq,
+                "ops": _json_patch(projected, after),
+            }
+            projected = after
+            cursor = event.seq
+
+    async def subscribe_workspace(self, interval: float = 0.5) -> AsyncIterator[dict[str, Any]]:
+        """Publish workspace session summaries when another client changes them.
+
+        Session logs are independently owned, so the workspace index uses a
+        small bounded poll over their summary metadata. The initial snapshot is
+        immediate; idle viewers incur no work more often than ``interval``.
+        """
+        delay = max(0.1, min(float(interval), 10.0))
+        revision = 0
+        previous: list[Any] | None = None
+        while True:
+            sessions = [jsonable(_asdict(item)) for item in self.list_sessions()]
+            if previous != sessions:
+                revision += 1
+                yield {"schema_version": 1, "revision": revision, "sessions": sessions}
+                previous = sessions
+            await asyncio.sleep(delay)
 
     def agent_transcript(self, session_id: str, agent_id: str) -> dict[str, Any]:
         """Return one view-safe child transcript from the parent event log."""
@@ -402,6 +925,26 @@ class HostFacade:
             )
         )
 
+    def _model_row(self, model: Any, *, selectable_only: bool) -> dict[str, Any]:
+        """Project one catalogue row and attach runtime-route effort choices."""
+        row = _asdict(model)
+        if selectable_only:
+            query = getattr(self.runtime, "candidate_supported_efforts", None)
+            efforts: object = ()
+            if callable(query):
+                try:
+                    efforts = query(row.get("provider"), row.get("id"))
+                except Exception:  # noqa: BLE001 - metadata cannot block model listing
+                    efforts = ()
+            if not isinstance(efforts, (tuple, list)):
+                efforts = ()
+            row["supported_efforts"] = [
+                value
+                for value in efforts
+                if isinstance(value, str) and value in REASONING_EFFORTS
+            ]
+        return row
+
     def model_info(self, ref: str) -> dict[str, Any] | None:
         """Resolve one model reference to its descriptive row, or ``None``.
 
@@ -469,8 +1012,52 @@ class HostFacade:
         agents = self.runtime.agents
         if agents is None:
             return []
+        refresh = getattr(agents, "refresh", None)
+        if callable(refresh):
+            try:
+                refresh()
+            except Exception:  # noqa: BLE001, S110 - metadata must not block the UI
+                pass
         entries = agents.index
-        return [{"name": e.name, "description": e.description, "source": str(e.source), "model": e.model, "read_only": bool(e.read_only), "contexts": list(getattr(agents.get(e.name), "contexts", ("subagent",))) if callable(getattr(agents, "get", None)) else ["subagent"]} for e in entries]
+        rows: list[dict[str, Any]] = []
+        for entry in entries:
+            name = self._agent_text(entry.name, limit=80)
+            if not name:
+                continue
+            description = self._agent_text(entry.description, limit=500)
+            source = self._agent_text(
+                getattr(entry.source, "value", entry.source), limit=40
+            )
+            contexts = ["subagent"]
+            get_agent = getattr(agents, "get", None)
+            agent = get_agent(entry.name) if callable(get_agent) else None
+            raw_contexts = getattr(agent, "contexts", None)
+            if isinstance(raw_contexts, (list, tuple)):
+                contexts = [
+                    value
+                    for value in (self._agent_text(item, limit=40) for item in raw_contexts)
+                    if value
+                ]
+            rows.append(
+                {
+                    "name": name,
+                    "description": description,
+                    "source": source,
+                    "provider": self._agent_text(
+                        getattr(entry, "provider", None), limit=80
+                    ) or None,
+                    "model": self._agent_text(
+                        getattr(entry, "model", None), limit=160
+                    ) or None,
+                    "reasoning_effort": self._agent_effort(
+                        getattr(entry, "reasoning_effort", None)
+                    ),
+                    "color": self._agent_color(getattr(entry, "color", None)),
+                    "read_only": bool(entry.read_only),
+                    "contexts": contexts or ["subagent"],
+                }
+            )
+        return rows
 
     def _refresh_agents(self) -> Any:
         agents = self.runtime.agents
@@ -482,6 +1069,109 @@ class HostFacade:
         handle = self._session(session_id)
         return self.runtime.effective_session_agent(handle)
 
+    def current_agent_metadata(self, session_id: str) -> dict[str, Any]:
+        """Return sanitized metadata for the session's next root turn."""
+        handle = self._session(session_id)
+        name, source = self.runtime.effective_session_agent(handle)
+        context = getattr(self.runtime, "context", None)
+        effective_config = getattr(context, "effective_config", None)
+        try:
+            config = effective_config() if callable(effective_config) else None
+        except Exception:  # noqa: BLE001 - metadata cannot block the UI
+            config = None
+        agent = self._root_agent(name)
+        query = getattr(self.runtime, "root_route_metadata", None)
+        route: Mapping[str, Any] = {}
+        try:
+            value = query(handle) if callable(query) else {}
+        except Exception:  # noqa: BLE001 - descriptive metadata must not block UI
+            value = {}
+        if isinstance(value, Mapping):
+            route = value
+        color = self._agent_color(getattr(agent, "color", None))
+        effort_metadata = self._root_reasoning_effort_metadata(handle)
+        v2 = getattr(config, "v2", None)
+        params = getattr(getattr(v2, "model", None), "params", None)
+        budget = getattr(params, "thinking_budget", None)
+        return {
+            "name": self._agent_text(name, limit=80) or "general",
+            "source": self._agent_text(source, limit=40) or "default",
+            "color": color,
+            "provider": self._agent_text(route.get("provider"), limit=80) or None,
+            "model": self._agent_text(route.get("model"), limit=160) or None,
+            "reasoning_effort": effort_metadata["effective_effort"],
+            "supported_levels": effort_metadata["supported_levels"],
+            "stored_override": effort_metadata["stored_override"],
+            "reasoning_effort_source": effort_metadata["source"],
+            "thinking_budget": budget if type(budget) is int else None,
+        }
+
+    def _root_reasoning_effort_metadata(self, handle: Any) -> dict[str, Any]:
+        """Use runtime-owned capability metadata, with safe fake-runtime defaults."""
+        query = getattr(self.runtime, "root_reasoning_effort_metadata", None)
+        try:
+            value = query(handle) if callable(query) else {}
+        except Exception:  # noqa: BLE001 - descriptive metadata must not block UI
+            value = {}
+        if not isinstance(value, Mapping):
+            value = {}
+        levels = value.get("supported_levels", ())
+        if not isinstance(levels, (tuple, list)):
+            levels = ()
+        supported = [level for level in levels if isinstance(level, str) and level in REASONING_EFFORTS]
+        stored = value.get("stored_override")
+        if not isinstance(stored, str) or stored not in REASONING_EFFORTS:
+            stored = None
+        effective = value.get("effective_effort")
+        if not isinstance(effective, str) or effective not in supported:
+            effective = None
+        source = value.get("source")
+        if source not in {"session", "agent"}:
+            source = None
+        return {
+            "supported_levels": supported,
+            "stored_override": stored,
+            "effective_effort": effective,
+            "source": source,
+        }
+
+    @staticmethod
+    def _agent_text(value: object, *, limit: int) -> str:
+        if not isinstance(value, str):
+            return ""
+        return redact_secrets(sanitize_text(value, limit=limit)).strip()
+
+    @staticmethod
+    def _agent_effort(value: object) -> str | None:
+        if not isinstance(value, str) or value not in REASONING_EFFORTS:
+            return None
+        return value
+
+    @staticmethod
+    def _agent_color(value: object) -> str | None:
+        if not isinstance(value, str) or len(value) != 7 or value[0] != "#":
+            return None
+        if any(char not in "0123456789abcdefABCDEF" for char in value[1:]):
+            return None
+        return value.upper()
+
+    def _root_agent(self, name: str) -> Any | None:
+        agents = getattr(self.runtime, "agents", None)
+        refresh = getattr(agents, "refresh", None)
+        if callable(refresh):
+            try:
+                refresh()
+            except Exception:  # noqa: BLE001, S110 - unavailable agent has no metadata
+                pass
+        resolve = getattr(agents, "resolve", None)
+        if callable(resolve):
+            try:
+                return resolve(name, context="root")
+            except Exception:  # noqa: BLE001 - unavailable agent has no metadata
+                return None
+        get_agent = getattr(agents, "get", None)
+        return get_agent(name) if callable(get_agent) else None
+
     def select_agent(self, session_id: str, name: str | None) -> tuple[str, str]:
         return self.runtime.select_session_agent(session_id, name)
 
@@ -491,6 +1181,17 @@ class HostFacade:
         if not callable(lister):
             return []
         return list(await lister())
+
+    async def inspect_context(self, session_id: str) -> dict[str, Any]:
+        """Read a next-turn context preview without changing session history."""
+        session = self._session(session_id, create=False, recover=False)
+        inspector = getattr(self.runtime, "inspect_context", None)
+        if not callable(inspector):
+            raise TypeError("runtime does not support context inspection")
+        result = await inspector(session)
+        if not isinstance(result, Mapping):
+            raise TypeError("runtime returned invalid context inspection")
+        return project_context_preview(result)
 
     # -- health / shutdown -------------------------------------------------
 
@@ -539,6 +1240,66 @@ class HostFacade:
     async def _dispatch(self, command: p.Command) -> p.Result:
         if isinstance(command, p.SessionList):
             return p.SessionListResult(sessions=self.list_sessions())
+        if isinstance(command, p.FileSearch):
+            paths = await asyncio.to_thread(
+                self.search_files, command.query, command.limit
+            )
+            return p.FileSearchResult(paths=paths)
+        if isinstance(command, p.WorktreeList):
+            rows, has_more = await asyncio.to_thread(self.list_worktrees)
+            return p.WorktreeListResult(worktrees=rows, has_more=has_more)
+        if isinstance(command, p.WorktreeInspect):
+            record = await asyncio.to_thread(
+                self.inspect_worktree, command.child_id
+            )
+            return p.WorktreeInspectResult(
+                child_id=_worktree_text(command.child_id, 256),
+                status=record["lifecycle"],
+                record=record,
+            )
+        if isinstance(command, p.WorktreeReview):
+            result = await asyncio.to_thread(
+                self.review_worktree,
+                command.child_id,
+                review_id=command.review_id,
+                cursor=command.cursor,
+                limit=command.limit,
+            )
+            return p.WorktreeReviewResult(child_id=_worktree_text(command.child_id, 256), **result)
+        if isinstance(command, p.WorktreeAcknowledge):
+            result = await asyncio.to_thread(
+                self.acknowledge_worktree,
+                command.child_id,
+                command.review_id,
+                command.digest,
+            )
+            return p.WorktreeAcknowledgeResult(
+                child_id=_worktree_text(command.child_id, 256), **result
+            )
+        if isinstance(command, p.WorktreeIntegrate):
+            result = await _run_worktree_mutation(
+                self.mutate_worktree,
+                "integrate",
+                command.child_id,
+                review_id=command.review_id,
+                digest=command.digest,
+                confirmation_token=command.confirmation_token,
+            )
+            return p.WorktreeMutationResult(
+                child_id=_worktree_text(command.child_id, 256), **result
+            )
+        if isinstance(command, p.WorktreeDiscard):
+            result = await _run_worktree_mutation(
+                self.mutate_worktree,
+                "discard",
+                command.child_id,
+                force=command.force,
+                review_id=command.review_id,
+                confirmation_token=command.confirmation_token,
+            )
+            return p.WorktreeMutationResult(
+                child_id=_worktree_text(command.child_id, 256), **result
+            )
         if isinstance(command, p.SessionOpen):
             return p.SessionOpenResult(
                 session=self.open_session(
@@ -575,6 +1336,19 @@ class HostFacade:
             view, seq = self.state(command.session, command.from_seq)
             return p.SessionStateResult(
                 session=command.session, seq=seq, view=view.to_dict()
+            )
+        if isinstance(command, p.LogsRead):
+            pages = await asyncio.to_thread(
+                self.read_logs,
+                session_id=command.session,
+                daemon_cursor=command.daemon_cursor,
+                session_cursor=command.session_cursor,
+                limit=command.limit,
+                daemon_diagnostics=getattr(self, "daemon_diagnostics", None),
+            )
+            return p.LogsReadResult(
+                daemon=_log_page(pages["daemon"], daemon=True),
+                session=_log_page(pages["session"]),
             )
         if isinstance(command, p.AgentTranscript):
             result = self.agent_transcript(command.session, command.agent_id)
@@ -652,7 +1426,11 @@ class HostFacade:
                 search=command.search,
             )
             return p.ModelsListResult(
-                count=len(models), models=[_asdict(model) for model in models]
+                count=len(models),
+                models=[
+                    self._model_row(model, selectable_only=command.selectable_only)
+                    for model in models
+                ],
             )
         if isinstance(command, p.ModelShow):
             model = self.model_info(command.ref)
@@ -682,6 +1460,29 @@ class HostFacade:
                 fallback=self._fallback_chain(selection),
                 apply_next_turn=True,
             )
+        if isinstance(command, p.ReasoningEffortSelect):
+            handle = self._session(command.session)
+            metadata = self._root_reasoning_effort_metadata(handle)
+            if command.effort is not None:
+                if command.effort not in REASONING_EFFORTS:
+                    raise ValueError("unknown reasoning effort")
+                if command.effort not in metadata["supported_levels"]:
+                    raise ValueError("reasoning effort is not supported by the current model")
+                handle.select_reasoning_effort(
+                    ReasoningEffortSelection(effort=command.effort)
+                )
+            else:
+                handle.clear_reasoning_effort()
+            current = self._root_reasoning_effort_metadata(handle)
+            return p.ReasoningEffortSelectResult(
+                session=command.session,
+                accepted=True,
+                stored_override=current["stored_override"],
+                effective_effort=current["effective_effort"],
+                source=current["source"],
+                supported_levels=current["supported_levels"],
+                apply_next_turn=True,
+            )
         if isinstance(command, p.AgentsList):
             agents = self.runtime.agents
             return p.AgentsListResult(
@@ -689,8 +1490,8 @@ class HostFacade:
                 agents=self.list_agents(),
             )
         if isinstance(command, p.AgentCurrent):
-            name, source = self.current_agent(command.session)
-            return p.AgentCurrentResult(session=command.session, name=name, source=source)
+            metadata = self.current_agent_metadata(command.session)
+            return p.AgentCurrentResult(session=command.session, **metadata)
         if isinstance(command, p.AgentSelect):
             name, source = self.select_agent(command.session, command.name)
             return p.AgentSelectResult(session=command.session, name=name, source=source)
@@ -700,6 +1501,9 @@ class HostFacade:
         if isinstance(command, p.ToolsList):
             tools = await self.list_tools()
             return p.ToolsListResult(count=len(tools), tools=tools)
+        if isinstance(command, p.ContextInspect):
+            result = await self.inspect_context(command.session)
+            return p.ContextInspectResult(session=command.session, **result)
         if isinstance(command, p.Doctor):
             # The report can read a bounded set of session tails (up to 64 x
             # 512 KiB) and parse their JSON. ``doctor`` stays a synchronous
@@ -738,6 +1542,74 @@ def _content(content: str, blocks: list[dict[str, Any]]) -> Any:
     if blocks:
         return msgspec.convert(blocks, type=list[ContentBlock])
     return content
+
+
+def _empty_log_page(cursor: str | int | None = None) -> dict[str, Any]:
+    return {"entries": [], "next_cursor": cursor, "truncated": False, "has_more": False}
+
+
+def _log_page(value: Mapping[str, Any], *, daemon: bool = False) -> Any:
+    page_type = p.DaemonLogPage if daemon else p.SessionLogPage
+    return page_type(
+        entries=[p.LogEntry(**entry) for entry in value.get("entries", ())],
+        next_cursor=value.get("next_cursor"),
+        truncated=bool(value.get("truncated", False)),
+        has_more=bool(value.get("has_more", False)),
+    )
+
+
+def _hex_id(value: Any, length: int) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == length
+        and all(char in "0123456789abcdef" for char in value)
+    )
+
+
+def _validate_worktree_child_id(value: Any) -> str:
+    if not isinstance(value, str) or not value or len(value) > 256 or "\x00" in value:
+        raise ValueError("child_id must be a non-empty string of at most 256 characters")
+    try:
+        value.encode("utf-8", errors="strict")
+    except UnicodeEncodeError as exc:
+        raise ValueError("child_id must be valid UTF-8 text") from exc
+    return value
+
+
+def _canonical_json(value: Any) -> bytes:
+    return msgspec.json.encode(value)
+
+
+def _b64url(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+def _b64url_decode(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+async def _run_worktree_mutation(
+    function: Any, *args: Any, **kwargs: Any
+) -> dict[str, Any]:
+    """Drain the worker so a cancellation cannot hide a durable Git outcome."""
+    cancelled = threading.Event()
+
+    class Cancel:
+        def raise_if_cancelled(self) -> None:
+            if cancelled.is_set():
+                raise _WorktreeMutationCancelled("worktree mutation cancelled")
+
+    kwargs["cancel"] = Cancel()
+    task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        cancelled.set()
+        return await asyncio.shield(task)
+
+
+class _WorktreeMutationCancelled(Exception):
+    """Internal cancellation signal understood by the worktree journals."""
 
 
 def _asdict(value: Any) -> dict[str, Any]:

@@ -17,6 +17,7 @@ from .message import (
     ToolUse,
 )
 from .provider import Provider, ProviderError
+from .reasoning_effort import ReasoningEffortSelection
 from .request import ModelRequest, SamplingParams, ToolSchema
 from .stream import (
     MessageStart,
@@ -51,6 +52,7 @@ __all__ = [
     "ToolUse",
     "Provider",
     "ProviderError",
+    "ReasoningEffortSelection",
     "ModelRequest",
     "SamplingParams",
     "ToolSchema",

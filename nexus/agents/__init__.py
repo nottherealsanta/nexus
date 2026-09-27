@@ -4,7 +4,7 @@ A subagent definition is a single ``.md`` file with a restricted frontmatter
 declaration and a system-prompt body. This package exposes:
 
 * :mod:`nexus.agents.model` -- the restricted, dependency-free declaration parser
-  (seven keys; no YAML library) and the immutable
+  (no YAML library) and the immutable
   :class:`~nexus.agents.model.AgentDef` with provenance, a whole-definition
   fingerprint, and a bounded body snapshot. ``model`` is opaque; it is validated
   for shape only and is never resolved here;
@@ -45,6 +45,7 @@ from .manager import (
 )
 from .model import (
     AGENT_CONTEXTS,
+    DEFAULT_AGENT_COLORS,
     DEFAULT_MAX_BODY_BYTES,
     DELIMITER,
     FORBIDDEN_ROLE_BUNDLES,
@@ -58,11 +59,13 @@ from .model import (
     MAX_LIST_ITEMS,
     MAX_MODEL_CHARS,
     MAX_NAME_CHARS,
+    MAX_PROVIDER_CHARS,
     MAX_TOOLS,
     MODEL_INHERIT,
     MODEL_TIERS,
     MUTATING_FS_TOOLS,
     READ_ONLY_ROLES,
+    REASONING_EFFORTS,
     SHELL_TOOLS,
     SOURCE_PRECEDENCE,
     AgentDef,
@@ -80,6 +83,7 @@ from .model import (
     AgentSource,
     AgentStaleError,
     ParsedFrontmatter,
+    default_agent_color,
     find_frontmatter_bounds,
     is_model_tier,
     parse_frontmatter,
@@ -116,13 +120,14 @@ from .runner import (
 )
 
 __all__ = [
-    "AGENT_CONTEXTS",
     "AGENT_CLAMPED",
     "AGENT_COMPLETED",
+    "AGENT_CONTEXTS",
     "AGENT_FILE_SUFFIX",
     "AGENT_SPAWNED",
     "CHILD_SESSION_SEGMENT",
     "DATA_DIR_NAME",
+    "DEFAULT_AGENT_COLORS",
     "DEFAULT_CHILD_TYPE",
     "DEFAULT_MAX_BODY_BYTES",
     "DEFAULT_MAX_CONCURRENT",
@@ -141,11 +146,13 @@ __all__ = [
     "MAX_LIST_ITEMS",
     "MAX_MODEL_CHARS",
     "MAX_NAME_CHARS",
+    "MAX_PROVIDER_CHARS",
     "MAX_TOOLS",
     "MODEL_INHERIT",
     "MODEL_TIERS",
     "MUTATING_FS_TOOLS",
     "READ_ONLY_ROLES",
+    "REASONING_EFFORTS",
     "SEEDED_ROLES",
     "SEED_MARKER_NAME",
     "SEED_VERSION",
@@ -183,6 +190,7 @@ __all__ = [
     "SubagentRunner",
     "SubagentUsage",
     "TaskRequest",
+    "default_agent_color",
     "find_frontmatter_bounds",
     "is_model_tier",
     "parse_frontmatter",

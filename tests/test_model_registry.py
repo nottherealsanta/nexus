@@ -168,6 +168,250 @@ def test_parse_valid_catalogue():
     assert opus.output_modalities == ("text",)
 
 
+def test_reasoning_efforts_are_optional_and_canonically_ordered():
+    raw = json.dumps(
+        {
+            "anthropic": {
+                "models": {
+                    "unknown-efforts": {
+                        "reasoning": True,
+                        "modalities": {"output": ["text"]},
+                    },
+                    "known-efforts": {
+                        "reasoning": True,
+                        "reasoning_options": [
+                            {"type": "effort", "values": ["xhigh", "low", "none", "high"]},
+                            {"type": "budget_tokens", "values": [1024, 4096]},
+                            {"type": "future-option", "values": ["future-value"]},
+                            {"future": "unknown shape"},
+                        ],
+                        "modalities": {"output": ["text"]},
+                    },
+                }
+            }
+        }
+    ).encode()
+    catalogue = parse_catalogue(raw)
+    models = {model.id: model for model in catalogue.providers[0].models}
+    assert models["unknown-efforts"].reasoning_efforts == ()
+    assert models["known-efforts"].reasoning_efforts == (
+        "none", "low", "high", "xhigh"
+    )
+
+    registry = make_registry(
+        raw=raw,
+        env={"ANTHROPIC_API_KEY": "1"},
+        providers={"anthropic": {}},
+    )
+    assert registry.resolve("anthropic/unknown-efforts").reasoning_efforts == ()
+
+
+@pytest.mark.parametrize(
+    "efforts",
+    [
+        ["ultra"],
+        ["low", 1],
+        ["low", None],
+        ["low", "low"],
+        ["none", "minimal", "low", "medium", "high", "xhigh", "low"],
+        ["x" * 257],
+    ],
+)
+def test_parse_rejects_invalid_reasoning_efforts(efforts):
+    raw = json.dumps(
+        {
+            "anthropic": {
+                "models": {
+                    "m": {
+                        "reasoning_efforts": efforts,
+                        "modalities": {"output": ["text"]},
+                    }
+                }
+            }
+        }
+    ).encode()
+    with pytest.raises(CatalogueError, match="reasoning_effort"):
+        parse_catalogue(raw)
+
+
+def test_typed_effort_options_validate_levels_and_duplicates():
+    raw = json.dumps(
+        {"openai": {"models": {"m": {
+            "reasoning_options": [
+                {"type": "effort", "values": [
+                    "default", None, "future-level", 5, {},
+                    "x" * 257, "high", "low", "high",
+                ]},
+                {"type": "effort", "values": "not-a-list"},
+                {"type": "effort", "values": ["medium"]},
+                {"type": "budget_tokens", "values": [1024]},
+                {"unexpected": "shape"},
+                None,
+            ],
+            "modalities": {"output": ["text"]},
+        }}}}
+    ).encode()
+    catalogue = parse_catalogue(raw)
+    assert catalogue.providers[0].models[0].reasoning_efforts == (
+        "low", "medium", "high"
+    )
+
+
+@pytest.mark.parametrize("options", ["bad-shape", {"type": "effort"}, [
+    {"type": "effort", "values": ["low", None, "unknown"]}
+]])
+def test_typed_effort_metadata_is_best_effort(options):
+    raw = json.dumps({"openai": {"models": {
+        "with-effort": {
+            "reasoning_options": options,
+            "modalities": {"output": ["text"]},
+        },
+        "also-valid": {"modalities": {"output": ["text"]}},
+    }}}).encode()
+    catalogue = parse_catalogue(raw)
+    assert [model.id for model in catalogue.providers[0].models] == [
+        "with-effort", "also-valid"
+    ]
+    assert catalogue.providers[0].models[0].reasoning_efforts == (
+        ("low",) if isinstance(options, list) else ()
+    )
+
+
+def test_typed_effort_values_over_bound_are_ignored():
+    raw = json.dumps({"openai": {"models": {"m": {
+        "reasoning_options": [{
+            "type": "effort",
+            "values": ["low"] * 65,
+        }],
+        "modalities": {"output": ["text"]},
+    }}}}).encode()
+    assert parse_catalogue(raw).providers[0].models[0].reasoning_efforts == ()
+
+
+def test_flat_efforts_take_precedence_over_typed_effort_options():
+    raw = json.dumps(
+        {"openai": {"models": {"m": {
+            "reasoning_efforts": [],
+            "reasoning_options": [{"type": "effort", "values": ["max"]}],
+            "modalities": {"output": ["text"]},
+        }}}}
+    ).encode()
+    model = parse_catalogue(raw).providers[0].models[0]
+    assert model.reasoning_efforts == ()
+
+
+def test_flat_efforts_reject_null_instead_of_using_best_effort_typed_parsing():
+    raw = json.dumps({"openai": {"models": {"m": {
+        "reasoning_efforts": None,
+        "reasoning_options": [{"type": "effort", "values": ["high"]}],
+    }}}}).encode()
+    with pytest.raises(CatalogueError, match="reasoning_effort"):
+        parse_catalogue(raw)
+
+
+def test_reasoning_efforts_survive_canonical_alias_projection_and_serialization():
+    raw = json.dumps(
+        {
+            "openai": {
+                "models": {
+                    "m": {
+                        "reasoning_efforts": ["high", "minimal"],
+                        "modalities": {"output": ["text"]},
+                    }
+                }
+            },
+            "openrouter": {
+                "models": {
+                    "openai/m": {
+                        "reasoning_efforts": ["low"],
+                        "modalities": {"output": ["text"]},
+                    }
+                }
+            },
+        }
+    ).encode()
+    registry = make_registry(
+        raw=raw,
+        env={"OPENAI_API_KEY": "1", "OPENROUTER_API_KEY": "1"},
+        providers={"openai": {}, "openrouter": {}},
+    )
+
+    canonical = registry.resolve("openai/m")
+    assert canonical.aliases == ("openrouter/openai/m",)
+    assert canonical.reasoning_efforts == ("minimal", "high")
+    assert registry.get("openrouter/openai/m").reasoning_efforts == canonical.reasoning_efforts
+    listed = msgspec.json.decode(msgspec.json.encode(registry.list()))
+    shown = msgspec.json.decode(msgspec.json.encode(canonical))
+    assert listed[0]["reasoning_efforts"] == ["minimal", "high"]
+    assert shown["reasoning_efforts"] == ["minimal", "high"]
+
+
+def test_reasoning_effort_override_wins_and_projects_to_aliases():
+    raw = json.dumps(
+        {
+            "openai": {
+                "models": {
+                    "m": {
+                        "reasoning": True,
+                        "reasoning_efforts": ["low"],
+                        "modalities": {"output": ["text"]},
+                    },
+                    "without-efforts": {
+                        "reasoning": True,
+                        "reasoning_efforts": ["high"],
+                        "modalities": {"output": ["text"]},
+                    },
+                }
+            },
+            "openrouter": {
+                "models": {
+                    "openai/m": {
+                        "reasoning_efforts": ["xhigh"],
+                        "modalities": {"output": ["text"]},
+                    }
+                }
+            },
+        }
+    ).encode()
+    registry = make_registry(
+        raw=raw,
+        env={"OPENAI_API_KEY": "1", "OPENROUTER_API_KEY": "1"},
+        providers={"openai": {}, "openrouter": {}},
+        reasoning_effort_overrides={
+            "openrouter/openai/m": ["high", "minimal"],
+            "openai/without-efforts": [],
+        },
+    )
+
+    info = registry.resolve("openai/m")
+    assert info.reasoning_efforts == ("minimal", "high")
+    assert registry.get("openrouter/openai/m").reasoning_efforts == (
+        "minimal",
+        "high",
+    )
+    assert registry.list()[0].reasoning_efforts == ("minimal", "high")
+    assert registry.resolve("openai/without-efforts").reasoning_efforts == ()
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"m": ["low"]},
+        {"openai/": ["low"]},
+        {"openai/m": ["ultra"]},
+        {"openai/m": ["low", "low"]},
+        {"openai/m": ["none", "minimal", "low", "medium", "high", "xhigh", "low"]},
+    ],
+)
+def test_registry_rejects_invalid_reasoning_effort_overrides(overrides):
+    with pytest.raises(ConfigError, match="reasoning_efforts"):
+        ModelRegistry(
+            env={},
+            snapshot_path=MISSING,
+            reasoning_effort_overrides=overrides,
+        )
+
+
 def test_parse_license_pending_label():
     raw = b'{"_license": "pending", "anthropic": {"models": {}}}'
     assert parse_catalogue(raw).license_pending is True
@@ -287,6 +531,114 @@ def test_provider_alias_projects_openai_catalogue_as_configured_codex_route():
     assert [status.id for status in registry.providers()] == ["codex"]
     # There is one bare id and it routes to the configured provider.
     assert registry.get("gpt-5.6-luna").provider == "codex"
+
+
+def test_effort_override_on_catalogue_provider_projects_to_codex_runtime_alias():
+    raw = json.dumps(
+        {"openai": {"models": {"gpt-5.6-luna": {
+            "reasoning": True,
+            "reasoning_options": [{
+                "type": "effort",
+                "values": ["none", "low", "medium", "high", "xhigh", "max"],
+            }],
+            "modalities": {"output": ["text"]},
+        }}}}
+    ).encode()
+    registry = ModelRegistry(
+        providers={"codex": {"kind": "openai"}},
+        provider_aliases={"codex": "openai"},
+        reasoning_effort_overrides={"openai/gpt-5.6-luna": ["high", "minimal"]},
+        env={}, snapshot_path=MISSING,
+    )
+    registry.install_raw(raw)
+
+    # The explicit config override remains authoritative over catalogue data.
+    assert registry.resolve("codex/gpt-5.6-luna").reasoning_efforts == (
+        "minimal", "high"
+    )
+
+
+def test_typed_luna_efforts_project_to_codex_alias_with_budget_ignored():
+    raw = json.dumps(
+        {"openai": {"models": {"gpt-5.6-luna": {
+            "reasoning": True,
+            "reasoning_options": [
+                {"type": "effort", "values": ["none", "low", "medium", "high", "xhigh", "max"]},
+                {"type": "budget_tokens", "values": [1024, 4096]},
+                {"type": "future-option", "values": ["future-value"]},
+                {"unrecognized": "future shape"},
+            ],
+            "modalities": {"output": ["text"]},
+        }}}}
+    ).encode()
+    registry = ModelRegistry(
+        providers={"codex": {"kind": "openai"}},
+        provider_aliases={"codex": "openai"},
+        env={}, snapshot_path=MISSING,
+    )
+    registry.install_raw(raw)
+    assert registry.resolve("codex/gpt-5.6-luna").reasoning_efforts == (
+        "none", "low", "medium", "high", "xhigh", "max"
+    )
+
+
+def test_both_luna_models_show_catalogue_efforts_through_codex_alias():
+    raw = json.dumps({"openai": {"models": {
+        model_id: {
+            "reasoning": True,
+            "reasoning_options": [{
+                "type": "effort",
+                "values": ["none", "low", "medium", "high", "xhigh", "max"],
+            }],
+            "modalities": {"output": ["text"]},
+        }
+        for model_id in ("gpt-5.6-luna", "gpt-6-luna")
+    }}}).encode()
+    registry = ModelRegistry(
+        providers={"codex": {"kind": "openai"}},
+        provider_aliases={"codex": "openai"},
+        env={}, snapshot_path=MISSING,
+    )
+    registry.install_raw(raw)
+
+    expected = ("none", "low", "medium", "high", "xhigh", "max")
+    assert registry.resolve("codex/gpt-5.6-luna").reasoning_efforts == expected
+    assert registry.resolve("codex/gpt-6-luna").reasoning_efforts == expected
+
+
+def test_max_effort_config_override_is_canonical_and_wins_over_catalogue():
+    raw = json.dumps(
+        {"openai": {"models": {"gpt-5.6-luna": {
+            "reasoning_options": [{
+                "type": "effort",
+                "values": ["none", "low", "medium", "high", "xhigh"],
+            }],
+            "modalities": {"output": ["text"]},
+        }}}}
+    ).encode()
+    registry = ModelRegistry(
+        providers={"codex": {"kind": "openai"}},
+        provider_aliases={"codex": "openai"},
+        reasoning_effort_overrides={"codex/gpt-5.6-luna": ["max"]},
+        env={}, snapshot_path=MISSING,
+    )
+    registry.install_raw(raw)
+    assert registry.resolve("codex/gpt-5.6-luna").reasoning_efforts == ("max",)
+
+
+def test_effort_override_for_unresolvable_reference_is_rejected():
+    raw = json.dumps(
+        {"openai": {"models": {"gpt-5.6-luna": {
+            "modalities": {"output": ["text"]},
+        }}}}
+    ).encode()
+    registry = ModelRegistry(
+        providers={"openai": {"kind": "openai"}},
+        reasoning_effort_overrides={"openai/missing": ["high"]},
+        env={}, snapshot_path=MISSING,
+    )
+    with pytest.raises(ConfigError, match="do not resolve.*openai/missing"):
+        registry.install_raw(raw)
 
 
 def test_provider_alias_does_not_project_arbitrary_compatible_vendor():

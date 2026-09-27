@@ -9,6 +9,9 @@ whose head is a tiny frontmatter block::
     bundles: [fs]
     tools: ["-Write", "-Edit"]
     model: low
+    provider: anthropic
+    reasoning_effort: medium
+    color: #4F8EF7
     max_iterations: 30
     context_tokens: 100000
     contexts: [root, subagent]
@@ -32,11 +35,13 @@ scalars, duplicate keys, unknown keys, and wrong value types. One bad line
 rejects the whole declaration.
 
 The supported keys are exactly ``name``, ``description``, ``bundles``,
-``tools``, ``model``, ``max_iterations``, ``context_tokens``, and ``contexts``.
-``name`` and ``description`` are required; ``bundles``, ``tools``, and
-``contexts`` are the list-valued fields. Missing ``contexts`` preserves the
-legacy subagent-only behavior. A ``tools`` item may carry a leading ``-`` to *exclude* a tool, which is
-the only way a declaration can narrow a set -- declarations never grant.
+``tools``, ``model``, ``provider``, ``reasoning_effort``, ``color``,
+``max_iterations``, ``context_tokens``, and ``contexts``. ``name`` and
+``description`` are required; ``bundles``, ``tools``, and ``contexts`` are the
+list-valued fields. Missing ``contexts`` preserves the legacy subagent-only
+behavior. A ``tools`` item may carry a leading ``-`` to *exclude* a tool, which
+is the only way a declaration can narrow a set -- declarations never grant.
+Missing ``color`` is resolved deterministically from the normalized agent name.
 
 ``model`` is deliberately **opaque**: it is validated for shape only and is never
 resolved, looked up, or sent to a network. A tier name (``low``/``medium``/
@@ -65,6 +70,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from ..errors import NexusError
+from ..tools.names import canonical_tool_name, canonical_tool_names
 
 __all__ = [
     "DEFAULT_MAX_BODY_BYTES",
@@ -79,11 +85,14 @@ __all__ = [
     "MAX_ITERATIONS",
     "MAX_LIST_ITEMS",
     "MAX_MODEL_CHARS",
+    "MAX_PROVIDER_CHARS",
     "MAX_NAME_CHARS",
     "MAX_TOOLS",
     "AGENT_CONTEXTS",
     "MODEL_INHERIT",
     "MODEL_TIERS",
+    "REASONING_EFFORTS",
+    "DEFAULT_AGENT_COLORS",
     "MUTATING_FS_TOOLS",
     "READ_ONLY_ROLES",
     "READ_ONLY_TOOLS",
@@ -106,6 +115,7 @@ __all__ = [
     "ParsedFrontmatter",
     "find_frontmatter_bounds",
     "is_model_tier",
+    "default_agent_color",
     "parse_frontmatter",
     "read_agent_bytes",
     "read_agent_file",
@@ -165,6 +175,7 @@ MAX_FRONTMATTER_BYTES = 16_384
 MAX_DESCRIPTION_CHARS = 2_048
 MAX_NAME_CHARS = 64
 MAX_MODEL_CHARS = 128
+MAX_PROVIDER_CHARS = 64
 MAX_LIST_ITEMS = 64
 MAX_TOOLS = MAX_LIST_ITEMS
 MAX_BUNDLES = MAX_LIST_ITEMS
@@ -178,21 +189,38 @@ DEFAULT_MAX_BODY_BYTES = MAX_AGENT_FILE_BYTES
 #: Reserved tier names a ``model:`` may use. They are matched literally and are
 #: never resolved here: this layer only checks the token's shape.
 MODEL_TIERS = ("low", "medium", "high")
+REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+DEFAULT_AGENT_COLORS = (
+    "#4F8EF7",
+    "#34A853",
+    "#14B8A6",
+    "#A855F7",
+    "#F97316",
+    "#E84393",
+    "#D4A017",
+    "#64748B",
+    "#06B6D4",
+    "#84CC16",
+    "#EF4444",
+    "#8B5CF6",
+)
 #: The sentinel that means "use the session's model".
 MODEL_INHERIT = "inherit"
 
 #: Tools that write to the filesystem; a read-only role may never hold one.
-MUTATING_FS_TOOLS = frozenset({"Write", "Edit", "MultiEdit"})
+MUTATING_FS_TOOLS = frozenset({"write", "edit", "multiedit"})
 #: The shell bundle tools; a read-only role may never hold one.
-SHELL_TOOLS = frozenset({"Bash", "BashOutput", "KillShell"})
+SHELL_TOOLS = frozenset({"bash", "BashOutput", "KillShell"})
 #: Everything the read-only roles are structurally denied.
-FORBIDDEN_ROLE_TOOLS = SHELL_TOOLS | MUTATING_FS_TOOLS | frozenset({"Task"})
+FORBIDDEN_ROLE_TOOLS = SHELL_TOOLS | MUTATING_FS_TOOLS
 #: Bundles the read-only roles are structurally denied.
 FORBIDDEN_ROLE_BUNDLES = frozenset({"shell"})
 #: Roles with no write path at all, regardless of what their file declares.
 READ_ONLY_ROLES = frozenset({"explore", "plan", "planner"})
 #: Tools permitted to structurally read-only roles.
-READ_ONLY_TOOLS = frozenset({"Read", "Glob", "Grep", "LS"})
+READ_ONLY_TOOLS = frozenset(
+    {"read", "glob", "grep", "subagent", "todowrite", "skill", "webfetch", "websearch"}
+)
 AGENT_CONTEXTS = frozenset({"root", "subagent"})
 
 _NAME_RE = re.compile(rf"[A-Za-z0-9][A-Za-z0-9._-]{{0,{MAX_NAME_CHARS - 1}}}\Z")
@@ -201,6 +229,8 @@ _BUNDLE_RE = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
 _TOOL_RE = re.compile(r"-?[A-Za-z][A-Za-z0-9_]{0,63}\Z")
 _INT_RE = re.compile(r"[0-9]+\Z")
 _FLOAT_RE = re.compile(r"[0-9]+\.[0-9]+\Z")
+_PROVIDER_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}\Z")
+_COLOR_RE = re.compile(r"#[0-9A-Fa-f]{6}\Z")
 
 #: Keys the grammar understands. Anything else is an error, never ignored.
 _FIELDS = (
@@ -209,6 +239,9 @@ _FIELDS = (
     "bundles",
     "tools",
     "model",
+    "provider",
+    "reasoning_effort",
+    "color",
     "max_iterations",
     "context_tokens",
     "contexts",
@@ -273,6 +306,7 @@ class AgentDiagnosticCode(StrEnum):
     FORBIDDEN_BUNDLE = "forbidden_bundle"
     SEED_ERROR = "seed_error"
     DEPRECATED_PLANNER = "deprecated_planner"
+    LEGACY_TOOL_NAME = "legacy_tool_name"
 
 
 @dataclass(frozen=True)
@@ -319,10 +353,14 @@ class ParsedFrontmatter:
     tools: tuple[str, ...]
     excluded_tools: tuple[str, ...]
     model: str | None
+    provider: str | None
+    reasoning_effort: str | None
+    color: str
     max_iterations: int | None
     context_tokens: int | None
     contexts: tuple[str, ...]
     profile: str | None
+    migration_notices: tuple[str, ...]
     raw: bytes
 
 
@@ -350,6 +388,14 @@ class AgentFile:
 def is_model_tier(value: object) -> bool:
     """Whether ``value`` is one of the reserved tier names (never resolves it)."""
     return isinstance(value, str) and value in MODEL_TIERS
+
+
+def default_agent_color(name: str) -> str:
+    """Return a stable palette color derived from a case-normalized agent name."""
+    normalized = name.casefold()
+    digest = hashlib.sha256(normalized.encode("utf-8")).digest()
+    palette_index = int.from_bytes(digest[:4], "big") % len(DEFAULT_AGENT_COLORS)
+    return DEFAULT_AGENT_COLORS[palette_index]
 
 
 # ---------------------------------------------------------------------------
@@ -476,7 +522,7 @@ def _parse_list(
     return tuple(ordered)
 
 
-def _parse_tools(value: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+def _parse_tools(value: str) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     """Split a ``tools`` flow list into positive tools and exclusions."""
     items = _parse_list(value, "tools", _TOOL_RE, "tool name")
     tools: list[str] = []
@@ -486,10 +532,12 @@ def _parse_tools(value: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
             excluded.append(item[1:])
         else:
             tools.append(item)
+    tools, collisions = canonical_tool_names(tools)
+    excluded = [canonical_tool_name(name) for name in excluded]
     excluded_set = set(excluded)
     # An exclusion wins over an inclusion of the same name.
     tools = [name for name in tools if name not in excluded_set]
-    return tuple(tools), tuple(excluded)
+    return tuple(tools), tuple(excluded), collisions
 
 
 def _parse_model(value: str) -> str:
@@ -499,6 +547,32 @@ def _parse_model(value: str) -> str:
     if any(ch.isspace() for ch in model):
         raise AgentParseError("model must not contain whitespace")
     return model
+
+
+def _parse_provider(value: str) -> str:
+    provider = _parse_scalar(value, "provider")
+    if len(provider) > MAX_PROVIDER_CHARS or _PROVIDER_RE.fullmatch(provider) is None:
+        raise AgentParseError(
+            "provider must be a provider identifier containing only letters, "
+            "digits, '_' or '-'"
+        )
+    return provider
+
+
+def _parse_reasoning_effort(value: str) -> str:
+    effort = _parse_scalar(value, "reasoning_effort")
+    if effort not in REASONING_EFFORTS:
+        raise AgentParseError(
+            "reasoning_effort must be one of: " + ", ".join(REASONING_EFFORTS)
+        )
+    return effort
+
+
+def _parse_color(value: str) -> str:
+    color = _parse_scalar(value, "color")
+    if _COLOR_RE.fullmatch(color) is None:
+        raise AgentParseError("color must be a six-digit hex color like #4F8EF7")
+    return color.upper()
 
 
 def _parse_int(value: str, field: str, max_value: int) -> int:
@@ -569,10 +643,27 @@ def _parse_raw(raw: bytes) -> ParsedFrontmatter:
         else ()
     )
     if "tools" in fields:
-        tools, excluded_tools = _parse_tools(fields["tools"])
+        tools, excluded_tools, migration_notices = _parse_tools(fields["tools"])
     else:
-        tools, excluded_tools = (), ()
+        tools, excluded_tools, migration_notices = (), (), ()
     model = _parse_model(fields["model"]) if "model" in fields else None
+    provider = _parse_provider(fields["provider"]) if "provider" in fields else None
+    if model is not None and "/" in model and provider is not None:
+        model_provider = model.split("/", 1)[0]
+        if model_provider.casefold() != provider.casefold():
+            raise AgentParseError(
+                f"provider {provider!r} conflicts with qualified model {model!r}"
+            )
+    reasoning_effort = (
+        _parse_reasoning_effort(fields["reasoning_effort"])
+        if "reasoning_effort" in fields
+        else None
+    )
+    color = (
+        _parse_color(fields["color"])
+        if "color" in fields
+        else default_agent_color(name)
+    )
     max_iterations = (
         _parse_int(fields["max_iterations"], "max_iterations", MAX_ITERATIONS)
         if "max_iterations" in fields
@@ -607,10 +698,14 @@ def _parse_raw(raw: bytes) -> ParsedFrontmatter:
         tools=tools,
         excluded_tools=excluded_tools,
         model=model,
+        provider=provider,
+        reasoning_effort=reasoning_effort,
+        color=color,
         max_iterations=max_iterations,
         context_tokens=context_tokens,
         contexts=contexts,
         profile=profile,
+        migration_notices=migration_notices,
         raw=raw,
     )
 
@@ -777,6 +872,13 @@ class AgentDef:
     body_size: int = 0
     file_sha256: str = ""
     snapshotted: bool = False
+    provider: str | None = None
+    reasoning_effort: str | None = None
+    color: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.color:
+            object.__setattr__(self, "color", default_agent_color(self.name))
 
     # -- provenance conveniences ------------------------------------------
 
@@ -828,7 +930,8 @@ class AgentDef:
         if not self.read_only:
             return ()
         found: list[str] = [
-            name for name in self.tools if name in FORBIDDEN_ROLE_TOOLS
+            name for name in self.tools
+            if canonical_tool_name(name) in FORBIDDEN_ROLE_TOOLS
         ]
         found.extend(
             bundle for bundle in self.bundles if bundle in FORBIDDEN_ROLE_BUNDLES
@@ -852,6 +955,9 @@ class AgentDef:
             "tools": list(self.tools),
             "excluded_tools": list(self.excluded_tools),
             "model": self.model,
+            "provider": self.provider,
+            "reasoning_effort": self.reasoning_effort,
+            "color": self.color,
             "max_iterations": self.max_iterations,
             "context_tokens": self.context_tokens,
             "contexts": list(self.contexts),
@@ -935,6 +1041,9 @@ class AgentIndexEntry:
     source: AgentSource
     model: str | None = None
     read_only: bool = False
+    provider: str | None = None
+    reasoning_effort: str | None = None
+    color: str | None = None
 
     def line(self) -> str:
         return f"{self.name}: {self.description}"

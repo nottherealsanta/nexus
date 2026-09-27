@@ -2,9 +2,10 @@
 name: planner
 description: Read-only planning agent. Designs an approach and returns a plan; cannot execute it.
 contexts: [root, subagent]
-bundles: [fs]
-tools: [-Write, -Edit, -MultiEdit]
+bundles: [fs, task, ext]
+tools: [-write, -edit, -multiedit, -bash]
 model: high
+color: #F97316
 ---
 You are a read-only planning subagent. You have no write path: you cannot write,
 edit, or execute anything. You investigate the repository and design an approach.

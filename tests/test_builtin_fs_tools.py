@@ -5,6 +5,9 @@ a temporary workspace, and no test reads or writes a path outside ``tmp_path``.
 """
 from __future__ import annotations
 
+import asyncio
+import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -110,7 +113,7 @@ def workspace(tmp_path: Path) -> Path:
 
 def test_specs_cover_the_fs_bundle_in_order():
     names = [spec.name for spec in FS_SPECS]
-    assert names == ["Read", "Write", "Edit", "MultiEdit", "Glob", "Grep", "LS"]
+    assert names == ["read", "glob", "grep", "edit", "write"]
     assert all(spec.bundle == "fs" for spec in FS_SPECS)
     assert {spec.name for spec in FS_SPECS} == set(FS_RUNNERS)
     assert [tool.name for tool in FS_TOOLS] == names
@@ -139,6 +142,13 @@ def test_permission_key_canonicalizes_absolute_symlink(tmp_path: Path):
     alias.symlink_to(real, target_is_directory=True)
     key = READ_SPEC.resolve_permission_key({"path": str(alias / "f.txt")})
     assert key == str((real / "f.txt").resolve())
+
+
+def test_csv_conversion_option_does_not_change_permission_key():
+    path = "data.csv"
+    assert READ_SPEC.resolve_permission_key({"path": path}) == READ_SPEC.resolve_permission_key(
+        {"path": path, "csv_as_markdown": True}
+    )
 
 
 def test_permission_key_fails_closed():
@@ -208,7 +218,137 @@ async def test_read_missing_file_and_directory(workspace: Path):
     ctx = make_ctx(workspace)
     assert (await read.run({"path": "nope.txt"}, ctx)).is_error is True
     (workspace / "adir").mkdir()
-    assert (await read.run({"path": "adir"}, ctx)).is_error is True
+    result = await read.run({"path": "adir"}, ctx)
+    assert result.is_error is False
+    assert result.content[0].text == ""
+    assert result.metrics["total_lines"] == 0
+    assert result.metrics["truncated"] is False
+
+
+async def test_read_directory_sorted_nested_and_offset(workspace: Path):
+    (workspace / "z.txt").write_text("", encoding="utf-8")
+    (workspace / "a-dir").mkdir()
+    (workspace / "m.txt").write_text("", encoding="utf-8")
+    nested = workspace / "a-dir" / "nested"
+    nested.mkdir()
+    (nested / "child.txt").write_text("", encoding="utf-8")
+
+    result = await read.run({"path": "."}, make_ctx(workspace))
+    page = await read.run(
+        {"path": ".", "offset": 2, "limit": 2}, make_ctx(workspace)
+    )
+    nested_result = await read.run({"path": "a-dir/nested"}, make_ctx(workspace))
+
+    assert result.content[0].text == "a-dir/\nm.txt\nz.txt"
+    assert result.metrics["total_lines_exact"] is True
+    assert page.content[0].text == "m.txt\nz.txt"
+    assert page.metrics["lines"] == 2
+    assert nested_result.content[0].text == "child.txt"
+
+
+async def test_read_directory_symlinks_do_not_expose_targets(
+    workspace: Path, tmp_path: Path
+):
+    (workspace / "inside").mkdir()
+    (workspace / "inside-link").symlink_to(
+        workspace / "inside", target_is_directory=True
+    )
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("secret", encoding="utf-8")
+    (workspace / "outside-link").symlink_to(outside, target_is_directory=True)
+
+    result = await read.run({"path": "."}, make_ctx(workspace))
+
+    assert result.content[0].text.splitlines() == [
+        "inside/",
+        "inside-link@",
+        "outside-link@",
+    ]
+    assert "->" not in result.content[0].text
+    assert str(outside) not in result.content[0].text
+    assert "secret.txt" not in result.content[0].text
+
+
+async def test_read_directory_honours_read_denyroots(workspace: Path):
+    secret = workspace / "secret"
+    secret.mkdir()
+    (secret / "id_rsa").write_text("key", encoding="utf-8")
+    (workspace / "ok.txt").write_text("", encoding="utf-8")
+    ctx = make_ctx(workspace, config=make_config(read_denyroots=(str(secret),)))
+
+    result = await read.run({"path": "."}, ctx)
+
+    assert result.content[0].text == "ok.txt"
+    assert result.metrics["total_lines"] == 1
+
+
+async def test_read_directory_scan_cap_reports_lower_bound(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(read, "_MAX_DIRECTORY_SCAN_ENTRIES", 3)
+    for name in ("a", "b", "c", "d", "e"):
+        (workspace / name).write_text("", encoding="utf-8")
+
+    result = await read.run({"path": "."}, make_ctx(workspace))
+
+    assert result.metrics["total_lines"] == 3
+    assert result.metrics["total_lines_exact"] is False
+    assert result.metrics["truncated"] is True
+    assert "of at least 3 entries" in result.content[0].text
+
+
+async def test_read_directory_filtered_entries_do_not_consume_cap(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+):
+    denied = workspace / "secret"
+    denied.mkdir()
+    (workspace / ".hidden").write_text("", encoding="utf-8")
+    (denied / "key").write_text("", encoding="utf-8")
+    for name in ("a", "b", "c"):
+        (workspace / name).write_text("", encoding="utf-8")
+    monkeypatch.setattr(read, "_MAX_DIRECTORY_SCAN_ENTRIES", 2)
+    real_scandir = os.scandir
+
+    class SortedScandir:
+        def __init__(self, path):
+            with real_scandir(path) as iterator:
+                self.entries = iter(sorted(iterator, key=lambda entry: entry.name))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return False
+
+        def __iter__(self):
+            return self.entries
+
+    monkeypatch.setattr(read.os, "scandir", SortedScandir)
+    ctx = make_ctx(workspace, config=make_config(read_denyroots=(str(denied),)))
+
+    result = await read.run({"path": "."}, ctx)
+
+    assert result.content[0].text.splitlines() == [
+        "a",
+        "b",
+        "[Read: truncated, showing 2 of at least 2 entries; list a narrower directory]",
+    ]
+    assert result.metrics["total_lines"] == 2
+    assert result.metrics["total_lines_exact"] is False
+    assert "offset=" not in result.content[0].text
+
+
+async def test_read_directory_byte_cap_is_explicit(workspace: Path):
+    for name in ("a" * 20, "b" * 20, "c" * 20):
+        (workspace / name).write_text("", encoding="utf-8")
+    ctx = make_ctx(workspace, config=make_config(max_result_tokens=5))
+
+    result = await read.run({"path": "."}, ctx)
+
+    assert result.metrics["truncated"] is True
+    assert "truncated" in result.content[0].text
+    assert "re-run with offset=" in result.content[0].text
 
 
 async def test_read_binary_reports_not_decodes(workspace: Path):
@@ -285,6 +425,89 @@ async def test_read_outside_workspace_is_allowed_within_tmp(
     result = await read.run({"path": "../sibling.txt"}, make_ctx(workspace))
     assert result.is_error is False
     assert result.content[0].text == "sibling"
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFO is not available")
+async def test_read_rejects_fifo_without_opening(workspace: Path):
+    fifo = workspace / "pipe.txt"
+    os.mkfifo(fifo)
+    assert stat.S_ISFIFO(fifo.stat().st_mode)
+
+    result = await read.run({"path": "pipe.txt"}, make_ctx(workspace))
+
+    assert result.is_error is True
+    assert "regular file" in result.content[0].text
+
+
+async def test_read_rejects_symlink_swap_at_open(
+    workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    target = workspace / "race.txt"
+    target.write_text("allowed initial content", encoding="utf-8")
+    denied = tmp_path / "denied.txt"
+    denied.write_text("secret contents", encoding="utf-8")
+    real_open = os.open
+    real_read = os.read
+    read_calls = 0
+
+    def swapping_open(path, flags, *args, **kwargs):
+        if Path(path) == target:
+            target.unlink()
+            target.symlink_to(denied)
+        return real_open(path, flags, *args, **kwargs)
+
+    def tracking_read(fd, size):
+        nonlocal read_calls
+        read_calls += 1
+        return real_read(fd, size)
+
+    monkeypatch.setattr(read.os, "open", swapping_open)
+    monkeypatch.setattr(read.os, "read", tracking_read)
+    ctx = make_ctx(
+        workspace, config=make_config(read_denyroots=(str(denied),))
+    )
+
+    result = await read.run({"path": "race.txt"}, ctx)
+
+    assert result.is_error is True
+    assert "secret contents" not in result.content[0].text
+    assert read_calls == 0
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "mkfifo") or not hasattr(os, "O_NONBLOCK"),
+    reason="nonblocking FIFO open is not available",
+)
+async def test_read_rejects_fifo_swap_at_open(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+):
+    target = workspace / "race.txt"
+    target.write_text("initial", encoding="utf-8")
+    real_open = os.open
+    real_read = os.read
+    read_calls = 0
+    open_flags: list[int] = []
+
+    def swapping_open(path, flags, *args, **kwargs):
+        if Path(path) == target:
+            target.unlink()
+            os.mkfifo(target)
+            open_flags.append(flags)
+        return real_open(path, flags, *args, **kwargs)
+
+    def tracking_read(fd, size):
+        nonlocal read_calls
+        read_calls += 1
+        return real_read(fd, size)
+
+    monkeypatch.setattr(read.os, "open", swapping_open)
+    monkeypatch.setattr(read.os, "read", tracking_read)
+
+    result = await read.run({"path": "race.txt"}, make_ctx(workspace))
+
+    assert result.is_error is True
+    assert read_calls == 0
+    assert open_flags and open_flags[0] & os.O_NONBLOCK
 
 
 async def test_read_cancellation(workspace: Path):
@@ -670,6 +893,50 @@ async def test_glob_match_cap(workspace: Path, monkeypatch: pytest.MonkeyPatch):
     assert "showing 2 of 5 matches" in result.content[0].text
 
 
+async def test_glob_default_limit_and_truncation_notice(workspace: Path):
+    for index in range(100):
+        (workspace / f"match-{index:03}.txt").write_text("", encoding="utf-8")
+    ctx = make_ctx(workspace)
+
+    exactly_at_limit = await glob.run({"pattern": "*.txt"}, ctx)
+    assert exactly_at_limit.metrics["matches"] == 100
+    assert exactly_at_limit.metrics["total_matches"] == 100
+    assert exactly_at_limit.metrics["truncated"] is False
+    assert "truncated" not in exactly_at_limit.content[0].text
+
+    (workspace / "match-100.txt").write_text("", encoding="utf-8")
+    over_limit = await glob.run({"pattern": "*.txt"}, ctx)
+    assert over_limit.metrics["matches"] == 100
+    assert over_limit.metrics["total_matches"] == 101
+    assert over_limit.metrics["truncated"] is True
+    assert "showing 100 of 101 matches" in over_limit.content[0].text
+
+
+@pytest.mark.parametrize(
+    ("pattern", "expected_matches"),
+    [("z.py", 0), ("*.py", 1)],
+    ids=["no-match", "partial-match"],
+)
+async def test_glob_scan_entry_cap_reports_incomplete_counts(
+    workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    pattern: str,
+    expected_matches: int,
+):
+    monkeypatch.setattr(glob, "_MAX_SCAN_ENTRIES", 2)
+    for name in ("a.py", "b.txt", "z.py"):
+        (workspace / name).write_text("", encoding="utf-8")
+
+    result = await glob.run({"pattern": pattern}, make_ctx(workspace))
+
+    assert result.metrics["matches"] == expected_matches
+    assert result.metrics["total_matches"] == expected_matches
+    assert result.metrics["total_matches_exact"] is False
+    assert result.metrics["walk_truncated"] is True
+    assert result.metrics["truncated"] is True
+    assert f"of at least {expected_matches} matches" in result.content[0].text
+
+
 # ---------------------------------------------------------------------------
 # Grep
 # ---------------------------------------------------------------------------
@@ -683,6 +950,46 @@ async def test_grep_regex_and_sorted_output(workspace: Path):
         "a.txt:1:beta",
         "b.txt:2:beta",
     ]
+
+
+async def test_grep_worker_cannot_be_shadowed_by_workspace_package(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+):
+    marker = workspace / "shadow-executed"
+    package = workspace / "nexus"
+    package.mkdir()
+    (package / "__init__.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).touch()\n",
+        encoding="utf-8",
+    )
+    (workspace / "matches.txt").write_text(
+        "ignore\nneedle-1\nneedle-2\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(workspace)
+
+    result = await grep.run({"pattern": r"needle-\d+"}, make_ctx(workspace))
+
+    assert result.is_error is False
+    assert result.content[0].text.splitlines() == [
+        "matches.txt:2:needle-1",
+        "matches.txt:3:needle-2",
+    ]
+    assert not marker.exists()
+
+
+async def test_grep_cancellation_terminates_worker(workspace: Path):
+    class DelayedCancel(FakeCancel):
+        async def wait(self) -> None:
+            await asyncio.sleep(0.02)
+            self._cancelled = True
+
+    (workspace / "slow.txt").write_text("a" * 64 + "b\n", encoding="utf-8")
+    ctx = make_ctx(workspace, cancel_token=DelayedCancel())
+
+    with pytest.raises(OperationCancelled):
+        await grep.run({"pattern": "(a+)+$"}, ctx)
+
+    assert grep.live_workers() == ()
 
 
 async def test_grep_literal_mode(workspace: Path):
@@ -740,6 +1047,52 @@ async def test_grep_match_cap(workspace: Path):
     assert result.metrics["total_matches"] == 4
     assert result.metrics["truncated"] is True
     assert "showing 2 of 4 matches" in result.content[0].text
+
+
+async def test_grep_default_limit_and_truncation_notice(workspace: Path):
+    target = workspace / "matches.txt"
+    target.write_text("hit\n" * 100, encoding="utf-8")
+    ctx = make_ctx(workspace)
+
+    exactly_at_limit = await grep.run({"pattern": "hit"}, ctx)
+    assert exactly_at_limit.metrics["matches"] == 100
+    assert exactly_at_limit.metrics["total_matches"] == 100
+    assert exactly_at_limit.metrics["truncated"] is False
+    assert "truncated" not in exactly_at_limit.content[0].text
+
+    with target.open("a", encoding="utf-8") as handle:
+        handle.write("hit\n")
+    over_limit = await grep.run({"pattern": "hit"}, ctx)
+    assert over_limit.metrics["matches"] == 100
+    assert over_limit.metrics["total_matches"] == 101
+    assert over_limit.metrics["truncated"] is True
+    assert "showing 100 of 101 matches" in over_limit.content[0].text
+
+
+@pytest.mark.parametrize(
+    ("pattern", "expected_matches"),
+    [("needle", 0), ("hit", 1)],
+    ids=["no-match", "partial-match"],
+)
+async def test_grep_scan_entry_cap_reports_incomplete_counts(
+    workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    pattern: str,
+    expected_matches: int,
+):
+    monkeypatch.setattr(grep, "_MAX_SCAN_ENTRIES", 2)
+    (workspace / "a.py").write_text("hit\n", encoding="utf-8")
+    (workspace / "b.txt").write_text("other\n", encoding="utf-8")
+    (workspace / "z.py").write_text("hit needle\n", encoding="utf-8")
+
+    result = await grep.run({"pattern": pattern}, make_ctx(workspace))
+
+    assert result.metrics["matches"] == expected_matches
+    assert result.metrics["total_matches"] == expected_matches
+    assert result.metrics["total_matches_exact"] is False
+    assert result.metrics["walk_truncated"] is True
+    assert result.metrics["truncated"] is True
+    assert f"of at least {expected_matches} matches" in result.content[0].text
 
 
 async def test_grep_output_byte_cap(workspace: Path):

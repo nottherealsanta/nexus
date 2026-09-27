@@ -149,7 +149,7 @@ _WRITE_SCHEMA: dict[str, Any] = {
 }
 
 SPEC = ToolSpec(
-    name="Write",
+    name="write",
     description=(
         "Write a UTF-8 text file, replacing it atomically. Parent directories "
         "are only created when create_parents is true."

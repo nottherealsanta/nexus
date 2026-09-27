@@ -55,10 +55,11 @@ from ..model.message import (
     ToolResult,
     ToolUse,
 )
+from ..model.reasoning_effort import ReasoningEffortSelection
 from ..model.selection import ModelSelection
-from .agent_selection import AgentSelection
 from ..util import new_id
 from . import snapshot as snapshot_mod
+from .agent_selection import AgentSelection
 from .ids import validate_session_id
 from .lock import SessionLock
 from .snapshot import Snapshot, SnapshotSummary
@@ -110,6 +111,7 @@ _QUEUED_BYTES_TAG = "__nexus_bytes__"
 #: same selection from the log.
 _MODEL_SELECTED_EVENT = "model.selected"
 _AGENT_SELECTED_EVENT = "agent.selected"
+_REASONING_EFFORT_SELECTED_EVENT = "reasoning_effort.selected"
 
 
 def _decode_queued_content(raw: object) -> list[ContentBlock] | None:
@@ -452,6 +454,7 @@ class Session:
         #: is visible to the *next* turn without reading the whole log again.
         self._model_selection: ModelSelection | None = None
         self._agent_selection: AgentSelection | None = None
+        self._reasoning_effort_selection: ReasoningEffortSelection | None = None
         self._turn_agent_definition: Any | None = None
         # A crash can leave a submission durable as ``input.queued`` but absent
         # from memory; rebuilding the FIFO here means a reopened handle resumes
@@ -459,6 +462,7 @@ class Session:
         self._rehydrate_queue()
         self._rehydrate_model_selection()
         self._rehydrate_agent_selection()
+        self._rehydrate_reasoning_effort_selection()
 
     # -- wiring ------------------------------------------------------------
 
@@ -639,6 +643,10 @@ class Session:
             parsed = AgentSelection.from_dict(event.data)
             if parsed is not None:
                 self._agent_selection = parsed
+        elif event.type == _REASONING_EFFORT_SELECTED_EVENT:
+            parsed = ReasoningEffortSelection.from_dict(event.data)
+            if parsed is not None:
+                self._reasoning_effort_selection = parsed
         elif event.type in TERMINAL_EVENTS:
             # A terminal turn can never resolve another approval; leaving stale
             # ids behind would let a later viewer-drop "resolve" a dead request.
@@ -724,6 +732,39 @@ class Session:
                     if parsed is not None:
                         latest = parsed
         self._agent_selection = latest
+
+    @property
+    def reasoning_effort_selection(self) -> ReasoningEffortSelection | None:
+        """The durable root reasoning-effort override, or ``None`` for default."""
+        return self._reasoning_effort_selection
+
+    def select_reasoning_effort(
+        self, selection: ReasoningEffortSelection
+    ) -> EventRecord | None:
+        """Persist a root-session effort override for subsequent turns only."""
+        if not isinstance(selection, ReasoningEffortSelection):
+            raise TypeError("selection must be a ReasoningEffortSelection")
+        self._ensure_writable()
+        return self._emit(_REASONING_EFFORT_SELECTED_EVENT, selection.to_dict())
+
+    def clear_reasoning_effort(self) -> EventRecord | None:
+        """Persist a reset to configured/default reasoning effort."""
+        self._ensure_writable()
+        return self._emit(
+            _REASONING_EFFORT_SELECTED_EVENT,
+            ReasoningEffortSelection(effort=None).to_dict(),
+        )
+
+    def _rehydrate_reasoning_effort_selection(self) -> None:
+        """Rebuild the latest valid reasoning-effort selection from the log."""
+        latest: ReasoningEffortSelection | None = None
+        for event in self.read().events():
+            if event.type != _REASONING_EFFORT_SELECTED_EVENT:
+                continue
+            parsed = ReasoningEffortSelection.from_dict(event.data)
+            if parsed is not None:
+                latest = parsed
+        self._reasoning_effort_selection = latest
 
     # -- identity ----------------------------------------------------------
 
@@ -1596,7 +1637,12 @@ class Session:
             if limits is None:
                 lease.limits = self._limits_for_turn(assembler)
             tool_turn = self._tool_turn_for(assembler, lease, attended)
-            agent = getattr(assembler, "agent_definition", None)
+            # Keep the definition resolved at turn start even when an explicit
+            # model selection suppresses the assembler's agent defaults. It is
+            # still the effective root agent for prompts/tools and turn history.
+            agent = self._turn_agent_definition or getattr(
+                assembler, "agent_definition", None
+            )
             if agent is not None:
                 manager = getattr(tool_turn, "manager", None)
                 self._turn_agent_selection_source = getattr(
@@ -1657,6 +1703,8 @@ class Session:
         tool_turn: Any,
         *,
         fanout: _Fanout | None = None,
+        input_id: str | None = None,
+        input_content: list[ContentBlock] | None = None,
     ) -> asyncio.Task:
         """Start the detached producer task for a prepared turn."""
         sink = _SessionEventSink(self, fanout)
@@ -1671,6 +1719,8 @@ class Session:
                 gate=getattr(tool_turn, "gate", None),
                 lease=lease,
                 persist_user_message=False,
+                input_id=input_id,
+                input_content=input_content,
                 manifest_ref=getattr(tool_turn, "manifest_ref", None),
                 environment_for=getattr(tool_turn, "environment_for", None),
                 hooks=getattr(tool_turn, "hooks", None),
@@ -1816,10 +1866,22 @@ class Session:
             return self._fail_blocked_prompt(block_reason)
         effective = self.attended if attended is None else bool(attended)
         lease, assembler, tool_turn = self._prepare_turn(
-            content, effective, turn_id, limits, queued_item=queued_item
+            content,
+            effective,
+            turn_id,
+            limits,
+            queued_item=queued_item,
         )
         try:
-            self._launch_turn(lease, content, assembler, tool_turn, fanout=None)
+            self._launch_turn(
+                lease,
+                content,
+                assembler,
+                tool_turn,
+                fanout=None,
+                input_id=new_id() if queued_item is None else None,
+                input_content=_encode_queued_content(content) if queued_item is None else None,
+            )
         except BaseException:
             self._active_tools = None
             lease.release()
@@ -1947,16 +2009,20 @@ class Session:
         # headless JSON consumer stays unattended even while it is attached.
         effective = self._attended if attended is None else bool(attended)
         fanout = _Fanout(self._event_buffer)
-        lease, assembler, tool_turn = self._prepare_turn(
-            content, effective, None, None
-        )
+        lease, assembler, tool_turn = self._prepare_turn(content, effective, None, None)
         # Every event persisted before the producer started (the gate's hook
         # events, and a queued ``input.consumed``) is replayed first, because the
         # fan-out only captures what the loop emits after launch.
         pre_launch_events = self._events_after(watermark)
         try:
             task = self._launch_turn(
-                lease, content, assembler, tool_turn, fanout=fanout
+                lease,
+                content,
+                assembler,
+                tool_turn,
+                fanout=fanout,
+                input_id=new_id(),
+                input_content=_encode_queued_content(content),
             )
         except BaseException:
             self._active_tools = None

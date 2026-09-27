@@ -49,6 +49,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..tools.names import canonical_tool_name, canonical_tool_names
 from .model import (
     FORBIDDEN_ROLE_BUNDLES,
     FORBIDDEN_ROLE_TOOLS,
@@ -600,6 +601,9 @@ class AgentManager:
                 description=description,
                 source=agent.source,
                 model=agent.model,
+                provider=agent.provider,
+                reasoning_effort=agent.reasoning_effort,
+                color=agent.color,
                 read_only=agent.read_only,
             )
             for agent, description in zip(self._agents, descriptions)
@@ -678,11 +682,11 @@ class AgentManager:
         never add to it.
         """
         resolved = self._coerce_agent(agent)
-        available_set = frozenset(str(tool) for tool in available)
+        available_set = frozenset(canonical_tool_name(str(tool)) for tool in available)
         profile_set = (
             available_set
             if profile is None
-            else frozenset(str(tool) for tool in profile)
+            else frozenset(canonical_tool_name(str(tool)) for tool in profile)
         )
         ceiling = available_set & profile_set
 
@@ -691,11 +695,17 @@ class AgentManager:
         requested: set[str] = set(ceiling) if declared else set()
         if not declared and bundles is not None:
             for bundle in resolved.bundles:
-                requested.update(str(tool) for tool in bundles.get(bundle, ()))
-        requested.update(resolved.tools)
+                requested.update(
+                    canonical_tool_name(str(tool))
+                    for tool in bundles.get(bundle, ())
+                )
+        declared_tools, _collisions = canonical_tool_names(resolved.tools)
+        requested.update(declared_tools)
 
         requested_set = frozenset(requested)
-        selected = (ceiling & requested_set) - frozenset(resolved.excluded_tools)
+        selected = (ceiling & requested_set) - frozenset(
+            canonical_tool_name(tool) for tool in resolved.excluded_tools
+        )
         stripped = frozenset()
         if resolved.read_only:
             forbidden = FORBIDDEN_ROLE_TOOLS | frozenset(
@@ -712,12 +722,6 @@ class AgentManager:
             selected = selected & READ_ONLY_TOOLS
         else:
             forbidden = frozenset()
-        if resolved.name.casefold() in {"plan", "planner"}:
-            # Planning agents may delegate read-only investigation but never a
-            # child with write access. The Task tool itself is not a grant.
-            selected = selected - frozenset({"Task"})
-            stripped = stripped | (requested_set & frozenset({"Task"}))
-
         return AgentToolSelection(
             agent=resolved.name,
             available=available_set,
@@ -916,6 +920,9 @@ class AgentManager:
             tools=parsed.tools,
             excluded_tools=parsed.excluded_tools,
             model=parsed.model,
+            provider=parsed.provider,
+            reasoning_effort=parsed.reasoning_effort,
+            color=parsed.color,
             max_iterations=parsed.max_iterations,
             context_tokens=parsed.context_tokens,
             contexts=parsed.contexts,
@@ -943,15 +950,30 @@ class AgentManager:
         path: Path,
         diagnostics: list[AgentDiagnostic],
     ) -> None:
+        if parsed.migration_notices:
+            for name in parsed.migration_notices[:5]:
+                diagnostics.append(
+                    AgentDiagnostic(
+                        code=AgentDiagnosticCode.LEGACY_TOOL_NAME,
+                        message=(
+                            f"agent {parsed.name!r} declares both legacy and canonical "
+                            f"spellings for {name!r}; they were deduplicated"
+                        ),
+                        tier=tier,
+                        path=str(path),
+                        name=parsed.name,
+                    )
+                )
         if self._known_tools is not None:
             for tool in parsed.tools:
-                if tool not in self._known_tools:
+                canonical = canonical_tool_name(tool)
+                if canonical not in self._known_tools:
                     diagnostics.append(
                         AgentDiagnostic(
                             code=AgentDiagnosticCode.UNKNOWN_TOOL,
                             message=(
                                 f"agent {parsed.name!r} declares unknown tool "
-                                f"{tool!r}; declarations never grant access"
+                            f"{tool!r}; declarations never grant access"
                             ),
                             tier=tier,
                             path=str(path),
@@ -975,7 +997,7 @@ class AgentManager:
                     )
         if parsed.name.casefold() in READ_ONLY_ROLES:
             for tool in parsed.tools:
-                if tool in FORBIDDEN_ROLE_TOOLS:
+                if canonical_tool_name(tool) in FORBIDDEN_ROLE_TOOLS:
                     diagnostics.append(
                         AgentDiagnostic(
                             code=AgentDiagnosticCode.FORBIDDEN_TOOL,
@@ -1003,16 +1025,3 @@ class AgentManager:
                             name=parsed.name,
                         )
                     )
-            if parsed.tools and "Task" in parsed.tools:
-                diagnostics.append(
-                    AgentDiagnostic(
-                        code=AgentDiagnosticCode.FORBIDDEN_TOOL,
-                        message=(
-                            f"read-only agent {parsed.name!r} declares forbidden "
-                            "tool 'Task'; it will never hold it"
-                        ),
-                        tier=tier,
-                        path=str(path),
-                        name=parsed.name,
-                    )
-                )

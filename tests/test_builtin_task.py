@@ -100,7 +100,7 @@ def outcome(**overrides) -> SubagentOutcome:
 
 def test_task_spec_shape_and_bundle():
     spec = task.TASK_SPEC
-    assert spec.name == "Task"
+    assert spec.name == "subagent"
     assert spec.bundle == "task"
     assert spec.mutates is False
     assert spec.concurrency == "parallel"
@@ -114,6 +114,7 @@ def test_task_spec_shape_and_bundle():
         "tools",
         "model",
         "description",
+        "worktree",
     }
 
 
@@ -135,18 +136,39 @@ def test_static_permission_key(data, expected):
     assert task.TASK_SPEC.resolve_permission_key(data) == expected
 
 
+def test_worktree_permission_key_has_a_distinct_approval_scope():
+    assert task.TASK_SPEC.resolve_permission_key(
+        {"prompt": "x", "subagent_type": "explore", "model": "low"}
+    ) == "explore:low"
+    assert task.TASK_SPEC.resolve_permission_key(
+        {
+            "prompt": "x",
+            "subagent_type": "explore",
+            "model": "low",
+            "worktree": True,
+        }
+    ) == "explore:low:worktree"
+    from nexus.tools.permissions import parse_rule
+
+    broad_legacy_rule = parse_rule("Task(*)")
+    assert broad_legacy_rule.matches("subagent", "explore:low:worktree", "task")
+
+
 def test_bound_spec_uses_the_service_permission_key():
     service = FakeService(outcome(), key="explore:low")
     service.default_type = "explore"
     spec = task.make_task_spec(service)
     assert spec.resolve_permission_key({"prompt": "x"}) == "explore:low"
+    assert spec.resolve_permission_key({"prompt": "x", "worktree": True}) == (
+        "explore:low:worktree"
+    )
 
 
 def test_build_task_tool_returns_a_registered_task_tool():
     service = FakeService(outcome(), key="planner:medium")
     tool = task.build_task_tool(service)
     assert isinstance(tool, RegisteredTool)
-    assert tool.name == "Task"
+    assert tool.name == "subagent"
     assert tool.bundle == "task"
     assert tool.spec.resolve_permission_key({"prompt": "x"}) == "planner:medium"
 
@@ -177,7 +199,7 @@ async def test_run_passes_the_request_and_context_seams(tmp_path):
         {
             "prompt": "search the repo",
             "subagent_type": "explore",
-            "tools": ["Read", "Grep"],
+            "tools": ["read", "grep"],
             "model": "low",
             "description": "fan out",
         },
@@ -187,13 +209,32 @@ async def test_run_passes_the_request_and_context_seams(tmp_path):
     assert request == {
         "prompt": "search the repo",
         "subagent_type": "explore",
-        "tools": ["Read", "Grep"],
+        "tools": ["read", "grep"],
         "model": "low",
         "description": "fan out",
     }
     assert service.cancel is token
     assert service.emit is sink
     assert service.call_id == "task-call-7"
+
+
+@pytest.mark.parametrize(("value", "expected"), [(True, True), (False, False)])
+async def test_worktree_argument_is_coerced_as_a_boolean(tmp_path, value, expected):
+    service = FakeService(outcome())
+    await task.run({"prompt": "x", "worktree": value}, make_ctx(tmp_path, subagents=service))
+    assert service.requests[-1]["worktree"] is expected
+
+
+async def test_worktree_defaults_off_and_rejects_non_boolean(tmp_path):
+    service = FakeService(outcome())
+    await task.run({"prompt": "x"}, make_ctx(tmp_path, subagents=service))
+    assert service.requests[-1] == {"prompt": "x", "subagent_type": "general"}
+
+    result = await task.run(
+        {"prompt": "x", "worktree": "true"}, make_ctx(tmp_path, subagents=service)
+    )
+    assert result.is_error
+    assert len(service.requests) == 1
 
 
 async def test_bound_service_default_type_applies_to_spawn(tmp_path):

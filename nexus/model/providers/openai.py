@@ -61,8 +61,8 @@ Known mapping limits, stated plainly rather than papered over:
 * Chat Completions has no document block; a :class:`~nexus.model.message.Document`
   degrades to a short text note (declared ``documents: to_text``).
 * Neither dialect has a portable thinking *budget* field the IR can fill from
-  ``SamplingParams.thinking_budget``; reasoning effort is model-selected, so the
-  budget is not sent.
+  ``SamplingParams.thinking_budget``; that budget is not sent. Responses accepts
+  ``reasoning.effort`` independently, while Chat Completions has no equivalent.
 * Prompt caching is automatic server-side; there are no explicit breakpoints to
   place, so the ``cache`` metadata other adapters read is ignored here.
 * **Reasoning replay is not implemented.** A Responses reasoning item's
@@ -82,6 +82,8 @@ import os
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from contextlib import aclosing
 from typing import Any
+
+import msgspec
 
 from ...errors import ProviderError
 from ..capabilities import Capabilities
@@ -121,6 +123,7 @@ __all__ = [
     "build_request_body",
     "normalize_chat_finish_reason",
     "normalize_responses_status",
+    "reasoning_effort_applied",
 ]
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
@@ -180,6 +183,25 @@ def normalize_responses_status(
     if text == "failed":
         return "error"
     return "end_turn"
+
+
+def reasoning_effort_applied(
+    req: ModelRequest,
+    *,
+    api: str,
+    capabilities: Capabilities | None = None,
+) -> bool:
+    """Whether this OpenAI dialect will send the request's effort setting.
+
+    Effort is a Responses API control, not a thinking-token budget. Chat
+    Completions deliberately drops it because that dialect has no portable
+    equivalent.
+    """
+    return (
+        api == API_RESPONSES
+        and req.params.reasoning_effort is not None
+        and (capabilities is None or capabilities.thinking)
+    )
 
 
 def _is_openai_host(base_url: str) -> bool:
@@ -458,7 +480,11 @@ def _responses_content(
 
 
 def _build_responses_body(
-    req: ModelRequest, *, model: str, default_max_tokens: int | None
+    req: ModelRequest,
+    *,
+    model: str,
+    default_max_tokens: int | None,
+    capabilities: Capabilities | None = None,
 ) -> dict[str, Any]:
     body = _responses_content(req, model=model)
     body["stream"] = True
@@ -471,6 +497,10 @@ def _build_responses_body(
         body["temperature"] = params.temperature
     if params.top_p is not None:
         body["top_p"] = params.top_p
+    if reasoning_effort_applied(
+        req, api=API_RESPONSES, capabilities=capabilities
+    ):
+        body["reasoning"] = {"effort": params.reasoning_effort}
     # Responses has no ``stop`` parameter; ``stop_sequences`` is dropped rather
     # than sent and rejected.
     return body
@@ -482,6 +512,7 @@ def build_request_body(
     model: str,
     api: str = API_RESPONSES,
     default_max_tokens: int = DEFAULT_MAX_TOKENS,
+    capabilities: Capabilities | None = None,
 ) -> dict[str, Any]:
     """Translate a :class:`ModelRequest` into an OpenAI request body.
 
@@ -490,7 +521,12 @@ def build_request_body(
     if api == API_CHAT:
         return _build_chat_body(req, model=model, default_max_tokens=default_max_tokens)
     if api == API_RESPONSES:
-        return _build_responses_body(req, model=model, default_max_tokens=default_max_tokens)
+        return _build_responses_body(
+            req,
+            model=model,
+            default_max_tokens=default_max_tokens,
+            capabilities=capabilities,
+        )
     raise ProviderError(f"openai: unknown api dialect {api!r}")
 
 
@@ -1125,11 +1161,24 @@ class OpenAIProvider:
         model = req.model or self._model
         if not model:
             raise ProviderError("openai: no model specified")
+        capabilities = self.capabilities(model)
+        if (
+            self._api == API_RESPONSES
+            and req.params.reasoning_effort is not None
+            and not capabilities.thinking
+        ):
+            req = msgspec.structs.replace(
+                req,
+                params=msgspec.structs.replace(
+                    req.params, reasoning_effort=None
+                ),
+            )
         body = build_request_body(
             req,
             model=model,
             api=self._api,
             default_max_tokens=self._default_max_tokens,
+            capabilities=capabilities,
         )
         headers = await self._headers()
         usage = _UsageTotals()

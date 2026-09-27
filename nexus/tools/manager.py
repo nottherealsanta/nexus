@@ -26,7 +26,9 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import hashlib
 import inspect
+import json
 import math
 import os
 import re
@@ -45,6 +47,7 @@ from ..events import Event
 from ..model.message import DUPLICATE_TOOL_CALL_KEY, Image, Text
 from ..model.request import ToolSchema
 from .bundles import DEFAULT_PROFILE, get_bundle, get_profile
+from .names import canonical_tool_name, permission_bundle_matches
 from .permissions import (
     BatchPlan,
     Decision,
@@ -54,6 +57,7 @@ from .permissions import (
 )
 from .spec import (
     CancelTokenView,
+    PathTarget,
     RegisteredTool,
     ToolCall,
     ToolContext,
@@ -293,6 +297,10 @@ class PreparedCall:
     error: ToolExecutionResult | None = None
     code: str | None = None
     decision: Decision | None = None
+    path_targets: tuple[PathTarget, ...] = ()
+    _multi_target_authorization: object | None = dataclasses.field(
+        default=None, repr=False, compare=False
+    )
 
     @property
     def executable(self) -> bool:
@@ -486,6 +494,17 @@ def _first_text(result: ToolExecutionResult) -> str:
     return ""
 
 
+def _tool_call_digest(call: ToolCall) -> str:
+    """Stable identity for the complete prepared call, including its inputs."""
+    payload = json.dumps(
+        {"id": call.id, "name": call.name, "input": call.input},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _truncate_lines(text: str, max_chars: int) -> str:
     """UTF-8 safe prefix of ``text`` cut at a line boundary when possible."""
     if max_chars <= 0:
@@ -588,14 +607,16 @@ class ToolManager:
         self._owns_todo_store = todo_store is None
         self._todo_store = self._new_todo_store() if todo_store is None else todo_store
         self._closed = False
+        self._multi_target_authorizations: dict[object, tuple[Any, ...]] = {}
+        self._multi_target_authority = object()
 
     # -- construction helpers ---------------------------------------------
 
     @staticmethod
     def _builtin_catalog() -> tuple[RegisteredTool, ...]:
-        from .builtin import BUILTIN_TOOLS
+        from .builtin import BUILTIN_CATALOG
 
-        return BUILTIN_TOOLS
+        return BUILTIN_CATALOG
 
     @staticmethod
     def _new_job_registry():
@@ -631,6 +652,11 @@ class ToolManager:
             for name in tool_names:
                 if not isinstance(name, str):
                     raise ToolSelectionError("tool names must be strings")
+                canonical = canonical_tool_name(name)
+                from .names import LEGACY_TOOL_NAMES
+
+                if canonical in self._by_name and name in LEGACY_TOOL_NAMES:
+                    name = canonical
                 if name in seen:
                     raise DuplicateToolError(f"duplicate requested tool {name!r}")
                 tool = self._by_name.get(name)
@@ -659,6 +685,7 @@ class ToolManager:
         selectable through the same profile machinery without the manager
         importing ``nexus.ext``.
         """
+        profile_bundles = self._profile.bundles
         by_bundle: dict[str, list[str]] = {}
         available: set[str] = set()
         for tool in catalog:
@@ -667,7 +694,7 @@ class ToolManager:
             if isinstance(bundle, str):
                 by_bundle.setdefault(bundle, []).append(tool.name)
         order: list[str] = []
-        for bundle_name in self._profile.bundles:
+        for bundle_name in profile_bundles:
             extra = sorted(
                 (
                     name
@@ -891,7 +918,68 @@ class ToolManager:
                     is_error=True,
                 ),
             )
-        if spec.bundle == "fs" and "path" in normalized.input:
+        try:
+            raw_targets = spec.resolve_multi_path_targets(normalized.input)
+        except Exception as exc:  # noqa: BLE001 - resolver failures fail closed
+            return PreparedCall(
+                call=normalized,
+                spec=spec,
+                code="multi_path_target_error",
+                error=ToolExecutionResult.text(
+                    f"{normalized.name}: {exc}", is_error=True
+                ),
+            )
+        if spec.multi_path_targets is not None and not raw_targets:
+            return PreparedCall(
+                call=normalized,
+                spec=spec,
+                code="multi_path_target_error",
+                error=ToolExecutionResult.text(
+                    f"{normalized.name}: multi-path resolver returned no targets",
+                    is_error=True,
+                ),
+            )
+        if raw_targets:
+            targets: list[PathTarget] = []
+            try:
+                for target in raw_targets:
+                    resolved = guard.resolve(target.path, for_write=True)
+                    targets.append(
+                        PathTarget(
+                            target.role,
+                            str(resolved.absolute),
+                            raw_path=target.path,
+                        )
+                    )
+            except PathSecurityError as exc:
+                return PreparedCall(
+                    call=normalized,
+                    spec=spec,
+                    code=exc.code,
+                    error=ToolExecutionResult.text(
+                        f"{normalized.name}: {exc}", is_error=True
+                    ),
+                )
+            canonical_targets = tuple(targets)
+            try:
+                key = spec.resolve_permission_key(normalized.input)
+            except ToolSpecError as exc:
+                return PreparedCall(
+                    call=normalized,
+                    spec=spec,
+                    path_targets=canonical_targets,
+                    code="permission_key_error",
+                    error=ToolExecutionResult.text(
+                        f"{normalized.name}: {exc}", is_error=True
+                    ),
+                )
+            return PreparedCall(
+                call=normalized,
+                spec=spec,
+                key=key,
+                path_targets=canonical_targets,
+            )
+        if permission_bundle_matches("fs", spec.bundle) and "path" in normalized.input:
             return self._prepare_fs(normalized, spec, guard)
         if spec.path_mode:
             return self._prepare_path_mode(normalized, spec, guard)
@@ -986,13 +1074,23 @@ class ToolManager:
             )
         return PreparedCall(call=canonical, spec=spec, key=key)
 
-    @staticmethod
-    def _coerce_call(call: ToolCall | Any) -> ToolCall:
+    def _coerce_call(self, call: ToolCall | Any) -> ToolCall:
         if isinstance(call, ToolCall):
-            return call
+            canonical = canonical_tool_name(call.name)
+            if canonical not in self._selected:
+                canonical = call.name
+            return call if canonical == call.name else ToolCall(
+                id=call.id, name=canonical, input=dict(call.input)
+            )
         from_tool_use = getattr(call, "from_tool_use", None)
         if from_tool_use is not None:
-            return ToolCall.from_tool_use(call)
+            parsed = ToolCall.from_tool_use(call)
+            canonical = canonical_tool_name(parsed.name)
+            if canonical not in self._selected:
+                canonical = parsed.name
+            return parsed if canonical == parsed.name else ToolCall(
+                id=parsed.id, name=canonical, input=dict(parsed.input)
+            )
         raise ToolManagerError("calls must be ToolCall or ToolUse instances")
 
     # -- dispatch ----------------------------------------------------------
@@ -1042,6 +1140,48 @@ class ToolManager:
                     },
                 )
                 continue
+            if entry.path_targets or (
+                entry.spec is not None
+                and entry.spec.multi_path_targets is not None
+            ):
+                authorized = self._consume_multi_target_authorization(entry)
+                target_recheck = (
+                    self._recheck_path_targets(entry) if entry.path_targets else None
+                )
+                if target_recheck is not None:
+                    code, target_error = target_recheck
+                    results[index] = target_error
+                    await self._emit(
+                        emit,
+                        "tool.failed",
+                        {
+                            "call_id": entry.call.id,
+                            "tool": entry.call.name,
+                            "code": code,
+                            "error": _first_text(target_error),
+                            "executed": False,
+                        },
+                    )
+                    continue
+                if not authorized:
+                    result = ToolExecutionResult.text(
+                        f"{entry.call.name}: no valid multi-target approval "
+                        "evidence was provided; call was refused",
+                        is_error=True,
+                    )
+                    results[index] = result
+                    await self._emit(
+                        emit,
+                        "tool.failed",
+                        {
+                            "call_id": entry.call.id,
+                            "tool": entry.call.name,
+                            "code": "multi_target_unauthorized",
+                            "error": _first_text(result),
+                            "executed": False,
+                        },
+                    )
+                    continue
             if entry.spec is None:
                 results[index] = ToolExecutionResult.text(
                     f"Unknown tool {entry.call.name!r}", is_error=True
@@ -1115,6 +1255,158 @@ class ToolManager:
         assert entry.spec is not None
         return entry.spec.mutates or entry.spec.concurrency == "exclusive"
 
+    def _recheck_path_targets(
+        self, entry: PreparedCall
+    ) -> tuple[str, ToolExecutionResult] | None:
+        """Recheck every prepared multi-path target immediately before dispatch."""
+        first_error: tuple[str, ToolExecutionResult] | None = None
+        for target in entry.path_targets:
+            try:
+                raw_path = target.raw_path or target.path
+                resolved = self._path_guard.recheck(raw_path, for_write=True)
+            except PathSecurityError as exc:
+                candidate = (
+                    exc.code,
+                    ToolExecutionResult.text(f"{entry.call.name}: {exc}", is_error=True),
+                )
+            else:
+                candidate = (
+                    "path_changed",
+                    ToolExecutionResult.text(
+                        f"{entry.call.name}: {target.role} path changed after "
+                        "preparation; the call was refused",
+                        is_error=True,
+                    ),
+                ) if resolved.key != target.path else None
+            if first_error is None and candidate is not None:
+                first_error = candidate
+        return first_error
+
+    def _authorize_multi_target(
+        self,
+        prepared: PreparedBatch,
+        evaluation: Any,
+        decision: Decision,
+        *,
+        authority: object,
+        scope: object | None = None,
+    ) -> PreparedBatch:
+        """Record runtime-gate evidence for one fully evaluated multi-path call.
+
+        The returned batch only carries an opaque handle. Authorization is
+        verified against this manager's private table at dispatch, so callers
+        cannot manufacture approval by setting a scalar decision.
+        """
+        if authority is not self._multi_target_authority:
+            return prepared
+        if not isinstance(prepared, PreparedBatch):
+            raise ToolManagerError("multi-target authorization needs a PreparedBatch")
+        decision = Decision.from_value(decision)
+        if not decision.allows or getattr(evaluation.outcome, "value", None) not in {
+            "allow",
+            "ask",
+        }:
+            return prepared
+        call = evaluation.call
+        entry = next(
+            (
+                item
+                for item in prepared.entries
+                if item.call.id == call.id and item.call.name == call.name
+            ),
+            None,
+        )
+        if (
+            entry is None
+            or entry.error is not None
+            or entry.spec is None
+            or entry.spec.multi_path_targets is None
+            or self._selected.get(entry.call.name) is None
+            or self._selected[entry.call.name].spec is not entry.spec
+            or not entry.path_targets
+        ):
+            return prepared
+        target_evaluations = tuple(getattr(evaluation, "target_evaluations", ()))
+        targets = tuple((item.role, item.path) for item in entry.path_targets)
+        evaluated = tuple(
+            (item.role, item.key) for item in target_evaluations
+        )
+        if (
+            not target_evaluations
+            or evaluated != targets
+            or any(
+                getattr(item.outcome, "value", None) not in {"allow", "ask"}
+                for item in target_evaluations
+            )
+        ):
+            return prepared
+        call_digest = _tool_call_digest(call)
+        binding = (
+            call.id,
+            call.name,
+            call_digest,
+            id(entry.spec),
+            targets,
+            getattr(evaluation.outcome, "value", None),
+            evaluation.code,
+            tuple(
+                (
+                    item.role,
+                    item.key,
+                    getattr(item.outcome, "value", None),
+                    item.code,
+                )
+                for item in target_evaluations
+            ),
+            decision.value,
+        )
+        token = object()
+        self._multi_target_authorizations[token] = (scope, *binding)
+        return PreparedBatch(
+            tuple(
+                dataclasses.replace(item, _multi_target_authorization=token)
+                if item is entry
+                else item
+                for item in prepared.entries
+            )
+        )
+
+    def _revoke_multi_target_authorizations(self, scope: object) -> None:
+        """Revoke outstanding runtime evidence minted by one permission gate."""
+        for token, binding in tuple(self._multi_target_authorizations.items()):
+            if binding[0] is scope:
+                self._multi_target_authorizations.pop(token, None)
+
+    def _consume_multi_target_authorization(self, entry: PreparedCall) -> bool:
+        token = entry._multi_target_authorization
+        if token is None:
+            return False
+        binding = self._multi_target_authorizations.pop(token, None)
+        if binding is None:
+            return False
+        _, *binding = binding
+        binding = tuple(binding)
+        # Evidence is single-use even if validation fails.
+        if entry.spec is None or self._selected.get(entry.call.name) is None:
+            return False
+        if self._selected[entry.call.name].spec is not entry.spec:
+            return False
+        expected_targets = tuple((item.role, item.path) for item in entry.path_targets)
+        expected = (
+            entry.call.id,
+            entry.call.name,
+            _tool_call_digest(entry.call),
+            id(entry.spec),
+            expected_targets,
+            *binding[5:],
+        )
+        return (
+            entry.decision is not None
+            and entry.decision.allows
+            and entry.decision.value == binding[8]
+            and binding == expected
+        )
+
     def _recheck_fs_entry(
         self, entry: PreparedCall
     ) -> tuple[str, ToolExecutionResult] | None:
@@ -1130,7 +1422,7 @@ class ToolManager:
         spec = entry.spec
         if spec is None or entry.key is None:
             return None
-        if spec.bundle != "fs" and not spec.path_mode:
+        if not permission_bundle_matches("fs", spec.bundle) and not spec.path_mode:
             return None
         if not os.path.isabs(entry.key):
             return None
@@ -1336,7 +1628,7 @@ class ToolManager:
     def _timeout_for(self, spec: ToolSpec) -> float | None:
         if spec.timeout_s is not None:
             return spec.timeout_s
-        if spec.name == "Bash":
+        if spec.name == "bash":
             return self._bash_timeout_s + BASH_TIMEOUT_GRACE_S
         return self._default_timeout_s
 

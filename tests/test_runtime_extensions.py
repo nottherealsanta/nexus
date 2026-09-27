@@ -135,7 +135,7 @@ async def test_bootstrap_manifest_has_builtins_config_system_files_skills_tools(
     manifest = runtime.manifest
 
     # Builtins plus the external tool.
-    assert "Read" in manifest.tools and "Bash" in manifest.tools
+    assert "read" in manifest.tools and "bash" in manifest.tools
     assert "ExtPing" in manifest.tools
     assert manifest.tools["ExtPing"].origin == "ext"
     # Config is the bootstrap config.
@@ -208,7 +208,8 @@ async def test_extension_events_are_published_on_the_runtime_bus(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Empty/limited manifest catalog never gains the builtin fallback
+# Empty/limited manifest catalogs do not gain the builtin fallback. Available
+# runtime-owned web tools remain separately selectable by profile/config.
 # ---------------------------------------------------------------------------
 
 
@@ -217,9 +218,10 @@ async def test_empty_manifest_catalog_has_no_tools(tmp_path):
     runtime = make_runtime(tmp_path)
     empty = Manifest(generation=1, config=config, tools={})
     manager = runtime._build_iteration_manager(config, empty)
-    # An empty manifest must yield an empty catalog, never all builtins.
-    assert manager.names == ()
-    assert manager.schemas() == ()
+    # Web fetching is a runtime-owned capability, not an extension-manifest
+    # builtin; no other tools are filled in from the default builtin catalog.
+    assert manager.names == ("webfetch",)
+    assert tuple(schema.name for schema in manager.schemas()) == ("webfetch",)
     await runtime.aclose()
 
 
@@ -230,7 +232,7 @@ async def test_limited_manifest_catalog_exposes_only_its_tools(tmp_path):
         generation=1, config=config, tools={"OnlyOne": _registered("OnlyOne")}
     )
     manager = runtime._build_iteration_manager(config, manifest)
-    assert manager.names == ("OnlyOne",)
+    assert manager.names == ("OnlyOne", "webfetch")
     assert "Read" not in manager.names
     await runtime.aclose()
 
@@ -242,4 +244,4 @@ def test_tool_manager_distinguishes_none_from_empty_catalog(tmp_path):
     # ``None`` (the default) means the builtin catalog; only an explicit empty
     # sequence means no tools.
     default = ToolManager(config, workspace=tmp_path)
-    assert "Read" in default.names
+    assert "read" in default.names

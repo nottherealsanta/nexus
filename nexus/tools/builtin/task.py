@@ -18,7 +18,8 @@ report comes back as this tool's :class:`ToolExecutionResult`, with any dropped
 tools and any tier clamp reported in the text so the model learns rather than
 silently getting less than it asked for.
 
-``permission_key`` returns ``"<subagent_type>:<tier>"`` so the existing rule
+``permission_key`` returns ``"<subagent_type>:<tier>"`` (or appends
+``":worktree"`` for isolated checkout creation) so the existing rule
 grammar expresses real policy without new syntax::
 
     deny  = ["Task(*:high)"]
@@ -88,7 +89,7 @@ _TASK_SCHEMA: dict[str, Any] = {
             "type": "array",
             "items": {"type": "string"},
             "description": (
-                "Optional narrowing set of tool names. Can only reduce the "
+                "Optional narrowing set of canonical lowercase tool names. Can only reduce the "
                 "role's set, never add a tool the parent lacks."
             ),
         },
@@ -104,6 +105,11 @@ _TASK_SCHEMA: dict[str, Any] = {
             "type": "string",
             "minLength": 1,
             "description": "Short label for the agent tree; not sent to the child.",
+        },
+        "worktree": {
+            "type": "boolean",
+            "default": False,
+            "description": "Run the subagent in an isolated Git worktree.",
         },
     },
     "required": ["prompt"],
@@ -133,7 +139,8 @@ def _static_permission_key(data: Mapping[str, Any]) -> str:
         tier = "auto"
     else:
         tier = "inherit"
-    return f"{subagent_type}:{tier}"
+    key = f"{subagent_type}:{tier}"
+    return f"{key}:worktree" if data.get("worktree") is True else key
 
 
 def make_task_spec(service: SubagentServiceView | None = None) -> ToolSpec:
@@ -152,9 +159,10 @@ def make_task_spec(service: SubagentServiceView | None = None) -> ToolSpec:
         def key(data: Mapping[str, Any]) -> str:
             request = dict(data)
             request.setdefault("subagent_type", service.default_type)
-            return service.permission_key(request)
+            resolved = service.permission_key(request)
+            return f"{resolved}:worktree" if request.get("worktree") is True else resolved
     return ToolSpec(
-        name="Task",
+        name="subagent",
         description=_TASK_DESCRIPTION,
         input_schema=_TASK_SCHEMA,
         bundle="task",
@@ -201,6 +209,11 @@ def _build_request(args: Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(value, str) or not value.strip():
             raise _TaskToolError(f"'{name}' must be a non-empty string when given")
         request[name] = value
+    worktree = args.get("worktree", False)
+    if not isinstance(worktree, bool):
+        raise _TaskToolError("'worktree' must be a boolean")
+    if "worktree" in args:
+        request["worktree"] = worktree
     tools = args.get("tools")
     if tools is not None:
         if not isinstance(tools, (list, tuple)) or not all(
@@ -253,6 +266,9 @@ def _to_result(outcome: object) -> ToolExecutionResult:
     requested_tier = getattr(outcome, "requested_tier", None)
     if isinstance(requested_tier, str):
         metrics["requested_tier"] = requested_tier
+    worktree = getattr(outcome, "worktree", None)
+    if isinstance(worktree, Mapping):
+        metrics["worktree"] = dict(worktree)
     if not text.strip():
         text = f"Task: subagent {agent} returned {status}"
     context_note = (

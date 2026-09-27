@@ -1094,7 +1094,12 @@ class HookManager:
         for spec in specs:
             if spec.disabled:
                 continue
-            if not spec.matches(invocation.tool, invocation.key, invocation.bundle):
+            if not spec.matches(
+                invocation.tool,
+                invocation.key,
+                invocation.bundle,
+                input_data=invocation.tool_input,
+            ):
                 continue
             current = invocation.with_tool_input(working)
             try:

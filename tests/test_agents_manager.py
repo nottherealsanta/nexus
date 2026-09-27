@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from nexus.agents import (
+    DEFAULT_AGENT_COLORS,
     FORBIDDEN_ROLE_TOOLS,
     MUTATING_FS_TOOLS,
     READ_ONLY_ROLES,
@@ -29,6 +30,7 @@ from nexus.agents import (
     AgentSeedError,
     AgentSource,
     AgentStaleError,
+    default_agent_color,
     is_model_tier,
     parse_frontmatter,
     read_agent_file,
@@ -114,14 +116,71 @@ def test_parse_all_fields():
     assert parsed.name == "explorer"
     assert parsed.description == "read-only search"
     assert parsed.bundles == ("fs", "task")
-    assert parsed.tools == ("Read",)
-    assert parsed.excluded_tools == ("Write", "Edit")
+    assert parsed.tools == ("read",)
+    assert parsed.excluded_tools == ("write", "edit")
     assert parsed.model == "low"
     assert parsed.max_iterations == 30
     assert parsed.context_tokens == 100_000
     assert parsed.contexts == ("subagent",)
     assert b"name: explorer" in parsed.raw
     assert b"BODY" not in parsed.raw
+
+
+def test_optional_model_provider_effort_and_color_fields():
+    parsed = parse_frontmatter(
+        doc(
+            "name: reviewer",
+            "description: d",
+            "model: anthropic/claude-opus-5",
+            "provider: anthropic",
+            "reasoning_effort: xhigh",
+            "color: #aBcD09",
+        )
+    )
+    assert parsed.provider == "anthropic"
+    assert parsed.reasoning_effort == "xhigh"
+    assert parsed.color == "#ABCD09"
+
+    for effort in ("minimal", "low", "medium", "high", "xhigh", "max"):
+        assert parse_frontmatter(
+            doc("name: agent", "description: d", f"reasoning_effort: {effort}")
+        ).reasoning_effort == effort
+
+
+def test_agent_reasoning_effort_none_is_accepted():
+    assert parse_frontmatter(
+        doc("name: agent", "description: d", "reasoning_effort: none")
+    ).reasoning_effort == "none"
+
+
+def test_invalid_agent_provider_effort_color_and_qualified_conflict_rejected():
+    for field in (
+        "color: red",
+        "color: #12345",
+        "color: #12345678",
+        "color: #12GG56",
+        "provider: bad/provider",
+        "reasoning_effort: ultra",
+        "reasoning_effort: MAX",
+    ):
+        with pytest.raises(AgentParseError):
+            parse_frontmatter(doc("name: agent", "description: d", field))
+    with pytest.raises(AgentParseError, match="conflicts"):
+        parse_frontmatter(
+            doc(
+                "name: agent",
+                "description: d",
+                "model: anthropic/claude-opus-5",
+                "provider: openai",
+            )
+        )
+
+
+def test_omitted_color_is_stable_for_normalized_name():
+    parsed = parse_frontmatter(doc("name: My-Agent", "description: d"))
+    assert parsed.color == default_agent_color("my-agent")
+    assert parsed.color in DEFAULT_AGENT_COLORS
+    assert default_agent_color("My-Agent") == default_agent_color("my-agent")
 
 
 def test_contexts_parse_and_legacy_defaults_to_subagent():
@@ -164,8 +223,58 @@ def test_tools_exclusion_parsing_and_dedup():
     parsed = parse_frontmatter(
         doc("name: a", "description: d", "tools: [Bash, Bash, -Edit, -Edit]")
     )
-    assert parsed.tools == ("Bash",)
-    assert parsed.excluded_tools == ("Edit",)
+    assert parsed.tools == ("bash",)
+    assert parsed.excluded_tools == ("edit",)
+
+
+def test_legacy_tool_declarations_migrate_exactly_and_report_collisions():
+    parsed = parse_frontmatter(
+        doc("name: a", "description: d", "tools: [Read, read, READ]")
+    )
+    assert parsed.tools == ("read", "READ")
+    assert parsed.migration_notices == ("read",)
+
+
+def test_collision_migration_diagnostics_are_bounded_without_widening_tools(tmp_path):
+    legacy_and_canonical = [
+        name
+        for legacy, canonical in (
+            ("Read", "read"),
+            ("Bash", "bash"),
+            ("Edit", "edit"),
+            ("Write", "write"),
+            ("Glob", "glob"),
+            ("Grep", "grep"),
+        )
+        for name in (legacy, canonical)
+    ]
+    write_agent(tmp_path / "workspace", "demo", tools=legacy_and_canonical)
+    mgr = manager(tmp_path)
+
+    notices = [
+        diagnostic
+        for diagnostic in mgr.diagnostics
+        if diagnostic.code is AgentDiagnosticCode.LEGACY_TOOL_NAME
+    ]
+    assert len(notices) == 5
+    assert all("deduplicated" in diagnostic.message for diagnostic in notices)
+
+    selection = mgr.select_tools("demo", available={"read"})
+    assert selection.selected == frozenset({"read"})
+    assert selection.selected <= selection.ceiling <= selection.available
+
+
+def test_bundle_derived_legacy_tool_names_are_canonicalized_within_ceiling(tmp_path):
+    write_agent(tmp_path / "workspace", "demo", bundles=["fs"])
+    mgr = manager(tmp_path)
+    selection = mgr.select_tools(
+        "demo",
+        available={"ls", "multiedit"},
+        bundle_map={"fs": ["LS", "MultiEdit"]},
+    )
+    assert selection.requested == frozenset({"ls", "multiedit"})
+    assert selection.selected == frozenset({"ls", "multiedit"})
+    assert selection.selected <= selection.ceiling <= selection.available
 
 
 def test_exclusion_wins_over_inclusion():
@@ -173,7 +282,7 @@ def test_exclusion_wins_over_inclusion():
         doc("name: a", "description: d", "tools: [Write, -Write]")
     )
     assert parsed.tools == ()
-    assert parsed.excluded_tools == ("Write",)
+    assert parsed.excluded_tools == ("write",)
 
 
 def test_model_is_opaque_and_shape_only():
@@ -512,6 +621,7 @@ def test_seeded_roles_match_the_read_only_contract(tmp_path):
     assert mgr.require("general").model == "medium"
     assert {"general", "build", "explore", "plan"} <= set(mgr.names)
     assert all(mgr.require(name).contexts == ("root", "subagent") for name in ("general", "build", "explore", "plan"))
+    assert len({mgr.require(name).color for name in SEEDED_ROLES}) == len(SEEDED_ROLES)
 
 
 def test_planner_alias_keeps_custom_definition_and_uses_plan_when_absent(tmp_path):
@@ -596,6 +706,50 @@ def test_manager_fingerprints_are_stable_and_map_identity(tmp_path):
         AgentManager.fingerprint_key(first.require("alpha"))
         == first.require("alpha").fingerprint()
     )
+
+
+def test_new_fields_flow_through_manager_index_and_fingerprint(tmp_path):
+    root = tmp_path / "workspace"
+    path = write_agent(root, "worker")
+    path.write_text(
+        doc(
+            "name: worker",
+            "description: agent",
+            "model: anthropic/claude-opus-5",
+            "provider: anthropic",
+            "reasoning_effort: high",
+            "color: #123ABC",
+        ),
+        encoding="utf-8",
+    )
+    mgr = manager(tmp_path)
+    agent = mgr.require("worker")
+    assert (agent.provider, agent.reasoning_effort, agent.color) == (
+        "anthropic",
+        "high",
+        "#123ABC",
+    )
+    entry = mgr.index[0]
+    assert (entry.provider, entry.reasoning_effort, entry.color) == (
+        "anthropic",
+        "high",
+        "#123ABC",
+    )
+    fingerprint = agent.fingerprint()
+
+    path.write_text(
+        doc(
+            "name: worker",
+            "description: agent",
+            "model: anthropic/claude-opus-5",
+            "provider: anthropic",
+            "reasoning_effort: xhigh",
+            "color: #123ABC",
+        ),
+        encoding="utf-8",
+    )
+    mgr.refresh()
+    assert mgr.require("worker").fingerprint() != fingerprint
 
 
 def test_definitions_are_immutable(tmp_path):
@@ -705,8 +859,21 @@ def test_declarations_never_grant_beyond_the_ceiling(tmp_path):
         available={"Read"},
         bundle_map=seed_bundle_map() | {"shell": ["Bash"]},
     )
-    assert selection.selected == frozenset({"Read"})
-    assert "Bash" in selection.dropped
+    assert selection.selected == frozenset({"read"})
+    assert "bash" in selection.dropped
+    assert selection.selected <= selection.ceiling <= selection.available
+
+
+def test_empty_tools_list_inherits_only_the_parent_profile_ceiling(tmp_path):
+    write_agent(tmp_path / "workspace", "demo", tools=[])
+    mgr = manager(tmp_path)
+    selection = mgr.select_tools(
+        "demo",
+        available={"Read", "Write", "Bash"},
+        profile={"Read", "Write"},
+    )
+    assert selection.requested == frozenset({"read", "write"})
+    assert selection.selected == frozenset({"read", "write"})
     assert selection.selected <= selection.ceiling <= selection.available
 
 
@@ -727,7 +894,7 @@ def test_unknown_declarations_are_diagnosed_but_retained(tmp_path):
     assert AgentDiagnosticCode.UNKNOWN_TOOL in codes
     assert AgentDiagnosticCode.UNKNOWN_BUNDLE in codes
     agent = mgr.require("demo")
-    assert agent.tools == ("Read", "Nope")
+    assert agent.tools == ("read", "Nope")
     assert agent.bundles == ("fs", "ghost")
 
 
@@ -754,10 +921,24 @@ def test_read_only_roles_strip_shell_and_mutating_tools(tmp_path):
         available={"Bash", "Write", "Read", "Grep", "Edit", "MultiEdit"},
         bundle_map={"shell": ["Bash"], "fs": ["Read", "Write", "Grep"]},
     )
-    assert selection.selected == frozenset({"Read"})
+    assert selection.selected == frozenset({"read"})
     assert selection.stripped  # the structural strip did real work
     assert not (selection.selected & FORBIDDEN_ROLE_TOOLS)
     assert not (selection.selected & MUTATING_FS_TOOLS)
+
+
+def test_read_only_multiedit_legacy_declaration_is_diagnosed(tmp_path):
+    write_agent(tmp_path / "workspace", "explore", tools=["MultiEdit"])
+    mgr = manager(tmp_path)
+    assert any(
+        diagnostic.code is AgentDiagnosticCode.FORBIDDEN_TOOL
+        and "multiedit" in diagnostic.message
+        for diagnostic in mgr.security
+    )
+    selection = mgr.select_tools(
+        "explore", available={"multiedit"}, mutating=set()
+    )
+    assert selection.selected == frozenset()
 
 
 def test_read_only_role_inherits_the_ceiling_without_mutating(tmp_path):
@@ -779,10 +960,12 @@ def test_read_only_role_inherits_the_ceiling_without_mutating(tmp_path):
     scout = mgr.select_tools(
         explore, available=available, mutating={"SomeDynamicWrite"}
     )
-    assert worker.selected == frozenset(available)
+    assert worker.selected == frozenset(
+        {"read", "write", "edit", "multiedit", "glob", "grep", "ls", "bash"}
+    )
     assert not (scout.selected & FORBIDDEN_ROLE_TOOLS)
     assert "SomeDynamicWrite" not in scout.selected
-    assert scout.selected == frozenset({"Read", "Glob", "Grep", "LS"})
+    assert scout.selected == frozenset({"read", "glob", "grep"})
 
 
 def test_exclusions_can_only_remove_from_the_ceiling(tmp_path):
@@ -791,8 +974,8 @@ def test_exclusions_can_only_remove_from_the_ceiling(tmp_path):
     selection = mgr.select_tools(
         "demo", available={"Read", "Write", "Glob"}, mutating=set()
     )
-    assert selection.selected == frozenset({"Read", "Glob"})
-    assert "Write" in selection.stripped or "Write" in selection.dropped
+    assert selection.selected == frozenset({"read", "glob"})
+    assert "write" in selection.stripped or "write" in selection.dropped
 
 
 def test_declarations_are_not_grants_for_read_only_names(tmp_path):
@@ -811,7 +994,7 @@ def test_declarations_are_not_grants_for_read_only_names(tmp_path):
         available={"Bash", "Read"},
         bundle_map={"shell": ["Bash"]},
     )
-    assert selection.selected == frozenset({"Read"})
+    assert selection.selected == frozenset({"read"})
     assert selection.read_only
 
 
@@ -830,8 +1013,8 @@ def _provenance(tmp_path: Path, name: str):
 
 
 def test_read_only_roles_constant_covers_shell_and_mutating_fs():
-    assert {"Bash", "BashOutput", "KillShell"} <= FORBIDDEN_ROLE_TOOLS
-    assert {"Write", "Edit", "MultiEdit"} <= FORBIDDEN_ROLE_TOOLS
+    assert {"bash", "BashOutput", "KillShell"} <= FORBIDDEN_ROLE_TOOLS
+    assert {"write", "edit", "multiedit"} <= FORBIDDEN_ROLE_TOOLS
     assert READ_ONLY_ROLES == frozenset({"explore", "plan", "planner"})
 
 

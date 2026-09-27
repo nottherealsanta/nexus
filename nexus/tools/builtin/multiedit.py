@@ -50,13 +50,13 @@ _MULTIEDIT_SCHEMA: dict[str, Any] = {
 }
 
 SPEC = ToolSpec(
-    name="MultiEdit",
+    name="multiedit",
     description=(
         "Apply several exact string edits to one UTF-8 file in a single atomic "
         "commit. If any edit is invalid, nothing is written."
     ),
     input_schema=_MULTIEDIT_SCHEMA,
-    bundle="fs",
+    bundle="legacy_fs",
     mutates=True,
     concurrency="exclusive",
     permission_key=canonical_permission_key,

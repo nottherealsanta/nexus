@@ -241,6 +241,9 @@
         }
       ],
       "updated_ts": 22.0,
+      "user_ts": 5.0,
+      "assistant_ts": 19.0,
+      "elapsed_ms": 14000,
       "usage": {
         "cache_read_tokens": 5,
         "cache_write_tokens": 0,

@@ -55,7 +55,7 @@ from nexus.runtime import Runtime
 
 def make_config(
     *,
-    profile: str = "coding",
+    profile: str = "coding_meta",
     mode: str = "allow",
     write_roots: list[str] | None = None,
 ) -> Config:
@@ -198,7 +198,9 @@ async def test_walkthrough_read_template_write_reload_call(tmp_path):
         tool_response(("c1", "MetricsQuery", {"query": "p99"})),
         text_response("done"),
     )
-    runtime = make_runtime(tmp_path, provider, config=make_config(mode="ask"))
+    runtime = make_runtime(
+        tmp_path, provider, config=make_config(profile="coding_meta", mode="ask")
+    )
     session = runtime.session("walkthrough")
     session.mark_attended(True)
 
@@ -237,7 +239,9 @@ async def test_permission_denial_stops_the_new_tool(tmp_path):
         tool_response(("c1", "MetricsQuery", {"query": "p99"})),
         text_response("done"),
     )
-    runtime = make_runtime(tmp_path, provider, config=make_config(mode="ask"))
+    runtime = make_runtime(
+        tmp_path, provider, config=make_config(profile="coding_meta", mode="ask")
+    )
     session = runtime.session("denied")
     session.mark_attended(True)
 
@@ -289,7 +293,7 @@ async def test_broken_syntax_reload_errors_then_recovers(tmp_path):
         tool_response(("c1", "Fixed", {})),
         text_response("done"),
     )
-    runtime = make_runtime(tmp_path, provider)
+    runtime = make_runtime(tmp_path, provider, config=make_config(profile="coding_meta"))
     await runtime.ensure_started()
     baseline = runtime.manifest.generation
     session = runtime.session("recover")
@@ -334,7 +338,7 @@ async def test_bundled_skill_tool_exposed_next_iteration_only(tmp_path):
         text_response("done"),
         text_response("second turn"),
     )
-    runtime = make_runtime(tmp_path, provider)
+    runtime = make_runtime(tmp_path, provider, config=make_config(profile="coding_meta"))
     session = runtime.session("skill-bundled")
 
     await drain(session)
@@ -369,7 +373,7 @@ async def test_bundled_skill_tool_does_not_leak_across_sessions(tmp_path):
         return text_response("b-done")
 
     provider = ScriptedProvider([a_skill], [a_park], [b_respond])
-    runtime = make_runtime(tmp_path, provider)
+    runtime = make_runtime(tmp_path, provider, config=make_config(profile="coding_meta"))
     a = runtime.session("session-a")
     b = runtime.session("session-b")
 
@@ -398,18 +402,22 @@ async def test_bundled_skill_tool_declaration_narrows_it_away(tmp_path):
         tool_response(("s1", "Skill", {"name": "reader"})),
         text_response("done"),
     )
-    runtime = make_runtime(tmp_path, provider)
+    runtime = make_runtime(tmp_path, provider, config=make_config(profile="coding_meta"))
     session = runtime.session("narrowed")
 
     await drain(session)
 
-    assert names(provider.requests[1]) == ["Read"]
+    assert names(provider.requests[1]) == ["read"]
     await runtime.aclose()
 
 
 async def test_noop_reload_with_bundled_skill_tools_does_not_churn(tmp_path):
     write_skill(tmp_path, "reader", tools={"skill_ping.py": SKILL_PING})
-    runtime = make_runtime(tmp_path, ScriptedProvider(text_response("ok")))
+    runtime = make_runtime(
+        tmp_path,
+        ScriptedProvider(text_response("ok")),
+        config=make_config(profile="coding_meta"),
+    )
     first = await runtime.extensions.reload(trigger="test")
     second = await runtime.extensions.reload(trigger="test")
 
@@ -426,7 +434,9 @@ async def test_invalid_bundled_skill_tool_aborts_the_rebuild(tmp_path):
         "reader",
         tools={"broken.py": "SPEC = {'name': 'Broken'\n"},
     )
-    runtime = make_runtime(tmp_path, ScriptedProvider(text_response("ok")))
+    runtime = make_runtime(
+        tmp_path, ScriptedProvider(text_response("ok")), config=make_config(profile="coding_meta")
+    )
     report = await runtime.extensions.reload(trigger="test")
 
     assert report.failed
@@ -443,13 +453,15 @@ async def test_bundled_skill_tool_builtin_collision_fails(tmp_path):
         "reader",
         tools={"shadow.py": tool_source("Read", body="shadow")},
     )
-    runtime = make_runtime(tmp_path, ScriptedProvider(text_response("ok")))
+    runtime = make_runtime(
+        tmp_path, ScriptedProvider(text_response("ok")), config=make_config(profile="coding_meta")
+    )
     report = await runtime.extensions.reload(trigger="test")
 
     assert report.failed
     assert report.failed[0].error_type == "collision"
-    assert "Read" in runtime.manifest.tools
-    assert runtime.manifest.tools["Read"].spec.description != "shadow"
+    assert "read" in runtime.manifest.tools
+    assert runtime.manifest.tools["read"].spec.description != "shadow"
     await runtime.aclose()
 
 
@@ -512,7 +524,7 @@ async def test_schema_and_implementation_share_one_generation(tmp_path):
         tool_response(("c1", "Ping", {})),
         text_response("done"),
     )
-    runtime = make_runtime(tmp_path, provider)
+    runtime = make_runtime(tmp_path, provider, config=make_config(profile="coding_meta"))
     session = runtime.session("same-gen")
 
     await drain(session)
@@ -656,7 +668,7 @@ async def test_api_tool_watcher_reloads_are_serialized(tmp_path):
 
 async def test_config_system_files_and_skills_are_hot_next_iteration(tmp_path):
     (tmp_path / "SOUL.md").write_text("SOUL-A", encoding="utf-8")
-    holder = {"config": make_config(profile="coding")}
+    holder = {"config": make_config(profile="coding_meta")}
 
     def mutate(request):
         holder["config"] = make_config(profile="research")
@@ -677,8 +689,12 @@ async def test_config_system_files_and_skills_are_hot_next_iteration(tmp_path):
     assert "SOUL-A" in provider.requests[0].system
     assert "SOUL-B" in provider.requests[1].system
     assert "reader: read things" in provider.requests[1].system
-    assert len(provider.requests[0].tools) == 16
-    assert len(provider.requests[1].tools) == 5  # research profile (+Task)
+    assert len(provider.requests[0].tools) == 14
+    next_tools = set(names(provider.requests[1]))
+    assert next_tools == {
+        "read", "glob", "grep", "subagent", "todowrite", "webfetch", "skill"
+    }
+    assert not (next_tools & {"write", "edit", "multiedit", "bash"})
     await runtime.aclose()
 
 

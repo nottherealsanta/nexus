@@ -487,7 +487,7 @@ _SKILL_SCHEMA: dict[str, Any] = {
 }
 
 SKILL_SPEC = ToolSpec(
-    name="Skill",
+    name="skill",
     description=(
         "Load a skill's instructions (or one of its bundled resources) by name. "
         "Use this when a task matches a skill listed in the skills index; the "

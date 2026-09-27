@@ -36,6 +36,7 @@ import msgspec
 from ..errors import ConfigError, NexusError
 from ..util import redact_url_userinfo
 from .capabilities import Capabilities
+from .request import REASONING_EFFORT_ORDER, REASONING_EFFORTS
 
 __all__ = [
     "ADAPTER_ANTHROPIC",
@@ -156,6 +157,11 @@ _MAX_NAME_LEN = 512
 _MAX_FAMILY_LEN = 256
 _MAX_NPM_LEN = 256
 _MAX_TIER_LEN = 64
+_REASONING_EFFORT_ORDER = REASONING_EFFORT_ORDER
+_MAX_REASONING_EFFORTS = len(_REASONING_EFFORT_ORDER)
+_MAX_REASONING_EFFORT_OVERRIDES = 20_000
+_MAX_REASONING_OPTIONS = 64
+_MAX_TYPED_REASONING_EFFORT_VALUES = 64
 
 
 class ModelRegistryError(NexusError, ValueError):
@@ -195,6 +201,7 @@ class ModelInfo(msgspec.Struct, frozen=True):
     cost: Cost | None = None
     tier: str = "low"
     source: Literal["catalogue", "config", "builtin"] = "catalogue"
+    reasoning_efforts: tuple[str, ...] = ()
 
     @property
     def ref(self) -> str:
@@ -263,6 +270,7 @@ class CatalogueModel(msgspec.Struct, frozen=True):
     input_modalities: tuple[str, ...] = ()
     output_modalities: tuple[str, ...] = ()
     cost: Cost | None = None
+    reasoning_efforts: tuple[str, ...] = ()
 
 
 class CatalogueProvider(msgspec.Struct, frozen=True):
@@ -379,6 +387,109 @@ def _parse_modalities(value: object) -> tuple[tuple[str, ...], tuple[str, ...]]:
     return parsed[0], parsed[1]
 
 
+def _parse_effort_values(raw: object, field: str) -> tuple[str, ...]:
+    if not isinstance(raw, list) or len(raw) > _MAX_REASONING_EFFORTS:
+        raise CatalogueError(f"{field} must be a bounded list")
+    values: set[str] = set()
+    for item in raw:
+        if not isinstance(item, str) or len(item) > _MAX_ID_LEN:
+            raise CatalogueError(
+                f"{field} reasoning_effort entries must be bounded strings"
+            )
+        if item not in REASONING_EFFORTS:
+            raise CatalogueError(f"unknown reasoning_effort value {item!r}")
+        if item in values:
+            raise CatalogueError(f"duplicate reasoning_effort value {item!r}")
+        values.add(item)
+    return tuple(effort for effort in _REASONING_EFFORT_ORDER if effort in values)
+
+
+def _parse_reasoning_efforts(entry: Mapping[str, object]) -> tuple[str, ...]:
+    # Preserve models.dev's legacy/custom flat field. Its presence explicitly
+    # wins over the typed representation, but its values remain strict.
+    if "reasoning_efforts" in entry:
+        return _parse_effort_values(entry["reasoning_efforts"], "'reasoning_efforts'")
+
+    options = entry.get("reasoning_options")
+    if not isinstance(options, list) or len(options) > _MAX_REASONING_OPTIONS:
+        return ()
+
+    values: set[str] = set()
+    for option in options:
+        # Typed catalogue metadata is best-effort: malformed and future
+        # options are ignored rather than invalidating unrelated model data.
+        if not isinstance(option, Mapping) or option.get("type") != "effort":
+            continue
+        raw_efforts = option.get("values")
+        if (
+            not isinstance(raw_efforts, list)
+            or len(raw_efforts) > _MAX_TYPED_REASONING_EFFORT_VALUES
+        ):
+            continue
+        for effort in raw_efforts:
+            if (
+                isinstance(effort, str)
+                and len(effort) <= _MAX_ID_LEN
+                and effort in REASONING_EFFORTS
+            ):
+                # Multiple provider records commonly repeat the same typed
+                # levels; retaining their unique known union is safe.
+                values.add(effort)
+    return tuple(effort for effort in _REASONING_EFFORT_ORDER if effort in values)
+
+
+def _validate_reasoning_effort_overrides(
+    overrides: Mapping[str, object] | None,
+) -> dict[str, tuple[str, ...]]:
+    """Validate and canonically order explicit ``provider/model`` overrides."""
+    if overrides is None:
+        return {}
+    if not isinstance(overrides, Mapping):
+        raise ConfigError("models.reasoning_efforts must be a mapping")
+    if len(overrides) > _MAX_REASONING_EFFORT_OVERRIDES:
+        raise ConfigError("models.reasoning_efforts has too many model references")
+    parsed: dict[str, tuple[str, ...]] = {}
+    for reference, raw_efforts in overrides.items():
+        if (
+            not isinstance(reference, str)
+            or len(reference) > 2 * _MAX_ID_LEN + 1
+            or reference.strip() != reference
+            or any(ord(char) < 32 or char.isspace() for char in reference)
+        ):
+            raise ConfigError("models.reasoning_efforts keys must be bounded model references")
+        provider, separator, model_id = reference.partition("/")
+        if (
+            not separator
+            or not provider
+            or not model_id
+            or any(not part for part in reference.split("/"))
+            or len(provider) > _MAX_ID_LEN
+            or any(len(part) > _MAX_ID_LEN for part in model_id.split("/"))
+        ):
+            raise ConfigError(
+                f"models.reasoning_efforts key {reference!r} must be provider/model"
+            )
+        if not isinstance(raw_efforts, (list, tuple)) or len(raw_efforts) > _MAX_REASONING_EFFORTS:
+            raise ConfigError(
+                f"models.reasoning_efforts.{reference} must be a bounded list"
+            )
+        values: set[str] = set()
+        for effort in raw_efforts:
+            if not isinstance(effort, str) or effort not in REASONING_EFFORTS:
+                raise ConfigError(
+                    f"models.reasoning_efforts.{reference} has unknown effort {effort!r}"
+                )
+            if effort in values:
+                raise ConfigError(
+                    f"models.reasoning_efforts.{reference} has duplicate effort {effort!r}"
+                )
+            values.add(effort)
+        parsed[reference] = tuple(
+            effort for effort in _REASONING_EFFORT_ORDER if effort in values
+        )
+    return parsed
+
+
 def _parse_model(key: str, value: object) -> CatalogueModel:
     entry = _require_mapping(value, f"model {key!r}")
     model_id = _opt_str(entry, "id", max_len=_MAX_ID_LEN) or key
@@ -407,6 +518,7 @@ def _parse_model(key: str, value: object) -> CatalogueModel:
         input_modalities=input_modalities,
         output_modalities=output_modalities,
         cost=_parse_cost(entry.get("cost")),
+        reasoning_efforts=_parse_reasoning_efforts(entry),
     )
 
 
@@ -597,6 +709,7 @@ def build_index(
     default_tier: str = "low",
     source: Literal["catalogue", "config", "builtin"] = "catalogue",
     provider_aliases: Mapping[str, str] | None = None,
+    reasoning_effort_overrides: Mapping[str, object] | None = None,
 ) -> _ModelIndex:
     """Filter, canonicalize, and index a validated catalogue.
 
@@ -606,6 +719,7 @@ def build_index(
     aliases.
     """
     provider_cfg, aliases, env_map = providers_config or {}, provider_aliases or {}, os.environ if env is None else env
+    effort_overrides = _validate_reasoning_effort_overrides(reasoning_effort_overrides)
     known_providers = {p.id for p in catalogue.providers}
     statuses: list[ProviderStatus] = []; retained: set[str] = set()
     catalogue_by_id = {provider.id: provider for provider in catalogue.providers}
@@ -651,6 +765,7 @@ def build_index(
                 cost=model.cost,
                 tier=default_tier,
                 source=source,
+                reasoning_efforts=model.reasoning_efforts,
             )
             if tier_table is not None:
                 tier = str(tier_table.assign(info))
@@ -663,16 +778,42 @@ def build_index(
         groups.setdefault(key, []).append(info)
     selectable = {status.id: status.selectable for status in statuses}
     models: list[ModelInfo] = []; aliases: dict[str, ModelInfo] = {}
+    resolved_overrides: set[str] = set()
     for key, items in groups.items():
         winner = max(items, key=lambda item: _preference(item, key, selectable))
         loser_refs = tuple(
             sorted({item.ref for item in items if item.ref != winner.ref})
         )
+        # Runtime provider aliases (for example codex -> openai) project the
+        # catalogue's reference onto another provider id. Accept either explicit
+        # reference, but always attach the override to the runtime model record.
+        catalogue_refs = tuple(
+            f"{item.catalogue_provider}/{item.id}"
+            for item in items
+            if item.catalogue_provider
+        )
+        override_refs = tuple(dict.fromkeys((winner.ref, *loser_refs, *catalogue_refs)))
+        resolved_overrides.update(ref for ref in override_refs if ref in effort_overrides)
+        override = next(
+            (effort_overrides[ref] for ref in override_refs if ref in effort_overrides),
+            None,
+        )
+        if override is not None:
+            winner = msgspec.structs.replace(winner, reasoning_efforts=override)
         if loser_refs:
             winner = msgspec.structs.replace(winner, aliases=loser_refs)
         models.append(winner)
         for ref in loser_refs:
             aliases[ref] = winner
+    unresolved_overrides = sorted(set(effort_overrides) - resolved_overrides)
+    if unresolved_overrides:
+        references = ", ".join(repr(ref) for ref in unresolved_overrides[:5])
+        if len(unresolved_overrides) > 5:
+            references += f", and {len(unresolved_overrides) - 5} more"
+        raise ConfigError(
+            "models.reasoning_efforts references do not resolve to retained "
+            f"catalogue models: {references}"
+        )
     models.sort(key=lambda info: (info.provider, info.id))
     by_ref = {info.ref: info for info in models}
     by_id: dict[str, list[ModelInfo]] = {}
@@ -801,6 +942,7 @@ class ModelRegistry:
         tier_table: object | None = None,
         default_tier: str = "low",
         provider_aliases: Mapping[str, str] | None = None,
+        reasoning_effort_overrides: Mapping[str, object] | None = None,
     ) -> None:
         if (
             isinstance(ttl_days, bool)
@@ -840,6 +982,9 @@ class ModelRegistry:
         self._now = now
         self._tier_table = tier_table
         self._default_tier = default_tier
+        self._reasoning_effort_overrides = _validate_reasoning_effort_overrides(
+            reasoning_effort_overrides
+        )
         self._provider_aliases, self._index = dict(provider_aliases or {}), _ModelIndex((), (), {}, {}, {})
         self._loaded = False
         #: Single-flight guard so N concurrent turn boundaries share one
@@ -1082,6 +1227,7 @@ class ModelRegistry:
             default_tier=self._default_tier,
             source=model_source,
             provider_aliases=self._provider_aliases,
+            reasoning_effort_overrides=self._reasoning_effort_overrides,
         )
         self._index = index
         self._loaded = True

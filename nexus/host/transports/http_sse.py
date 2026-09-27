@@ -55,6 +55,7 @@ import msgspec
 from ...events import Event
 from ...util import new_id
 from .. import protocol as p
+from ..web import MAX_WEB_RESPONSE, BrowserRoutes
 from . import TransportError
 
 #: The only address family this surface ever listens on.
@@ -304,6 +305,7 @@ class HTTPSSEServer:
         write_timeout: float = DEFAULT_WRITE_TIMEOUT,
         retry_ms: int = DEFAULT_RETRY_MS,
         on_shutdown: Any | None = None,
+        web_workspace: str = "",
     ) -> None:
         if not _is_loopback(host):
             raise ValueError(
@@ -346,12 +348,14 @@ class HTTPSSEServer:
         self.write_timeout = float(write_timeout)
         self.retry_ms = int(retry_ms)
         self._on_shutdown = on_shutdown
+        self._web_workspace = web_workspace
 
         self._server: asyncio.AbstractServer | None = None
         self._port = 0
         self._writers: set[asyncio.StreamWriter] = set()
         self._tasks: set[asyncio.Task[Any]] = set()
         self._closed = False
+        self._web: BrowserRoutes | None = None
 
     # -- introspection -----------------------------------------------------
 
@@ -394,6 +398,11 @@ class HTTPSSEServer:
         self._port = int(sock.getsockname()[1])
         if self._allowed is None:
             self._allowed = loopback_origins(self._port)
+        self._web = BrowserRoutes(
+            self.facade,
+            workspace=self._web_workspace,
+            port=self._port,
+        )
         return self
 
     async def aclose(self) -> None:
@@ -519,6 +528,10 @@ class HTTPSSEServer:
                 )
                 return
             served += 1
+            # Browser pages and local assets share this listener but use a
+            # separate cookie/CSRF path. Peer routes below retain bearer auth.
+            if self._web is not None and await self._web.route(request, writer, self):
+                return
             origin_header = request.headers.get("origin", "")
             if request.method == "OPTIONS":
                 if not self._origin_allowed(origin_header):
@@ -724,6 +737,15 @@ class HTTPSSEServer:
                 keep_alive=False,
             )
             return False
+        # Browser listener startup is owner-only over the UDS, never an HTTP
+        # peer command. The command remains in the shared wire union only so the
+        # daemon's local control socket can return its one-use launch URL.
+        if isinstance(command, getattr(p, "WebLaunch", ())):
+            await self._write_response(
+                writer, 403, _error_body("command unavailable over HTTP"),
+                headers=self._cors(origin), keep_alive=False,
+            )
+            return False
         try:
             result = await self.facade.handle(command)
         except asyncio.CancelledError:
@@ -733,6 +755,16 @@ class HTTPSSEServer:
                 writer,
                 500,
                 _error_body("internal error"),
+                headers=self._cors(origin),
+                keep_alive=False,
+            )
+            return False
+        data = p.encode_result(result)
+        if len(data) > MAX_WEB_RESPONSE:
+            await self._write_response(
+                writer,
+                413,
+                _error_body("command result too large"),
                 headers=self._cors(origin),
                 keep_alive=False,
             )
@@ -748,7 +780,7 @@ class HTTPSSEServer:
         await self._write_response(
             writer,
             200,
-            p.encode_result(result),
+            data,
             headers={"Content-Type": "application/json", **self._cors(origin)},
             keep_alive=request.keep_alive,
         )

@@ -206,7 +206,7 @@ async def test_list_requires_extension_service(workspace: Path):
 
 
 async def test_reload_success_returns_concise_diff(workspace: Path):
-    config = make_config()
+    config = make_config(profile="coding_meta")
     manager = make_manager(workspace, config, ["Read"])
     write_source(workspace, "metrics_query.py", TOOL_SOURCE)
     ctx = ctx_for(workspace, extensions=manager, config=config)
@@ -219,7 +219,7 @@ async def test_reload_success_returns_concise_diff(workspace: Path):
 
 
 async def test_reload_uses_tool_trigger_and_forwards_events(workspace: Path):
-    config = make_config()
+    config = make_config(profile="coding_meta")
     manager = make_manager(workspace, config, ["Read"])
     write_source(workspace, "metrics_query.py", TOOL_SOURCE)
     recorder = Recorder()
@@ -471,8 +471,14 @@ async def test_write_tool_refuses_symlinked_tools_dir(workspace: Path):
 
 
 async def test_write_tool_permission_key_is_canonical_absolute(workspace: Path):
-    config = make_config()
-    manager = ToolManager(config, workspace=workspace)
+    config = make_config(profile="coding_meta")
+    from nexus.tools.builtin import META_TOOLS_OPT_IN, OPT_IN_TOOLS
+
+    manager = ToolManager(
+        config,
+        workspace=workspace,
+        tools=(*ToolManager._builtin_catalog(), *OPT_IN_TOOLS, *META_TOOLS_OPT_IN),
+    )
     entry = manager.prepare(
         [
             ToolCall(
@@ -493,8 +499,12 @@ async def test_write_tool_permission_key_is_canonical_absolute(workspace: Path):
 
 
 async def test_write_tool_key_boundary_is_enforced_by_the_manager(workspace: Path):
+    from nexus.tools.builtin import META_TOOLS_OPT_IN, OPT_IN_TOOLS
+
     restricted = ToolManager(
-        make_config(write_roots=["./src"]), workspace=workspace
+        make_config(profile="coding_meta", write_roots=["./src"]),
+        workspace=workspace,
+        tools=(*ToolManager._builtin_catalog(), *OPT_IN_TOOLS, *META_TOOLS_OPT_IN),
     )
     entry = restricted.prepare(
         [

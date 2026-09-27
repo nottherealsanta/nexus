@@ -1,26 +1,27 @@
-"""``TodoWrite``: session-scoped in-memory task list (bundle ``task``).
+"""``TodoWrite``: agent-scoped in-memory task list (bundle ``task``).
 
 The model uses this to plan and track work. State lives in a
 :class:`TodoStore` owned by the tool manager (or bound for the current context),
-never in a workspace file: the plan defers durable snapshots to Phase 3, and an
-agent-writable ``todos.json`` would be an uncontrolled mutation surface.
+never in a workspace file. The store is process-memory only; an agent-writable
+``todos.json`` would be an uncontrolled mutation surface.
 
 Injection mirror of :mod:`nexus.tools.builtin._jobs`: :func:`todo_store_for`
 resolves, in order, ``ctx.todo_store`` (the explicit :class:`ToolContext` seam),
 a :mod:`contextvars` binding installed by :func:`bind_store`, and a process-wide
 default store. The result payload carries the full serialized state in
-``metrics["todos"]`` and emits a ``tool.progress`` record, which is the durable
-event/state seam Phase 3 can persist or replay.
+``metrics["todos"]`` and emits durable ``todo.updated`` and ``tool.progress``
+records. The store itself remains in-memory.
 """
 from __future__ import annotations
 
+import inspect
 from collections.abc import Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import Any
 
-from ...errors import ToolError
+from ...errors import SessionError, ToolError
 from ..spec import ToolContext, ToolExecutionResult, ToolSpec
 
 __all__ = [
@@ -42,6 +43,7 @@ __all__ = [
 STATUSES: tuple[str, ...] = ("pending", "in_progress", "completed")
 PRIORITIES: tuple[str, ...] = ("low", "medium", "high")
 _DEFAULT_PRIORITY = "medium"
+DEFAULT_AGENT_ID = "root"
 
 _STATUS_MARK = {"pending": "[ ]", "in_progress": "[~]", "completed": "[x]"}
 
@@ -86,59 +88,176 @@ class TodoItem:
 
 
 class TodoStore:
-    """A keyed, in-memory map of ``session_id -> tuple[TodoItem, ...]``.
+    """An in-memory map keyed by ``(session_id, agent_id)``.
 
     ``replace`` is atomic from the caller's point of view and returns the stored
-    frozen tuple, so a tool can render exactly what was committed. ``snapshot``/
-    ``restore`` are the Phase 3 persistence seam; nothing here touches disk.
+    frozen tuple, so a tool can render exactly what was committed. ``snapshot``
+    and ``restore`` are in-memory inspection helpers, not session replay.
     """
 
     def __init__(self) -> None:
-        self._by_session: dict[str, tuple[TodoItem, ...]] = {}
-        self._revisions: dict[str, int] = {}
+        self._by_agent: dict[tuple[str, str], tuple[TodoItem, ...]] = {}
+        self._revisions: dict[tuple[str, str], int] = {}
 
-    def get(self, session_id: str) -> tuple[TodoItem, ...]:
-        return self._by_session.get(session_id, ())
+    def get(
+        self, session_id: str, agent_id: str = DEFAULT_AGENT_ID
+    ) -> tuple[TodoItem, ...]:
+        return self._by_agent.get((session_id, agent_id), ())
 
     def replace(
-        self, session_id: str, items: Iterable[TodoItem]
+        self,
+        session_id: str,
+        items: Iterable[TodoItem],
+        agent_id: str = DEFAULT_AGENT_ID,
     ) -> tuple[TodoItem, ...]:
         frozen = tuple(items)
         for item in frozen:
             if not isinstance(item, TodoItem):
                 raise ToolError("TodoStore.replace expects TodoItem instances")
-        self._by_session[session_id] = frozen
-        self._revisions[session_id] = self._revisions.get(session_id, 0) + 1
+        key = (session_id, agent_id)
+        self._by_agent[key] = frozen
+        self._revisions[key] = self._revisions.get(key, 0) + 1
         return frozen
 
-    def clear(self, session_id: str) -> None:
-        self._by_session.pop(session_id, None)
-        self._revisions.pop(session_id, None)
+    def clear(self, session_id: str, agent_id: str = DEFAULT_AGENT_ID) -> None:
+        key = (session_id, agent_id)
+        self._by_agent.pop(key, None)
+        self._revisions.pop(key, None)
 
-    def revision(self, session_id: str) -> int:
-        return self._revisions.get(session_id, 0)
+    def clear_session(self, session_id: str) -> None:
+        """Drop all in-memory agent todo state for one closed session."""
+        keys = [key for key in self._by_agent if key[0] == session_id]
+        for key in keys:
+            self._by_agent.pop(key, None)
+            self._revisions.pop(key, None)
+
+    def revision(self, session_id: str, agent_id: str = DEFAULT_AGENT_ID) -> int:
+        return self._revisions.get((session_id, agent_id), 0)
+
+    def replay(self, session: object) -> None:
+        """Restore each agent's latest valid update from this session's log.
+
+        Replayed revisions are assigned verbatim. A newer in-memory revision
+        wins over an older log view, which makes repeated opens safe during a
+        live runtime (and prevents a replay from undoing a write in flight).
+        Empty todo lists are stored with their revision as authoritative clears.
+        """
+        session_id = getattr(session, "id", None)
+        if not isinstance(session_id, str) or not session_id:
+            return
+
+        latest: dict[str, tuple[int, tuple[TodoItem, ...]]] = {}
+        try:
+            events = session.events
+        except SessionError:
+            return
+        if callable(events):
+            try:
+                events = events()
+            except SessionError:
+                return
+        for event in events or ():
+            if getattr(event, "type", None) != "todo.updated":
+                continue
+            # Relayed child events carry the parent session envelope, but retain
+            # their originating session in the payload. Never replay those into
+            # the parent's agent store.
+            if getattr(event, "session", None) != session_id:
+                continue
+            data = getattr(event, "data", None)
+            if not isinstance(data, Mapping) or data.get("session") != session_id:
+                continue
+            agent_id = data.get("agent_id")
+            revision = data.get("revision")
+            if (
+                not isinstance(agent_id, str)
+                or not agent_id
+                or isinstance(revision, bool)
+                or not isinstance(revision, int)
+                or revision < 1
+            ):
+                continue
+            parsed, errors = _parse_todos(data.get("todos"))
+            if errors:
+                continue
+            latest[agent_id] = (revision, tuple(parsed))
+
+        for agent_id, (revision, items) in latest.items():
+            key = (session_id, agent_id)
+            if self._revisions.get(key, 0) >= revision:
+                continue
+            self._by_agent[key] = items
+            self._revisions[key] = revision
+
+    def _rollback_if_revision(
+        self,
+        session_id: str,
+        agent_id: str,
+        *,
+        expected_revision: int,
+        previous_items: tuple[TodoItem, ...],
+        previous_revision: int,
+    ) -> bool:
+        """Restore a failed write only if no later replacement has occurred.
+
+        There is no await in this compare-and-restore, so it is atomic with
+        respect to other event-loop tasks using this store.
+        """
+        key = (session_id, agent_id)
+        if self._revisions.get(key, 0) != expected_revision:
+            return False
+        if previous_revision:
+            self._by_agent[key] = previous_items
+            self._revisions[key] = previous_revision
+        else:
+            self._by_agent.pop(key, None)
+            self._revisions.pop(key, None)
+        return True
 
     def sessions(self) -> tuple[str, ...]:
-        return tuple(self._by_session)
+        return tuple(dict.fromkeys(session for session, _agent in self._by_agent))
 
-    def snapshot(self) -> dict[str, list[dict[str, str]]]:
+    def snapshot(self) -> dict[str, dict[str, list[dict[str, str]]]]:
         return {
-            session: [item.to_dict() for item in items]
-            for session, items in self._by_session.items()
+            session: {
+                agent: [item.to_dict() for item in items]
+                for (stored_session, agent), items in self._by_agent.items()
+                if stored_session == session
+            }
+            for session in self.sessions()
         }
 
-    def restore(self, data: Mapping[str, Sequence[Mapping[str, Any]]]) -> None:
+    def restore(self, data: Mapping[str, Any]) -> None:
         if not isinstance(data, Mapping):
             raise ToolError("TodoStore.restore expects a mapping")
-        restored: dict[str, tuple[TodoItem, ...]] = {}
-        for session, items in data.items():
+        restored: dict[tuple[str, str], tuple[TodoItem, ...]] = {}
+        for session, agents_or_items in data.items():
             if not isinstance(session, str):
                 raise ToolError("TodoStore.restore session keys must be strings")
-            if not isinstance(items, Sequence) or isinstance(items, (str, bytes)):
-                raise ToolError("TodoStore.restore values must be sequences")
-            restored[session] = tuple(TodoItem.from_dict(item) for item in items)
-        self._by_session = restored
-        self._revisions = {session: 1 for session in restored}
+            # Older in-memory snapshots used session -> item-list. Map them to
+            # the explicit root identity when restoring.
+            if isinstance(agents_or_items, Sequence) and not isinstance(
+                agents_or_items, (str, bytes)
+            ):
+                agents = {DEFAULT_AGENT_ID: agents_or_items}
+            elif isinstance(agents_or_items, Mapping):
+                agents = agents_or_items
+            else:
+                raise ToolError(
+                    "TodoStore.restore values must be agent mappings or sequences"
+                )
+            for agent, items in agents.items():
+                if not isinstance(agent, str) or not agent:
+                    raise ToolError(
+                        "TodoStore.restore agent keys must be non-empty strings"
+                    )
+                if not isinstance(items, Sequence) or isinstance(items, (str, bytes)):
+                    raise ToolError("TodoStore.restore todo values must be sequences")
+                restored[(session, agent)] = tuple(
+                    TodoItem.from_dict(item) for item in items
+                )
+        self._by_agent = restored
+        self._revisions = {key: 1 for key in restored}
 
 
 _default_store: TodoStore | None = None
@@ -222,10 +341,10 @@ _TODO_ITEM_SCHEMA: dict[str, Any] = {
 }
 
 TODO_SPEC = ToolSpec(
-    name="TodoWrite",
+    name="todowrite",
     description=(
-        "Create or update the session's task list. Send the complete list each "
-        "time; omitted items are removed. State is in-memory for this session."
+        "Create or update this agent's task list. Send the complete list each "
+        "time; omitted items are removed. State is in-memory for this agent."
     ),
     input_schema={
         "type": "object",
@@ -316,7 +435,9 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
         )
 
     store = todo_store_for(ctx)
-    items = store.replace(ctx.session_id, parsed)
+    previous_items = store.get(ctx.session_id, ctx.agent_id)
+    previous_revision = store.revision(ctx.session_id, ctx.agent_id)
+    items = store.replace(ctx.session_id, parsed, ctx.agent_id)
     counts = _counts(items)
     summary = ", ".join(
         f"{counts[status]} {status.replace('_', ' ')}" for status in STATUSES
@@ -331,13 +452,44 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
     payload = {
         "todos": [item.to_dict() for item in items],
         "counts": counts,
-        "revision": store.revision(ctx.session_id),
+        "revision": store.revision(ctx.session_id, ctx.agent_id),
         "session": ctx.session_id,
+        "agent_id": ctx.agent_id,
     }
+    try:
+        if ctx.emit is not None:
+            outcome = ctx.emit("todo.updated", payload)
+            if inspect.isawaitable(outcome):
+                await outcome
+    except BaseException as exc:
+        rolled_back = store._rollback_if_revision(
+            ctx.session_id,
+            ctx.agent_id,
+            expected_revision=payload["revision"],
+            previous_items=previous_items,
+            previous_revision=previous_revision,
+        )
+        if not isinstance(exc, Exception):
+            raise
+        detail = (
+            "the previous list was restored"
+            if rolled_back
+            else "a later list revision is retained in memory"
+        )
+        raise ToolError(
+            f"TodoWrite: durable todo.updated event failed at revision "
+            f"{payload['revision']}; {detail}"
+        ) from exc
+
     await ctx.report("todos updated", payload)
 
     return ToolExecutionResult.text(
         body,
         display=f"TodoWrite: {len(items)} item(s)",
-        metrics={"counts": counts, "todos": payload["todos"], "revision": payload["revision"]},
+        metrics={
+            "counts": counts,
+            "todos": payload["todos"],
+            "revision": payload["revision"],
+            "agent_id": ctx.agent_id,
+        },
     )

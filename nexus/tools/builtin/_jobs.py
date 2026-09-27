@@ -215,7 +215,9 @@ class ShellJob:
         command: str,
         cwd: Path,
         env: dict[str, str] | None,
+        shell: str | None = None,
         *,
+        cwd_check: Callable[[], Path] | None = None,
         output_limit: int = DEFAULT_OUTPUT_LIMIT,
         grace_s: float = DEFAULT_GRACE_S,
         kill_wait_s: float = DEFAULT_KILL_WAIT_S,
@@ -224,6 +226,8 @@ class ShellJob:
         self.job_id = job_id
         self.command = command
         self.cwd = cwd
+        self.shell = shell
+        self._cwd_check = cwd_check
         self.status = JobStatus.RUNNING
         self.pid: int | None = None
         self.pgid: int | None = None
@@ -275,9 +279,12 @@ class ShellJob:
         process_env = os.environ.copy()
         if self._env:
             process_env.update(self._env)
+        if self._cwd_check is not None:
+            self.cwd = self._cwd_check()
         self._process = await asyncio.create_subprocess_shell(
             self.command,
             cwd=str(self.cwd),
+            executable=self.shell,
             env=process_env,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
@@ -568,6 +575,8 @@ class JobRegistry:
         session_id: str | None = None,
         cwd: str | Path,
         env: dict[str, str] | None = None,
+        shell: str | None = None,
+        cwd_check: Callable[[], Path] | None = None,
         output_limit: int | None = None,
     ) -> ShellJob:
         if self._closed:
@@ -587,6 +596,8 @@ class JobRegistry:
             command,
             Path(cwd),
             env,
+            shell,
+            cwd_check=cwd_check,
             output_limit=(
                 self.output_limit if output_limit is None else output_limit
             ),

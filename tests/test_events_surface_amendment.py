@@ -24,7 +24,7 @@ from nexus.events import (
 
 # The exact planned groups from PLAN.md §14.10.
 PLAN_GROUPS = {
-    "input": ("input.queued", "input.consumed", "input.dropped"),
+    "input": ("input.started", "input.queued", "input.consumed", "input.dropped"),
     "presence": ("presence.joined", "presence.left"),
     "daemon": (
         "daemon.started",
@@ -109,6 +109,7 @@ def test_compat_aliases_are_known_but_outside_groups():
 def test_event_types_is_exactly_groups_plus_legacy_plus_compat():
     grouped = {name for members in EVENT_GROUPS.values() for name in members}
     assert EVENT_TYPES == grouped | set(LEGACY_EVENTS) | set(COMPAT_EVENTS) | {"agent.selected"}
+    assert "reasoning_effort.selected" in EVENT_GROUPS["model"]
 
 
 def test_event_type_names_are_well_formed():

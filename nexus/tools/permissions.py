@@ -37,7 +37,13 @@ from typing import Any, Literal
 
 from ..errors import NexusError
 from ..util import new_id
-from .spec import ToolCall, ToolSpec
+from .names import (
+    LEGACY_BASH_PERMISSION_ACTIONS,
+    canonical_permission_rule,
+    canonical_tool_name,
+    permission_bundle_matches,
+)
+from .spec import PathTarget, ToolCall, ToolSpec
 
 __all__ = [
     "ApprovalBroker",
@@ -48,6 +54,7 @@ __all__ = [
     "Outcome",
     "PathGuard",
     "PathSecurityError",
+    "PathTargetEvaluation",
     "PermissionEngine",
     "PermissionRequest",
     "PermissionRuleError",
@@ -78,6 +85,8 @@ _GLOB_META = ("\\", "*", "?", "[")
 #: into an event/log/grant, so its ``*_ALWAYS`` decision degrades to ``*_ONCE``
 #: rather than being truncated (truncation would broaden the rule).
 MAX_PERMISSION_KEY_CHARS = 8192
+MAX_PERMISSION_TARGETS = 64
+MAX_PERMISSION_TARGET_REQUEST_CHARS = 65536
 
 
 def escape_glob(value: str) -> str:
@@ -172,13 +181,48 @@ class Rule:
     pattern: str | None = None
     bundle: str | None = None
 
-    def matches(self, tool: str, key: str | None, bundle: str | None) -> bool:
+    def matches(
+        self,
+        tool: str,
+        key: str | None,
+        bundle: str | None,
+        *,
+        input_data: Mapping[str, Any] | None = None,
+    ) -> bool:
+        tool = canonical_tool_name(tool)
+        if self.tool in LEGACY_BASH_PERMISSION_ACTIONS and tool == "bash":
+            # The legacy names are intentionally not dispatch aliases. Translate
+            # their permission rules only for explicit unified-job actions, and
+            # use the structured action as well as the qualified key so a run
+            # command such as ``status:job_1`` cannot inherit a job permission.
+            actions = LEGACY_BASH_PERMISSION_ACTIONS[self.tool]
+            action = input_data.get("action") if input_data is not None else None
+            if (
+                bundle != "shell"
+                or action not in actions
+                or key is None
+                or not key.startswith(f"{action}:")
+                or not key[len(action) + 1 :]
+            ):
+                return False
+            job_key = key[len(action) + 1 :]
+            if self.kind == "tool":
+                return True
+            if self.kind == "tool_pattern":
+                return self.pattern is not None and _glob_matches(
+                    self.pattern, job_key
+                )
+            if self.kind == "tool_exact":
+                return self.pattern == job_key
+            return False
         if self.kind == "tool":
             return self.tool == tool
         if self.kind == "wildcard":
             return self.tool is not None and fnmatch.fnmatchcase(tool, self.tool)
         if self.kind == "bundle":
-            return self.bundle is not None and self.bundle == bundle
+            return self.bundle is not None and permission_bundle_matches(
+                self.bundle, bundle
+            )
         if self.kind == "tool_pattern":
             return (
                 self.tool == tool
@@ -256,7 +300,22 @@ def _parse_exact_rule(raw: str) -> Rule | None:
         return None
     if "\x00" in decoded:
         return None
-    return Rule(raw=raw, kind="tool_exact", tool=head, pattern=decoded)
+    return Rule(
+        raw=raw,
+        kind="tool_exact",
+        tool=canonical_tool_name(head),
+        pattern=decoded,
+    )
+
+
+def _validate_legacy_job_pattern(tool: str, pattern: str, raw: str) -> None:
+    """Reject action-qualified legacy keys, which are not job IDs."""
+    actions = LEGACY_BASH_PERMISSION_ACTIONS.get(tool, ())
+    if pattern.partition(":")[0] in actions:
+        raise PermissionRuleError(
+            f"Legacy job permission {raw!r} must use an unqualified job ID; "
+            f"remove the action prefix (for example {tool}({pattern.split(':', 1)[1]}))"
+        )
 
 
 def parse_rule(raw: object) -> Rule:
@@ -270,22 +329,29 @@ def parse_rule(raw: object) -> Rule:
     if "\x00" in raw:
         raise PermissionRuleError("Permission rule must not contain a NUL byte")
 
-    if raw.startswith(_BUNDLE_PREFIX):
-        name = raw[len(_BUNDLE_PREFIX) :]
+    # Tool-name compatibility applies only to a whole exact tool head;
+    # wildcard heads and every argument/pattern retain their original semantics.
+    # Bundle heads stay spelled as written; the bounded historical unions are
+    # applied only when the parsed bundle rule is matched.
+    canonical_raw = canonical_permission_rule(raw)
+
+    if canonical_raw.startswith(_BUNDLE_PREFIX):
+        name = canonical_raw[len(_BUNDLE_PREFIX) :]
         if ":" in name or "(" in name or ")" in name:
             raise PermissionRuleError(f"Malformed bundle rule: {raw!r}")
         if _TOOL_NAME.fullmatch(name) is None:
             raise PermissionRuleError(f"Invalid bundle name in rule: {raw!r}")
         return Rule(raw=raw, kind="bundle", bundle=name)
 
-    if ":" in raw:
+    if ":" in canonical_raw and "(" not in canonical_raw:
         raise PermissionRuleError(
             f"Unknown rule prefix (only {_BUNDLE_PREFIX!r}) or ambiguous ':': {raw!r}"
         )
 
-    if raw.endswith(")"):
+    if canonical_raw.endswith(")"):
         exact = _parse_exact_rule(raw)
         if exact is not None:
+            _validate_legacy_job_pattern(exact.tool or "", exact.pattern or "", raw)
             # Equality rules are safe for any key, including one containing
             # ``~``. (Glob/pattern rules still reject ``~`` because there it is
             # either ambiguous or inert against canonical keys.)
@@ -294,13 +360,14 @@ def parse_rule(raw: object) -> Rule:
             raise PermissionRuleError(
                 f"Malformed rule (nested or unbalanced parentheses): {raw!r}"
             )
-        head, separator, pattern = raw[:-1].partition("(")
+        head, separator, pattern = canonical_raw[:-1].partition("(")
         if separator != "(" or "(" in head or ")" in head:
             raise PermissionRuleError(f"Malformed rule: {raw!r}")
         if _TOOL_NAME.fullmatch(head) is None:
             raise PermissionRuleError(f"Invalid tool name in rule: {raw!r}")
         if not pattern or "(" in pattern or ")" in pattern:
             raise PermissionRuleError(f"Malformed or empty pattern in rule: {raw!r}")
+        _validate_legacy_job_pattern(head, pattern, raw)
         if "\x00" in pattern:
             raise PermissionRuleError("Permission pattern must not contain a NUL byte")
         if _looks_like_home_path(pattern):
@@ -309,18 +376,24 @@ def parse_rule(raw: object) -> Rule:
                 "are canonical paths, so '~' would never match. Use an absolute "
                 "path, or configure read_denyroots/write_roots for home locations"
             )
-        return Rule(raw=raw, kind="tool_pattern", tool=head, pattern=pattern)
+        original_head = raw[:-1].partition("(")[0]
+        return Rule(
+            raw=raw,
+            kind="tool_pattern",
+            tool=canonical_tool_name(original_head),
+            pattern=pattern,
+        )
 
-    if "(" in raw or ")" in raw:
+    if "(" in canonical_raw or ")" in canonical_raw:
         raise PermissionRuleError(f"Malformed rule (unbalanced parentheses): {raw!r}")
 
-    if _TOOL_NAME.fullmatch(raw) is not None:
-        return Rule(raw=raw, kind="tool", tool=raw)
+    if _TOOL_NAME.fullmatch(canonical_raw) is not None:
+        return Rule(raw=raw, kind="tool", tool=canonical_raw)
 
-    if _WILDCARD_NAME.fullmatch(raw) is not None and any(
-        char in raw for char in _GLOB_CHARS
+    if _WILDCARD_NAME.fullmatch(canonical_raw) is not None and any(
+        char in canonical_raw for char in _GLOB_CHARS
     ):
-        return Rule(raw=raw, kind="wildcard", tool=raw)
+        return Rule(raw=raw, kind="wildcard", tool=canonical_raw)
 
     raise PermissionRuleError(f"Invalid permission rule: {raw!r}")
 
@@ -394,8 +467,17 @@ class Grant:
     def compiled(self) -> Rule:
         return parse_rule(self.rule)
 
-    def matches(self, tool: str, key: str | None, bundle: str | None) -> bool:
-        return self.compiled().matches(tool, key, bundle)
+    def matches(
+        self,
+        tool: str,
+        key: str | None,
+        bundle: str | None,
+        *,
+        input_data: Mapping[str, Any] | None = None,
+    ) -> bool:
+        return self.compiled().matches(
+            tool, key, bundle, input_data=input_data
+        )
 
     def to_dict(self) -> dict[str, str]:
         return {"effect": self.effect, "rule": self.rule, "scope": self.scope}
@@ -454,7 +536,11 @@ def rule_is_exact_for(rule_raw: object, tool: object, key: object) -> bool:
         rule = parse_rule(rule_raw)
     except PermissionRuleError:
         return False
-    return rule.kind == "tool_exact" and rule.tool == tool and rule.pattern == key
+    return (
+        rule.kind == "tool_exact"
+        and rule.tool == canonical_tool_name(tool)
+        and rule.pattern == key
+    )
 
 
 def collect_grants(records: Iterable[Mapping[str, Any]]) -> tuple[Grant, ...]:
@@ -468,6 +554,76 @@ def collect_grants(records: Iterable[Mapping[str, Any]]) -> tuple[Grant, ...]:
     """
     grants: list[Grant] = []
     for record in records:
+        raw_targets = record.get("targets")
+        if raw_targets is not None:
+            raw_target_grants = record.get("target_grants")
+            tool = record.get("tool")
+            decision = record.get("decision")
+            if not (
+                isinstance(raw_targets, list)
+                and isinstance(raw_target_grants, list)
+                and 0 < len(raw_targets) <= MAX_PERMISSION_TARGETS
+                and len(raw_target_grants) == len(raw_targets)
+                and isinstance(tool, str)
+                and tool
+                and decision in (
+                    Decision.ALLOW_ALWAYS.value,
+                    Decision.DENY_ALWAYS.value,
+                )
+            ):
+                continue
+            target_paths: list[str] = []
+            target_roles: list[str] = []
+            valid = True
+            for target in raw_targets:
+                if not isinstance(target, Mapping):
+                    valid = False
+                    break
+                path, role = target.get("path"), target.get("role")
+                if not (
+                    isinstance(path, str)
+                    and path
+                    and _representable_exact_key(path)
+                    and isinstance(role, str)
+                    and role
+                ):
+                    valid = False
+                    break
+                target_paths.append(path)
+                target_roles.append(role)
+            reconstructed: list[Grant] = []
+            if valid:
+                for index, item in enumerate(raw_target_grants):
+                    if not isinstance(item, Mapping):
+                        valid = False
+                        break
+                    raw_grant = item.get("grant")
+                    if (
+                        item.get("path") != target_paths[index]
+                        or item.get("role") != target_roles[index]
+                    ):
+                        valid = False
+                        break
+                    try:
+                        grant = Grant.from_dict(raw_grant)
+                    except PermissionRuleError:
+                        valid = False
+                        break
+                    if not rule_is_exact_for(
+                        grant.rule, tool, target_paths[index]
+                    ) or grant.effect != (
+                        "allow"
+                        if decision == Decision.ALLOW_ALWAYS.value
+                        else "deny"
+                    ):
+                        valid = False
+                        break
+                    reconstructed.append(grant)
+            if valid and len(reconstructed) == len(raw_targets):
+                grants.extend(reconstructed)
+            # Plural records are atomic: never fall through to a scalar grant.
+            continue
+
         raw_grant = record.get("grant")
         key = record.get("key")
         tool = record.get("tool")
@@ -508,7 +664,7 @@ def collect_grants(records: Iterable[Mapping[str, Any]]) -> tuple[Grant, ...]:
                     if not (isinstance(tool, str) and tool):
                         continue
                     # No explicit rule: derive the bounded exact rule.
-                    rule = exact_rule(tool, key)
+                    rule = exact_rule(canonical_tool_name(tool), key)
             elif not (isinstance(rule, str) and rule):
                 continue
             try:
@@ -574,7 +730,15 @@ class PathGuard:
     a write, closing the plan/execute TOCTOU window.
     """
 
-    __slots__ = ("_read_denyroots", "_workspace", "_write_roots")
+    __slots__ = (
+        "_home",
+        "_read_denyroot_specs",
+        "_read_denyroots",
+        "_workspace",
+        "_worktree_boundary",
+        "_write_root_specs",
+        "_write_roots",
+    )
 
     def __init__(
         self,
@@ -583,16 +747,27 @@ class PathGuard:
         write_roots: Sequence[str] = ("./",),
         read_denyroots: Sequence[str] = (),
         home: str | Path | None = None,
+        _allow_empty_write_roots: bool = False,
+        _worktree_boundary: bool = False,
     ) -> None:
         self._workspace = _canonical(Path(workspace))
+        self._home = Path(home) if home is not None else Path.home()
         roots = tuple(write_roots) or ("./",)
+        self._write_root_specs = roots
         self._write_roots = tuple(
             self._root(root, home=home, label="write_roots") for root in roots
         )
+        self._read_denyroot_specs = tuple(read_denyroots)
         self._read_denyroots = tuple(
             self._root(root, home=home, label="read_denyroots")
             for root in read_denyroots
         )
+        # A rebased policy can have no writable intersection with the child.
+        # The normal constructor's empty-list default remains unchanged.
+        if _allow_empty_write_roots and not write_roots:
+            self._write_root_specs = ()
+            self._write_roots = ()
+        self._worktree_boundary = _worktree_boundary
 
     def _root(
         self, value: object, *, home: str | Path | None, label: str
@@ -621,6 +796,69 @@ class PathGuard:
     @property
     def read_denyroots(self) -> tuple[Path, ...]:
         return self._read_denyroots
+
+    def for_worktree(self, child_workspace: str | Path) -> PathGuard:
+        """Return a child-checkout guard with authority rebased conservatively.
+
+        Relative write roots retain their configured spelling and are resolved
+        under the child checkout. Absolute write roots are clipped to their
+        intersection with the child; disjoint roots are discarded. The child
+        workspace is also an unconditional write boundary, including when a
+        configured relative root contains ``..`` or resolves through symlinks.
+        Read-deny roots keep their canonical parent locations; relative deny
+        roots are also rebased under the child so matching child paths stay
+        denied. PermissionEngine rules are not broadened or rewritten.
+        """
+        child = _canonical(Path(child_workspace))
+        if child == self._workspace or _is_within(self._workspace, child):
+            raise PathSecurityError(
+                "A worktree workspace cannot contain its parent checkout",
+                code="worktree_workspace",
+            )
+
+        rebased_write_roots: list[str] = []
+        for spec, canonical_root in zip(
+            self._write_root_specs, self._write_roots
+        ):
+            candidate = Path(spec)
+            if spec.startswith("~"):
+                # Tilde roots are explicit home-scoped absolute authority.
+                candidate = canonical_root
+            elif not candidate.is_absolute():
+                # Keep the original relative scope; the child constructor will
+                # resolve it against the child workspace, not this guard.
+                rebased_write_roots.append(spec)
+                continue
+            else:
+                candidate = canonical_root
+
+            # Tree intersections are representable only when one canonical
+            # directory contains the other. Keep the narrower side of that
+            # intersection and discard disjoint absolute authority.
+            if _is_within(candidate, child):
+                rebased_write_roots.append(str(candidate))
+            elif _is_within(child, candidate):
+                rebased_write_roots.append(str(child))
+
+        # Keep every canonical deny root so parent secrets stay denied, and
+        # also retain relative specs so the corresponding child paths are
+        # denied. Tilde and absolute roots remain canonical absolute paths.
+        rebased_read_denyroots: list[str] = []
+        for spec, root in zip(
+            self._read_denyroot_specs, self._read_denyroots
+        ):
+            rebased_read_denyroots.append(str(root))
+            candidate = Path(spec)
+            if not spec.startswith("~") and not candidate.is_absolute():
+                rebased_read_denyroots.append(spec)
+        return PathGuard(
+            child,
+            write_roots=tuple(rebased_write_roots),
+            read_denyroots=tuple(dict.fromkeys(rebased_read_denyroots)),
+            home=self._home,
+            _allow_empty_write_roots=True,
+            _worktree_boundary=True,
+        )
 
     def resolve(self, raw: object, *, for_write: bool) -> ResolvedPath:
         """Resolve a tool-provided path against the workspace and boundaries."""
@@ -656,6 +894,11 @@ class PathGuard:
             if inside_workspace
             else str(resolved)
         )
+        if for_write and self._worktree_boundary and not inside_workspace:
+            raise PathSecurityError(
+                f"Write denied: {display} is outside the child workspace",
+                code="write_root",
+            )
         if for_write and not any(
             _is_within(resolved, root) for root in self._write_roots
         ):
@@ -697,6 +940,7 @@ class PermissionRequest:
     #: example an over-long or non-encodable key); the UI must then offer a
     #: once-only decision and must never suggest a whole-tool grant.
     persistence_available: bool = True
+    targets: tuple[PermissionTargetRequest, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         key = self.key
@@ -705,7 +949,7 @@ class PermissionRequest:
             # Bound the event/log payload; matching already used the full key.
             key = key[:MAX_PERMISSION_KEY_CHARS]
             key_truncated = True
-        return {
+        payload = {
             "id": self.id,
             "call_id": self.call_id,
             "tool": self.tool,
@@ -716,6 +960,27 @@ class PermissionRequest:
             "suggestions": list(self.suggestions),
             "default_rule": self.default_rule,
             "persistence_available": self.persistence_available,
+        }
+        if self.targets:
+            payload["targets"] = [target.to_dict() for target in self.targets]
+        return payload
+
+
+@dataclass(frozen=True)
+class PermissionTargetRequest:
+    """A bounded, UI-facing detail for one path awaiting approval."""
+
+    role: str
+    path: str
+    reason: str
+    suggested_rule: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "role": self.role,
+            "path": self.path,
+            "reason": self.reason,
+            "suggested_rule": self.suggested_rule,
         }
 
 
@@ -732,6 +997,7 @@ class Evaluation:
     reason: str
     rule: Rule | None = None
     suggestions: tuple[str, ...] = ()
+    target_evaluations: tuple[PathTargetEvaluation, ...] = ()
 
     @property
     def allowed(self) -> bool:
@@ -742,7 +1008,7 @@ class Evaluation:
         return self.outcome is Outcome.DENY
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "call_id": self.call.id,
             "tool": self.call.name,
             "key": self.key,
@@ -752,6 +1018,35 @@ class Evaluation:
             "reason": self.reason,
             "rule": self.rule.raw if self.rule else None,
             "suggestions": list(self.suggestions),
+        }
+        if self.target_evaluations:
+            payload["targets"] = [
+                item.to_dict() for item in self.target_evaluations
+            ]
+        return payload
+
+
+@dataclass(frozen=True)
+class PathTargetEvaluation:
+    """The permission verdict and audit trail for one multi-path target."""
+
+    role: str
+    key: str
+    outcome: Outcome
+    decision: Decision | None
+    code: str
+    reason: str
+    rule: Rule | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "role": self.role,
+            "key": self.key,
+            "outcome": self.outcome.value,
+            "decision": self.decision.value if self.decision else None,
+            "code": self.code,
+            "reason": self.reason,
+            "rule": self.rule.raw if self.rule else None,
         }
 
 
@@ -902,10 +1197,16 @@ class PermissionEngine:
     # -- evaluation --------------------------------------------------------
 
     def _first_match(
-        self, rules: Sequence[Rule], tool: str, key: str | None, bundle: str | None
+        self,
+        rules: Sequence[Rule],
+        tool: str,
+        key: str | None,
+        bundle: str | None,
+        *,
+        input_data: Mapping[str, Any] | None = None,
     ) -> Rule | None:
         for rule in rules:
-            if rule.matches(tool, key, bundle):
+            if rule.matches(tool, key, bundle, input_data=input_data):
                 return rule
         return None
 
@@ -961,13 +1262,18 @@ class PermissionEngine:
                 suggestions=suggestions,
             )
 
-        denied = self._first_match(self._deny, call.name, key, bundle)
+        public_name = canonical_tool_name(call.name)
+        denied = self._first_match(
+            self._deny, public_name, key, bundle, input_data=call.input
+        )
         if denied is not None:
             return self._verdict(
                 call, spec, key, Outcome.DENY, denied, "deny", f"Denied by rule {denied.raw!r}", suggestions
             )
 
-        grant_effect, grant = self._first_grant(grants, call.name, key, bundle)
+        grant_effect, grant = self._first_grant(
+            grants, public_name, key, bundle, input_data=call.input
+        )
         if grant_effect == "deny":
             return self._verdict(
                 call, spec, key, Outcome.DENY, None, "session_grant_deny",
@@ -979,14 +1285,18 @@ class PermissionEngine:
                 f"Allowed by session grant {grant.rule!r}", suggestions,
             )
 
-        allowed = self._first_match(self._allow, call.name, key, bundle)
+        allowed = self._first_match(
+            self._allow, public_name, key, bundle, input_data=call.input
+        )
         if allowed is not None:
             return self._verdict(
                 call, spec, key, Outcome.ALLOW, allowed, "allow",
                 f"Allowed by rule {allowed.raw!r}", suggestions,
             )
 
-        ask = self._first_match(self._ask, call.name, key, bundle)
+        ask = self._first_match(
+            self._ask, public_name, key, bundle, input_data=call.input
+        )
         if ask is not None:
             return self._ask_verdict(call, spec, key, ask, attended, suggestions)
 
@@ -1014,7 +1324,14 @@ class PermissionEngine:
         grant_list = tuple(grants)
         return BatchPlan(
             tuple(
-                self.evaluate(
+                self._evaluate_multi_target(
+                    call, specs[call.name], grant_list, attended
+                )
+                if (
+                    call.name in specs
+                    and specs[call.name].multi_path_targets is not None
+                )
+                else self.evaluate(
                     call,
                     specs.get(call.name),
                     grants=grant_list,
@@ -1024,18 +1341,337 @@ class PermissionEngine:
             )
         )
 
+    def _evaluate_multi_target(
+        self,
+        call: ToolCall,
+        spec: ToolSpec,
+        grants: tuple[Grant, ...],
+        attended: bool,
+    ) -> Evaluation:
+        """Plan a multi-path call by evaluating each target independently.
+
+        Multi-target calls never use their scalar permission key. Every target
+        must first pass the hard path boundaries, then uses the usual ordered
+        deny/grant/allow/ask/mode policy against its own canonical path.
+        """
+        # A scalar-key suggestion would invite a grant unrelated to the targets.
+        suggestions: tuple[str, ...] = ()
+        try:
+            targets = spec.resolve_multi_path_targets(call.input)
+            if not targets:
+                raise ValueError("multi-path resolver returned no targets")
+            if len(targets) > MAX_PERMISSION_TARGETS:
+                return Evaluation(
+                    call=call,
+                    spec=spec,
+                    key=None,
+                    outcome=Outcome.DENY,
+                    decision=Decision.DENY_ONCE,
+                    code="multi_target_request_limit",
+                    reason=(
+                        f"multi-path call has {len(targets)} targets; the "
+                        f"approval request limit is {MAX_PERMISSION_TARGETS}"
+                    ),
+                    suggestions=suggestions,
+                )
+            target_evaluations: list[PathTargetEvaluation] = []
+            for target in targets:
+                try:
+                    if self.path_guard is None:
+                        raise PathSecurityError(
+                            "Multi-path policy requires a path guard",
+                            code="path_guard",
+                        )
+                    resolved = self.path_guard.resolve(
+                        target.path, for_write=True
+                    )
+                    canonical_path = str(resolved.absolute)
+                except PathSecurityError as exc:
+                    target_evaluations.append(
+                        PathTargetEvaluation(
+                            target.role,
+                            target.path,
+                            Outcome.DENY,
+                            Decision.DENY_ONCE,
+                            exc.code,
+                            str(exc),
+                        )
+                    )
+                    continue
+                canonical = PathTarget(
+                    target.role, canonical_path, target.path
+                )
+                target_evaluations.append(
+                    self._evaluate_target(call, spec, canonical, grants, attended)
+                )
+        except PathSecurityError as exc:
+            return Evaluation(
+                call=call,
+                spec=spec,
+                key=None,
+                outcome=Outcome.DENY,
+                decision=Decision.DENY_ONCE,
+                code=exc.code,
+                reason=str(exc),
+                suggestions=suggestions,
+            )
+        except Exception as exc:  # noqa: BLE001 - invalid resolver output fails closed
+            return Evaluation(
+                call=call,
+                spec=spec,
+                key=None,
+                outcome=Outcome.DENY,
+                decision=Decision.DENY_ONCE,
+                code="multi_path_target_error",
+                reason=f"multi-path target resolution failed: {exc}",
+                suggestions=suggestions,
+            )
+
+        target_evaluations = tuple(target_evaluations)
+        pending_targets = tuple(
+            item for item in target_evaluations if item.outcome is Outcome.ASK
+        )
+        estimated_request_size = sum(
+            len(item.role)
+            + len(item.key)
+            + min(len(item.reason), 512)
+            + len(
+                exact_rule(canonical_tool_name(call.name), item.key)
+                if _representable_exact_key(item.key)
+                else ""
+            )
+            + 64
+            for item in pending_targets
+        )
+        if estimated_request_size * 6 > MAX_PERMISSION_TARGET_REQUEST_CHARS:
+            return Evaluation(
+                call=call,
+                spec=spec,
+                key=None,
+                outcome=Outcome.DENY,
+                decision=Decision.DENY_ONCE,
+                code="multi_target_request_limit",
+                reason="multi-path approval details exceed the bounded request size",
+                suggestions=suggestions,
+                target_evaluations=target_evaluations,
+            )
+        request_details = [
+            {
+                "role": item.role,
+                "path": item.key,
+                "reason": item.reason[:512],
+                "suggested_rule": (
+                    exact_rule(canonical_tool_name(call.name), item.key)
+                    if _representable_exact_key(item.key)
+                    else ""
+                ),
+            }
+            for item in pending_targets
+        ]
+        request_preview = "\n".join(
+            f"{item['role']}: {item['path']} — {item['reason']}"
+            for item in request_details
+        )
+        request_size = len(
+            json.dumps(
+                {"targets": request_details, "preview": request_preview},
+                ensure_ascii=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        if request_size > MAX_PERMISSION_TARGET_REQUEST_CHARS:
+            return Evaluation(
+                call=call,
+                spec=spec,
+                key=None,
+                outcome=Outcome.DENY,
+                decision=Decision.DENY_ONCE,
+                code="multi_target_request_limit",
+                reason="multi-path approval details exceed the bounded request size",
+                suggestions=suggestions,
+                target_evaluations=target_evaluations,
+            )
+        if any(item.outcome is Outcome.DENY for item in target_evaluations):
+            outcome = Outcome.DENY
+            code = "multi_target_deny"
+            reason = "Denied because at least one path target was denied"
+            decision = Decision.DENY_ONCE
+        elif any(item.outcome is Outcome.FAIL_TURN for item in target_evaluations):
+            outcome = Outcome.FAIL_TURN
+            code = "multi_target_fail_turn"
+            reason = "Failed because at least one path target requires a failed turn"
+            decision = None
+        elif any(item.outcome is Outcome.ASK for item in target_evaluations):
+            outcome = Outcome.ASK
+            code = "multi_target_ask"
+            reason = "Approval is required for at least one path target"
+            decision = None
+        else:
+            outcome = Outcome.ALLOW
+            code = "multi_target_allow"
+            reason = "Allowed because every path target was allowed"
+            decision = Decision.ALLOW_ONCE
+        return Evaluation(
+            call=call,
+            spec=spec,
+            key=None,
+            outcome=outcome,
+            decision=decision,
+            code=code,
+            reason=reason,
+            suggestions=suggestions,
+            target_evaluations=target_evaluations,
+        )
+
+    def _evaluate_target(
+        self,
+        call: ToolCall,
+        spec: ToolSpec,
+        target: PathTarget,
+        grants: tuple[Grant, ...],
+        attended: bool,
+    ) -> PathTargetEvaluation:
+        key = target.path
+        # Multi-target references are path security boundaries even when their
+        # owning tool belongs to a non-filesystem bundle.
+        if self.path_guard is not None:
+            try:
+                self.path_guard.recheck(key, for_write=True)
+            except PathSecurityError as exc:
+                return PathTargetEvaluation(
+                    target.role,
+                    key,
+                    Outcome.DENY,
+                    Decision.DENY_ONCE,
+                    exc.code,
+                    str(exc),
+                )
+
+        tool = canonical_tool_name(call.name)
+        denied = self._first_match(
+            self._deny, tool, key, spec.bundle, input_data=call.input
+        )
+        if denied is not None:
+            return PathTargetEvaluation(
+                target.role,
+                key,
+                Outcome.DENY,
+                Decision.DENY_ONCE,
+                "deny",
+                f"Denied by rule {denied.raw!r}",
+                denied,
+            )
+        effect, grant = self._first_grant(
+            grants, tool, key, spec.bundle, input_data=call.input
+        )
+        if effect == "deny":
+            return PathTargetEvaluation(
+                target.role,
+                key,
+                Outcome.DENY,
+                Decision.DENY_ONCE,
+                "session_grant_deny",
+                f"Denied by session grant {grant.rule!r}",
+            )
+        if effect == "allow":
+            return PathTargetEvaluation(
+                target.role,
+                key,
+                Outcome.ALLOW,
+                Decision.ALLOW_ONCE,
+                "session_grant",
+                f"Allowed by session grant {grant.rule!r}",
+            )
+        allowed = self._first_match(
+            self._allow, tool, key, spec.bundle, input_data=call.input
+        )
+        if allowed is not None:
+            return PathTargetEvaluation(
+                target.role,
+                key,
+                Outcome.ALLOW,
+                Decision.ALLOW_ONCE,
+                "allow",
+                f"Allowed by rule {allowed.raw!r}",
+                allowed,
+            )
+        ask = self._first_match(
+            self._ask, tool, key, spec.bundle, input_data=call.input
+        )
+        if ask is not None:
+            verdict = self._ask_verdict(call, spec, key, ask, attended, ())
+        elif self.mode == "deny":
+            return PathTargetEvaluation(
+                target.role,
+                key,
+                Outcome.DENY,
+                Decision.DENY_ONCE,
+                "mode_deny",
+                "Denied by default mode",
+            )
+        elif self.mode == "allow":
+            return PathTargetEvaluation(
+                target.role,
+                key,
+                Outcome.ALLOW,
+                Decision.ALLOW_ONCE,
+                "mode_allow",
+                "Allowed by default mode",
+            )
+        else:
+            verdict = self._ask_verdict(call, spec, key, None, attended, ())
+        return PathTargetEvaluation(
+            target.role,
+            key,
+            verdict.outcome,
+            verdict.decision,
+            verdict.code,
+            verdict.reason,
+            verdict.rule,
+        )
+
     def request_for(self, evaluation: Evaluation) -> PermissionRequest:
         key = evaluation.key
         preview = key[:200] if key else None
+        targets: tuple[PermissionTargetRequest, ...] = ()
         # A keyed request is never given a bare whole-tool default: it uses the
         # most specific exact-action rule when the key is representable, and no
         # persistable rule at all otherwise (so ``*_ALWAYS`` degrades to
         # ``*_ONCE``). Only a keyless tool may default to its whole-tool rule.
-        if key is None:
-            default_rule = evaluation.call.name
+        if evaluation.target_evaluations:
+            unresolved = tuple(
+                item
+                for item in evaluation.target_evaluations
+                if item.outcome is Outcome.ASK
+            )
+            targets = tuple(
+                PermissionTargetRequest(
+                    role=item.role,
+                    path=item.key,
+                    reason=item.reason[:512],
+                    suggested_rule=(
+                        exact_rule(canonical_tool_name(evaluation.call.name), item.key)
+                        if _representable_exact_key(item.key)
+                        else ""
+                    ),
+                )
+                for item in unresolved
+            )
+            # Existing approval UIs render only ``preview``. Keep every pending
+            # path visible there as well as in the structured target details.
+            preview = "\n".join(
+                f"{target.role}: {target.path} — {target.reason}"
+                for target in targets
+            )
+            default_rule = ""
+            persistence_available = bool(targets) and all(
+                bool(target.suggested_rule) for target in targets
+            )
+        elif key is None:
+            default_rule = canonical_tool_name(evaluation.call.name)
             persistence_available = True
         elif _representable_exact_key(key):
-            default_rule = exact_rule(evaluation.call.name, key)
+            default_rule = exact_rule(canonical_tool_name(evaluation.call.name), key)
             persistence_available = True
         else:
             default_rule = ""
@@ -1047,9 +1683,20 @@ class PermissionEngine:
             key=key,
             bundle=evaluation.spec.bundle if evaluation.spec else None,
             preview=preview,
-            suggestions=evaluation.suggestions,
+            suggestions=(
+                tuple(
+                    dict.fromkeys(
+                        target.suggested_rule
+                        for target in targets
+                        if target.suggested_rule
+                    )
+                )
+                if targets
+                else evaluation.suggestions
+            ),
             default_rule=default_rule,
             persistence_available=persistence_available,
+            targets=targets,
         )
 
     # -- internals ---------------------------------------------------------
@@ -1059,7 +1706,7 @@ class PermissionEngine:
     ) -> tuple[str, str] | None:
         if self.path_guard is None or key is None:
             return None
-        if spec.bundle != "fs" and not spec.path_mode:
+        if not permission_bundle_matches("fs", spec.bundle) and not spec.path_mode:
             return None
         try:
             self.path_guard.recheck(key, for_write=spec.mutates)
@@ -1073,9 +1720,11 @@ class PermissionEngine:
         tool: str,
         key: str | None,
         bundle: str | None,
+        *,
+        input_data: Mapping[str, Any] | None = None,
     ) -> tuple[Effect | None, Grant | None]:
         for grant in grants:
-            if grant.matches(tool, key, bundle):
+            if grant.matches(tool, key, bundle, input_data=input_data):
                 return grant.effect, grant
         return None, None
 
@@ -1093,9 +1742,10 @@ class PermissionEngine:
             # A keyed request only ever suggests the exact-action rule. It must
             # never suggest whole-tool or bundle scope, which would broaden.
             if _representable_exact_key(key):
-                suggestions.append(exact_rule(call.name, key))
+                suggestions.append(exact_rule(canonical_tool_name(call.name), key))
         else:
-            # Keyless tools may legitimately be granted as a whole.
+            # Keyless tools may legitimately be granted as a whole. Keep the
+            # original display spelling for historical approval UI records.
             suggestions.append(call.name)
             if spec is not None and spec.bundle:
                 suggestions.append(f"Bundle:{spec.bundle}")
@@ -1229,15 +1879,47 @@ class ApprovalBroker:
             chosen_rule = ""
         effective = resolved
         grant: Grant | None = None
+        target_grants: list[tuple[PermissionTargetRequest, Grant]] = []
         if resolved.persists:
-            if chosen_rule:
+            if request.targets:
+                if (
+                    request.persistence_available
+                    and len(request.targets) <= MAX_PERMISSION_TARGETS
+                    and all(
+                        target.path
+                        and _representable_exact_key(target.path)
+                        and rule_is_exact_for(
+                            target.suggested_rule, request.tool, target.path
+                        )
+                        for target in request.targets
+                    )
+                ):
+                    try:
+                        target_grants = [
+                            (
+                                target,
+                                grant_for_decision(
+                                    resolved,
+                                    rule=target.suggested_rule,
+                                    scope=self._scope,
+                                ),
+                            )
+                            for target in request.targets
+                        ]
+                    except PermissionRuleError:
+                        target_grants = []
+                    if any(item is None for _, item in target_grants):
+                        target_grants = []
+                if len(target_grants) != len(request.targets):
+                    target_grants = []
+            elif chosen_rule:
                 try:
                     grant = grant_for_decision(
                         resolved, rule=chosen_rule, scope=self._scope
                     )
                 except PermissionRuleError:
                     grant = None
-            if grant is None:
+            if grant is None and not target_grants:
                 # Deterministically degrade to the corresponding ONCE decision
                 # with no persisted grant; never broaden to the whole tool.
                 effective = _once_decision(resolved)
@@ -1259,6 +1941,17 @@ class ApprovalBroker:
         }
         if grant is not None:
             record["grant"] = grant.to_dict()
+        if request.targets:
+            record["targets"] = [target.to_dict() for target in request.targets]
+            if target_grants:
+                record["target_grants"] = [
+                    {
+                        "role": target.role,
+                        "path": target.path,
+                        "grant": target_grant.to_dict(),
+                    }
+                    for target, target_grant in target_grants
+                ]
         self._records.append(record)
         future.set_result(effective)
         return True

@@ -9,6 +9,7 @@ description = "A small, provider-agnostic Python agent harness"
 requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.27",
+    "httpcore==1.0.9",
     "msgspec>=0.18",
     "mcp>=1.2,<2",
     "keyring>=24",
@@ -28,6 +29,9 @@ dev = [
     # models.dev catalogue and its attribution ship in the distribution.
     "setuptools>=68",
 ]
+documents = [
+    "firecrawl-anydoc==0.2.4",
+]
 
 [project.scripts]
 nexus = "nexus.cli:main"
@@ -45,6 +49,7 @@ include = ["nexus*"]
 "nexus.auth" = ["NOTICE"]
 "nexus.agents" = ["data/*.md"]
 "nexus.ui.tui" = ["*.tcss"]
+"nexus.ui.web" = ["index.html", "styles/*.css", "js/*.js", "assets/*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

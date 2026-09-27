@@ -2,9 +2,10 @@
 name: explore
 description: Read-only search agent for broad fan-out searches. Returns findings, not file dumps.
 contexts: [root, subagent]
-bundles: [fs]
-tools: [-Write, -Edit, -MultiEdit]
+bundles: [fs, task, ext]
+tools: [-write, -edit, -multiedit, -bash]
 model: low
+color: #14B8A6
 ---
 You are a read-only exploration subagent. You have no write path: you cannot
 write, edit, or execute anything.

@@ -19,7 +19,14 @@ from nexus.config import Config
 from nexus.core.cancel import CancelToken
 from nexus.errors import OperationCancelled
 from nexus.model.message import Text
-from nexus.tools.builtin import _jobs, bash, bash_output, kill_shell
+from nexus.tools.builtin import (
+    LEGACY_SHELL_TOOLS,
+    SHELL_TOOLS,
+    _jobs,
+    bash,
+    bash_output,
+    kill_shell,
+)
 from nexus.tools.spec import ToolContext
 
 JOB_ID_RE = re.compile(r"job_id: (job_[0-9a-f]+)")
@@ -245,6 +252,20 @@ async def test_bash_output_wait_s_blocks_for_new_output(registry, ctx):
     assert "late" in body(polled)
 
 
+@pytest.mark.parametrize("wait_s", [30.1, float("inf"), float("nan")])
+async def test_bash_output_rejects_wait_s_over_limit_or_nonfinite(
+    registry, ctx, wait_s
+):
+    started = await bash.run(
+        {"command": "sleep 5", "run_in_background": True}, ctx
+    )
+    result = await bash_output.run(
+        {"job_id": job_id_of(started), "wait_s": wait_s}, ctx
+    )
+
+    assert result.is_error is True
+
+
 async def test_kill_shell_terminates_and_is_idempotent(registry, ctx):
     started = await bash.run(
         {"command": "sleep 30", "run_in_background": True}, ctx
@@ -356,19 +377,29 @@ async def test_invalid_arguments_are_model_visible_errors(registry, ctx):
 
 
 def test_specs_and_permission_keys():
-    assert bash.SPEC.name == "Bash"
+    assert bash.SPEC.name == "bash"
     assert bash.SPEC.bundle == "shell"
     assert bash.SPEC.mutates is True
     assert bash.SPEC.resolve_permission_key({"command": "git status"}) == "git status"
+    assert tuple(tool.spec.name for tool in SHELL_TOOLS) == ("bash",)
 
     assert bash_output.SPEC.name == "BashOutput"
-    assert bash_output.SPEC.bundle == "shell"
+    assert bash_output.SPEC.bundle == "legacy_shell"
     assert bash_output.SPEC.mutates is False
+    assert bash_output.SPEC.input_schema["properties"]["wait_s"]["maximum"] == 30
     assert bash_output.SPEC.resolve_permission_key({"job_id": "job_x"}) == "job_x"
 
     assert kill_shell.SPEC.name == "KillShell"
-    assert kill_shell.SPEC.bundle == "shell"
+    assert kill_shell.SPEC.bundle == "legacy_shell"
     assert kill_shell.SPEC.resolve_permission_key({"job_id": "job_x"}) == "job_x"
+    assert tuple(tool.spec.name for tool in LEGACY_SHELL_TOOLS) == (
+        "BashOutput",
+        "KillShell",
+    )
+    assert tuple(tool.spec.bundle for tool in LEGACY_SHELL_TOOLS) == (
+        "legacy_shell",
+        "legacy_shell",
+    )
 
 
 def test_registry_resolution_order():

@@ -22,6 +22,7 @@ ARTIFACTS = ROOT / "artifacts" / "visual-tui"
 PORT = 8128
 STATES = (
     ("empty-desktop", "empty", 800, 1000),
+    ("empty-narrow", "empty", 430, 900),
     ("transcript-desktop", "transcript", 800, 1000),
     ("permission-desktop", "permission", 800, 1000),
     ("picker-narrow", "picker", 430, 900),

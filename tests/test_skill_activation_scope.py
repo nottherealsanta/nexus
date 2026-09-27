@@ -107,9 +107,9 @@ def names(request):
 
 
 async def test_declared_tools_narrow_the_next_iteration(tmp_path):
-    write_skill(tmp_path, "reader", allowed="[Read]")
+    write_skill(tmp_path, "reader", allowed="[read]")
     provider = ScriptedProvider(
-        tool_response(("s1", "Skill", {"name": "reader"})),
+        tool_response(("s1", "skill", {"name": "reader"})),
         text_response("used skill"),
     )
     runtime = make_runtime(tmp_path, provider)
@@ -117,15 +117,30 @@ async def test_declared_tools_narrow_the_next_iteration(tmp_path):
 
     await drain(session)
 
-    assert len(names(provider.requests[0])) == 16
-    assert names(provider.requests[1]) == ["Read"]
+    assert len(names(provider.requests[0])) == 11  # includes runtime webfetch
+    assert names(provider.requests[1]) == ["read"]
+    await runtime.aclose()
+
+
+async def test_legacy_skill_tool_name_remains_accepted(tmp_path):
+    write_skill(tmp_path, "reader", allowed="[Read]")
+    provider = ScriptedProvider(
+        tool_response(("s1", "Skill", {"name": "reader"})),
+        text_response("used skill"),
+    )
+    runtime = make_runtime(tmp_path, provider)
+    session = runtime.session("legacy-name")
+
+    await drain(session)
+
+    assert names(provider.requests[1]) == ["read"]
     await runtime.aclose()
 
 
 async def test_declaration_naming_an_unavailable_tool_fails_closed(tmp_path):
     write_skill(tmp_path, "reader", allowed="[Nope]")
     provider = ScriptedProvider(
-        tool_response(("s1", "Skill", {"name": "reader"})),
+        tool_response(("s1", "skill", {"name": "reader"})),
         text_response("used skill"),
     )
     runtime = make_runtime(tmp_path, provider)
@@ -140,7 +155,7 @@ async def test_declaration_naming_an_unavailable_tool_fails_closed(tmp_path):
 async def test_declaration_of_nothing_does_not_narrow(tmp_path):
     write_skill(tmp_path, "reader")  # no allowed-tools / bundles
     provider = ScriptedProvider(
-        tool_response(("s1", "Skill", {"name": "reader"})),
+        tool_response(("s1", "skill", {"name": "reader"})),
         text_response("used skill"),
     )
     runtime = make_runtime(tmp_path, provider)
@@ -148,14 +163,14 @@ async def test_declaration_of_nothing_does_not_narrow(tmp_path):
 
     await drain(session)
 
-    assert len(names(provider.requests[1])) == 16
+    assert len(names(provider.requests[1])) == 11  # no skill declaration narrows
     await runtime.aclose()
 
 
 async def test_bundle_declaration_expands_to_the_bundle_tools(tmp_path):
     write_skill(tmp_path, "reader", bundles="[shell]")
     provider = ScriptedProvider(
-        tool_response(("s1", "Skill", {"name": "reader"})),
+        tool_response(("s1", "skill", {"name": "reader"})),
         text_response("used skill"),
     )
     runtime = make_runtime(tmp_path, provider)
@@ -163,7 +178,7 @@ async def test_bundle_declaration_expands_to_the_bundle_tools(tmp_path):
 
     await drain(session)
 
-    assert names(provider.requests[1]) == ["Bash", "BashOutput", "KillShell"]
+    assert names(provider.requests[1]) == ["bash"]
     await runtime.aclose()
 
 
@@ -178,7 +193,7 @@ async def test_activation_does_not_leak_to_another_session(tmp_path):
 
     def a_skill(request):
         # Iteration 1 of A returns the Skill call.
-        return tool_response(("s1", "Skill", {"name": "reader"}))
+        return tool_response(("s1", "skill", {"name": "reader"}))
 
     async def a_park(request):
         # A's second iteration parks so the activation stays live while B runs.
@@ -200,7 +215,7 @@ async def test_activation_does_not_leak_to_another_session(tmp_path):
 
     await b.start_turn("go")
     await wait_until_idle(b)
-    assert len(recorded["b_tools"]) == 16  # B is unaffected by A's activation
+    assert len(recorded["b_tools"]) == 11  # includes webfetch; B is unaffected by A
 
     release.set()
     await wait_until_idle(a)
@@ -221,7 +236,7 @@ async def test_bundled_skill_tool_candidates_are_not_auto_registered(tmp_path):
         encoding="utf-8",
     )
     provider = ScriptedProvider(
-        tool_response(("s1", "Skill", {"name": "reader"})),
+        tool_response(("s1", "skill", {"name": "reader"})),
         tool_response(("c1", "SkillPing", {})),
         text_response("used skill"),
     )
@@ -241,10 +256,43 @@ async def test_bundled_skill_tool_candidates_are_not_auto_registered(tmp_path):
     await runtime.aclose()
 
 
-async def test_activation_is_cleared_when_the_turn_finishes(tmp_path):
-    write_skill(tmp_path, "reader", allowed="[Read]")
+async def test_bundle_declaration_cannot_widen_read_only_child_catalog(tmp_path):
+    agents = tmp_path / ".nexus" / "agents"
+    agents.mkdir(parents=True)
+    (agents / "explore.md").write_text(
+        "---\nname: explore\ndescription: read-only child\n"
+        "contexts: [subagent]\n---\nexplore\n",
+        encoding="utf-8",
+    )
+    write_skill(tmp_path, "shell-helper", bundles="[shell]")
     provider = ScriptedProvider(
-        tool_response(("s1", "Skill", {"name": "reader"})),
+        tool_response(("root-task", "subagent", {
+            "prompt": "inspect safely",
+            "subagent_type": "explore",
+        })),
+        tool_response(("child-skill", "skill", {"name": "shell-helper"})),
+        text_response("read-only result"),
+        text_response("root report"),
+    )
+    runtime = make_runtime(tmp_path, provider)
+    session = runtime.session("bundle-readonly-ceiling")
+
+    await drain(session)
+
+    child_catalog = {
+        "read", "glob", "grep", "subagent", "todowrite", "webfetch", "skill"
+    }
+    assert len(provider.requests) == 4
+    assert {tool.name for tool in provider.requests[1].tools} == child_catalog
+    assert {tool.name for tool in provider.requests[2].tools} == child_catalog
+    assert "bash" not in {tool.name for tool in provider.requests[2].tools}
+    await runtime.aclose()
+
+
+async def test_activation_is_cleared_when_the_turn_finishes(tmp_path):
+    write_skill(tmp_path, "reader", allowed="[read]")
+    provider = ScriptedProvider(
+        tool_response(("s1", "skill", {"name": "reader"})),
         text_response("used skill"),
         text_response("second turn"),
     )
@@ -255,16 +303,16 @@ async def test_activation_is_cleared_when_the_turn_finishes(tmp_path):
     assert runtime._activations.get(session.id) is None
 
     await drain(session)
-    assert len(names(provider.requests[2])) == 16
+    assert len(names(provider.requests[2])) == 11  # fresh turn restores base catalog
     await runtime.aclose()
 
 
 async def test_activation_is_cleared_when_the_turn_is_cancelled(tmp_path):
-    write_skill(tmp_path, "reader", allowed="[Read]")
+    write_skill(tmp_path, "reader", allowed="[read]")
     release = asyncio.Event()
 
     def a_skill(request):
-        return tool_response(("s1", "Skill", {"name": "reader"}))
+        return tool_response(("s1", "skill", {"name": "reader"}))
 
     async def a_park(request):
         await release.wait()

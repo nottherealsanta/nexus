@@ -226,6 +226,10 @@ class _FakeFacade:
             return p.SessionOpenResult(session=SessionSummary(id=command.session))
         if isinstance(command, p.SessionStart):
             return p.SessionStartResult(session=command.session, turn_id="t")
+        if isinstance(command, p.LogsRead):
+            return p.LogsReadResult(
+                daemon=p.DaemonLogPage(), session=p.SessionLogPage()
+            )
         if isinstance(command, p.Shutdown):
             return p.ShutdownResult(stopping=True, reason=command.reason)
         return p.ErrorResult(kind="unknown", message="no")
@@ -338,6 +342,30 @@ async def test_valid_token_returns_the_correlated_result():
         assert headers["vary"] == "Origin"
         assert "access-control-allow-credentials" not in headers
         assert isinstance(p.decode_result(body), p.HealthResult)
+
+
+async def test_logs_read_peer_command_keeps_bearer_and_origin_authentication():
+    async with running_server(_FakeFacade()) as server:
+        origin = f"http://127.0.0.1:{server.port}"
+        status, _, body = await _call(
+            server.port, p.LogsRead(session="s"), origin=origin
+        )
+        assert status == 200
+        assert isinstance(p.decode_result(body), p.LogsReadResult)
+        wrong_token = await _call(
+            server.port, p.LogsRead(session="s"), origin=origin, token="wrong"
+        )
+        assert wrong_token[0] == 401
+        wrong_origin = await _send_raw(
+            server.port,
+            _request_bytes(
+                "POST",
+                COMMAND_PATH,
+                headers=_auth_headers("https://evil.example"),
+                body=p.encode_command(p.LogsRead(session="s")),
+            ),
+        )
+        assert _parse(wrong_origin)[0] == 403
 
 
 async def test_origin_is_required_and_allowlisted_on_every_request():

@@ -47,7 +47,7 @@ from nexus.model.providers.scripted import (
 from nexus.model.stream import ToolCallAccumulator
 from nexus.runtime import Runtime
 from nexus.tools import permissions
-from nexus.tools.builtin import _jobs, grep, write
+from nexus.tools.builtin import OPT_IN_TOOLS, _jobs, grep, ls, write
 from nexus.tools.manager import ToolManager
 from nexus.tools.permissions import (
     ApprovalBroker,
@@ -65,7 +65,14 @@ from nexus.tools.permissions import (
     grant_for_decision,
     parse_rule,
 )
-from nexus.tools.spec import ToolCall, ToolContext, ToolSpec
+from nexus.tools.spec import (
+    PathTarget,
+    RegisteredTool,
+    ToolCall,
+    ToolContext,
+    ToolExecutionResult,
+    ToolSpec,
+)
 
 SCRIPTED = "scripted/m"
 
@@ -180,7 +187,7 @@ def test_accumulator_duplicate_start_is_typed_error():
 
 def test_duplicate_id_group_rejected_before_permission(workspace: Path):
     manager = ToolManager(
-        make_config(mode="allow", deny=["Bash(echo*)"]), workspace=workspace
+        make_config(mode="allow", deny=["bash(echo*)"]), workspace=workspace
     )
     batch = manager.prepare(
         [
@@ -196,11 +203,11 @@ def test_duplicate_id_group_rejected_before_permission(workspace: Path):
     )
     # The absolute deny still holds for the Bash call evaluated on its own.
     engine = PermissionEngine(
-        mode="allow", deny=["Bash(echo*)"], path_guard=manager.path_guard
+        mode="allow", deny=["bash(echo*)"], path_guard=manager.path_guard
     )
     evaluation = engine.evaluate(
         ToolCall(id="x", name="Bash", input={"command": "echo hi > pwned"}),
-        manager.get("Bash").spec,
+        manager.get("bash").spec,
     )
     assert evaluation.outcome is Outcome.DENY
 
@@ -430,6 +437,108 @@ async def test_write_recheck_refuses_swapped_path(tmp_path: Path):
     assert list(outside.iterdir()) == []
 
 
+def test_legacy_multiedit_canonical_deny_blocks_symlink_alias(workspace: Path):
+    secret = workspace / "secret.txt"
+    secret.write_text("before", encoding="utf-8")
+    (workspace / "alias.txt").symlink_to(secret)
+    manager = ToolManager(
+        make_config(
+            mode="allow",
+            allow=["multiedit"],
+            deny=[f"multiedit({secret.resolve()})"],
+        ),
+        workspace=workspace,
+        tools=OPT_IN_TOOLS,
+        tool_names=["multiedit"],
+    )
+    entry = manager.prepare(
+        [
+            ToolCall(
+                id="edit",
+                name="multiedit",
+                input={
+                    "path": "alias.txt",
+                    "edits": [{"old_string": "before", "new_string": "after"}],
+                },
+            )
+        ]
+    ).for_call("edit")
+
+    assert entry is not None and entry.error is None
+    assert entry.key == str(secret.resolve())
+    engine = PermissionEngine(
+        mode="allow",
+        allow=["multiedit"],
+        deny=[f"multiedit({secret.resolve()})"],
+        path_guard=manager.path_guard,
+    )
+    evaluation = engine.evaluate(entry.call, entry.spec)
+    assert evaluation.outcome is Outcome.DENY
+    assert evaluation.code == "deny"
+    assert secret.read_text(encoding="utf-8") == "before"
+
+
+def test_legacy_ls_read_denyroot_blocks_symlink_alias(workspace: Path):
+    secret = workspace.parent / "secret"
+    secret.mkdir()
+    (secret / "private.txt").write_text("secret", encoding="utf-8")
+    (workspace / "leak").symlink_to(secret, target_is_directory=True)
+    guard = PathGuard(workspace, read_denyroots=[str(secret)])
+
+    evaluation = PermissionEngine(
+        mode="allow", allow=["ls"], path_guard=guard
+    ).evaluate(
+        ToolCall(id="list", name="ls", input={"path": "leak"}), ls.SPEC
+    )
+    assert evaluation.outcome is Outcome.DENY
+    assert evaluation.code == "read_deny"
+
+
+async def test_legacy_multiedit_execution_recheck_refuses_swapped_path(
+    tmp_path: Path,
+):
+    workspace = tmp_path / "ws"
+    parent = workspace / "a" / "sub"
+    parent.mkdir(parents=True)
+    (parent / "file.txt").write_text("before", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_target = outside / "file.txt"
+    outside_target.write_text("outside", encoding="utf-8")
+    manager = ToolManager(
+        make_config(mode="allow", allow=["multiedit"]),
+        workspace=workspace,
+        tools=OPT_IN_TOOLS,
+        tool_names=["multiedit"],
+    )
+    batch = manager.prepare(
+        [
+            ToolCall(
+                id="edit",
+                name="multiedit",
+                input={
+                    "path": "a/sub/file.txt",
+                    "edits": [{"old_string": "before", "new_string": "after"}],
+                },
+            )
+        ]
+    )
+
+    parent.rename(parent.with_name("sub-away"))
+    parent.symlink_to(outside, target_is_directory=True)
+    events: list = []
+    results = await manager.dispatch(
+        batch.with_decisions({"edit": Decision.ALLOW_ONCE}),
+        ctx_factory(workspace),
+        emit=events.append,
+    )
+
+    assert results[0].is_error is True
+    assert [event.data.get("code") for event in events] == ["write_root"]
+    assert not any(event.type == "tool.started" for event in events)
+    assert outside_target.read_text(encoding="utf-8") == "outside"
+
+
 # ---------------------------------------------------------------------------
 # 4. Atomic write parent handling
 # ---------------------------------------------------------------------------
@@ -505,6 +614,78 @@ def test_approver_sanitizes_control_injection():
     assert "\\x1b" in output  # rendered visibly instead
     assert "\\u202e" in output
     assert "\\u2066" in output
+
+
+def test_multi_target_approval_lists_every_path_without_truncation_and_fails_closed():
+    from nexus.ui.cli.approve import MAX_PERMISSION_TARGETS, Approver, describe
+
+    targets = [
+        {"role": "source", "path": f"src/{index:02}.py", "reason": "Read required."}
+        for index in range(MAX_PERMISSION_TARGETS)
+    ]
+    description = describe({"tool": "Move", "targets": targets})
+    assert f"targets ({MAX_PERMISSION_TARGETS})" in description
+    for target in targets:
+        assert target["path"] in description
+
+    protected = describe({
+        "tool": "Write",
+        "targets": [{
+            "role": "destination\x1b[2J",
+            "path": "private/api_key=supersecret-sk-abcdefghijk123\nfile",
+            "reason": "credential ghp_12345678901234567890",
+        }],
+    })
+    assert "\\x1b[2J" in protected
+    assert "supersecret" not in protected
+    assert "ghp_12345678901234567890" not in protected
+    assert "private/api_key=\u2026" in protected
+
+    overflow = {"tool": "Move", "targets": [*targets, {
+        "role": "source", "path": "src/overflow.py", "reason": "Read required."
+    }]}
+    assert "targets: unavailable" in describe(overflow)
+    assert "always persists: unavailable" in describe(overflow)
+
+    for answer in ("y", "a"):
+        async def reader(prompt: str, answer=answer) -> str:
+            return answer
+
+        stderr = io.StringIO()
+        decision = asyncio.run(Approver(reader, stderr=stderr).ask(overflow))
+        assert decision == "deny_once"
+        assert "src/overflow.py" not in stderr.getvalue()
+        assert "refusing approval" in stderr.getvalue()
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        {"role": "source", "path": "src/file.py"},
+        {"role": "source", "path": "p" * 4097, "reason": "Read required."},
+    ],
+)
+@pytest.mark.parametrize("answer", ["y", "a"])
+def test_invalid_multi_target_approval_is_refused(target, answer):
+    from nexus.ui.cli.approve import Approver
+
+    async def reader(prompt: str) -> str:
+        return answer
+
+    stderr = io.StringIO()
+    decision = asyncio.run(
+        Approver(reader, stderr=stderr).ask({"tool": "Move", "targets": [target]})
+    )
+    assert decision == "deny_once"
+    assert "refusing approval" in stderr.getvalue()
+
+
+def test_scalar_approval_description_remains_unchanged():
+    from nexus.ui.cli.approve import describe
+
+    assert describe({"tool": "Bash", "key": "git status"}) == (
+        "Permission requested: Bash\n  key: git status"
+    )
 
 
 def test_run_once_resolving_a_stale_request_does_not_hang(tmp_path: Path):
@@ -621,7 +802,7 @@ def test_request_for_default_rule_is_exact_scope():
         ToolCall(id="c1", name="Bash", input={"command": "git status"}), bash_spec()
     )
     request = engine.request_for(evaluation)
-    assert request.default_rule == 'Bash("git status")'
+    assert request.default_rule == 'bash("git status")'
     assert request.persistence_available is True
     assert request.default_rule in request.suggestions
 
@@ -676,7 +857,7 @@ def test_keyed_request_uses_exact_home_path_default():
     )
     assert evaluation.outcome is Outcome.ASK
     request = engine.request_for(evaluation)
-    assert request.default_rule == 'Bash("~/deploy.sh")'
+    assert request.default_rule == 'bash("~/deploy.sh")'
     assert request.persistence_available is True
 
 
@@ -692,7 +873,7 @@ async def test_broker_persists_exact_home_rule_on_allow_always():
     assert await future is Decision.ALLOW_ALWAYS
 
     grants = broker.grants()
-    assert grants and grants[-1].rule == 'Bash("~/deploy.sh")'
+    assert grants and grants[-1].rule == 'bash("~/deploy.sh")'
     assert grants[-1].matches("Bash", "~/deploy.sh", "shell")
     assert not grants[-1].matches("Bash", "rm -rf /", "shell")
 
@@ -730,7 +911,7 @@ async def test_broker_deny_always_exact_and_overlong_fallback():
     future = broker.request(exact_request)
     assert broker.resolve(exact_request.id, Decision.DENY_ALWAYS) is True
     assert await future is Decision.DENY_ALWAYS
-    assert broker.records[0]["grant"]["rule"] == 'Bash("~/deploy.sh")'
+    assert broker.records[0]["grant"]["rule"] == 'bash("~/deploy.sh")'
     assert broker.records[0]["grant"]["effect"] == "deny"
 
     long_eval = engine.evaluate(
@@ -780,7 +961,7 @@ def test_collect_grants_never_widens_keyed_record_to_bare_tool():
         {"decision": "allow_always", "tool": "Write"},
     ]
     grants = collect_grants(records)
-    assert [grant.rule for grant in grants] == ['Bash("git status")']
+    assert [grant.rule for grant in grants] == ['bash("git status")']
 
 
 def test_collect_grants_rejects_broader_or_mismatched_keyed_rules():
@@ -849,6 +1030,118 @@ def test_collect_grants_rejects_broader_or_mismatched_keyed_rules():
     assert [grant.rule for grant in grants] == [exact]
     assert grants[0].matches("Bash", key, "shell")
     assert not grants[0].matches("Bash", "rm -rf /", "shell")
+
+
+async def test_multi_target_replay_rejects_partial_persistent_grant_set(
+    tmp_path: Path,
+):
+    paths = (str(tmp_path / "one.txt"), str(tmp_path / "two.txt"))
+    spec = ToolSpec(
+        name="Multi",
+        description="multi",
+        input_schema={"type": "object"},
+        bundle="fs",
+        mutates=True,
+        permission_key=lambda _data: "unused-scalar-key",
+        multi_path_targets=lambda data: tuple(
+            PathTarget(role, path) for role, path in data["targets"]
+        ),
+    )
+    evaluation = PermissionEngine(mode="ask", workspace=tmp_path).plan(
+        [
+            ToolCall(
+                id="multi",
+                name="Multi",
+                input={"targets": tuple(("target", path) for path in paths)},
+            )
+        ],
+        {"Multi": spec},
+    ).evaluations[0]
+    request = PermissionEngine(mode="ask", workspace=tmp_path).request_for(
+        evaluation
+    )
+    assert len(request.targets) == 2, (evaluation.outcome, evaluation.reason)
+    broker = ApprovalBroker()
+    future = broker.request(request)
+    assert broker.resolve(request.id, Decision.ALLOW_ALWAYS)
+    assert await future is Decision.ALLOW_ALWAYS
+
+    record = dict(broker.records[0])
+    assert "target_grants" in record, record
+    partial = list(record["target_grants"])
+    partial[1] = {
+        **partial[1],
+        "grant": {
+            **partial[1]["grant"],
+            "rule": 'Multi("/a/different/path")',
+        },
+    }
+    record["target_grants"] = partial
+
+    assert collect_grants([record]) == ()
+
+
+async def test_multi_target_deny_prevents_approval_and_dispatch(tmp_path: Path):
+    denied_path = str((tmp_path / "denied.txt").resolve())
+    ran: list[bool] = []
+
+    async def run(_args, _ctx):
+        ran.append(True)
+        return ToolExecutionResult.text("ran")
+
+    spec = ToolSpec(
+        name="Multi",
+        description="multi",
+        input_schema={"type": "object"},
+        bundle="fs",
+        mutates=True,
+        permission_key=lambda _data: "unused-scalar-key",
+        multi_path_targets=lambda data: tuple(
+            PathTarget(role, path) for role, path in data["targets"]
+        ),
+    )
+    manager = ToolManager(
+        make_config(mode="allow"),
+        workspace=tmp_path,
+        tools=[RegisteredTool(spec=spec, run=run, origin="builtin")],
+        tool_names=["Multi"],
+    )
+    prepared = manager.prepare(
+        [
+            ToolCall(
+                id="multi",
+                name="Multi",
+                input={
+                    "targets": [
+                        ["source", "allowed.txt"],
+                        ["destination", "denied.txt"],
+                    ]
+                },
+            )
+        ]
+    )
+    plan = PermissionEngine(
+        mode="allow",
+        deny=[exact_rule("Multi", denied_path)],
+        path_guard=manager.path_guard,
+    ).plan(prepared.calls(), prepared.spec_map())
+
+    evaluation = plan.evaluations[0]
+    assert evaluation.outcome is Outcome.DENY
+    assert [target.outcome for target in evaluation.target_evaluations] == [
+        Outcome.ALLOW,
+        Outcome.DENY,
+    ]
+    assert plan.asks() == ()
+    gated = prepared.apply_plan(plan)
+    assert gated.for_call("multi").error is not None
+
+    events: list = []
+    results = await manager.dispatch(gated, emit=events.append)
+    assert results[0].is_error is True
+    assert ran == []
+    assert not any(event.type == "tool.started" for event in events)
+    await manager.aclose()
 
 
 def test_collect_grants_keeps_keyless_broad_rules():

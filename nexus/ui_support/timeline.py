@@ -1,0 +1,245 @@
+"""Pure formatting and filtering for reducer-backed conversation timelines."""
+from __future__ import annotations
+
+import json
+import math
+import re
+from collections.abc import Mapping
+
+from ..view import AgentView, MessageView, ToolCallView, TurnView
+from ..ui_support.text import escape_controls, sanitize
+
+_DETAIL_LIMIT = 1_600
+_ARG_LIMIT = 180
+_HUNK_HEADER = re.compile(r"^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@")
+_STALE_GREETINGS = (
+    "hi! how can i help?",
+    "i’m nexus, your assistant.",
+    "i'm nexus, your assistant.",
+)
+_SETUP_FAILURE_MARKERS = (
+    "configerror", "providererror", "authentication_error", "authentication error",
+    "unauthorized", "invalid api key", "no api key", "credentials",
+)
+
+
+def _text(value: object, limit: int = _DETAIL_LIMIT) -> str:
+    return sanitize(value, limit)
+
+
+def _literal(value: object, limit: int = _DETAIL_LIMIT) -> str:
+    """Bound terminal data without interpreting it as Markdown or Rich markup."""
+    return escape_controls(str(value))[:limit]
+
+
+def _output(tool: ToolCallView) -> str:
+    if tool.display:
+        return _literal(tool.display)
+    if tool.context_note:
+        return _literal(tool.context_note)
+    if not tool.result:
+        return ""
+    parts: list[str] = []
+    for block in tool.result[:8]:
+        value = block.get("text", block.get("content", block)) if isinstance(block, Mapping) else block
+        if isinstance(value, (dict, list)):
+            value = json.dumps(value, ensure_ascii=True, default=str)
+        if value:
+            parts.append(_literal(value, 400))
+    return "\n".join(parts)[:_DETAIL_LIMIT]
+
+
+def _first_line(text: str, limit: int = _ARG_LIMIT) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _setup_failure(text: str | None) -> bool:
+    lowered = (text or "").casefold()
+    return any(marker in lowered for marker in _SETUP_FAILURE_MARKERS)
+
+
+def _stale_greeting(message: MessageView) -> bool:
+    return message.role == "assistant" and message.text.strip().casefold() in _STALE_GREETINGS
+
+
+def _message_markdown(message: MessageView) -> str:
+    """Render assistant text and provider thoughts, omitting opaque signatures."""
+    if message.role == "user":
+        return message.text
+    parts = []
+    for block in message.blocks:
+        if block.text:
+            if block.kind == "thinking":
+                parts.append("### Thought\n\n" + block.text)
+            elif block.kind == "text":
+                parts.append(block.text)
+    return "\n\n---\n\n".join(parts)
+
+
+def _has_message_content(message: MessageView) -> bool:
+    return bool(message.text or (message.role == "assistant" and message.thinking))
+
+
+def _turn_setup_failure(turn: TurnView) -> bool:
+    """Match setup failures only against structured error fields."""
+    return _setup_failure(turn.error) or any(_setup_failure(tool.error) for tool in turn.tools)
+
+
+def format_arguments(tool: ToolCallView) -> str:
+    """Return useful, bounded arguments without exposing write payloads."""
+    args = tool.input if isinstance(tool.input, dict) else {}
+    name = tool.name.casefold()
+    path = args.get("path") or args.get("file_path") or ""
+    if name == "read":
+        extras = [f"{key}={_text(args[key], 32)}" for key in ("offset", "limit") if key in args]
+        return _first_line(f"{_text(path, 120)}  ({', '.join(extras)})" if extras else _text(path, 180))
+    if name == "write":
+        content = args.get("content")
+        lines = content.count("\n") + 1 if isinstance(content, str) and content else 0
+        return _first_line(f"{_text(path, 120)} ({lines} lines)" if lines else _text(path, 180))
+    if name in {"edit", "multiedit"}:
+        return _first_line(_text(path, 180))
+    if name in {"bash", "bashoutput", "killshell"}:
+        return _first_line(_text(args.get("command") or args.get("id") or ""))
+    if name == "task":
+        return _first_line(_text(args.get("description") or args.get("task") or args.get("prompt") or ""))
+    pairs = [
+        f"{key}={_first_line(_text(value), 48)}"
+        for key, value in args.items()
+        if key not in {"content", "old_string", "new_string"}
+    ]
+    return _first_line(", ".join(pairs))
+
+
+def tool_status(tool: ToolCallView) -> str:
+    if tool.is_error or tool.status == "failed":
+        return "failed"
+    return "running" if tool.status in {"requested", "running"} else tool.status
+
+
+def tool_summary(tool: ToolCallView) -> str:
+    output = _output(tool)
+    if tool.error:
+        return _first_line(_text(tool.error))
+    if tool.is_error:
+        return "failed"
+    if tool.progress:
+        return _first_line(_text(tool.progress[-1]))
+    if tool.name.casefold() == "read":
+        return "read" if not output else _first_line(output)
+    if tool.name.casefold() == "write":
+        return "written" if tool.status == "completed" else tool.status
+    return _first_line(output) if output else tool.status
+
+
+def _diff_text(diff: Mapping[str, object]) -> tuple[str, str] | None:
+    """Reconstruct bounded before/after text from Nexus's durable unified hunk."""
+    hunk = diff.get("hunk")
+    if not isinstance(hunk, str) or not hunk:
+        return None
+    before: list[str] = []
+    after: list[str] = []
+    seen_hunk = False
+    for line in hunk.splitlines():
+        if _HUNK_HEADER.match(line):
+            seen_hunk = True
+            continue
+        if not seen_hunk:
+            continue
+        if line.startswith("+") and not line.startswith("+++"):
+            after.append(line[1:])
+        elif line.startswith("-") and not line.startswith("---"):
+            before.append(line[1:])
+        elif line.startswith(" "):
+            before.append(line[1:])
+            after.append(line[1:])
+    return ("\n".join(before), "\n".join(after)) if before or after else None
+
+
+def _latest_activity(agent: AgentView) -> str:
+    for turn in reversed(agent.body.turns):
+        if turn.tools:
+            tool = max(turn.tools, key=lambda item: item.event_seq)
+            return _text(f"{tool.name or 'tool'}: {tool_summary(tool)}", 140)
+    for turn in reversed(agent.body.turns):
+        for message in reversed(turn.messages):
+            if message.text:
+                return _text(message.text, 140)
+    return "waiting for activity"
+
+
+def _agent_metrics(agent: AgentView) -> str:
+    """Summarize reducer-owned child calls and timestamps without a wall clock."""
+    tools = [tool for turn in agent.body.turns for tool in turn.tools]
+    completed = sum(tool.status in {"completed", "failed"} for tool in tools)
+    label = f"{completed} tool{'s' if completed != 1 else ''}"
+    starts = [stamp for value in (agent.spawned_ts, *(turn.started_ts for turn in agent.body.turns))
+              if (stamp := _timestamp(value)) is not None]
+    if not starts:
+        return label
+    start = min(starts)
+    ends = [stamp for value in (
+        agent.completed_ts, *(turn.updated_ts for turn in agent.body.turns),
+        *(stamp for tool in tools for stamp in (tool.requested_ts, tool.started_ts, tool.finished_ts)),
+    ) if (stamp := _timestamp(value)) is not None]
+    end = max(ends, default=start)
+    elapsed = max(0, round((end - start) * 1000))
+    duration = f"{elapsed / 1000:.1f}s" if elapsed < 60_000 else f"{elapsed // 60_000}m {(elapsed // 1000) % 60}s"
+    return f"{label} · {duration}"
+
+
+def _timestamp(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def _turn_duration(turn: TurnView) -> str | None:
+    elapsed_ms = turn.elapsed_ms
+    if isinstance(elapsed_ms, bool) or not isinstance(elapsed_ms, int) or elapsed_ms < 0:
+        return None
+    return f"{elapsed_ms / 1000:.1f}s" if elapsed_ms < 60_000 else f"{elapsed_ms // 60_000}m {(elapsed_ms // 1000) % 60}s"
+
+
+def _turn_models(turn: TurnView) -> str:
+    """Show actual per-message model metadata, never the current selection."""
+    models = dict.fromkeys(
+        f"{message.provider}/{message.model}" if message.provider and message.model
+        else message.model or message.provider or ""
+        for message in turn.messages
+        if message.role == "assistant" and (message.provider or message.model)
+    )
+    return ", ".join(_literal(model, 120) for model in models) or "unknown"
+
+
+def _turn_agent(turn: TurnView) -> str:
+    agent = turn.agent
+    name = agent.get("name") if isinstance(agent, Mapping) else None
+    if not isinstance(name, str) or not name.strip():
+        return "No agent"
+    name = name.strip()
+    return _literal(name[0].upper() + name[1:], 80)
+
+
+def _turn_effort(turn: TurnView) -> str:
+    effort = turn.reasoning_effort
+    return _literal(effort.strip(), 48) if isinstance(effort, str) and effort.strip() else "Default"
+
+
+def _turn_summary(turn: TurnView) -> str:
+    """Render frozen per-turn facts from the reducer projection."""
+    parts = [f"Model {_turn_models(turn)}"]
+    if duration := _turn_duration(turn):
+        parts.append(duration)
+    parts.extend((f"Agent {_turn_agent(turn)}", f"Effort {_turn_effort(turn)}"))
+    return "  ·  ".join(parts)
+
+
+__all__ = [
+    "_DETAIL_LIMIT", "_agent_metrics", "_diff_text", "_has_message_content", "_latest_activity",
+    "_literal", "_message_markdown", "_setup_failure", "_stale_greeting",
+    "_output", "_text", "_turn_setup_failure", "_turn_summary", "format_arguments",
+    "tool_status", "tool_summary",
+]

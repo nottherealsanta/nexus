@@ -350,7 +350,7 @@ async def test_dead_server_mid_call_never_fails_turn(tmp_path: Path) -> None:
         )
         assert runtime.manifest.mcp["fs"].connected is False
         # Non-MCP tools are untouched by one server's death.
-        assert "Bash" in runtime.manifest.tools
+        assert "bash" in runtime.manifest.tools
     finally:
         await runtime.aclose()
 

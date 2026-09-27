@@ -1,30 +1,48 @@
-"""``Bash``: run a non-interactive shell command in the workspace.
+"""``bash``: run commands and control background jobs in the workspace.
 
 The submitted command string is the tool's permission key: the engine matches
 allow/deny/ask rules against it. That is **policy matching, not sandboxing** —
 it does not constrain what the command may read or write.
 
 Foreground commands return their captured output and exit code; a nonzero exit
-is a normal, model-visible result. ``run_in_background=true`` starts the job and
-returns its registry-owned ``job_id`` immediately for later ``BashOutput`` /
-``KillShell`` calls. Timeouts and cancellation SIGTERM the whole process group,
-grace, then SIGKILL, and always reap the direct child.
+is a normal, model-visible result. Background jobs can be read, waited on, and
+stopped through action-specific requests addressed by registry-owned job IDs.
+Timeouts and cancellation SIGTERM the whole process group, grace, then SIGKILL,
+and always reap the direct child.
 """
 from __future__ import annotations
 
+import math
+import os
 from pathlib import Path
 from typing import Any
 
 from ..spec import ToolContext, ToolExecutionResult, ToolSpec
-from . import _jobs
+from . import _jobs, bash_output, kill_shell
 
 __all__ = ["SPEC", "run"]
 
 _COMMAND = {
     "type": "string",
     "description": (
-        "The shell command to execute. Runs via `/bin/sh -c` with the "
-        "workspace as the working directory and stdin closed."
+        "The shell command to execute. Runs with `-c` and stdin closed; "
+        "defaults to `/bin/sh` and the workspace directory."
+    ),
+}
+_SHELLS = ("/bin/sh", "/bin/bash", "/bin/zsh")
+_SHELL = {
+    "type": "string",
+    "enum": list(_SHELLS),
+    "description": (
+        "Optional explicit shell executable. Only /bin/sh, /bin/bash, and "
+        "/bin/zsh are accepted; shell arguments are not allowed."
+    ),
+}
+_WORKDIR = {
+    "type": "string",
+    "description": (
+        "Optional working directory, relative to the workspace or an absolute "
+        "path inside it. Symlink and traversal escapes are rejected."
     ),
 }
 _TIMEOUT = {
@@ -38,7 +56,7 @@ _BACKGROUND = {
     "type": "boolean",
     "description": (
         "Start the command in the background and return its job_id "
-        "immediately. Poll with BashOutput and stop it with KillShell."
+        "immediately."
     ),
 }
 _ENV = {
@@ -48,29 +66,64 @@ _ENV = {
     ),
     "additionalProperties": {"type": "string"},
 }
+_ACTION = {
+    "type": "string",
+    "enum": ["run", "status", "wait", "stop"],
+    "default": "run",
+    "description": "Run a command or control a background job.",
+}
+_JOB_ID = {
+    "type": "string",
+    "description": "A job_id previously returned by bash.",
+}
+_STDOUT_OFFSET = {
+    "type": "integer",
+    "description": "Non-negative byte offset into captured stdout.",
+}
+_STDERR_OFFSET = {
+    "type": "integer",
+    "description": "Non-negative byte offset into captured stderr.",
+}
+_WAIT = {
+    "type": "number",
+    "description": "Maximum seconds to wait for new output or completion (1–30).",
+}
+_RUN_FIELDS = {
+    "command", "timeout_s", "run_in_background", "env", "shell", "workdir"
+}
+_JOB_FIELDS = {"job_id"}
+_OUTPUT_FIELDS = {"stdout_offset", "stderr_offset"}
+_MAX_WAIT_S = 30.0
 
 SPEC = ToolSpec(
-    name="Bash",
+    name="bash",
     description=(
-        "Execute a non-interactive shell command in the workspace. Returns "
-        "stdout, stderr, and the exit code. Use run_in_background for "
-        "long-running commands."
+        "Run a non-interactive shell command, or inspect, wait for, or stop a "
+        "background job started in this session. Commands default to /bin/sh "
+        "and the workspace directory; run actions may select an allowlisted "
+        "shell executable and a checked in-workspace directory."
     ),
     input_schema={
         "type": "object",
         "properties": {
+            "action": _ACTION,
             "command": _COMMAND,
+            "shell": _SHELL,
+            "workdir": _WORKDIR,
+            "job_id": _JOB_ID,
             "timeout_s": _TIMEOUT,
             "run_in_background": _BACKGROUND,
             "env": _ENV,
+            "stdout_offset": _STDOUT_OFFSET,
+            "stderr_offset": _STDERR_OFFSET,
+            "wait_s": _WAIT,
         },
-        "required": ["command"],
         "additionalProperties": False,
     },
     bundle="shell",
     mutates=True,
     concurrency="exclusive",
-    permission_key=lambda data: str(data.get("command", "")),
+    permission_key=lambda data: _permission_key(data),
 )
 
 
@@ -78,35 +131,167 @@ def _error(message: str) -> ToolExecutionResult:
     return ToolExecutionResult.text(message, is_error=True)
 
 
+def _permission_key(data: dict[str, Any]) -> str:
+    """Keep command permissions stable and qualify each job action."""
+    action = data.get("action", "run")
+    if action == "run":
+        return str(data.get("command", ""))
+    return f"{action}:{data.get('job_id', '')}"
+
+
+def _validate_shape(args: dict[str, Any]) -> tuple[str, ToolExecutionResult | None]:
+    action = args.get("action", "run")
+    if not isinstance(action, str) or action not in {
+        "run", "status", "wait", "stop"
+    }:
+        return "", _error("bash: action must be one of run, status, wait, stop")
+
+    if action == "run":
+        allowed = _RUN_FIELDS
+        required = {"command"}
+    elif action in {"status", "wait"}:
+        allowed = _JOB_FIELDS | _OUTPUT_FIELDS
+        required = {"job_id"}
+        if action == "wait":
+            allowed = allowed | {"wait_s"}
+            required.add("wait_s")
+    else:
+        allowed = _JOB_FIELDS
+        required = _JOB_FIELDS
+
+    extras = set(args) - allowed - {"action"}
+    if extras:
+        return "", _error(
+            f"bash: {action} does not accept: {', '.join(sorted(extras))}"
+        )
+    missing = required - set(args)
+    if missing:
+        return "", _error(
+            f"bash: {action} requires: {', '.join(sorted(missing))}"
+        )
+    if action in {"status", "wait", "stop"} and (
+        not isinstance(args.get("job_id"), str) or not args["job_id"]
+    ):
+        return "", _error("bash: 'job_id' must be a non-empty string")
+
+    if action in {"status", "wait"}:
+        for key in _OUTPUT_FIELDS:
+            value = args.get(key, 0)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                return "", _error(f"bash: {key} must be a non-negative integer")
+    if action == "wait" and "wait_s" in args:
+        wait_s = args.get("wait_s")
+        if (
+            isinstance(wait_s, bool)
+            or not isinstance(wait_s, (int, float))
+            or not 0 < wait_s <= _MAX_WAIT_S
+            or not math.isfinite(wait_s)
+        ):
+            return "", _error(
+                f"bash: wait_s must be a positive finite number no greater than "
+                f"{_MAX_WAIT_S:g} seconds"
+            )
+    return action, None
+
+
+def _resolve_workdir(workspace: Path, raw: object = None) -> Path:
+    """Resolve a run cwd and require a real directory inside the workspace."""
+    try:
+        root = workspace.resolve(strict=True)
+        if raw is None:
+            candidate = root
+        else:
+            if not isinstance(raw, str) or not raw or not raw.strip():
+                raise ValueError("workdir must be a non-empty path string")
+            if "\x00" in raw or raw.startswith("~"):
+                raise ValueError("workdir must not contain NUL or use home expansion")
+            supplied = Path(raw)
+            candidate = (supplied if supplied.is_absolute() else root / supplied).resolve(
+                strict=True
+            )
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ValueError(f"invalid workdir: {exc}") from exc
+    if not candidate.is_relative_to(root):
+        raise ValueError("workdir must resolve inside the workspace")
+    if not candidate.is_dir():
+        raise ValueError(f"workdir is not a directory: {raw!r}")
+    return candidate
+
+
+def _resolve_shell(raw: object = None) -> str | None:
+    """Accept only an explicit, available shell executable from the allowlist."""
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or raw not in _SHELLS:
+        raise ValueError(
+            "shell must be one of: " + ", ".join(_SHELLS)
+        )
+    if not os.path.isfile(raw) or not os.access(raw, os.X_OK):
+        raise ValueError(f"shell executable is not available: {raw}")
+    return raw
+
+
 async def run(
     args: dict[str, Any], ctx: ToolContext
 ) -> ToolExecutionResult:
-    """Spawn the command and either await it or register it in the background."""
+    """Run a command or perform a validated action on an owned background job."""
+    if not isinstance(args, dict):
+        return _error("bash: arguments must be an object")
+    action, invalid = _validate_shape(args)
+    if invalid is not None:
+        return invalid
+
+    if action == "status":
+        return await bash_output._read_job_output(
+            args, ctx, tool_name="bash"
+        )
+    if action == "wait":
+        return await bash_output._read_job_output(
+            args, ctx, tool_name="bash", max_wait_s=_MAX_WAIT_S
+        )
+    if action == "stop":
+        return await kill_shell._stop_job(
+            args.get("job_id"), ctx, tool_name="bash"
+        )
+
     command = args.get("command") if isinstance(args, dict) else None
     if not isinstance(command, str) or not command.strip():
-        return _error("Bash: 'command' must be a non-empty string")
+        return _error("bash: 'command' must be a non-empty string")
 
     try:
         timeout = _jobs.resolve_timeout(args, ctx.config)
         env = _jobs.resolve_env(args)
+        shell = _resolve_shell(args.get("shell"))
     except (TypeError, ValueError) as exc:
-        return _error(f"Bash: {exc}")
+        return _error(f"bash: {exc}")
 
     workspace = Path(ctx.workspace)
     if not workspace.is_dir():
-        return _error(f"Bash: workspace does not exist: {workspace}")
+        return _error(f"bash: workspace does not exist: {workspace}")
+    try:
+        # Resolve here and immediately before spawn; never pass an untrusted
+        # relative path to the subprocess layer.
+        cwd = _resolve_workdir(workspace, args.get("workdir"))
+    except ValueError as exc:
+        return _error(f"bash: {exc}")
 
     registry = _jobs.registry_for(ctx)
     try:
         session_id = _jobs.require_session_id(ctx.session_id)
     except _jobs.JobRegistryError as exc:
-        return _error(f"Bash: {exc}")
+        return _error(f"bash: {exc}")
     try:
+        cwd = _resolve_workdir(workspace, args.get("workdir"))
         job = await registry.spawn(
-            command, session_id=session_id, cwd=workspace, env=env
+            command,
+            session_id=session_id,
+            cwd=cwd,
+            env=env,
+            shell=shell,
+            cwd_check=lambda: _resolve_workdir(workspace, args.get("workdir")),
         )
-    except (OSError, ValueError, _jobs.JobRegistryError) as exc:
-        return _error(f"Bash: failed to start command: {exc}")
+    except (OSError, RuntimeError, ValueError, _jobs.JobRegistryError) as exc:
+        return _error(f"bash: failed to start command: {exc}")
 
     background = bool(args.get("run_in_background", False))
     if background:
@@ -114,11 +299,11 @@ async def run(
             _jobs.format_job_output(job, show_offsets=True),
             display=(
                 f"started {job.job_id} in background "
-                f"(pid {job.pid}); poll with BashOutput"
+                f"(pid {job.pid})"
             ),
             context_note=(
-                f"[Bash {command!r} started in background as {job.job_id}; poll "
-                "with BashOutput to read its output]"
+                f"[bash {command!r} started in background as {job.job_id}; "
+                "use action=status/wait/stop with this job_id]"
             ),
         )
 

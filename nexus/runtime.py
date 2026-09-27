@@ -32,12 +32,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import hashlib
 import inspect
 import re
+import subprocess
 import threading
+import weakref
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self
 
@@ -45,6 +48,8 @@ import httpx
 import msgspec
 
 from .agents import SubagentOutcome, SubagentRunner, SubagentUsage
+from .agents.model import AgentError, AgentNotFoundError
+from .agents.runner import WORKTREE_CHILD_TOOLS
 from .config import Config
 from .context import ContextManager
 from .context.cache import TokenCountCache
@@ -56,7 +61,7 @@ from .core.turn import TurnLimits
 from .errors import ConfigError, OperationCancelled
 from .events import Event
 from .hooks import HookEvent, HookInvocation, HookManager, HookOutcome
-from .model.message import Text
+from .model.message import Document, Image, Text, Thinking, ToolResult, ToolUse
 from .model.provider import Provider
 from .model.providers.anthropic import AnthropicProvider
 from .model.providers.gemini import GeminiProvider
@@ -72,24 +77,27 @@ from .model.registry import (
     OPENAI_COMPATIBLE,
     ModelRegistry,
 )
-from .model.request import ModelRequest, ToolSchema
+from .model.request import REASONING_EFFORT_ORDER, ModelRequest, ToolSchema
 from .model.router import ModelRouter
 from .model.selection import ModelSelection
-from .session.agent_selection import AgentSelection
 from .model.tiers import DEFAULT_TIER, TierTable
+from .net import OutboundHTTPService, SafeOutboundHTTPService
 from .session import Session, SessionManager
+from .session.agent_selection import AgentSelection
 from .tools.builtin._jobs import JobRegistry
 from .tools.builtin.todo import TodoStore
 from .tools.manager import ToolManager
 from .tools.permissions import (
     ApprovalBroker,
+    Decision,
     Grant,
+    Outcome,
     PathGuard,
     PermissionEngine,
     collect_grants,
 )
 from .tools.spec import ToolCall, ToolContext
-from .util import redact_url_userinfo
+from .util import redact_secrets, redact_url_userinfo
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; the runtime imports lazily
     from .ext.manager import ExtensionManager
@@ -157,16 +165,19 @@ class _ToolDispatcherAdapter:
         session_id: str,
         turn_id: str,
         config: Config,
+        agent_id: str = "root",
         skills: Any | None = None,
         extensions: Any | None = None,
         activations: Any | None = None,
         subagents: Any | None = None,
+        outbound_http: OutboundHTTPService | None = None,
     ) -> None:
         self.manager = manager
         self._workspace = Path(workspace)
         self._session_id = session_id
         self._turn_id = turn_id
         self._config = config
+        self._agent_id = agent_id
         #: The narrow, manager-owned service seams a tool may reach. Injected
         #: here (never a ``Runtime``) so ``Skill``/``ReloadExtensions`` can act
         #: without the tools layer importing a concrete manager.
@@ -176,6 +187,7 @@ class _ToolDispatcherAdapter:
         #: The ``Task`` subagent service for this iteration. Injected into every
         #: ``ToolContext`` so the builtin never imports ``nexus.agents``.
         self._subagents = subagents
+        self._outbound_http = outbound_http
 
     def prepare(self, tool_uses):
         calls = [ToolCall.from_tool_use(block) for block in tool_uses]
@@ -199,10 +211,12 @@ class _ToolDispatcherAdapter:
             session_id=self._session_id,
             turn_id=self._turn_id,
             config=self._config,
+            agent_id=self._agent_id,
             skills=self._skills,
             extensions=self._extensions,
             activations=self._activations,
             subagents=self._subagents,
+            outbound_http=self._outbound_http,
         )
 
     async def dispatch(
@@ -245,11 +259,13 @@ class _PermissionGateAdapter:
         self,
         engine: PermissionEngine,
         *,
+        manager: ToolManager | None = None,
         grants: tuple[Grant, ...] = (),
         attended: bool = True,
         broker: ApprovalBroker | None = None,
     ) -> None:
         self.engine = engine
+        self._manager = manager
         self._grants = tuple(grants)
         self._attended = bool(attended)
         self._broker = broker if broker is not None else ApprovalBroker()
@@ -258,17 +274,79 @@ class _PermissionGateAdapter:
         #: them from ``_futures``; this second map keeps them reachable so a
         #: presence-driven fallback can resolve/fail a request that is parked.
         self._inflight: dict[str, asyncio.Future] = {}
+        self._resolved_decisions: dict[str, tuple[Any, Decision]] = {}
+        self._approval_evaluations: dict[str, Any] = {}
+        self._issued_plans: dict[int, tuple[Any, Any]] = {}
+        #: One unforgeable evidence scope per gate/turn. Managers can be shared
+        #: across sessions, so cleanup must revoke only this gate's capabilities.
+        self._evidence_scope = object()
 
     def plan(self, prepared):
-        return self.engine.plan(
+        plan = self.engine.plan(
             prepared.calls(),
             prepared.spec_map(),
             grants=self._grants,
             attended=self._attended,
         )
+        evaluations = []
+        for evaluation in plan.evaluations:
+            if (
+                evaluation.call.name == "subagent"
+                and evaluation.call.input.get("worktree") is True
+                and evaluation.outcome is not Outcome.DENY
+            ):
+                if self._attended:
+                    evaluation = replace(
+                        evaluation,
+                        outcome=Outcome.ASK,
+                        decision=None,
+                        code="worktree_approval_required",
+                        reason="Creating an isolated worktree requires explicit approval",
+                    )
+                else:
+                    evaluation = replace(
+                        evaluation,
+                        outcome=Outcome.DENY,
+                        decision=Decision.DENY_ONCE,
+                        code="worktree_approval_required",
+                        reason=(
+                            "Worktree creation requires attended approval; "
+                            "unattended child calls are denied"
+                        ),
+                    )
+            evaluations.append(evaluation)
+        if len(evaluations) != len(plan.evaluations) or any(
+            updated is not original
+            for updated, original in zip(evaluations, plan.evaluations)
+        ):
+            plan = replace(plan, evaluations=tuple(evaluations))
+        self._issued_plans[id(plan)] = (plan, prepared)
+        return plan
+
+    def bind_manager(self, manager: ToolManager) -> None:
+        """Bind multi-target evidence to the manager executing this iteration.
+
+        Manifest-backed catalogs are rebuilt per iteration, and static agent
+        setup may also rebuild its final catalog. The permission baseline stays
+        turn-frozen, but evidence must be issued by the exact manager that will
+        consume it. A manager switch is only valid between approval batches.
+        """
+        if self._manager is manager:
+            return
+        if self._futures or self._inflight:
+            raise RuntimeError("cannot replace a manager with pending approvals")
+        revoke = getattr(self._manager, "_revoke_multi_target_authorizations", None)
+        if callable(revoke):
+            revoke(self._evidence_scope)
+        self._manager = manager
+        self._issued_plans.clear()
+        self._resolved_decisions.clear()
+        self._approval_evaluations.clear()
 
     def request_for(self, evaluation):
-        return self.engine.request_for(evaluation)
+        request = self.engine.request_for(evaluation)
+        self._approval_evaluations[request.id] = evaluation
+        return request
 
     def open(self, request) -> None:
         if request.id in self._futures or request.id in self._inflight:
@@ -291,7 +369,15 @@ class _PermissionGateAdapter:
             if future in done:
                 cancel_task.cancel()
                 await asyncio.gather(cancel_task, return_exceptions=True)
-                return future.result()
+                decision = future.result()
+                evaluation = self._approval_evaluations.get(request.id)
+                if getattr(evaluation, "target_evaluations", ()):
+                    self._resolved_decisions[request.id] = (
+                        request, Decision.from_value(decision)
+                    )
+                else:
+                    self._approval_evaluations.pop(request.id, None)
+                return decision
             if not future.done():
                 future.cancel()
             self._broker.cancel(request.id)
@@ -311,6 +397,82 @@ class _PermissionGateAdapter:
             if record.get("id") == request_id:
                 return record
         return None
+
+    def authorize(self, prepared, plan, decisions):
+        """Attach manager-owned evidence after the loop's complete approval pass."""
+        issued = self._issued_plans.pop(id(plan), None)
+        if (
+            self._manager is None
+            or issued is None
+            or issued[0] is not plan
+            or tuple(item.call for item in issued[1].entries)
+            != tuple(item.call for item in prepared.entries)
+        ):
+            return prepared
+        supplied = list(decisions)
+        evaluations = tuple(plan.evaluations)
+        authorized = prepared
+        for evaluation in evaluations:
+            if not getattr(evaluation, "target_evaluations", ()):
+                continue
+            if getattr(evaluation.outcome, "value", None) not in {"allow", "ask"}:
+                continue
+            asks = tuple(
+                item
+                for item in evaluation.target_evaluations
+                if getattr(item.outcome, "value", None) == "ask"
+            )
+            if asks:
+                resolved = next(
+                    (
+                        (call_id, raw)
+                        for call_id, raw in supplied
+                        if call_id == evaluation.call.id
+                    ),
+                    None,
+                )
+                if resolved is None:
+                    continue
+                decision = Decision.from_value(resolved[1])
+                # Prove the decision came through this gate's real ApprovalBroker
+                # and was resolved for this exact request/evaluation.
+                request_id = next(
+                    (
+                        key
+                        for key, requested in self._approval_evaluations.items()
+                        if requested is evaluation
+                    ),
+                    None,
+                )
+                if request_id is None:
+                    continue
+                resolved = self._resolved_decisions.pop(request_id, None)
+                self._approval_evaluations.pop(request_id, None)
+                if resolved is None:
+                    continue
+                request, broker_decision = resolved
+                if broker_decision != decision:
+                    continue
+                record = self.resolution(request.id)
+                if (
+                    record is None
+                    or record.get("id") != request.id
+                    or record.get("call_id") != evaluation.call.id
+                    or record.get("tool") != evaluation.call.name
+                ):
+                    continue
+                if not decision.allows:
+                    continue
+            else:
+                decision = evaluation.decision or Decision.ALLOW_ONCE
+            authorized = self._manager._authorize_multi_target(
+                authorized,
+                evaluation,
+                decision,
+                authority=self._manager._multi_target_authority,
+                scope=self._evidence_scope,
+            )
+        return authorized
 
     def resolve(self, request_id: str, decision: object) -> bool:
         return self._broker.resolve(request_id, decision)
@@ -338,6 +500,12 @@ class _PermissionGateAdapter:
             self._broker.cancel(request_id)
         self._futures.clear()
         self._inflight.clear()
+        revoke = getattr(self._manager, "_revoke_multi_target_authorizations", None)
+        if callable(revoke):
+            revoke(self._evidence_scope)
+        self._issued_plans.clear()
+        self._resolved_decisions.clear()
+        self._approval_evaluations.clear()
 
 
 class _ContextCoordinator:
@@ -357,11 +525,16 @@ class _ContextCoordinator:
         *,
         token_cache: TokenCountCache | None = None,
         agents: Any | None = None,
+        tiers: Any | None = None,
+        registry: Any | None = None,
+        runtime: Any | None = None,
     ) -> None:
         self._context = context
         self._resolver = resolver
         self._token_cache = token_cache
         self._agents = agents
+        self._tiers = tiers
+        self._registry = registry
         #: Marker read by :meth:`Session._assemble_for_turn`: this coordinator
         #: accepts a ``session`` so it can freeze that session's model override.
         self.session_aware = True
@@ -390,6 +563,248 @@ class _ContextCoordinator:
         except Exception:  # noqa: BLE001 - unresolved model keeps base defaults
             return None
 
+    def _route_reference(
+        self,
+        config: Any | None,
+        *,
+        agent_definition: Any | None = None,
+        model_selection: ModelSelection | None = None,
+        apply_agent: bool = True,
+    ) -> tuple[str | None, str | None, str | None, str | None]:
+        """Choose the requested route before resolving it through the router.
+
+        Session selections always take precedence. Otherwise the selected root
+        agent may override the configured route; tier references are interpreted
+        from the agent's own model field so a configured tier cannot mask a
+        concrete agent default. The final two values are the configured route,
+        retained for a safe fallback if an agent route has gone stale.
+        """
+        configured_provider: str | None = None
+        configured_model: str | None = None
+        reference = getattr(self._context, "model_reference", None)
+        if config is not None and callable(reference):
+            try:
+                configured_provider, configured_model = reference(config)
+            except ConfigError:  # unresolved config may use router default
+                pass
+
+        if model_selection is not None:
+            return (
+                model_selection.provider,
+                model_selection.model,
+                configured_provider,
+                configured_model,
+            )
+
+        provider_name, model = configured_provider, configured_model
+        if agent_definition is not None and apply_agent:
+            agent_model = getattr(agent_definition, "model", None)
+            agent_provider = getattr(agent_definition, "provider", None)
+            if isinstance(agent_model, str) and agent_model not in ("inherit", ""):
+                if agent_model in getattr(self._tiers, "order", ()):
+                    if self._registry is not None:
+                        # A tier is a router reference, not a provider/model id.
+                        provider_name, model = None, agent_model
+                    elif isinstance(agent_provider, str) and agent_provider:
+                        # Without a registry the tier is not resolvable; retain
+                        # the configured model while honoring the agent adapter.
+                        provider_name = agent_provider
+                elif "/" in agent_model:
+                    provider_name, _, model = agent_model.partition("/")
+                else:
+                    provider_name, model = agent_provider, agent_model
+            elif isinstance(agent_provider, str) and agent_provider:
+                provider_name = agent_provider
+
+        return (
+            provider_name,
+            model,
+            configured_provider,
+            configured_model,
+        )
+
+    def _root_route(
+        self,
+        session: Any | None,
+        *,
+        config: Any | None = None,
+        agent_definition: Any | None = None,
+        model_selection: ModelSelection | None = None,
+    ) -> tuple[str | None, str | None, Any | None]:
+        """Resolve the next root-turn route without contacting a provider.
+
+        Route precedence is shared with iteration setup by ``_route_reference``.
+        An explicit session selection wins; otherwise the selected root agent
+        can override the workspace route. A stale agent default falls back to
+        the configured route, while a stale explicit session selection falls
+        back directly to the configured route.
+        """
+        if config is None:
+            config = self.effective_config()
+        session_selection = getattr(session, "model_selection", None)
+        selection = model_selection if model_selection is not None else session_selection
+        provider_name, model, configured_provider, configured_model = (
+            self._route_reference(
+                config,
+                agent_definition=agent_definition,
+                model_selection=selection,
+            )
+        )
+        resolved = self._resolve(provider_name, model)
+        if resolved is None and selection is not None:
+            provider_name, model, configured_provider, configured_model = (
+                self._route_reference(
+                    config,
+                    agent_definition=agent_definition,
+                    apply_agent=False,
+                )
+            )
+            resolved = self._resolve(provider_name, model)
+        if resolved is None and (provider_name, model) != (
+            configured_provider,
+            configured_model,
+        ):
+            provider_name, model = configured_provider, configured_model
+            resolved = self._resolve(provider_name, model)
+        if resolved is not None:
+            return provider_name or resolved.provider.name, resolved.model, resolved
+        # When no router/config exists, an explicit route can still be
+        # described from its durable selection fields.
+        return provider_name, model, None
+
+    def root_route_metadata(self, session: Any) -> dict[str, str | None]:
+        """Return the effective provider/model for the session's next root turn.
+
+        This query only performs local route resolution; it never calls a
+        provider or performs network I/O.
+        """
+        config = self.effective_config()
+        agent_definition = self._root_agent_definition(session, config)
+        provider, model, _resolved = self._root_route(
+            session, config=config, agent_definition=agent_definition
+        )
+        return {"provider": provider, "model": model}
+
+    def _root_agent_definition(self, session: Any, config: Any | None) -> Any | None:
+        if self._agents is None:
+            return None
+        if config is not None:
+            try:
+                self._agents.refresh()
+            except (AgentError, OSError):  # metadata remains descriptive
+                pass
+        selection = getattr(session, "agent_selection", None)
+        configured_name = getattr(
+            getattr(getattr(config, "v2", None), "agent", None), "name", "general"
+        )
+        name = getattr(selection, "name", None) or configured_name
+        try:
+            return self._agents.resolve(name, context="root")
+        except AgentNotFoundError:  # unavailable agent has no route default
+            return None
+
+    @staticmethod
+    def _supported_efforts(
+        resolved: Any, registry: Any | None, *, provider_name: str | None = None
+    ) -> tuple[str, ...]:
+        """Return exact efforts for a route that can apply them.
+
+        ScriptedProvider is intentionally supported as an offline test adapter,
+        but it still needs explicit per-model metadata. Capabilities alone never
+        imply levels, and unknown models have no advertised effort choices.
+        """
+        provider = getattr(resolved, "provider", None)
+        capabilities = getattr(resolved, "capabilities", None)
+        if not bool(getattr(capabilities, "thinking", False)):
+            return ()
+        scripted = getattr(provider, "name", None) == "scripted"
+        if not scripted and getattr(provider, "_api", None) != "responses":
+            return ()
+        if registry is None:
+            return ()
+        get = getattr(registry, "get", None)
+        routed_provider = provider_name or getattr(provider, "name", "")
+        info = (
+            get(f"{routed_provider}/{getattr(resolved, 'model', '')}")
+            if callable(get)
+            else None
+        )
+        levels = getattr(info, "reasoning_efforts", ())
+        if not isinstance(levels, (tuple, list)):
+            return ()
+        offered = set(levels)
+        return tuple(level for level in REASONING_EFFORT_ORDER if level in offered)
+
+    def _effort_metadata(
+        self,
+        session: Any,
+        agent_definition: Any | None,
+        resolved: Any,
+        *,
+        provider_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Resolve root-session effort precedence for one concrete route."""
+        supported = self._supported_efforts(
+            resolved, self._registry, provider_name=provider_name
+        )
+        selection = getattr(session, "reasoning_effort_selection", None)
+        stored = getattr(selection, "effort", None)
+        agent_default = getattr(agent_definition, "reasoning_effort", None)
+        if stored is not None:
+            effective = stored if stored in supported else None
+            source = "session" if effective is not None else None
+        elif getattr(session, "model_selection", None) is not None:
+            effective, source = None, None
+        elif agent_default is not None and agent_default in supported:
+            effective, source = agent_default, "agent"
+        else:
+            effective, source = None, None
+        return {
+            "supported_levels": supported,
+            "stored_override": stored,
+            "effective_effort": effective,
+            "source": source,
+        }
+
+    def _effective_effort(
+        self,
+        session: Any | None,
+        agent_definition: Any | None,
+        resolved: Any,
+        *,
+        provider_name: str | None = None,
+    ) -> str | None:
+        supported = self._supported_efforts(
+            resolved, self._registry, provider_name=provider_name
+        )
+        selection = getattr(session, "reasoning_effort_selection", None)
+        stored = getattr(selection, "effort", None)
+        if stored is not None:
+            return stored if stored in supported else None
+        if getattr(session, "model_selection", None) is not None:
+            return None
+        default = getattr(agent_definition, "reasoning_effort", None)
+        return default if default in supported else None
+
+    def root_reasoning_effort_metadata(self, session: Any) -> dict[str, Any]:
+        """Return the root session's exact reasoning-effort choices.
+
+        Resolves the session's current model selection first, then the selected
+        root agent's route/default, then the workspace route. Unknown model
+        metadata yields no choices; a stored unsupported override is reported
+        as dormant and is never replaced by the agent default.
+        """
+        config = self.effective_config()
+        agent_definition = getattr(session, "_turn_agent_definition", None)
+        if agent_definition is None:
+            agent_definition = self._root_agent_definition(session, config)
+        provider_name, _model, resolved = self._root_route(
+            session, config=config, agent_definition=agent_definition
+        )
+        return self._effort_metadata(
+            session, agent_definition, resolved, provider_name=provider_name
+        )
+
     def for_turn(
         self,
         *,
@@ -409,6 +824,7 @@ class _ContextCoordinator:
         for_turn = getattr(manager, "for_turn", None)
         if not callable(for_turn):
             return manager
+        session_model_selection = getattr(session, "model_selection", None)
         config = self.effective_config()
         selection = getattr(session, "agent_selection", None) if session is not None else None
         configured_name = getattr(
@@ -431,67 +847,62 @@ class _ContextCoordinator:
                 raise ConfigError(
                     f"cannot prepare selected root agent {selection.name!r}: {exc}"
                 ) from exc
-        provider_name: str | None = None
-        model: str | None = None
-        capabilities = None
+        provider_name, model, resolved = self._root_route(
+            session,
+            config=config,
+            agent_definition=agent_definition,
+            model_selection=model_selection,
+        )
+        capabilities = getattr(resolved, "capabilities", None)
         request_counter = None
-
-        selection = model_selection
-        if selection is None and session is not None:
-            selection = getattr(session, "model_selection", None)
-        if selection is not None:
-            if config is not None and self._resolver is not None:
-                resolved = self._resolve(selection.provider, selection.model)
-                if resolved is None:
-                    # A selection that no longer resolves falls back to config
-                    # rather than failing the turn.
-                    selection = None
-                else:
-                    capabilities = resolved.capabilities
-                    provider_name = resolved.provider.name
-                    model = resolved.model
-                    request_counter = RequestTokenCounter(
-                        resolved.provider,
-                        cache=self._token_cache,
-                        provider_name=provider_name,
-                    )
-            else:
-                provider_name, model = selection.provider, selection.model
-
-        if selection is None:
-            reference = getattr(manager, "model_reference", None)
-            if config is not None and callable(reference):
-                try:
-                    provider_name, model = reference(config)
-                except Exception:  # noqa: BLE001
-                    provider_name, model = None, None
-            if config is not None and self._resolver is not None:
-                resolved = self._resolve(provider_name, model)
-                if resolved is not None:
-                    capabilities = resolved.capabilities
-                    provider_name = resolved.provider.name
-                    model = resolved.model
-                    request_counter = RequestTokenCounter(
-                        resolved.provider,
-                        cache=self._token_cache,
-                        provider_name=provider_name,
-                    )
+        selected_agent_effort = None
+        explicit_session_model = session_model_selection is not None
+        if resolved is not None:
+            request_counter = RequestTokenCounter(
+                resolved.provider,
+                cache=self._token_cache,
+                provider_name=provider_name,
+            )
+            selected_agent_effort = self._effective_effort(
+                session, agent_definition, resolved, provider_name=provider_name
+            )
         assembler = for_turn(
             capabilities=capabilities,
             request_counter=request_counter,
             model=model,
             provider=provider_name,
+            reasoning_effort=selected_agent_effort,
         )
+        if session is not None:
+            # Captured by the manifest factory for every iteration of this root
+            # turn. Subsequent session selection changes are next-turn only.
+            session._turn_reasoning_effort = selected_agent_effort
+        if hasattr(assembler, "_reasoning_effort"):
+            assembler._reasoning_effort = selected_agent_effort
+        if hasattr(assembler, "_agent_effort_supported"):
+            assembler._agent_effort_supported = selected_agent_effort is not None
+        explicit_session_model = getattr(session, "model_selection", None) is not None
+        if explicit_session_model:
+            assembler.agent_definition = None
         if agent_definition is not None:
+            selected_agent_effort = getattr(
+                assembler, "_reasoning_effort", selected_agent_effort
+            )
             append_prompt = getattr(assembler, "append_agent_prompt", None)
             if callable(append_prompt):
                 append_prompt(agent_definition.load_body())
-            assembler.agent_definition = agent_definition
+            if not explicit_session_model:
+                assembler.agent_definition = agent_definition
+                assembler._requested_agent_effort = selected_agent_effort
+                if agent_definition.provider and agent_definition.model and "/" not in agent_definition.model:
+                    assembler._agent_provider_default = agent_definition.provider
+                assembler._agent_effort_supported = selected_agent_effort is not None
             assembler.agent_selection_source = (
                 "session" if getattr(session, "agent_selection", None) is not None else
                 "config" if self._agents.get(configured_name) is not None else
                 "default"
             )
+            assembler._context_agent_definition = agent_definition
             assembler.agent_selection_source = (
                 "session" if getattr(session, "agent_selection", None) is not None else
                 "config" if self._agents.get(configured_name) is not None else
@@ -499,6 +910,10 @@ class _ContextCoordinator:
             )
             if session is not None:
                 session._turn_agent_definition = agent_definition
+        if explicit_session_model:
+            assembler.agent_definition = None
+            assembler._requested_agent_effort = None
+            assembler._agent_effort_supported = False
         return assembler
 
     def assemble(self, session: Any) -> Any:
@@ -519,6 +934,8 @@ class _ContextCoordinator:
         iteration: int = 0,
         model_selection: ModelSelection | None = None,
         agent_definition: Any | None = None,
+        reasoning_effort: str | None = None,
+        selected_agent_effort: str | None = None,
     ) -> Any:
         """Build one iteration's assembler from a pinned manifest generation.
 
@@ -537,21 +954,45 @@ class _ContextCoordinator:
         for_iteration = getattr(manager, "for_iteration", None)
         if not callable(for_iteration):
             return manager
-
         provider_name: str | None = None
         model: str | None = None
         capabilities = None
         request_counter = None
-        used_selection = False
-        if (
-            model_selection is not None
-            and config is not None
-            and self._resolver is not None
+        selected_agent_effort = reasoning_effort
+        (
+            provider_name,
+            model,
+            configured_provider,
+            configured_model,
+        ) = self._route_reference(
+            config,
+            agent_definition=agent_definition,
+            model_selection=model_selection,
+        )
+
+        if config is not None and self._resolver is not None and (
+            provider_name is not None or model is not None
         ):
-            resolved = self._resolve(
-                model_selection.provider, model_selection.model
-            )
-            if resolved is not None:
+            resolve = getattr(self._resolver, "resolve", None)
+            if resolve is not None:
+                routed_provider_name = provider_name
+                request = ModelRequest(messages=[], provider=provider_name, model=model)
+                try:
+                    resolved = resolve(request)
+                except Exception:
+                    if (provider_name, model) == (
+                        configured_provider, configured_model
+                    ):
+                        raise
+                    # A selected session route falls back to config (never to
+                    # the selected agent); a stale agent default falls back to
+                    # config as well. Precedence itself remains centralized.
+                    provider_name, model = configured_provider, configured_model
+                    routed_provider_name = provider_name
+                    request = ModelRequest(
+                        messages=[], provider=provider_name, model=model
+                    )
+                    resolved = resolve(request)
                 capabilities = resolved.capabilities
                 provider_name = resolved.provider.name
                 model = resolved.model
@@ -560,30 +1001,14 @@ class _ContextCoordinator:
                     cache=self._token_cache,
                     provider_name=provider_name,
                 )
-                used_selection = True
-
-        if not used_selection:
-            reference = getattr(manager, "model_reference", None)
-            if config is not None and callable(reference):
-                provider_name, model = reference(config)
-
-            if config is not None and self._resolver is not None and (
-                provider_name is not None or model is not None
-            ):
-                resolve = getattr(self._resolver, "resolve", None)
-                if resolve is not None:
-                    request = ModelRequest(
-                        messages=[], provider=provider_name, model=model
-                    )
-                    resolved = resolve(request)  # strict: unknown provider raises
-                    capabilities = resolved.capabilities
-                    provider_name = resolved.provider.name
-                    model = resolved.model
-                    request_counter = RequestTokenCounter(
-                        resolved.provider,
-                        cache=self._token_cache,
-                        provider_name=provider_name,
-                    )
+                supported = self._supported_efforts(
+                    resolved,
+                    self._registry,
+                    provider_name=routed_provider_name,
+                )
+                selected_agent_effort = (
+                    reasoning_effort if reasoning_effort in supported else None
+                )
         assembler = for_iteration(
             config=config,
             system_files=system_files,
@@ -597,7 +1022,19 @@ class _ContextCoordinator:
             turn_id=turn_id,
             iteration=iteration,
             agent_definition=agent_definition,
+            reasoning_effort=selected_agent_effort,
         )
+        provider_default = getattr(agent_definition, "provider", None)
+        if (
+            provider_default
+            and getattr(agent_definition, "model", None)
+            and "/" not in agent_definition.model
+            and provider_name == "openai"
+            and assembler._env is not None
+        ):
+            from dataclasses import replace
+
+            assembler._env = replace(assembler._env, provider=provider_default)
         return assembler
 
 
@@ -650,6 +1087,13 @@ class _ManifestEnvironmentFactory:
         #: configured default). Reused for every iteration and never re-read, so
         #: a selection made mid-turn cannot change the running turn.
         self._model_selection = model_selection
+        #: Effort is frozen with the root assembler and reused by manifest
+        #: iterations even if the durable session record changes mid-turn.
+        self._reasoning_effort = getattr(session, "_turn_reasoning_effort", None)
+        if model_selection is not None and getattr(
+            getattr(session, "reasoning_effort_selection", None), "effort", None
+        ) is None:
+            self._reasoning_effort = None
         self._agent_definition = agent_definition
         #: The turn-scoped gate (engine + grants + attended + broker). Reused for
         #: every iteration, so a reload cannot detach a pending approval.
@@ -709,7 +1153,13 @@ class _ManifestEnvironmentFactory:
             iteration=iteration,
             model_selection=self._model_selection,
             agent_definition=self._agent_definition,
+            reasoning_effort=getattr(self, "_reasoning_effort", None),
         )
+        if self._agent_definition is not None:
+            assembler._agent_effort_supported = getattr(
+                assembler, "_reasoning_effort", None
+            ) is not None
+            assembler.agent_definition = self._agent_definition
         activation = self._activation_for(session)
         skill_tools = self._skill_tools_for(manifest, activation)
         base_catalog = (
@@ -717,6 +1167,7 @@ class _ManifestEnvironmentFactory:
             if isinstance(getattr(manifest, "tools", None), Mapping)
             else skill_tools
         )
+        base_catalog = runtime._filter_web_catalog(config, base_catalog)
         restrict = self._restrict_for(activation, skill_tools)
         runner = self._subagent_runner(
             runtime,
@@ -766,6 +1217,8 @@ class _ManifestEnvironmentFactory:
                 catalog=catalog,
                 path_guard=self._path_guard,
             )
+        if self._gate is not None:
+            self._gate.bind_manager(manager)
         manager._agent_selection_source = getattr(
             self._session, "_turn_agent_selection_source", "default"
         )
@@ -785,6 +1238,7 @@ class _ManifestEnvironmentFactory:
             extensions=runtime._extensions,
             activations=runtime._activations,
             subagents=runner,
+            outbound_http=runtime._outbound_http_service,
         )
         return _IterationEnv(
             assembler=assembler,
@@ -850,10 +1304,58 @@ class _ManifestEnvironmentFactory:
         parent_tier = (
             self._model_selection.tier if self._model_selection is not None else None
         )
+        parent_provider = (
+            self._model_selection.provider
+            if self._model_selection is not None
+            else None
+        )
+        parent_model = (
+            self._model_selection.model
+            if self._model_selection is not None
+            else None
+        )
+        if parent_tier is None:
+            if self._model_selection is None:
+                parent_provider, parent_model = runtime._assembler._context.model_reference(config)
+            if self._agent_definition is not None:
+                agent_model = getattr(self._agent_definition, "model", None)
+                agent_provider = getattr(self._agent_definition, "provider", None)
+                if self._model_selection is None and agent_model == "inherit":
+                    agent_model = None
+                if (
+                    self._model_selection is None
+                    and agent_model
+                    and "/" not in agent_model
+                    and agent_provider
+                ):
+                    agent_model = f"{agent_provider}/{agent_model}"
+                if self._model_selection is None and agent_model:
+                    parent_model = agent_model
+                    parent_provider = None
+                elif self._model_selection is None and agent_provider:
+                    parent_provider = agent_provider
+            if parent_provider and parent_model and "/" not in parent_model:
+                parent_model = f"{parent_provider}/{parent_model}"
+                parent_provider = None
+            reference = (
+                parent_model
+                if parent_model
+                else f"{parent_provider}/{parent_model}"
+                if parent_provider and parent_model
+                else None
+            )
+            if reference:
+                info = runtime._registry.get(reference) if runtime._registry else None
+                parent_tier = runtime._tiers.resolve(reference, info=info).tier
+        effective_parent_model = parent_model
+        if parent_provider and parent_model and "/" not in parent_model:
+            effective_parent_model = f"{parent_provider}/{parent_model}"
         return runtime._make_subagent_runner(
             session_id=session_id,
             parent_tools=parent_tools,
             parent_tier=parent_tier,
+            parent_model=effective_parent_model,
+            agent_definition=self._agent_definition,
             root_turn_id=self._turn_id,
             permissions=authority,
             grants=tuple(getattr(self._gate, "_grants", ())),
@@ -861,6 +1363,7 @@ class _ManifestEnvironmentFactory:
             catalog=base_catalog,
             hooks=hooks,
             budget=self._budget,
+            runtime_supports_workspace=runtime._supports_child_workspace(),
         )
 
     def _secure_config(self, config: Config) -> Config:
@@ -1220,6 +1723,7 @@ _CHILD_RELAY_SUPPRESS = frozenset(
         "input.queued",
         "input.consumed",
         "input.dropped",
+        "input.started",
         "presence.joined",
         "presence.left",
         "presence.changed",
@@ -1241,8 +1745,11 @@ class _ChildEventSink:
         self._relay = relay
 
     async def emit(self, event: Event) -> Event:
-        with contextlib.suppress(Exception):
+        if event.type == "todo.updated":
             self._session.append_event(event)
+        else:
+            with contextlib.suppress(Exception):
+                self._session.append_event(event)
         if self._relay is None or event.type in _CHILD_RELAY_SUPPRESS:
             return event
         with contextlib.suppress(Exception):
@@ -1269,47 +1776,89 @@ class _ChildRuntime:
     async def run(self) -> SubagentOutcome:
         runtime = self._runtime
         spec = self._spec
+        workspace = Path(getattr(spec, "workspace", runtime.workspace)).resolve()
         facade = runtime._ensure_child_sessions()
         real_id = _child_session_id(spec.session_id)
         session = facade.manager.open(real_id, create=True, recover=False)
-        config = runtime._child_config(spec)
-        assembler = runtime._build_child_assembler(spec, config)
-        manager = runtime._build_child_tool_manager(spec, config, self._runner)
-        engine = runtime._child_permission_engine(spec, config)
-        gate = _PermissionGateAdapter(
-            engine, grants=tuple(spec.grants), attended=False
-        )
-        dispatcher = _ToolDispatcherAdapter(
-            manager,
-            workspace=runtime.workspace,
-            session_id=real_id,
-            turn_id="",
-            config=config,
-            subagents=self._runner,
-        )
-        max_iterations = int(spec.max_iterations or 60)
-        limits = TurnLimits(max_iterations=max_iterations, max_seconds=1800.0)
-        lease = session.begin_turn(limits=limits)
-        sink = _ChildEventSink(session, spec.emit)
         try:
-            outcome = await run_turn(
-                session=session,
-                user_input=spec.prompt,
-                assemble=assembler,
-                provider_for=runtime._router,
-                emit=sink,
-                tools=dispatcher,
-                gate=gate,
-                lease=lease,
-                persist_user_message=True,
-                hooks=spec.hooks,
-                relay_transcript=True,
+            runtime._restore_todos(session)
+            config = (
+                spec.config
+                if isinstance(getattr(spec, "config", None), Config)
+                else runtime._child_config(spec)
             )
+            path_guard_builder = getattr(runtime, "_child_path_guard", None)
+            real_path_scope = (
+                callable(path_guard_builder)
+                and hasattr(runtime, "_child_workspace_config")
+            )
+            if real_path_scope:
+                path_guard = path_guard_builder(spec, workspace)
+                config = runtime._child_workspace_config(config, path_guard)
+            else:  # lightweight runtime fakes use their prebuilt manager guard
+                path_guard = None
+            assembler_builder = runtime._build_child_assembler
+            if real_path_scope:
+                assembler = assembler_builder(spec, config, workspace=workspace)
+                manager = runtime._build_child_tool_manager(
+                    spec, config, self._runner, workspace=workspace,
+                    path_guard=path_guard,
+                )
+            else:
+                assembler = assembler_builder(spec, config)
+                manager = runtime._build_child_tool_manager(
+                    spec, config, self._runner
+                )
+            freeze_tools = getattr(assembler, "freeze_tools", None)
+            if callable(freeze_tools):
+                freeze_tools(tuple(manager.schemas()))
+            engine_builder = getattr(runtime, "_child_permission_engine", None)
+            engine = (
+                engine_builder(spec, config, workspace=workspace, path_guard=path_guard)
+                if real_path_scope and callable(engine_builder)
+                else runtime._child_permission_engine(spec, config)
+            )
+            gate = _PermissionGateAdapter(
+                engine, manager=manager, grants=tuple(spec.grants), attended=False
+            )
+            dispatcher = _ToolDispatcherAdapter(
+                manager,
+                workspace=workspace,
+                session_id=real_id,
+                turn_id="",
+                config=config,
+                agent_id=spec.agent_id,
+                subagents=self._runner,
+                outbound_http=getattr(runtime, "_outbound_http_service", None),
+            )
+            max_iterations = int(spec.max_iterations or 60)
+            limits = TurnLimits(max_iterations=max_iterations, max_seconds=1800.0)
+            lease = session.begin_turn(limits=limits)
+            sink = _ChildEventSink(session, spec.emit)
+            try:
+                outcome = await run_turn(
+                    session=session,
+                    user_input=spec.prompt,
+                    assemble=assembler,
+                    provider_for=runtime._router,
+                    emit=sink,
+                    tools=dispatcher,
+                    gate=gate,
+                    lease=lease,
+                    persist_user_message=True,
+                    hooks=spec.hooks,
+                    relay_transcript=True,
+                )
+            finally:
+                with contextlib.suppress(Exception):
+                    lease.release()
+            cost = runtime._child_cost(session, outcome)
+            return runtime._child_outcome(spec, session, outcome, cost=cost)
         finally:
-            with contextlib.suppress(Exception):
-                lease.release()
-        cost = runtime._child_cost(session, outcome)
-        return runtime._child_outcome(spec, session, outcome, cost=cost)
+            store = runtime._effective_todo_store()
+            clear_session = getattr(store, "clear_session", None)
+            if callable(clear_session):
+                clear_session(real_id)
 
     async def aclose(self) -> None:
         return None
@@ -1341,6 +1890,8 @@ class Runtime:
         limits: TurnLimits | Callable[[], TurnLimits] | None = None,
         http_transport: Any | None = None,
         client: Any | None = None,
+        outbound_http_service: OutboundHTTPService | None = None,
+        owns_outbound_http_service: bool | None = None,
         tools: ToolManager | None = None,
         owns_tools: bool | None = None,
         permissions: PermissionEngine | None = None,
@@ -1387,11 +1938,13 @@ class Runtime:
         self._todo_store = todo_store
         self._owns_job_registry = False
         #: Explicit ownership. An injected manager is only closed when the
-        #: caller says so; a manager the runtime builds is always owned. Built
-        #: per-turn managers carry no independent resources (the runtime injects
-        #: the shared job registry/todo store), so only the most recent is kept.
+        #: caller says so; a manager the runtime builds is always owned. Keep
+        #: managers with private stores strongly until shutdown; snapshots that
+        #: borrow shared runtime stores are tracked weakly so iteration rebuilds
+        #: do not accumulate for the runtime's lifetime.
         self._owns_tools = (tools is None) if owns_tools is None else bool(owns_tools)
         self._owned_tools: list[ToolManager] = []
+        self._tracked_tools: weakref.WeakSet[ToolManager] = weakref.WeakSet()
         if tools is not None and self._owns_tools:
             self._owned_tools.append(tools)
         if tools is None and tool_factory is None:
@@ -1421,6 +1974,17 @@ class Runtime:
 
         if initial is None:
             initial = self._load_config()
+
+        self._outbound_http_service = (
+            outbound_http_service
+            if outbound_http_service is not None
+            else SafeOutboundHTTPService()
+        )
+        self._owns_outbound_http_service = (
+            outbound_http_service is None
+            if owns_outbound_http_service is None
+            else bool(owns_outbound_http_service)
+        )
 
         # Model registry and tier table (plan sections 15.3-15.4). The runtime
         # owns both; an injected registry/tier table is the caller's. A registry
@@ -1453,7 +2017,12 @@ class Runtime:
             self.workspace / ".nexus" / "cache" / "tokens"
         )
         self._assembler = _ContextCoordinator(
-            self._context, self._router, token_cache=self._token_cache
+            self._context,
+            self._router,
+            token_cache=self._token_cache,
+            tiers=self._tiers,
+            registry=self._registry,
+            runtime=self,
         )
 
         # Extension world. The runtime owns the manager, its atomic manifest
@@ -1497,6 +2066,16 @@ class Runtime:
         self._assembler._agents = self._agents
         self._hooks = self._build_hook_manager(initial, hooks, owns_hooks)
         self._child_sessions: _ChildSessionFacade | None = None
+        from .agents.worktrees import WorktreeService
+
+        # One canonical registry per active parent checkout. Child runtimes
+        # borrow this service/root even when their workspace is itself a
+        # worktree, so nested spawns never create an arbitrary nested registry.
+        self._worktree_service = WorktreeService(
+            runtime_ownership=self._worktree_runtime_ownership
+        )
+        self._worktree_root = self.workspace.parent / f".nexus-worktrees-{self.workspace.name}"
+        self._worktree_roots: dict[Path, Path] = {self.workspace: self._worktree_root}
 
         if extensions is not None:
             self._extensions: ExtensionManager | None = extensions
@@ -1505,14 +2084,14 @@ class Runtime:
             )
         else:
             from .ext.manager import ExtensionManager
-            from .tools.builtin import BUILTIN_TOOLS
+            from .tools.builtin import BUILTIN_TOOLS, META_TOOLS_OPT_IN, OPT_IN_TOOLS
 
             self._extensions = ExtensionManager(
                 self.workspace,
                 home=self._home,
                 config=initial,
                 config_loader=self._load_config,
-                builtin_tools=BUILTIN_TOOLS,
+                builtin_tools=BUILTIN_TOOLS + OPT_IN_TOOLS + META_TOOLS_OPT_IN,
                 skills=self._skills,
                 mcp=self._mcp,
                 agents=self._agents,
@@ -1582,6 +2161,20 @@ class Runtime:
         """The runtime-owned model registry, or ``None`` when ``[models]`` is off."""
         return self._registry
 
+    def root_reasoning_effort_metadata(self, session: Any) -> dict[str, Any]:
+        """Resolve current root-session effort choices for a facade.
+
+        The returned mapping contains ``supported_levels`` (a tuple),
+        ``stored_override`` (including dormant unsupported values),
+        ``effective_effort``, and ``source`` (``"session"``, ``"agent"``, or
+        ``None``). This is descriptive only; persistence remains a session API.
+        """
+        return self._assembler.root_reasoning_effort_metadata(session)
+
+    def root_route_metadata(self, session: Any) -> dict[str, str | None]:
+        """Resolve the provider/model effective for the session's next root turn."""
+        return self._assembler.root_route_metadata(session)
+
     @property
     def tiers(self) -> TierTable:
         """The runtime-owned tier table (always present; built-ins by default)."""
@@ -1607,7 +2200,7 @@ class Runtime:
 
     @property
     def todo_store(self) -> Any | None:
-        """The runtime-owned todo store (keyed by session id)."""
+        """The runtime-owned todo store (keyed by session and agent id)."""
         return self._todo_store
 
     @property
@@ -1698,6 +2291,11 @@ class Runtime:
                 return
             try:
                 status = await registry.load(force=force)
+            except ConfigError:
+                # A catalogue lookup can validate configured model metadata.
+                # Keep an invalid explicit override visible instead of treating
+                # it like an optional catalogue acquisition failure.
+                raise
             except Exception as exc:  # noqa: BLE001 - registry I/O must not fail a turn
                 self._publish_registry_event(
                     "registry.failed",
@@ -1758,9 +2356,13 @@ class Runtime:
             manager = ToolManager(
                 config,
                 workspace=self.workspace,
+                tools=self._filter_web_catalog(
+                    config, ToolManager._builtin_catalog()
+                ),
                 job_registry=self._job_registry,
-                todo_store=self._todo_store,
+                todo_store=self._effective_todo_store(),
             )
+            self._track_tool_manager(manager)
         specs = {spec.name: spec for spec in manager.specs}
         rows: list[dict[str, Any]] = []
         for schema in manager.schemas():
@@ -1774,7 +2376,284 @@ class Runtime:
                     "input_schema": dict(schema.input_schema),
                 }
             )
+        web_available, unavailable = self._web_tool_availability(config)
+        from .tools.bundles import profile_tools
+
+        selected_profile = (
+            frozenset(manager.names)
+            if self._tools is not None and manager is self._tools
+            else profile_tools(manager.profile)
+        )
+        web_names = {"webfetch", "websearch"}
+        rows = [
+            row
+            for row in rows
+            if row["name"] not in web_names or row["name"] in web_available
+        ]
+        for name, reason in unavailable.items():
+            if name in selected_profile:
+                rows.append(
+                    {
+                        "name": name,
+                        "description": "",
+                        "bundle": "web",
+                        "mutates": False,
+                        "availability": "unavailable",
+                        "reason": reason,
+                    }
+                )
         return rows
+
+    async def inspect_context(self, session: Any) -> dict[str, Any]:
+        """Assemble next-turn context from persisted conversation history.
+
+        One manifest lease pins system files, skills/MCP indexes, tools, and
+        schemas to the same generation used for assembly. The empty session view
+        intentionally omits draft input. This inspection does not run
+        prompt-submit/compaction hooks, persist summaries, or call a provider.
+        """
+        await self.ensure_started()
+        if getattr(session, "active", False):
+            raise ConfigError("context preview is unavailable while the session is active")
+        class _PreviewSession:
+            """Read-only subset of Session used during local preparation."""
+
+            id = getattr(session, "id", "")
+            messages = tuple(getattr(session, "messages", ()))
+            model_selection = getattr(session, "model_selection", None)
+            agent_selection = getattr(session, "agent_selection", None)
+            reasoning_effort_selection = getattr(
+                session, "reasoning_effort_selection", None
+            )
+            attended = bool(getattr(session, "attended", False))
+            # Only the durable selection fields are relevant to standing
+            # context. Do not replay real-session events into preview setup.
+            events: tuple[Any, ...] = ()
+
+            def latest_summary(self):
+                getter = getattr(session, "latest_summary", None)
+                return getter() if callable(getter) else None
+
+            def summary_for(self, input_digest: str, strategy: str):
+                getter = getattr(session, "summary_for", None)
+                return getter(input_digest, strategy) if callable(getter) else None
+
+            def message_seqs(self):
+                getter = getattr(session, "message_seqs", None)
+                return getter() if callable(getter) else ()
+
+        preview_session = _PreviewSession()
+        assembler = self._assembler.for_turn(session=preview_session)
+        tool_turn = self._make_tool_turn(
+            config=assembler.effective_config(),
+            session=preview_session,
+            turn_id="context-preview",
+            attended=preview_session.attended,
+        )
+        lease = None
+        try:
+            if tool_turn is not None and tool_turn.manifest_ref is not None:
+                lease = tool_turn.manifest_ref.pin()
+                if tool_turn.environment_for is not None:
+                    from .tools.builtin.skill import _turn_number
+
+                    iteration = tool_turn.environment_for.for_iteration(
+                        preview_session,
+                        lease,
+                        _turn_number("context-preview"),
+                    )
+                    assembler = iteration.assembler
+                    # A preview must not invoke lifecycle hooks or their
+                    # PreCompact callbacks while computing its budget view.
+                    if hasattr(assembler, "_pre_compact"):
+                        assembler._pre_compact = None
+            elif tool_turn is not None:
+                freeze = getattr(assembler, "freeze_tools", None)
+                if callable(freeze):
+                    freeze(tuple(tool_turn.schemas))
+
+            # Exact request counting may call a provider's count API. Inspection
+            # is local-only, so retain estimates and skip exact-count refinement.
+            frozen_env = getattr(assembler, "_env", None)
+            if frozen_env is not None and hasattr(frozen_env, "request_counter"):
+                assembler._env = replace(
+                    frozen_env,
+                    counter=None,
+                    counter_async=False,
+                    request_counter=None,
+                    summarizer=None,
+                    summarizer_async=False,
+                )
+
+            request = assembler.assemble(preview_session)
+            if inspect.isawaitable(request):
+                request = await request
+            parts = getattr(assembler, "last_included_parts", {})
+            budget = getattr(assembler, "last_budget", {})
+            budget_parts = {
+                row.get("name"): row
+                for row in budget.get("parts", ())
+                if isinstance(row, Mapping)
+            }
+            tools_supported = bool(
+                getattr(getattr(frozen_env, "capabilities", None), "tools", True)
+            )
+            generation = getattr(lease, "generation", None)
+            manifest = getattr(lease, "manifest", None)
+            agent = getattr(
+                assembler,
+                "_context_agent_definition",
+                getattr(assembler, "agent_definition", None),
+            )
+            system_files: dict[str, Any] = {}
+            frozen_files = getattr(manifest, "system_files", None)
+            getter = getattr(frozen_files, "get", None)
+            context_config = getattr(frozen_env, "config", None)
+            for key, attribute in (("soul", "instructions_file"), ("memory", "memory_file")):
+                filename = getattr(context_config, attribute, None)
+                entry = getter(key) if callable(getter) else None
+                loaded = entry is not None
+                if manifest is None and filename:
+                    from .config.paths import resolve_within
+
+                    loaded = resolve_within(self.workspace, filename).is_file()
+                system_files[key] = {
+                    "configured": bool(filename),
+                    "loaded": loaded,
+                    "included": key in parts,
+                    "included_nonempty": key in parts and bool(parts.get(key, "").strip()),
+                    "truncated": bool(budget_parts.get(key, {}).get("truncated", False)),
+                    "source": (
+                        Path(entry.path).name
+                        if entry is not None and getattr(entry, "path", None)
+                        else Path(filename).name if filename else None
+                    ),
+                }
+            agent_info = {
+                "name": getattr(agent, "name", None),
+                "source": getattr(assembler, "agent_selection_source", "default"),
+                "instructions_included": bool(
+                    agent is not None
+                    and "soul" in parts
+                    and "Selected agent instructions" in parts["soul"]
+                ),
+            }
+            skills_snapshot = (
+                tuple(getattr(manifest, "skills", {}).values())
+                if isinstance(getattr(manifest, "skills", None), Mapping)
+                else ()
+            )
+            return {
+                "manifest_generation": generation,
+                "agent": agent_info,
+                "system_files": system_files,
+                "system_text": redact_secrets((request.system or "")[:1_000_000]) or None,
+                "redacted_for_display": True,
+                "included_parts": [
+                    {"name": name, "text": redact_secrets(text[:1_000_000])}
+                    for name, text in list(parts.items())[:32]
+                ],
+                "skills_index": [
+                    {
+                        "name": getattr(entry, "name", ""),
+                        "description": (
+                            entry.sanitized_description()
+                            if callable(getattr(entry, "sanitized_description", None))
+                            else getattr(entry, "description", "")
+                        ),
+                        "included": bool(
+                            any(
+                                line.startswith(f"{getattr(entry, 'name', '')}:")
+                                for line in parts.get("skills_index", "").splitlines()
+                            )
+                        ),
+                    }
+                    for entry in skills_snapshot[:512]
+                ],
+                "mcp_index": parts.get("mcp_index", ""),
+                "tools": [
+                    {
+                        "name": schema.name,
+                        "description": schema.description,
+                        "input_schema": dict(schema.input_schema),
+                    }
+                    for schema in request.tools[:512]
+                ] if tools_supported else [],
+                "tools_supported": tools_supported,
+                "model": request.model,
+                "provider": request.provider,
+                "budget": dict(budget),
+                "messages": [
+                    {
+                        "role": message.role,
+                        "blocks": [
+                            self._context_block(block)
+                            for block in message.content[:256]
+                        ],
+                    }
+                    for message in request.messages[-256:]
+                ],
+                "history_included": bool(request.messages),
+                "request_context": dict(request.metadata.get("context", {})),
+                "params": {
+                    "temperature": request.params.temperature,
+                    "max_output_tokens": request.params.max_output_tokens,
+                    "thinking_budget": request.params.thinking_budget,
+                    "reasoning_effort": request.params.reasoning_effort,
+                },
+                "omitted": [
+                    "draft input (not provided)",
+                    *(
+                        [f"{len(request.messages) - 256} earlier request messages omitted from display"]
+                        if len(request.messages) > 256
+                        else []
+                    ),
+                    "provider-specific request transformation and send-time changes",
+                    "provider token counting and send-time exact-count refinement",
+                    "new durable summaries (read-only inspection drops history that cannot be reused from an existing summary)",
+                    "display bounds: at most 256 messages; text/schema strings are clipped at 16,384 characters",
+                ],
+            }
+        finally:
+            if lease is not None:
+                lease.release()
+
+    @staticmethod
+    def _context_block(block: Any) -> dict[str, Any]:
+        """Project one provider-request content block without binary payloads."""
+        if isinstance(block, Text):
+            return {"type": "text", "text": block.text}
+        if isinstance(block, Thinking):
+            return {"type": "thinking", "text": block.text}
+        if isinstance(block, ToolUse):
+            return {
+                "type": "tool_use",
+                "id": block.id,
+                "name": block.name,
+                "input": block.input,
+            }
+        if isinstance(block, ToolResult):
+            return {
+                "type": "tool_result",
+                "tool_use_id": block.tool_use_id,
+                "is_error": block.is_error,
+                "content": [
+                    {"type": "text", "text": item.text}
+                    if isinstance(item, Text)
+                    else {"type": "image", "text": "[image omitted]"}
+                    for item in block.content
+                ],
+            }
+        if isinstance(block, Image):
+            return {"type": "image", "media_type": block.media_type, "text": "[image omitted]"}
+        if isinstance(block, Document):
+            return {
+                "type": "document",
+                "media_type": block.media_type,
+                "title": block.title or "",
+                "text": "[document payload omitted]",
+            }
+        return {"type": type(block).__name__}
 
     def _publish_registry_event(self, event_type: str, data: dict[str, Any]) -> None:
         """Publish a registry lifecycle event on the runtime event bus."""
@@ -1798,7 +2677,28 @@ class Runtime:
         self, session_id: str, *, create: bool = True, recover: bool = True
     ) -> Session:
         """Open (and migrate, and recover) a session ready for ``send``."""
-        return self._sessions.open(session_id, create=create, recover=recover)
+        session = self._sessions.open(session_id, create=create, recover=recover)
+        self._restore_todos(session)
+        return session
+
+    def _restore_todos(self, session: Any) -> None:
+        """Replay durable todo state for one actual session log, if available."""
+        store = self._effective_todo_store()
+        replay = getattr(store, "replay", None)
+        if callable(replay):
+            replay(session)
+
+    def _effective_todo_store(self) -> Any | None:
+        """Return the shared store, borrowing it from injected tools if needed.
+
+        Borrowing the store does not transfer ownership of the injected manager
+        or its services to this runtime or to managers rebuilt for a turn.
+        """
+        if self._todo_store is not None:
+            return self._todo_store
+        if self._tools is not None:
+            return getattr(self._tools, "todo_store", None)
+        return None
 
     # -- per-session model selection ---------------------------------------
 
@@ -1882,6 +2782,46 @@ class Runtime:
             tier_source=resolution.source,
             requested_tier=ref if ref in self._tiers.order else "",
             clamped=bool(resolution.clamped),
+        )
+
+    def candidate_supported_efforts(
+        self, provider: str, model: str
+    ) -> tuple[str, ...]:
+        """Return efforts supported by this candidate's effective runtime route.
+
+        This is descriptive only: it resolves the same concrete provider/model
+        that model selection would validate, then applies the exact adapter,
+        capability, and registry checks used by root-session effort metadata.
+        An unresolvable candidate or route that cannot apply effort has no
+        choices. It never selects a model or changes session effort state.
+        """
+        if (
+            not isinstance(provider, str)
+            or not provider
+            or not isinstance(model, str)
+            or not model
+        ):
+            return ()
+        try:
+            selection = self._validate_model_selection(f"{provider}/{model}")
+            # Custom tiers/aliases can shadow a catalogue coordinate. Do not
+            # advertise choices for a different model that selecting this row
+            # would actually resolve to.
+            if (selection.provider, selection.model) != (provider, model):
+                return ()
+            resolved = self._router.resolve(
+                ModelRequest(
+                    messages=[],
+                    provider=selection.provider,
+                    model=selection.model,
+                )
+            )
+        except Exception:  # noqa: BLE001 - candidate metadata must not block listing
+            return ()
+        return self._assembler._supported_efforts(
+            resolved,
+            self._registry,
+            provider_name=selection.provider,
         )
 
     async def close_session_jobs(self, session_id: str) -> bool:
@@ -2000,6 +2940,11 @@ class Runtime:
         Unknown profiles fail closed here, before the session appends anything.
         An injected ``tool_factory`` fully overrides this path (tests).
         """
+        # Runtime.sessions is public, so callers can bypass Runtime.session().
+        # Reconcile again at the actual turn boundary; TodoStore.replay only
+        # applies log revisions newer than memory and is therefore safe during
+        # an active runtime.
+        self._restore_todos(session)
         if self._tool_factory is not None:
             return self._tool_factory(
                 config=config,
@@ -2017,16 +2962,92 @@ class Runtime:
         parent_tier = (
             model_selection.tier if model_selection is not None else None
         )
+        parent_provider = (
+            model_selection.provider if model_selection is not None else None
+        )
+        parent_model = model_selection.model if model_selection is not None else None
+        if parent_tier is None:
+            if agent_definition is not None:
+                parent_model = getattr(agent_definition, "model", None)
+                parent_provider = getattr(agent_definition, "provider", None)
+                if parent_model == "inherit":
+                    parent_model = None
+                if parent_model and "/" not in parent_model and parent_provider:
+                    parent_model = f"{parent_provider}/{parent_model}"
+            if not parent_model:
+                reference = getattr(self._assembler._context, "model_reference", None)
+                if callable(reference):
+                    configured_provider, configured_model = reference(config)
+                    if configured_model:
+                        parent_model = configured_model
+                        if agent_definition is None or not agent_definition.provider:
+                            parent_provider = configured_provider
+                        else:
+                            parent_provider = agent_definition.provider
+            else:
+                parent_provider = None
+            if parent_provider and parent_model and "/" not in parent_model:
+                parent_model = f"{parent_provider}/{parent_model}"
+                parent_provider = None
+            if parent_model:
+                parent_info = (
+                    self._registry.get(parent_model)
+                    if self._registry is not None
+                    else None
+                )
+                parent_tier = self._tiers.resolve(
+                    parent_model, info=parent_info
+                ).tier
         manager = self._tools
+        if manager is not None:
+            filtered = self._filter_web_catalog(
+                config, manager.tools, add_available=False
+            )
+            if len(filtered) != len(manager.tools):
+                manager = ToolManager(
+                    config,
+                    workspace=self.workspace,
+                    tools=filtered,
+                    job_registry=self._job_registry,
+                    todo_store=self._effective_todo_store(),
+                    path_guard=manager.path_guard,
+                )
+                self._track_tool_manager(manager)
         if manager is None:
+            catalog = self._filter_web_catalog(config, ToolManager._builtin_catalog())
+            if self._agents is not None:
+                from .tools.builtin.task import build_task_tool
+
+                catalog = (
+                    tuple(tool for tool in catalog if tool.bundle != "meta")
+                    + (build_task_tool(None),)
+                )
             manager = ToolManager(
                 config,
                 workspace=self.workspace,
+                tools=catalog,
                 job_registry=self._job_registry,
-                todo_store=self._todo_store,
+                todo_store=self._effective_todo_store(),
             )
-            if self._owns_tools:
-                self._owned_tools = [manager]
+            self._track_tool_manager(manager)
+        if (
+            agent_definition is not None
+            and "subagent" not in manager.names
+            and self._agents is not None
+        ):
+            from .tools.builtin.task import build_task_tool
+
+            original_names = manager.names
+            manager = ToolManager(
+                config,
+                workspace=self.workspace,
+                tools=(*manager.tools, build_task_tool(None)),
+                restrict=(*original_names, "subagent"),
+                job_registry=self._job_registry,
+                todo_store=self._effective_todo_store(),
+                path_guard=manager.path_guard,
+            )
+            self._track_tool_manager(manager)
         if agent_definition is not None:
             from .tools.bundles import BUNDLES, profile_tools
 
@@ -2044,25 +3065,27 @@ class Runtime:
                     spec.name for spec in manager.specs if getattr(spec, "mutates", False)
                 ),
             )
-            manager = (
-                ToolManager(
+            if self._extensions is None:
+                manager = ToolManager(
                     config,
                     workspace=self.workspace,
                     tools=manager.tools,
                     restrict=tuple(name for name in manager.names if name in selected.selected),
                     job_registry=self._job_registry,
-                    todo_store=self._todo_store,
+                    todo_store=self._effective_todo_store(),
                     path_guard=manager.path_guard,
                 )
-                if self._extensions is None
-                else self._build_iteration_manager(
+                self._track_tool_manager(manager)
+            else:
+                manager = self._build_iteration_manager(
                     config,
                     self.manifest,
-                    catalog=manager.tools,
+                    catalog=self._filter_web_catalog(
+                        config, manager.tools, add_available=False
+                    ),
                     restrict=tuple(name for name in manager.names if name in selected.selected),
                     path_guard=manager.path_guard,
                 )
-            )
         engine = self._permissions
         if engine is None:
             permissions = getattr(getattr(config, "v2", None), "permissions", None)
@@ -2074,7 +3097,7 @@ class Runtime:
                 )
         grants = _grants_from_events(session.events)
         gate = _PermissionGateAdapter(
-            engine, grants=grants, attended=attended
+            engine, manager=manager, grants=grants, attended=attended
         )
         hooks_service = None
         current_manifest = self.manifest
@@ -2087,10 +3110,16 @@ class Runtime:
         runner = None
         if self._agents is not None and self._tools is None:
             authority = _ChildAuthority(engine=engine, path_guard=manager.path_guard)
-            runner = self._make_subagent_runner(
+            static_runner = self._make_subagent_runner(
                 session_id=session.id,
                 parent_tools=manager.names,
                 parent_tier=parent_tier,
+                parent_model=(
+                    f"{parent_provider}/{parent_model}"
+                    if parent_provider and parent_model
+                    else parent_model
+                ),
+                agent_definition=agent_definition,
                 root_turn_id=turn_id,
                 permissions=authority,
                 grants=grants,
@@ -2098,17 +3127,60 @@ class Runtime:
                 catalog=manager.tools,
                 hooks=hooks_service,
                 budget=self._new_subagent_budget(config),
+                runtime_supports_workspace=self._supports_child_workspace(),
             )
+            if static_runner is not None and "subagent" in manager.names:
+                from .tools.builtin.task import build_task_tool
+
+                manager = ToolManager(
+                    config,
+                    workspace=self.workspace,
+                    tools=tuple(
+                        build_task_tool(static_runner) if tool.name == "subagent" else tool
+                        for tool in manager.tools
+                    ),
+                    restrict=manager.names,
+                    job_registry=self._job_registry,
+                    todo_store=self._effective_todo_store(),
+                    path_guard=manager.path_guard,
+                )
+                self._track_tool_manager(manager)
+            runner = self._make_subagent_runner(
+                session_id=session.id,
+                parent_tools=manager.names,
+                parent_tier=parent_tier,
+                parent_model=(
+                    f"{parent_provider}/{parent_model}"
+                    if parent_provider and parent_model
+                    else parent_model
+                ),
+                agent_definition=agent_definition,
+                root_turn_id=turn_id,
+                permissions=authority,
+                grants=grants,
+                config=config,
+                catalog=manager.tools,
+                hooks=hooks_service,
+                budget=self._new_subagent_budget(config),
+                runtime_supports_workspace=self._supports_child_workspace(),
+            )
+        gate.bind_manager(manager)
+        # Track the manager actually returned for this turn, after all catalog
+        # rebuilds. Intermediate snapshots above share runtime-owned services
+        # and own no independent resources. An unchanged injected manager stays
+        # caller-owned unless it was explicitly registered as owned at init.
         dispatcher = _ToolDispatcherAdapter(
             manager,
             workspace=self.workspace,
             session_id=session.id,
             turn_id=turn_id,
             config=config,
+            agent_id="root",
             skills=self._skills,
             extensions=self._extensions,
             activations=self._activations,
             subagents=runner,
+            outbound_http=self._outbound_http_service,
         )
         # Per-iteration environment path: only when the runtime (not a caller)
         # owns the tool catalog and an extension world exists. An injected
@@ -2154,15 +3226,18 @@ class Runtime:
 
         The catalog defaults to the manifest's registered tools (builtins plus
         external tools) and the profile selects among them exactly as before.
+        Available web tools are runtime-owned capabilities and are added
+        independently of the manifest; their config/service availability is
+        checked before they can be advertised or executed.
         When a skill is active for this session/turn the caller passes a
         ``catalog`` that also carries that skill's bundled tools, so they are
         selectable *only* for this iteration; ``restrict`` applies the skill's
         declared-tool narrowing. ``path_guard`` is the turn-frozen guard so
         security roots never refresh mid-turn.
 
-        The empty catalog is passed through as an empty catalog: ``None`` means
-        "derive from the manifest" and a genuinely empty manifest yields zero
-        tools, never the built-in fallback. ``ToolManager`` already treats
+        ``None`` means "derive from the manifest" and a genuinely empty
+        manifest never falls back to the full builtin catalog. Runtime-owned,
+        available web tools may still be added, as above. ``ToolManager`` treats
         ``tools=None`` as "all builtins" and ``tools=()`` as "none", so the
         runtime must never collapse an empty tuple back to ``None``.
         """
@@ -2170,15 +3245,114 @@ class Runtime:
             tools = getattr(manifest, "tools", None)
             catalog = tuple(tools.values()) if isinstance(tools, Mapping) else ()
         catalog = tuple(catalog)
-        return ToolManager(
+        catalog = self._filter_web_catalog(config, catalog)
+        manager = ToolManager(
             config,
             workspace=self.workspace,
             tools=catalog,
             restrict=restrict,
             job_registry=self._job_registry,
-            todo_store=self._todo_store,
+            todo_store=self._effective_todo_store(),
             path_guard=path_guard,
         )
+        self._track_tool_manager(manager)
+        return manager
+
+    def _web_tool_availability(
+        self, config: Config
+    ) -> tuple[frozenset[str], dict[str, str]]:
+        """Return executable web tool names and host-visible unavailable reasons."""
+        from .config.schema import WebSection
+        from .tools.builtin import webfetch, websearch
+
+        v2 = getattr(config, "v2", None)
+        tools_section = getattr(v2, "tools", None)
+        web = getattr(tools_section, "web", None)
+        if not isinstance(web, WebSection):
+            web = WebSection()
+        available: set[str] = set()
+        unavailable: dict[str, str] = {}
+
+        if not web.fetch_enabled:
+            unavailable[webfetch.SPEC.name] = "Web fetching is disabled by tools.web.fetch_enabled."
+        elif self._outbound_http_service is None:
+            unavailable[webfetch.SPEC.name] = "Outbound HTTP service is not configured."
+        else:
+            available.add(webfetch.SPEC.name)
+
+        if self._outbound_http_service is None:
+            unavailable[websearch.SPEC.name] = "Outbound HTTP service is not configured."
+        elif not web.searxng_instances:
+            unavailable[websearch.SPEC.name] = (
+                "No HTTPS SearXNG instance is configured in tools.web.searxng_instances."
+            )
+        else:
+            def origin(value: str) -> tuple[str, str, int] | None:
+                try:
+                    result = websearch._origin(value)
+                except (UnicodeError, ValueError):
+                    return None
+                if result is None or result[0] != "https":
+                    return None
+                return result
+
+            allowed = {key for value in web.allowed_origins if (key := origin(value)) is not None}
+            instances = {key for value in web.searxng_instances if (key := origin(value)) is not None}
+            if not instances:
+                unavailable[websearch.SPEC.name] = (
+                    "No valid HTTPS SearXNG instance is configured."
+                )
+            elif not instances.intersection(allowed):
+                unavailable[websearch.SPEC.name] = (
+                    "No configured SearXNG instance origin is present in tools.web.allowed_origins."
+                )
+            else:
+                available.add(websearch.SPEC.name)
+        return frozenset(available), unavailable
+
+    def _filter_web_catalog(
+        self,
+        config: Config,
+        catalog: Sequence[Any],
+        *,
+        add_available: bool = True,
+    ) -> tuple[Any, ...]:
+        from .tools.builtin import WEB_TOOLS, webfetch, websearch
+
+        available, _unavailable = self._web_tool_availability(config)
+        web_names = {webfetch.SPEC.name, websearch.SPEC.name}
+        retained = tuple(
+            tool
+            for tool in catalog
+            if tool.name not in web_names or tool.name in available
+        )
+        registered = {tool.name for tool in retained}
+        additions = (
+            tuple(
+                tool for tool in WEB_TOOLS
+                if tool.name in available and tool.name not in registered
+            )
+            if add_available
+            else ()
+        )
+        return retained + additions
+
+    def _track_tool_manager(self, manager: ToolManager) -> None:
+        """Track manager shutdown without retaining non-owning snapshots.
+
+        ToolManager closes only stores it created itself. Runtime-created
+        iteration snapshots are normally passed the runtime's shared stores,
+        so the runtime can close any still-live manager weakly while the
+        registry/store remain the actual owned resources. A rebuilt manager
+        that owns private stores must stay strongly reachable until shutdown.
+        """
+        if manager is self._tools:
+            return
+        if manager._owns_job_registry or manager._owns_todo_store:
+            if not any(manager is owned for owned in self._owned_tools):
+                self._owned_tools.append(manager)
+        else:
+            self._tracked_tools.add(manager)
 
     # -- providers / router ------------------------------------------------
 
@@ -2225,6 +3399,7 @@ class Runtime:
             offline=models.offline,
             tier_table=self._tiers,
             provider_aliases=provider_aliases,
+            reasoning_effort_overrides=models.reasoning_efforts or None,
         )
 
     def _provider_transport_kwargs(self) -> dict[str, Any]:
@@ -2598,17 +3773,25 @@ class Runtime:
             return None
         try:
             from .agents import AgentManager
-            from .tools.builtin import BUILTIN_TOOLS
+            from .tools.builtin import (
+                BUILTIN_TOOLS,
+                META_TOOLS_OPT_IN,
+                OPT_IN_TOOLS,
+                WEB_TOOLS,
+            )
             from .tools.bundles import BUNDLES
 
             known_bundles = {
                 name: bundle.tools for name, bundle in BUNDLES.items()
             }
-            known_tools = {tool.name for tool in BUILTIN_TOOLS}
+            known_tools = {
+                tool.name
+                for tool in BUILTIN_TOOLS + OPT_IN_TOOLS + META_TOOLS_OPT_IN + WEB_TOOLS
+            }
             # ``Task`` is injected by the runtime per iteration, not a static
             # builtin; include it so a role may declare it without a false
             # ``unknown_tool`` diagnostic.
-            known_tools.add("Task")
+            known_tools.add("subagent")
             manager = AgentManager.for_workspace(
                 self.workspace,
                 home=self._home,
@@ -2705,6 +3888,17 @@ class Runtime:
 
     # -- subagents ---------------------------------------------------------
 
+    def _supports_child_workspace(self) -> bool:
+        """Whether this runtime can scope all child execution to a workspace."""
+        context = getattr(self._assembler, "_context", None)
+        return bool(
+            context is not None
+            and hasattr(context, "workspace")
+            and callable(getattr(context, "for_iteration", None))
+            and callable(getattr(self, "_build_child_tool_manager", None))
+            and callable(getattr(self, "_child_path_guard", None))
+        )
+
     def _ensure_child_sessions(self) -> _ChildSessionFacade:
         if self._child_sessions is None:
             directory = getattr(self._sessions, "directory", None) or (
@@ -2785,6 +3979,13 @@ class Runtime:
         profile_for: Callable[[str], Any] | None = None,
         event_sink: Any | None = None,
         hooks: Any | None = None,
+        agent_definition: Any | None = None,
+        parent_model: str | None = None,
+        workspace: Path | None = None,
+        runtime_supports_workspace: bool = False,
+        worktree_service: Any | None = None,
+        worktree_root: Path | None = None,
+        worktree_scope: bool = False,
     ) -> Any | None:
         """Build a bounded subagent runner for one turn/iteration, or ``None``.
 
@@ -2799,6 +4000,71 @@ class Runtime:
         section = self._agents_section(effective)
         if section is None or not getattr(section, "enabled", True):
             return None
+        if worktree_service is not None and worktree_service is not self._worktree_service:
+            raise ValueError("subagent runners must use the Runtime-owned WorktreeService")
+        expected_worktree_root = self._owned_worktree_root_for(
+            workspace or self.workspace
+        )
+        if worktree_root is not None and Path(worktree_root) not in {
+            self._worktree_root,
+            expected_worktree_root,
+        }:
+            raise ValueError("subagent runners must use the Runtime-owned worktree root")
+        if not parent_tier:
+            agent_reference = parent_model
+            if agent_definition is not None:
+                agent_model = getattr(agent_definition, "model", None)
+                agent_provider = getattr(agent_definition, "provider", None)
+                if parent_model is None and agent_model != "inherit":
+                    agent_reference = agent_model
+                if (
+                    agent_reference
+                    and "/" not in agent_reference
+                    and agent_provider
+                    and agent_reference not in self._tiers.order
+                ):
+                    agent_reference = f"{agent_provider}/{agent_reference}"
+            if not agent_reference:
+                agent_reference = parent_model
+            if not agent_reference:
+                reference = getattr(self._assembler._context, "model_reference", None)
+                if callable(reference):
+                    provider_name, model = reference(effective)
+                    if provider_name and model:
+                        agent_reference = f"{provider_name}/{model}"
+                    else:
+                        agent_reference = model
+            if agent_reference:
+                info = (
+                    self._registry.get(agent_reference)
+                    if self._registry is not None
+                    else None
+                )
+                parent_tier = self._tiers.resolve(
+                    agent_reference, info=info
+                ).tier
+        parent_provider = getattr(agent_definition, "provider", None)
+        if parent_model and "/" in parent_model:
+            parent_provider, _, parent_model = parent_model.partition("/")
+        if parent_model is None and agent_definition is not None:
+            parent_model = getattr(agent_definition, "model", None)
+            parent_provider = getattr(agent_definition, "provider", None)
+            if parent_model == "inherit":
+                parent_model = None
+            if parent_model and "/" not in parent_model and parent_provider:
+                parent_model = f"{parent_provider}/{parent_model}"
+        if parent_model is None:
+            reference = getattr(self._assembler._context, "model_reference", None)
+            if callable(reference):
+                configured_provider, parent_model = reference(effective)
+                parent_provider = (
+                    getattr(agent_definition, "provider", None)
+                    if agent_definition is not None
+                    else None
+                ) or configured_provider
+        if parent_provider and parent_model and "/" not in parent_model:
+            parent_model = f"{parent_provider}/{parent_model}"
+            parent_provider = None
         from .tools.bundles import profile_tools
 
         max_tier = str(getattr(section, "max_tier", "medium"))
@@ -2808,7 +4074,7 @@ class Runtime:
             return SubagentRunner(
                 agents=self._agents,
                 runtime_factory=self._build_child_runtime,
-                workspace=self.workspace,
+                workspace=workspace or self.workspace,
                 parent_session=parent_session or session_id,
                 parent_agent_id=parent_agent_id,
                 root_turn_id=root_turn_id,
@@ -2816,6 +4082,7 @@ class Runtime:
                 sessions=self._ensure_child_sessions(),
                 parent_tools=tuple(parent_tools or ()),
                 parent_tier=parent_tier or self._tiers.default,
+                parent_model=parent_model,
                 parent_depth=parent_depth,
                 permissions=permissions,
                 grants=tuple(grants),
@@ -2833,13 +4100,259 @@ class Runtime:
                 bundle_map=self._bundle_map(catalog),
                 mutating_tools=self._mutating_names(catalog),
                 hooks=hooks,
+                worktree_service=self._worktree_service,
+                worktree_root=expected_worktree_root,
+                worktree_root_for=self._owned_worktree_root_for,
+                runtime_supports_workspace=runtime_supports_workspace,
+                worktree_scope=worktree_scope,
             )
         except Exception:  # noqa: BLE001 - an invalid agents config disables Task
             return None
 
+    def _worktree_root_for(self, workspace: str | Path) -> Path:
+        """Resolve one stable, Runtime-owned registry root per parent checkout."""
+        checkout = Path(workspace).expanduser().resolve()
+        root = self._worktree_roots.get(checkout)
+        if root is None:
+            identity = hashlib.sha256(str(checkout).encode("utf-8")).hexdigest()[:16]
+            root = checkout.parent / f".nexus-worktrees-{checkout.name}-{identity}"
+            self._worktree_roots[checkout] = root
+        return root
+
+    def _owned_worktree_root_for(self, workspace: str | Path) -> Path:
+        """Resolve a root only when the checkout is a runtime-owned worktree."""
+        checkout = Path(workspace).expanduser().resolve()
+        if checkout == self.workspace:
+            return self._worktree_root
+        owned_roots = (
+            root / "worktrees"
+            for root in tuple(self._worktree_roots.values())
+        )
+        if any(checkout.is_relative_to(root) for root in owned_roots):
+            return self._worktree_root_for(checkout)
+        raise ValueError("nested worktree parent is outside Runtime-owned worktrees")
+
+    def inspect_worktree(self, child_id: str) -> Any:
+        """Inspect a child from one of this runtime's owned registry roots."""
+        from .agents.worktrees import WorktreeError
+
+        missing: WorktreeError | None = None
+        for root in tuple(self._worktree_roots.values()):
+            if not root.exists():
+                continue
+            try:
+                return self._worktree_service.inspect(child_id, root=root)
+            except WorktreeError as exc:
+                if "no owned worktree record" not in str(exc):
+                    raise
+                missing = exc
+        if missing is not None:
+            raise missing
+        raise WorktreeError(f"no owned worktree record for child {child_id!r}")
+
+    def _worktree_runtime_ownership(self, child_id: str) -> bool | None:
+        """Report whether a child session still has a live runtime handle."""
+        sessions = self._child_sessions
+        if sessions is None:
+            return False
+        try:
+            return sessions.manager._live_handle(_child_session_id(child_id)) is not None
+        except Exception:  # noqa: BLE001 - unknown ownership must fail closed
+            return None
+
+    def _owned_worktree_record(self, child_id: str) -> tuple[Path, Any]:
+        """Resolve an authenticated child record only across registered roots."""
+        from .agents.worktrees import WorktreeError
+
+        matches = []
+        for root in tuple(self._worktree_roots.values()):
+            if not root.exists():
+                continue
+            try:
+                matches.append((root, self._worktree_service.get(child_id, root=root)))
+            except WorktreeError as exc:
+                if "no owned worktree record" not in str(exc):
+                    raise
+        if len(matches) != 1:
+            raise WorktreeError(
+                "worktree ownership is missing or ambiguous for this runtime"
+            )
+        return matches[0]
+
+    def worktree_confirmation_state(self, child_id: str) -> dict[str, Any]:
+        """Capture state used to bind one short-lived host confirmation."""
+        import hashlib
+        import json
+
+        root, record = self._owned_worktree_record(child_id)
+        from .agents import worktrees
+        from .agents.worktrees import WorktreeError
+
+        parent = record.parent_workspace.resolve(strict=True)
+        child = record.path.resolve(strict=True)
+        git_dir = Path(worktrees._git(parent, "rev-parse", "--absolute-git-dir"))
+        index_path = git_dir / "index"
+
+        def snapshot(checkout: Path, *, ignored: bool = False) -> dict[str, str]:
+            args = [
+                "git",
+                "--no-optional-locks",
+                "-c",
+                "core.fsmonitor=false",
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=all",
+            ]
+            if ignored:
+                args.append("--ignored=traditional")
+            result = subprocess.run(
+                args,
+                cwd=checkout,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                check=False,
+                env=worktrees._git_environment(),
+            )
+            if result.returncode:
+                raise WorktreeError("could not snapshot owned worktree Git status")
+            status = result.stdout
+            return {
+                "head": worktrees._git(checkout, "rev-parse", "--verify", "HEAD^{commit}"),
+                "status": hashlib.sha256(status).hexdigest(),
+                "dirty": bool(status),
+            }
+
+        record_state = {
+            name: str(value) if isinstance(value, Path) else value
+            for name, value in vars(record).items()
+        }
+        state = {
+            "service_root": str(root.resolve(strict=True)),
+            "record": record_state,
+            "parent": {
+                **snapshot(parent),
+                "index": hashlib.sha256(index_path.read_bytes()).hexdigest(),
+            },
+            "child": snapshot(child, ignored=True),
+        }
+        # Validate serialization here rather than silently producing an unstable token.
+        json.dumps(state, sort_keys=True, separators=(",", ":"))
+        return state
+
+    def acknowledge_worktree(self, child_id: str, review_id: str, digest: str) -> Any:
+        root, _record = self._owned_worktree_record(child_id)
+        return self._worktree_service.acknowledge(
+            child_id, review_id, digest, root=root
+        )
+
+    def integrate_worktree(
+        self, child_id: str, review_id: str, digest: str, *, cancel: object | None = None
+    ) -> Any:
+        root, _record = self._owned_worktree_record(child_id)
+        return self._worktree_service.integrate(
+            child_id, review_id, digest, root=root, cancel=cancel
+        )
+
+    def discard_worktree(
+        self,
+        child_id: str,
+        *,
+        force: bool = False,
+        review_id: str | None = None,
+        cancel: object | None = None,
+    ) -> Any:
+        root, _record = self._owned_worktree_record(child_id)
+        return self._worktree_service.discard(
+            child_id,
+            root=root,
+            force=force,
+            acknowledged_review_id=review_id,
+            cancel=cancel,
+        )
+
+    def list_worktrees(self) -> tuple[Any, ...]:
+        """List verified records with fresh checkout status from owned roots."""
+        records = []
+        for root in tuple(self._worktree_roots.values()):
+            if not root.exists():
+                continue
+            records.extend(
+                self._worktree_service.inspect(record.child_id, root=root)
+                for record in self._worktree_service.list(root=root)
+            )
+        return tuple(records)
+
+    def review_worktree(
+        self,
+        child_id: str,
+        *,
+        review_id: str | None = None,
+        cursor: int = 0,
+        limit: int = 1,
+    ) -> Any:
+        """Review a child only through a registry root owned by this runtime."""
+        from .agents.worktrees import WorktreeError
+
+        missing: WorktreeError | None = None
+        for root in tuple(self._worktree_roots.values()):
+            if not root.exists():
+                continue
+            try:
+                return self._worktree_service.review(
+                    child_id,
+                    review_id=review_id,
+                    cursor=cursor,
+                    limit=limit,
+                    root=root,
+                )
+            except WorktreeError as exc:
+                if "no owned worktree record" not in str(exc):
+                    raise
+                missing = exc
+        if missing is not None:
+            raise missing
+        raise WorktreeError(f"no owned worktree record for child {child_id!r}")
+
     def _build_child_runtime(self, spec: Any) -> _ChildRuntime:
         """The ``RuntimeFactory``: build a nested, restricted child run."""
         config = spec.config if isinstance(spec.config, Config) else self._load_config()
+        workspace = Path(spec.workspace).resolve()
+        path_guard = self._child_path_guard(spec, workspace)
+        config = self._child_workspace_config(self._child_config(spec), path_guard)
+        engine = self._child_permission_engine(
+            spec, config, workspace=workspace, path_guard=path_guard
+        )
+        authority = _ChildAuthority(engine=engine, path_guard=path_guard)
+        hooks = spec.hooks
+        if hooks is not None:
+            hook_manager = copy.copy(self._hooks)
+            hook_manager._workspace = workspace
+            parent_workspace = Path(getattr(hooks, "_workspace", self.workspace))
+            hook_specs = getattr(hooks, "_specs", None)
+            if isinstance(hook_specs, Mapping):
+                rebased_specs: dict[str, tuple[Any, ...]] = {}
+                for event, declarations in hook_specs.items():
+                    rebased: list[Any] = []
+                    for declaration in declarations:
+                        cwd = getattr(declaration, "cwd", None)
+                        if cwd:
+                            candidate = Path(cwd)
+                            try:
+                                relative = candidate.relative_to(parent_workspace)
+                            except ValueError:
+                                rebased.append(declaration)
+                            else:
+                                rebased.append(
+                                    replace(declaration, cwd=str(workspace / relative))
+                                )
+                        else:
+                            rebased.append(declaration)
+                    rebased_specs[str(event)] = tuple(rebased)
+                hook_specs = rebased_specs
+            hooks = _HookService(
+                hook_manager, hook_specs, workspace=workspace
+            )
         child_runner = self._make_subagent_runner(
             session_id=spec.session_id,
             parent_tools=spec.tools,
@@ -2847,25 +4360,106 @@ class Runtime:
             parent_session=spec.session_id,
             parent_agent_id=spec.agent_id,
             parent_tier=spec.tier,
+            parent_model=spec.model,
             root_turn_id=spec.root_turn_id,
             event_sink=spec.emit,
             budget=spec.budget,
-            permissions=spec.permissions,
+            permissions=authority,
             grants=spec.grants,
             config=config,
-            hooks=spec.hooks,
+            hooks=hooks,
+            workspace=Path(spec.workspace),
+            runtime_supports_workspace=self._supports_child_workspace(),
+            worktree_scope=bool(getattr(spec, "worktree_scope", False)),
+            worktree_service=self._worktree_service,
+            worktree_root=self._owned_worktree_root_for(workspace),
         )
-        return _ChildRuntime(self, spec, child_runner)
+        return _ChildRuntime(
+            self,
+            replace(spec, config=config, permissions=authority, hooks=hooks),
+            child_runner,
+        )
+
+    def _child_path_guard(self, spec: Any, workspace: Path) -> PathGuard:
+        """Build the effective guard for a child without changing parent state."""
+        authority = spec.permissions
+        if isinstance(authority, _ChildAuthority):
+            parent_guard = authority.path_guard
+        else:
+            permissions = getattr(
+                getattr(spec.config, "v2", None), "permissions", None
+            )
+            parent_guard = PathGuard(
+                self.workspace,
+                write_roots=(
+                    tuple(permissions.write_roots)
+                    if permissions is not None and permissions.write_roots
+                    else ("./",)
+                ),
+                read_denyroots=(
+                    tuple(permissions.read_denyroots)
+                    if permissions is not None
+                    else ()
+                ),
+                home=self._home,
+            )
+        if workspace == parent_guard.workspace:
+            return parent_guard
+        return parent_guard.for_worktree(workspace)
+
+    def _child_workspace_config(self, config: Config, guard: PathGuard) -> Config:
+        """Pin permission roots to the child-scoped hard boundary.
+
+        The manager and gate use ``guard`` directly; built-in read/write tools
+        also construct guards from config, so rebasing this frozen config is
+        necessary to keep their checks in the same workspace.
+        """
+        permissions = getattr(getattr(config, "v2", None), "permissions", None)
+        if permissions is None:
+            if guard.workspace == Path(self.workspace).resolve():
+                return config
+            raise RuntimeError(
+                "cannot scope child workspace: configuration has no permissions section"
+            )
+        try:
+            safe_write_roots: list[str] = []
+            child = guard.workspace
+            for root in guard.write_roots:
+                if root.is_relative_to(child):
+                    safe_write_roots.append(str(root))
+                elif child.is_relative_to(root):
+                    safe_write_roots.append(str(child))
+            scoped_permissions = msgspec.structs.replace(
+                permissions,
+                write_roots=(
+                    safe_write_roots
+                    or [str(child.parent / ".nexus-worktree-no-write")]
+                ),
+                read_denyroots=[str(root) for root in guard.read_denyroots],
+            )
+            scoped_v2 = msgspec.structs.replace(
+                config.v2, permissions=scoped_permissions
+            )
+            return replace(config, v2=scoped_v2)
+        except Exception as exc:
+            raise RuntimeError(
+                "cannot scope child workspace permissions; refusing child runtime"
+            ) from exc
 
     def _child_config(self, spec: Any) -> Config:
         base = spec.config if isinstance(spec.config, Config) else self._load_config()
         reference = spec.model
+        if reference and "/" not in reference and reference not in self._tiers.order:
+            role_provider = getattr(spec, "provider", None)
+            if role_provider and getattr(spec, "requested_model", None) == reference:
+                reference = f"{role_provider}/{reference}"
+        if not reference:
+            reference = getattr(base, "model", None)
         # Without a model registry a tier name cannot resolve to a concrete
         # model, so an inherited/clamped tier falls back to the parent's model.
         if reference in self._tiers.order and self._registry is None:
-            reference = getattr(base, "model", None)
-        if not reference:
-            reference = getattr(base, "model", None)
+            parent_model = getattr(spec, "parent_model", None)
+            reference = parent_model or getattr(base, "model", None)
         import dataclasses
 
         v2 = getattr(base, "v2", None)
@@ -2879,52 +4473,139 @@ class Runtime:
                 return dataclasses.replace(base, model=reference, v2=child_v2)
         return dataclasses.replace(base, model=reference)
 
-    def _build_child_assembler(self, spec: Any, config: Config) -> Any:
+    def _build_child_assembler(
+        self, spec: Any, config: Config, *, workspace: Path | None = None
+    ) -> Any:
         manager = self._assembler
         if not hasattr(manager, "for_iteration"):
             return manager
+        context_manager = manager._context
+        child_context = context_manager
+        if workspace is not None and context_manager.workspace != workspace:
+            child_context = copy.copy(context_manager)
+            child_context.workspace = workspace.resolve()
+            if child_context._env is not None:
+                child_context._env = replace(
+                    child_context._env, workspace=child_context.workspace
+                )
+        child_coordinator = copy.copy(manager)
+        child_coordinator._context = child_context
         # The agent body is the child's SOUL; MEMORY is deliberately empty.
-        return manager.for_iteration(
+        selected_agent_effort = None
+        if getattr(spec, "reasoning_effort", None):
+            reference = getattr(config, "model", None)
+            if reference and "/" in reference:
+                provider_name, _, model_name = reference.partition("/")
+                resolved = child_coordinator._resolve(provider_name, model_name)
+            else:
+                resolved = child_coordinator._resolve(None, reference)
+            supported_efforts = ()
+            if resolved is not None:
+                supported = getattr(child_coordinator, "_supported_efforts", None)
+                if callable(supported):
+                    supported_efforts = supported(
+                        resolved,
+                        getattr(self, "_registry", None),
+                        provider_name=provider_name if reference and "/" in reference else None,
+                    )
+            if spec.reasoning_effort in supported_efforts:
+                selected_agent_effort = spec.reasoning_effort
+        assembler = child_coordinator.for_iteration(
             config=config,
             system_files={"soul": spec.system_prompt, "memory": ""},
             skills_index=(),
             mcp_index={},
+            reasoning_effort=selected_agent_effort,
         )
+        assembler.agent_definition = type(
+            "ChildAgentDefinition",
+            (),
+            {"reasoning_effort": selected_agent_effort},
+        )()
+        assembler._agent_effort_supported = selected_agent_effort is not None
+        return assembler
 
     def _build_child_tool_manager(
-        self, spec: Any, config: Config, runner: Any
+        self,
+        spec: Any,
+        config: Config,
+        runner: Any,
+        *,
+        workspace: Path | None = None,
+        path_guard: PathGuard | None = None,
     ) -> ToolManager:
         manifest = self.manifest
         catalog_map: dict[str, Any] = (
             dict(manifest.tools) if manifest is not None else {}
         )
+        catalog_map = {
+            tool.name: tool
+            for tool in self._filter_web_catalog(config, tuple(catalog_map.values()))
+        }
         if runner is not None:
             from .tools.builtin.task import build_task_tool
 
-            catalog_map["Task"] = build_task_tool(runner)
+            catalog_map["subagent"] = build_task_tool(runner)
+        if bool(getattr(spec, "worktree_scope", False)) or bool(
+            getattr(spec, "worktree", None)
+        ):
+            catalog_map = {
+                name: tool
+                for name, tool in catalog_map.items()
+                if name in WORKTREE_CHILD_TOOLS and tool.origin == "builtin"
+            }
         catalog = [catalog_map[name] for name in spec.tools if name in catalog_map]
         authority = (
             spec.permissions if isinstance(spec.permissions, _ChildAuthority) else None
         )
-        return ToolManager(
-            config,
-            workspace=self.workspace,
-            tools=catalog,
-            path_guard=authority.path_guard if authority is not None else None,
-            job_registry=self._job_registry,
-            todo_store=self._todo_store,
+        workspace = workspace or Path(spec.workspace).resolve()
+        path_guard = path_guard or (
+            authority.path_guard if authority is not None else None
         )
+        manager = ToolManager(
+            config,
+            workspace=workspace,
+            tools=catalog,
+            path_guard=path_guard,
+            job_registry=self._job_registry,
+            todo_store=self._effective_todo_store(),
+        )
+        self._track_tool_manager(manager)
+        return manager
 
-    def _child_permission_engine(self, spec: Any, config: Config) -> PermissionEngine:
+    def _child_permission_engine(
+        self,
+        spec: Any,
+        config: Config,
+        *,
+        workspace: Path | None = None,
+        path_guard: PathGuard | None = None,
+    ) -> PermissionEngine:
         authority = spec.permissions
         if isinstance(authority, _ChildAuthority):
-            return authority.engine
+            if authority.path_guard is path_guard:
+                return authority.engine
+            source = authority.engine
+            return PermissionEngine(
+                mode=source.mode,
+                allow=tuple(rule.raw for rule in source._allow),
+                ask=tuple(rule.raw for rule in source._ask),
+                deny=tuple(rule.raw for rule in source._deny),
+                on_unattended=source.on_unattended,
+                path_guard=path_guard,
+            )
+        workspace = workspace or Path(spec.workspace).resolve()
         permissions = getattr(getattr(config, "v2", None), "permissions", None)
         if permissions is not None:
-            return PermissionEngine.from_config(
-                permissions, workspace=self.workspace, home=self._home
+            return PermissionEngine(
+                mode=permissions.mode,
+                allow=permissions.allow,
+                ask=permissions.ask,
+                deny=permissions.deny,
+                on_unattended=permissions.on_unattended,
+                path_guard=path_guard,
             )
-        return PermissionEngine(workspace=self.workspace, home=self._home)
+        return PermissionEngine(path_guard=path_guard)
 
     @staticmethod
     def _child_outcome(
@@ -3141,11 +4822,20 @@ class Runtime:
             await self._shared_client.aclose()
             self._shared_client = None
             self._owns_shared_client = False
-        for manager in self._owned_tools:
+        if self._owns_outbound_http_service:
+            aclose = getattr(self._outbound_http_service, "aclose", None)
+            if callable(aclose):
+                outcome = aclose()
+                if inspect.isawaitable(outcome):
+                    await outcome
+            self._owns_outbound_http_service = False
+        managers = [*self._owned_tools, *self._tracked_tools]
+        for manager in managers:
             aclose = getattr(manager, "aclose", None)
             if aclose is not None:
                 await aclose()
         self._owned_tools = []
+        self._tracked_tools.clear()
         if self._owns_job_registry and self._job_registry is not None:
             aclose = getattr(self._job_registry, "aclose", None)
             if aclose is not None:

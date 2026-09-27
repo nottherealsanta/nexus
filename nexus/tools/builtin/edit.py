@@ -108,7 +108,7 @@ _EDIT_SCHEMA: dict[str, Any] = {
 }
 
 SPEC = ToolSpec(
-    name="Edit",
+    name="edit",
     description=(
         "Replace exact text in a UTF-8 file. By default old_string must occur "
         "exactly once; use replace_all or occurrence to disambiguate."

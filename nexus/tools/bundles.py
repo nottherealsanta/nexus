@@ -19,6 +19,7 @@ from types import MappingProxyType
 from ..errors import ConfigError
 
 __all__ = [
+    "BASE_TOOL_AVAILABILITY",
     "BUNDLES",
     "BUNDLE_NAMES",
     "DEFAULT_PROFILE",
@@ -82,15 +83,31 @@ BUNDLES: Mapping[str, Bundle] = MappingProxyType(
     {
         "fs": Bundle(
             name="fs",
-            tools=("Read", "Write", "Edit", "MultiEdit", "Glob", "Grep", "LS"),
+            tools=("read", "glob", "grep", "edit", "write"),
+        ),
+        "patch": Bundle(
+            name="patch",
+            tools=("apply_patch",),
         ),
         "shell": Bundle(
             name="shell",
-            tools=("Bash", "BashOutput", "KillShell"),
+            tools=("bash",),
+        ),
+        "legacy_shell": Bundle(
+            name="legacy_shell",
+            tools=("BashOutput", "KillShell"),
+        ),
+        "legacy_fs": Bundle(
+            name="legacy_fs",
+            tools=("ls", "multiedit"),
         ),
         "task": Bundle(
             name="task",
-            tools=("Task", "TodoWrite"),
+            tools=("subagent", "todowrite"),
+        ),
+        "web": Bundle(
+            name="web",
+            tools=("webfetch", "websearch"),
         ),
         # Phase 4 self-extension controls. ``meta`` owns the reload/inspect and
         # extension-authoring tools; ``ext`` owns the skill-invocation tool
@@ -101,7 +118,7 @@ BUNDLES: Mapping[str, Bundle] = MappingProxyType(
         ),
         "ext": Bundle(
             name="ext",
-            tools=("Skill",),
+            tools=("skill",),
         ),
         # Phase 5: everything bridged from MCP. The bundle owns no static names:
         # bridged tools declare ``bundle="mcp"`` and join this bundle's ordered
@@ -115,18 +132,32 @@ BUNDLES: Mapping[str, Bundle] = MappingProxyType(
 
 BUNDLE_NAMES = frozenset(BUNDLES)
 
+# Baseline availability explanations for tools that require runtime services.
+# Runtime host listings replace these with config-specific reasons.
+BASE_TOOL_AVAILABILITY: Mapping[str, str] = MappingProxyType({
+    "question": "question broker/service not implemented",
+    "websearch": "No HTTPS SearXNG instance and matching allowed origin are configured",
+    "webfetch": "Web fetching is disabled or the outbound HTTP service is unavailable",
+})
+
 #: Research is read/search only: the fs bundle minus every mutating tool.
 PROFILES: Mapping[str, Profile] = MappingProxyType(
     {
         "coding": Profile(
             name="coding",
-            bundles=("fs", "shell", "task", "meta", "ext", "mcp"),
+            bundles=("fs", "patch", "shell", "task", "web", "ext", "mcp"),
+        ),
+        # Extension-management tools are opt-in: the default coding vocabulary
+        # remains lowercase, with this profile for callers that want meta.
+        "coding_meta": Profile(
+            name="coding_meta",
+            bundles=("fs", "patch", "shell", "task", "web", "ext", "mcp", "meta"),
         ),
         "research": Profile(
             name="research",
-            bundles=("fs", "mcp"),
-            include=("Task",),
-            exclude=("Write", "Edit", "MultiEdit"),
+            bundles=("fs", "task", "web", "ext", "mcp"),
+            include=("subagent", "todowrite", "skill"),
+            exclude=("write", "edit", "bash"),
             read_only=True,
         ),
         "chat": Profile(name="chat", bundles=()),

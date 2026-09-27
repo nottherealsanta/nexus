@@ -36,11 +36,12 @@ from nexus.model.providers.scripted import (
     text_response,
     tool_response,
 )
+from nexus.model.message import Text, ToolResult, ToolUse
 from nexus.model.stream import MessageStart, MessageStop, TextDelta
 from nexus.runtime import Runtime
 from nexus.session.manager import SessionSummary, TrashRecord
 from nexus.tools.permissions import Decision
-from nexus.view import fold
+from nexus.view import apply, fold
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -300,6 +301,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.SessionCancel(session="s"),
         p.SessionSubscribe(session="s", from_seq=3),
         p.SessionState(session="s", from_seq=1),
+        p.LogsRead(session="s"),
         p.AgentTranscript(session="s", agent_id="s/sub/1"),
         p.SessionFork(session="s", at_seq=2, new_id="c"),
         p.SessionDelete(session="s", force=True),
@@ -315,13 +317,23 @@ def test_protocol_round_trips_every_command_and_result():
         p.ModelShow(ref="p/m"),
         p.ModelTiers(),
         p.ModelSelect(session="s", ref="high"),
+        p.ReasoningEffortSelect(session="s", effort="high"),
+        p.FileSearch(query="src"),
+        p.WorktreeList(),
+        p.WorktreeInspect(child_id="s/sub/1"),
+        p.WorktreeReview(child_id="s/sub/1", review_id="a" * 32, cursor=2, limit=8),
+        p.WorktreeAcknowledge(child_id="s/sub/1", review_id="a" * 32, digest="b" * 64),
+        p.WorktreeIntegrate(child_id="s/sub/1", review_id="a" * 32, digest="b" * 64),
+        p.WorktreeDiscard(child_id="s/sub/1", force=True, review_id="a" * 32),
         p.AgentsList(),
         p.AgentCurrent(session="s"),
         p.AgentSelect(session="s", name="general"),
         p.AgentReset(session="s"),
         p.ToolsList(),
+        p.ContextInspect(session="s"),
         p.Doctor(explain_reload=True),
         p.Health(),
+        p.WebLaunch(),
         p.Shutdown(reason="bye"),
     ]
     assert {type(command) for command in commands} == set(p.COMMANDS)
@@ -337,6 +349,9 @@ def test_protocol_round_trips_every_command_and_result():
         p.SessionCancelResult(session="s", cancelled=True, dropped=2),
         p.SessionSubscribeResult(session="s", from_seq=0),
         p.SessionStateResult(session="s", seq=4, view={"session_id": "s"}),
+        p.LogsReadResult(
+            daemon=p.DaemonLogPage(), session=p.SessionLogPage()
+        ),
         p.AgentTranscriptResult(session="s", agent_id="s/sub/1", view={"id": "s/sub/1"}),
         p.SessionForkResult(session=summary),
         p.SessionDeleteResult(session="s", trash_id="t", delete_after=2.0),
@@ -352,12 +367,41 @@ def test_protocol_round_trips_every_command_and_result():
         p.ModelShowResult(ref="p/m", found=True, model={"id": "m"}),
         p.ModelTiersResult(order=["low", "medium", "high"], default="medium"),
         p.ModelSelectResult(session="s", provider="p", model="m", tier="high"),
+        p.ReasoningEffortSelectResult(
+            session="s", stored_override="high", effective_effort="high",
+            source="session", supported_levels=["low", "high"],
+        ),
+        p.FileSearchResult(paths=["src/main.py"]),
+        p.WorktreeListResult(worktrees=[{"child_id": "s/sub/1"}]),
+        p.WorktreeInspectResult(child_id="s/sub/1", status="finalized"),
+        p.WorktreeReviewResult(
+            child_id="s/sub/1", status="ok", entries=[{"path": "a.txt"}],
+            diff=[{"path": "a.txt", "patch": "+line"}], has_more=True,
+            review_id="a" * 32, digest="b" * 64,
+        ),
+        p.WorktreeAcknowledgeResult(
+            child_id="s/sub/1", review_id="a" * 32, digest="b" * 64
+        ),
+        p.WorktreeMutationResult(
+            child_id="s/sub/1", status="requires_confirmation",
+            operation="integrate", confirmation_token="token", impact={"parent_clean": True},
+        ),
         p.AgentsListResult(generation=3, agents=[{"name": "explore"}]),
         p.AgentCurrentResult(session="s", name="general", source="config"),
+        p.AgentCurrentResult(
+            session="s", supported_levels=["low", "high"],
+            stored_override="high", reasoning_effort_source="session",
+        ),
         p.AgentSelectResult(session="s", name="build"),
         p.ToolsListResult(count=1, tools=[{"name": "Read"}]),
+        p.ContextInspectResult(
+            session="s",
+            system_text="standing prompt",
+            included_parts=[{"name": "identity", "text": "standing prompt"}],
+        ),
         p.DoctorResult(ok=True, report={"workspace": "/tmp/ws"}),
         p.HealthResult(ok=True, version=PROTOCOL_VERSION),
+        p.WebLaunchResult(url="http://127.0.0.1:8080/#ticket"),
         p.ShutdownResult(stopping=True),
         p.ErrorResult(kind="SessionError", message="no"),
     ]
@@ -367,6 +411,14 @@ def test_protocol_round_trips_every_command_and_result():
 
     with pytest.raises(msgspec.ValidationError):
         p.decode_command(b'{"type": "DoesNotExist"}')
+
+    legacy_current = p.decode_result(
+        b'{"type":"AgentCurrentResult","session":"s","name":"general",'
+        b'"source":"default","reasoning_effort":"high"}'
+    )
+    assert legacy_current == p.AgentCurrentResult(
+        session="s", reasoning_effort="high"
+    )
 
 
 async def test_facade_handle_dispatches_every_verb():
@@ -452,6 +504,101 @@ async def test_facade_handle_dispatches_every_verb():
 
     stopped = await facade.handle(p.Shutdown())
     assert isinstance(stopped, p.ShutdownResult) and stopped.stopping
+
+
+async def test_context_inspect_is_a_read_only_current_request_projection(tmp_path):
+    runtime = _runtime(
+        tmp_path,
+        ScriptedProvider(text_response("unused")),
+    )
+    facade = HostFacade(runtime)
+    try:
+        session = runtime.session("context")
+        await facade.start_turn("context", "history")
+        await facade.wait_idle(timeout=5.0)
+        before = list(session.events)
+        result = await facade.handle(p.ContextInspect(session="context"))
+
+        assert isinstance(result, p.ContextInspectResult)
+        assert result.mode == "next_turn_preview"
+        assert not result.actually_sent and not result.draft_provided
+        assert result.manifest_generation is not None
+        assert result.system_text and "You are Nexus" in result.system_text
+        assert result.tools_supported
+        assert result.tools and all(
+            isinstance(tool["input_schema"], dict) for tool in result.tools
+        )
+        assert result.omitted[0] == "draft input (not provided)"
+        assert list(session.events) == before
+        assert "history" not in (result.system_text or "")
+        assert result.history_included
+        assert result.messages
+        assert result.messages[0]["role"] == "user"
+        assert result.messages[0]["blocks"][0]["text"] == "history"
+        assert result.request_context["final_messages"] == len(result.messages)
+        assert list(session.events) == before
+    finally:
+        await runtime.aclose()
+
+
+def test_context_block_projection_preserves_tool_call_result_linkage():
+    call = Runtime._context_block(ToolUse(id="call-7", name="Read", input={"path": "a.py"}))
+    result = Runtime._context_block(
+        ToolResult(tool_use_id="call-7", content=[Text(text="contents")])
+    )
+
+    assert call["id"] == "call-7"
+    assert result["tool_use_id"] == call["id"]
+    assert result["content"] == [{"type": "text", "text": "contents"}]
+
+
+async def test_context_inspect_refuses_to_read_active_turn(tmp_path):
+    runtime = _runtime(tmp_path, ScriptedProvider(text_response("unused")))
+    facade = HostFacade(runtime)
+    session = runtime.session("busy-context")
+    lease = session.begin_turn()
+    try:
+        result = await facade.handle(p.ContextInspect(session="busy-context"))
+        assert isinstance(result, p.ErrorResult)
+        assert "active" in result.message
+    finally:
+        lease.release()
+        await runtime.aclose()
+
+
+async def test_context_inspect_surfaces_only_activated_skills_and_connected_mcp(tmp_path):
+    runtime = _runtime(tmp_path, ScriptedProvider(text_response("unused")))
+    facade = HostFacade(runtime)
+    try:
+        await runtime.ensure_started()
+        facade.open_session("indexes")
+        old = runtime._extensions.ref.get()
+        manifest = msgspec.structs.replace(
+            old,
+            generation=old.generation + 1,
+            mcp={
+                "ready": {
+                    "connected": True,
+                    "resources": [{"uri": "file:///safe/root"}],
+                },
+                "offline": {"connected": False, "resources": [{"uri": "file:///secret"}]},
+            },
+        )
+        runtime._extensions.ref.swap(manifest)
+        async def ready():
+            return None
+
+        runtime.ensure_started = ready
+        result = await facade.handle(p.ContextInspect(session="indexes"))
+
+        assert isinstance(result, p.ContextInspectResult)
+        assert result.mcp_index and "ready" in result.mcp_index
+        assert "offline" not in result.mcp_index and "file:///secret" not in result.mcp_index
+        # The built-in catalog need not contain a skill body/tool candidate.
+        assert "Skill tool" not in str(result.tools)
+        assert all(not row["included"] for row in result.skills_index)
+    finally:
+        await runtime.aclose()
 
 
 async def test_facade_health_exposes_counters_only():
@@ -595,6 +742,222 @@ async def test_facade_doctor_reports_mcp_server_health():
     ]
 
 
+async def test_web_projection_keeps_ids_and_streams_small_text_appends():
+    from nexus.host.facade import _json_patch
+
+    runtime = _FakeRuntime()
+    facade = HostFacade(runtime)
+    handle = runtime.sessions.handle("s")
+    # Seed a complete assistant message, then stream another long response in
+    # two chunks. The patch for the second chunk should carry only its suffix.
+    handle.events = [
+        Event(type="turn.started", seq=1, session="s", turn="t"),
+        Event(type="text.delta", data={"text": "hello"}, seq=2, session="s", turn="t", id="m"),
+        Event(type="text.delta", data={"text": " world"}, seq=3, session="s", turn="t", id="m"),
+    ]
+    snapshot = facade.web_snapshot("s")
+    message = snapshot["view"]["turns"][0]["messages"][0]
+    assert snapshot["seq"] == 3
+    assert message["id"] == "m"
+    assert message["event_seq"] == 2
+
+    # This isolates the wire-size property relied on for high-frequency model
+    # deltas: the operation payload is the new fragment, never the whole text.
+    before = {"turns": [{"messages": [{"id": "m", "blocks": [{"text": "x" * 100_000}]}]}]}
+    after = {"turns": [{"messages": [{"id": "m", "blocks": [{"text": "x" * 100_000 + " tail"}]}]}]}
+    ops = _json_patch(before, after)
+    assert ops == [{"op": "append", "path": "/turns/0/messages/0/blocks/0/text", "value": " tail"}]
+    assert len(msgspec.json.encode(ops)) < 100
+
+    handle.events = [Event(type="turn.started", seq=1, session="s", turn="big")]
+    handle.events.extend(
+        Event(
+            type="text.delta",
+            data={"text": "z" * 10},
+            seq=seq,
+            session="s",
+            turn="big",
+        )
+        for seq in range(2, 1002)
+    )
+    frames = [frame async for frame in facade.subscribe_web("s", from_seq=1)]
+    assert len(frames) == 1000
+    assert len(msgspec.json.encode(frames[0])) < 1000
+    assert max(len(msgspec.json.encode(frame)) for frame in frames[1:]) < 512
+    long_snapshot = facade.web_snapshot("s")
+    assert len(long_snapshot["view"]["turns"][0]["messages"][0]["blocks"][0]["text"]) == 10_000
+
+
+async def test_permission_targets_reach_web_snapshot_and_patch_without_rules():
+    runtime = _FakeRuntime()
+    facade = HostFacade(runtime)
+    handle = runtime.sessions.handle("s")
+    target = {
+        "role": "destination",
+        "path": "notes/today.md",
+        "reason": "This file is outside the writable root.",
+        "suggested_rule": "Write(notes/today.md)",
+        "private_metadata": "must not be projected",
+    }
+    handle.events = [
+        Event(
+            type="permission.requested",
+            data={"id": "p1", "tool": "Write", "targets": [target]},
+            seq=1,
+            session="s",
+            turn="t",
+        )
+    ]
+
+    snapshot = facade.web_snapshot("s")
+    expected = [{key: target[key] for key in ("role", "path", "reason")}]
+    assert snapshot["view"]["permissions"][0]["targets"] == expected
+    assert "suggested_rule" not in str(snapshot)
+    assert "private_metadata" not in str(snapshot)
+
+    frames = [frame async for frame in facade.subscribe_web("s")]
+    patch = str(frames[0]["ops"])
+    assert "notes/today.md" in patch
+    assert "This file is outside the writable root." in patch
+    assert "suggested_rule" not in patch
+    assert "private_metadata" not in patch
+
+
+async def test_web_projection_accepts_nonconsecutive_event_sequences():
+    runtime = _FakeRuntime()
+    facade = HostFacade(runtime)
+    handle = runtime.sessions.handle("s")
+    # Session message/snapshot records consume sequence values without
+    # producing event frames. Replaying from seq 1 must therefore accept seq 3.
+    handle.events = [
+        Event(type="turn.started", seq=1, session="s", turn="t"),
+        Event(type="text.delta", data={"text": "hello"}, seq=3, session="s", turn="t", id="m"),
+        Event(type="text.delta", data={"text": " world"}, seq=5, session="s", turn="t", id="m"),
+    ]
+
+    async def replay_with_duplicates(session_id, from_seq=0, *, follow=True, client_id=None):
+        del session_id, follow, client_id
+        for event in [handle.events[1], handle.events[1], handle.events[0], handle.events[2]]:
+            yield event
+
+    facade.subscribe = replay_with_duplicates
+
+    frames = [frame async for frame in facade.subscribe_web("s", from_seq=1)]
+
+    assert [frame["seq"] for frame in frames] == [3, 5]
+    assert frames[0]["schema_version"] == 1
+    assert frames[0]["session"] == "s"
+    assert frames[0]["ops"]
+    assert {"op": "append", "path": "/turns/0/messages/0/blocks/0/text", "value": " world"} in frames[1]["ops"]
+    assert frames[-1]["seq"] == 5
+    assert facade.web_snapshot("s")["seq"] == 5
+
+
+async def test_web_projection_reuses_unchanged_history_branches():
+    from nexus.host.facade import _web_view
+
+    runtime = _FakeRuntime()
+    facade = HostFacade(runtime)
+    handle = runtime.sessions.handle("s")
+    handle.events = []
+    for turn in range(20):
+        handle.events.extend(
+            [
+                Event(type="turn.started", seq=turn * 4 + 1, session="s", turn=f"t{turn}"),
+                Event(type="text.delta", data={"text": f"answer-{turn}"}, seq=turn * 4 + 2, session="s", turn=f"t{turn}", id=f"m{turn}"),
+                Event(type="turn.completed", seq=turn * 4 + 3, session="s", turn=f"t{turn}"),
+            ]
+        )
+    before, _ = facade.state("s")
+    before_wire = _web_view(before)
+    after = apply(
+        before,
+        Event(type="turn.started", seq=81, session="s", turn="live"),
+    )
+    after = apply(
+        after,
+        Event(type="text.delta", data={"text": "tail"}, seq=82, session="s", turn="live", id="live-message"),
+    )
+    after_wire = _web_view(after, before, before_wire)
+
+    assert after_wire["turns"][:-1] == before_wire["turns"]
+    assert all(
+        after_turn is before_turn
+        for after_turn, before_turn in zip(after_wire["turns"][:-1], before_wire["turns"])
+    )
+    assert after_wire["messages"][:-1] == before_wire["messages"]
+    assert all(
+        after_message is before_message
+        for after_message, before_message in zip(after_wire["messages"][:-1], before_wire["messages"])
+    )
+
+
+def test_web_projection_pairs_agent_wire_reuse_by_stable_id():
+    from nexus.host.facade import _web_view
+    from nexus.view.model import AgentView, ConversationView
+
+    first = AgentView(id="first", description="unchanged")
+    second = AgentView(id="second", description="must not reuse first")
+    old = ConversationView(
+        agents={"first": first, "second": second},
+        agent_order=["first", "missing", "second"],
+    )
+    old_wire = _web_view(old)
+    old_second_wire = old_wire["agents"][1]
+    # Model an older/incomplete projection where an ordered agent lacks a wire
+    # entry. Positional pairing would incorrectly reuse this branch for first.
+    old_wire["agents"] = [old_second_wire]
+
+    changed_first = AgentView(id="first", description="changed")
+    new = ConversationView(
+        agents={"first": changed_first, "second": second},
+        agent_order=["first", "missing", "second"],
+    )
+    new_wire = _web_view(new, old, old_wire)
+
+    assert [agent["id"] for agent in new_wire["agents"]] == ["first", "second"]
+    assert new_wire["agents"][0] is not old_second_wire
+    assert new_wire["agents"][0]["description"] == "changed"
+    assert new_wire["agents"][1] is old_second_wire
+    assert new_wire["agents"][1]["description"] == "must not reuse first"
+
+
+def test_web_projection_only_preserves_unbounded_assistant_text():
+    from nexus.host.facade import _web_view
+    from nexus.view.model import (
+        MAX_TEXT,
+        BlockView,
+        MessageView,
+        PermissionView,
+        ToolCallView,
+    )
+
+    long_text = "x" * (MAX_TEXT + 1)
+    assistant = MessageView(role="assistant", blocks=[BlockView(kind="thinking", text=long_text)])
+    user = MessageView(role="user", blocks=[BlockView(kind="text", text=long_text)])
+    permission = PermissionView(preview=long_text)
+    tool = ToolCallView(error=long_text)
+
+    assert _web_view(assistant)["blocks"][0]["text"] == long_text
+    assert _web_view(user)["blocks"][0]["text"] == long_text[:MAX_TEXT] + "…"
+    assert _web_view(permission)["preview"] == long_text[:MAX_TEXT] + "…"
+    assert _web_view(tool)["error"] == long_text[:MAX_TEXT] + "…"
+
+
+async def test_web_workspace_feed_emits_session_index_changes():
+    runtime = _FakeRuntime()
+    facade = HostFacade(runtime)
+    feed = facade.subscribe_workspace(interval=0.1)
+    initial = await asyncio.wait_for(anext(feed), 1)
+    assert initial["revision"] == 1
+    assert initial["sessions"] == []
+    runtime.sessions.handle("created-in-terminal")
+    changed = await asyncio.wait_for(anext(feed), 1)
+    assert changed["revision"] == 2
+    assert changed["sessions"][0]["id"] == "created-in-terminal"
+    await feed.aclose()
+
+
 async def test_facade_doctor_aggregates_durable_registry_mismatches(tmp_path):
     """A recorded `registry.mismatch` is surfaced, redacted, by `doctor` (§15.5)."""
     runtime = _runtime(tmp_path, ScriptedProvider(text_response("ok")))
@@ -733,8 +1096,10 @@ async def test_facade_enqueue_runs_at_the_next_turn_boundary(tmp_path):
 
     handle = runtime.session("s")
     kinds = [event.type for event in handle.events]
-    assert kinds.count("input.queued") == 1
-    assert "input.consumed" in kinds
+    queued = [event for event in handle.events if event.type == "input.queued"]
+    consumed = [event for event in handle.events if event.type == "input.consumed"]
+    assert len(queued) == len(consumed) == 1
+    assert queued[0].data["queued_id"] == consumed[0].data["queued_id"]
     assert kinds[-1] == "turn.completed"
     assert handle.queue_depth == 0
     await runtime.aclose()

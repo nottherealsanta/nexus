@@ -43,13 +43,13 @@ _LS_SCHEMA: dict[str, Any] = {
 }
 
 SPEC = ToolSpec(
-    name="LS",
+    name="ls",
     description=(
         "List a workspace directory in deterministic order. Directories end in "
         "'/'; symlinks end in '@' and never expose an outside target."
     ),
     input_schema=_LS_SCHEMA,
-    bundle="fs",
+    bundle="legacy_fs",
     mutates=False,
     concurrency="parallel",
     permission_key=canonical_root_key,

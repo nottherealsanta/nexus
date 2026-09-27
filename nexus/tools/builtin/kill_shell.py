@@ -30,41 +30,51 @@ SPEC = ToolSpec(
         "required": ["job_id"],
         "additionalProperties": False,
     },
-    bundle="shell",
+    bundle="legacy_shell",
     mutates=True,
     concurrency="exclusive",
     permission_key=lambda data: str(data.get("job_id", "")),
 )
 
 
-async def run(
-    args: dict[str, Any], ctx: ToolContext
+async def _stop_job(
+    job_id: object,
+    ctx: ToolContext,
+    *,
+    tool_name: str = "KillShell",
 ) -> ToolExecutionResult:
-    """Terminate one job owned by this runtime's registry."""
-    job_id = args.get("job_id") if isinstance(args, dict) else None
+    """Terminate one session-owned registry job, idempotently."""
     if not isinstance(job_id, str) or not job_id:
         return ToolExecutionResult.text(
-            "KillShell: 'job_id' must be a non-empty string", is_error=True
+            f"{tool_name}: 'job_id' must be a non-empty string", is_error=True
         )
 
     registry = _jobs.registry_for(ctx)
     try:
         session_id = _jobs.require_session_id(ctx.session_id)
     except _jobs.JobRegistryError as exc:
-        return ToolExecutionResult.text(f"KillShell: {exc}", is_error=True)
+        return ToolExecutionResult.text(f"{tool_name}: {exc}", is_error=True)
     result = await registry.kill(job_id, session_id=session_id)
     if result.outcome == "unknown":
         return ToolExecutionResult.text(
-            f"KillShell: unknown job_id {job_id!r}; only jobs started by "
+            f"{tool_name}: unknown job_id {job_id!r}; only jobs started by "
             "Bash in this session can be terminated",
             is_error=True,
         )
     if result.outcome == "finished":
         return ToolExecutionResult.text(
-            f"KillShell: job {job_id} was already finished "
+            f"{tool_name}: job {job_id} was already finished "
             f"(exit_code={result.exit_code})"
         )
     return ToolExecutionResult.text(
-        f"KillShell: job {job_id} terminated "
+        f"{tool_name}: job {job_id} terminated "
         f"(exit_code={result.exit_code}, signal={result.signal})"
     )
+
+
+async def run(
+    args: dict[str, Any], ctx: ToolContext
+) -> ToolExecutionResult:
+    """Legacy entry point for stopping a registry-owned job."""
+    job_id = args.get("job_id") if isinstance(args, dict) else None
+    return await _stop_job(job_id, ctx)

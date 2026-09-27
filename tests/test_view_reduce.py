@@ -145,6 +145,120 @@ def test_queued_input_before_turn_started_attaches_the_prompt():
     assert turn.messages[-1].text == "ok"
 
 
+def test_input_consumed_before_queued_still_attaches_the_prompt():
+    # A live follower attaches mid-turn, so it can observe input.consumed (the
+    # turn is started from the cursor) *before* the input.queued event with the
+    # actual text. The user message must still carry the prompt either way.
+    view = fold(
+        [
+            _ev(1, "input.consumed", {"queued_id": "q1", "turn": "t1"}),
+            _ev(2, "turn.started", {"limits": {}}, turn="t1"),
+            _ev(3, "input.queued", {"queued_id": "q1", "content": [{"type": "text", "text": "hi"}], "queue_depth": 1}),
+            _ev(4, "model.started", {}, turn="t1"),
+            _ev(5, "text", {"text": "ok"}, turn="t1"),
+        ]
+    )
+    turn = view.turns[0]
+    assert [m.role for m in turn.messages] == ["user", "assistant"]
+    assert turn.messages[0].text == "hi"
+    assert view.input_queue == []
+
+
+def test_completed_turn_summary_fields_use_turn_events_and_frozen_metadata():
+    events = [
+        _ev(1, "input.consumed", {"queued_id": "q1", "turn": "t1"}, turn=None, ts=100),
+        _ev(
+            2,
+            "turn.started",
+            {"agent": {"name": "general", "source": "config"}},
+            turn="t1",
+            ts=101,
+        ),
+        _ev(
+            3,
+            "model.started",
+            {"provider": "p", "model": "m", "reasoning_effort": "high"},
+            turn="t1",
+            ts=102,
+        ),
+        _ev(4, "text", {"text": "done"}, turn="t1", ts=104),
+        _ev(5, "model.stopped", {"stop_reason": "end_turn"}, turn="t1", ts=105),
+        _ev(6, "turn.completed", {}, turn="t1", ts=106),
+        # Later session selections must not rewrite a completed turn's facts.
+        _ev(7, "agent.selected", {"name": "later"}, ts=107),
+        _ev(8, "reasoning_effort.selected", {"effort": "low"}, ts=108),
+    ]
+    view = fold(events)
+    turn = view.turns[0]
+
+    assert turn.user_ts == 100
+    assert turn.assistant_ts == 104
+    assert turn.elapsed_ms == 4000
+    assert turn.agent == {"name": "general", "source": "config"}
+    assert turn.reasoning_effort == "high"
+    assert turn.to_dict()["elapsed_ms"] == 4000
+
+    split = fold(events[:4])
+    assert fold(events[4:], split).to_dict() == view.to_dict()
+
+
+@pytest.mark.parametrize(
+    ("user_ts", "assistant_ts", "expected"),
+    [
+        (None, 4.0, None),
+        (2.0, None, None),
+        (float("nan"), 4.0, None),
+        (5.0, 4.0, None),
+        (2.0, 4.125, 2125),
+    ],
+)
+def test_completed_turn_summary_timestamp_validation(user_ts, assistant_ts, expected):
+    events = []
+    events.append(
+        _ev(
+            1,
+            "input.consumed",
+            {"queued_id": "q", "turn": "t"},
+            ts=2.0 if user_ts is None else user_ts,
+        )
+    )
+    events.extend(
+        [
+            _ev(2, "turn.started", {}, turn="t", ts=3),
+            _ev(3, "model.started", {}, turn="t", ts=3.5),
+                _ev(4, "text", {"text": "ok"}, turn="t", ts=6 if assistant_ts is None else assistant_ts),
+            _ev(5, "model.stopped", {}, turn="t", ts=6),
+        ]
+    )
+    if user_ts is None:
+        events[0] = _ev(1, "input.consumed", {"queued_id": "q", "turn": "t"}, ts=float("nan"))
+    if assistant_ts is None:
+        events[3] = _ev(4, "text", {"text": "ok"}, turn="t", ts=float("nan"))
+        events[4] = _ev(5, "model.stopped", {}, turn="t", ts=float("nan"))
+    turn = fold(events).turns[0]
+    assert turn.elapsed_ms == expected
+
+
+def test_effort_is_unknown_when_not_emitted_and_frozen_when_present():
+    view = fold(
+        [
+            _ev(1, "turn.started", {}, turn="t"),
+            _ev(2, "model.started", {}, turn="t"),
+            _ev(3, "reasoning_effort.selected", {"effort": "high"}),
+        ]
+    )
+    assert view.turns[0].reasoning_effort is None
+
+    view = fold(
+        [
+            _ev(1, "turn.started", {}, turn="t"),
+            _ev(2, "model.started", {"reasoning_effort": "medium"}, turn="t"),
+            _ev(3, "model.started", {"reasoning_effort": None}, turn="t"),
+        ]
+    )
+    assert view.turns[0].reasoning_effort == "medium"
+
+
 # ---------------------------------------------------------------------------
 # Deltas, thinking, tools, permissions, agents
 # ---------------------------------------------------------------------------
@@ -305,6 +419,130 @@ def test_permission_pending_then_resolved():
     assert permission.status == "resolved"
     assert permission.decision == "allow_once"
     assert view.pending_permissions == []
+
+
+def test_permission_targets_are_projected_without_rule_metadata():
+    view = fold(
+        [
+            _ev(
+                1,
+                "permission.requested",
+                {
+                    "id": "p1",
+                    "tool": "Write",
+                    "targets": [
+                        {
+                            "role": "destination",
+                            "path": "notes/today.md",
+                            "reason": "This file is outside the writable root.",
+                            "suggested_rule": "Write(notes/today.md)",
+                            "private_metadata": "must not be projected",
+                        }
+                    ],
+                },
+            )
+        ]
+    )
+
+    permission = view.permissions[0]
+    assert permission.to_dict()["targets"] == [
+        {
+            "role": "destination",
+            "path": "notes/today.md",
+            "reason": "This file is outside the writable root.",
+        }
+    ]
+    assert "suggested_rule" not in str(permission.to_dict())
+    assert "private_metadata" not in str(permission.to_dict())
+
+
+def test_permission_target_projection_is_complete_or_unavailable():
+    from nexus.view.reduce import (
+        _MAX_PERMISSION_TARGET_REQUEST_CHARS,
+        _MAX_PERMISSION_TARGETS,
+    )
+
+    oversized_role = "r" * 65
+    valid_target = {"role": "source", "path": "src/file.py", "reason": "Read required."}
+    targets = [
+        valid_target,
+        {"role": "write", "path": "dst", "reason": 12},
+        {"role": oversized_role, "path": "dst", "reason": "too long role"},
+        {"role": "write", "path": "p" * 4097, "reason": "too long path"},
+        {"role": "write", "path": "dst", "reason": "x" * 513},
+        None,
+    ]
+    targets.extend(
+        {"role": "source", "path": f"src/{index}.py", "reason": "Read required."}
+        for index in range(_MAX_PERMISSION_TARGETS + 2)
+    )
+    view = fold([_ev(1, "permission.requested", {"id": "p1", "targets": targets})])
+
+    projected = view.permissions[0].to_dict()
+    assert projected["targets"] == []
+
+    overflow = fold(
+        [
+            _ev(
+                1,
+                "permission.requested",
+                {
+                    "id": "p2",
+                    "targets": [
+                        {"role": "source", "path": f"src/{index}.py", "reason": "Read required."}
+                        for index in range(_MAX_PERMISSION_TARGETS + 2)
+                    ],
+                },
+            )
+        ]
+    )
+    assert overflow.permissions[0].to_dict()["targets"] == []
+
+    boundary = fold(
+        [
+            _ev(
+                1,
+                "permission.requested",
+                {
+                    "id": "p3",
+                    "targets": [
+                        {"role": "source", "path": f"src/{index}.py", "reason": "Read required."}
+                        for index in range(_MAX_PERMISSION_TARGETS)
+                    ],
+                },
+            )
+        ]
+    )
+    assert len(boundary.permissions[0].to_dict()["targets"]) == _MAX_PERMISSION_TARGETS
+
+    aggregate_overflow = fold(
+        [
+            _ev(
+                1,
+                "permission.requested",
+                {
+                    "id": "p4",
+                    "targets": [
+                        {"role": "source", "path": f"p/{index}/{'x' * 4096}", "reason": "Read required."}
+                        for index in range(16)
+                    ],
+                },
+            )
+        ]
+    )
+    assert _MAX_PERMISSION_TARGET_REQUEST_CHARS == 65_536
+    assert aggregate_overflow.permissions[0].to_dict()["targets"] == []
+
+
+def test_legacy_permission_event_keeps_scalar_readability_without_targets():
+    view = fold(
+        [_ev(1, "permission.requested", {"id": "old", "tool": "Bash", "key": "cmd:ls"})]
+    )
+
+    permission = view.permissions[0]
+    assert permission.tool == "Bash"
+    assert permission.key == "cmd:ls"
+    assert "targets" not in permission.to_dict()
 
 
 def test_terminal_turn_expires_a_leftover_pending_permission():

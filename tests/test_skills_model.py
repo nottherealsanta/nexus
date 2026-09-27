@@ -91,7 +91,7 @@ VALID_FULL = (
             {
                 "name": "demo",
                 "description": "d",
-                "allowed_tools": ("Bash", "Read", "Glob"),
+                    "allowed_tools": ("bash", "read", "glob"),
                 "bundles": ("fs", "shell"),
                 "model": "inherit",
                 "version": "1",
@@ -165,7 +165,7 @@ def test_duplicate_list_items_are_deduplicated_in_order():
     parsed = parse_frontmatter(
         "---\nname: demo\ndescription: d\nallowed-tools: [Bash, Read, Bash]\n---\n"
     )
-    assert parsed.allowed_tools == ("Bash", "Read")
+    assert parsed.allowed_tools == ("bash", "read")
 
 
 def test_split_frontmatter_returns_body():

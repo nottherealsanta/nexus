@@ -44,6 +44,7 @@ TURN_EVENTS = (
 CONTEXT_EVENTS = ("context.assembled", "context.compacted", "context.degraded")
 MODEL_EVENTS = (
     "model.selected",
+    "reasoning_effort.selected",
     "model.started",
     "text.delta",
     "text",
@@ -88,11 +89,11 @@ REGISTRY_EVENTS = (
 )
 MISC_EVENTS = ("provider.raw", "error", *REGISTRY_EVENTS)
 
-# Phase 3.5 session surface, as amended by PLAN section 14.10. The input queue
-# persists a submission, the loop consumes it at the next turn boundary, and a
-# submission that can never run is dropped; each transition is a drawable event
-# so no UI polls the queue.
-INPUT_EVENTS = ("input.queued", "input.consumed", "input.dropped")
+# Direct input starts are turn-scoped and durable. The remaining input events
+# describe actual queue lifecycle: enqueue, consume at a turn boundary, or drop.
+# Keeping the distinction explicit prevents direct starts appearing as pending
+# queue items in projections.
+INPUT_EVENTS = ("input.started", "input.queued", "input.consumed", "input.dropped")
 
 # Presence is a subscriber count, not identity (single user, many views).
 # Section 14.10 adds only the join/leave transitions; the derived

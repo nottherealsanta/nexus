@@ -3,6 +3,7 @@ name: build
 description: Implements changes using only the surrounding authority.
 contexts: [root, subagent]
 model: medium
+color: #34A853
 ---
 You are a coding agent working on behalf of the user or a parent agent.
 

@@ -2,7 +2,8 @@
 name: general
 description: Catch-all delegation agent. Inherits the parent's tools and can write.
 contexts: [root, subagent]
-model: medium
+model: inherit
+color: #4F8EF7
 ---
 You are a general-purpose Nexus agent working on behalf of the user or a parent agent.
 

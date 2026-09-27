@@ -70,6 +70,25 @@ def detail_lines(session: str, view: ConversationView) -> list[str]:
     for p in view.pending_permissions:
         detail = p.key or p.preview
         lines.append(f"approval {sanitize(p.tool or '?', 60)}" + (f" \u00b7 {sanitize(detail, 80)}" if detail else ""))
+        if p.targets is not None:
+            if not p.targets:
+                lines.append("  targets: unavailable (incomplete or oversized target list)")
+            else:
+                lines.append(f"  targets ({len(p.targets)}):")
+                for number, target in enumerate(p.targets, 1):
+                    lines.extend((
+                        f"    {number}. role: {sanitize(target.role, max(240, len(target.role) * 6))}",
+                        f"       path: {sanitize(target.path, max(240, len(target.path) * 6))}",
+                        f"       reason: {sanitize(target.reason, max(240, len(target.reason) * 6))}",
+                    ))
+    for error in view.errors:
+        lines.append(
+            f"event error [{sanitize(error.type or 'error', 40)}]: "
+            f"{sanitize(error.message, 240)}"
+        )
+    for turn in view.turns:
+        if turn.phase == "failed" and turn.error:
+            lines.append(f"turn error [{sanitize(turn.id or 'turn', 60)}]: {sanitize(turn.error, 240)}")
     stack = [(a, 0) for a in view.root_agents]
     if not stack: lines.append("no subagents")
     while stack:

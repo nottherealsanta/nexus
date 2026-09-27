@@ -1615,7 +1615,7 @@ bidirectional low latency.
 ### 14.10 Events added to the §3.5 catalogue
 
 ```
-input.queued     input.consumed    input.dropped
+input.started    input.queued     input.consumed    input.dropped
 presence.joined  presence.left
 daemon.started   daemon.stopping   daemon.session_scheduled  daemon.session_queued
 ```
@@ -1624,6 +1624,11 @@ The §3.5 rule is unchanged and now load-bearing across processes: **every state
 change a UI could draw is an event; no UI polls the facade.** The queries in
 §14.4 exist only so a late-joining view can establish a baseline before
 subscribing.
+
+`input.started` identifies direct turn submissions and carries their durable
+content without treating them as pending queue entries. `input.queued`,
+`input.consumed`, and `input.dropped` remain reserved for actual FIFO queue
+transitions.
 
 ### 14.11 UI encapsulation and customizability
 
@@ -2183,7 +2188,7 @@ item above pre-existed it.
 - **UI layering:** `tests/test_ui_layering.py` enforces that `nexus/ui/**`
   imports only `{nexus.host, nexus.view, nexus.events, stdlib}`.
 
-### 16.4 Verification evidence
+### 16.4 Verification evidence (historical, before strict independent budgets)
 
 - **Full offline suite — re-reproduced after the Phase 8 delete/cancel
   hardening** (see §16.8) on 2026-09-23 at `fc26db7` + the uncommitted worktree:
@@ -2194,7 +2199,7 @@ item above pre-existed it.
   delete-refusal, parked-cancel, rollback, and trash-identity regressions). The
   2 deselected are the credential-gated `live` tests (`addopts = -m 'not live'`);
   the 311 skips are gated (absent credentials / model features), not failures.
-- **The 2 xfailed are exactly the line-budget gates**, both `strict=False`:
+- **At this historical run, the 2 xfailed were the line-budget gates**, both `strict=False`:
   `tests/test_phase3_exit.py::test_line_budget_core_model_spec_within_plan_cap`
   and `::test_line_budget_host_view_ui_within_plan_cap`.
 - **Line budgets (from the regenerated report, measured at `fc26db7` + tree):**
@@ -2247,10 +2252,11 @@ implemented" — are now closed and moved to §16.3; the §14.15 criterion-11
 terminal-plus-HTTP pairing they blocked is now demonstrated by
 `tests/test_http_daemon_e2e.py`.
 
-1. **Line budgets unmet.** §12 criterion 10 (core < 2,500) and the §14.14
-   surface cap (host/view/ui < 2,000) are both exceeded by a wide margin
-   (12476 vs 2500; 7899 vs 2000). The gates remain non-strict `xfail` by design;
-   the regenerated report records the exact overage.
+1. **Historical line budgets unmet at this ledger point.** §12 criterion 10
+   (core < 2,500) and the §14.14 surface cap (host/view/ui < 2,000) were exceeded
+   at that time (12476 vs 2500; 7899 vs 2000). The gates were then non-strict
+   `xfail`; §18 later revised them and the current gate now uses separate strict
+   host/view/ui budgets described below.
 2. **`/model` is cosmetic.** §14.11 lists `/model` as a session command, but the
    facade has no per-session model override; `nexus/ui/cli/app.py:_cmd_model`
    only lists selectable models and points the user at `[models] default` in
@@ -2564,11 +2570,11 @@ per-session isolation, unknown-reference refusal); two interactive-CLI tests and
 one root-CLI test (`tests/test_ui_cli.py`, `tests/test_cli.py`); the protocol
 round-trip and every-verb facade tests were extended.
 
-Full offline suite: **3114 passed, 311 skipped, 2 deselected, 2 xfailed in
+Historical full offline suite: **3114 passed, 311 skipped, 2 deselected, 2 xfailed in
 63.92s** (`rc=0`). The two `xfail`s remain exactly the (non-strict) line-budget
 gates. The closeout report
 `tests/fixtures/reports/phase3_exit_baseline.{json,txt}` was regenerated after
-green: `core+model+spec = 12554` physical / `host+view+ui = 8190`
+green: `core+model+spec = 12554` physical / historical aggregate `host+view+ui = 8190`
 (`host=4768 view=1604 ui=1818`). Both are still over the plan caps; the packet
 neither met nor waived a budget, only moved the recorded baseline.
 
@@ -2607,7 +2613,7 @@ facade test in `tests/test_host_facade.py` and an end-to-end daemon+CLI test in
 `tests/test_cli.py` (human and `--json`, with a secret-bearing log asserted not
 to leak). Full offline suite: **3137 passed, 311 skipped, 2 deselected, 2
 xfailed**. The baseline report was regenerated after green (§16.4); the new
-`nexus/host/doctor.py` moved the recorded surface baseline to `host+view+ui =
+`nexus/host/doctor.py` moved the historical aggregate surface baseline to `host+view+ui =
 8526` physical (`host=5104 view=1604 ui=1818`), still over the plan cap.
 
 This closes §16.5 item 3.
@@ -2655,20 +2661,20 @@ deterministic enumeration, and zero/negative/non-integer cap rejection;
 `tests/test_session_model.py` adds strict-bool parsing and fallback
 redaction/dedupe/selection-drop. Full offline suite: **3148 passed, 311 skipped,
 2 deselected, 2 xfailed** (`rc=0`). The baseline report was regenerated after
-green: `core+model+spec = 12560` physical / `10385` code, `host+view+ui = 8620`
+green: `core+model+spec = 12560` physical / `10385` code, historical aggregate `host+view+ui = 8620`
 physical / `7126` code (`host=5198 view=1604 ui=1818`); both remain over the plan
 caps and no budget was met or waived.
 
 ---
 
-## 18. Amendment: line-budget cap revision and as-built status ledger
+## 18. Historical amendment: initial aggregate line-budget cap revision
 
 Fifth append-only amendment, same rules as §14-§17: **sections 1-17 are not
 rewritten**, only amended by reference. Where this section disagrees with an
-earlier one, this section wins. Nothing here relaxes a requirement; it records an
-authorized, explicit revision of two numeric ceilings and the status that remains
-unmet. **No code was moved, split, or relocated to evade either budget** — the
-measured prefixes and the physical-line counting semantics are unchanged.
+earlier one, this section won at the time. This section records the initial
+revision to aggregate numeric ceilings; those surface ceilings were later
+superseded by the independent host/view/ui budgets recorded in the current
+follow-up below. No code was relocated to evade a budget.
 
 ### 18.1 What this amends
 
@@ -2676,7 +2682,7 @@ measured prefixes and the physical-line counting semantics are unchanged.
 | --- | --- |
 | §11 Risks (scope-creep mitigation) | The **2,500-line** hard budget is superseded by the ceilings in §18.2. |
 | §12 Done (criterion 10) | "Core stays under 2,500 lines" is superseded: core is under **14,000** physical lines. |
-| §14.14 (surface budget) | The **2,000-line** `host/` + `view/` + `ui/` budget is superseded by **9,500** physical lines. |
+| §14.14 (surface budget) | At this amendment, the **2,000-line** aggregate `host/` + `view/` + `ui/` budget was superseded by **9,500** physical lines. This aggregate limit is historical and no longer enforced. |
 | §16.4 / §16.5 recorded comparisons | **Historical.** The `2,500`/`2,000` cap comparisons and overage figures in the §16 as-built ledger describe the tree *before* this revision and are superseded by §18.2. They are retained for provenance only. |
 | §16.5 item 1 | "Line budgets unmet" is closed by this revision (the two gates are now strict and green). |
 
@@ -2685,25 +2691,23 @@ measured prefixes and the physical-line counting semantics are unchanged.
 The original 2,500/2,000 ceilings were set in §11/§14.14 before Phases 5-8
 (model registry and tiers, subagents and hooks, provider breadth, and the whole
 host/view/ui surface) existed. At the time of revision the as-built tree measured
-**12,560 physical lines** for `core/` + `model/` + `tools/spec.py` and **8,620
-physical lines** for `host/` + `view/` + `ui/` (`host=5198 view=1604 ui=1818`).
-The ceilings are revised to conservative, round numbers that keep modest
-headroom for near-term work without becoming unbounded:
+**12,560 physical lines** for `core/` + `model/` + `tools/spec.py` and a then-current
+aggregate **8,620 physical lines** for `host/` + `view/` + `ui/` (`host=5198
+view=1604 ui=1818`). The initial §18 aggregate ceilings were:
 
 - `core/` + `model/` + `tools/spec.py` **under 14,000 physical lines**
   (1,440 lines, ~11.5% headroom over 12,560).
-- `host/` + `view/` + `ui/` **under 9,500 physical lines**
+- (Historical only) `host/` + `view/` + `ui/` **under 9,500 physical lines**
   (880 lines, ~10.2% headroom over 8,620).
 
-The caps remain *caps*, not targets: the point is still to make scope creep
-visible and to force "widen an interface, do not add a layer" rather than to
-bless unbounded growth. The exact prefixes (`nexus/core/`, `nexus/model/`,
-`nexus/tools/spec.py`; `nexus/host/`, `nexus/view/`, `nexus/ui/`) and the
-**physical-line** measure are unchanged from the original gates.
+These historical limits were caps, not targets. At the §18.2 amendment, the
+independently reviewed surface budgets were `host/` < 6,500, `view/` < 2,200,
+and `ui/` < 4,000 physical lines; they were separate ratchets, not a combined
+allowance. The core budget remains `core/` + `model/` + `tools/spec.py` < 14,000.
 
-### 18.3 Enforcement changes
+### 18.3 Enforcement at the historical aggregate-cap revision
 
-- The two gates in `tests/test_phase3_exit.py`
+- The core gate and separate per-directory gates in `tests/test_phase3_exit.py`
   (`test_line_budget_core_model_spec_within_plan_cap`,
   `test_line_budget_host_view_ui_within_plan_cap`) are **strict**: the
   non-strict `xfail` markers are removed and each test asserts the tree is within
@@ -2712,7 +2716,7 @@ bless unbounded growth. The exact prefixes (`nexus/core/`, `nexus/model/`,
   closeout baseline when any budget records a cap violation, so a regenerated
   report can never move the ratchet floor past a cap. The check **recomputes**
   each recorded budget from the fixture's own `physical_lines` against the
-  **enforced code constants** (`CORE_BUDGET_CAP`/`SURFACE_BUDGET_CAP`) rather
+  **enforced code constants** (`CORE_BUDGET_CAP`/`SURFACE_BUDGET_CAPS`) rather
   than trusting the recorded `plan_cap`/`within_plan_cap`/`overage` fields, so a
   hand-edited over-cap fixture (flag flipped or cap inflated) fails rather than
   passing silently. The boundary is **strict** (`physical_lines >= cap` is a
@@ -2729,13 +2733,13 @@ bless unbounded growth. The exact prefixes (`nexus/core/`, `nexus/model/`,
 - The ratchet (`live <= recorded`) is retained; it catches growth *within* a cap
   and is no longer the only line of defence.
 
-### 18.4 As-built status ledger
+### 18.4 Historical as-built status ledger (superseded by current budgets)
 
 Recorded against `db98882` plus this packet's tree.
 
 | Item | Status |
 | --- | --- |
-| §11 / §14.14 line budgets, as revised | **Met** — 12,560 is under the 14,000 cap and 8,620 is under the 9,500 cap; both gates strict and green. |
+| §11 / §14.14 line budgets at §18 measurement | **Met at that historical measurement** — 12,560 was under 14,000 and 8,620 under the then-aggregate 9,500 cap. The aggregate cap is retired; current surface gates are per-directory. |
 | §12 criterion 10 (core bounded) | **Met** under the revised cap. |
 | §14.15 criteria 11-13 (two views, detached turn, UI layering) | **Met** — demonstrated by the daemon UDS+HTTP E2E tests and the UI layering test (§16.4). |
 | §16.5 item 1 (line budgets unmet) | **Closed** by this revision. |
@@ -2758,18 +2762,19 @@ Recorded against `db98882` plus this packet's tree.
 Neither item is a waiver of a requirement; both are stated so this ledger is not
 read as a claim of completion.
 
-### 18.5 Verification
+### 18.5 Historical verification of the initial aggregate caps
 
 - Targeted: the two strict cap gates, the recomputed fixture check, and both
   write-guard branches (refusal and in-cap write) pass.
-- Full offline suite re-run after the change (the regenerated closeout report
-  embeds its own full-suite run); the report fixture
-  `tests/fixtures/reports/phase3_exit_baseline.{json,txt}` is regenerated with
-  `plan_cap` 14000/9500, `within_plan_cap: true`, and `overage: 0`.
-- `ruff` clean on the changed files; docs (`README.md`, `ARCHITECTURE.md`,
+- At the time, the full offline suite was re-run after the initial cap revision
+  (the regenerated closeout report embeds its own full-suite run); the report
+  fixture recorded then-current aggregate `plan_cap` values 14000/9500. The
+  9500 surface cap was subsequently retired in favor of separate directory
+  budgets.
+- At that point, `ruff` was clean on the changed files; docs (`README.md`, `ARCHITECTURE.md`,
   `SOUL.md`) updated to the revised ceilings, phrased consistently as "under
-  14,000" / "under 9,500" so the docs match the strict tests' `<` comparison
-  rather than a `<=` boundary that those tests do not allow.
+  14,000" / "under 9,500" at that historical cap revision. The current docs
+  now use the independently enforced directory caps above.
 
 ---
 
@@ -2889,10 +2894,11 @@ One lock primitive, applied to both managers, with a fixed lock order.
   **3164 passed, 311 skipped, 2 deselected in 62.11s** (`rc=0`), **no `xfailed`
   and no `xfail` markers remain**; the 2 deselected are the credential-gated
   `live` tests (`addopts = -m 'not live'`).
-- **Line budgets strict and within cap.** `core/` + `model/` + `tools/spec.py` =
-  **12,560 physical / 10,385 code** (< 14,000); `host/` + `view/` + `ui/` =
-  **8,620 physical / 7,126 code** (`host=5198 view=1604 ui=1818`; < 9,500).
-  Both strict gates pass with `within_plan_cap: true`, `overage: 0`.
+- **Historical line-budget measurement at this review.** `core/` + `model/` +
+  `tools/spec.py` = **12,560 physical / 10,385 code** (< 14,000); aggregate
+  `host/` + `view/` + `ui/` = **8,620 physical / 7,126 code** (host=5198,
+  view=1604, ui=1818; < then-current 9,500). The aggregate cap has since been
+  retired in favor of separate current directory budgets.
 - **`ruff` clean on every changed file** (`nexus/ext/manager.py`,
   `nexus/session/{lock,manager}.py`,
   `tests/{test_ext_trash,test_phase3_exit,test_session_lock,test_session_operations}.py`);
@@ -2963,7 +2969,7 @@ the corrected §19.2 text above is authoritative.
   `O_NOFOLLOW | O_NONBLOCK` (best-effort per platform): a symlinked lock path is
   refused with `ELOOP` and a FIFO can never block the open.
 - **Baseline guard.** `_cap_violations` now recomputes `physical_lines` against
-  the **enforced code constants** (`CORE_BUDGET_CAP`/`SURFACE_BUDGET_CAP`)
+   the **enforced code constants** (`CORE_BUDGET_CAP`/`SURFACE_BUDGET_CAPS`)
   instead of trusting the recorded `plan_cap`/`within_plan_cap`/`overage` fields,
   so a hand-edited over-cap fixture (flag flipped or cap inflated) cannot be
   blessed by regeneration. The boundary is **strict** (`physical_lines >= cap`
@@ -3084,7 +3090,7 @@ made.
 | Section | Amendment |
 | --- | --- |
 | §14.11 (status bar, slash commands, tool rendering) | Extended: the status line, editor toolbar, and `/details` now render one pure function of the reduced view; `/reconnect` re-attaches; colour and safe previews are explicit. |
-| §14.14 (surface budget) | The strict combined gate holds at **8,803** physical lines (host 5,198 / view 1,604 / ui 2,001) against the §18 cap of 9,500. The UI client keeps its own `test_ui_layering` budget: **1,989 < 2,000** after the refactors in §20.3 and §20.7. |
+| §14.14 (surface budget) | Historically, the combined gate held at **8,803** physical lines (host 5,198 / view 1,604 / ui 2,001) against the then-current §18 cap of 9,500. The UI client also had a `test_ui_layering` budget: **1,989 < 2,000**. The aggregate cap is retired in favor of current per-directory budgets. |
 | §19 ledger | No recovery guarantee changes; the still-open live-provider item (§18.4 item 1) remains open. |
 
 ### 20.2 What was built (retired line surface)
@@ -3190,9 +3196,10 @@ client at **1,989 < 2,000**.
 - **Full offline suite — green.** `.venv/bin/python -m pytest -q -p no:cacheprovider`
   → **3197 passed, 311 skipped, 2 deselected in 65.94s** (`rc=0`); the 2
   deselected are the credential-gated `live` tests.
-- **Line budgets.** `core/` + `model/` + `tools/spec.py` = **12,560 physical /
-  10,385 code** (< 14,000); `host/` + `view/` + `ui/` = **8,803 physical / 7,253
-  code** (host=5,198 view=1,604 ui=2,001; < 9,500). The UI client's own
+- **Historical line-budget measurement.** `core/` + `model/` + `tools/spec.py`
+  = **12,560 physical / 10,385 code** (< 14,000); aggregate `host/` + `view/` +
+  `ui/` = **8,803 physical / 7,253 code** (host=5,198 view=1,604 ui=2,001; <
+  then-current 9,500). The UI client's own
   `test_ui_layering` budget is **1,989 < 2,000**. Both gates are strict and
   green; no code was relocated to change a prefix or a counting rule.
 - **`ruff` clean on every changed file** (`nexus/cli.py`, `nexus/session/*.py`,
@@ -3210,7 +3217,7 @@ client at **1,989 < 2,000**.
 | Item | Status |
 | --- | --- |
 | §14.11 status bar, tool/permission previews, colour, optional editor | **Met** — one pure details source; the two integration defects fixed, plus the §20.7 review follow-ups. |
-| §14.14 / §18 surface budget | **Met** — 8,803 < 9,500 strict; UI client 1,989 < 2,000. |
+| §14.14 / §18 surface budget | **Met at this historical stage** — 8,803 < 9,500 strict; UI client 1,989 < 2,000. The aggregate allowance is superseded by independent current budgets. |
 | §18.4 item 1 live, credential-dependent provider end-to-end | **Still open** — `-m live` deselected and not run. |
 
 The open item is stated so this ledger is not read as a claim of completion; it
@@ -3276,8 +3283,24 @@ uses the host `AgentTranscript` contract for validation and the canonical
 `ConversationView` reducer for live rendering, nested navigation, and the
 bounded tool/text detail. No activity side store or polling loop exists.
 
-The former 9,500 surface cap reflected a 2,001-line line UI. After retiring it,
-the shipped Textual-only surface measures **10,058** lines, so the reviewed cap
-is **10,500** (about 4% headroom). The guarded full-report path was run to refresh
-the checked-in baseline after the cap revision; it records **3,201 passed, 311
-skipped, 3 deselected**. Current strict budget gates pass.
+The then-current 10,500 aggregate cap described in this historical §20 note has
+since been replaced with independent strict budgets; it is retained here only
+for the history of that phase. Current caps are `host/` < 7,000, `view/` <
+2,200, and `ui/` < 5,000 physical lines. The host cap was raised from 6,500 for
+the distinct browser, file-completion, metadata, and redacted-diagnostics
+surfaces; the UI cap was raised from 4,500 to 5,000 for the browser client and
+expanded Textual composition, including the right drawer, composer/picker,
+session diagnostics, and completion. They are separate reviewed budgets and
+ratchets, not a combined allowance. The core cap remains < 14,000. See the live
+measurement and enforcement in `tests/test_phase3_exit.py` and the current
+budget overview in `ARCHITECTURE.md`.
+
+## 21. Current independent physical-line budgets
+
+The aggregate `host/` + `view/` + `ui/` ceilings described in §§18-20 are
+historical and no longer enforced. Current strict ratchets in
+`tests/test_phase3_exit.py` are independent reviewed budgets: `core/` + `model/`
++ `tools/spec.py` < 14,000 physical lines; `host/` < 7,000; `view/` < 2,200;
+and `ui/` < 5,000. Each directory is compared to its own cap and recorded
+separately. Host/view/ui limits are not a combined allowance. Regeneration
+rejects a report if any measured directory reaches its cap.

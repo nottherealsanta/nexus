@@ -292,7 +292,7 @@ def test_unknown_declarations_are_diagnosed_but_do_not_remove_the_skill(tmp_path
     assert SkillDiagnosticCode.UNKNOWN_BUNDLE in codes
     # The declaration is retained verbatim; nothing was expanded.
     skill = mgr.require("demo")
-    assert skill.allowed_tools == ("Read", "Nope")
+    assert skill.allowed_tools == ("read", "Nope")
     assert skill.bundles == ("fs", "ghost")
 
 
@@ -620,7 +620,7 @@ def test_activation_for_skill_uses_the_declaration(tmp_path):
         bundle_tools={"fs": ["Read", "Write"]},
     )
     assert activation.active == frozenset({"Read", "Write"})
-    assert activation.unavailable == frozenset({"Nope"})
+    assert activation.unavailable == frozenset({"Nope", "read"})
 
 
 # ---------------------------------------------------------------------------

@@ -17,7 +17,7 @@ from typing import Any, TextIO
 
 from ..jsonl import JsonlWriter
 from .approve import Approver
-from .client import Client, ClientError
+from ...client.protocol import Client, ClientError
 from .render import TERMINAL_EVENTS, TerminalRenderer, exit_code
 from .stream import answer_permission, turn_events
 

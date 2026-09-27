@@ -25,8 +25,12 @@ UI_ROOT = REPO_ROOT / "nexus" / "ui"
 CLIENT_FILES = sorted((UI_ROOT / "cli").rglob("*.py")) + [UI_ROOT / "jsonl.py", UI_ROOT / "tui" / "app.py"]
 TUI_FILES = sorted((UI_ROOT / "tui").rglob("*.py")) + [UI_ROOT / "turn_stream.py"]
 
-#: ``nexus`` packages the UI client is allowed to reach.
-ALLOWED_NEXUS_PREFIXES = ("nexus.host", "nexus.view", "nexus.events", "nexus.ui")
+#: Host protocol clients and pure terminal projections sit beside (not inside)
+#: the Textual/CLI package and are valid UI dependencies.
+ALLOWED_NEXUS_PREFIXES = (
+    "nexus.host", "nexus.view", "nexus.events", "nexus.ui",
+    "nexus.client", "nexus.host_support", "nexus.ui_support",
+)
 
 #: Only the first-class TUI is permitted to import these presentation packages.
 ALLOWED_THIRD_PARTY: tuple[str, ...] = ("textual_diff_view",)
@@ -48,7 +52,7 @@ FORBIDDEN_PREFIXES = (
     "nexus.hooks",
     "nexus.ext",
     "nexus.config",
-    "nexus.cli",
+    "nexus.cli.",
 )
 
 

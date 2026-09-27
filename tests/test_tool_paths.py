@@ -220,3 +220,146 @@ def test_workspace_root_is_canonicalized(tmp_path):
     resolved = guard.resolve("file.txt", for_write=True)
     assert resolved.absolute == real / "file.txt"
     assert resolved.display == "file.txt"
+
+
+def test_worktree_rebases_default_write_root_to_child_only(tmp_path):
+    parent = tmp_path / "parent"
+    child = tmp_path / "child"
+    parent.mkdir()
+    child.mkdir()
+    parent_guard = make_guard(parent)
+
+    child_guard = parent_guard.for_worktree(child)
+
+    assert child_guard.resolve("new.txt", for_write=True).absolute == child / "new.txt"
+    with pytest.raises(PathSecurityError) as excinfo:
+        child_guard.resolve(str(parent / "parent-file.txt"), for_write=True)
+    assert excinfo.value.code == "write_root"
+    # Rebasing returns a separate guard and does not mutate the parent's policy.
+    assert parent_guard.resolve("parent-file.txt", for_write=True).absolute == (
+        parent / "parent-file.txt"
+    )
+
+
+def test_worktree_rebases_relative_subdirectory_and_nested_worktree(tmp_path):
+    parent = tmp_path / "parent"
+    child = parent / "worktrees" / "child"
+    nested = child / "nested"
+    child.mkdir(parents=True)
+    nested.mkdir()
+    guard = make_guard(parent, write_roots=["src"]).for_worktree(child)
+
+    assert guard.resolve("src/new.py", for_write=True).absolute == child / "src" / "new.py"
+    with pytest.raises(PathSecurityError):
+        guard.resolve("other/new.py", for_write=True)
+
+    nested_guard = guard.for_worktree(nested)
+    assert nested_guard.resolve("src/new.py", for_write=True).absolute == (
+        nested / "src" / "new.py"
+    )
+    with pytest.raises(PathSecurityError):
+        nested_guard.resolve(str(child / "src" / "parent.py"), for_write=True)
+
+
+def test_worktree_clips_absolute_write_roots_to_child(tmp_path):
+    parent = tmp_path / "parent"
+    child = tmp_path / "shared" / "child"
+    shared = tmp_path / "shared"
+    outside = tmp_path / "outside"
+    parent.mkdir()
+    child.mkdir(parents=True)
+    outside.mkdir()
+
+    # An absolute ancestor is narrowed to the child; disjoint authority is
+    # discarded rather than carried to the child guard.
+    narrowed = make_guard(
+        parent, write_roots=["./", str(shared), str(outside)]
+    ).for_worktree(child)
+    assert narrowed.resolve("new.txt", for_write=True).absolute == child / "new.txt"
+    with pytest.raises(PathSecurityError):
+        narrowed.resolve(str(outside / "new.txt"), for_write=True)
+
+    absolute_only = make_guard(parent, write_roots=[str(outside)]).for_worktree(child)
+    with pytest.raises(PathSecurityError) as excinfo:
+        absolute_only.resolve("new.txt", for_write=True)
+    assert excinfo.value.code == "write_root"
+
+
+def test_worktree_preserves_absolute_read_deny_and_blocks_symlink_escape(tmp_path):
+    parent = tmp_path / "parent"
+    child = tmp_path / "child"
+    secret = tmp_path / "secret"
+    outside = tmp_path / "outside"
+    parent.mkdir()
+    child.mkdir()
+    secret.mkdir()
+    outside.mkdir()
+    (secret / "key").write_text("secret")
+    (child / "secret-link").symlink_to(secret, target_is_directory=True)
+    (child / "escape").symlink_to(outside, target_is_directory=True)
+
+    guard = make_guard(
+        parent, read_denyroots=[str(secret)]
+    ).for_worktree(child)
+    assert str(secret) in {str(root) for root in guard.read_denyroots}
+    with pytest.raises(PathSecurityError) as denied:
+        guard.resolve("secret-link/key", for_write=False)
+    assert denied.value.code == "read_deny"
+    with pytest.raises(PathSecurityError) as escaped:
+        guard.resolve("escape/new.txt", for_write=True)
+    assert escaped.value.code == "write_root"
+
+
+def test_worktree_preserves_parent_and_rebases_relative_read_denyroots(tmp_path):
+    parent = tmp_path / "parent"
+    child = parent / "worktrees" / "child"
+    nested = child / "nested"
+    nested.mkdir(parents=True)
+    (parent / ".env").write_text("parent secret")
+    (child / ".env").write_text("child secret")
+    (nested / ".env").write_text("nested secret")
+
+    child_guard = make_guard(parent, read_denyroots=[".env"]).for_worktree(child)
+    for secret in (parent / ".env", child / ".env"):
+        with pytest.raises(PathSecurityError) as denied:
+            child_guard.resolve(str(secret), for_write=False)
+        assert denied.value.code == "read_deny"
+
+    nested_guard = child_guard.for_worktree(nested)
+    for secret in (parent / ".env", child / ".env", nested / ".env"):
+        with pytest.raises(PathSecurityError) as denied:
+            nested_guard.resolve(str(secret), for_write=False)
+        assert denied.value.code == "read_deny"
+
+
+def test_worktree_relative_read_denyroot_blocks_symlink_aliases(tmp_path):
+    parent = tmp_path / "parent"
+    child = tmp_path / "child"
+    parent.mkdir()
+    child.mkdir()
+    parent_secret = parent / ".env"
+    child_secret = child / ".env"
+    parent_secret.write_text("parent secret")
+    child_secret.write_text("child secret")
+    (child / "parent-secret").symlink_to(parent_secret)
+    (child / "child-secret").symlink_to(child_secret)
+    guard = make_guard(parent, read_denyroots=[".env"]).for_worktree(child)
+
+    for alias in ("parent-secret", "child-secret"):
+        with pytest.raises(PathSecurityError) as denied:
+            guard.resolve(alias, for_write=False)
+        assert denied.value.code == "read_deny"
+
+
+def test_worktree_child_cannot_be_parent_or_ancestor(tmp_path):
+    parent = tmp_path / "parent"
+    child = parent / "child"
+    child.mkdir(parents=True)
+    guard = make_guard(parent)
+
+    with pytest.raises(PathSecurityError) as same:
+        guard.for_worktree(parent)
+    assert same.value.code == "worktree_workspace"
+    with pytest.raises(PathSecurityError) as ancestor:
+        guard.for_worktree(tmp_path)
+    assert ancestor.value.code == "worktree_workspace"

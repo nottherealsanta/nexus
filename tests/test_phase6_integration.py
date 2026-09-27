@@ -20,6 +20,7 @@ Providers are scripts; agents and hooks are real hot-loaded files.
 from __future__ import annotations
 
 import asyncio
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -34,6 +35,7 @@ from nexus.config.schema import (
     PermissionsSection,
     ToolsSection,
 )
+from nexus.host import HostFacade
 from nexus.model.message import Message, Text, ToolResult
 from nexus.model.providers.scripted import (
     ScriptedProvider,
@@ -44,7 +46,6 @@ from nexus.model.providers.scripted import (
 from nexus.model.registry import Cost
 from nexus.model.stream import Usage
 from nexus.runtime import Runtime
-from nexus.host import HostFacade
 from nexus.view import fold
 
 # ---------------------------------------------------------------------------
@@ -56,6 +57,7 @@ def make_config(
     *,
     profile: str = "coding",
     mode: str = "allow",
+    allow: list[str] | None = None,
     write_roots: list[str] | None = None,
     max_tier: str = "medium",
     max_depth: int = 3,
@@ -76,6 +78,7 @@ def make_config(
             agent=AgentSection(profile=profile),
             permissions=PermissionsSection(
                 mode=mode,
+                allow=list(allow or []),
                 on_unattended="allow",
                 write_roots=list(write_roots) if write_roots else ["./"],
             ),
@@ -149,6 +152,31 @@ def write_agent(tmp_path: Path, name: str, *, description: str, body: str = "bod
         f"---\nname: {name}\ndescription: {description}\n---\n{body}\n",
         encoding="utf-8",
     )
+
+
+def git(path: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=path,
+        check=True,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    return result.stdout.strip()
+
+
+def clean_git_repo(path: Path) -> Path:
+    path.mkdir()
+    git(path, "init", "-q")
+    git(path, "config", "user.name", "Nexus Worktree Test")
+    git(path, "config", "user.email", "nexus-worktree@example.invalid")
+    (path / ".gitignore").write_text(".nexus/\n", encoding="utf-8")
+    (path / "tracked.txt").write_text("parent base\n", encoding="utf-8")
+    git(path, "add", ".gitignore", "tracked.txt")
+    git(path, "commit", "-qm", "initial")
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +303,326 @@ async def test_named_task_runs_a_child_and_replays_nested_events(tmp_path):
 
     # A real, replayable child session was written under the agents directory.
     assert (tmp_path / ".nexus" / "sessions" / "agents").is_dir()
+    await runtime.aclose()
+
+
+async def test_normal_child_retains_parent_bash_authority(tmp_path):
+    target = tmp_path / "normal-child-shell.txt"
+    provider = ScriptedProvider(
+        tool_response(("spawn", "subagent", {"prompt": "run the requested shell"})),
+        tool_response(
+            ("shell", "bash", {"command": f"printf normal > {target}"}),
+        ),
+        text_response("child done"),
+        text_response("parent done"),
+    )
+    runtime = make_runtime(tmp_path, provider)
+
+    events = await asyncio.wait_for(drain(runtime.session("normal-child-shell")), timeout=20)
+
+    spawn = next(event.data for event in events if event.type == "agent.spawned")
+    assert "bash" in spawn["tools"]
+    assert target.read_text(encoding="utf-8") == "normal"
+    await runtime.aclose()
+
+
+async def test_worktree_child_runtime_is_workspace_scoped_and_logs_in_parent(
+    tmp_path,
+):
+    parent = clean_git_repo(tmp_path / "repository")
+    provider = ScriptedProvider(
+        tool_response(
+            (
+                "spawn",
+                "subagent",
+                {"prompt": "work in this isolated checkout", "worktree": True},
+            )
+        ),
+        tool_response(
+            (
+                "nested",
+                "subagent",
+                {"prompt": "inspect without changing anything", "subagent_type": "explore"},
+            )
+        ),
+        text_response("nested read-only findings"),
+        tool_response(
+            (
+                "parent-bash-escape",
+                "bash",
+                {"command": f"echo escaped > {parent / 'parent-bash-write.txt'}"},
+            ),
+            (
+                "write",
+                "write",
+                {"path": "child-output.txt", "content": "from child"},
+            ),
+            (
+                "parent-escape",
+                "write",
+                {"path": str(parent / "parent-write.txt"), "content": "escape"},
+            ),
+        ),
+        text_response("child finished"),
+        text_response("parent finished"),
+    )
+    runtime = Runtime(
+        parent,
+        config=make_config(mode="allow", allow=["Task(*)"]),
+        providers={"scripted": provider},
+    )
+    session = runtime.session("worktree-root").mark_attended(True)
+    await session.start_turn("go")
+    await wait_for(
+        lambda: any(event.type == "permission.requested" for event in session.events)
+    )
+    permission = next(
+        event.data for event in session.events if event.type == "permission.requested"
+    )
+    assert permission["key"].endswith(":worktree")
+    assert permission["default_rule"] != "subagent"
+    session.resolve_permission(permission["id"], "allow_once")
+    await session.wait_idle()
+    events = list(session.events)
+
+    spawned = next(event.data for event in events if event.type == "agent.spawned")
+    worktree = spawned["worktree"]
+    checkout = Path(worktree["path"])
+    assert not (parent / "parent-bash-write.txt").exists()
+    assert any(
+        event.type == "tool.failed"
+        and event.data.get("call_id") == "parent-bash-escape"
+        and event.data.get("executed") is False
+        for event in events
+    )
+    agent_spawns = [event.data for event in events if event.type == "agent.spawned"]
+    assert len(agent_spawns) == 2
+    nested_spawn = next(data for data in agent_spawns if data["depth"] == 2)
+    assert nested_spawn["worktree"] is None
+    assert not (set(nested_spawn["tools"]) & {"write", "edit", "multiedit", "bash"})
+    assert (checkout / "child-output.txt").read_text(encoding="utf-8") == "from child"
+    assert not (parent / "parent-write.txt").exists()
+    assert (parent / "tracked.txt").read_text(encoding="utf-8") == "parent base\n"
+    assert git(parent, "status", "--porcelain", "--untracked-files=all") == ""
+    child_session_log = next(
+        (parent / ".nexus" / "sessions" / "agents").glob("*.jsonl")
+    ).read_text(encoding="utf-8")
+    assert str(checkout) in child_session_log
+    assert (parent / ".nexus" / "sessions" / "agents").is_dir()
+    assert not (checkout / ".nexus" / "sessions" / "agents").exists()
+    from nexus.agents.worktrees import WorktreeService
+
+    daemon = parent.parent / f".nexus-worktrees-{parent.name}"
+    record = WorktreeService().inspect("worktree-root/sub/1", root=daemon)
+    assert record.path == checkout
+    await runtime.aclose()
+
+
+async def test_worktree_child_catalog_cannot_run_shell_or_custom_writer(tmp_path):
+    parent = clean_git_repo(tmp_path / "repository")
+    extension_dir = parent / ".nexus" / "tools"
+    extension_dir.mkdir(parents=True)
+    (extension_dir / "custom_writer.py").write_text(
+        "from pathlib import Path\n"
+        "from nexus.tools.spec import ToolExecutionResult, ToolSpec\n"
+        "SPEC = ToolSpec(name='CustomWriter', description='custom', "
+        "input_schema={'type':'object','properties':{},'additionalProperties':False}, "
+        "bundle='fs')\n"
+        "async def run(args, ctx):\n"
+        f"    Path({str(parent / 'custom-parent-write.txt')!r}).write_text('x')\n"
+        "    return ToolExecutionResult.text('ran')\n",
+        encoding="utf-8",
+    )
+    provider = ScriptedProvider(
+        tool_response(
+            ("spawn", "subagent", {"prompt": "try unreviewed tools", "worktree": True})
+        ),
+        tool_response(
+            (
+                "bash-escape",
+                "bash",
+                {"command": f"echo escaped > {parent / 'parent-shell-write.txt'}"},
+            ),
+            ("custom-escape", "CustomWriter", {}),
+            ("nested-spawn", "subagent", {"prompt": "inherit safety ceiling"}),
+        ),
+        tool_response(
+            (
+                "grandchild-bash",
+                "bash",
+                {"command": f"echo escaped > {parent / 'grandchild-shell-write.txt'}"},
+            ),
+            ("grandchild-custom", "CustomWriter", {}),
+        ),
+        text_response("child done"),
+        text_response("child done"),
+        text_response("parent done"),
+    )
+    runtime = Runtime(
+        parent,
+        config=make_config(mode="allow", allow=["Task(*)"]),
+        providers={"scripted": provider},
+    )
+    session = runtime.session("catalog-worktree").mark_attended(True)
+
+    await session.start_turn("go")
+    await wait_for(
+        lambda: any(event.type == "permission.requested" for event in session.events)
+    )
+    permission = next(
+        event.data for event in session.events if event.type == "permission.requested"
+    )
+    assert permission["key"].endswith(":worktree")
+    session.resolve_permission(permission["id"], "allow_once")
+    await session.wait_idle()
+    events = list(session.events)
+
+    spawns = [event.data for event in events if event.type == "agent.spawned"]
+    spawn = next(data for data in spawns if data["depth"] == 1)
+    advertised = set(spawn["tools"])
+    assert "bash" not in advertised
+    assert "bash_output" not in advertised
+    assert "kill_shell" not in advertised
+    assert "CustomWriter" not in advertised
+    nested = next(data for data in spawns if data["depth"] == 2)
+    assert nested["worktree"] is None
+    assert "bash" not in nested["tools"]
+    assert "CustomWriter" not in nested["tools"]
+    assert not (parent / "parent-shell-write.txt").exists()
+    assert not (parent / "grandchild-shell-write.txt").exists()
+    assert not (parent / "custom-parent-write.txt").exists()
+    assert git(parent, "status", "--porcelain", "--untracked-files=all") == ""
+    failed_calls = {
+        event.data.get("call_id")
+        for event in events
+        if event.type == "tool.failed" and event.data.get("executed") is False
+    }
+    assert {
+        "bash-escape", "custom-escape", "grandchild-bash", "grandchild-custom"
+    } <= failed_calls
+    await runtime.aclose()
+
+
+async def test_worktree_child_clips_parent_relative_write_root(tmp_path):
+    from nexus.agents.worktrees import WorktreeService
+
+    parent = clean_git_repo(tmp_path / "repository")
+    outside = parent.parent / "outside.txt"
+    config = make_config(write_roots=["../"])
+    runtime = Runtime(
+        parent,
+        config=config,
+        providers={"scripted": ScriptedProvider(text_response("unused"))},
+    )
+    child = WorktreeService().create(
+        parent,
+        "guard-check",
+        root=parent.parent / f".nexus-worktrees-{parent.name}",
+    )
+    from nexus.tools.builtin.write import run as run_write
+    from nexus.tools.permissions import PathGuard
+    from nexus.tools.spec import ToolContext
+
+    child_guard = PathGuard(parent, write_roots=("../",)).for_worktree(
+        child.path
+    )
+    child_config = runtime._child_workspace_config(config, child_guard)
+    result = await run_write(
+        {"path": str(outside), "content": "no"},
+        ToolContext(
+            workspace=child.path,
+            session_id="guard-check",
+            turn_id="guard-check",
+            config=child_config,
+        ),
+    )
+    assert result.is_error
+    assert not outside.exists()
+    await runtime.aclose()
+
+
+async def test_worktree_child_cancellation_retains_checkout_changes(tmp_path):
+    parent = clean_git_repo(tmp_path / "repository")
+    provider = ScriptedProvider(
+        tool_response(
+            (
+                "spawn",
+                "subagent",
+                {"prompt": "write then wait", "worktree": True},
+            )
+        ),
+        tool_response(
+            (
+                "write-child",
+                "write",
+                {"path": "retained.txt", "content": "retain on cancel"},
+            )
+        ),
+        [Wait()],
+    )
+    runtime = Runtime(parent, config=make_config(), providers={"scripted": provider})
+    session = runtime.session("worktree-cancel").mark_attended(True)
+    await session.start_turn("go")
+    await wait_for(lambda: bool(session.pending_permissions))
+    permission_id = session.pending_permissions[0]
+    assert session.resolve_permission(permission_id, "allow_once") is True
+
+    async def wait_for_retained_write():
+        deadline = asyncio.get_running_loop().time() + 10
+        while asyncio.get_running_loop().time() < deadline:
+            spawned = next(
+                (event.data for event in session.events if event.type == "agent.spawned"),
+                None,
+            )
+            if spawned is not None:
+                checkout = Path(spawned["worktree"]["path"])
+                if (checkout / "retained.txt").exists():
+                    return checkout
+            await asyncio.sleep(0.01)
+        raise TimeoutError("child did not write into its worktree")
+
+    checkout = await asyncio.wait_for(wait_for_retained_write(), timeout=12)
+    session.cancel("stop child")
+    await asyncio.wait_for(session.wait_idle(), timeout=12)
+
+    assert (checkout / "retained.txt").read_text(encoding="utf-8") == "retain on cancel"
+    assert git(checkout, "status", "--porcelain", "--untracked-files=all")
+    assert git(parent, "status", "--porcelain", "--untracked-files=all") == ""
+    await runtime.aclose()
+
+
+@pytest.mark.parametrize("repository_kind", ["dirty", "non_git"])
+async def test_runtime_worktree_spawn_refuses_dirty_or_non_git_parent(
+    tmp_path, repository_kind
+):
+    if repository_kind == "dirty":
+        parent = clean_git_repo(tmp_path / "repository")
+        (parent / "tracked.txt").write_text("preserve dirty data\n", encoding="utf-8")
+        before = git(parent, "status", "--porcelain", "--untracked-files=all")
+    else:
+        parent = tmp_path / "not-a-repository"
+        parent.mkdir()
+
+    provider = ScriptedProvider(
+        tool_response(
+            (
+                "spawn",
+                "subagent",
+                {"prompt": "must be refused", "worktree": True},
+            )
+        ),
+        text_response("parent finished"),
+    )
+    runtime = Runtime(parent, config=make_config(), providers={"scripted": provider})
+    events = await asyncio.wait_for(drain(runtime.session("refusal")), timeout=15)
+
+    spawned = [event for event in events if event.type == "agent.spawned"]
+    assert spawned == []
+    if repository_kind == "dirty":
+        assert git(parent, "status", "--porcelain", "--untracked-files=all") == before
+        assert (parent / "tracked.txt").read_text(encoding="utf-8") == "preserve dirty data\n"
+    else:
+        assert not tuple(parent.glob(".nexus-worktrees-*"))
     await runtime.aclose()
 
 
@@ -592,7 +940,7 @@ async def test_research_parent_cannot_write_through_task(tmp_path):
 
     result = tool_result_for(session, "t1")
     assert result is not None and result.is_error is False
-    assert "Write" in result.content[0].text
+    assert "write" in result.content[0].text
     assert not (tmp_path / "written.txt").exists()
     await runtime.aclose()
 
@@ -612,8 +960,8 @@ async def test_explore_and_planner_have_no_shell_or_write_path(tmp_path):
         ]
         assert spawned, role
         tools = set(spawned[-1].data["tools"])
-        assert not (tools & {"Write", "Edit", "MultiEdit", "Bash"}), role
-        assert tools <= {"Read", "Glob", "Grep", "LS"}, role
+        assert not (tools & {"write", "edit", "multiedit", "bash"}), role
+        assert tools <= {"read", "glob", "grep", "todowrite", "skill", "subagent"}, role
         await runtime.aclose()
 
 

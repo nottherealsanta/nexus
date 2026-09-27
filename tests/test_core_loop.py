@@ -201,6 +201,8 @@ async def test_text_only_event_and_message_ordering():
     assert types.index("text") < types.index("model.usage")
     assert types.index("model.usage") < types.index("model.stopped")
     assert types[-1] == "turn.completed"
+    model_started = next(record.event for record in sink.events if record.event.type == "model.started")
+    assert model_started.data["reasoning_effort"] is None
     _assert_single_terminal(sink, "turn.completed")
 
     for index, record in enumerate(sink.events, start=1):
@@ -1007,4 +1009,3 @@ async def test_terminal_emit_failure_still_releases_supplied_lease():
 
     assert lease.released
     assert lease.release_count >= 1
-

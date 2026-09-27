@@ -87,6 +87,11 @@ _V2_NUMERIC = {
     "context.limits.environment": int,
     "context.limits.attachments": int,
     "tools.bash_timeout_s": float,
+    "tools.web.search_timeout_s": float,
+    "tools.web.fetch_timeout_s": float,
+    "tools.web.max_results": int,
+    "tools.web.max_query_length": int,
+    "tools.web.max_output_bytes": int,
     "tools.max_result_tokens": int,
     "tools.max_parallel": int,
     "ext.watch_interval_ms": int,
@@ -109,6 +114,7 @@ _V2_BOOL = frozenset(
         "hooks.enabled",
         "mcp.enabled",
         "models.offline",
+        "tools.web.fetch_enabled",
     }
 )
 

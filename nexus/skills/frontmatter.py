@@ -52,6 +52,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..tools.names import canonical_tool_name, canonical_tool_names
 from .errors import SkillOversizeError, SkillParseError
 
 __all__ = [
@@ -373,6 +374,9 @@ def _parse_raw(raw: bytes) -> ParsedFrontmatter:
         )
     else:
         allowed_tools = ()
+    allowed_tools, _collisions = canonical_tool_names(
+        canonical_tool_name(name) for name in allowed_tools
+    )
     if "bundles" in fields:
         bundles = _parse_list(fields["bundles"], "bundles", _BUNDLE_RE, "bundle name")
     else:

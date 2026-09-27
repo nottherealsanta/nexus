@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 
-from ..cli.client import Client
+from ...client.protocol import Client
 from .app import NexusTextualApp
 
 

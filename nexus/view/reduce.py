@@ -10,6 +10,8 @@ nested conversation.
 """
 from __future__ import annotations
 
+import json
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
@@ -27,6 +29,7 @@ from .model import (
     HookView,
     McpView,
     MessageView,
+    PermissionTargetView,
     PermissionView,
     PresenceView,
     QueuedInputView,
@@ -71,7 +74,19 @@ def _key_int(data: Mapping[str, Any], key: str) -> int | None:
     return _opt_int(data.get(key))
 
 def _opt_float(value: object) -> float | None:
-    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    try:
+        result = float(value)
+    except (OverflowError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+def _elapsed_ms(start: float | None, end: float | None) -> int | None:
+    if start is None or end is None or end < start:
+        return None
+    return round((end - start) * 1000)
 
 def _key_map(data: Mapping[str, Any], key: str) -> dict[str, Any] | None:
     value = data.get(key)
@@ -265,6 +280,58 @@ def _expire_pending(state: ConversationView, ids: set[str]) -> ConversationView:
     ]
     return replace(state, permissions=permissions)
 
+
+_MAX_PERMISSION_TARGETS = 64
+_MAX_PERMISSION_TARGET_REQUEST_CHARS = 65_536
+_MAX_PERMISSION_TARGET_ROLE = 64
+_MAX_PERMISSION_TARGET_PATH = 4096
+_MAX_PERMISSION_TARGET_REASON = 512
+
+
+def _permission_targets(value: object) -> list[PermissionTargetView] | None:
+    """Copy only bounded, well-formed target display fields from a request."""
+    if type(value) is not list:
+        return None
+    if not 0 < len(value) <= _MAX_PERMISSION_TARGETS:
+        return []
+    targets: list[PermissionTargetView] = []
+    for item in value:
+        if type(item) is not dict:
+            return []
+        role, path, reason = item.get("role"), item.get("path"), item.get("reason")
+        if not all(type(part) is str for part in (role, path, reason)):
+            return []
+        if (
+            not role
+            or not path
+            or len(role) > _MAX_PERMISSION_TARGET_ROLE
+            or len(path) > _MAX_PERMISSION_TARGET_PATH
+            or len(reason) > _MAX_PERMISSION_TARGET_REASON
+        ):
+            return []
+        try:
+            role.encode("utf-8", errors="strict")
+            path.encode("utf-8", errors="strict")
+            reason.encode("utf-8", errors="strict")
+        except UnicodeEncodeError:
+            return []
+        targets.append(PermissionTargetView(role=role, path=path, reason=reason))
+    rows = [
+        {"role": target.role, "path": target.path, "reason": target.reason}
+        for target in targets
+    ]
+    preview = "\n".join(
+        f"{target.role}: {target.path} — {target.reason}" for target in targets
+    )
+    payload_size = len(json.dumps(
+        {"targets": rows, "preview": preview},
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8"))
+    if payload_size > _MAX_PERMISSION_TARGET_REQUEST_CHARS:
+        return []
+    return targets
+
 def _recompute_phase(state: ConversationView) -> ConversationView:
     if state.closed:
         return state if state.phase == "closed" else replace(state, phase="closed")
@@ -294,9 +361,21 @@ def _on_turn_started(state: ConversationView, event: Event, data: Mapping[str, A
         turn = replace(
             turn, phase="active", limits=limits or turn.limits,
             started_ts=turn.started_ts or event.ts, updated_ts=event.ts,
+            agent=(
+                jsonable(dict(data["agent"])) if turn.agent is None else turn.agent
+            ) if isinstance(data.get("agent"), Mapping) else turn.agent,
         )
         return _put(state, index, turn)
-    turn = TurnView(id=turn_id, index=len(state.turns), phase="active", limits=limits, started_ts=event.ts, updated_ts=event.ts)
+    agent = data.get("agent")
+    turn = TurnView(
+        id=turn_id,
+        index=len(state.turns),
+        phase="active",
+        limits=limits,
+        started_ts=event.ts,
+        updated_ts=event.ts,
+        agent=jsonable(dict(agent)) if isinstance(agent, Mapping) else None,
+    )
     return _append_turn(state, turn)
 
 def _on_turn_terminal(
@@ -386,7 +465,15 @@ def _on_model_started(state: ConversationView, event: Event, data: Mapping[str, 
                 attempt=attempt,
             )
         )
-    turn = replace(turn, messages=messages, iteration=iteration, updated_ts=event.ts)
+    changes: dict[str, Any] = {
+        "messages": messages,
+        "iteration": iteration,
+        "updated_ts": event.ts,
+    }
+    effort = _as_str(data.get("reasoning_effort"))
+    if effort is not None:
+        changes["reasoning_effort"] = effort
+    turn = replace(turn, **changes)
     model_info = {
         "iteration": iteration,
         "provider": provider,
@@ -405,7 +492,11 @@ def _on_text_delta(state: ConversationView, event: Event, data: Mapping[str, Any
     # ``model.started`` may create an empty placeholder before tool activity.
     # The transcript order belongs to the first visible text, not that placeholder.
     event_seq = event.seq if not message.text and _text(data) else message.event_seq
-    turn = _with_message(turn, message_index, replace(message, blocks=blocks, event_seq=event_seq))
+    turn = _with_message(
+        turn,
+        message_index,
+        replace(message, blocks=blocks, event_seq=event_seq),
+    )
     return _put(state, index, replace(turn, updated_ts=event.ts))
 
 def _on_text(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
@@ -414,8 +505,20 @@ def _on_text(state: ConversationView, event: Event, data: Mapping[str, Any]) -> 
     message = turn.messages[message_index]
     blocks = finalize_text(message.blocks, _text(data))
     event_seq = event.seq if not message.text and _text(data) else message.event_seq
-    turn = _with_message(turn, message_index, replace(message, blocks=blocks, event_seq=event_seq))
-    return _put(state, index, replace(turn, updated_ts=event.ts))
+    timestamp = _opt_float(event.ts)
+    turn = _with_message(
+        turn,
+        message_index,
+        replace(message, blocks=blocks, event_seq=event_seq, ts=timestamp),
+    )
+    assistant_ts = timestamp
+    turn = replace(
+        turn,
+        assistant_ts=assistant_ts,
+        elapsed_ms=_elapsed_ms(turn.user_ts, assistant_ts),
+        updated_ts=event.ts,
+    )
+    return _put(state, index, turn)
 
 def _on_thinking_delta(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
     state, index = _turn_for(state, event)
@@ -432,8 +535,23 @@ def _on_thinking(state: ConversationView, event: Event, data: Mapping[str, Any])
     blocks = finalize_thinking(
         message.blocks, _text(data), _as_str(data.get("signature"))
     )
-    turn = _with_message(turn, message_index, replace(message, blocks=blocks))
-    return _put(state, index, replace(turn, updated_ts=event.ts))
+    timestamp = _opt_float(event.ts)
+    turn = _with_message(
+        turn,
+        message_index,
+        replace(message, blocks=blocks, ts=timestamp),
+    )
+    assistant_ts = timestamp if timestamp is not None else turn.assistant_ts
+    return _put(
+        state,
+        index,
+        replace(
+            turn,
+            assistant_ts=assistant_ts,
+            elapsed_ms=_elapsed_ms(turn.user_ts, assistant_ts),
+            updated_ts=event.ts,
+        ),
+    )
 
 def _on_model_usage(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
     state, index = _turn_for(state, event)
@@ -445,11 +563,23 @@ def _on_model_stopped(state: ConversationView, event: Event, data: Mapping[str, 
     state, index = _turn_for(state, event)
     turn = state.turns[index]
     messages = list(turn.messages)
+    assistant_ts = _opt_float(event.ts)
     if messages and messages[-1].role == "assistant" and not messages[-1].done:
+        assistant_ts = messages[-1].ts if messages[-1].ts is not None else assistant_ts
         messages[-1] = replace(
-            messages[-1], done=True, stop_reason=_as_str(data.get("stop_reason"))
+            messages[-1],
+            done=True,
+            stop_reason=_as_str(data.get("stop_reason")),
+            ts=assistant_ts,
         )
-    turn = replace(turn, messages=messages, updated_ts=event.ts)
+    elapsed = _elapsed_ms(turn.user_ts, assistant_ts)
+    turn = replace(
+        turn,
+        messages=messages,
+        assistant_ts=assistant_ts,
+        elapsed_ms=elapsed,
+        updated_ts=event.ts,
+    )
     return _put(state, index, turn)
 
 def _on_model_retrying(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
@@ -645,6 +775,7 @@ def _permission_view(data: Mapping[str, Any], status: str, *, ts: float | None =
         persistence_available=bool(data.get("persistence_available", True)), status=status,
         decision=_as_str(data.get("decision")), scope=_as_str(data.get("scope")),
         grant=jsonable(grant) if grant is not None else None, ts=ts,
+        targets=_permission_targets(data.get("targets")),
     )
 
 def _on_permission_requested(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
@@ -758,15 +889,82 @@ def _on_presence(state: ConversationView, event: Event, data: Mapping[str, Any])
         attended = viewers > 0
     return replace(state, presence=PresenceView(viewers=viewers, attended=attended))
 
+def _user_message_id(queued_id: str, event: Event) -> str:
+    """Stable id linking an input-submitted user message to its queue entry."""
+    if queued_id:
+        return f"message:input:{queued_id}"
+    return event.id or f"message@{event.seq}"
+
+def _user_blocks(content: object) -> list[BlockView]:
+    if not isinstance(content, Sequence) or isinstance(content, str):
+        return []
+    text = _content_text(content)
+    return [BlockView(kind="text", text=text, finalized=True)] if text else []
+
 def _on_input(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
     queue = list(state.input_queue)
+    if event.type == "input.started":
+        input_id = _as_str(data.get("input_id")) or event.id
+        message_id = f"message:input:{input_id}"
+        state, index = _turn_for(state, event)
+        turn = state.turns[index]
+        if any(message.id == message_id for message in turn.messages):
+            return state
+        content = jsonable(data.get("content")) if data.get("content") is not None else []
+        message = MessageView(
+            id=message_id,
+            event_seq=event.seq,
+            role="user",
+            blocks=_user_blocks(content),
+            iteration=turn.iteration,
+            done=True,
+        )
+        user_ts = _opt_float(event.ts)
+        return _put(
+            state,
+            index,
+            replace(
+                turn,
+                messages=[message, *turn.messages],
+                user_ts=turn.user_ts if turn.user_ts is not None else user_ts,
+                elapsed_ms=_elapsed_ms(
+                    turn.user_ts if turn.user_ts is not None else user_ts,
+                    turn.assistant_ts,
+                ),
+                updated_ts=event.ts,
+            ),
+        )
     queued_id = _as_str(data.get("queued_id")) or ""
     if event.type == "input.queued":
-        content = data.get("content")
+        content = jsonable(data.get("content")) if data.get("content") is not None else []
+        # A live follower can observe ``input.consumed`` before its matching
+        # ``input.queued`` (the turn starts from the cursor first). That earlier
+        # event already removed the queue entry and opened the user message, so
+        # this late queued event must backfill it rather than re-enqueue.
+        message_id = _user_message_id(queued_id, event)
+        if queued_id and any(item.queued_id == queued_id for item in queue):
+            return state
+        for index, turn in enumerate(state.turns):
+            for position, message in enumerate(turn.messages):
+                if message.id != message_id:
+                    continue
+                if not message.text:
+                    state = _put(
+                        state,
+                        index,
+                        replace(
+                            turn,
+                            messages=_replace_at(
+                                turn.messages, position, replace(message, blocks=_user_blocks(content))
+                            ),
+                            updated_ts=event.ts,
+                        ),
+                    )
+                return state
         queue.append(
             QueuedInputView(
                 queued_id=queued_id,
-                content=jsonable(content) if content is not None else [],
+                content=content,
                 depth=_as_int(data.get("queue_depth"), len(queue) + 1),
             )
         )
@@ -775,27 +973,47 @@ def _on_input(state: ConversationView, event: Event, data: Mapping[str, Any]) ->
     pending_content = next(
         (item.content for item in queue if item.queued_id == queued_id), None
     )
-    queue = [item for item in queue if item.queued_id != queued_id]
-    state = replace(state, input_queue=queue)
+    state = replace(state, input_queue=[item for item in queue if item.queued_id != queued_id])
     if event.type == "input.consumed":
         turn_id = _as_str(data.get("turn"))
         if turn_id:
+            message_id = _user_message_id(queued_id, event)
+            if any(
+                message.id == message_id
+                for turn in state.turns
+                for message in turn.messages
+            ):
+                return state
             state, index = _turn_for(state, _with_turn(event, turn_id))
             turn = state.turns[index]
             message = MessageView(
-                id=event.id or f"message@{event.seq}",
+                id=message_id,
                 event_seq=event.seq,
                 role="user",
-                blocks=[],
+                blocks=_user_blocks(pending_content),
                 iteration=turn.iteration,
                 done=True,
             )
-            if pending_content:
-                message = replace(
-                    message,
-                    blocks=[BlockView(kind="text", text=_content_text(pending_content), finalized=True)],
-                )
-            state = _put(state, index, replace(turn, messages=[message, *turn.messages], updated_ts=event.ts))
+            state = _put(
+                state,
+                index,
+                replace(
+                    turn,
+                    messages=[message, *turn.messages],
+                    user_ts=(
+                        turn.user_ts
+                        if turn.user_ts is not None
+                        else _opt_float(event.ts)
+                    ),
+                    elapsed_ms=_elapsed_ms(
+                        turn.user_ts
+                        if turn.user_ts is not None
+                        else _opt_float(event.ts),
+                        turn.assistant_ts,
+                    ),
+                    updated_ts=event.ts,
+                ),
+            )
     return state
 
 def _content_text(content: Sequence[Any]) -> str:
@@ -1168,6 +1386,7 @@ _HANDLERS: dict[str, Any] = {
     "presence.left": _on_presence,
     "presence.changed": _on_presence,
     "input.queued": _on_input,
+    "input.started": _on_input,
     "input.consumed": _on_input,
     "input.dropped": _on_input,
     "ext.loaded": _on_ext,

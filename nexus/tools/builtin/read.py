@@ -9,7 +9,9 @@ contracts used are :mod:`nexus.tools.spec` and :mod:`nexus.tools.permissions`.
 from __future__ import annotations
 
 import os
+import stat as stat_module
 from collections.abc import Iterator
+from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
@@ -18,6 +20,7 @@ from ...config.schema import PermissionsSection
 from ...errors import ToolError
 from ..permissions import PathGuard, PathSecurityError, ResolvedPath
 from ..spec import ToolContext, ToolExecutionResult, ToolSpec
+from ._anydoc_client import AnyDocError, convert_document
 
 # ---------------------------------------------------------------------------
 # Shared helpers (private to nexus.tools.builtin)
@@ -30,6 +33,24 @@ _FALLBACK_MAX_RESULT_TOKENS = 25_000
 _HARD_MAX_RESULT_BYTES = 1_000_000
 #: Bytes inspected for a NUL to classify a file as binary.
 _BINARY_SNIFF_BYTES = 8192
+_MAX_DOCUMENT_BYTES = 16 * 1024 * 1024
+_DOCUMENT_EXTENSIONS = frozenset(
+    {
+        ".pdf", ".doc", ".docx", ".docm", ".ppt", ".pps", ".pot",
+        ".pptx", ".pptm", ".ppsx", ".ppsm", ".xls", ".xlsx",
+        ".xlsm", ".xlsb", ".odt", ".ods", ".odp", ".rtf", ".epub",
+    }
+)
+_TEXT_EXTENSIONS = frozenset(
+    {
+        ".txt", ".md", ".markdown", ".rst", ".py", ".pyi", ".js", ".jsx",
+        ".ts", ".tsx", ".json", ".jsonl", ".yaml", ".yml", ".toml",
+        ".ini", ".cfg", ".xml", ".html", ".htm", ".css", ".scss",
+        ".sql", ".sh", ".bash", ".zsh", ".go", ".rs", ".java", ".c",
+        ".h", ".cc", ".cpp", ".hpp", ".rb", ".php", ".swift", ".kt",
+        ".log", ".env", ".conf", ".properties",
+    }
+)
 
 
 def _permissions(ctx: ToolContext) -> PermissionsSection:
@@ -218,6 +239,127 @@ def _read_text_file(path: Path, max_bytes: int) -> str:
         raise ToolError(f"File is not valid UTF-8 text: {path}") from exc
 
 
+def _read_document_bytes(
+    guard: PathGuard,
+    raw: str,
+    resolved: ResolvedPath,
+    target: Path,
+    initial_stat: os.stat_result,
+) -> bytes:
+    """Read a regular, bounded document while checking path/inode stability."""
+    if not stat_module.S_ISREG(initial_stat.st_mode):
+        raise ToolError("Document path is not a regular file")
+    if initial_stat.st_size > _MAX_DOCUMENT_BYTES:
+        raise ToolError("Document exceeds the 16 MiB conversion limit")
+    try:
+        with target.open("rb") as handle:
+            opened = os.fstat(handle.fileno())
+            if (
+                not stat_module.S_ISREG(opened.st_mode)
+                or (opened.st_dev, opened.st_ino)
+                != (initial_stat.st_dev, initial_stat.st_ino)
+            ):
+                raise ToolError("Document changed while it was being opened")
+            if opened.st_size > _MAX_DOCUMENT_BYTES:
+                raise ToolError("Document exceeds the 16 MiB conversion limit")
+            data = handle.read(_MAX_DOCUMENT_BYTES + 1)
+            after = os.fstat(handle.fileno())
+        rechecked = guard.recheck(raw, for_write=False)
+        current = target.stat()
+    except ToolError:
+        raise
+    except (OSError, PathSecurityError) as exc:
+        raise ToolError("Document could not be read safely") from exc
+    if len(data) > _MAX_DOCUMENT_BYTES:
+        raise ToolError("Document exceeds the 16 MiB conversion limit")
+    identity = (opened.st_dev, opened.st_ino)
+    if (
+        (after.st_dev, after.st_ino) != identity
+        or (current.st_dev, current.st_ino) != identity
+        or after.st_size != opened.st_size
+        or after.st_size > _MAX_DOCUMENT_BYTES
+        or after.st_mtime_ns != opened.st_mtime_ns
+        or rechecked.absolute != resolved.absolute
+    ):
+        raise ToolError("Document changed while it was being read")
+    return data
+
+
+def _read_text_bytes(
+    guard: PathGuard,
+    raw: str,
+    resolved: ResolvedPath,
+    target: Path,
+    initial_stat: os.stat_result,
+    max_bytes: int,
+) -> bytes:
+    """Read bounded text through a verified regular-file descriptor."""
+    if not stat_module.S_ISREG(initial_stat.st_mode):
+        raise ToolError(f"Not a regular file: {resolved.display}")
+
+    flags = os.O_RDONLY
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    # A path swapped to a FIFO must not block between stat and fstat.
+    flags |= getattr(os, "O_NONBLOCK", 0)
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(target, flags)
+        opened = os.fstat(descriptor)
+        identity = (initial_stat.st_dev, initial_stat.st_ino)
+        if (
+            not stat_module.S_ISREG(opened.st_mode)
+            or (opened.st_dev, opened.st_ino) != identity
+            or opened.st_size != initial_stat.st_size
+        ):
+            raise ToolError("File changed while it was being opened")
+
+        chunks: list[bytes] = []
+        remaining = max_bytes + 1
+        while remaining:
+            chunk = os.read(descriptor, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        after = os.fstat(descriptor)
+    except ToolError:
+        raise
+    except OSError as exc:
+        raise ToolError(f"Cannot read {resolved.display}: {exc}") from exc
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+    try:
+        rechecked = guard.recheck(raw, for_write=False)
+        current = target.stat()
+    except (OSError, PathSecurityError) as exc:
+        raise ToolError("File changed while it was being read") from exc
+    if (
+        rechecked.absolute != resolved.absolute
+        or (after.st_dev, after.st_ino) != identity
+        or after.st_size != opened.st_size
+        or after.st_mtime_ns != opened.st_mtime_ns
+        or not stat_module.S_ISREG(current.st_mode)
+        or (current.st_dev, current.st_ino) != identity
+        or current.st_size != opened.st_size
+        or current.st_mtime_ns != opened.st_mtime_ns
+    ):
+        raise ToolError("File changed while it was being read")
+    return b"".join(chunks)
+
+
+@dataclass
+class _WalkStatus:
+    """Optional outcome metadata for callers that need to detect a capped walk."""
+
+    truncated: bool = False
+
+
 def _walk_entries(
     root: Path,
     *,
@@ -225,6 +367,7 @@ def _walk_entries(
     denied_roots: tuple[Path, ...],
     max_entries: int,
     ctx: ToolContext,
+    status: _WalkStatus | None = None,
 ) -> Iterator[tuple[Path, str, bool, bool]]:
     """Deterministic, bounded, symlink-safe walk under ``root``.
 
@@ -249,6 +392,8 @@ def _walk_entries(
                 continue
             visited += 1
             if visited > max_entries:
+                if status is not None:
+                    status.truncated = True
                 return
             path = Path(entry.path)
             try:
@@ -345,13 +490,17 @@ def _match_parts(rel_parts: list[str], pat_parts: list[str]) -> bool:
 _DEFAULT_LINES = 2000
 _HARD_MAX_LINES = 20_000
 _DEFAULT_MAX_BYTES = 256 * 1024
+_MAX_DIRECTORY_SCAN_ENTRIES = 10_000
+# Bound raw directory work independently from the public-entry cap so hidden
+# and denied names do not consume result capacity or make a walk unbounded.
+_MAX_DIRECTORY_SCAN_WORK = 100_000
 
 _READ_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "path": {
             "type": "string",
-            "description": "File to read, relative to the workspace.",
+            "description": "File or directory to read, relative to the workspace.",
         },
         "offset": {
             "type": "integer",
@@ -361,17 +510,22 @@ _READ_SCHEMA: dict[str, Any] = {
             "type": "integer",
             "description": f"Maximum lines to return (default {_DEFAULT_LINES}).",
         },
+        "csv_as_markdown": {
+            "type": "boolean",
+            "description": "Convert a CSV file to Markdown instead of reading its raw UTF-8 text.",
+        },
     },
     "required": ["path"],
     "additionalProperties": False,
 }
 
 SPEC = ToolSpec(
-    name="Read",
+    name="read",
     description=(
-        "Read a UTF-8 text file from the workspace, optionally starting at a "
-        "1-based line offset and limited to a number of lines. Binary files are "
-        "reported rather than decoded."
+        "Read a UTF-8 text file or list a workspace directory, optionally "
+        "starting at a 1-based line offset and limited to a number of lines. "
+        "Supported local documents are converted to Markdown; other binary "
+        "files are reported rather than decoded."
     ),
     input_schema=_READ_SCHEMA,
     bundle="fs",
@@ -389,6 +543,7 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
         raw = _require_str(args, "path")
         offset = _opt_int(args, "offset", 1)
         limit = _opt_int(args, "limit", _DEFAULT_LINES)
+        csv_as_markdown = _opt_bool(args, "csv_as_markdown")
     except ToolError as exc:
         return _error(str(exc))
     if offset < 1:
@@ -411,35 +566,192 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
         return _error(f"File not found: {resolved.display}")
     except OSError as exc:
         return _error(f"Cannot stat {resolved.display}: {exc}")
-    if target.is_dir():
-        return _error(f"Is a directory, not a file: {resolved.display}")
-
     max_bytes = _byte_budget(ctx, _DEFAULT_MAX_BYTES)
     _check_cancel(ctx)
-    try:
-        with target.open("rb") as handle:
-            data = handle.read(max_bytes + 1)
-    except OSError as exc:
-        return _error(f"Cannot read {resolved.display}: {exc}")
+    if stat_module.S_ISDIR(stat.st_mode):
+        if not resolved.inside_workspace:
+            return _error(f"Path is outside the workspace: {resolved.display}")
+        try:
+            rechecked = guard.recheck(raw, for_write=False)
+            current = target.stat()
+        except (OSError, PathSecurityError) as exc:
+            return _error(f"Directory changed before it could be listed: {exc}")
+        if (
+            rechecked.absolute != resolved.absolute
+            or not rechecked.inside_workspace
+            or not stat_module.S_ISDIR(current.st_mode)
+            or (current.st_dev, current.st_ino) != (stat.st_dev, stat.st_ino)
+        ):
+            return _error("Directory changed before it could be listed")
+        try:
+            with os.scandir(target) as iterator:
+                entries: list[tuple[str, str]] = []
+                total_entries = 0
+                scanned_entries = 0
+                scan_truncated = False
+                for entry in iterator:
+                    _check_cancel(ctx)
+                    scanned_entries += 1
+                    if scanned_entries > _MAX_DIRECTORY_SCAN_WORK:
+                        scan_truncated = True
+                        break
+                    if entry.name.startswith("."):
+                        # Keep hidden entries out of the public read result.
+                        continue
+                    entry_path = Path(entry.path)
+                    if _is_denied(entry_path, guard.read_denyroots):
+                        continue
+                    if entry.is_symlink():
+                        try:
+                            real = Path(os.path.realpath(entry.path))
+                        except OSError:
+                            continue
+                        if _is_denied(real, guard.read_denyroots):
+                            continue
+                        if not _within(real, guard.workspace):
+                            description = f"{entry.name}@"
+                        else:
+                            description = f"{entry.name}@"
+                    else:
+                        try:
+                            is_dir = entry.is_dir(follow_symlinks=False)
+                        except OSError:
+                            is_dir = False
+                        description = f"{entry.name}/" if is_dir else entry.name
+                    if total_entries >= _MAX_DIRECTORY_SCAN_ENTRIES:
+                        scan_truncated = True
+                        break
+                    total_entries += 1
+                    entries.append((entry.name, description))
+        except OSError as exc:
+            return _error(f"Cannot list {resolved.display}: {exc}")
 
-    byte_truncated = len(data) > max_bytes
-    if byte_truncated:
-        data = data[:max_bytes]
+        try:
+            rechecked = guard.recheck(raw, for_write=False)
+            current = target.stat()
+        except (OSError, PathSecurityError) as exc:
+            return _error(f"Directory changed while it was being listed: {exc}")
+        if (
+            rechecked.absolute != resolved.absolute
+            or not rechecked.inside_workspace
+            or not stat_module.S_ISDIR(current.st_mode)
+            or (current.st_dev, current.st_ino) != (stat.st_dev, stat.st_ino)
+        ):
+            return _error("Directory changed while it was being listed")
 
-    if b"\x00" in data[:_BINARY_SNIFF_BYTES]:
+        entries.sort(key=lambda entry: entry[0])
+        window = [
+            description
+            for _, description in entries[offset - 1 : offset - 1 + limit]
+        ]
+        shown, byte_truncated = _cap_lines(window, max_bytes)
+        last_shown = offset - 1 + len(shown)
+        line_truncated = last_shown < total_entries
+        truncated = scan_truncated or byte_truncated or line_truncated
+        body = "\n".join(shown)
+        context_note: str | None = None
+        if truncated:
+            exactness = "at least " if scan_truncated else ""
+            rerun = (
+                "list a narrower directory"
+                if scan_truncated
+                else f"re-run with offset={last_shown + 1} or list a narrower directory"
+            )
+            marker = (
+                f"[Read: truncated, showing {len(shown)} of {exactness}"
+                f"{total_entries} entries; {rerun}]"
+            )
+            body = f"{body}\n{marker}" if body else marker
+            context_note = marker
+        elif shown:
+            context_note = (
+                f"[Read {resolved.display}: {len(shown)} line(s) shown; re-run Read "
+                "to load the content again]"
+            )
+        display = f"Read {resolved.display}: {len(shown)} of "
+        display += f"{'at least ' if scan_truncated else ''}{total_entries} entries"
+        if truncated:
+            display += " (truncated)"
         return ToolExecutionResult.text(
-            f"Binary file not shown: {resolved.display} ({stat.st_size} bytes)",
-            is_error=True,
-            display=f"Read {resolved.display}: binary ({stat.st_size} bytes)",
+            body,
+            display=display,
+            context_note=context_note,
             metrics={
-                "binary": True,
-                "bytes": stat.st_size,
+                "lines": len(shown),
+                "total_lines": total_entries,
+                "total_lines_exact": not scan_truncated,
+                "bytes": len("\n".join(shown).encode("utf-8")),
+                "size": stat.st_size,
+                "truncated": truncated,
+                "replacements": 0,
                 "path": resolved.key,
             },
         )
 
-    text = data.decode("utf-8", errors="replace")
-    replacements = text.count("\ufffd")
+    extension = target.suffix.lower()
+    if csv_as_markdown and extension != ".csv":
+        return _error("csv_as_markdown is only supported for .csv files")
+    is_document = extension in _DOCUMENT_EXTENSIONS or (
+        extension == ".csv" and csv_as_markdown
+    )
+    source_metadata: dict[str, Any] = {}
+    byte_truncated = False
+    replacements = 0
+    source_bytes = 0
+    if is_document:
+        try:
+            document = _read_document_bytes(guard, raw, resolved, target, stat)
+        except ToolError as exc:
+            return _error(f"Read: {exc}")
+        try:
+            markdown = await convert_document(document, extension, ctx.cancel_token)
+        except AnyDocError as exc:
+            return _error(f"Read: {exc}")
+        text = markdown.decode("utf-8")
+        source_bytes = len(markdown)
+        source_metadata = {
+            "source": "firecrawl-anydoc",
+            "document": True,
+            "extension": extension,
+        }
+    else:
+        if not stat_module.S_ISREG(stat.st_mode):
+            return _error(f"Not a regular file: {resolved.display}")
+        try:
+            data = _read_text_bytes(guard, raw, resolved, target, stat, max_bytes)
+        except ToolError as exc:
+            return _error(str(exc))
+
+        byte_truncated = len(data) > max_bytes
+        if byte_truncated:
+            data = data[:max_bytes]
+        source_bytes = len(data)
+
+        if b"\x00" in data[:_BINARY_SNIFF_BYTES]:
+            return ToolExecutionResult.text(
+                f"Binary file not shown: {resolved.display} ({stat.st_size} bytes)",
+                is_error=True,
+                display=f"Read {resolved.display}: binary ({stat.st_size} bytes)",
+                metrics={
+                    "binary": True,
+                    "bytes": stat.st_size,
+                    "path": resolved.key,
+                },
+            )
+
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            if extension not in _TEXT_EXTENSIONS:
+                return ToolExecutionResult.text(
+                    f"Binary or non-UTF-8 file not shown: {resolved.display}",
+                    is_error=True,
+                    display=f"Read {resolved.display}: binary or non-UTF-8",
+                    metrics={"binary": True, "bytes": stat.st_size, "path": resolved.key},
+                )
+            # Preserve the established tolerant decoding for known text files.
+            text = data.decode("utf-8", errors="replace")
+            replacements = text.count("\ufffd")
     lines = _split_lines(text)
     total_lines = len(lines)
     window = lines[offset - 1 : offset - 1 + limit]
@@ -452,8 +764,13 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
     if truncated:
         if byte_truncated:
             rerun = (
-                f"output cut at {len(data)} bytes; re-run with offset="
+                f"output cut at {source_bytes} bytes; re-run with offset="
                 f"{last_shown + 1} or a smaller limit"
+            )
+        elif is_document and line_truncated:
+            rerun = (
+                f"converted Markdown reached the {max_bytes}-byte result cap; "
+                f"re-run with offset={last_shown + 1} or a smaller limit"
             )
         else:
             rerun = f"re-run with offset={last_shown + 1} or a smaller limit"
@@ -468,6 +785,8 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
             "to load the content again]"
         )
     display = f"Read {resolved.display}: {len(shown)} of {total_lines} lines"
+    if is_document:
+        display += f" (converted from {extension} via Firecrawl AnyDoc)"
     if truncated:
         display += " (truncated)"
     return ToolExecutionResult.text(
@@ -477,11 +796,12 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
         metrics={
             "lines": len(shown),
             "total_lines": total_lines,
-            "bytes": len(data),
+            "bytes": source_bytes,
             "size": stat.st_size,
             "truncated": truncated,
             "replacements": replacements,
             "path": resolved.key,
+            **source_metadata,
         },
     )
 

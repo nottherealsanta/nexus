@@ -22,7 +22,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .read import _BINARY_SNIFF_BYTES, _glob_match, _split_lines, _walk_entries
+from .read import (
+    _BINARY_SNIFF_BYTES,
+    _glob_match,
+    _split_lines,
+    _walk_entries,
+    _WalkStatus,
+)
 
 __all__ = [
     "DEFAULT_MAX_MATCHES",
@@ -37,7 +43,7 @@ __all__ = [
     "scan",
 ]
 
-DEFAULT_MAX_MATCHES = 200
+DEFAULT_MAX_MATCHES = 100
 HARD_MAX_MATCHES = 5000
 MAX_SCAN_FILES = 5000
 MAX_FILE_BYTES = 2 * 1024 * 1024
@@ -63,6 +69,8 @@ def scan(request: dict[str, Any]) -> dict[str, Any]:
     case_insensitive = bool(request.get("case_insensitive", False))
     max_matches = int(request.get("max_matches", DEFAULT_MAX_MATCHES))
     max_matches = max(1, min(max_matches, HARD_MAX_MATCHES))
+    max_scan_entries = int(request.get("max_scan_entries", MAX_SCAN_FILES * 20))
+    max_scan_entries = max(1, min(max_scan_entries, MAX_SCAN_FILES * 20))
 
     flags = re.IGNORECASE if case_insensitive else 0
     compiled = re.compile(pattern if regex else re.escape(pattern), flags)
@@ -79,13 +87,15 @@ def scan(request: dict[str, Any]) -> dict[str, Any]:
     scan_truncated = False
     stored_bytes = 0
     stop = False
+    walk_status = _WalkStatus()
 
     for path, rel, is_dir, _is_symlink in _walk_entries(
         root,
         include_hidden=include_hidden,
         denied_roots=denied_roots,
-        max_entries=MAX_SCAN_FILES * 20,
+        max_entries=max_scan_entries,
         ctx=None,
+        status=walk_status,
     ):
         if stop:
             break
@@ -147,12 +157,21 @@ def scan(request: dict[str, Any]) -> dict[str, Any]:
         "files": len(files_with_matches),
         "files_scanned": files_scanned,
         "binary_skipped": binary_skipped,
+        "walk_truncated": walk_status.truncated,
         "truncated": (
             truncated
+            or walk_status.truncated
             or input_truncated
             or scan_truncated
             or line_truncated
             or store_truncated
+        ),
+        "total_matches_exact": not (
+            walk_status.truncated
+            or files_scanned > MAX_SCAN_FILES
+            or input_truncated
+            or scan_truncated
+            or stop
         ),
         "input_truncated": input_truncated,
         "scan_truncated": scan_truncated,

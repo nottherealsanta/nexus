@@ -59,13 +59,14 @@ What is present now:
 - `nexus/view/`, `nexus/host/` (UDS by default; opt-in HTTP/SSE),
   `nexus/ui/cli/`, and `nexus/ui/jsonl.py`
 
-The two line budgets stated in ARCHITECTURE.md were revised by the PLAN §18
-amendment to `core/` + `model/` + `tools/spec.py` under **14,000** physical lines
-and `host/` + `view/` + `ui/` under **10,500** following review for the Textual-only
-chat shell. The enforcing tests are strict
-(not `xfail`), and regenerating the closeout baseline refuses to record an
-overage, so a cap breach fails the suite rather than being blessed. The measured
-tree is within both revised caps; the two budgets are satisfied, not waived.
+Strict line budgets are defined in ARCHITECTURE.md and enforced by
+`tests/test_phase3_exit.py`: `core/` + `model/` + `tools/spec.py` under **14,000**;
+`host/` under **7,000** (raised from 6,500 for the browser, file-completion,
+metadata, and redacted-diagnostics surfaces); `view/` under **2,200**; and `ui/`
+under **5,000** physical lines (raised from 4,500 for the browser client and
+expanded Textual drawer/composer/picker). Host, view, and UI are independent
+reviewed budgets and ratchets, not a combined allowance. The tests are strict,
+and baseline generation refuses a directory count at or above its cap.
 
 When unsure whether something exists, read the code before claiming it does.
 

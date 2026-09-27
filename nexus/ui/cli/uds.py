@@ -23,7 +23,7 @@ from typing import Any
 from ...events import Event
 from ...host import TransportError, UDSClient, VersionMismatch, ensure_daemon
 from ...host import protocol as p
-from .client import Client, ClientError, ProtocolVersionError, TransportClosed
+from ...client.protocol import Client, ClientError, ProtocolVersionError, TransportClosed
 
 #: Default bound on connect + auto-start readiness.
 DEFAULT_CONNECT_TIMEOUT = 10.0

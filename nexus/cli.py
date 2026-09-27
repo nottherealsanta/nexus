@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import importlib.util
+import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, TextIO
@@ -123,6 +124,33 @@ async def _chat(workspace: Path, *, session: str) -> int:
         return await run(client, session=session, reconnect=reconnect)
     finally:
         await client.aclose()
+
+
+async def _web(workspace: Path, *, open_browser: bool) -> int:
+    """Open the same workspace daemon in a local browser window."""
+    from .host import protocol as p
+    from .host.daemon import ensure_daemon
+
+    client = await ensure_daemon(workspace, client="web-launch")
+    try:
+        result = await client.call(p.WebLaunch())
+    finally:
+        await client.close()
+    if not isinstance(result, p.WebLaunchResult):
+        raise RuntimeError(  # noqa: TRY004 - daemon protocol failure, not bad input
+            getattr(result, "message", "daemon did not return a browser URL")
+        )
+    if open_browser:
+        import webbrowser
+
+        try:
+            if webbrowser.open(result.url, new=2):
+                print("Opened Nexus in your browser.")
+                return 0
+        except Exception:  # noqa: BLE001, S110 - browser launch is best-effort
+            pass
+    print(result.url)
+    return 0
 
 
 def _chat_entry(workspace: Path, *, session: str) -> int:
@@ -370,6 +398,281 @@ async def _tools_command(
         return 0
     finally:
         await client.aclose()
+
+
+async def _worktrees_command(
+    workspace: Path,
+    args: argparse.Namespace,
+    stdout: TextIO,
+    stderr: TextIO,
+) -> int:
+    from .ui.cli import open_client
+
+    client = await open_client(workspace)
+    try:
+        return await _dispatch_worktrees(client, args, stdout, stderr)
+    finally:
+        await client.aclose()
+
+
+async def _dispatch_worktrees(
+    client: Any, args: argparse.Namespace, stdout: TextIO, stderr: TextIO
+) -> int:
+    action = args.worktrees_action
+    if action == "list":
+        result = await client.list_worktrees()
+        stdout.write(f"status: {_worktree_text(result.status)}\n")
+        stdout.writelines(
+                f"{_worktree_text(row.get('child_id'))} "
+                f"[{_worktree_text(row.get('lifecycle') or row.get('status'))}] "
+                f"dirty={bool(row.get('dirty'))} "
+                f"acknowledged={bool(row.get('acknowledged'))}\n"
+                for row in result.worktrees
+        )
+        if result.has_more:
+            stdout.write("partial: host worktree list has more entries\n")
+        return 0 if result.status == "ok" and not result.has_more else 1
+
+    if action == "inspect":
+        result = await client.inspect_worktree(args.child_id)
+        stdout.write(f"child: {_worktree_text(result.child_id)}\n")
+        stdout.write(f"status: {_worktree_text(result.status)}\n")
+        for field in (
+            "lifecycle", "dirty", "review_id", "digest", "acknowledged",
+            "created_at", "finished_at", "integrated_at",
+        ):
+            if field in result.record:
+                value = result.record[field]
+                rendered = _worktree_text(value) if isinstance(value, str) else str(value)
+                stdout.write(f"{field}: {rendered}\n")
+        return 0 if result.status not in {"partial", "error", "recovery_required"} else 1
+
+    if action == "review":
+        return await _worktree_review(client, args, stdout)
+
+    if action == "acknowledge":
+        result = await client.acknowledge_worktree(
+            args.child_id, args.review_id, args.digest
+        )
+        stdout.write(
+            f"status: {_worktree_text(result.status)}\n"
+            f"review: {_worktree_text(result.review_id)}\n"
+            f"digest: {_worktree_text(result.digest)}\n"
+        )
+        return 0 if result.status == "acknowledged" else 1
+
+    if action in {"integrate", "discard"}:
+        return await _worktree_mutation(client, args, stdout, stderr)
+
+    raise ValueError(f"unknown worktrees action {action!r}")
+
+
+async def _worktree_review(client: Any, args: argparse.Namespace, stdout: TextIO) -> int:
+    cursor = args.cursor
+    page_limit = args.limit
+    pages: list[Any] = []
+    pinned_review_id = args.review_id
+    pinned_digest: str | None = None
+    while True:
+        page = await client.review_worktree(
+            args.child_id,
+            review_id=pinned_review_id,
+            cursor=cursor,
+            limit=page_limit,
+        )
+        if pinned_review_id is None:
+            pinned_review_id = page.review_id
+        if pinned_digest is None:
+            pinned_digest = page.digest
+        elif page.review_id != pinned_review_id or page.digest != pinned_digest:
+            raise RuntimeError("review changed during paging; restart from cursor 0")
+        pages.append(page)
+        if not args.all or not page.has_more:
+            break
+        if len(pages) >= 500:
+            break
+        next_cursor = page.cursor + page_limit
+        if next_cursor <= cursor:
+            raise RuntimeError("host returned a non-advancing worktree review cursor")
+        cursor = next_cursor
+    final = pages[-1]
+    next_cursor = final.cursor + page_limit if final.has_more else None
+    payload = {
+        "child_id": _worktree_text(final.child_id),
+        "status": _worktree_text(final.status),
+        "review_id": _worktree_text(final.review_id),
+        "digest": _worktree_text(final.digest),
+        "entries": [
+            _safe_worktree_row(row, include_patch=False)
+            for row in pages[0].entries
+        ],
+        "diff": [
+            _safe_worktree_row(row, include_patch=True)
+            for page in pages
+            for row in page.diff
+        ],
+        "cursor": pages[0].cursor,
+        "next_cursor": next_cursor,
+        "has_more": final.has_more,
+    }
+    if args.json:
+        stdout.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+    else:
+        stdout.write(f"status: {payload['status']}\n")
+        stdout.write(f"review: {payload['review_id']}\n")
+        stdout.write(f"digest: {payload['digest']}\n")
+        stdout.write("changed files:\n")
+        stdout.writelines(f"  {row['change']} {row['path']}\n" for row in payload["entries"])
+        for row in payload["diff"]:
+            patch = row.get("patch", "")
+            if patch:
+                stdout.write(patch if patch.endswith("\n") else patch + "\n")
+        if next_cursor is not None:
+            stdout.write(f"next cursor: {next_cursor} (use --cursor {next_cursor})\n")
+        if args.all and final.has_more:
+            stdout.write(f"review paging capped; continue with --cursor {next_cursor}\n")
+    incomplete = args.all and final.has_more
+    return (
+        1
+        if incomplete or payload["status"] in {"partial", "error", "recovery_required"}
+        else 0
+    )
+
+
+async def _worktree_mutation(
+    client: Any, args: argparse.Namespace, stdout: TextIO, stderr: TextIO
+) -> int:
+    operation = args.worktrees_action
+
+    async def mutate(token: str = ""):
+        if operation == "integrate":
+            return await client.integrate_worktree(
+                args.child_id,
+                args.review_id,
+                args.digest,
+                confirmation_token=token,
+            )
+        return await client.discard_worktree(
+            args.child_id,
+            force=args.force,
+            review_id=args.review_id,
+            confirmation_token=token,
+        )
+
+    # The first request is always a fresh, token-free preview.
+    preview = await mutate()
+    if preview.status != "requires_confirmation":
+        return _print_worktree_mutation(preview, stdout)
+
+    changed_files: list[str] = []
+    review_digest = args.digest if operation == "integrate" else None
+    review_id = args.review_id
+    force = bool(args.force) if operation == "discard" else False
+    if operation == "discard" and not force and not review_id:
+        inspected = await client.inspect_worktree(args.child_id)
+        review_id = inspected.record.get("review_id")
+    if operation == "integrate" or review_id:
+        review = await client.review_worktree(
+            args.child_id,
+            review_id=review_id,
+            cursor=0,
+            limit=8,
+        )
+        changed_files = [
+            _worktree_text(row.get("path")) for row in review.entries
+            if isinstance(row, dict) and row.get("path")
+        ]
+        if operation == "integrate" and review.digest != args.digest:
+            raise RuntimeError("review digest changed; request a fresh preview")
+        if not review_digest:
+            review_digest = _worktree_text(review.digest)
+
+    stdout.write(f"operation: {_worktree_text(preview.operation or operation)}\n")
+    if operation == "discard":
+        stdout.write(f"force: {'yes' if force else 'no'}\n")
+        if force:
+            stdout.write("WARNING: force discard removes the child worktree, including dirty files.\n")
+    stdout.write("changed files:\n")
+    if changed_files:
+        stdout.writelines(f"  {path}\n" for path in changed_files)
+    elif operation == "discard" and preview.impact.get("child_dirty"):
+        stdout.write("  dirty files are present; the host preview does not enumerate them\n")
+    else:
+        stdout.write("  (none reported by the host review)\n")
+    stdout.write(f"digest: {_worktree_text(review_digest) if review_digest else '(none)'}\n")
+    for key in ("parent_clean", "parent_head_matches_base", "child_dirty", "summary"):
+        if key in preview.impact:
+            value = preview.impact[key]
+            rendered = _worktree_text(value) if isinstance(value, str) else str(value)
+            stdout.write(f"{key}: {rendered}\n")
+
+    if not args.confirm_token:
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            stderr.write(
+                "Error: worktree mutation needs an interactive typed confirmation; "
+                "use --confirmation-token to authorize the fresh preview token.\n"
+            )
+            return 2
+        confirmation_detail = (
+            review_digest if operation == "integrate" else "force" if force else "clean"
+        )
+        phrase = f"confirm {operation} {args.child_id} {confirmation_detail}"
+        prompt_phrase = _worktree_text(phrase)
+        stderr.write(f"Type exactly: {prompt_phrase}\n> ")
+        stderr.flush()
+        try:
+            answer = sys.stdin.readline()
+        except (EOFError, OSError):
+            stderr.write("Confirmation input closed; no changes made.\n")
+            return 2
+        if not answer:
+            stderr.write("Confirmation input closed; no changes made.\n")
+            return 2
+        answer = answer.rstrip("\r\n")
+        if answer != phrase:
+            stderr.write("Confirmation did not match; no changes made.\n")
+            return 2
+
+    result = await mutate(preview.confirmation_token)
+    return _print_worktree_mutation(result, stdout)
+
+
+def _print_worktree_mutation(result: Any, stdout: TextIO) -> int:
+    stdout.write(f"status: {_worktree_text(result.status)}\n")
+    if result.operation:
+        stdout.write(f"operation: {_worktree_text(result.operation)}\n")
+    if result.digest:
+        stdout.write(f"digest: {_worktree_text(result.digest)}\n")
+    stdout.writelines(f"changed: {_worktree_text(path)}\n" for path in result.changed_paths)
+    if result.error:
+        stdout.write(f"error: {_worktree_text(result.error)}\n")
+    if result.status != "committed":
+        return 1
+    return 0
+
+
+def _worktree_text(value: Any) -> str:
+    from .ui.cli.render import sanitize
+
+    text = sanitize(value, 4096)
+    # Protocol paths are workspace-relative; absolute service paths are never
+    # useful in the CLI and may reveal daemon or user directory structure.
+    return re.sub(r"(?<![\w])/(?:[^\s,;]+/)*[^\s,;]*", "[path]", text)
+
+
+def _safe_worktree_row(row: Any, *, include_patch: bool) -> dict[str, Any]:
+    if not isinstance(row, dict):
+        return {}
+    fields = ("path", "change", "binary", "old_mode", "new_mode", "old_sha256", "new_sha256")
+    safe = {
+        key: (_worktree_text(row[key]) if isinstance(row.get(key), str) else row.get(key))
+        for key in fields
+        if key in row
+    }
+    if include_patch and isinstance(row.get("patch"), str):
+        patch = row["patch"]
+        safe["patch"] = "\n".join(_worktree_text(line) for line in patch.splitlines())
+    return safe
 
 
 async def _doctor(
@@ -650,6 +953,9 @@ def build_parser() -> argparse.ArgumentParser:
     chat = sub.add_parser("chat", help="Open the interactive Textual chat")
     chat.add_argument("--session", default="default")
 
+    web = sub.add_parser("web", help="Open the workspace in a local browser")
+    web.add_argument("--no-browser", action="store_true", help="Print the one-time launch URL")
+
     replay = sub.add_parser("replay", help="Re-render a session from its log")
     replay.add_argument("session_id")
     replay.add_argument("--json", action="store_true", help="Emit the view model as JSON")
@@ -744,13 +1050,49 @@ def build_parser() -> argparse.ArgumentParser:
     tools_sub = tools.add_subparsers(dest="tools_action", required=True)
     tools_sub.add_parser("list", help="List available tools")
 
+    worktrees = sub.add_parser("worktrees", help="Inspect and manage child worktrees")
+    worktrees_sub = worktrees.add_subparsers(dest="worktrees_action", required=True)
+    worktrees_sub.add_parser("list", help="List daemon-owned child worktrees")
+    worktree_inspect = worktrees_sub.add_parser("inspect", help="Inspect one child worktree")
+    worktree_inspect.add_argument("child_id")
+    worktree_review = worktrees_sub.add_parser("review", help="Read a finalized worktree review")
+    worktree_review.add_argument("child_id")
+    worktree_review.add_argument("--review-id", default=None)
+    worktree_review.add_argument("--cursor", type=int, default=0)
+    worktree_review.add_argument("--limit", type=int, choices=range(1, 9), default=8)
+    worktree_review.add_argument("--all", action="store_true", help="Read every bounded page")
+    worktree_review.add_argument("--json", action="store_true", help="Emit review data as JSON")
+    worktree_ack = worktrees_sub.add_parser("acknowledge", help="Acknowledge an exact review")
+    worktree_ack.add_argument("child_id")
+    worktree_ack.add_argument("review_id")
+    worktree_ack.add_argument("digest")
+    worktree_integrate = worktrees_sub.add_parser("integrate", help="Integrate an acknowledged review")
+    worktree_integrate.add_argument("child_id")
+    worktree_integrate.add_argument("review_id")
+    worktree_integrate.add_argument("digest")
+    worktree_integrate.add_argument(
+        "--confirm-token", "--confirmation-token", dest="confirm_token",
+        action="store_true",
+        help="Authorize the token returned by this invocation's fresh host preview",
+    )
+    worktree_discard = worktrees_sub.add_parser("discard", help="Discard an owned child worktree")
+    worktree_discard.add_argument("child_id")
+    worktree_discard.add_argument("--force", action="store_true")
+    worktree_discard.add_argument("--review", dest="review_id", default=None)
+    worktree_discard.add_argument(
+        "--confirm-token", "--confirmation-token", dest="confirm_token",
+        action="store_true",
+        help="Authorize the token returned by this invocation's fresh host preview",
+    )
+
     return parser
 
 
 def _json_error(args: argparse.Namespace, exc: BaseException) -> None:
     from .events import Event
 
-    payload = Event("error", {"message": str(exc)}).to_dict()
+    message = _worktree_text(str(exc)) if args.command == "worktrees" else str(exc)
+    payload = Event("error", {"message": message}).to_dict()
     print(json.dumps(payload, ensure_ascii=False), flush=True)
 
 
@@ -806,6 +1148,8 @@ def main(argv: list[str] | None = None) -> int:
                     stderr.write("Error: Textual is required for chat; reinstall Nexus with its runtime dependencies.\n")
                     return 1
                 raise
+        if args.command == "web":
+            return asyncio.run(_web(workspace, open_browser=not args.no_browser))
         if args.command == "replay":
             return asyncio.run(_replay(workspace, args, stdout))
         if args.command == "daemon":
@@ -824,6 +1168,8 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(_agents_command(workspace, args, stdout))
         if args.command == "tools":
             return asyncio.run(_tools_command(workspace, args, stdout))
+        if args.command == "worktrees":
+            return asyncio.run(_worktrees_command(workspace, args, stdout, stderr))
         if args.command == "doctor":
             return asyncio.run(_doctor(workspace, args, stdout))
         parser.error(f"unknown command {args.command!r}")
@@ -836,6 +1182,8 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001 - the CLI boundary reports, never tracebacks
         if getattr(args, "json", False):
             _json_error(args, exc)
+        elif args.command == "worktrees":
+            stderr.write(f"Error: {_worktree_text(str(exc))}\n")
         else:
             stderr.write(f"Error: {exc}\n")
         return 1

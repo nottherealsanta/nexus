@@ -143,22 +143,25 @@ def tool_result_for(session, call_id):
 
 async def test_reload_then_call_new_tool_in_the_same_turn(tmp_path):
     def write_then_reload(request):
-        write_tool(tmp_path, "ExtPing", body="pong")
-        return tool_response(("r1", "ReloadExtensions", {}))
+        return tool_response(("r1", "WriteTool", {
+            "filename": "ExtPing.py",
+            "content": ext_source("ExtPing", body="pong"),
+        }))
 
     provider = ScriptedProvider(
         [write_then_reload],
+        tool_response(("r2", "ReloadExtensions", {})),
         tool_response(("c1", "ExtPing", {})),
         text_response("done"),
     )
-    runtime = make_runtime(tmp_path, provider)
+    runtime = make_runtime(tmp_path, provider, config=make_config(profile="coding_meta"))
     session = runtime.session("walkthrough")
 
     events = await drain(session)
 
     assert events[-1].type == "turn.completed"
     # The new tool was advertised on the iteration after the reload...
-    assert "ExtPing" in {t.name for t in provider.requests[1].tools}
+    assert "ExtPing" in {t.name for t in provider.requests[2].tools}
     assert "ExtPing" not in {t.name for t in provider.requests[0].tools}
     # ...and executed.
     result = tool_result_for(session, "c1")
@@ -290,7 +293,7 @@ async def test_invalid_reload_keeps_the_previous_generation(tmp_path):
 async def test_reload_refreshes_config_soul_memory_skills_next_iteration(tmp_path):
     (tmp_path / "SOUL.md").write_text("SOUL-A", encoding="utf-8")
     (tmp_path / "MEMORY.md").write_text("MEMORY-A", encoding="utf-8")
-    holder = {"config": make_config(profile="coding")}
+    holder = {"config": make_config(profile="coding_meta")}
 
     def mutate(request):
         holder["config"] = make_config(profile="research")
@@ -313,11 +316,13 @@ async def test_reload_refreshes_config_soul_memory_skills_next_iteration(tmp_pat
     # Iteration 1: the turn-start snapshot.
     assert "SOUL-A" in first.system and "MEMORY-A" in first.system
     assert "reader:" not in first.system
-    assert len(first.tools) == 16  # Phase 6 adds the Task (subagent) tool
+    assert len(first.tools) == 14  # base tools plus opt-in extension controls
     # Iteration 2: the reloaded manifest.
     assert "SOUL-B" in second.system and "MEMORY-B" in second.system
     assert "reader: read things" in second.system
-    assert len(second.tools) == 5  # research profile (+Task)
+    assert {tool.name for tool in second.tools} == {
+        "read", "glob", "grep", "subagent", "todowrite", "webfetch", "skill"
+    }
     await runtime.aclose()
 
 
@@ -328,12 +333,12 @@ async def test_reload_refreshes_config_soul_memory_skills_next_iteration(tmp_pat
 
 async def test_reload_cannot_widen_write_roots_mid_turn(tmp_path):
     (tmp_path / "sub").mkdir()
-    holder = {"config": make_config(write_roots=["sub"])}
+    holder = {"config": make_config(profile="coding_meta", write_roots=["sub"])}
 
     def mutate(request):
         # Widen the roots on disk and in the loader; the running turn must keep
         # the roots it started with.
-        holder["config"] = make_config(write_roots=["./"])
+        holder["config"] = make_config(profile="coding_meta", write_roots=["./"])
         return tool_response(("r1", "ReloadExtensions", {}))
 
     provider = ScriptedProvider(
@@ -356,10 +361,10 @@ async def test_reload_cannot_widen_write_roots_mid_turn(tmp_path):
 
 
 async def test_reload_cannot_switch_a_denied_mode_to_allow_mid_turn(tmp_path):
-    holder = {"config": make_config(mode="deny")}
+    holder = {"config": make_config(profile="coding_meta", mode="deny")}
 
     def mutate(request):
-        holder["config"] = make_config(mode="allow")
+        holder["config"] = make_config(profile="coding_meta", mode="allow")
         return tool_response(("r1", "ReloadExtensions", {}))
 
     provider = ScriptedProvider(
@@ -391,7 +396,9 @@ async def test_pending_permission_survives_a_reload(tmp_path):
         tool_response(("c1", "Write", {"path": "out.txt", "content": "x"})),
         text_response("done"),
     )
-    runtime = make_runtime(tmp_path, provider, config=make_config(mode="ask"))
+    runtime = make_runtime(
+        tmp_path, provider, config=make_config(profile="coding_meta", mode="ask")
+    )
     session = runtime.session("approval").mark_attended(True)
 
     await session.start_turn("go")
@@ -416,7 +423,23 @@ async def test_pending_permission_survives_a_reload(tmp_path):
 
 
 async def test_provider_unavailable_after_reload_fails_the_turn(tmp_path):
-    holder = {"config": make_config()}
+    agents = tmp_path / ".nexus" / "agents"
+    agents.mkdir(parents=True)
+    (agents / "inherit-root.md").write_text(
+        "---\nname: inherit-root\ndescription: inherit workspace model\n"
+        "contexts: [root]\nmodel: inherit\n---\nroot prompt\n",
+        encoding="utf-8",
+    )
+    holder = {"config": Config(
+        model="scripted/m",
+        version=2,
+        v2=ConfigV2(
+            model=ModelSection(default="scripted/m"),
+            agent=AgentSection(name="inherit-root", profile="coding_meta"),
+            permissions=PermissionsSection(mode="allow", on_unattended="allow"),
+            tools=ToolsSection(),
+        ),
+    )}
 
     def break_provider(request):
         holder["config"] = Config(
@@ -424,7 +447,7 @@ async def test_provider_unavailable_after_reload_fails_the_turn(tmp_path):
             version=2,
             v2=ConfigV2(
                 model=ModelSection(default="missing/model"),
-                agent=AgentSection(profile="coding"),
+                agent=AgentSection(name="inherit-root", profile="coding_meta"),
                 permissions=PermissionsSection(mode="allow", on_unattended="allow"),
                 tools=ToolsSection(),
             ),

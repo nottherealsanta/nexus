@@ -203,6 +203,47 @@ def test_spec_matcher_reuses_permission_grammar():
     assert not wildcard.matches("Read", None, None)
 
 
+@pytest.mark.parametrize(
+    ("matcher", "action", "matches"),
+    [
+        ("BashOutput", "status", True),
+        ("BashOutput", "wait", True),
+        ("BashOutput", "stop", False),
+        ("BashOutput", "run", False),
+        ("KillShell", "stop", True),
+        ("KillShell", "status", False),
+        ("KillShell", "wait", False),
+        ("KillShell", "run", False),
+    ],
+)
+async def test_legacy_bash_job_matchers_use_tool_action(
+    tmp_path: Path, matcher: str, action: str, matches: bool
+):
+    async def allow(invocation, context):
+        return HookDecision.allow()
+
+    spec = HookSpec(
+        event="PreToolUse",
+        name="legacy-job",
+        kind="python",
+        matcher=matcher,
+        fn=allow,
+    )
+    manager = make_manager(tmp_path)
+    outcome = await manager.run(
+        "PreToolUse",
+        HookInvocation(
+            event="PreToolUse",
+            tool="bash",
+            key=f"{action}:job_1",
+            bundle="shell",
+            tool_input={"action": action, "job_id": "job_1"},
+        ),
+        specs=(spec,),
+    )
+    assert outcome.fired == (("legacy-job",) if matches else ())
+
+
 def test_command_hook_is_argv_without_shell_by_default():
     spec = HookSpec(event="PreToolUse", name="c", command=("echo", "hi"))
     assert spec.argv == ("echo", "hi")

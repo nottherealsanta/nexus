@@ -23,6 +23,7 @@ __all__ = [
     "HookView",
     "McpView",
     "MessageView",
+    "PermissionTargetView",
     "PermissionView",
     "PresenceView",
     "QueuedInputView",
@@ -61,11 +62,25 @@ def _dump(value: object) -> Any:
             # Additive Phase 2 transcript/correlation fields stay absent when
             # reducing older events, preserving the established golden wire
             # snapshots while real values serialize normally.
+            if item.name == "targets" and isinstance(value, PermissionView) and field_value is None:
+                continue
             if item.name in {
                 "input", "result", "display", "context_note", "metrics",
                 "child_agent_ids",
                 "parent_session", "parent_agent_id", "parent_call_id", "root_turn_id",
             } and field_value in (None, "", 0, {}, []):
+                continue
+            if item.name in {
+                "user_ts", "assistant_ts", "elapsed_ms", "agent", "reasoning_effort",
+            } and field_value is None:
+                continue
+            if item.name == "ts" and isinstance(value, MessageView):
+                continue
+            if (
+                item.name in {"assistant_ts", "elapsed_ms"}
+                and isinstance(value, TurnView)
+                and value.user_ts is None
+            ):
                 continue
             if (
                 item.name == "diff"
@@ -162,6 +177,8 @@ class MessageView(_View):
     attempt: int = 0
     stop_reason: str | None = None
     done: bool = False
+    #: Event timestamp used as the completed assistant message's durable bound.
+    ts: float | None = None
 
     @property
     def text(self) -> str:
@@ -200,6 +217,14 @@ class ToolCallView(_View):
     child_agent_ids: list[str] = field(default_factory=list)
 
 @dataclass
+class PermissionTargetView(_View):
+    """One bounded, display-safe path detail for a permission request."""
+
+    role: str
+    path: str
+    reason: str
+
+@dataclass
 class PermissionView(_View):
     """One approval request and, once resolved, the winning decision."""
 
@@ -217,6 +242,7 @@ class PermissionView(_View):
     scope: str | None = None
     grant: dict[str, Any] | None = None
     ts: float | None = None
+    targets: list[PermissionTargetView] | None = None
 
 @dataclass
 class ContextView(_View):
@@ -283,6 +309,14 @@ class TurnView(_View):
     usage: UsageTotals = field(default_factory=UsageTotals)
     started_ts: float | None = None
     updated_ts: float | None = None
+    #: Frozen root-agent metadata carried by this turn's ``turn.started``.
+    agent: dict[str, Any] | None = None
+    #: Effort on the actual model request, captured from ``model.started``.
+    reasoning_effort: str | None = None
+    #: Durable input/assistant event timestamps used for the summary duration.
+    user_ts: float | None = None
+    assistant_ts: float | None = None
+    elapsed_ms: int | None = None
 
     @property
     def terminal(self) -> bool:

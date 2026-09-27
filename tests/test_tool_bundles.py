@@ -22,45 +22,59 @@ from nexus.tools.bundles import (
 
 
 def test_the_bundles_are_defined():
-    assert BUNDLE_NAMES == frozenset({"fs", "shell", "task", "meta", "ext", "mcp"})
+    assert BUNDLE_NAMES == frozenset({"fs", "patch", "shell", "legacy_shell", "legacy_fs", "task", "web", "meta", "ext", "mcp"})
     assert all_bundles() is BUNDLES
 
 
 def test_bundle_contents_match_the_plan():
-    assert bundle_tools("fs") == ("Read", "Write", "Edit", "MultiEdit", "Glob", "Grep", "LS")
-    assert bundle_tools("shell") == ("Bash", "BashOutput", "KillShell")
-    assert bundle_tools("task") == ("Task", "TodoWrite")
+    assert bundle_tools("fs") == ("read", "glob", "grep", "edit", "write")
+    assert bundle_tools("patch") == ("apply_patch",)
+    assert bundle_tools("shell") == ("bash",)
+    assert bundle_tools("legacy_fs") == ("ls", "multiedit")
+    assert bundle_tools("legacy_shell") == ("BashOutput", "KillShell")
+    assert bundle_tools("task") == ("subagent", "todowrite")
+    assert bundle_tools("web") == ("webfetch", "websearch")
     assert bundle_tools("meta") == (
         "ReloadExtensions",
         "ListExtensions",
         "WriteTool",
     )
-    assert bundle_tools("ext") == ("Skill",)
+    assert bundle_tools("ext") == ("skill",)
     # The MCP bundle owns no static names: bridged tools join it dynamically.
     assert bundle_tools("mcp") == ()
 
 
 def test_profile_table():
-    assert PROFILE_NAMES == frozenset({"coding", "research", "chat", "ops"})
+    assert PROFILE_NAMES == frozenset({"coding", "coding_meta", "research", "chat", "ops"})
     assert DEFAULT_PROFILE == "coding"
-    assert profile_names() == ("coding", "research", "chat", "ops")
+    assert profile_names() == (
+        "coding", "coding_meta", "research", "chat", "ops"
+    )
 
 
-def test_coding_profile_covers_all_phase2_tools():
-    expected = set()
-    for name in BUNDLE_NAMES:
-        expected.update(bundle_tools(name))
-    assert profile_tools("coding") == expected
+def test_base_profile_advertises_only_implemented_canonical_tools():
+    assert profile_tools("coding") == frozenset(
+        {
+            "read", "apply_patch", "glob", "grep", "edit", "write", "bash",
+            "subagent", "todowrite", "webfetch", "websearch", "skill",
+        }
+    )
+
+
+def test_meta_tools_require_the_explicit_meta_profile():
+    assert profile_tools("coding_meta") == profile_tools("coding") | frozenset(
+        {"ReloadExtensions", "ListExtensions", "WriteTool"}
+    )
 
 
 def test_research_profile_is_read_search_only():
     # Phase 6 adds Task: research may delegate, but read_only still strips every
     # mutating and shell tool, so a child can never write.
     assert profile_tools("research") == frozenset(
-        {"Read", "Glob", "Grep", "LS", "Task"}
+        {"read", "glob", "grep", "subagent", "todowrite", "webfetch", "websearch", "skill"}
     )
     assert profile_tools("research").isdisjoint(
-        {"Write", "Edit", "MultiEdit", "Bash"}
+        {"apply_patch", "write", "edit", "bash"}
     )
 
 
@@ -69,7 +83,7 @@ def test_chat_profile_has_no_tools():
 
 
 def test_ops_profile_is_shell_only():
-    assert profile_tools("ops") == frozenset(bundle_tools("shell"))
+    assert profile_tools("ops") == frozenset({"bash"})
 
 
 def test_unknown_profiles_fail_closed():

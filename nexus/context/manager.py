@@ -435,6 +435,7 @@ class ContextManager:
         self._request_counter = request_counter
         self._model_override = model
         self._provider_override = provider
+        self._reasoning_effort: str | None = None
         self._parts: tuple[ContextPart, ...] = (
             tuple(parts) if parts is not None else builtin_parts()
         )
@@ -478,6 +479,7 @@ class ContextManager:
         self._last_budget_metadata: dict[str, Any] = {}
         self._last_compaction_metadata: dict[str, Any] = {}
         self._last_cache_metadata: dict[str, Any] = {}
+        self._last_included_parts: dict[str, str] = {}
         self._last_compacted: dict[str, Any] | None = None
         self._last_summary_reuse: dict[str, Any] | None = None
         #: The current assemble's PreCompact outcome (sanitized), or ``None``.
@@ -590,6 +592,7 @@ class ContextManager:
         skills: Any | None = None,
         mcp_index: Any | None = None,
         agent_definition: Any | None = None,
+        reasoning_effort: str | None = None,
     ) -> ContextManager:
         """Return a snapshot manager with config and rendered inputs frozen.
 
@@ -612,6 +615,7 @@ class ContextManager:
             request_counter=request_counter,
             model=model,
             provider=provider,
+            reasoning_effort=reasoning_effort,
             skills_index=(
                 self._skills_index
                 if raw_skills is None
@@ -644,6 +648,7 @@ class ContextManager:
         turn_id: str | None = None,
         iteration: int | None = None,
         agent_definition: Any | None = None,
+        reasoning_effort: str | None = None,
     ) -> ContextManager:
         """Build a sibling snapshot sharing this manager's frozen inputs.
 
@@ -706,6 +711,17 @@ class ContextManager:
             ),
         )
         snapshot._tool_schemas = self._tool_schemas
+        snapshot._reasoning_effort = (
+            reasoning_effort
+            if reasoning_effort is not None
+            else self._reasoning_effort
+        )
+        if reasoning_effort is None:
+            snapshot._reasoning_effort = None
+        snapshot.agent_definition = getattr(self, "agent_definition", None)
+        snapshot._agent_effort_supported = getattr(
+            self, "_agent_effort_supported", True
+        )
         snapshot._env = self._env
         return snapshot
 
@@ -727,6 +743,7 @@ class ContextManager:
         turn_id: str | None = None,
         iteration: int | None = None,
         agent_definition: Any | None = None,
+        reasoning_effort: str | None = None,
     ) -> ContextManager:
         """Return a sibling snapshot for one loop iteration.
 
@@ -772,7 +789,11 @@ class ContextManager:
             pre_compact=pre_compact,
             turn_id=turn_id,
             iteration=iteration,
+            reasoning_effort=reasoning_effort,
         )
+        snapshot._reasoning_effort = reasoning_effort
+        snapshot._agent_effort_supported = reasoning_effort is not None
+        snapshot.agent_definition = agent_definition
         if agent_definition is not None:
             # _spawn keeps a shared frozen environment when config is supplied;
             # iteration snapshots must own a copy before extending instructions.
@@ -803,6 +824,7 @@ class ContextManager:
         elif config is not None:
             snapshot._env = snapshot._build_env(config)
         if agent_definition is not None:
+            snapshot.agent_definition = agent_definition
             snapshot.append_agent_prompt(agent_definition.load_body())
         return snapshot
 
@@ -877,6 +899,15 @@ class ContextManager:
             "compaction": self.last_compaction,
             "cache": self.last_cache,
         }
+
+    @property
+    def last_included_parts(self) -> dict[str, str]:
+        """Exact system-text contributions included in the last request.
+
+        This is an in-memory inspection seam. It is deliberately absent from
+        request metadata and session events, which must never carry prompt text.
+        """
+        return dict(self._last_included_parts)
 
     # -- environment -------------------------------------------------------
 
@@ -970,15 +1001,18 @@ class ContextManager:
         return None, ref
 
     @staticmethod
-    def _sampling(config: Config) -> SamplingParams:
+    def _sampling(
+        config: Config, *, reasoning_effort: str | None = None
+    ) -> SamplingParams:
         v2 = getattr(config, "v2", None)
         params = getattr(getattr(v2, "model", None), "params", None)
         if params is None:
-            return SamplingParams()
+            return SamplingParams(reasoning_effort=reasoning_effort)
         return SamplingParams(
             temperature=params.temperature,
             max_output_tokens=params.max_output_tokens,
             thinking_budget=params.thinking_budget,
+            reasoning_effort=reasoning_effort,
         )
 
     def _read(self, filename: str) -> str:
@@ -1444,11 +1478,29 @@ class ContextManager:
         }
         if self._last_precompact is not None:
             metadata["pre_compact"] = dict(self._last_precompact)
+        agent_effort = getattr(
+            getattr(self, "agent_definition", None), "reasoning_effort", None
+        )
+        effort = self._reasoning_effort
+        if effort is None:
+            effort = getattr(self, "_requested_agent_effort", None)
+        if not getattr(self, "_agent_effort_supported", True):
+            agent_effort = None
+        if (
+            effort is None
+            and agent_effort
+            and env.capabilities.thinking
+            and getattr(self, "_agent_effort_supported", True)
+        ):
+            effort = agent_effort
         return ModelRequest(
             messages=final_messages,
             system=system,
             tools=tools,
-            params=self._sampling(env.config),
+            params=self._sampling(
+                env.config,
+                reasoning_effort=effort,
+            ),
             model=env.model,
             provider=env.provider,
             metadata=metadata,
@@ -2125,8 +2177,14 @@ class ContextManager:
         plan: Any,
     ) -> str | None:
         if env.system_override is not None:
+            self._last_included_parts = (
+                {"system_override": env.system_override}
+                if env.system_override.strip()
+                else {}
+            )
             return env.system_override
         pieces: list[str] = []
+        included: dict[str, str] = {}
         for output in outputs:
             if output is None:
                 continue
@@ -2140,13 +2198,17 @@ class ContextManager:
                 text = _truncate_text(output.text, requested, granted)
                 if text.strip():
                     pieces.append(text)
+                    included[output.name] = text
             elif output.kind == "skills_index":
                 # Whole lines only: a token budget drops entries, never halves one.
                 kept = _fit_whole_lines(
                     output.lines, costs.line_costs.get(output.name, ()), granted
                 )
                 if kept:
-                    pieces.append("\n".join(kept))
+                    text = "\n".join(kept)
+                    pieces.append(text)
+                    included[output.name] = text
+        self._last_included_parts = included
         return "\n\n".join(pieces) or None
 
     @staticmethod

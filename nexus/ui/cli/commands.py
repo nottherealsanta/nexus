@@ -44,12 +44,16 @@ SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("/agent", "list or select this session's root agent", "[list|current|reset|NAME]"),
     CommandSpec("/tools", "list tools used in this transcript"),
     CommandSpec("/details", "model, context, queue, approvals, and subagents"),
+    CommandSpec("/context", "show assembled prompt, tools, messages, and accounting"),
     CommandSpec("/reconnect", "re-attach and replay missed events"),
     CommandSpec("/cancel", "cancel the active turn"),
     CommandSpec("/fork", "branch this session", "[at_seq]"),
     CommandSpec("/export", "export this session", "[json|markdown|jsonl]"),
     CommandSpec("/help", "show this help"),
     CommandSpec("/exit", "leave the chat"),
+    CommandSpec("/worktrees", "review and manage child worktrees"),
+    CommandSpec("/session", "list sessions and switch", "[id]"),
+    CommandSpec("/sesssion", "list sessions and switch", "[id]"),
 )
 
 BY_NAME: dict[str, CommandSpec] = {spec.name: spec for spec in SPECS}
@@ -114,7 +118,7 @@ def help_text() -> str:
         usage = f" {spec.usage}" if spec.usage else ""
         lines.append(f"  {spec.name:<{width}}{usage}  {spec.summary}")
     lines.append(
-        "Controls: Ctrl+P commands; Ctrl+Enter submits; Enter inserts a line; "
-        "Ctrl+C cancels; Ctrl+Q quits."
+        "Controls: Enter submits; Shift+Enter inserts a line; Ctrl+P opens "
+        "commands (see \"Show keyboard shortcuts\"); Ctrl+C cancels."
     )
     return "\n".join(lines)

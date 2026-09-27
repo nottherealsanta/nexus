@@ -351,6 +351,8 @@ class HookSpec:
         tool: str | None,
         key: str | None = None,
         bundle: str | None = None,
+        *,
+        input_data: Mapping[str, Any] | None = None,
     ) -> bool:
         """Whether this hook's matcher fires for a tool call.
 
@@ -370,7 +372,7 @@ class HookSpec:
             rule = parse_rule(matcher)
         except PermissionRuleError:
             return False
-        return rule.matches(tool, key, bundle)
+        return rule.matches(tool, key, bundle, input_data=input_data)
 
     def fingerprint(self) -> str:
         """A stable content digest that ignores the generation and ``fn``."""

@@ -53,6 +53,7 @@ import msgspec
 
 from ..errors import NexusError
 from ..events import Event
+from ..observability.daemon import DaemonDiagnostics
 from ..util import new_id, redact_secrets
 from . import protocol as p
 from .facade import DEFAULT_MAX_CONCURRENT_TURNS, HostFacade
@@ -83,6 +84,11 @@ DEFAULT_IDLE_TIMEOUT = 300.0
 DEFAULT_AUTOSTART_TIMEOUT = 10.0
 #: Default bound on the handshake (a peer that connects and never speaks).
 DEFAULT_HANDSHAKE_TIMEOUT = 5.0
+#: Bound on closing one accepted connection during shutdown: cancel its
+#: subscriptions, close the writer, and wait for the transport. A wedged peer
+#: (or a callback that never returns) must not stop the daemon from releasing
+#: its exclusive lock.
+TEARDOWN_TIMEOUT = 1.0
 #: Bound on concurrent subscriptions from one client, so a buggy client cannot
 #: open unbounded streams.
 MAX_SUBSCRIPTIONS_PER_CLIENT = 64
@@ -196,6 +202,7 @@ class _ClientConnection:
         self._subs: dict[str, _Subscription] = {}
         self._write_lock = asyncio.Lock()
         self._closed = False
+        self._torn_down = False
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -228,7 +235,11 @@ class _ClientConnection:
                     client_id=self.client_id,
                 )
             )
-            self.daemon._client_joined(self)
+            # ``aclose`` may have snapshotted and stopped accepting while this
+            # handshake was in flight. Refusing the join here means a late
+            # client is closed by the ``finally`` instead of left active.
+            if not self.daemon._client_joined(self):
+                return
             await self._loop()
         except (TimeoutError, TransportError, OSError) as exc:
             self.daemon._log("connection_error", error=redact_secrets(str(exc)))
@@ -256,6 +267,11 @@ class _ClientConnection:
                 break
 
     async def _command(self, frame: CommandFrame) -> None:
+        if isinstance(frame.command, getattr(p, "WebLaunch", ())):
+            endpoint = await self.daemon.web_launch()
+            result = p.WebLaunchResult(url=endpoint)
+            await self._send(ResultFrame(id=frame.id, result=result))
+            return
         result = await self.daemon.facade.handle(frame.command)
         await self._send(ResultFrame(id=frame.id, result=result))
         if isinstance(frame.command, p.SessionSubscribe) and isinstance(
@@ -320,18 +336,38 @@ class _ClientConnection:
                 self._closed = True
 
     async def _teardown(self) -> None:
+        """Close this connection: cancel streams, drop registration, close writer.
+
+        Bounded and idempotent. A wedged peer (or a subscription whose task
+        ignores cancellation) must not stop the daemon from releasing its lock,
+        so both the subscription wait and ``wait_closed`` are time-boxed. Safe
+        to call from both ``run``'s ``finally`` and :meth:`Daemon.aclose`.
+        """
         self._closed = True
+        if self._torn_down:
+            return
+        self._torn_down = True
         tasks = [subscription.task for subscription in self._subs.values()]
         self._subs.clear()
         for task in tasks:
             task.cancel()
-        for task in tasks:
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await task
+        if tasks:
+            # Wait as a group rather than awaiting each task: a task that
+            # suppresses ``CancelledError`` would otherwise pin teardown.
+            _done, pending = await asyncio.wait(tasks, timeout=TEARDOWN_TIMEOUT)
+            for task in pending:
+                self.daemon._log(
+                    "connection_task_timeout", client=self.client_id
+                )
         self.daemon._client_left(self)
-        self.writer.close()
         with contextlib.suppress(Exception):
-            await self.writer.wait_closed()
+            self.writer.close()
+        try:
+            await asyncio.wait_for(self.writer.wait_closed(), TEARDOWN_TIMEOUT)
+        except TimeoutError:
+            self.daemon._log("connection_close_timeout", client=self.client_id)
+        except Exception:  # noqa: BLE001, S110 - closing an already-failed peer is best-effort
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +446,8 @@ class Daemon:
             tuple(http_origins) if http_origins is not None else None
         )
         self._http_token = http_token
+        self._web_start_lock = asyncio.Lock()
+        self.diagnostics = DaemonDiagnostics()
 
         self._runtime: Any | None = None
         self._facade: HostFacade | None = None
@@ -466,6 +504,17 @@ class Daemon:
         """The bound HTTP/SSE port, or ``0`` when the surface is not running."""
         return self._http.port if self._http is not None else 0
 
+    async def web_launch(self) -> str:
+        """Start or attach the local browser listener and mint a one-use URL."""
+        if self._closed or self._facade is None:
+            raise DaemonError("daemon is stopping")
+        async with self._web_start_lock:
+            if self._http is None:
+                await self._start_http()
+            assert self._http is not None and self._http._web is not None
+            ticket = self._http._web.issue_ticket()
+            return f"http://127.0.0.1:{self._http.port}/#ticket={ticket}"
+
     @property
     def http_endpoint(self) -> dict[str, Any] | None:
         """The running HTTP/SSE endpoint (host, port, token, origins), or ``None``.
@@ -515,6 +564,9 @@ class Daemon:
                 owns_runtime=True,
                 emit=self._emit,
             )
+            # Diagnostics are owned by this daemon generation and shared with
+            # the facade's read-only LogsRead projection.
+            self._facade.daemon_diagnostics = self.diagnostics
             self._server = await asyncio.start_unix_server(
                 self._on_connection, path=str(self._socket)
             )
@@ -584,41 +636,79 @@ class Daemon:
             return
         self._closed = True
         self._log("daemon.stopping")
+        try:
+            await self._shutdown()
+        finally:
+            # ``_release`` closes the lock fd and removes the socket/pid. It
+            # must run even if a connection teardown raised or this coroutine
+            # was cancelled mid-shutdown; otherwise the exclusive ``flock``
+            # leaks and the next start fails with "another daemon already
+            # owns ...". ``_release`` never awaits, so it cannot be interrupted.
+            await self._release()
+            self._log("daemon.stopped")
+
+    async def _shutdown(self) -> None:
         if self._reaper is not None:
             self._reaper.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._reaper
             self._reaper = None
         if self._server is not None:
+            # Stop accepting first, but do not await ``wait_closed`` yet: since
+            # Python 3.12 ``Server.wait_closed`` does not return until every
+            # accepted connection has ended, and an idle peer (for example a
+            # ``chat`` shell whose socket is still open) would otherwise pin
+            # shutdown forever. Tear the live connections down next, *then* the
+            # listener can reap them and report closed.
             self._server.close()
-            with contextlib.suppress(Exception):
-                await self._server.wait_closed()
-            self._server = None
         # Close the HTTP surface before the facade it wraps; it owns only its own
         # sockets, and the facade stays the daemon's to shut down.
         if self._http is not None:
             with contextlib.suppress(Exception):
                 await self._http.aclose()
             self._http = None
-        for connection in list(self._clients):
-            await connection._teardown()
+        # Snapshot then clear before tearing down: a handshake landing during
+        # teardown is refused by ``_client_joined`` and cannot slip into a set
+        # that is about to be dropped.
+        connections = list(self._clients)
         self._clients.clear()
+        for connection in connections:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(
+                    connection._teardown(), 2 * TEARDOWN_TIMEOUT
+                )
+        if self._server is not None:
+            # Connections are gone, so this is immediate; bounded anyway so a
+            # wedged transport cannot stop the daemon from releasing its lock.
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(
+                    self._server.wait_closed(), timeout=TEARDOWN_TIMEOUT
+                )
+            self._server = None
         if self._facade is not None:
             with contextlib.suppress(Exception):
                 await self._facade.shutdown("daemon stopping")
             self._facade = None
         self._runtime = None
-        await self._release()
-        self._log("daemon.stopped")
 
     # -- connections -------------------------------------------------------
 
     async def _on_connection(self, reader: Any, writer: Any) -> None:
         await _ClientConnection(self, reader, writer).run()
 
-    def _client_joined(self, connection: _ClientConnection) -> None:
+    def _client_joined(self, connection: _ClientConnection) -> bool:
+        """Register a handshaked connection, unless the daemon is closing.
+
+        A handshake can complete after :meth:`aclose` has snapshotted the
+        clients and stopped accepting. Refuse the late join (return ``False``)
+        so ``run`` closes the connection rather than leaving it active after
+        the lock is gone.
+        """
+        if self._closed:
+            return False
         self._clients.add(connection)
         self.touch()
+        return True
 
     def _client_left(self, connection: _ClientConnection) -> None:
         self._clients.discard(connection)
@@ -742,6 +832,7 @@ class Daemon:
                 token=token,
                 allowed_origins=self._http_origins,
                 on_shutdown=self.request_stop,
+                web_workspace=str(self.workspace),
             )
             await server.start()
         except (ValueError, TransportError, OSError) as exc:
@@ -801,6 +892,9 @@ class Daemon:
     # -- logging -----------------------------------------------------------
 
     def _log(self, message: str, **fields: Any) -> None:
+        # The diagnostics store independently selects reviewed categories and
+        # fields; keep the owner log's existing raw-field/redaction behavior.
+        self.diagnostics.capture(message, fields)
         line = f"{time.strftime('%Y-%m-%dT%H:%M:%S%z')} {message}"
         if fields:
             pairs = " ".join(f"{key}={value!r}" for key, value in fields.items())

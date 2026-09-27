@@ -7,6 +7,7 @@ result capping, event emission, and service ownership.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from nexus.tools.bundles import UnknownProfileError
 from nexus.tools.manager import (
     MAX_DISPLAY_CHARS,
     DuplicateToolError,
+    PreparedBatch,
     PreparedCall,
     ToolInputError,
     ToolManager,
@@ -32,6 +34,7 @@ from nexus.tools.manager import (
 )
 from nexus.tools.permissions import Decision, PermissionEngine
 from nexus.tools.spec import (
+    PathTarget,
     RegisteredTool,
     ToolCall,
     ToolContext,
@@ -50,21 +53,8 @@ EMPTY_SCHEMA: dict = {
 }
 
 ALL_BUILTINS = (
-    "Read",
-    "Write",
-    "Edit",
-    "MultiEdit",
-    "Glob",
-    "Grep",
-    "LS",
-    "Bash",
-    "BashOutput",
-    "KillShell",
-    "TodoWrite",
-    "ReloadExtensions",
-    "ListExtensions",
-    "WriteTool",
-    "Skill",
+    "read", "glob", "grep", "edit", "write", "apply_patch", "bash",
+    "todowrite", "skill",
 )
 
 
@@ -85,6 +75,7 @@ def make_spec(
     concurrency: str = "parallel",
     timeout_s: float | None = None,
     permission_key=None,
+    multi_path_targets=None,
     max_result_tokens: int = 25_000,
     input_schema: dict | None = None,
 ) -> ToolSpec:
@@ -97,6 +88,7 @@ def make_spec(
         concurrency=concurrency,
         timeout_s=timeout_s,
         permission_key=permission_key,
+        multi_path_targets=multi_path_targets,
         max_result_tokens=max_result_tokens,
     )
 
@@ -178,13 +170,86 @@ def test_default_catalog_is_builtins_in_bundle_order(tmp_path: Path):
     assert m.names == ALL_BUILTINS
     assert m.profile == "coding"
     assert all(tool.origin == "builtin" for tool in m.tools)
-    assert [s.name for s in m.schemas()] == list(ALL_BUILTINS)
+    assert [s.name for s in m.schemas()] == list(m.names)
     assert m.schemas() == m.schemas()  # deterministic
 
 
 def test_research_profile_is_read_only(tmp_path: Path):
-    m = ToolManager(cfg(), workspace=tmp_path, profile="research")
-    assert m.names == ("Read", "Glob", "Grep", "LS")
+    from nexus.tools.builtin.task import build_task_tool
+
+    m = ToolManager(
+        cfg(), workspace=tmp_path,
+        tools=(
+            *(
+                tool for tool in ToolManager._builtin_catalog()
+                if tool.bundle not in {"legacy_fs", "legacy_shell", "meta"}
+            ),
+            build_task_tool(None),
+        ),
+        profile="research",
+    )
+    assert m.names == ("read", "glob", "grep", "subagent", "todowrite", "skill")
+    assert "apply_patch" not in m.names
+
+
+def test_full_registered_catalog_profiles_do_not_implicitly_select_opt_ins(
+    tmp_path: Path,
+):
+    from nexus.tools.builtin import META_TOOLS_OPT_IN, OPT_IN_TOOLS
+    from nexus.tools.builtin.task import build_task_tool
+
+    builtin_catalog = ToolManager._builtin_catalog()
+    builtin_names = {tool.name for tool in builtin_catalog}
+    catalog = (
+        *builtin_catalog,
+        *(tool for tool in OPT_IN_TOOLS if tool.name not in builtin_names),
+        *META_TOOLS_OPT_IN,
+        build_task_tool(None),
+    )
+    coding = ToolManager(cfg(), workspace=tmp_path, tools=catalog)
+    assert coding.names == (
+        "read", "glob", "grep", "edit", "write", "apply_patch", "bash", "subagent",
+        "todowrite", "skill",
+    )
+    assert all(name == name.lower() for name in coding.names)
+
+    research = ToolManager(
+        cfg(), workspace=tmp_path, tools=catalog, profile="research"
+    )
+    assert research.names == (
+        "read", "glob", "grep", "subagent", "todowrite", "skill"
+    )
+    assert "apply_patch" not in research.names
+    assert not any(tool.spec.mutates for tool in research.tools)
+
+
+def test_explicit_opt_in_profile_and_tool_selection(tmp_path: Path):
+    from nexus.tools.builtin import META_TOOLS_OPT_IN, OPT_IN_TOOLS
+
+    builtin_catalog = ToolManager._builtin_catalog()
+    builtin_names = {tool.name for tool in builtin_catalog}
+    catalog = (
+        *builtin_catalog,
+        *(tool for tool in OPT_IN_TOOLS if tool.name not in builtin_names),
+        *META_TOOLS_OPT_IN,
+    )
+    with_meta = ToolManager(
+        cfg(), workspace=tmp_path, tools=catalog, profile="coding_meta"
+    )
+    assert with_meta.names[-3:] == (
+        "ReloadExtensions", "ListExtensions", "WriteTool"
+    )
+
+    legacy = ToolManager(
+        cfg(), workspace=tmp_path, tools=catalog, tool_names=("ls", "multiedit")
+    )
+    assert legacy.names == ("ls", "multiedit")
+
+    legacy_shell = ToolManager(
+        cfg(), workspace=tmp_path, tools=catalog,
+        tool_names=("BashOutput", "KillShell"),
+    )
+    assert legacy_shell.names == ("BashOutput", "KillShell")
 
 
 def test_chat_profile_has_no_tools(tmp_path: Path):
@@ -193,7 +258,7 @@ def test_chat_profile_has_no_tools(tmp_path: Path):
 
 def test_ops_profile_is_shell_only(tmp_path: Path):
     m = ToolManager(cfg(), workspace=tmp_path, profile="ops")
-    assert m.names == ("Bash", "BashOutput", "KillShell")
+    assert m.names == ("bash",)
 
 
 def test_unknown_profile_fails_closed(tmp_path: Path):
@@ -223,18 +288,18 @@ def test_duplicate_requested_names_fail(tmp_path: Path):
 
 def test_mapping_and_lookup(tmp_path: Path):
     m = ToolManager(cfg(), workspace=tmp_path)
-    assert "Read" in m
+    assert "read" in m
     assert "Nope" not in m
     assert len(m) == len(ALL_BUILTINS)
-    assert m.get("Read").name == "Read"
+    assert m.get("read").name == "read"
     assert m.get("Nope") is None
     assert m.get(5) is None
-    assert m.require("Read").spec.name == "Read"
+    assert m.require("read").spec.name == "read"
     with pytest.raises(ToolSelectionError):
         m.require("Nope")
-    assert list(m.as_mapping()) == list(ALL_BUILTINS)
-    assert [tool.name for tool in m] == list(ALL_BUILTINS)
-    assert [spec.name for spec in m.specs] == list(ALL_BUILTINS)
+    assert list(m.as_mapping()) == list(m.names)
+    assert [tool.name for tool in m] == list(m.names)
+    assert [spec.name for spec in m.specs] == list(m.names)
 
 
 # ---------------------------------------------------------------------------
@@ -360,7 +425,7 @@ def test_unknown_tool_error_lists_available_names(tmp_path: Path):
     m = ToolManager(cfg(), workspace=tmp_path)
     entry = m.prepare([ToolCall(id="c", name="Nope", input={})]).for_call("c")
     assert entry.error is not None
-    assert "Read" in entry.error.content[0].text
+    assert "read" in entry.error.content[0].text
 
 
 # ---------------------------------------------------------------------------
@@ -819,11 +884,221 @@ def test_fs_write_outside_write_root_becomes_error(tmp_path: Path):
     assert entry.code == "write_root"
 
 
+def _multi_path_resolver(data):
+    from nexus.tools.builtin._patch_parse import operation_path_refs, parse_patch
+
+    operations = parse_patch(data["patch"])
+    return tuple(
+        PathTarget(role, path)
+        for operation in operations
+        for role, path in zip(
+            (
+                ("source", "destination")
+                if operation.kind == "move"
+                else ("destination",)
+                if operation.kind == "add"
+                else ("source",)
+            ),
+            operation_path_refs(operation),
+        )
+    )
+
+
+def _multi_path_tool(run):
+    schema = {
+        "type": "object",
+        "properties": {"patch": {"type": "string"}},
+        "required": ["patch"],
+        "additionalProperties": False,
+    }
+    return make_tool(
+        "PatchProbe",
+        run,
+        bundle="task",
+        mutates=True,
+        input_schema=schema,
+        permission_key=lambda data: "legacy-scalar-key",
+        multi_path_targets=_multi_path_resolver,
+    )
+
+
+def _move_patch(source="from.txt", destination="to.txt"):
+    return (
+        "*** Begin Patch\n"
+        f"*** Move File: {source} -> {destination}\n"
+        "*** End Patch\n"
+    )
+
+
+def test_multi_path_targets_are_ordered_and_canonicalized(tmp_path: Path):
+    real = tmp_path / "real"
+    real.mkdir()
+    (tmp_path / "alias").symlink_to(real, target_is_directory=True)
+    m = manager(tmp_path, [_multi_path_tool(_noop)], ["PatchProbe"])
+    entry = m.prepare(
+        [ToolCall(id="c", name="PatchProbe", input={"patch": _move_patch("alias/from.txt", "to.txt")})]
+    ).for_call("c")
+    assert entry.path_targets == (
+        PathTarget("source", str(real / "from.txt"), "alias/from.txt"),
+        PathTarget("destination", str(tmp_path / "to.txt"), "to.txt"),
+    )
+    assert entry.key == "legacy-scalar-key"
+    assert entry.code is None
+    assert entry.error is None
+
+
+@pytest.mark.parametrize(
+    "source,destination,code",
+    [
+        ("../outside.txt", "to.txt", "write_root"),
+        ("from.txt", "../outside.txt", "write_root"),
+        ("/etc/passwd", "to.txt", "write_root"),
+        ("from.txt", "/etc/passwd", "write_root"),
+    ],
+)
+def test_multi_path_targets_reject_invalid_or_outside_paths(
+    tmp_path: Path, source: str, destination: str, code: str
+):
+    m = manager(tmp_path, [_multi_path_tool(_noop)], ["PatchProbe"])
+    entry = m.prepare(
+        [ToolCall(id="c", name="PatchProbe", input={"patch": _move_patch(source, destination)})]
+    ).for_call("c")
+    assert entry.error is not None
+    # The strict patch grammar itself rejects traversal/absolute paths before
+    # PathGuard gets them; either layer must fail closed.
+    assert entry.code in {code, "multi_path_target_error"}
+
+
+@pytest.mark.parametrize("unsafe_role", ["source", "destination"])
+def test_multi_path_targets_reject_symlink_escapes(
+    tmp_path: Path, unsafe_role: str
+):
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    (tmp_path / "link").symlink_to(outside, target_is_directory=True)
+    source = "link/from.txt" if unsafe_role == "source" else "from.txt"
+    destination = "link/to.txt" if unsafe_role == "destination" else "to.txt"
+    m = manager(tmp_path, [_multi_path_tool(_noop)], ["PatchProbe"])
+    entry = m.prepare(
+        [ToolCall(id="c", name="PatchProbe", input={"patch": _move_patch(source, destination)})]
+    ).for_call("c")
+    assert entry.error is not None
+    assert entry.code == "write_root"
+
+
+async def test_multi_path_targets_remain_unsupported_at_dispatch(
+    tmp_path: Path,
+):
+    ran: list[bool] = []
+
+    async def run(args, ctx):
+        ran.append(True)
+        return ToolExecutionResult.text("ran")
+
+    m = manager(tmp_path, [_multi_path_tool(run)], ["PatchProbe"])
+    batch = m.prepare(
+        [ToolCall(id="c", name="PatchProbe", input={"patch": _move_patch()})]
+    )
+    # An explicit scalar decision cannot bypass the unsupported dispatch seam.
+    batch = batch.with_decisions({"c": Decision.ALLOW_ONCE})
+    result = await m.dispatch(batch, ctx_factory(tmp_path))
+    assert ran == []
+    assert result[0].is_error
+    assert "no valid multi-target approval evidence" in result[0].content[0].text
+
+
+async def test_multi_path_dispatch_rejects_forged_authorization_handle(tmp_path: Path):
+    ran: list[bool] = []
+
+    async def run(args, ctx):
+        ran.append(True)
+        return ToolExecutionResult.text("ran")
+
+    m = manager(tmp_path, [_multi_path_tool(run)], ["PatchProbe"])
+    batch = m.prepare(
+        [ToolCall(id="c", name="PatchProbe", input={"patch": _move_patch()})]
+    )
+    entry = batch.for_call("c")
+    assert entry is not None
+    forged = PreparedBatch(
+        (
+            dataclasses.replace(
+                entry,
+                decision=Decision.ALLOW_ONCE,
+                _multi_target_authorization=object(),
+            ),
+        )
+    )
+
+    result = await m.dispatch(forged, ctx_factory(tmp_path))
+
+    assert ran == []
+    assert result[0].is_error
+    assert "no valid multi-target approval evidence" in result[0].content[0].text
+
+
+async def test_multi_path_targets_recheck_after_mutation(tmp_path: Path):
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    link = tmp_path / "link"
+    link.mkdir()
+    ran: list[bool] = []
+
+    async def run(args, ctx):
+        ran.append(True)
+        return ToolExecutionResult.text("ran")
+
+    m = manager(tmp_path, [_multi_path_tool(run)], ["PatchProbe"])
+    batch = m.prepare(
+        [
+            ToolCall(
+                id="c",
+                name="PatchProbe",
+                input={"patch": _move_patch("link/from.txt", "to.txt")},
+            )
+        ]
+    )
+    # A would-be plan allow still cannot pass the manager's unsupported seam.
+    plan = PermissionEngine(
+        mode="allow", allow=["PatchProbe(**)"], path_guard=m.path_guard
+    ).plan(batch.calls(), batch.spec_map())
+    assert plan.evaluations[0].outcome.value == "allow"
+    link.rmdir()
+    link.symlink_to(outside, target_is_directory=True)
+    result = await m.dispatch(
+        batch.with_decisions({"c": Decision.ALLOW_ONCE}), ctx_factory(tmp_path)
+    )
+    assert ran == []
+    assert result[0].is_error
+    assert "Write denied" in result[0].content[0].text
+
+
+async def test_scalar_tool_permission_behavior_is_unchanged(tmp_path: Path):
+    ran: list[bool] = []
+
+    async def run(args, ctx):
+        ran.append(True)
+        return ToolExecutionResult.text("ran")
+
+    m = manager(
+        tmp_path,
+        [make_tool("Scalar", run, permission_key=lambda _data: "scalar-key")],
+        ["Scalar"],
+    )
+    entry = m.prepare([ToolCall(id="c", name="Scalar", input={})]).for_call("c")
+    assert entry.key == "scalar-key"
+    result = await m.dispatch(
+        gate(m.prepare([ToolCall(id="c", name="Scalar", input={})])),
+        ctx_factory(tmp_path),
+    )
+    assert not result[0].is_error
+    assert ran == [True]
+
+
 def test_directory_tool_without_path_is_left_alone(tmp_path: Path):
     m = ToolManager(cfg(), workspace=tmp_path)
     entry = m.prepare([ToolCall(id="c", name="LS", input={})]).for_call("c")
-    assert entry.error is None
-    assert entry.key == "."
+    assert entry.code == "unknown_tool"
 
 
 # ---------------------------------------------------------------------------

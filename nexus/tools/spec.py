@@ -30,7 +30,7 @@ import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import msgspec
 
@@ -38,6 +38,9 @@ from ..config import Config
 from ..errors import ToolError
 from ..model.message import ContentBlock, Text, ToolResult, ToolUse
 from ..model.request import ToolSchema
+
+if TYPE_CHECKING:
+    from ..net import OutboundHTTPService
 
 #: Tool names: one leading letter, then up to 63 letters/digits/underscores.
 NAME_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}\Z")
@@ -128,18 +131,20 @@ class JobRegistryView(Protocol):
 
 
 class TodoStoreView(Protocol):
-    """The session-scoped todo-state seam injected through :class:`ToolContext`.
+    """The agent-scoped todo-state seam injected through :class:`ToolContext`.
 
     Implemented structurally by :class:`nexus.tools.builtin.todo.TodoStore`; the
     manager owns one and injects it so ``TodoWrite`` never writes a workspace
     file and the state survives across calls in a session.
     """
 
-    def get(self, session_id: str) -> tuple[object, ...]: ...
+    def get(self, session_id: str, agent_id: str = ...) -> tuple[object, ...]: ...
 
-    def replace(self, session_id: str, items: object) -> tuple[object, ...]: ...
+    def replace(
+        self, session_id: str, items: object, agent_id: str = ...
+    ) -> tuple[object, ...]: ...
 
-    def clear(self, session_id: str) -> None: ...
+    def clear(self, session_id: str, agent_id: str = ...) -> None: ...
 
 
 class SkillServiceView(Protocol):
@@ -241,6 +246,25 @@ class SubagentServiceView(Protocol):
 
 #: How a tool declares what a permission rule matches against.
 PermissionKeyFn = Callable[[dict[str, Any]], str]
+
+
+@dataclass(frozen=True, slots=True)
+class PathTarget:
+    """One immutable path reference returned by a multi-target resolver.
+
+    ``role`` identifies the operation's relationship to the path (for example
+    ``"source"`` or ``"destination"``); ``path`` is the raw path supplied by
+    the tool input in resolver output and the canonical absolute path on a
+    prepared call. ``raw_path`` is manager-owned and retained only to recheck
+    symlink-sensitive resolution immediately before dispatch.
+    """
+
+    role: str
+    path: str
+    raw_path: str | None = None
+
+
+MultiPathTargetFn = Callable[[dict[str, Any]], tuple[PathTarget, ...]]
 
 
 # ---------------------------------------------------------------------------
@@ -363,6 +387,11 @@ class ToolSpec(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: the ``fs`` bundle (for example the meta ``WriteTool``). Declared last so
     #: adding it leaves every existing positional field position unchanged.
     path_mode: bool = False
+    #: Optional ordered resolver for every path touched by one operation. The
+    #: resolver must return an immutable tuple of :class:`PathTarget` values.
+    #: Until the permission engine can evaluate every target, the manager
+    #: validates and retains them but refuses execution.
+    multi_path_targets: MultiPathTargetFn | None = None
 
     def __post_init__(self) -> None:
         from .bundles import BUNDLE_NAMES
@@ -392,6 +421,10 @@ class ToolSpec(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
             raise ToolSpecError("permission_key must be callable or None")
         if not isinstance(self.path_mode, bool):
             raise ToolSpecError("path_mode must be a bool")
+        if self.multi_path_targets is not None and not callable(
+            self.multi_path_targets
+        ):
+            raise ToolSpecError("multi_path_targets must be callable or None")
         if (
             isinstance(self.max_result_tokens, bool)
             or not isinstance(self.max_result_tokens, int)
@@ -425,6 +458,49 @@ class ToolSpec(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
         if "\x00" in value:
             raise ToolSpecError(f"{self.name}.permission_key returned a NUL byte")
         return value
+
+    def resolve_multi_path_targets(
+        self, tool_input: dict[str, Any]
+    ) -> tuple[PathTarget, ...]:
+        """Return validated, ordered targets, or an empty tuple if undeclared.
+
+        Resolver output must be a tuple (not a mutable sequence) of immutable
+        ``PathTarget`` values. This keeps path order and roles stable across
+        preparation, future policy evaluation, and execution-time rechecks.
+        """
+        if self.multi_path_targets is None:
+            return ()
+        targets = self.multi_path_targets(dict(tool_input))
+        if not isinstance(targets, tuple):
+            raise ToolSpecError(
+                f"{self.name}.multi_path_targets must return a tuple"
+            )
+        for index, target in enumerate(targets):
+            if not isinstance(target, PathTarget):
+                raise ToolSpecError(
+                    f"{self.name}.multi_path_targets[{index}] must be a PathTarget"
+                )
+            if not isinstance(target.role, str) or not target.role.strip():
+                raise ToolSpecError(
+                    f"{self.name}.multi_path_targets[{index}].role must be non-empty"
+                )
+            if "\x00" in target.role:
+                raise ToolSpecError(
+                    f"{self.name}.multi_path_targets[{index}].role contains a NUL byte"
+                )
+            if not isinstance(target.path, str) or not target.path:
+                raise ToolSpecError(
+                    f"{self.name}.multi_path_targets[{index}].path must be non-empty"
+                )
+            if "\x00" in target.path:
+                raise ToolSpecError(
+                    f"{self.name}.multi_path_targets[{index}].path contains a NUL byte"
+                )
+            if target.raw_path is not None:
+                raise ToolSpecError(
+                    f"{self.name}.multi_path_targets[{index}].raw_path is manager-owned"
+                )
+        return targets
 
 
 # ---------------------------------------------------------------------------
@@ -545,6 +621,11 @@ class ToolContext:
     activations: SkillActivationSink | None = None
     skill_service: SkillServiceView | None = None
     extension_service: ExtensionServiceView | None = None
+    #: Runtime-shared hardened outbound GET service; tools receive no Runtime.
+    outbound_http: OutboundHTTPService | None = None
+    #: Stable identity within a session. Runtime root tools use ``"root"``;
+    #: child adapters use the runner-assigned ChildSpec.agent_id.
+    agent_id: str = "root"
 
     async def report(self, text: str, data: dict[str, Any] | None = None) -> None:
         """Emit a ``tool.progress`` event if a sink is attached."""
@@ -607,6 +688,8 @@ __all__ = [
     "Concurrency",
     "ExtensionServiceView",
     "JobRegistryView",
+    "MultiPathTargetFn",
+    "PathTarget",
     "PermissionKeyFn",
     "ProgressEmitter",
     "RegisteredTool",

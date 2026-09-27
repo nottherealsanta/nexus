@@ -149,8 +149,14 @@ active. Precedence is workspace > user > builtin.
 
 `.nexus/agents/<name>.md`. The frontmatter grammar is deliberately restricted
 (no YAML library): the keys are `name`, `description`, `bundles`, `tools`,
-`model`, `max_iterations`, `context_tokens`, `contexts`, and `profile`. A
-`tools` item may carry a leading `-` to exclude.
+`model`, `provider`, `reasoning_effort`, `color`, `max_iterations`,
+`context_tokens`, `contexts`, and `profile`. A `tools` item may carry a leading
+`-` to exclude. Empty or omitted `tools` and `bundles` inherit the parent/profile
+tool ceiling; they never grant tools. Omitted `contexts` keeps the legacy
+subagent-only default. `provider` is optional and must agree with a qualified
+`model: provider/model`; `reasoning_effort` accepts `minimal`, `low`, `medium`,
+`high`, or `xhigh`. `color` is optional and must be `#RRGGBB`; when omitted, a
+stable palette color is derived from the case-normalized agent name.
 
 ```markdown
 ---
@@ -159,6 +165,9 @@ description: Read-only reviewer for auth and secrets handling.
 bundles: [fs]
 tools: [-Write, -Edit, -MultiEdit, -Bash]
 model: high
+provider: anthropic
+reasoning_effort: high
+color: #4F8EF7
 max_iterations: 20
 ---
 

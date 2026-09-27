@@ -179,7 +179,7 @@ async def test_bundled_skill_tool_builtin_collision_fails(tmp_path: Path):
     report = await manager.reload()
     assert report.failed
     assert report.failed[0].error_type == "collision"
-    assert "Read" in manager.manifest.tools
+    assert "read" in manager.manifest.tools
     await manager.aclose()
 
 
