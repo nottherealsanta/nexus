@@ -552,8 +552,8 @@ OptionList {
 }
 
 OptionList > .option-list--option-highlighted {
-    background: $nx-element-hi;
-    color: $nx-text;
+    background: $nx-accent;
+    color: $nx-on-accent;
 }
 
 /* Screenshot fixture for the reference Terminal TUI; the live shell keeps its
