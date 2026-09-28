@@ -33,6 +33,47 @@ def test_defaults_when_no_files(tmp_path):
     assert ConfigV2().sessions.auto_archive_days == 2
 
 
+def test_nested_git_workspace_inherits_project_models_without_changing_workspace(tmp_path):
+    home = _home(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".git").mkdir()
+    (project / "nexus.toml").write_text(
+        'config_version = 2\n[models]\ndefault = "codex/gpt-test"\n'
+        '[providers.codex]\nauth = "chatgpt_oauth"\napi = "responses"\n',
+        encoding="utf-8",
+    )
+    workspace = project / "benchmark"
+    workspace.mkdir()
+    config = Config.load(workspace, home=home, environ={})
+    assert config.version == 2
+    assert config.model == "codex/gpt-test"
+    assert config.v2.models_configured()
+    assert "codex" in config.v2.providers
+    assert config.source == str(project / "nexus.toml")
+
+    (workspace / "nexus.toml").write_text(
+        'config_version = 2\n[models]\ndefault = "codex/local"\n', encoding="utf-8"
+    )
+    assert Config.load(workspace, home=home, environ={}).model == "codex/local"
+
+
+def test_git_config_does_not_cross_repository_or_unrelated_parent(tmp_path):
+    home = _home(tmp_path)
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    (parent / "nexus.toml").write_text('model = "parent"\n', encoding="utf-8")
+    workspace = parent / "unrelated"
+    workspace.mkdir()
+    assert Config.load(workspace, home=home, environ={}).model is None
+
+    (parent / ".git").mkdir()
+    nested = workspace / "nested"
+    nested.mkdir()
+    (workspace / ".git").write_text("gitdir: elsewhere", encoding="utf-8")
+    assert Config.load(nested, home=home, environ={}).model is None
+
+
 @pytest.mark.parametrize("days", [-1, 3651, True, 1.5])
 def test_auto_archive_days_must_be_a_bounded_integer(days):
     with pytest.raises(ValueError, match="sessions.auto_archive_days"):

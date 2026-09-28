@@ -119,3 +119,19 @@ async def test_modal_persists_favorite_and_recent_after_selection(tmp_path):
     restarted = NexusTextualApp(Client(ModelPickerTransport()), session="favorites", preferences_path=path)
     assert restarted.prefs["model_favorites"] == ["fake/chosen"]
     assert restarted.prefs["model_recent"] == ["fake/chosen"]
+
+
+@pytest.mark.asyncio
+async def test_modal_explains_when_workspace_has_no_configured_models():
+    transport = ModelPickerTransport()
+    transport.models = []
+    app = NexusTextualApp(Client(transport), session="empty-models")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app._push_model_picker()
+        await pilot.pause()
+        modal = app.screen
+        assert isinstance(modal, ModelPickerScreen)
+        option = modal.query_one("#model-picker-options").get_option_at_index(0)
+        assert "No selectable models" in str(option.prompt)
+        assert "nexus.toml" in str(option.prompt)

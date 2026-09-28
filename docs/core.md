@@ -51,6 +51,13 @@ events ──► session log ──► view/reduce.py (pure) ──► Conversat
 
 ## Host layer (the surface every UI talks to)
 
+For a workspace inside a Git repository, configuration loads the repository
+root's `nexus.toml` as a lower-precedence project layer. The exact workspace's
+`nexus.toml` and `.nexus/nexus.toml` override it; the workspace and its relative
+context-file paths do not change. Nexus does not inherit arbitrary parent
+configuration outside the nearest Git root. `~/.nexus/config.toml` supplies
+defaults for unrelated workspaces.
+
 | File | Role |
 | --- | --- |
 | `host/protocol.py` | Wire contract: frozen, tagged `msgspec` commands and `*Result` structs, `PROTOCOL_VERSION`, `decode_command`. Commands include `SessionList/Open/Start/Enqueue/Cancel/Subscribe/State/Fork/Delete/Restore/Export`, `PermissionResolve`, `ModelsList/ModelSelect/ReasoningEffortSelect`, `AgentsList` (its `default` is `[agent] name`, the agent new sessions start with)`/AgentCurrent/AgentSelect/AgentReset/AgentDefaultSet` (writes `[agent] name` via `host_support/settings_inventory.py`), `ToolsList`, `ContextInspect`, `FileSearch`, `LogsRead`, `Worktree*`, `Doctor` (includes MCP status), `Health`, `WebLaunch`, `Shutdown`. |

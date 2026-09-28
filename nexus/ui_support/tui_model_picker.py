@@ -147,7 +147,9 @@ class ModelPickerScreen(ModalScreen[tuple[str, str | None, bool] | None]):
                 self._visible_rows.append(row)
         listing = self.query_one(OptionList)
         listing.clear_options()
-        listing.add_options(options or [Option("No matching models", disabled=True)])
+        empty = ("No matching models" if query else
+                 "No selectable models · configure a provider in nexus.toml or ~/.nexus/config.toml")
+        listing.add_options(options or [Option(empty, disabled=True)])
         chosen = selected_ref or (self.current if not query else "")
         index = next((i for i, row in enumerate(self._visible_rows)
                       if row is not None and _ref(row) == chosen), None)

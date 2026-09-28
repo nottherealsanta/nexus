@@ -336,6 +336,16 @@ def _read_docs(
     user = user_config_path(home)
     if user.exists():
         docs.append((str(user), read_toml(user)))
+    # A nested workspace shares its repository's project configuration without
+    # inheriting arbitrary parent directories. Its own files still override it.
+    root = Path(workspace).resolve()
+    for parent in (root, *root.parents):
+        if (parent / ".git").exists():
+            if parent != root:
+                project_file = workspace_config_path(parent)
+                if project_file.exists():
+                    docs.append((str(project_file), read_toml(project_file)))
+            break
     workspace_file = workspace_config_path(workspace)
     if workspace_file.exists():
         docs.append((str(workspace_file), read_toml(workspace_file)))
