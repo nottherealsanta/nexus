@@ -337,12 +337,13 @@ def _check_transcript(playwright, browser: Browser) -> None:
         )
         text = _received_terminal_text(received)
         assert (
+            # Taui-style footer: "AGENT · model · duration".
             "0.0s" in text
             and "Elapsed" not in text
-            and "Model demo/nexus-small" in text
-            and "Effort Default" in text
+            and "NO AGENT" in text
+            and "nexus-small" in text
         ), (
-            f"completed transcript omitted its turn summary: {text!r}"
+            f"completed transcript omitted its turn summary: {text[-500:]!r}"
         )
         print("transcript: screenshot captured (user message + Read/Edit tool cards + completed turn summary)")
     finally:
@@ -466,7 +467,7 @@ def _check_commands_shortcuts(playwright, browser: Browser) -> None:
 
 
 def _check_slash_suggestions_keyboard(playwright, browser: Browser, command_log: Path) -> None:
-    """Render the complete seven-row slash page and execute a non-first item."""
+    """Scroll the alphabetical slash list and execute a non-first item."""
     server = _start_acceptance(command_log)
     page = browser.new_page(viewport={"width": 900, "height": 900}, device_scale_factor=1)
     received: list[str] = []
@@ -480,11 +481,11 @@ def _check_slash_suggestions_keyboard(playwright, browser: Browser, command_log:
         page.keyboard.type("/")
         page.wait_for_timeout(300)
         before = _shot(page, "functional-slash-suggestions.png")
-        page.keyboard.press("ArrowDown", delay=30)
-        page.keyboard.press("ArrowDown", delay=30)
-        page.keyboard.press("ArrowDown", delay=30)
-        page.keyboard.press("ArrowDown", delay=30)
-        page.keyboard.press("ArrowDown", delay=30)
+        from nexus.ui.cli import commands
+
+        visible = sorted(spec.name for spec in commands.SPECS if not spec.hidden)
+        for _ in range(visible.index("/details")):
+            page.keyboard.press("ArrowDown", delay=30)
         page.keyboard.press("Enter")
         deadline = time.monotonic() + 5
         terminal = ""
@@ -496,11 +497,11 @@ def _check_slash_suggestions_keyboard(playwright, browser: Browser, command_log:
         after = _shot(page, "functional-slash-details-executed.png")
         assert before != after, "selecting /details did not change the rendered screen"
         assert "session visual" in terminal, (
-            f"non-first /details suggestion did not execute: {terminal!r}"
+            f"non-first /details suggestion did not execute: {terminal[-500:]!r}"
         )
         stream = _sent_stdin(sent)
         assert "/" in stream and "\x1b[B" in stream and "\r" in stream, stream
-        print("slash suggestions: seven rows rendered; ArrowDown×5 + Enter executed /details")
+        print("slash suggestions: alphabetical rows rendered; ArrowDown×8 + Enter executed /details")
     finally:
         page.close()
         _stop(server)
@@ -912,10 +913,7 @@ def _check_logs_reasoning_and_sessions(playwright, browser: Browser, command_log
             command_log,
             lambda current: len([row for row in current if row["command"] == "AgentCurrent"]) >= 4,
         )
-        _shot(page, "functional-effort-picker-open.png")
-        # The effort picker is a typeahead-filtered list above the composer.
-        page.keyboard.press("ArrowDown")
-        page.keyboard.press("Enter")
+        # Ctrl+T cycles effort in place; the picker is reached through /effort.
         rows = _wait_acceptance_rows(
             command_log,
             lambda current: any(
@@ -952,7 +950,7 @@ def _check_logs_reasoning_and_sessions(playwright, browser: Browser, command_log
             and str(row.get("active_session", "")).startswith("session-")
             for row in rows
         ), f"Ctrl+N did not open a new host session: {rows!r}"
-        print("logs/reasoning/session: Ctrl+E open/close, Ctrl+T opened effort picker and selected medium, Ctrl+O listed sessions, Ctrl+N opened a new host session")
+        print("logs/reasoning/session: Ctrl+E open/close, Ctrl+T cycled effort low -> medium, Ctrl+O listed sessions, Ctrl+N opened a new host session")
     finally:
         page.close()
         _stop(server)

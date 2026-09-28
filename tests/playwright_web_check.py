@@ -72,6 +72,8 @@ def _web_fixture(session: str) -> dict[str, object]:
         tool("running-1", 13, "Read", "running", display="Still working"),
         tool("failed-1", 14, "Bash", "failed", error="Command failed safely", input={"command": "false"}),
     ]
+    if session.endswith("question"):
+        tools.append(tool("question-1", 15, "question", "running", input={"question": "Which database should the new service use?", "options": ["Postgres", "SQLite", "Keep the current one"]}))
     approval_call = session.endswith(("approval", "targets-unavailable", "targets-incomplete", "targets-over-limit", "scalar-approval"))
     boundary_call = session.endswith("boundary")
     targets_unavailable = session.endswith("targets-unavailable")
@@ -361,69 +363,102 @@ async def main() -> None:
                 session = page.url.rsplit("/s/", 1)[1]
                 assert session
                 await page.locator("#connection-label").get_by_text("Live sync").wait_for(timeout=5_000)
-                await page.locator("#context-preview").wait_for(state="visible", timeout=5_000)
-                assert await page.locator("#context-preview").evaluate("n => n.compareDocumentPosition(document.querySelector('#timeline')) & Node.DOCUMENT_POSITION_FOLLOWING")
-                await page.locator("#context-inline-content .context-inline-part-more:not([hidden])").first.wait_for(timeout=3_000)
-                main_context = await page.locator("#context-inline-content").inner_text()
-                assert "SYSTEM PROMPT · request.system" in main_context
-                assert "Prompt line 10" in main_context
-                assert "..." in main_context
-                assert "Prior line 1" in main_context and "I found the failing path." in main_context
-                assert await page.locator("#context-inline-content .context-link").count() >= 4
-                preview_layout = await page.locator("#context-inline-content .context-inline-part-preview").first.evaluate("node => { const style = getComputedStyle(node); return {clamp: style.webkitLineClamp, overflow: style.overflow, height: node.getBoundingClientRect().height, lineHeight: parseFloat(style.lineHeight)}; }")
-                assert preview_layout["overflow"] == "hidden"
-                assert preview_layout["height"] <= preview_layout["lineHeight"] * 10 + 28
-                inline_layout = await page.locator("#context-inline-content").evaluate("node => { const style = getComputedStyle(node); return {overflow: style.overflow, maxHeight: style.maxHeight}; }")
-                assert inline_layout["overflow"] == "visible" and inline_layout["maxHeight"] == "none"
-                assert "TOOLS · structured request.tools · 1" in main_context
-                assert "MESSAGES · ordered request.messages · 2" in main_context
-                assert "I found the failing path." in main_context
-                assert "420 / 8,000 input tokens" in main_context
-                await page.locator("#context-inline-content .context-inline-part-preview").first.click()
+                await terminal.call(p.SessionOpen(session="sidebar-check"))
+                await terminal.call(p.SessionArchive(session="sidebar-check"))
+                archived_row = page.locator('#archived-list .session-item').filter(
+                    has=page.locator('.session-row[title*="sidebar-check"]')
+                )
+                await archived_row.wait_for(timeout=5_000)
+                assert await archived_row.locator(".session-delete").is_visible()
+                assert await page.locator("#session-list .session-delete").count() == await page.locator("#session-list .session-item").count()
+                await archived_row.get_by_role("button", name="Delete").click()
+                await page.get_by_text("Deleted “sidebar-check”").wait_for(timeout=5_000)
+                await page.locator("#toast-region .toast").last.get_by_role("button", name="Undo").click()
+                await archived_row.wait_for(timeout=5_000)
+                # Like the terminal, every conversation opens on the four-block
+                # request header (ui_support/tui_context_header.py).
+                header = page.locator("#timeline > .context-header")
+                await header.get_by_text(f"Session marker {session}", exact=False).wait_for(timeout=5_000)
+                assert await page.locator("#timeline > *").first.evaluate("n => n.classList.contains('context-header')")
+                assert await page.locator("#context-preview").is_hidden()
+                main_context = await header.inner_text()
+                assert [await chip.text_content() for chip in await header.locator(".context-chip").all()] == ["System prompt", "Tools", "Skills", "MCP"]
+                assert "Prompt line 5" in main_context and "Prompt line 6" not in main_context
+                assert "… +7 more lines" in main_context
+                assert "Read" in main_context and "included-skill" in main_context and "available-skill" not in main_context
+                assert await header.locator(".context-block.empty").count() == 1
+                assert await header.locator("script").count() == 0
+                # The System prompt block shows only the prompt, rendered as Markdown.
+                await header.locator(".context-block").first.click()
+                system_dialog = page.get_by_role("dialog", name="System prompt")
+                await system_dialog.wait_for(state="visible")
+                await system_dialog.get_by_text("Prompt line 12", exact=False).first.wait_for()
+                assert await system_dialog.locator(".ctx-system .context-markdown").count() == 1
+                await page.keyboard.press("Escape")
+                await header.locator(".context-block").nth(2).click()
                 context_dialog = page.get_by_role("dialog", name="Current context")
                 await context_dialog.wait_for(state="visible")
-                await context_dialog.get_by_text("Prompt line 12", exact=False).wait_for()
-                assert "Input schema · request.tools" in await context_dialog.inner_text()
+                # Grouped like the TUI: system prompt, tools, then one group per turn, all collapsed.
+                group_titles = await context_dialog.locator(".ctx-group > summary .ctx-title").all_inner_texts()
+                assert group_titles[:2] == ["System prompt", "Tools"] and group_titles[-1] == "Request details", group_titles
+                assert any(title.startswith("Turn ") for title in group_titles), group_titles
+                assert await context_dialog.locator(".ctx-group[open]").count() == 0
+                await context_dialog.get_by_role("button", name="Expand all").click()
+                await context_dialog.get_by_text("Prompt line 12", exact=False).first.wait_for()
+                assert "Schema" in await context_dialog.inner_text()
                 assert "field-11" in await context_dialog.inner_text()
                 assert "Prior line 12" in await context_dialog.inner_text()
                 assert "Agent line 12" in await context_dialog.inner_text()
                 assert await context_dialog.locator("script").count() == 0
                 assert await page.evaluate("window.contextPwned") is None
-                context_command_count = len(context_commands)
                 await page.keyboard.press("Escape")
                 assert await context_dialog.count() == 0
-                assert len(context_commands) == context_command_count
                 assert await page.locator("#composer-input").input_value() == ""
+                # The Tools block opens the grouped tool list instead.
+                await header.locator(".context-block").nth(1).click()
+                tools_dialog = page.get_by_role("dialog", name="Tools")
+                await tools_dialog.wait_for(state="visible")
+                # One row per tool; a family of one tool has no header of its own.
+                assert await tools_dialog.locator(".ctx-entry").count() >= 1
+                assert await tools_dialog.locator(".ctx-entry[open]").count() == 0
+                assert await tools_dialog.locator(".ctx-group:not([open])").count() == 0
+                assert "definition" in await tools_dialog.inner_text()
+                await page.keyboard.press("Escape")
+                assert await tools_dialog.count() == 0
+                # A failed inspection is reported in the dialog; the header keeps the last good one.
                 context_failure["message"] = "Cannot inspect context while a turn is active"
-                await page.locator("#context-refresh-inline").click()
+                await page.locator("#context-toolbar").click()
+                await context_dialog.wait_for(state="visible")
                 await page.wait_for_timeout(500)
-                context_status = await page.locator("#context-inline-status").inner_text()
-                assert "inspection is unavailable" in context_status.lower(), {"status": context_status, "context_commands": context_commands[-3:], "timeline": await page.locator("#timeline").inner_text()}
+                context_status = await page.locator("#context-modal-status").inner_text()
+                assert "inspection is unavailable" in context_status.lower(), {"status": context_status, "context_commands": context_commands[-3:]}
+                await page.keyboard.press("Escape")
+                assert f"Session marker {session}" in await header.inner_text()
                 assert await page.locator("#composer-input").is_enabled()
                 context_failure["message"] = ""
-                await page.locator("#context-refresh-inline").click()
-                await page.locator("#context-inline-status").get_by_text("Current request structure", exact=False).wait_for(timeout=3_000)
+                # A slow inspection for one session never paints over another.
                 delayed_context["entered"].clear()
                 delayed_context["release"].clear()
                 delayed_context["session"] = session
-                await page.locator("#context-refresh-inline").click()
+                await page.locator("#context-toolbar").click()
                 await asyncio.wait_for(delayed_context["entered"].wait(), timeout=5)
+                await page.keyboard.press("Escape")
                 context_switch_session = "context-switch-target"
                 daemon.facade.open_session(context_switch_session, create=True, recover=True)
                 await page.evaluate("""id => {
                   history.pushState({session:id}, '', `/s/${id}`);
                   dispatchEvent(new PopStateEvent('popstate'));
                 }""", context_switch_session)
-                await page.locator("#context-inline-content").get_by_text(f"Session marker {context_switch_session}", exact=False).wait_for(timeout=5_000)
+                await header.get_by_text(f"Session marker {context_switch_session}", exact=False).wait_for(timeout=5_000)
                 delayed_context["release"].set()
                 await page.wait_for_timeout(100)
-                assert f"Session marker {context_switch_session}" in await page.locator("#context-inline-content").inner_text()
-                assert session not in await page.locator("#context-inline-content").inner_text()
+                assert f"Session marker {context_switch_session}" in await header.inner_text()
+                assert f"Session marker {session} " not in await header.inner_text()
                 await page.evaluate("""id => {
                   history.pushState({session:id}, '', `/s/${id}`);
                   dispatchEvent(new PopStateEvent('popstate'));
                 }""", session)
-                await page.locator("#context-inline-content").get_by_text(f"Session marker {session}", exact=False).wait_for(timeout=5_000)
+                await header.get_by_text(f"Session marker {session}", exact=False).wait_for(timeout=5_000)
                 await page.locator("#composer-input").fill("must remain an unsent draft")
 
                 started_at = time.monotonic()
@@ -468,6 +503,11 @@ async def main() -> None:
                 # the authoritative prefix and continue on the same daemon turn.
                 await page.reload(wait_until="domcontentloaded")
                 await page.get_by_text("First streamed half.", exact=False).wait_for(timeout=8_000)
+                active_sidebar_row = page.locator("#session-list .session-item:has(.session-row.active)")
+                await active_sidebar_row.locator('.session-status[data-status="working"]').wait_for(timeout=5_000)
+                assert await active_sidebar_row.locator(".session-status").evaluate(
+                    "node => getComputedStyle(node, '::before').animationName"
+                ) == "spin"
                 before_active_send = len([r for r in daemon.facade.runtime.session(session).read().records if isinstance(r, EventRecord) and r.event.type in {"input.started", "input.queued"}])
                 assert await page.locator("#composer-input").is_disabled()
                 await page.locator("#composer-form").evaluate("e=>e.requestSubmit()")
@@ -480,8 +520,8 @@ async def main() -> None:
                 await page.screenshot(path=str(ARTIFACTS / "running-draft.png"), full_page=True)
                 gate.set()
                 await page.get_by_text("Second streamed half.", exact=False).wait_for(timeout=8_000)
-                await page.locator("#send-button").wait_for(state="visible", timeout=8_000)
-                assert await page.locator("#stop-button").is_hidden()
+                await page.locator("#stop-button").wait_for(state="hidden", timeout=8_000)
+                assert await page.locator("#send-button").count() == 0
                 assert await page.locator("#connection-banner").is_hidden()
                 await page.screenshot(path=str(ARTIFACTS / "light.png"), full_page=True)
 
@@ -490,7 +530,7 @@ async def main() -> None:
                 subscription = await terminal.subscribe(session, baseline.seq, follow=True)
                 try:
                     await page.locator("#composer-input").fill("Started in web")
-                    await page.locator("#send-button").click()
+                    await page.locator("#composer-input").press("Enter")
 
                     async def terminal_completion() -> list[str]:
                         seen: list[str] = []
@@ -542,6 +582,7 @@ async def main() -> None:
                 fixture_a, fixture_b, fixture_approval, fixture_boundary = "ui-fixture-a", "ui-fixture-b", "ui-fixture-approval", "ui-fixture-boundary"
                 fixture_targets_unavailable, fixture_targets_incomplete, fixture_targets_over_limit = "ui-fixture-targets-unavailable", "ui-fixture-targets-incomplete", "ui-fixture-targets-over-limit"
                 fixture_scalar_approval = "ui-fixture-scalar-approval"
+                fixture_question = "ui-fixture-question"
                 effort_a, effort_b, effort_none = "ui-effort-a", "ui-effort-b", "ui-effort-none"
                 context_select_session = "ui-context-select-agent-model"
                 for effort_session in (effort_a, effort_b, effort_none):
@@ -555,6 +596,7 @@ async def main() -> None:
                 daemon.facade.open_session(fixture_targets_incomplete, create=True, recover=True)
                 daemon.facade.open_session(fixture_targets_over_limit, create=True, recover=True)
                 daemon.facade.open_session(fixture_scalar_approval, create=True, recover=True)
+                daemon.facade.open_session(fixture_question, create=True, recover=True)
                 fixture_disconnect="ui-fixture-disconnect"
                 daemon.facade.open_session(fixture_disconnect,create=True,recover=True)
                 original_snapshot = daemon.facade.web_snapshot
@@ -820,14 +862,14 @@ async def main() -> None:
                 await page.locator("#close-inspector").click()
 
                 # Malformed target lists are explicit fail-closed approvals:
-                # no allow action is offered, and denial still reaches the host.
+                # allow rows are shown disabled, and denial still reaches the host.
                 for target_session in (fixture_targets_unavailable, fixture_targets_incomplete, fixture_targets_over_limit):
                     await page.goto(f"{page.url.split('/s/')[0]}/s/{target_session}", wait_until="domcontentloaded")
                     approval_card = page.locator(".permission-card")
                     await approval_card.wait_for(state="visible", timeout=5_000)
                     await page.get_by_text("Target details are unavailable or incomplete. This request cannot be approved.", exact=True).wait_for()
-                    assert await approval_card.get_by_role("button", name="Allow once").count() == 0
-                    assert await approval_card.get_by_role("button", name="Allow for session").count() == 0
+                    assert await approval_card.get_by_role("button", name="Allow once").is_disabled()
+                    assert await approval_card.get_by_role("button", name="Allow for session").is_disabled()
                     assert await approval_card.get_by_role("button", name="Deny once").is_enabled()
                     async with page.expect_request(lambda request: request.url.endswith("/v1/web/command") and
                                                    json.loads(request.post_data or "{}").get("type") == "PermissionResolve") as request_info:
@@ -841,11 +883,30 @@ async def main() -> None:
                 assert await scalar_approval.get_by_role("button", name="Allow once").is_enabled()
                 assert await scalar_approval.get_by_role("button", name="Allow for session").is_enabled()
 
+                # An agent question is the running ``question`` call, shown as a
+                # list like the pickers and answered by call id.
+                await page.goto(f"{page.url.split('/s/')[0]}/s/{fixture_question}", wait_until="domcontentloaded")
+                question_card = page.locator(".question-card")
+                await question_card.wait_for(state="visible", timeout=5_000)
+                await question_card.get_by_text("Which database should the new service use?").wait_for()
+                assert await question_card.get_by_role("button", name="SQLite").is_enabled()
+                await page.screenshot(path=str(ARTIFACTS / "question.png"))
+                async with page.expect_request(lambda request: request.url.endswith("/v1/web/command") and
+                                               json.loads(request.post_data or "{}").get("type") == "QuestionAnswer") as request_info:
+                    await page.keyboard.press("2")
+                answer_command = json.loads((await request_info.value).post_data or "{}")
+                assert (answer_command["call_id"], answer_command["answer"]) == ("question-1", "2"), answer_command
+
                 log_timestamp = int(time.time())
                 await page.goto(f"{page.url.split('/s/')[0]}/s/{effort_a}", wait_until="domcontentloaded")
                 await page.get_by_text("Current live response remains fully visible.").wait_for(timeout=5_000)
                 effort_label = page.locator("#reasoning-effort")
                 await page.get_by_text("Effort: medium", exact=True).wait_for()
+                metadata = page.locator(".composer-context")
+                assert "session" not in (await metadata.inner_text()).lower()
+                assert await page.locator("#composer-model small").evaluate(
+                    "node => getComputedStyle(node).fontStyle"
+                ) == "normal"
                 draft = "reasoning effort keeps this draft"
                 await page.locator("#composer-input").fill(draft)
                 composer = page.locator("#composer-input")
@@ -859,7 +920,7 @@ async def main() -> None:
                     {"type": "ReasoningEffortSelect", "session": effort_a, "effort": "low"},
                 ], effort_commands
                 assert await composer.input_value() == draft
-                assert await page.get_by_text("applies next turn", exact=False).count() >= 1
+                assert await page.get_by_text("applies next turn", exact=False).count() == 0
 
                 await page.locator("#composer-model").click()
                 model_picker = page.get_by_role("dialog", name="Choose a model")
@@ -935,7 +996,7 @@ async def main() -> None:
                 await asyncio.wait_for(delayed_metadata["completed"].wait(), timeout=5)
                 await page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => resolve()))")
                 assert len(effort_commands) == before_effort_commands, effort_commands
-                assert await effort_label.inner_text() == "Effort: default"
+                assert await effort_label.text_content() == "Effort: default"
                 assert await page.locator("#composer-input").input_value() == switched_draft
 
                 await page.evaluate("""id => {
@@ -948,7 +1009,7 @@ async def main() -> None:
                 reject_effort["next"] = True
                 await page.keyboard.press("Control+t")
                 await page.get_by_text("selection was rejected", exact=False).wait_for(timeout=2_000)
-                assert await effort_label.inner_text() == "Effort: low"
+                assert await effort_label.text_content() == "Effort: low"
                 assert await composer.input_value() == draft
 
                 before_effort_commands = len(effort_commands)
@@ -1015,17 +1076,17 @@ async def main() -> None:
                 await page.keyboard.press("ArrowDown")
                 await page.keyboard.press("ArrowDown")
                 await page.keyboard.press("Enter")
-                await page.locator("#context-inline-content").get_by_text(
+                await page.locator("#timeline > .context-header").get_by_text(
                     f"Session marker {context_select_session} · inspection {inspections_before_agent_change + 1}", exact=False
                 ).wait_for(timeout=5_000)
                 delayed_context["release"].set()
                 await page.wait_for_timeout(100)
-                assert f"inspection {inspections_before_agent_change + 1}" in await page.locator("#context-inline-content").inner_text()
-                assert f"inspection {inspections_before_agent_change}" not in await page.locator("#context-inline-content").inner_text()
+                assert f"inspection {inspections_before_agent_change + 1}" in await page.locator("#timeline > .context-header").inner_text()
+                assert f"inspection {inspections_before_agent_change}" not in await page.locator("#timeline > .context-header").inner_text()
                 await page.get_by_text("Effort: medium", exact=True).wait_for()
                 await page.locator("#composer-input").evaluate("e=>{e.value='draft survives model selection';e.dispatchEvent(new Event('input',{bubbles:true}))}")
                 assert await page.locator("#composer-input").input_value() == model_draft
-                await page.locator("#context-open").click()
+                await page.locator("#context-toolbar").click()
                 context_dialog = page.get_by_role("dialog", name="Current context")
                 await context_dialog.wait_for()
                 assert await context_dialog.get_by_role("button", name="Choose agent").count() == 0
@@ -1041,7 +1102,7 @@ async def main() -> None:
                 await picker.get_by_role("combobox").press("Enter")
                 await _wait_for(lambda: len(selection_commands) > before_selection)
                 await _wait_for(lambda: len(effort_commands) > before_effort)
-                await page.get_by_text("Model and reasoning effort updated", exact=False).wait_for(timeout=3_000)
+                assert await page.get_by_text("Model and reasoning effort updated", exact=False).count() == 0
                 assert selection_commands[before_selection] == {"type": "ModelSelect", "session": context_select_session, "ref": "scripted/m"}
                 assert effort_commands[before_effort] == {"type": "ReasoningEffortSelect", "session": context_select_session, "effort": "medium"}
 
@@ -1052,7 +1113,7 @@ async def main() -> None:
                 await page.keyboard.press("ArrowDown")
                 await picker.get_by_text("explore", exact=True).wait_for()
                 await page.keyboard.press("Enter")
-                await page.locator("#composer-agent").get_by_text("explore", exact=True).wait_for(timeout=3_000)
+                await page.locator("#composer-agent").get_by_text("Explore", exact=True).wait_for(timeout=3_000)
                 assert await page.locator("#composer-input").input_value() == model_draft
 
                 await page.locator("#composer-model").click()
@@ -1106,6 +1167,18 @@ async def main() -> None:
                 assert await page.locator("html").get_attribute("data-detail") == "balanced"
                 await page.locator(".timeline").evaluate("e=>e.scrollTop=0")
                 assert await page.locator(".tool-card").count() == 10
+                tool_rows = page.locator("#timeline .tool-card")
+                assert await tool_rows.nth(0).evaluate("e=>e.getBoundingClientRect().height") <= 24
+                assert await tool_rows.nth(0).locator(".tool-preview,.tool-details,.tool-inline-diff").count() == 0
+                assert await page.get_by_text("Result for read-1", exact=True).count() == 0
+                await tool_rows.nth(0).locator(".card-head").click()
+                tool_dialog = page.locator("#text-overlay .text-dialog")
+                await tool_dialog.wait_for()
+                assert "src/read-1.py" in await tool_dialog.locator("#text-body").inner_text()
+                assert "Result for read-1" in await tool_dialog.locator("#text-body").inner_text()
+                await page.keyboard.press("Escape")
+                await tool_dialog.wait_for(state="hidden")
+                assert await page.evaluate("document.activeElement?.closest('.tool-card')?.dataset.callId") == "read-1"
                 await page.screenshot(path=str(ARTIFACTS / "balanced-dark-large.png"), full_page=True)
                 balanced_radio = page.locator('#settings-overlay input[name="session-detail"][value="balanced"]')
                 await page.get_by_role("button", name="Settings").click()
@@ -1136,11 +1209,7 @@ async def main() -> None:
                 assert await page.locator("html").get_attribute("data-detail") == "focused"
                 await settings.get_by_role("button", name="Close settings").click()
                 assert len(command_requests) == preference_command_baseline, command_requests
-                assert await page.locator(".tool-group").count() == 2
-                group_text = await page.locator(".tool-group").first.inner_text()
-                assert "Read 2 files · Searched 1 location · Ran 1 command · Edited 1 file · 5 completed" in group_text, group_text
                 assert await page.locator(".message-disclosure").count() == 1
-                assert await page.locator(".tool-group").count() == 2
                 expanded_preview = page.locator(".message-disclosure")
                 await expanded_preview.locator("summary").click()
                 assert await expanded_preview.locator(".message-full h3").count() == 0
@@ -1151,10 +1220,10 @@ async def main() -> None:
                 assert await expanded_preview.locator(".message-full script").count() == 0
                 assert await expanded_preview.locator(".message-full pre code").inner_text() == "*x* and **y**"
                 await page.screenshot(path=str(ARTIFACTS / "focused-dark-large.png"), full_page=True)
-                assert "Read 2 files · Searched 1 location" in group_text
-                await page.locator(".group-toggle").first.press("Enter")
-                assert await page.locator(".tool-group").first.locator(".group-members .tool-card").count() == 5
-                assert await page.get_by_text("Read 2 files · Searched 1 location", exact=False).count() == 1
+                assert await page.locator(".tool-group").count() == 0
+                assert await page.locator("#timeline .tool-card").count() == 10
+                adjacent_gap = await page.locator("#timeline .tool-card").nth(1).evaluate("e=>e.getBoundingClientRect().top") - await page.locator("#timeline .tool-card").nth(0).evaluate("e=>e.getBoundingClientRect().bottom")
+                assert adjacent_gap <= 2, adjacent_gap
                 assert await page.get_by_role("button", name="explore Inspect a related module completed").count() == 1
                 assert await page.get_by_text("Failed", exact=True).count() == 1
                 assert await page.get_by_text("Running", exact=True).count() >= 1
@@ -1166,12 +1235,10 @@ async def main() -> None:
                 boundary_settings=page.get_by_role("dialog",name="Settings")
                 await boundary_settings.locator('input[name="session-detail"][value="focused"]').check()
                 await boundary_settings.get_by_role("button",name="Close settings").click()
-                assert await page.locator(".tool-group").count()==2
+                assert await page.locator(".tool-group").count()==0
                 assert await page.locator('.tool-card[data-call-id="task-1"]').count()==1
-                assert "Read 2 files · Searched 1 location · Ran 1 command · Edited 1 file · 5 completed" in await page.locator(".tool-group").nth(0).inner_text()
-                assert "Read 2 files · 2 completed" in await page.locator(".tool-group").nth(1).inner_text()
                 boundary_order=await page.evaluate("""()=>[...document.querySelector('#timeline').children].map(e=>e.dataset.key||e.className)""")
-                assert boundary_order.index("group:read-1")<boundary_order.index("tool:task-1")<boundary_order.index("group:read-3"),boundary_order
+                assert boundary_order.index("tool:read-1")<boundary_order.index("tool:task-1")<boundary_order.index("tool:read-3"),boundary_order
                 assert await page.locator('.tool-card[data-call-id="task-1"] .tool-status-text').inner_text() == "Completed"
                 assert await page.get_by_text("Approval boundary").count()==0
                 await page.screenshot(path=str(ARTIFACTS/"focused-approval-boundaries.png"),full_page=True)
@@ -1182,43 +1249,57 @@ async def main() -> None:
                 await settings.locator('input[name="session-detail"][value="complete"]').check()
                 await settings.get_by_role("button", name="Close settings").click()
                 assert await page.locator(".tool-card").count() == 10
-                assert await page.locator(".tool-details[open]").count() == 10
-                assert await page.get_by_text("@@ -1 +1 @@", exact=False).count() >= 1
+                assert await page.locator(".tool-details[open]").count() == 0
+                assert await page.get_by_text("@@ -1 +1 @@", exact=False).count() == 0
                 assert await page.locator(".message-body pre code").count() >= 1
                 await page.screenshot(path=str(ARTIFACTS / "complete-diff-large.png"), full_page=True)
-                await page.locator(".tool-details").first.evaluate("e=>e.open=true")
+                await page.locator(".tool-card").first.locator(".card-head").press("Enter")
+                assert await page.locator("#text-overlay .text-dialog").is_visible()
+                await page.keyboard.press("Escape")
                 await page.evaluate("if(!document.querySelector('#app').classList.contains('inspector-open'))document.querySelector('#inspector-toggle').click()")
                 await page.wait_for_timeout(180)
                 assert await page.locator("#inspector").is_visible()
                 await page.locator("#tab-tools").click()
-                focused_tool = page.get_by_role("button", name="Read · completed").first
+                focused_tool = page.locator("#inspector-content .tool-row").filter(has_text="Read · completed").first
                 await focused_tool.focus()
                 await page.evaluate("""() => { const s=window.__nexusEventSources.at(-1); s.dispatchEvent(new MessageEvent('view',{data:JSON.stringify({schema_version:1,session:'ui-fixture-a',seq:21,ops:[{op:'replace',path:'/turns/0/tools/0/display',value:'updated result'}]})})); }""")
                 await page.wait_for_timeout(80)
                 assert await focused_tool.evaluate("e=>e===document.activeElement")
-                assert "updated result" in await focused_tool.inner_text()
+                assert "src/read-1.py" in await focused_tool.inner_text()
                 assert await page.locator("#tab-tools").get_attribute("aria-selected") == "true"
-                assert await page.locator(".tool-details[open]").count() >= 1
-                await focused_tool.evaluate("e=>{const r=document.createRange();r.selectNodeContents(e);const s=getSelection();s.removeAllRanges();s.addRange(r)}")
+                assert await page.locator(".tool-details[open]").count() == 0
                 await page.evaluate("""() => { const s=window.__nexusEventSources.at(-1); s.dispatchEvent(new MessageEvent('view',{data:JSON.stringify({schema_version:1,session:'ui-fixture-a',seq:22,ops:[{op:'replace',path:'/turns/0/tools/0/display',value:'updated result once more'}]})})); }""")
                 await page.wait_for_timeout(80)
-                selected_text = await page.evaluate("getSelection().toString()")
-                assert "Read · completed" in selected_text and "updated result once more" in selected_text, selected_text
+                assert "src/read-1.py" in await focused_tool.inner_text()
                 await page.screenshot(path=str(ARTIFACTS / "inspector-stream-state.png"), full_page=True)
                 await page.evaluate("if(!document.querySelector('#app').classList.contains('inspector-open'))document.querySelector('#inspector-toggle').click()")
                 assert await page.locator("#inspector").is_visible()
                 await page.locator("#tab-agents").click()
                 await page.get_by_role("button", name="explore · completed").click()
-                assert await page.locator("#inspector-content").get_by_text("Child agent transcript is available.").count() == 1
-                assert await page.get_by_text("Current live response remains fully visible.").count() == 1
-                assert await page.locator("#inspector-content .tool-card").count() == 1
-                assert await page.locator("#inspector-content .tool-details[open]").count() == 1
-                assert await page.locator("#inspector-content .tool-detail pre").count() >= 1
-                await page.locator("#inspector-content").get_by_role("button", name="← Parent session").click()
+                # A subagent opens in a large modal rendered like the root timeline, and stays live.
+                agent_modal = page.locator("#agent-overlay")
+                await agent_modal.wait_for(state="visible", timeout=5_000)
+                assert await agent_modal.get_by_text("Child agent transcript is available.").count() == 1
+                assert await agent_modal.locator(".tool-card").count() == 1
+                assert await agent_modal.locator(".tool-hint").count() == 0
+                await page.evaluate("""() => { const s=window.__nexusEventSources.at(-1); s.dispatchEvent(new MessageEvent('view',{data:JSON.stringify({schema_version:1,session:'ui-fixture-a',seq:23,ops:[{op:'replace',path:'/agents/0/body/turns/0/tools/0/display',value:'Live child update'}]})})); }""")
+                await agent_modal.get_by_text("Live child update").first.wait_for(timeout=5_000)
+                await page.wait_for_timeout(300)
+                await page.screenshot(path=str(ARTIFACTS / "agent-modal.png"))
+                await page.keyboard.press("Escape")
+                await agent_modal.wait_for(state="hidden", timeout=5_000)
+                await page.locator('#timeline .tool-card[data-child-agent="child-1"] .card-head').click()
+                task_dialog = page.locator("#text-overlay .text-dialog")
+                await task_dialog.wait_for()
+                await task_dialog.get_by_role("button", name="Open child agent").click()
+                await agent_modal.wait_for(state="visible", timeout=5_000)
+                await page.locator("#agent-close").click()
+                await agent_modal.wait_for(state="hidden", timeout=5_000)
                 await page.locator("#tab-tools").click()
-                await page.get_by_role("button", name="Edit · completed").click()
-                assert await page.locator("#inspector-content .diff-lines").count() == 1
-                assert await page.locator("#inspector-content .diff-line.added .diff-text").inner_text() == "new"
+                await page.locator("#inspector-content .tool-row").filter(has_text="Edit · completed").click()
+                edit_dialog = page.locator("#text-overlay .text-dialog")
+                await edit_dialog.wait_for()
+                assert "@@ -1 +1 @@" in await edit_dialog.locator("#text-body").inner_text()
                 await page.screenshot(path=str(ARTIFACTS / "inspector-diff.png"), full_page=True)
                 await page.keyboard.press("Escape")
                 await page.reload(wait_until="domcontentloaded")
@@ -1449,17 +1530,20 @@ async def main() -> None:
 
                 # Desktop/medium/compact/narrow breakpoints, including exact adjacent widths.
                 await page.locator("#inspector-toggle").evaluate("e=>e.click()")
-                for width, expected_sidebar, name in [
-                    (1440, "256px", "large"), (1280, "256px", "1280"), (1279, "240px", "1279"),
-                    (1024, "240px", "medium"), (960, "240px", "960"), (959, "60px", "959"),
-                    (800, "60px", "compact"), (700, "60px", "700"), (699, "300px", "699"),
-                    (390, "300px", "mobile"),
+                # Like the terminal: the 34-cell sessions sidebar docks while there is
+                # room (960px+) and otherwise opens over the chat column.
+                for width, docked, name in [
+                    (1440, True, "large"), (1280, True, "1280"), (1279, True, "1279"),
+                    (1024, True, "medium"), (960, True, "960"), (959, False, "959"),
+                    (800, False, "compact"), (700, False, "700"), (699, False, "699"),
+                    (390, False, "mobile"),
                 ]:
                     await page.set_viewport_size({"width": width, "height": 850})
                     await page.wait_for_timeout(30)
-                    dims = await page.evaluate("({doc:document.documentElement.scrollWidth, body:document.body.scrollWidth, inner:innerWidth, sidebar:getComputedStyle(document.querySelector('.sidebar')).width})")
+                    dims = await page.evaluate("({doc:document.documentElement.scrollWidth, body:document.body.scrollWidth, inner:innerWidth, sidebar:getComputedStyle(document.querySelector('.sidebar')).width, position:getComputedStyle(document.querySelector('.sidebar')).position})")
                     assert dims["doc"] <= dims["inner"] and dims["body"] <= dims["inner"], (width, dims)
-                    assert dims["sidebar"] == expected_sidebar, (width, dims)
+                    assert dims["sidebar"] == "272px", (width, dims)
+                    assert (dims["position"] != "fixed") == docked, (width, dims)
                     if width == 1440:
                         assert await page.locator("#inspector").is_visible()
                         main_box = await page.locator(".main-pane").bounding_box()
@@ -1473,7 +1557,7 @@ async def main() -> None:
                 # 640 CSS px; set that CSS viewport directly for deterministic CI.
                 await page.set_viewport_size({"width": 640, "height": 800})
                 zoom_dims = await page.evaluate("({doc:document.documentElement.scrollWidth,inner:innerWidth,sidebar:getComputedStyle(document.querySelector('.sidebar')).width})")
-                assert zoom_dims["doc"] <= zoom_dims["inner"] and zoom_dims["sidebar"] == "300px", zoom_dims
+                assert zoom_dims["doc"] <= zoom_dims["inner"] and zoom_dims["sidebar"] == "272px", zoom_dims
                 await page.screenshot(path=str(ARTIFACTS / "zoom-200.png"), full_page=True)
 
                 # Keyboard-only settings, radio selection, Escape restoration, and IME Enter safety.

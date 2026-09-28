@@ -29,13 +29,21 @@ What the manager guarantees:
 * **Declarations are not grants.** ``bundles``/``tools`` are validated against
   injected known names but never expand a profile, register a tool, or change the
   manager's own surface. :meth:`select_tools` intersects a declaration with the
-  parent's authority and can only narrow it. ``explore`` and ``planner`` are
-  structurally denied shell and mutating-filesystem tools regardless of what
-  their file declares.
-* **Seeding is once per workspace.** :func:`seed_workspace_roles` writes the
-  built-in ``general``/``explore``/``planner`` definitions into the workspace on
-  first run and drops a marker; the marker stops the seeder from resurrecting a
-  file the user deleted.
+  parent's authority and can only narrow it. ``advisor`` (and the legacy
+  ``explore``/``plan``/``planner`` names) are structurally denied shell and
+  mutating-filesystem tools regardless of what their file declares.
+* **Built-ins are global, edits are per user.** The packaged roles are the root
+  agent ``build`` and the subagents ``advisor``, ``task`` and ``quick``. They are
+  not copied into workspaces; editing one writes an override to
+  ``~/.nexus/agents/<name>.md`` (the Settings page does this). Workspace seeding
+  is opt-in (``agents.seed_roles``) and happens at most once per marker.
+* **Retiring old seeds.** Earlier releases copied the built-ins into every
+  workspace. :func:`retire_seeded_roles` moves those copies to
+  ``.nexus/trash/agents/`` once, but only the ones the user never edited, so the
+  current built-ins (and ``~/.nexus`` overrides) are no longer shadowed.
+* **Legacy names.** ``general`` resolves to ``task`` (``build`` as a root) and
+  ``explore``/``plan``/``planner`` to the read-only ``advisor`` when no
+  definition with the exact name exists.
 """
 from __future__ import annotations
 
@@ -44,6 +52,7 @@ import hashlib
 import json
 import os
 import tempfile
+import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -79,6 +88,7 @@ from .model import (
 __all__ = [
     "AGENT_FILE_SUFFIX",
     "DATA_DIR_NAME",
+    "LEGACY_AGENT_ALIASES",
     "SEEDED_ROLES",
     "SEED_MARKER_NAME",
     "SEED_VERSION",
@@ -86,6 +96,7 @@ __all__ = [
     "AgentToolSelection",
     "RootSpec",
     "SeedReport",
+    "retire_seeded_roles",
     "seed_workspace_roles",
 ]
 
@@ -95,11 +106,22 @@ AGENT_FILE_SUFFIX = ".md"
 DATA_DIR_NAME = "data"
 #: The marker written into the workspace once the built-in roles are seeded.
 SEED_MARKER_NAME = ".seeded"
-#: Bumped only when the seeding contract itself changes.
-SEED_VERSION = 1
-#: Canonical builtins seeded into fresh workspaces. Legacy planner files are
-#: retained when already present, but are not newly created by the seeder.
-SEEDED_ROLES = ("build", "explore", "general", "plan")
+#: Bumped only when the seeding contract itself changes. Version 2 markers
+#: record that pre-v2 seeded copies were retired.
+SEED_VERSION = 2
+#: Canonical builtins (seeded into a workspace only when ``agents.seed_roles``).
+SEEDED_ROLES = ("advisor", "build", "quick", "task")
+#: ``(context, legacy name) -> canonical built-in`` used when no definition with
+#: the exact legacy name exists. Read-only legacy roles map to read-only advisor.
+LEGACY_AGENT_ALIASES: Mapping[tuple[str, str], str] = {
+    ("root", "general"): "build",
+    ("subagent", "general"): "task",
+    ("subagent", "explore"): "advisor",
+    ("subagent", "plan"): "advisor",
+    ("subagent", "planner"): "advisor",
+}
+#: Seeded copies older than this many seconds past the marker count as edited.
+_RETIRE_MTIME_SLACK = 2.0
 
 #: A ``(tier, path)`` discovery root.
 RootSpec = tuple[AgentSource, Path]
@@ -190,26 +212,8 @@ def seed_workspace_roles(
     agents_dir = Path(workspace) / ".nexus" / "agents"
     marker = agents_dir / marker_name
 
-    previously_seeded: set[str] | None = None
     if marker.exists() and not overwrite:
-        # Version-1 markers predate the canonical ``plan``/``build`` additions.
-        # Seed only the new names absent from that marker; names previously
-        # seeded are never recreated if a user intentionally deleted them.
-        try:
-            state = json.loads(marker.read_text(encoding="utf-8"))
-            seeded = state.get("seeded") if isinstance(state, dict) else None
-            if not isinstance(seeded, list) and not (isinstance(state, dict) and "version" in state):
-                return SeedReport(already_seeded=True, source=source_dir, marker=marker)
-            if isinstance(seeded, list) and all(isinstance(name, str) for name in seeded):
-                previously_seeded = set(seeded)
-                legacy_marker = "planner" in previously_seeded or not {"build", "plan"} <= previously_seeded
-            else:
-                previously_seeded = {"explore", "general", "planner"}
-                legacy_marker = True
-        except (OSError, ValueError):
-            return SeedReport(already_seeded=True, source=source_dir, marker=marker)
-    else:
-        legacy_marker = False
+        return SeedReport(already_seeded=True, source=source_dir, marker=marker)
     if not source_dir.is_dir():
         return SeedReport(
             already_seeded=False,
@@ -220,16 +224,10 @@ def seed_workspace_roles(
     written: list[str] = []
     skipped: list[str] = []
     failed: list[str] = []
-    covered: set[str] = set(previously_seeded or ())
+    covered: set[str] = set()
 
     for entry in _seed_candidates(source_dir):
         name = entry.stem
-        if previously_seeded is not None and name in previously_seeded:
-            continue
-        if previously_seeded is not None and name not in {"build", "plan"}:
-            continue
-        if previously_seeded is None and name == "planner":
-            continue
         covered.add(name)
         try:
             validate_agent_name(name)
@@ -256,9 +254,6 @@ def seed_workspace_roles(
             continue
         written.append(name)
 
-    if previously_seeded is not None and not legacy_marker and not written:
-        return SeedReport(already_seeded=True, source=source_dir, marker=marker)
-
     payload = {
         "version": SEED_VERSION,
         "seeded": sorted(covered),
@@ -281,6 +276,73 @@ def seed_workspace_roles(
         skipped=tuple(skipped),
         failed=tuple(failed),
     )
+
+
+def retire_seeded_roles(
+    workspace: str | Path,
+    *,
+    marker_name: str = SEED_MARKER_NAME,
+    now: float | None = None,
+) -> tuple[str, ...]:
+    """Move untouched pre-v2 seeded role copies to ``.nexus/trash/agents``.
+
+    Runs once per workspace: it acts only on a marker older than
+    :data:`SEED_VERSION` and rewrites the marker afterwards. A seeded file whose
+    mtime is later than the marker's was edited by the user and is kept (it
+    keeps shadowing the built-in, which discovery reports). Files are moved, not
+    deleted, so a retired copy can be restored by hand. Returns retired names.
+    """
+    agents_dir = Path(workspace) / ".nexus" / "agents"
+    marker = agents_dir / marker_name
+    if not marker.is_file() or marker.is_symlink():
+        return ()
+    try:
+        state = json.loads(marker.read_text(encoding="utf-8"))
+        marker_mtime = marker.stat().st_mtime
+    except (OSError, ValueError):
+        return ()
+    if not isinstance(state, dict):
+        state = {}
+    version = state.get("version")
+    if isinstance(version, int) and not isinstance(version, bool) and version >= SEED_VERSION:
+        return ()
+    seeded = state.get("seeded")
+    if not isinstance(seeded, list) or not all(isinstance(n, str) for n in seeded):
+        seeded = ["explore", "general", "planner"]
+    retired: list[str] = []
+    trash = (
+        Path(workspace) / ".nexus" / "trash" / "agents"
+        / time.strftime("%Y%m%dT%H%M%S", time.gmtime(now))
+    )
+    for name in sorted(set(seeded))[:MAX_SEED_NAMES]:
+        try:
+            validate_agent_name(name)
+        except AgentError:
+            continue
+        target = agents_dir / f"{name}{AGENT_FILE_SUFFIX}"
+        try:
+            if target.is_symlink() or not target.is_file():
+                continue
+            if target.stat().st_mtime > marker_mtime + _RETIRE_MTIME_SLACK:
+                continue
+            trash.mkdir(parents=True, exist_ok=True)
+            os.replace(target, trash / target.name)
+        except OSError:
+            continue
+        retired.append(name)
+    payload = {
+        "version": SEED_VERSION,
+        "seeded": [],
+        "retired": retired,
+        "source": state.get("source", DATA_DIR_NAME),
+    }
+    with contextlib.suppress(OSError):
+        _atomic_write(marker, (json.dumps(payload, sort_keys=True) + "\n").encode("utf-8"))
+    return tuple(retired)
+
+
+#: Bound on names a marker may ask the retirer to inspect.
+MAX_SEED_NAMES = 64
 
 
 # ---------------------------------------------------------------------------
@@ -413,16 +475,16 @@ class AgentManager:
         *,
         home: str | Path | None = None,
         builtin: str | Path | Iterable[str | Path] | None = None,
-        seed: bool = True,
+        seed: bool = False,
         seed_source: str | Path | None = None,
         marker_name: str = SEED_MARKER_NAME,
         **kwargs: Any,
     ) -> AgentManager:
         """Convenience roots: ``<builtin>`` < ``~/.nexus/agents`` < ``.nexus/agents``.
 
-        When ``seed`` is true the built-in roles are written into the workspace
-        (once) before discovery, so ``general``/``explore``/``planner`` appear as
-        editable workspace definitions.
+        Pre-v2 seeded copies are retired first (see :func:`retire_seeded_roles`).
+        When ``seed`` is true the built-in roles are then written into the
+        workspace (once) as editable workspace definitions.
         """
         roots: list[RootSpec] = []
         if builtin is None:
@@ -438,6 +500,8 @@ class AgentManager:
         roots.append(
             (AgentSource.WORKSPACE, Path(workspace) / ".nexus" / "agents")
         )
+        with contextlib.suppress(OSError):
+            retire_seeded_roles(workspace, marker_name=marker_name)
         report: SeedReport | None = None
         if seed:
             report = seed_workspace_roles(
@@ -551,25 +615,23 @@ class AgentManager:
         return agent
 
     def resolve(self, name: object, *, context: str = "subagent") -> AgentDef:
-        """Resolve an eligible definition; legacy ``planner`` falls back to plan.
+        """Resolve an eligible definition, honoring :data:`LEGACY_AGENT_ALIASES`.
 
-        Exact non-builtin ``planner`` files are intentionally preserved. The
-        packaged pre-migration planner is ignored as a selection alias so the
-        canonical built-in is ``plan``.
+        An exact, eligible definition always wins, so a custom ``general`` or
+        ``planner`` file keeps working. Otherwise a legacy name falls back to
+        its canonical built-in (``general`` -> ``task``/``build``, ``explore``/
+        ``plan``/``planner`` -> read-only ``advisor``).
         """
-        agent = None
-        if isinstance(name, str) and name.casefold() == "planner":
-            agent = self.get("planner")
-            if agent is not None and agent.eligible_in(context):
-                return agent
-            agent = self.get("plan")
-        else:
-            agent = self.get(name)
-        if agent is None:
-            raise AgentNotFoundError(name)
-        if not agent.eligible_in(context):
-            raise AgentNotFoundError(name)
-        return agent
+        agent = self.get(name)
+        if agent is not None and agent.eligible_in(context):
+            return agent
+        if isinstance(name, str):
+            alias = LEGACY_AGENT_ALIASES.get((context, name.casefold()))
+            if alias is not None:
+                agent = self.get(alias)
+                if agent is not None and agent.eligible_in(context):
+                    return agent
+        raise AgentNotFoundError(name)
 
     def __contains__(self, name: object) -> bool:
         return self.get(name) is not None
@@ -605,6 +667,7 @@ class AgentManager:
                 reasoning_effort=agent.reasoning_effort,
                 color=agent.color,
                 read_only=agent.read_only,
+                fallback=agent.fallback,
             )
             for agent, description in zip(self._agents, descriptions)
         )
@@ -922,11 +985,13 @@ class AgentManager:
             model=parsed.model,
             provider=parsed.provider,
             reasoning_effort=parsed.reasoning_effort,
+            fallback=parsed.fallback,
             color=parsed.color,
             max_iterations=parsed.max_iterations,
             context_tokens=parsed.context_tokens,
             contexts=parsed.contexts,
             profile=parsed.profile,
+            write_roots=parsed.write_roots,
             body=agent_file.body,
             body_sha256=agent_file.body_sha256,
             body_size=agent_file.body_size,

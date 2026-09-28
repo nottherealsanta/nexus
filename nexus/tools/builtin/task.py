@@ -2,11 +2,11 @@
 
 One tool with two composable modes:
 
-* **Named type** -- ``Task(subagent_type="explore", prompt="...")``: the system
+* **Named type** -- ``Task(subagent_type="advisor", prompt="...")``: the system
   prompt, tool set, and model come from the definition file;
 * **Ad-hoc** -- ``Task(prompt="...", tools=["Read", "Grep"], model="low")``: a
   throwaway agent with exactly the listed tools; ``subagent_type`` defaults to
-  ``general``.
+  ``task``.
 
 The tool itself holds **no authority**: it reaches the injected
 :class:`~nexus.tools.spec.SubagentServiceView` (the runner) through
@@ -23,7 +23,7 @@ silently getting less than it asked for.
 grammar expresses real policy without new syntax::
 
     deny  = ["Task(*:high)"]
-    allow = ["Task(explore:*)", "Task(*:low)"]
+    allow = ["Task(advisor:*)", "Task(*:low)"]
 
 A spec built by :func:`make_task_spec` against a live service resolves the
 *effective* tier (the role's declared model included); the static
@@ -57,7 +57,7 @@ __all__ = [
 ]
 
 #: The role an ad-hoc request uses when none is named (plan section 15.7).
-DEFAULT_SUBAGENT_TYPE = "general"
+DEFAULT_SUBAGENT_TYPE = "task"
 #: The fallback cap on the returned report, matching the other builtins.
 _FALLBACK_MAX_RESULT_TOKENS = 25_000
 
@@ -81,8 +81,9 @@ _TASK_SCHEMA: dict[str, Any] = {
             "type": "string",
             "minLength": 1,
             "description": (
-                "A seeded role (general/explore/planner) or any discovered "
-                ".nexus/agents/<name>. Defaults to 'general'."
+                "advisor (read-only second opinion), task (multi-step work, "
+                "can edit), quick (small fast jobs, can edit), or any discovered "
+                ".nexus/agents/<name>. Defaults to 'task'."
             ),
         },
         "tools": {
@@ -118,7 +119,8 @@ _TASK_SCHEMA: dict[str, Any] = {
 
 _TASK_DESCRIPTION = (
     "Spawn a subagent to carry out a self-contained task and return its report. "
-    "Use a named role (general/explore/planner) or narrow ad-hoc tools/model. "
+    "Roles: advisor (read-only advice), task (multi-step work), quick (small, "
+    "fast jobs). Subagents that edit files list them in their report. "
     "A subagent inherits only the parent's authority and cannot exceed it."
 )
 

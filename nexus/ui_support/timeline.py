@@ -6,8 +6,8 @@ import math
 import re
 from collections.abc import Mapping
 
+from ..ui_support.text import escape_controls, redact, sanitize
 from ..view import AgentView, MessageView, ToolCallView, TurnView
-from ..ui_support.text import escape_controls, sanitize
 
 _DETAIL_LIMIT = 1_600
 _ARG_LIMIT = 180
@@ -64,17 +64,56 @@ def _stale_greeting(message: MessageView) -> bool:
 
 
 def _message_markdown(message: MessageView) -> str:
-    """Render assistant text and provider thoughts, omitting opaque signatures."""
+    """Render assistant text; thoughts render separately as a Thought line."""
     if message.role == "user":
         return message.text
-    parts = []
-    for block in message.blocks:
-        if block.text:
-            if block.kind == "thinking":
-                parts.append("### Thought\n\n" + block.text)
-            elif block.kind == "text":
-                parts.append(block.text)
-    return "\n\n---\n\n".join(parts)
+    return "\n\n".join(block.text for block in message.blocks if block.kind == "text" and block.text)
+
+
+def thought_title(text: str, limit: int = 96) -> str:
+    """One-line summary of provider thinking: its first heading or sentence."""
+    for raw in text.splitlines():
+        line = re.sub(r"[*_`#]+", "", raw).strip()
+        if line:
+            return _first_line(_text(re.split(r"(?<=[.!?])\s", line, maxsplit=1)[0].rstrip("."), limit), limit)
+    return "Thinking"
+
+
+_TOOL_VERBS = {
+    "read": "→ Read", "ls": "→ List", "glob": "✱ Glob", "grep": "✱ Grep",
+    "edit": "← Edit", "multiedit": "← Edit", "write": "← Write", "apply_patch": "← Patch",
+    "webfetch": "% Fetch", "websearch": "◈ Search", "todowrite": "☐ Todo", "skill": "◇ Skill",
+    "task": "◉ Task", "subagent": "◉ Task", "question": "? Question",
+}
+_RAW_OUTPUT_TOOLS = frozenset({"bash", "bashoutput", "glob", "grep", "ls"})
+
+
+def tool_heading(tool: ToolCallView) -> str:
+    """``$ command`` for shells, ``→ Read path`` style for everything else."""
+    name = tool.name.casefold()
+    args = format_arguments(tool)
+    if name in {"bash", "bashoutput", "killshell"}:
+        return f"$ {args}" if args else "$"
+    verb = _TOOL_VERBS.get(name, f"⚙ {_text(tool.name or 'tool', 40)}")
+    return f"{verb} {args}".rstrip()
+
+
+def tool_output(tool: ToolCallView) -> str:
+    """The body a tool block shows: raw output for shells and searches."""
+    if tool.error:
+        return redact(_literal(tool.error))
+    if tool.name.casefold() in _RAW_OUTPUT_TOOLS and tool.result:
+        parts = [
+            _literal(block.get("text", ""), _DETAIL_LIMIT)
+            for block in tool.result[:8] if isinstance(block, Mapping) and block.get("text")
+        ]
+        if parts:
+            return "\n".join(parts)[:_DETAIL_LIMIT]
+    if tool.progress and tool_status(tool) == "running":
+        return "\n".join(_literal(item, 300) for item in tool.progress[-10:])
+    if tool.name.casefold() == "write":
+        return tool_summary(tool)
+    return _output(tool)
 
 
 def _has_message_content(message: MessageView) -> bool:
@@ -238,8 +277,23 @@ def _turn_summary(turn: TurnView) -> str:
 
 
 __all__ = [
-    "_DETAIL_LIMIT", "_agent_metrics", "_diff_text", "_has_message_content", "_latest_activity",
-    "_literal", "_message_markdown", "_setup_failure", "_stale_greeting",
-    "_output", "_text", "_turn_setup_failure", "_turn_summary", "format_arguments",
-    "tool_status", "tool_summary",
+    "_DETAIL_LIMIT",
+    "_agent_metrics",
+    "_diff_text",
+    "_has_message_content",
+    "_latest_activity",
+    "_literal",
+    "_message_markdown",
+    "_output",
+    "_setup_failure",
+    "_stale_greeting",
+    "_text",
+    "_turn_setup_failure",
+    "_turn_summary",
+    "format_arguments",
+    "thought_title",
+    "tool_heading",
+    "tool_output",
+    "tool_status",
+    "tool_summary",
 ]

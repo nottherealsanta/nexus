@@ -49,10 +49,16 @@ Tests need no network or credentials. They use temporary workspaces,
 2. **UI encapsulation.** Code under `nexus/ui/**` may import only `nexus.host`,
    `nexus.view`, `nexus.events`, `nexus.client`, `nexus.host_support`,
    `nexus.ui_support`, `nexus.ui`, and the standard library. Textual and Rich
-   imports stay inside `nexus/ui/tui/` (and `nexus/ui_support/tui_widgets.py`).
+   imports stay inside `nexus/ui/tui/` (and `nexus/ui_support/tui_widgets.py`,
+   `nexus/ui_support/tui_panels.py`, `nexus/ui_support/tui_list.py`,
+   `nexus/ui_support/tui_context_header.py`, `nexus/ui_support/tui_archived.py`,
+   `nexus/ui_support/tui_settings.py`).
    Checked by `tests/test_ui_layering.py`.
 3. **Physical-line budgets** over `.py` files: `core/`+`model/`+`tools/spec.py` < 14,000,
-   `host/` < 7,000, `view/` < 2,200, `ui/` < 5,000 (`tests/test_phase3_exit.py`).
+   `host/` < 7,000, `view/` < 2,200, `ui/` < 5,000 (`tests/test_phase3_exit.py`),
+   and the pure-client files `ui/cli/` + `ui/jsonl.py` + `ui/tui/app.py` < 2,400
+   (`tests/test_ui_layering.py`). New Textual behavior goes in its own module
+   (e.g. `ui/tui/panels.py`), not in `app.py`.
    `host/` is close to its cap. Put helpers in `nexus/host_support/` or
    `nexus/ui_support/` when they belong there, but never move code only to dodge
    a budget. JS, CSS and HTML are not counted.
@@ -66,6 +72,15 @@ Tests need no network or credentials. They use temporary workspaces,
    reconnect.
 
 ## Conventions
+
+- **The web app mirrors the TUI.** `nexus web` has the same functionality as
+  `nexus chat`, with everything in the same place: top bar (`▌` title … status
+  `+` `▐`), sessions sidebar, the context header opening every conversation,
+  timeline, composer rows, details sidebar, the same chat commands (from
+  `ui/cli/commands.py`) and the same Control-key shortcuts. It should feel and
+  behave the same. It may look more modern (softer corners, taller lines,
+  floating dialogs) and uses the Monaspace Argon font. A feature or wording
+  change in one surface goes into the other. Details are in [docs/web.md](docs/web.md).
 
 - Match the surrounding style: module docstrings state the contract and cite the
   plan section. Structs are frozen `msgspec` or dataclasses. Errors are redacted

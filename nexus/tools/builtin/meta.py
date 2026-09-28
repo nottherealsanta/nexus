@@ -123,6 +123,7 @@ _RELOAD_SCHEMA: dict[str, Any] = {
 
 RELOAD_EXTENSIONS_SPEC = ToolSpec(
     name="ReloadExtensions",
+    group="extensions",
     description=(
         "Rebuild the extension manifest from disk and atomically swap it in. "
         "Call this after writing or editing a tool in .nexus/tools/ so the new "
@@ -257,6 +258,7 @@ _LIST_SCHEMA: dict[str, Any] = {
 
 LIST_EXTENSIONS_SPEC = ToolSpec(
     name="ListExtensions",
+    group="extensions",
     description=(
         "List the live tools, hot-loaded extension modules, discovered skills, "
         "and quarantined or shadowed extensions. Read-only; never returns "
@@ -461,6 +463,7 @@ def _write_tool_key(data: dict[str, Any]) -> str:
 
 WRITE_TOOL_SPEC = ToolSpec(
     name="WriteTool",
+    group="extensions",
     description=(
         "Write one Python extension tool to .nexus/tools/<filename>. Validates "
         "the filename, bounds the payload, and writes atomically. Does not "

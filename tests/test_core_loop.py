@@ -1009,3 +1009,14 @@ async def test_terminal_emit_failure_still_releases_supplied_lease():
 
     assert lease.released
     assert lease.release_count >= 1
+
+
+def test_usage_event_reports_the_whole_prompt_for_every_adapter():
+    from nexus.core.loop import _usage_event_data
+    from nexus.model.providers.anthropic import AnthropicProvider
+    from nexus.model.stream import Usage
+
+    # Anthropic's ``input`` omits cache reads and writes; OpenAI-style ``input`` already includes them.
+    assert _usage_event_data(Usage(input=10, output=5, cache_read=80, cache_write=10), AnthropicProvider)["prompt"] == 100
+    assert _usage_event_data(Usage(input=100, output=5, cache_read=80), object())["prompt"] == 100
+    assert "prompt" not in _usage_event_data(Usage(), object())

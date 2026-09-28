@@ -20,7 +20,7 @@ from typing import Any, Mapping
 from ..errors import ConfigError
 from . import layers
 from .paths import resolve_within
-from .schema import ConfigV2
+from .schema import DEFAULT_CONTEXT_TOKENS, ConfigV2
 
 __all__ = ["Config", "ConfigV2", "ConfigError", "resolve_within"]
 
@@ -100,7 +100,7 @@ class Config:
             # The legacy context budget is measured in characters; v2 is in
             # tokens. 4 chars/token is the same approximation the current
             # context builder is calibrated against.
-            context_chars=v2.context.max_tokens * 4,
+            context_chars=(v2.context.max_tokens or DEFAULT_CONTEXT_TOKENS) * 4,
             instructions_file=v2.agent.instructions_file,
             memory_file=v2.agent.memory_file,
             version=2,

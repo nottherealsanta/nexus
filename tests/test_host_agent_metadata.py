@@ -251,7 +251,8 @@ def test_agent_current_result_roundtrip_and_legacy_decode():
         b'{"type":"AgentCurrentResult","session":"s","name":"general",'
         b'"source":"default"}'
     )
-    assert legacy == p.AgentCurrentResult(session="s")
+    assert legacy == p.AgentCurrentResult(session="s", name="general")
+    assert p.AgentCurrentResult(session="s").name == "build"
 
 
 async def test_agent_metadata_omits_unavailable_values(tmp_path):

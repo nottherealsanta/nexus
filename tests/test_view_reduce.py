@@ -676,3 +676,40 @@ def test_reducer_is_synchronous():
 def test_apply_rejects_non_events():
     with pytest.raises(TypeError):
         apply(ConversationView(), "not an event")  # type: ignore[arg-type]
+
+
+def test_context_usage_prefers_the_provider_measurement_and_carries_it_forward():
+    from nexus.ui_support.context import context_measure, context_usage
+
+    assembled = {"context": {"used_tokens": 4000, "input_budget": 90000, "context_window": 100000}}
+    state = apply_many(initial_state("s1"), [
+        _ev(1, "turn.started", turn="t1"),
+        _ev(2, "context.assembled", {"iteration": 1, **assembled}, turn="t1"),
+    ])
+    assert context_measure(state) == (4000, 100000, False)
+    # Anthropic-style usage: the loop reports the whole prompt, cached tokens included.
+    state = apply(state, _ev(3, "model.usage", {"input": 20, "output": 100, "cache_read": 2900, "prompt": 3000}, turn="t1"))
+    assert context_measure(state) == (3100, 100000, True)
+    assert context_usage(state) == "3k (3%)"
+    # The next iteration's estimate grew by 700; the measurement grows by the same amount.
+    state = apply(state, _ev(4, "context.assembled", {"iteration": 2, "context": {**assembled["context"], "used_tokens": 4700}}, turn="t1"))
+    assert context_measure(state) == (3700, 100000, True)
+    # A log without ``prompt`` falls back to ``input``.
+    state = apply(state, _ev(5, "model.usage", {"input": 3800, "output": 50}, turn="t1"))
+    assert context_measure(state)[0] == 3850
+    assert fold([
+        _ev(1, "turn.started", turn="t1"),
+        _ev(2, "context.assembled", {"iteration": 1, **assembled}, turn="t1"),
+        _ev(3, "model.usage", {"input": 20, "output": 100, "cache_read": 2900, "prompt": 3000}, turn="t1"),
+    ]).context["context"]["measured_tokens"] == 3100
+
+
+def test_context_usage_without_a_window_uses_the_input_budget():
+    from nexus.ui_support.context import context_measure
+
+    state = apply_many(initial_state("s1"), [
+        _ev(1, "turn.started", turn="t1"),
+        _ev(2, "context.assembled", {"iteration": 1, "context": {"used_tokens": 500, "input_budget": 8000}}, turn="t1"),
+        _ev(3, "model.usage", {"input": 0, "output": 5}, turn="t1"),
+    ])
+    assert context_measure(state) == (500, 8000, False)

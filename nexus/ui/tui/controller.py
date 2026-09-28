@@ -32,7 +32,7 @@ class TuiController:
         self.session = session
         self.view: ConversationView = initial_state(session)
         self.cursor = 0
-        self.agent_name = "general"
+        self.agent_name = "build"
         self.agent_source = "default"
         self.agent_color: str | None = None
         self.provider: str | None = None
@@ -44,6 +44,8 @@ class TuiController:
         self.agent_metadata_known = False
         self.thinking_budget: int | None = None
         self.running = False
+        #: Called when a turn stream ends by any path so the UI can resync.
+        self.on_stream_end: Callable[[], None] | None = None
         self._task: asyncio.Task[None] | None = None
         self._closed = False
         self._agent_metadata_revision = 0
@@ -76,7 +78,7 @@ class TuiController:
             )
         ):
             return current
-        self.agent_name = str(getattr(current, "name", "general"))
+        self.agent_name = str(getattr(current, "name", "build"))
         self.agent_source = str(getattr(current, "source", "default"))
         self.agent_color = getattr(current, "color", None)
         self.provider = getattr(current, "provider", None)
@@ -173,19 +175,27 @@ class TuiController:
                 async for event in events:
                     if session != self.session:
                         return
+                    terminal = event.type in {"turn.completed", "turn.failed", "turn.cancelled"}
+                    if terminal:
+                        # Clear before the UI handles the final event so its last
+                        # sync stops the activity animation.
+                        self.running = False
                     handled = post_event(event)
                     if handled is not None:
                         await handled
-                    if event.type in {"turn.completed", "turn.failed", "turn.cancelled"}:
+                    if terminal:
                         break
         except asyncio.CancelledError:
             raise
         except ClientError:
             if session == self.session:
+                self.running = False
                 post_event(None)
         finally:
             if session == self.session:
                 self.running = False
+                if self.on_stream_end is not None:
+                    self.on_stream_end()
 
     async def switch_session(self, session: str) -> None:
         """Detach a prior session's live stream before replacing its projection."""
@@ -201,7 +211,7 @@ class TuiController:
         self._agent_metadata_revision += 1
         self.view = initial_state(session)
         self.cursor = 0
-        self.agent_name = "general"
+        self.agent_name = "build"
         self.agent_source = "default"
         self.agent_color = None
         self.provider = None

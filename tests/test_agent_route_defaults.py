@@ -296,7 +296,7 @@ async def test_effort_is_unknown_when_catalogue_does_not_support_it_and_agent_ca
         )
         assert model_started.data["reasoning_effort"] is None
         if agent_enabled:
-            assert turn_started.data["agent"]["name"] == "general"
+            assert turn_started.data["agent"]["name"] == "build"
             assert turn_started.data["agent"]["source"] == "config"
         else:
             assert "agent" not in turn_started.data

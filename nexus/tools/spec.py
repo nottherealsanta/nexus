@@ -211,6 +211,33 @@ class SkillActivationSink(Protocol):
     def record(self, activation: object) -> object: ...
 
 
+class QuestionServiceView(Protocol):
+    """The root-session question seam the ``question`` builtin may reach.
+
+    Bound by the runtime to one root session and backed by
+    :class:`~nexus.tools.questions.QuestionBroker`. ``attended`` is false when
+    no operator can answer, so the tool fails fast instead of parking the turn.
+    ``ask`` raises ``OperationCancelled`` on cancellation or operator loss and
+    ``QuestionTimeout`` at the deadline.
+    """
+
+    @property
+    def attended(self) -> bool: ...
+
+    async def ask(
+        self,
+        *,
+        source_session_id: str,
+        turn_id: str,
+        agent_id: str,
+        call_id: str,
+        prompt: str,
+        choices: tuple[Any, ...] = ...,
+        emit: Any = ...,
+        cancel: Any = ...,
+    ) -> str: ...
+
+
 class SubagentServiceView(Protocol):
     """The narrow slice of ``SubagentRunner`` the ``Task`` builtin may reach.
 
@@ -392,6 +419,8 @@ class ToolSpec(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: Until the permission engine can evaluate every target, the manager
     #: validates and retains them but refuses execution.
     multi_path_targets: MultiPathTargetFn | None = None
+    #: Optional display group for the terminal context header.
+    group: str = ""
 
     def __post_init__(self) -> None:
         from .bundles import BUNDLE_NAMES
@@ -408,6 +437,8 @@ class ToolSpec(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
             )
         if not isinstance(self.mutates, bool):
             raise ToolSpecError("mutates must be a bool")
+        if not isinstance(self.group, str) or len(self.group) > 80 or "\x00" in self.group:
+            raise ToolSpecError("group must be a short string")
         if self.concurrency not in ("parallel", "exclusive"):
             raise ToolSpecError("concurrency must be 'parallel' or 'exclusive'")
         if self.timeout_s is not None and (
@@ -623,6 +654,8 @@ class ToolContext:
     extension_service: ExtensionServiceView | None = None
     #: Runtime-shared hardened outbound GET service; tools receive no Runtime.
     outbound_http: OutboundHTTPService | None = None
+    #: Operator question seam; ``None`` means nobody can be asked.
+    questions: QuestionServiceView | None = None
     #: Stable identity within a session. Runtime root tools use ``"root"``;
     #: child adapters use the runner-assigned ChildSpec.agent_id.
     agent_id: str = "root"
@@ -692,6 +725,7 @@ __all__ = [
     "PathTarget",
     "PermissionKeyFn",
     "ProgressEmitter",
+    "QuestionServiceView",
     "RegisteredTool",
     "SkillActivationSink",
     "SkillServiceView",

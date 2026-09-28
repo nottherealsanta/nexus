@@ -11,6 +11,7 @@ whose head is a tiny frontmatter block::
     model: low
     provider: anthropic
     reasoning_effort: medium
+    fallback: [openai/gpt-5, anthropic/claude-sonnet-5]
     color: #4F8EF7
     max_iterations: 30
     context_tokens: 100000
@@ -35,10 +36,13 @@ scalars, duplicate keys, unknown keys, and wrong value types. One bad line
 rejects the whole declaration.
 
 The supported keys are exactly ``name``, ``description``, ``bundles``,
-``tools``, ``model``, ``provider``, ``reasoning_effort``, ``color``,
-``max_iterations``, ``context_tokens``, and ``contexts``. ``name`` and
-``description`` are required; ``bundles``, ``tools``, and ``contexts`` are the
-list-valued fields. Missing ``contexts`` preserves the legacy subagent-only
+``tools``, ``model``, ``provider``, ``reasoning_effort``, ``fallback``, ``color``,
+``max_iterations``, ``context_tokens``, ``contexts``, ``profile``, and
+``write_roots``. ``name`` and ``description`` are required; ``bundles``,
+``tools``, ``fallback``, ``contexts``, and ``write_roots`` are the
+list-valued fields. ``fallback`` is an ordered list of model references tried,
+before the workspace-wide ``models.fallback`` chain, when the agent's primary
+model fails before streaming any output. Missing ``contexts`` preserves the legacy subagent-only
 behavior. A ``tools`` item may carry a leading ``-`` to *exclude* a tool, which
 is the only way a declaration can narrow a set -- declarations never grant.
 Missing ``color`` is resolved deterministically from the normalized agent name.
@@ -53,8 +57,8 @@ fingerprint, and a bounded body snapshot taken from the *same* opened bytes as
 the declaration, so a caller holding a pinned generation cannot observe a later
 edit. The body is the subagent's system prompt and is disclosed only on demand.
 
-Two roles -- ``explore`` and ``planner`` (plan section 15.7) -- have **no write
-path at all**: they are structurally read-only. The model names the forbidden
+The ``advisor`` role (and the legacy ``explore``/``plan``/``planner`` names,
+plan section 15.7) has **no write path at all**: they are structurally read-only. The model names the forbidden
 tools and bundles here so the manager can diagnose a declaration that asks for
 them and so any tool selection strips them regardless of what the file says.
 """
@@ -73,6 +77,8 @@ from ..errors import NexusError
 from ..tools.names import canonical_tool_name, canonical_tool_names
 
 __all__ = [
+    "AGENT_CONTEXTS",
+    "DEFAULT_AGENT_COLORS",
     "DEFAULT_MAX_BODY_BYTES",
     "DELIMITER",
     "FORBIDDEN_ROLE_BUNDLES",
@@ -81,21 +87,20 @@ __all__ = [
     "MAX_BUNDLES",
     "MAX_CONTEXT_TOKENS",
     "MAX_DESCRIPTION_CHARS",
+    "MAX_FALLBACKS",
     "MAX_FRONTMATTER_BYTES",
     "MAX_ITERATIONS",
     "MAX_LIST_ITEMS",
     "MAX_MODEL_CHARS",
-    "MAX_PROVIDER_CHARS",
     "MAX_NAME_CHARS",
+    "MAX_PROVIDER_CHARS",
     "MAX_TOOLS",
-    "AGENT_CONTEXTS",
     "MODEL_INHERIT",
     "MODEL_TIERS",
-    "REASONING_EFFORTS",
-    "DEFAULT_AGENT_COLORS",
     "MUTATING_FS_TOOLS",
     "READ_ONLY_ROLES",
     "READ_ONLY_TOOLS",
+    "REASONING_EFFORTS",
     "SHELL_TOOLS",
     "SOURCE_PRECEDENCE",
     "AgentDef",
@@ -113,9 +118,9 @@ __all__ = [
     "AgentSource",
     "AgentStaleError",
     "ParsedFrontmatter",
+    "default_agent_color",
     "find_frontmatter_bounds",
     "is_model_tier",
-    "default_agent_color",
     "parse_frontmatter",
     "read_agent_bytes",
     "read_agent_file",
@@ -177,6 +182,8 @@ MAX_NAME_CHARS = 64
 MAX_MODEL_CHARS = 128
 MAX_PROVIDER_CHARS = 64
 MAX_LIST_ITEMS = 64
+#: Per-agent fallback chain length.
+MAX_FALLBACKS = 8
 MAX_TOOLS = MAX_LIST_ITEMS
 MAX_BUNDLES = MAX_LIST_ITEMS
 #: Integer clamps for the two numeric declarations.
@@ -216,10 +223,10 @@ FORBIDDEN_ROLE_TOOLS = SHELL_TOOLS | MUTATING_FS_TOOLS
 #: Bundles the read-only roles are structurally denied.
 FORBIDDEN_ROLE_BUNDLES = frozenset({"shell"})
 #: Roles with no write path at all, regardless of what their file declares.
-READ_ONLY_ROLES = frozenset({"explore", "plan", "planner"})
+READ_ONLY_ROLES = frozenset({"advisor", "explore", "plan", "planner"})
 #: Tools permitted to structurally read-only roles.
 READ_ONLY_TOOLS = frozenset(
-    {"read", "glob", "grep", "subagent", "todowrite", "skill", "webfetch", "websearch"}
+    {"read", "glob", "grep", "subagent", "todowrite", "question", "skill", "webfetch", "websearch"}
 )
 AGENT_CONTEXTS = frozenset({"root", "subagent"})
 
@@ -231,6 +238,8 @@ _INT_RE = re.compile(r"[0-9]+\Z")
 _FLOAT_RE = re.compile(r"[0-9]+\.[0-9]+\Z")
 _PROVIDER_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}\Z")
 _COLOR_RE = re.compile(r"#[0-9A-Fa-f]{6}\Z")
+#: A fallback model reference: bounded, no whitespace or flow-list punctuation.
+_MODEL_REF_RE = re.compile(rf"[A-Za-z0-9][A-Za-z0-9._:/@+-]{{0,{MAX_MODEL_CHARS - 1}}}\Z")
 
 #: Keys the grammar understands. Anything else is an error, never ignored.
 _FIELDS = (
@@ -241,13 +250,15 @@ _FIELDS = (
     "model",
     "provider",
     "reasoning_effort",
+    "fallback",
     "color",
     "max_iterations",
     "context_tokens",
     "contexts",
     "profile",
+    "write_roots",
 )
-_LIST_FIELDS = frozenset({"bundles", "tools", "contexts"})
+_LIST_FIELDS = frozenset({"bundles", "tools", "fallback", "contexts", "write_roots"})
 _REQUIRED_FIELDS = frozenset({"name", "description"})
 
 #: A value may not *begin* with one of these: each is a YAML structural marker.
@@ -360,8 +371,10 @@ class ParsedFrontmatter:
     context_tokens: int | None
     contexts: tuple[str, ...]
     profile: str | None
+    write_roots: tuple[str, ...]
     migration_notices: tuple[str, ...]
     raw: bytes
+    fallback: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -659,6 +672,13 @@ def _parse_raw(raw: bytes) -> ParsedFrontmatter:
         if "reasoning_effort" in fields
         else None
     )
+    fallback = (
+        _parse_list(fields["fallback"], "fallback", _MODEL_REF_RE, "model reference")
+        if "fallback" in fields
+        else ()
+    )
+    if len(fallback) > MAX_FALLBACKS:
+        raise AgentParseError(f"fallback: at most {MAX_FALLBACKS} models are allowed")
     color = (
         _parse_color(fields["color"])
         if "color" in fields
@@ -690,6 +710,13 @@ def _parse_raw(raw: bytes) -> ParsedFrontmatter:
         if "profile" in fields
         else None
     )
+    write_roots = (
+        _parse_list(fields["write_roots"], "write_roots", re.compile(r"(?:global|project)\Z"), "settings root")
+        if "write_roots" in fields
+        else ()
+    )
+    if len(set(write_roots)) != len(write_roots):
+        raise AgentParseError("write_roots entries must be unique")
 
     return ParsedFrontmatter(
         name=name,
@@ -705,8 +732,10 @@ def _parse_raw(raw: bytes) -> ParsedFrontmatter:
         context_tokens=context_tokens,
         contexts=contexts,
         profile=profile,
+        write_roots=write_roots,
         migration_notices=migration_notices,
         raw=raw,
+        fallback=fallback,
     )
 
 
@@ -866,6 +895,7 @@ class AgentDef:
     context_tokens: int | None = None
     contexts: tuple[str, ...] = ("subagent",)
     profile: str | None = None
+    write_roots: tuple[str, ...] = ()
     # -- refresh-time snapshot (progressive disclosure keeps it out of the index)
     body: bytes | None = None
     body_sha256: str = ""
@@ -875,6 +905,8 @@ class AgentDef:
     provider: str | None = None
     reasoning_effort: str | None = None
     color: str = ""
+    #: Ordered model references tried when the primary model fails pre-stream.
+    fallback: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.color:
@@ -915,8 +947,8 @@ class AgentDef:
     def read_only(self) -> bool:
         """Whether this definition is structurally denied a write path.
 
-        The three seeded roles include ``explore`` and ``planner``; membership is
-        by *declared name*, not by tier, so a workspace copy cannot escape the
+        ``advisor`` (and the legacy ``explore``/``plan``/``planner`` names) are
+        read-only; membership is by *declared name*, not by tier, so a workspace copy cannot escape the
         restriction by shadowing the built-in file.
         """
         return self.name.casefold() in READ_ONLY_ROLES
@@ -957,6 +989,7 @@ class AgentDef:
             "model": self.model,
             "provider": self.provider,
             "reasoning_effort": self.reasoning_effort,
+            "fallback": list(self.fallback),
             "color": self.color,
             "max_iterations": self.max_iterations,
             "context_tokens": self.context_tokens,
@@ -1044,6 +1077,7 @@ class AgentIndexEntry:
     provider: str | None = None
     reasoning_effort: str | None = None
     color: str | None = None
+    fallback: tuple[str, ...] = ()
 
     def line(self) -> str:
         return f"{self.name}: {self.description}"

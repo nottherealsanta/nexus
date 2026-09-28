@@ -1,6 +1,9 @@
 """Compatibility exports for the Textual widget toolkit."""
 
 from ...ui_support.tui_widgets import (
+    MAX_PASTED_CONTENT_ATTACHMENTS,
+    MAX_PASTED_CONTENT_CHARS,
+    ActivityProgress,
     ChatEditor,
     ChatInput,
     CompletionPopup,
@@ -9,6 +12,7 @@ from ...ui_support.tui_widgets import (
     ContextPreview,
     ContextUsage,
     LogsDrawer,
+    PastedContentScreen,
     PickerLink,
     RootAgentBar,
     Transcript,
@@ -18,9 +22,13 @@ from ...ui_support.tui_widgets import (
     agent_color,
     context_detail_usage,
     context_usage,
+    is_large_paste,
 )
 
 __all__ = [
+    "MAX_PASTED_CONTENT_ATTACHMENTS",
+    "MAX_PASTED_CONTENT_CHARS",
+    "ActivityProgress",
     "ChatEditor",
     "ChatInput",
     "CompletionPopup",
@@ -29,6 +37,7 @@ __all__ = [
     "ContextPreview",
     "ContextUsage",
     "LogsDrawer",
+    "PastedContentScreen",
     "PickerLink",
     "RootAgentBar",
     "Transcript",
@@ -38,4 +47,5 @@ __all__ = [
     "agent_color",
     "context_detail_usage",
     "context_usage",
+    "is_large_paste",
 ]

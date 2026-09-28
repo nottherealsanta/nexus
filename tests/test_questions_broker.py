@@ -152,7 +152,12 @@ async def test_request_and_resolve_events_are_durable_boundaries():
     assert await broker.resolve("root", request.id, "answer")
     assert events[1] == (
         "question.resolved",
-        {"question_id": request.id, "root_session_id": "root", "answer": "answer"},
+        {
+            "question_id": request.id,
+            "root_session_id": "root",
+            "answer": "answer",
+            "answer_label": "answer",
+        },
     )
     assert await waiter == "answer"
 

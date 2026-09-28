@@ -34,7 +34,7 @@ class Event(msgspec.Struct, frozen=True):
 
 # Grouped catalogue from the plan. UIs must tolerate unknown types; these
 # constants exist so emitters and tests do not scatter string literals.
-SESSION_EVENTS = ("session.opened", "session.closed")
+SESSION_EVENTS = ("session.opened", "session.closed", "session.forked")
 TURN_EVENTS = (
     "turn.started",
     "turn.completed",
@@ -64,6 +64,9 @@ TOOL_EVENTS = (
     "tool.result",
 )
 PERMISSION_EVENTS = ("permission.requested", "permission.resolved")
+# Agent questions (TOOLS_PLAN "question"): answers are data, never grants, so
+# they stay outside the pinned permission group.
+QUESTION_EVENTS = ("question.requested", "question.resolved")
 EXT_EVENTS = (
     "ext.loaded",
     "ext.unloaded",
@@ -173,6 +176,7 @@ __all__ = [
     "MODEL_EVENTS",
     "PERMISSION_EVENTS",
     "PRESENCE_EVENTS",
+    "QUESTION_EVENTS",
     "REGISTRY_EVENTS",
     "SESSION_EVENTS",
     "SKILL_EVENTS",

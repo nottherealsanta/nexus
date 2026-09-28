@@ -18,6 +18,20 @@ from typing import Any, Literal
 
 import msgspec
 
+from ..host_support.archive_protocol import (
+    ArchivedSummary,
+    SessionArchive,
+    SessionArchiveResult,
+    SessionListArchived,
+    SessionListArchivedResult,
+    SessionListResult,
+    SessionPreview,
+    SessionPreviewResult,
+    SessionSearch,
+    SessionSearchResult,
+    SessionUnarchive,
+    SessionUnarchiveResult,
+)
 from ..session.manager import SessionSummary
 
 #: Bumped when a command/result shape changes incompatibly, so a transport can
@@ -32,6 +46,30 @@ PROTOCOL_VERSION = 3
 
 class SessionList(msgspec.Struct, tag=True, frozen=True):
     """List every session as a transport-neutral summary."""
+
+
+class SettingsInventory(msgspec.Struct, tag=True, frozen=True):
+    scope: Literal["global", "project"]
+
+
+class SettingsRead(msgspec.Struct, tag=True, frozen=True):
+    scope: Literal["global", "project"]
+    category: str
+    id: str
+
+
+class SettingsWrite(msgspec.Struct, tag=True, frozen=True):
+    scope: Literal["global", "project"]
+    category: str
+    id: str
+    body: str
+    expected_sha256: str | None = None
+
+
+class SettingsDelete(msgspec.Struct, tag=True, frozen=True):
+    scope: Literal["global", "project"]
+    category: str
+    id: str
 
 
 class SessionOpen(msgspec.Struct, tag=True, frozen=True):
@@ -111,6 +149,19 @@ class PermissionResolve(msgspec.Struct, tag=True, frozen=True):
     request_id: str
     decision: str
     client_id: str | None = None
+
+
+class QuestionAnswer(msgspec.Struct, tag=True, frozen=True):
+    """Answer one agent question: a choice id, or free text when it has none.
+
+    Clients see a pending question as the running ``question`` tool call, so
+    they address it by ``call_id``; ``question_id`` is accepted when known.
+    """
+
+    session: str
+    answer: str
+    call_id: str = ""
+    question_id: str = ""
 
 
 class ExtensionsReload(msgspec.Struct, tag=True, frozen=True):
@@ -221,6 +272,13 @@ class AgentReset(msgspec.Struct, tag=True, frozen=True):
     session: str
 
 
+class AgentDefaultSet(msgspec.Struct, tag=True, frozen=True):
+    """Persist the root agent new sessions start with (``[agent] name``)."""
+
+    name: str
+    scope: Literal["global", "project"] = "global"
+
+
 class ToolsList(msgspec.Struct, tag=True, frozen=True):
     """The model-facing tool catalog for the current config and manifest."""
 
@@ -236,6 +294,13 @@ class FileSearch(msgspec.Struct, tag=True, frozen=True):
 
     query: str
     limit: int = 30
+
+
+class GitDiff(msgspec.Struct, tag=True, frozen=True):
+    """Bounded diff for the current workspace, optionally staged or against a ref."""
+
+    staged: bool = False
+    ref: str = ""
 
 
 class WorktreeList(msgspec.Struct, tag=True, frozen=True):
@@ -311,6 +376,15 @@ class WebLaunch(msgspec.Struct, tag=True, frozen=True):
 #: The complete command union. ``msgspec`` decodes it by the ``type`` tag.
 Command = (
     SessionList
+    | SettingsInventory
+    | SettingsRead
+    | SettingsWrite
+    | SettingsDelete
+    | SessionArchive
+    | SessionUnarchive
+    | SessionListArchived
+    | SessionPreview
+    | SessionSearch
     | SessionOpen
     | SessionStart
     | SessionEnqueue
@@ -324,6 +398,7 @@ Command = (
     | SessionRestore
     | SessionExport
     | PermissionResolve
+    | QuestionAnswer
     | ExtensionsReload
     | ExtensionsList
     | ExtensionsValidate
@@ -338,9 +413,11 @@ Command = (
     | AgentCurrent
     | AgentSelect
     | AgentReset
+    | AgentDefaultSet
     | ToolsList
     | ContextInspect
     | FileSearch
+    | GitDiff
     | WorktreeList
     | WorktreeInspect
     | WorktreeReview
@@ -355,6 +432,15 @@ Command = (
 
 COMMANDS: tuple[type, ...] = (
     SessionList,
+    SettingsInventory,
+    SettingsRead,
+    SettingsWrite,
+    SettingsDelete,
+    SessionArchive,
+    SessionUnarchive,
+    SessionListArchived,
+    SessionPreview,
+    SessionSearch,
     SessionOpen,
     SessionStart,
     SessionEnqueue,
@@ -368,6 +454,7 @@ COMMANDS: tuple[type, ...] = (
     SessionRestore,
     SessionExport,
     PermissionResolve,
+    QuestionAnswer,
     ExtensionsReload,
     ExtensionsList,
     ExtensionsValidate,
@@ -382,9 +469,11 @@ COMMANDS: tuple[type, ...] = (
     AgentCurrent,
     AgentSelect,
     AgentReset,
+    AgentDefaultSet,
     ToolsList,
     ContextInspect,
     FileSearch,
+    GitDiff,
     WorktreeList,
     WorktreeInspect,
     WorktreeReview,
@@ -403,8 +492,50 @@ COMMANDS: tuple[type, ...] = (
 # ---------------------------------------------------------------------------
 
 
-class SessionListResult(msgspec.Struct, tag=True, frozen=True):
-    sessions: list[SessionSummary] = msgspec.field(default_factory=list)
+class SettingsCategory(msgspec.Struct, frozen=True):
+    key: str
+    label: str
+    count: int
+
+
+class SettingsItem(msgspec.Struct, frozen=True):
+    category: str
+    id: str
+    label: str
+    summary: str
+    builtin: bool = False
+    rel_path: str = ""
+    #: A file in this scope that shadows a packaged built-in of the same id.
+    overrides_builtin: bool = False
+
+
+class SettingsInventoryResult(msgspec.Struct, tag=True, frozen=True):
+    scope: str
+    root_display: str
+    categories: list[SettingsCategory] = msgspec.field(default_factory=list)
+    items: list[SettingsItem] = msgspec.field(default_factory=list)
+
+
+class SettingsReadResult(msgspec.Struct, tag=True, frozen=True):
+    body: str
+    rel_path: str
+    builtin: bool
+    sha256: str
+    overrides_builtin: bool = False
+
+
+class SettingsWriteResult(msgspec.Struct, tag=True, frozen=True):
+    status: str
+    sha256: str = ""
+    loaded: list[str] = msgspec.field(default_factory=list)
+    unloaded: list[str] = msgspec.field(default_factory=list)
+    failed: list[str] = msgspec.field(default_factory=list)
+    config_reloaded: bool = False
+
+
+class SettingsDeleteResult(msgspec.Struct, tag=True, frozen=True):
+    status: str
+    trash_id: str = ""
 
 
 class SessionOpenResult(msgspec.Struct, tag=True, frozen=True):
@@ -507,6 +638,13 @@ class PermissionResolveResult(msgspec.Struct, tag=True, frozen=True):
     request_id: str
     resolved: bool = False
     client_id: str | None = None
+
+
+class QuestionAnswerResult(msgspec.Struct, tag=True, frozen=True):
+    session: str
+    call_id: str = ""
+    resolved: bool = False
+    error: str | None = None
 
 
 class ExtensionsReloadResult(msgspec.Struct, tag=True, frozen=True):
@@ -612,6 +750,8 @@ class ReasoningEffortSelectResult(msgspec.Struct, tag=True, frozen=True):
 class AgentsListResult(msgspec.Struct, tag=True, frozen=True):
     generation: int = 0
     agents: list[dict[str, Any]] = msgspec.field(default_factory=list)
+    #: The root agent a new session starts with (``[agent] name``).
+    default: str = "build"
 
 
 class AgentCurrentResult(msgspec.Struct, tag=True, frozen=True):
@@ -623,7 +763,7 @@ class AgentCurrentResult(msgspec.Struct, tag=True, frozen=True):
     """
 
     session: str
-    name: str = "general"
+    name: str = "build"
     source: str = "default"
     color: str | None = None
     provider: str | None = None
@@ -637,9 +777,18 @@ class AgentCurrentResult(msgspec.Struct, tag=True, frozen=True):
 
 class AgentSelectResult(msgspec.Struct, tag=True, frozen=True):
     session: str
-    name: str = "general"
+    name: str = "build"
     source: str = "session"
     apply_next_turn: bool = True
+
+
+class AgentDefaultSetResult(msgspec.Struct, tag=True, frozen=True):
+    #: The name written, and the default now in effect (a project config can
+    #: still override a global write).
+    name: str
+    effective: str
+    scope: str
+    rel_path: str = ""
 
 
 class ToolsListResult(msgspec.Struct, tag=True, frozen=True):
@@ -661,6 +810,7 @@ class ContextInspectResult(msgspec.Struct, tag=True, frozen=True):
     redacted_for_display: bool = False
     skills_index: list[dict[str, Any]] = msgspec.field(default_factory=list)
     mcp_index: str = ""
+    mcp_servers: list[dict[str, Any]] = msgspec.field(default_factory=list)
     included_parts: list[dict[str, str]] = msgspec.field(default_factory=list)
     tools: list[dict[str, Any]] = msgspec.field(default_factory=list)
     tools_supported: bool | None = None
@@ -676,6 +826,11 @@ class ContextInspectResult(msgspec.Struct, tag=True, frozen=True):
 
 class FileSearchResult(msgspec.Struct, tag=True, frozen=True):
     paths: list[str] = msgspec.field(default_factory=list)
+
+
+class GitDiffResult(msgspec.Struct, tag=True, frozen=True):
+    patch: str = ""
+    truncated: bool = False
 
 
 class WorktreeListResult(msgspec.Struct, tag=True, frozen=True):
@@ -766,7 +921,16 @@ class ErrorResult(msgspec.Struct, tag=True, frozen=True):
 
 #: The complete result union. ``msgspec`` decodes it by the ``type`` tag.
 Result = (
-    SessionListResult
+    SettingsInventoryResult
+    | SettingsReadResult
+    | SettingsWriteResult
+    | SettingsDeleteResult
+    | SessionListResult
+    | SessionArchiveResult
+    | SessionUnarchiveResult
+    | SessionListArchivedResult
+    | SessionPreviewResult
+    | SessionSearchResult
     | SessionOpenResult
     | SessionStartResult
     | SessionEnqueueResult
@@ -780,6 +944,7 @@ Result = (
     | SessionRestoreResult
     | SessionExportResult
     | PermissionResolveResult
+    | QuestionAnswerResult
     | ExtensionsReloadResult
     | ExtensionsListResult
     | ExtensionsValidateResult
@@ -793,9 +958,11 @@ Result = (
     | AgentsListResult
     | AgentCurrentResult
     | AgentSelectResult
+    | AgentDefaultSetResult
     | ToolsListResult
     | ContextInspectResult
     | FileSearchResult
+    | GitDiffResult
     | WorktreeListResult
     | WorktreeInspectResult
     | WorktreeReviewResult
@@ -809,7 +976,21 @@ Result = (
 )
 
 RESULTS: tuple[type, ...] = (
+    SettingsInventoryResult,
+    SettingsReadResult,
+    SettingsWriteResult,
+    SettingsDeleteResult,
     SessionListResult,
+    SessionArchiveResult,
+    SessionUnarchiveResult,
+    SessionListArchivedResult,
+    SessionPreviewResult,
+    SessionSearchResult,
+    SessionArchiveResult,
+    SessionUnarchiveResult,
+    SessionListArchivedResult,
+    SessionPreviewResult,
+    SessionSearchResult,
     SessionOpenResult,
     SessionStartResult,
     SessionEnqueueResult,
@@ -823,6 +1004,7 @@ RESULTS: tuple[type, ...] = (
     SessionRestoreResult,
     SessionExportResult,
     PermissionResolveResult,
+    QuestionAnswerResult,
     ExtensionsReloadResult,
     ExtensionsListResult,
     ExtensionsValidateResult,
@@ -836,9 +1018,11 @@ RESULTS: tuple[type, ...] = (
     AgentsListResult,
     AgentCurrentResult,
     AgentSelectResult,
+    AgentDefaultSetResult,
     ToolsListResult,
     ContextInspectResult,
     FileSearchResult,
+    GitDiffResult,
     WorktreeListResult,
     WorktreeInspectResult,
     WorktreeReviewResult,
@@ -883,6 +1067,8 @@ __all__ = [
     "RESULTS",
     "AgentCurrent",
     "AgentCurrentResult",
+    "AgentDefaultSet",
+    "AgentDefaultSetResult",
     "AgentReset",
     "AgentSelect",
     "AgentSelectResult",
@@ -890,6 +1076,7 @@ __all__ = [
     "AgentTranscriptResult",
     "AgentsList",
     "AgentsListResult",
+    "ArchivedSummary",
     "Command",
     "ContextInspect",
     "ContextInspectResult",
@@ -907,6 +1094,8 @@ __all__ = [
     "ExtensionsValidateResult",
     "FileSearch",
     "FileSearchResult",
+    "GitDiff",
+    "GitDiffResult",
     "Health",
     "HealthResult",
     "LogEntry",
@@ -924,9 +1113,13 @@ __all__ = [
     "ModelsRefreshResult",
     "PermissionResolve",
     "PermissionResolveResult",
+    "QuestionAnswer",
+    "QuestionAnswerResult",
     "ReasoningEffortSelect",
     "ReasoningEffortSelectResult",
     "Result",
+    "SessionArchive",
+    "SessionArchiveResult",
     "SessionCancel",
     "SessionCancelResult",
     "SessionDelete",
@@ -938,18 +1131,36 @@ __all__ = [
     "SessionFork",
     "SessionForkResult",
     "SessionList",
+    "SessionListArchived",
+    "SessionListArchivedResult",
     "SessionListResult",
     "SessionLogPage",
     "SessionOpen",
     "SessionOpenResult",
+    "SessionPreview",
+    "SessionPreviewResult",
     "SessionRestore",
     "SessionRestoreResult",
+    "SessionSearch",
+    "SessionSearchResult",
     "SessionStart",
     "SessionStartResult",
     "SessionState",
     "SessionStateResult",
     "SessionSubscribe",
     "SessionSubscribeResult",
+    "SessionUnarchive",
+    "SessionUnarchiveResult",
+    "SettingsCategory",
+    "SettingsDelete",
+    "SettingsDeleteResult",
+    "SettingsInventory",
+    "SettingsInventoryResult",
+    "SettingsItem",
+    "SettingsRead",
+    "SettingsReadResult",
+    "SettingsWrite",
+    "SettingsWriteResult",
     "Shutdown",
     "ShutdownResult",
     "ToolsList",

@@ -29,6 +29,7 @@ from . import (
     ls,
     meta,
     multiedit,
+    question,
     read,
     skill,
     todo,
@@ -46,6 +47,7 @@ from .kill_shell import SPEC as KILL_SHELL_SPEC
 from .ls import SPEC as LS_SPEC
 from .meta import LIST_EXTENSIONS_SPEC, RELOAD_EXTENSIONS_SPEC, WRITE_TOOL_SPEC
 from .multiedit import SPEC as MULTIEDIT_SPEC
+from .question import SPEC as QUESTION_SPEC
 from .read import SPEC as READ_SPEC
 from .skill import SKILL_SPEC
 from .todo import TODO_SPEC
@@ -113,9 +115,11 @@ LEGACY_SHELL_TOOLS = (
 
 #: Bundle order, matching ``nexus.tools.bundles.bundle_tools("task")`` minus
 #: the Phase 6 ``Task`` tool.
-TASK_SPECS = (TODO_SPEC,)
+TASK_SPECS = (TODO_SPEC, QUESTION_SPEC)
 
-TASK_RUNNERS = MappingProxyType({TODO_SPEC.name: todo.run})
+TASK_RUNNERS = MappingProxyType(
+    {TODO_SPEC.name: todo.run, QUESTION_SPEC.name: question.run}
+)
 
 TASK_TOOLS = tuple(
     RegisteredTool(spec=spec, run=TASK_RUNNERS[spec.name], origin="builtin")
@@ -189,6 +193,7 @@ __all__ = [
     "OPT_IN_TOOLS",
     "PATCH_SPECS",
     "PATCH_TOOLS",
+    "QUESTION_SPEC",
     "READ_SPEC",
     "RELOAD_EXTENSIONS_SPEC",
     "SHELL_RUNNERS",

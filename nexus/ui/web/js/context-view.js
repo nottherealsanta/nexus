@@ -436,3 +436,222 @@ export function renderCurrentContext({result, loading, error, chooseAgent, choos
   if (!preview) root.append(full);
   return root;
 }
+
+// ---------------------------------------------------------------------------
+// Grouped context and tools dialogs: a port of ui_support/context.py
+// (context_groups, tool_groups, context_summary). Keep the two in step.
+// ---------------------------------------------------------------------------
+
+const MAX_ROWS = 512;
+const estimateTokens = text => Math.ceil(String(text || '').length / 4);
+const compactTokens = value => value >= 1e6 ? `${(value / 1e6).toFixed(1).replace(/\.0$/, '')}M` : value >= 1e3 ? `${(value / 1e3).toFixed(1).replace(/\.0$/, '')}K` : String(value);
+const entry = (title, body, tokens = 0, detail = '', error = false) => ({title, body, tokens, detail, error});
+const group = (key, title, entries, detail = '', total = null) => ({key, title, entries, detail, tokens: total ?? entries.reduce((sum, row) => sum + row.tokens, 0)});
+
+function schemaRows(schema) {
+  const properties = schema && typeof schema === 'object' ? schema.properties : null;
+  if (!properties || typeof properties !== 'object') return [];
+  const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+  return Object.entries(properties).slice(0, 64).map(([name, prop]) => {
+    prop = prop && typeof prop === 'object' ? prop : {};
+    let kind = Array.isArray(prop.type) ? prop.type.join(' | ') : String(prop.type ?? 'any');
+    if (kind === 'array' && prop.items && typeof prop.items === 'object') kind = `array<${prop.items.type ?? 'any'}>`;
+    if (Array.isArray(prop.enum)) kind = prop.enum.slice(0, 8).join(' | ');
+    const description = String(prop.description || '').slice(0, 300);
+    return `- \`${name}\` ${kind} · ${required.has(name) ? 'required' : 'optional'}${description ? ` — ${description}` : ''}`;
+  });
+}
+
+export function toolEntry(tool) {
+  const description = String(tool.description || '');
+  const schema = tool.input_schema || {};
+  const rows = schemaRows(schema);
+  const body = [
+    description || '(no description)',
+    `**Parameters**\n${rows.length ? rows.join('\n') : '(none)'}`,
+    `**Schema**\n\`\`\`json\n${json(schema)}\n\`\`\``,
+  ].join('\n\n');
+  const first = description.trim().split('\n')[0] || '';
+  const detail = `${rows.length} param${rows.length === 1 ? '' : 's'}${first ? ` · ${first.slice(0, 90)}` : ''}`;
+  return entry(String(tool.name || 'tool'), body, estimateTokens(json({name: tool.name, description: tool.description, input_schema: schema})), detail);
+}
+
+export function toolGroups(tools) {
+  const families = new Map(), servers = new Map();
+  const add = (map, key, tool) => { if (!map.has(key)) map.set(key, []); map.get(key).push(toolEntry(tool)); };
+  for (const tool of (Array.isArray(tools) ? tools : []).slice(0, MAX_ROWS)) {
+    if (!tool || typeof tool !== 'object') continue;
+    const name = String(tool.name || ''), family = String(tool.group || '');
+    if (name.startsWith('mcp__')) add(servers, name.split('__')[1], tool);
+    else if (family.startsWith('mcp:')) add(servers, family.slice(4), tool);
+    else add(families, family || 'other', tool);
+  }
+  const sorted = map => [...map].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+  return [
+    ...sorted(families).map(([key, rows]) => group(`tools:${key}`, key, rows)),
+    ...sorted(servers).map(([key, rows]) => group(`mcp:${key}`, `MCP · ${key}`, rows)),
+  ];
+}
+
+function messageTurns(messages) {
+  const turns = [], calls = new Map();
+  for (const message of (Array.isArray(messages) ? messages : []).slice(0, MAX_ROWS)) {
+    if (!message || typeof message !== 'object') continue;
+    const role = String(message.role || 'unknown');
+    const blocks = (message.blocks || []).filter(block => block && typeof block === 'object');
+    if ((role === 'user' && blocks.some(block => block.type !== 'tool_result')) || !turns.length) turns.push([]);
+    const entries = turns.at(-1);
+    const text = blocks.filter(block => block.type === 'text').map(block => block.text || '').join('\n\n');
+    if (text) entries.push(entry(role === 'user' ? 'User message' : role === 'assistant' ? 'Assistant' : role[0].toUpperCase() + role.slice(1), text, estimateTokens(text)));
+    for (const block of blocks) {
+      if (block.type === 'thinking' && block.text) entries.push(entry('Thinking', block.text, estimateTokens(block.text)));
+      else if (block.type === 'tool_use') {
+        const input = json(block.input || {});
+        calls.set(String(block.id || ''), [turns.length - 1, entries.length]);
+        entries.push(entry(`Tool · ${block.name || 'tool'}`, `**Input**\n\`\`\`json\n${input}\n\`\`\``, estimateTokens(input), input.split(/\s+/).join(' ').slice(0, 90)));
+      } else if (block.type === 'tool_result') {
+        const output = (block.content || []).map(row => row?.text || '[image omitted]').join('\n') || '(empty)';
+        const key = String(block.tool_use_id || ''), where = calls.get(key);
+        calls.delete(key);
+        if (where) {
+          const call = turns[where[0]][where[1]];
+          turns[where[0]][where[1]] = entry(call.title, `${call.body}\n\n${block.is_error ? '**Error**' : '**Result**'}\n\`\`\`\n${output}\n\`\`\``, call.tokens + estimateTokens(output), call.detail, Boolean(block.is_error));
+        } else entries.push(entry('Tool result', output, estimateTokens(output), '', Boolean(block.is_error)));
+      } else if (block.type !== 'text' && block.type !== 'thinking') {
+        const kind = String(block.type || 'content');
+        entries.push(entry(kind[0].toUpperCase() + kind.slice(1), block.text || `[${kind} omitted]`));
+      }
+    }
+  }
+  return turns;
+}
+
+export function contextGroups(result) {
+  const system = result.system_text || '';
+  const parts = (result.included_parts || []).filter(part => part && typeof part === 'object')
+    .map(part => entry(String(part.name || 'part'), String(part.text || ''), estimateTokens(part.text)));
+  const names = new Set(parts.map(part => part.title.toLowerCase()));
+  const skills = (result.skills_index || []).filter(row => row && typeof row === 'object');
+  if (skills.length && !['skills', 'skills_index', 'skills index'].some(name => names.has(name))) {
+    parts.push(entry('Skills index', skills.slice(0, MAX_ROWS).map(row => `- **${row.name || '?'}** · ${row.included === false ? 'available, not included' : 'included'}${row.description ? ` — ${row.description}` : ''}`).join('\n'), 0, `${skills.length} skill(s)`));
+  }
+  if (result.mcp_index && !['mcp', 'mcp_index', 'mcp index'].some(name => names.has(name))) parts.push(entry('MCP index', String(result.mcp_index).slice(0, 4000)));
+  parts.push(entry('Full system prompt', system || '(empty)', estimateTokens(system), 'as sent'));
+  const groups = [group('system', 'System prompt', parts, parts.length > 1 ? `${parts.length - 1} part(s)` : '', estimateTokens(system))];
+  const tools = (result.tools || []).slice(0, MAX_ROWS).filter(tool => tool && typeof tool === 'object').map(toolEntry);
+  groups.push(group('tools', 'Tools', tools, result.tools_supported === false ? 'not supported by this model' : `${tools.length} definition(s)`));
+  messageTurns(result.messages).forEach((entries, index) => {
+    const calls = entries.filter(row => row.title.startsWith('Tool · ')).length;
+    groups.push(group(`turn:${index + 1}`, `Turn ${index + 1}`, entries, calls ? `${calls} tool call(s)` : ''));
+  });
+  const accounting = result.request_context && Object.keys(result.request_context).length ? result.request_context : result.budget;
+  const request = [entry('Accounting', `\`\`\`json\n${json(accounting && Object.keys(accounting).length ? accounting : '(not reported)')}\n\`\`\``)];
+  if (result.params && Object.values(result.params).some(value => value != null)) request.push(entry('Model parameters', `\`\`\`json\n${json(result.params)}\n\`\`\``));
+  const files = [['soul', 'SOUL.md'], ['memory', 'MEMORY.md']].map(([key, label]) => {
+    const item = result.system_files?.[key] || {};
+    return `${label}: ${item.included_nonempty ? 'included' : item.loaded ? 'loaded, empty' : 'not loaded'}${item.source ? ` · ${item.source}` : ''}`;
+  });
+  request.push(entry('System files', files.join('\n')));
+  if (result.omitted?.length) request.push(entry('Display limitations', result.omitted.map(row => `- ${row}`).join('\n')));
+  groups.push(group('request', 'Request details', request, 'not counted'));
+  return groups;
+}
+
+function summaryLine(parent, title, tokens, detail) {
+  parent.append(node('span', 'ctx-title', title));
+  if (tokens) parent.append(node('span', 'ctx-tokens', `~${compactTokens(tokens)} tokens`));
+  if (detail) parent.append(node('span', 'ctx-detail', detail));
+}
+
+function renderEntry(row) {
+  const details = node('details', `ctx-entry${row.error ? ' is-error' : ''}`);
+  const summary = node('summary');
+  summaryLine(summary, row.title, row.tokens, row.detail);
+  const body = node('div', 'ctx-body');
+  body.append(markdown(row.body || '(empty)'));
+  details.append(summary, body);
+  return details;
+}
+
+// flattenSingle shows a one-entry group as just its entry (a tool family of one).
+function renderGroups(groups, open = () => false, flattenSingle = false) {
+  const root = node('div', 'ctx-groups');
+  for (const item of groups) {
+    if (flattenSingle && item.entries.length === 1) {
+      root.append(renderEntry(item.entries[0]));
+      continue;
+    }
+    const details = node('details', 'ctx-group');
+    details.dataset.key = item.key;
+    details.open = open(item);
+    const summary = node('summary');
+    summaryLine(summary, item.title, item.tokens, item.detail);
+    details.append(summary);
+    if (!item.entries.length) details.append(node('p', 'context-muted ctx-empty', '(none)'));
+    for (const row of item.entries) details.append(renderEntry(row));
+    root.append(details);
+  }
+  return root;
+}
+
+function expandAll(root) {
+  const button = node('button', 'toolbar-button ctx-expand', 'Expand all');
+  button.type = 'button';
+  button.onclick = () => {
+    const expand = button.textContent === 'Expand all';
+    root.querySelectorAll('details').forEach(details => { details.open = expand; });
+    button.textContent = expand ? 'Collapse all' : 'Expand all';
+  };
+  return button;
+}
+
+export function renderContextGroups({result, usage = ''}) {
+  const root = node('div', 'context-request-tree ctx-report');
+  const groups = contextGroups(result);
+  const agent = result.agent || {};
+  const header = node('div', 'ctx-summary');
+  header.append(node('p', 'ctx-route', `${agent.name || 'default'} · ${[result.provider, result.model].filter(Boolean).join('/') || 'model not reported'}`));
+  if (usage) header.append(node('p', 'context-muted', usage));
+  const parts = [['system', groups[0].tokens], ['tools', groups[1].tokens], ['conversation', groups.filter(row => row.key.startsWith('turn:')).reduce((sum, row) => sum + row.tokens, 0)]];
+  const total = parts.reduce((sum, [, tokens]) => sum + tokens, 0) || 1;
+  const bar = node('div', 'ctx-bar');
+  bar.setAttribute('aria-hidden', 'true');
+  const legend = node('p', 'context-muted ctx-legend');
+  legend.append(`Next request (estimated) · ${groups.filter(row => row.key.startsWith('turn:')).length} turn(s) · `);
+  for (const [name, tokens] of parts) {
+    const segment = node('span', `ctx-bar-${name}`);
+    segment.style.setProperty('--share', `${(tokens / total) * 100}%`);
+    bar.append(segment);
+    legend.append(node('span', `ctx-key ctx-key-${name}`, `${name} ~${compactTokens(tokens)}`));
+  }
+  const tools = node('div', 'ctx-toolbar');
+  const list = renderGroups(groups);
+  tools.append(legend, expandAll(list));
+  header.append(bar, tools);
+  root.append(header, list);
+  return root;
+}
+
+export function renderSystemPrompt({result}) {
+  const root = node('div', 'context-request-tree ctx-report');
+  const text = result.system_text || '';
+  root.append(node('p', 'context-muted', `~${compactTokens(estimateTokens(text))} tokens`));
+  const body = node('div', 'ctx-body ctx-system');
+  body.append(markdown(text || '(empty)'));
+  root.append(body);
+  return root;
+}
+
+export function renderToolsReport({result}) {
+  const root = node('div', 'context-request-tree ctx-report');
+  const groups = toolGroups(result.tools);
+  const count = groups.reduce((sum, row) => sum + row.entries.length, 0);
+  const header = node('div', 'ctx-toolbar');
+  const list = renderGroups(groups, () => true, true);
+  header.append(node('p', 'context-muted', `${count} definition${count === 1 ? '' : 's'} · ~${compactTokens(groups.reduce((sum, row) => sum + row.tokens, 0))} tokens`), expandAll(list));
+  root.append(header);
+  if (result.tools_supported === false) root.append(node('p', 'context-muted', 'The selected model does not support tools; none are sent.'));
+  if (!groups.length) root.append(node('p', 'context-muted', '(none)'));
+  root.append(list);
+  return root;
+}

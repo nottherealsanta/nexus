@@ -25,6 +25,16 @@ _DARK = {
     "nx-success": "#7fd88f",
     "nx-warning": "#f5a742",
     "nx-error": "#e06c75",
+    "nx-label-neutral": "#8a8a8a",
+    "nx-cyan": "#56d4dd",
+    "nx-settings-accent": "#f0c808",
+    "nx-settings-border": "#5a4500",
+    "nx-settings-panel": "#0d0d0d",
+    "nx-list": "#0f0f0f",
+    "nx-scrim": "#070707 70%",
+    "nx-dialog": "#0d0d0d",
+    "nx-field": "#121212",
+    "nx-border-focus": "#5a5a5a",
 }
 _LIGHT = {
     "nx-bg": "#ffffff",
@@ -43,6 +53,16 @@ _LIGHT = {
     "nx-success": "#268044",
     "nx-warning": "#a86200",
     "nx-error": "#c23a4a",
+    "nx-label-neutral": "#6f6f6f",
+    "nx-cyan": "#0e7490",
+    "nx-settings-accent": "#8a6500",
+    "nx-settings-border": "#a88730",
+    "nx-settings-panel": "#fff9e6",
+    "nx-list": "#fafafa",
+    "nx-scrim": "#1f2328 40%",
+    "nx-dialog": "#ffffff",
+    "nx-field": "#f6f8fa",
+    "nx-border-focus": "#0969da",
 }
 
 

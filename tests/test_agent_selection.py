@@ -30,7 +30,19 @@ def _config(name: str = "general", *, web: WebSection | None = None) -> Config:
 
 
 async def _runtime(path, *, agent="general") -> Runtime:
+    _write_plan_agent(path)
     return Runtime(path, config=_config(agent), providers={"scripted": ScriptedProvider(text_response("ok"))})
+
+
+def _write_plan_agent(path) -> None:
+    """A custom root agent named ``plan``; the name keeps it structurally read-only."""
+    agents = path / ".nexus" / "agents"
+    agents.mkdir(parents=True, exist_ok=True)
+    (agents / "plan.md").write_text(
+        "---\nname: plan\ndescription: planner\ncontexts: [root]\nbundles: [fs, task, ext]\n---\n"
+        "You are a read-only planning agent.\n",
+        encoding="utf-8",
+    )
 
 
 async def test_agent_select_replay_reopen_fork_and_reset(tmp_path):
@@ -39,7 +51,8 @@ async def test_agent_select_replay_reopen_fork_and_reset(tmp_path):
     facade.open_session("s")
 
     current = await facade.handle(p.AgentCurrent(session="s"))
-    assert (current.name, current.source) == ("general", "config")
+    # A legacy ``general`` config resolves to the built-in root agent.
+    assert (current.name, current.source) == ("build", "config")
     selected = await facade.handle(p.AgentSelect(session="s", name="plan"))
     assert isinstance(selected, p.AgentSelectResult)
     assert selected.apply_next_turn and selected.name == "plan"
@@ -54,7 +67,7 @@ async def test_agent_select_replay_reopen_fork_and_reset(tmp_path):
     reopened = await _runtime(tmp_path)
     assert reopened.session("s").agent_selection.name == "plan"
     reset = await HostFacade(reopened).handle(p.AgentReset(session="s"))
-    assert reset.name == "general" and reset.source == "config"
+    assert reset.name == "build" and reset.source == "config"
     assert reopened.session("s").agent_selection is None
     await reopened.aclose()
 
@@ -90,6 +103,7 @@ async def test_cli_agent_command_parsing_and_completion():
 
 async def test_selected_agent_applies_next_turn_and_plan_is_read_only(tmp_path):
     provider = ScriptedProvider(text_response("planned"))
+    _write_plan_agent(tmp_path)
     runtime = Runtime(tmp_path, config=_config(), providers={"scripted": provider})
     facade = HostFacade(runtime)
     facade.open_session("s")
@@ -103,7 +117,7 @@ async def test_selected_agent_applies_next_turn_and_plan_is_read_only(tmp_path):
     assert started.data["agent"]["source"] == "session"
     assert started.data["agent"]["read_only"] is True
     assert {tool.name for tool in provider.requests[0].tools} == {
-        "read", "glob", "grep", "subagent", "todowrite", "skill"
+        "read", "glob", "grep", "subagent", "todowrite", "question", "skill"
     }
     assert not ({"write", "edit", "multiedit", "bash", "websearch"} & set(started.data["agent"]["tools"]))
     assert "read-only planning agent" in provider.requests[0].system
@@ -117,7 +131,7 @@ async def test_default_root_catalog_advertises_canonical_tools(tmp_path):
 
     assert {tool.name for tool in provider.requests[0].tools} == {
         "read", "glob", "grep", "edit", "write", "bash", "apply_patch",
-        "subagent", "todowrite", "webfetch", "skill",
+        "subagent", "todowrite", "question", "webfetch", "skill",
     }
     assert all(tool.name == tool.name.lower() for tool in provider.requests[0].tools)
     rows = await runtime.list_tools()
@@ -176,7 +190,7 @@ async def test_configured_web_bundle_is_selectable_but_children_keep_parent_ceil
 
     expected = {
         "read", "glob", "grep", "edit", "write", "bash", "apply_patch",
-        "subagent", "todowrite", "webfetch", "websearch", "skill",
+        "subagent", "todowrite", "question", "webfetch", "websearch", "skill",
     }
     assert [{tool.name for tool in request.tools} for request in provider.requests] == [expected] * 5
     assert all(name == name.lower() for request in provider.requests for name in (tool.name for tool in request.tools))
@@ -213,7 +227,7 @@ async def test_research_profile_keeps_web_read_only_through_grandchildren(tmp_pa
     runtime.agents.refresh()
     [event async for event in runtime.session("research-tree").send("delegate")]
 
-    expected = {"read", "glob", "grep", "subagent", "todowrite", "webfetch", "websearch", "skill"}
+    expected = {"read", "glob", "grep", "subagent", "todowrite", "question", "webfetch", "websearch", "skill"}
     catalogs = [{tool.name for tool in request.tools} for request in provider.requests]
     assert catalogs == [expected] * 5
     assert all(not ({"write", "edit", "bash", "apply_patch"} & names) for names in catalogs)
@@ -260,10 +274,11 @@ async def test_child_and_grandchild_catalogs_inherit_parent_authority(tmp_path):
         text_response("child report"),
         text_response("root report"),
     )
+    _write_plan_agent(tmp_path)
     runtime = Runtime(tmp_path, config=_config("plan"), providers={"scripted": provider})
     [event async for event in runtime.session("tree").send("delegate")]
 
-    expected = {"read", "glob", "grep", "subagent", "todowrite", "skill"}
+    expected = {"read", "glob", "grep", "subagent", "todowrite", "question", "skill"}
     catalogs = [
         {tool.name for tool in request.tools}
         for request in provider.requests
@@ -313,7 +328,7 @@ async def test_read_only_declaration_cannot_widen_parent_tool_authority(tmp_path
     # catalog; declarations by a role never create a catalog entry.
     assert {tool.name for tool in provider.requests[0].tools} == {
         "read", "glob", "grep", "edit", "write", "bash", "apply_patch",
-        "subagent", "todowrite", "webfetch", "skill",
+        "subagent", "todowrite", "question", "webfetch", "skill",
     }
     await runtime.aclose()
 
@@ -347,13 +362,13 @@ async def test_skill_activation_cannot_widen_child_catalog(tmp_path):
     runtime = Runtime(tmp_path, config=_config(), providers={"scripted": provider})
     [event async for event in runtime.session("skill-ceiling").send("delegate")]
 
-    expected = {"read", "glob", "grep", "subagent", "todowrite", "webfetch", "skill"}
+    expected = {"read", "glob", "grep", "subagent", "todowrite", "question", "webfetch", "skill"}
     assert len(provider.requests) == 4
     assert {tool.name for tool in provider.requests[1].tools} == expected
     assert {tool.name for tool in provider.requests[2].tools} == expected
     assert {tool.name for tool in provider.requests[3].tools} == {
         "read", "glob", "grep", "edit", "write", "bash", "apply_patch",
-        "subagent", "todowrite", "webfetch", "skill",
+        "subagent", "todowrite", "question", "webfetch", "skill",
     }
     await runtime.aclose()
 
@@ -490,4 +505,19 @@ async def test_subagent_profile_is_a_ceiling_even_when_parent_has_more(tmp_path)
     tools = set(spawned.data["tools"])
     assert {"read", "grep", "glob", "subagent", "todowrite", "skill"} <= tools
     assert not ({"write", "edit", "multiedit", "bash", "BashOutput", "KillShell"} & tools)
+    await runtime.aclose()
+
+
+async def test_root_agent_fallbacks_ride_in_request_metadata(tmp_path):
+    agents = tmp_path / ".nexus" / "agents"
+    agents.mkdir(parents=True)
+    (agents / "build.md").write_text(
+        "---\nname: build\ndescription: root\ncontexts: [root]\n"
+        "fallback: [scripted/backup, other/model]\n---\nBuild.\n",
+        encoding="utf-8",
+    )
+    provider = ScriptedProvider(text_response("ok"))
+    runtime = Runtime(tmp_path, config=_config("build"), providers={"scripted": provider})
+    [event async for event in runtime.session("fb").send("go")]
+    assert provider.requests[0].metadata["agent_fallback"] == ["scripted/backup", "other/model"]
     await runtime.aclose()

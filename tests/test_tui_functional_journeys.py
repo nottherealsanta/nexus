@@ -14,8 +14,9 @@ from nexus.ui.tui.agent_transcript import AgentTranscriptScreen
 from nexus.ui.tui.app import NexusTextualApp
 from nexus.ui.tui.messages import EventReceived
 from nexus.ui.tui.permission import PermissionScreen
-from nexus.ui.tui.timeline import AgentActivityLink, ConversationTimeline
+from nexus.ui.tui.timeline import ConversationTimeline, TaskActivityWidget
 from nexus.ui.tui.widgets import ChatEditor, RootAgentBar
+from nexus.ui_support.tui_panels import SessionsScreen
 from nexus.view import apply, initial_state
 
 
@@ -53,6 +54,14 @@ class JourneyTransport(FakeTransport):
         return result
 
 
+
+def _session_option_ids(screen) -> list[str]:
+    from textual.widgets import OptionList
+
+    options = screen.query_one("#sessions-options", OptionList)
+    return [options.get_option_at_index(i).id for i in range(options.option_count)
+            if options.get_option_at_index(i).id]
+
 @pytest.fixture
 def journey_transport():
     return JourneyTransport()
@@ -72,7 +81,11 @@ async def test_session_lifecycle_shortcuts_render_the_selected_session(journey_t
         await pilot.press("ctrl+o")
         await pilot.pause()
         assert p.SessionList() in journey_transport.commands
-        assert "other" in app.query_one("#connection-status", Static).render().plain
+        # Ctrl+O opens the searchable Sessions dialog listing every session.
+        assert isinstance(app.screen, SessionsScreen)
+        assert "other" in _session_option_ids(app.screen)
+        await pilot.press("escape")
+        await pilot.pause()
 
         editor = app.query_one(ChatEditor)
         editor.text = "/sesssion other"
@@ -86,9 +99,11 @@ async def test_session_lifecycle_shortcuts_render_the_selected_session(journey_t
         editor.move_cursor((0, len(editor.text)))
         await pilot.press("enter")
         await pilot.pause(0.1)
-        listing = app.query_one("#connection-status").render().plain
-        assert "s" in listing and "other" in listing
-        assert journey_transport.commands.count(p.SessionList()) == 3
+        assert isinstance(app.screen, SessionsScreen)
+        assert {"s", "other"} <= set(_session_option_ids(app.screen))
+        assert journey_transport.commands.count(p.SessionList()) >= 3
+        await pilot.press("escape")
+        await pilot.pause()
         await pilot.press("ctrl+f")
         await pilot.pause()
         assert app.controller.session == "forked"
@@ -111,7 +126,7 @@ async def test_agent_and_model_picker_mouse_selection_updates_host_and_root_bar(
         await pilot.click("#agent-options", offset=(2, 1))
         await pilot.pause(0.05)
         assert p.AgentSelect(session="pick", name="plan") in journey_transport.commands
-        assert "Plan" in app.query_one(RootAgentBar).render().plain
+        assert "Plan" in app.query_one(RootAgentBar).summary().plain
 
         await app._push_model_picker()
         await pilot.pause()
@@ -119,8 +134,8 @@ async def test_agent_and_model_picker_mouse_selection_updates_host_and_root_bar(
         await pilot.click("#agent-options", offset=(2, 0))
         await pilot.pause(0.05)
         assert p.ModelSelect(session="pick", ref="fake/m") in journey_transport.commands
-        assert "fake" in app.query_one(RootAgentBar).render().plain
-        assert "m" in app.query_one(RootAgentBar).render().plain
+        assert "fake" in app.query_one(RootAgentBar).summary().plain
+        assert "m" in app.query_one(RootAgentBar).summary().plain
 
 
 @pytest.mark.asyncio
@@ -224,8 +239,15 @@ async def test_task_child_transcript_opens_from_rendered_link_and_escape_returns
         app.controller.view = view
         await app._sync_timeline()
         await pilot.pause()
-        assert app.query_one(ConversationTimeline).query_one(AgentActivityLink)
-        await pilot.click(".task-child")
+        task_widget = app.query_one(ConversationTimeline).query_one(TaskActivityWidget)
+        task_widget.focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        from nexus.ui.tui.tool_details import ToolDetailsScreen
+
+        assert isinstance(app.screen, ToolDetailsScreen)
+        await pilot.click("#tool-details-agent")
         await pilot.pause()
         assert isinstance(app.screen, AgentTranscriptScreen)
         assert any(isinstance(row, p.AgentTranscript) and row.agent_id == "child"

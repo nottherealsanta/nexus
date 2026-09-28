@@ -26,6 +26,7 @@ from nexus.runtime import Runtime
 from nexus.ui.cli.client import Client
 from nexus.ui.tui.app import NexusTextualApp
 from nexus.ui.tui.timeline import ToolActivityWidget
+from nexus.ui.tui.tool_details import ToolDetailsScreen
 
 
 class _FacadeTransport:
@@ -100,23 +101,24 @@ async def test_real_read_edit_events_render_as_timeline_tool_cards(tmp_path):
 
             read_card = cards["read-render"]
             read_header = read_card.query_one("#tool-header", Static).render().plain
-            read_detail = read_card.query_one("#tool-detail", Static).render().plain
-            assert "read" in read_header and "note.md" in read_header
-            assert "completed" in read_header
-            assert read_detail == "Read note.md: 2 of 2 lines"
+            # "→ Read path" headers; a finished call carries no spinner or failure mark.
+            assert read_header == "→ Read note.md · Read note.md: 2 of 2 lines"
+            assert len(read_card.children) == 1
+            assert len(read_header.splitlines()) == 1
 
             edit_card = cards["edit-render"]
             edit_header = edit_card.query_one("#tool-header", Static).render().plain
-            edit_detail = edit_card.query_one("#tool-detail", Static).render().plain
-            assert "edit" in edit_header and "note.md" in edit_header
-            assert "completed" in edit_header
-            assert edit_detail == "Edit note.md: 1 replacement(s)"
+            assert edit_header == "← Edit note.md · Edit note.md: 1 replacement(s)"
+            assert len(edit_card.children) == 1
             assert edit_card.tool.diff["hunk"].endswith("-world\n+nexus")
 
-            # Expanded rendering uses the durable unified diff from the real
-            # tool result; it isn't supplied by the demo/browser fixture.
-            await edit_card.toggle()
-            expanded = edit_card.query_one("#tool-expanded", Static).render().plain
-            assert "-world" in expanded and "+nexus" in expanded
+            # Full input, result, and unified diff are available in the modal only.
+            edit_card.focus()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, ToolDetailsScreen)
+            detail = app.screen.query_one("#tool-details-body", Static).render().plain
+            assert '"path": "note.md"' in detail
+            assert "-world" in detail and "+nexus" in detail
     finally:
         await runtime.aclose()

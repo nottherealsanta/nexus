@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from test_ui_tui import FakeTransport, _client
 from textual.widgets import Static, TextArea
@@ -34,9 +32,8 @@ async def test_composer_metadata_and_conversation_layout_at_narrow_width():
         context_preview = app.query_one("#context-preview")
 
         assert app.focused is editor
-        assert context_preview.display
-        assert not app.query("#context-preview-scroll")
-        assert context_preview.region.y < conversation.region.y
+        assert not context_preview.display
+        assert app.query_one("#context-header") in conversation.children
         assert editor.region.y > conversation.region.y
         assert metadata.region.y == editor.region.y + editor.region.height
         assert bottom.region.y == metadata.region.y + metadata.region.height
@@ -49,12 +46,12 @@ async def test_composer_metadata_and_conversation_layout_at_narrow_width():
         assert composer.styles.border_right[0] == ""
         assert composer.styles.border_bottom[0] == ""
         assert composer.styles.border_left[0] == ""
-        assert composer.styles.background.hex.lower() == "#191919"
+        # The composer sits on the page; its editor and agent line form the box.
+        assert composer.styles.background.hex.lower() == "#141414"
         assert composer.styles.padding.bottom == 0
         assert not popup.display
-        assert metadata.styles.background.hex.lower() == "#191919"
-        assert app.query_one("#cwd-path", Static).render().plain == str(Path.cwd())
-        assert app.query_one("#cwd-path").region.x == bottom.region.x
+        assert metadata.styles.background.hex.lower() == "#141414"
+        assert not app.query("#cwd-path")
         assert app.query_one("#context-usage").region.right == bottom.region.right
         assert editor.styles.border_left[0] == ""
         assert editor.styles.border_top[0] == ""
@@ -62,14 +59,14 @@ async def test_composer_metadata_and_conversation_layout_at_narrow_width():
         assert editor.styles.border_bottom[0] == ""
         assert editor.region.y == composer.region.y
         assert app.query_one("#root-agent", RootAgentBar)
-        assert str(app.query_one("#context-usage", Static).render()) == "Preview"
+        assert str(app.query_one("#context-usage", Static).render()) == "0 (0%)"
         assert app.query_one("#context-usage", Static).display
         assert not app.query("#app-title")
         assert "Ctrl+" not in str(metadata.render())
         assert not app.query("#input-help")
         assert app.query_one("#connection-status").region.height <= 1
         assert editor.region.right <= 42
-        assert "default" not in str(app.query_one("#root-agent", RootAgentBar).render())
+        assert "default" not in str(app.query_one("#root-agent", RootAgentBar).summary())
         assert "seq" not in str(app.query_one("#connection-status").render())
 
         app._show_inline_picker(
@@ -85,14 +82,12 @@ async def test_composer_metadata_and_conversation_layout_at_narrow_width():
         assert picker.region.x == composer.region.x
         assert picker.region.right == composer.region.right
         assert picker.region.height <= 9
-        assert picker.styles.border_top[0] == "solid"
-        assert picker.styles.border_bottom[0] == "solid"
-        assert picker.styles.border_left[0] == "solid"
-        assert picker.styles.border_left[1].hex.lower() == "#302b28"
+        assert picker.styles.border_top[0] == picker.styles.border_bottom[0] == ""
+        assert picker.styles.outline_left[0] == ""
         assert picker.styles.padding.top == picker.styles.padding.bottom == 0
         options = picker.query_one("#agent-options")
-        assert options.region.x == picker.region.x + 1
-        assert options.region.right == picker.region.right - 1
+        assert options.region.x == picker.region.x
+        assert options.region.right == picker.region.right
         assert options.highlighted == 0
         assert options.region.height == 1
         assert app.focused is options
@@ -103,8 +98,8 @@ async def test_composer_metadata_and_conversation_layout_at_narrow_width():
         user = UserMessage(MessageView(role="user", blocks=[]), classes="timeline-user")
         await conversation.mount(user)
         await pilot.pause()
-        assert user.styles.background.hex.lower() == "#252525"
-        assert context_preview.region.y < conversation.region.y
+        assert user.styles.background.hex.lower() == "#141414"  # $nx-panel prompt block
+        assert app.query_one("#context-header") in conversation.children
 
 
 @pytest.mark.asyncio
@@ -122,6 +117,8 @@ async def test_focused_editor_keeps_session_shortcuts_and_reconnect_refreshes_me
         await pilot.press("ctrl+o")
         await pilot.pause()
         assert "SessionList" in transport.trace
+        await pilot.press("escape")  # close the Sessions dialog
+        await pilot.pause()
 
         await pilot.press("ctrl+f")
         await pilot.pause()
@@ -132,7 +129,7 @@ async def test_focused_editor_keeps_session_shortcuts_and_reconnect_refreshes_me
         app.controller.model = "fresh-model"
         await app.action_reconnect()
         await pilot.pause()
-        visible = str(app.query_one("#root-agent", RootAgentBar).render())
+        visible = str(app.query_one("#root-agent", RootAgentBar).summary())
         assert "General" in visible
         assert "fresh-provider/fresh-model" not in visible
 

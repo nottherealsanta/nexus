@@ -1,7 +1,7 @@
 Nexus Phase 3 exit - baseline closeout evidence
 ================================================
-generated : 2026-09-26T17:38:36+0530
-head      : 591876701acf540a8d6f7ac13190031482e70e14
+generated : 2026-09-28T07:59:57+0530
+head      : 9a5401c3ba296624674468b024a32765d8943134
 schema    : nexus.phase3_exit_baseline/1
 
 Phase 3 exit criteria (plan section 10)
@@ -10,9 +10,9 @@ Phase 3 exit criteria (plan section 10)
   turns .................... 100
   messages ................. 200
   model calls .............. 100
-  compacted assemblies ..... 22
+  compacted assemblies ..... 42
   input budget ............. 5744 tokens
-  peak used ................ 4879 tokens
+  peak used ................ 4873 tokens
   log message lines ........ 200
   contiguous suffix ........ True
   current turn once ........ True
@@ -28,24 +28,24 @@ Controlled prompt cache before/after
 
 Line budgets (separate host/view/ui allocations)
 ----------------------------------------
-  core+model+spec .......... 13120 physical / 10870 code (cap 14000, within=True, over=0)
-  host                      6955 physical / 5795 code (cap 7000, within=True, over=0)
-  view                      2187 physical / 1951 code (cap 2200, within=True, over=0)
-  ui                        4174 physical / 3565 code (cap 5000, within=True, over=0)
+  core+model+spec .......... 13177 physical / 10913 code (cap 14000, within=True, over=0)
+  host                      6794 physical / 5674 code (cap 7000, within=True, over=0)
+  view                      2199 physical / 1961 code (cap 2200, within=True, over=0)
+  ui                        4951 physical / 4249 code (cap 5000, within=True, over=0)
 
 Import cost (plan section 2.2)
 ----------------------------------------
-  import nexus ............. 10.64 ms, +40 modules, heavy=none
-  import nexus.runtime ..... 130.4 ms, 508 modules
+  import nexus ............. 9.44 ms, +40 modules, heavy=none
+  import nexus.runtime ..... 121.84 ms, 508 modules
 
 Phase 4 references (plan section 10)
 ----------------------------------------
-  result ................... passed in 2.68s
-  summary .................. 2 passed in 2.50s
+  result ................... passed in 2.37s
+  summary .................. 2 passed in 2.20s
     - tests/test_hot_extension_e2e.py::test_walkthrough_read_template_write_reload_call
     - tests/test_hot_extension_stress.py::test_two_hundred_reloads_do_not_leak
 
 Full suite
 ----------------------------------------
-  result ................... passed in 451.43s
-  summary .................. 4155 passed, 311 skipped, 3 deselected in 449.97s (0:07:29)
+  result ................... passed in 540.72s
+  summary .................. textual.css.query.NoMatches: No nodes match 'LogsDrawer' on Screen(id='_default')

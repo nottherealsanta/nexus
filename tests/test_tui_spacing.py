@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from test_ui_tui import FakeTransport, _client
 
@@ -41,17 +39,18 @@ async def test_message_and_composer_have_vertical_breathing_room_without_extra_h
         bottom = app.query_one("#bottom-info")
         assert composer.styles.padding.top == 0
         assert composer.styles.padding.bottom == 0
-        assert editor.styles.padding.top == 0
-        assert editor.styles.padding.bottom == 0
+        # The composer has one row of air around the text and two info rows.
+        assert editor.styles.padding.top == 1
+        assert editor.styles.padding.bottom == 1
         assert editor.region.y == composer.region.y
         assert metadata.region.height == 1
         assert metadata.region.y == editor.region.y + editor.region.height
         assert bottom.region.height == 1
         assert bottom.region.y == metadata.region.y + metadata.region.height
         assert bottom.region.y + bottom.region.height == composer.region.y + composer.region.height
-        assert app.query_one("#cwd-path").render().plain == str(Path.cwd())
-        assert app.query_one("#context-usage").render().plain == "Preview"
-        metadata_text = app.query_one("#root-agent").render().plain.casefold()
+        assert not app.query("#cwd-path")
+        assert app.query_one("#context-usage").render().plain == "0 (0%)"
+        metadata_text = app.query_one("#root-agent").summary().plain.casefold()
         assert "cwd" not in metadata_text
         assert "context" not in metadata_text
         assert composer.styles.border_top[0] == ""

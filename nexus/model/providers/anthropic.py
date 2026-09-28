@@ -433,6 +433,9 @@ class AnthropicProvider:
     """A :class:`~nexus.model.provider.Provider` for the Anthropic Messages API."""
 
     name = "anthropic"
+    #: ``input_tokens`` omits cache reads/writes; the loop adds them back to
+    #: measure the whole prompt.
+    usage_input_excludes_cache = True
     DEFAULT_BASE_URL = "https://api.anthropic.com"
     ANTHROPIC_VERSION = "2023-06-01"
 

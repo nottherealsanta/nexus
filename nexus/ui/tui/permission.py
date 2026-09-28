@@ -1,101 +1,80 @@
-"""Attended permission response screen; policy and race arbitration stay daemon-side."""
+"""Attended approval and question prompts; arbitration stays daemon-side.
+
+Both are :class:`ListPrompt` lists docked above the composer, like the model
+and slash-command pickers. Approvals answer one of the four protocol decision
+strings; questions answer by ``call_id`` through ``QuestionAnswer``.
+"""
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import Any
 
-from textual.app import ComposeResult
-from textual.containers import Vertical, VerticalScroll
-from textual.screen import ModalScreen
-from textual.widgets import Button, Static
-
+from ...client import ClientError
+from ...ui_support.prompts import PendingQuestion, approval_choices, pending_questions
+from ...ui_support.tui_list import ListPrompt
 from ..cli.approve import approval_data, describe
 
 
-class PermissionScreen(ModalScreen[str | None]):
+class PermissionScreen(ListPrompt):
     """Present the request and return one of the protocol decision strings."""
 
-    DECISION_KEYS: ClassVar[dict[str, str]] = {
-        "y": "allow_once", "a": "allow_always", "n": "deny_once", "d": "deny_always",
-    }
-
     def __init__(self, data: dict) -> None:
-        super().__init__()
         self.data = approval_data(data)
+        header, _, body = describe(self.data).partition("\n")
         if self.data.get("_targets_unavailable"):
-            self.DECISION_KEYS = {
-                "y": "deny_once", "a": "deny_once",
-                "n": "deny_once", "d": "deny_always",
-            }
-        elif not self.data.get("persistence_available", True):
-            self.DECISION_KEYS = {"y": "allow_once", "a": "allow_once", "n": "deny_once", "d": "deny_once"}
+            body += "\n  approval: unavailable; this request will be denied"
+        super().__init__(
+            header.replace("Permission requested: ", "Allow ", 1) + "?",
+            body.replace("\n  ", "\n").strip(),
+            approval_choices(self.data),
+            cancel="deny_once",
+            cancel_hint="deny",
+        )
 
-    def compose(self) -> ComposeResult:
-        persistence = bool(self.data.get("persistence_available", True))
-        targets_available = not self.data.get("_targets_unavailable", False)
-        details_scroll = VerticalScroll(id="permission-details-scroll")
-        details_scroll.styles.width = "1fr"
-        details_scroll.styles.height = "1fr"
-        details_scroll.styles.min_height = 3
-        details_scroll.styles.margin_bottom = 1
-        details_scroll.styles.scrollbar_size_vertical = 1
-        with Vertical(id="permission-dialog"):
-            with details_scroll:
-                description = describe(self.data)
-                if not targets_available:
-                    description += "\n  approval: unavailable; this request will be denied"
-                yield Static(description, id="permission-description", markup=False)
-            yield Button(
-                "Allow once [Y]" if targets_available else "Allow once [Y] · targets unavailable",
-                id="allow-once",
-                variant="success",
-                disabled=not targets_available,
+
+class QuestionScreen(ListPrompt):
+    """One agent question: pick an option, or type a free-text answer."""
+
+    def __init__(self, question: PendingQuestion) -> None:
+        self.question = question
+        super().__init__(
+            f"{question.agent} asks" if question.agent else "Question",
+            question.prompt,
+            question.choices(),
+            free_text=not question.options,
+        )
+
+
+async def ask_pending_question(app: Any) -> None:
+    """Show the oldest unanswered question once; later ones queue behind it."""
+    if isinstance(app.screen, (QuestionScreen, PermissionScreen)):
+        return
+    asked: set[str] | None = getattr(app, "_asked_questions", None)
+    if asked is None:
+        asked = app._asked_questions = set()
+    question = next(
+        (q for q in pending_questions(app.controller.view) if q.call_id not in asked), None
+    )
+    if question is None:
+        return
+    asked.add(question.call_id)
+
+    async def answer(value: str | None) -> None:
+        if value is None:
+            app._sync_status("Question hidden · it reopens with the next update")
+            asked.discard(question.call_id)
+            return
+        try:
+            ok, error = await app.controller.client.answer_question(
+                app.controller.session, question.call_id, value
             )
-            yield Button(
-                "Allow once [A] · persistence unavailable"
-                if targets_available and not persistence
-                else "Allow always [A]" if targets_available
-                else "Allow always [A] · targets unavailable",
-                id="allow-always",
-                disabled=not targets_available,
-            )
-            yield Button("Deny once [N]", id="deny-once", variant="warning")
-            yield Button(
-                "Deny always [D]"
-                if self.data.get("_targets_unavailable") or persistence
-                else "Deny once [D] · persistence unavailable",
-                id="deny-always",
-                variant="error",
-            )
+            app._sync_status("Answer sent" if ok else error or "Question already answered")
+        except ClientError as exc:
+            asked.discard(question.call_id)
+            app._sync_status(f"Answer failed · {exc}", error=True)
+        await ask_pending_question(app)
 
-    def on_mount(self) -> None:
-        focus_target = "#deny-once" if self.data.get("_targets_unavailable") else "#allow-once"
-        self.query_one(focus_target, Button).focus()
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        choices = {
-            "allow-once": "allow_once", "allow-always": "allow_always",
-            "deny-once": "deny_once", "deny-always": "deny_always",
-        }
-        decision = choices.get(event.button.id or "", "deny_once")
-        if self.data.get("_targets_unavailable") and decision in {"allow_once", "allow_always"}:
-            decision = "deny_once"
-        elif (
-            not self.data.get("_targets_unavailable")
-            and not self.data.get("persistence_available", True)
-            and decision in {"allow_always", "deny_always"}
-        ):
-            decision = "allow_once" if decision == "allow_always" else "deny_once"
-        self.dismiss(decision)
-
-    def on_key(self, event) -> None:
-        decision = self.DECISION_KEYS.get(event.key.casefold())
-        if decision:
-            event.stop()
-            self.dismiss(decision)
-        elif event.key == "escape":
-            event.stop()
-            self.dismiss("deny_once")
+    app.push_screen(QuestionScreen(question), callback=answer)
 
 
-__all__ = ["PermissionScreen"]
+__all__ = ["ListPrompt", "PermissionScreen", "QuestionScreen", "ask_pending_question"]

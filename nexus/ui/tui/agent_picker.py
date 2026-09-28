@@ -10,10 +10,12 @@ from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import OptionList
 
+from ...ui_support.tui_list import ListItem, ListPanel
+from ...ui_support.tui_widgets import agent_color
 from ..cli.render import sanitize
 
 
-class _PickerOptionList(OptionList):
+class _PickerOptionList(ListPanel):
     """OptionList with picker typeahead handled before its own key bindings."""
 
     def on_key(self, event: Key) -> None:
@@ -88,14 +90,22 @@ class AgentPickerPanel(Vertical):
             self.set_agents(agents, current=current)
 
     def compose(self) -> ComposeResult:
-        yield _PickerOptionList(*self._options(self.agents), id="agent-options")
+        yield _PickerOptionList(id="agent-options")
         from textual.widgets import Static
 
         yield Static("", id="picker-help", markup=False)
 
     def on_mount(self) -> None:
+        options = self.query_one("#agent-options", OptionList)
+        options.set_items(self._options(self._visible_agents), selected=0)
+        selected = next(
+            (i for i, row in enumerate(self._visible_agents)
+             if str(row.get("_value") or row.get("name") or "") == self.current),
+            0,
+        )
+        options.highlighted = selected if options.option_count else None
         if self.display:
-            self.query_one("#agent-options", OptionList).focus()
+            options.focus()
 
     def set_agents(self, agents: list[dict], *, current: str = "") -> None:
         self.agents = agents[:100]
@@ -107,8 +117,7 @@ class AgentPickerPanel(Vertical):
         self._visible_agents = list(self.agents)
         if self.is_mounted:
             options = self.query_one("#agent-options", OptionList)
-            options.clear_options()
-            options.add_options(self._options(self._visible_agents))
+            options.set_items(self._options(self._visible_agents), selected=0)
             selected = next(
                 (
                     index
@@ -232,13 +241,34 @@ class AgentPickerPanel(Vertical):
             if index is not None and index < len(self._visible_agents) else {}
         )
 
-    def _options(self, rows: list[dict]) -> list[str]:
-        return [
-            f"{sanitize(row.get('_label') or _display_name(row.get('name', '?')), 64)}  "
-            f"{sanitize(row.get('description', ''), 100)}"
-            + (" [" + sanitize(row.get("id", ""), 24) + "]" if row.get("id") else "")
-            for row in rows
-        ]
+    def _options(self, rows: list[dict]) -> list[ListItem]:
+        result = []
+        for row in rows:
+            primary = sanitize(row.get("_label") or _display_name(row.get("name", "?")), 64)
+            if self.kind == "effort":
+                primary = primary.removesuffix(" · current")
+            if self.kind == "agent":
+                secondary = str(row.get("provider") or "")
+                if row.get("model"):
+                    secondary = f"{secondary}/{row['model']}" if secondary else str(row["model"])
+            elif self.kind == "model":
+                primary = f"{primary:<45}"
+                context = row.get("context_window") or row.get("context")
+                secondary = f"{round(int(context) / 1000)}k ctx" if isinstance(context, int) else ""
+                if row.get("supports_reasoning"):
+                    secondary = f"{secondary} reasoning".strip()
+            else:
+                secondary = ""
+            if row.get("description") and not secondary and self.kind != "effort":
+                secondary = sanitize(row.get("description", ""), 100)
+            result.append(ListItem(
+                primary,
+                secondary,
+                value=str(row.get("_value") or row.get("name") or ""),
+                primary_style=(f"bold {agent_color(str(row.get('name') or ''))}" if self.kind == "agent" else "bold"),
+                current=str(row.get("_value") or row.get("name") or "") == self.current,
+            ))
+        return result
 
     def _selection_at(self, index: int) -> str:
         row = self._visible_agents[index]
@@ -256,8 +286,7 @@ class AgentPickerPanel(Vertical):
             or query in str(row.get("description", "")).casefold()
         ]
         options = self.query_one("#agent-options", OptionList)
-        options.clear_options()
-        options.add_options(self._options(self._visible_agents))
+        options.set_items(self._options(self._visible_agents), selected=0)
         if options.option_count:
             selected = next(
                 (

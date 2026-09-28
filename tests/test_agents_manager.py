@@ -16,9 +16,11 @@ import pytest
 from nexus.agents import (
     DEFAULT_AGENT_COLORS,
     FORBIDDEN_ROLE_TOOLS,
+    MAX_FALLBACKS,
     MUTATING_FS_TOOLS,
     READ_ONLY_ROLES,
     SEED_MARKER_NAME,
+    SEED_VERSION,
     SEEDED_ROLES,
     AgentDef,
     AgentDiagnosticCode,
@@ -34,6 +36,7 @@ from nexus.agents import (
     is_model_tier,
     parse_frontmatter,
     read_agent_file,
+    retire_seeded_roles,
     seed_workspace_roles,
     validate_agent_name,
 )
@@ -495,9 +498,25 @@ def test_marker_and_non_markdown_files_are_ignored(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_for_workspace_seeds_the_canonical_roles_once(tmp_path):
+def test_for_workspace_serves_builtins_without_touching_the_workspace(tmp_path):
     workspace = tmp_path / "ws"
     mgr = AgentManager.for_workspace(workspace)
+    assert set(mgr.names) == {"advisor", "build", "quick", "task"}
+    assert all(agent.source is AgentSource.BUILTIN for agent in mgr.agents)
+    assert not (workspace / ".nexus").exists()
+
+
+def test_user_override_shadows_the_builtin(tmp_path):
+    home = tmp_path / "home"
+    write_agent(home / ".nexus" / "agents", "task", body="MINE")
+    mgr = AgentManager.for_workspace(tmp_path / "ws", home=home)
+    assert mgr.require("task").source is AgentSource.USER
+    assert mgr.load_body("task") == "MINE"
+
+
+def test_for_workspace_seeds_the_canonical_roles_once_when_opted_in(tmp_path):
+    workspace = tmp_path / "ws"
+    mgr = AgentManager.for_workspace(workspace, seed=True)
     assert set(mgr.names) == set(SEEDED_ROLES)
     agents_dir = workspace / ".nexus" / "agents"
     assert (agents_dir / SEED_MARKER_NAME).is_file()
@@ -518,24 +537,49 @@ def test_seeding_is_idempotent_and_does_not_touch_files(tmp_path):
         path.name: path.read_bytes() for path in agents_dir.iterdir()
     }
     # A second construction must not rewrite anything.
-    AgentManager.for_workspace(workspace)
+    AgentManager.for_workspace(workspace, seed=True)
     after = {path.name: path.read_bytes() for path in agents_dir.iterdir()}
     assert before == after
 
 
 def test_deleted_seed_is_not_recreated_but_falls_back_to_builtin(tmp_path):
     workspace = tmp_path / "ws"
-    AgentManager.for_workspace(workspace)
-    target = workspace / ".nexus" / "agents" / "explore.md"
+    AgentManager.for_workspace(workspace, seed=True)
+    target = workspace / ".nexus" / "agents" / "advisor.md"
     target.unlink()
 
-    mgr = AgentManager.for_workspace(workspace)
+    mgr = AgentManager.for_workspace(workspace, seed=True)
     assert not target.exists()  # the marker prevents recreation
-    assert mgr.require("explore").source is AgentSource.BUILTIN
+    assert mgr.require("advisor").source is AgentSource.BUILTIN
 
     # And again, to be sure the marker is durable.
-    AgentManager.for_workspace(workspace)
+    AgentManager.for_workspace(workspace, seed=True)
     assert not target.exists()
+
+
+def test_untouched_legacy_seeds_are_retired_once_and_edited_ones_kept(tmp_path):
+    import json
+    import os
+
+    workspace = tmp_path / "ws"
+    agents_dir = workspace / ".nexus" / "agents"
+    old_build = write_agent(agents_dir, "build", description="old", body="OLD")
+    edited = write_agent(agents_dir, "general", description="mine", body="EDITED")
+    marker = agents_dir / SEED_MARKER_NAME
+    marker.write_text(json.dumps({"version": 1, "seeded": ["build", "general"]}))
+    stamp = marker.stat().st_mtime
+    os.utime(old_build, (stamp, stamp))
+    os.utime(edited, (stamp + 3600, stamp + 3600))
+
+    mgr = AgentManager.for_workspace(workspace)
+    assert not old_build.exists()
+    assert list((workspace / ".nexus" / "trash" / "agents").glob("*/build.md"))
+    assert mgr.require("build").source is AgentSource.BUILTIN
+    assert edited.exists() and mgr.require("general").source is AgentSource.WORKSPACE
+    state = json.loads(marker.read_text())
+    assert state["version"] == SEED_VERSION and state["retired"] == ["build"]
+    # A second run is a no-op.
+    assert retire_seeded_roles(workspace) == ()
 
 
 def test_marker_alone_prevents_seeding(tmp_path):
@@ -551,10 +595,10 @@ def test_marker_alone_prevents_seeding(tmp_path):
 def test_seeding_does_not_overwrite_an_existing_definition(tmp_path):
     workspace = tmp_path / "ws"
     custom = write_agent(
-        workspace / ".nexus" / "agents", "general", description="mine"
+        workspace / ".nexus" / "agents", "task", description="mine"
     )
     report = seed_workspace_roles(workspace)
-    assert "general" in report.skipped
+    assert "task" in report.skipped
     assert custom.read_text(encoding="utf-8").find("mine") != -1
     assert report.already_seeded is False
 
@@ -565,12 +609,12 @@ def test_seeding_refuses_to_follow_a_symlinked_target(tmp_path):
     agents_dir.mkdir(parents=True)
     outside = tmp_path / "outside.txt"
     outside.write_text("DO NOT TOUCH", encoding="utf-8")
-    (agents_dir / "explore.md").symlink_to(outside)
+    (agents_dir / "advisor.md").symlink_to(outside)
 
     report = seed_workspace_roles(workspace)
-    assert "explore" in report.skipped
+    assert "advisor" in report.skipped
     assert outside.read_text(encoding="utf-8") == "DO NOT TOUCH"
-    assert (agents_dir / "explore.md").is_symlink()
+    assert (agents_dir / "advisor.md").is_symlink()
 
 
 def test_seeding_reports_an_invalid_source_file(tmp_path):
@@ -610,28 +654,51 @@ def test_for_workspace_roots_are_builtin_user_workspace(tmp_path):
     ]
 
 
-def test_seeded_roles_match_the_read_only_contract(tmp_path):
+def test_builtin_roles_match_the_default_contract(tmp_path):
     mgr = AgentManager.for_workspace(tmp_path / "ws")
-    explore = mgr.require("explore")
-    planner = mgr.require("plan")
-    assert explore.read_only and planner.read_only
-    assert not mgr.require("general").read_only
-    assert explore.model == "low"
-    assert planner.model == "high"
-    assert mgr.require("general").model == "medium"
-    assert {"general", "build", "explore", "plan"} <= set(mgr.names)
-    assert all(mgr.require(name).contexts == ("root", "subagent") for name in ("general", "build", "explore", "plan"))
+    assert mgr.require("build").contexts == ("root",)
+    assert all(mgr.require(name).contexts == ("subagent",) for name in ("advisor", "task", "quick"))
+    assert mgr.require("advisor").read_only
+    assert not mgr.require("task").read_only and not mgr.require("quick").read_only
+    # Model, provider, effort and fallbacks are unset by default.
+    for agent in mgr.agents:
+        assert agent.model is None and agent.provider is None
+        assert agent.reasoning_effort is None and agent.fallback == ()
+    # Editing roles tell the root agent which files they changed.
+    for name in ("task", "quick"):
+        assert "Files changed" in mgr.load_body(name)
     assert len({mgr.require(name).color for name in SEEDED_ROLES}) == len(SEEDED_ROLES)
 
 
-def test_planner_alias_keeps_custom_definition_and_uses_plan_when_absent(tmp_path):
+def test_legacy_names_resolve_to_the_new_builtins(tmp_path):
     mgr = AgentManager.for_workspace(tmp_path / "builtins")
-    assert mgr.resolve("planner", context="root").name == "plan"
+    assert mgr.resolve("general", context="root").name == "build"
+    assert mgr.resolve("general", context="subagent").name == "task"
+    for legacy in ("explore", "plan", "planner"):
+        assert mgr.resolve(legacy, context="subagent").name == "advisor"
     workspace_root = tmp_path / "custom" / ".nexus" / "agents"
     write_agent(workspace_root, "planner", body="CUSTOM")
     custom = AgentManager.for_workspace(tmp_path / "custom")
     assert custom.resolve("planner", context="subagent").source is AgentSource.WORKSPACE
     assert any(d.code is AgentDiagnosticCode.DEPRECATED_PLANNER for d in custom.diagnostics)
+
+
+def test_fallback_list_is_parsed_bounded_and_fingerprinted(tmp_path):
+    root = tmp_path / "workspace"
+    path = write_agent(root, "demo")
+    path.write_text(
+        "---\nname: demo\ndescription: d\nfallback: [openai/gpt-5, low, anthropic/claude-sonnet-5]\n---\nx",
+        encoding="utf-8",
+    )
+    mgr = manager(tmp_path)
+    agent = mgr.require("demo")
+    assert agent.fallback == ("openai/gpt-5", "low", "anthropic/claude-sonnet-5")
+    assert mgr.index[0].fallback == agent.fallback
+    many = ", ".join(f"p/m{i}" for i in range(MAX_FALLBACKS + 1))
+    with pytest.raises(AgentParseError):
+        parse_frontmatter(f"---\nname: demo\ndescription: d\nfallback: [{many}]\n---\n")
+    with pytest.raises(AgentParseError):
+        parse_frontmatter("---\nname: demo\ndescription: d\nfallback: [has space]\n---\n")
 
 
 # ---------------------------------------------------------------------------
@@ -1015,7 +1082,7 @@ def _provenance(tmp_path: Path, name: str):
 def test_read_only_roles_constant_covers_shell_and_mutating_fs():
     assert {"bash", "BashOutput", "KillShell"} <= FORBIDDEN_ROLE_TOOLS
     assert {"write", "edit", "multiedit"} <= FORBIDDEN_ROLE_TOOLS
-    assert READ_ONLY_ROLES == frozenset({"explore", "plan", "planner"})
+    assert READ_ONLY_ROLES == frozenset({"advisor", "explore", "plan", "planner"})
 
 
 def test_seed_error_is_an_agent_error(tmp_path, monkeypatch):

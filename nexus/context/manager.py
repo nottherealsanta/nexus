@@ -1454,6 +1454,9 @@ class ContextManager:
         metadata = {
             "context": {
                 "input_budget": plan.input_budget,
+                # The whole window (before the output reserve and safety
+                # margin): what a UI shows usage against.
+                "context_window": inputs.context_window,
                 "effective_max_output_tokens": inputs.effective_max_output_tokens,
                 "safety_margin_tokens": inputs.safety_margin_tokens,
                 "history_budget": plan.history_budget,
@@ -1478,6 +1481,14 @@ class ContextManager:
         }
         if self._last_precompact is not None:
             metadata["pre_compact"] = dict(self._last_precompact)
+        agent_fallback = getattr(
+            getattr(self, "agent_definition", None), "fallback", None
+        )
+        if isinstance(agent_fallback, (tuple, list)) and agent_fallback:
+            # Tried by the router before the workspace ``models.fallback``.
+            metadata["agent_fallback"] = [
+                str(ref) for ref in agent_fallback[:8] if isinstance(ref, str)
+            ]
         agent_effort = getattr(
             getattr(self, "agent_definition", None), "reasoning_effort", None
         )

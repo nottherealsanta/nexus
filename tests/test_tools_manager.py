@@ -54,7 +54,7 @@ EMPTY_SCHEMA: dict = {
 
 ALL_BUILTINS = (
     "read", "glob", "grep", "edit", "write", "apply_patch", "bash",
-    "todowrite", "skill",
+    "todowrite", "question", "skill",
 )
 
 
@@ -188,7 +188,7 @@ def test_research_profile_is_read_only(tmp_path: Path):
         ),
         profile="research",
     )
-    assert m.names == ("read", "glob", "grep", "subagent", "todowrite", "skill")
+    assert m.names == ("read", "glob", "grep", "subagent", "todowrite", "question", "skill")
     assert "apply_patch" not in m.names
 
 
@@ -209,7 +209,7 @@ def test_full_registered_catalog_profiles_do_not_implicitly_select_opt_ins(
     coding = ToolManager(cfg(), workspace=tmp_path, tools=catalog)
     assert coding.names == (
         "read", "glob", "grep", "edit", "write", "apply_patch", "bash", "subagent",
-        "todowrite", "skill",
+        "todowrite", "question", "skill",
     )
     assert all(name == name.lower() for name in coding.names)
 
@@ -217,7 +217,7 @@ def test_full_registered_catalog_profiles_do_not_implicitly_select_opt_ins(
         cfg(), workspace=tmp_path, tools=catalog, profile="research"
     )
     assert research.names == (
-        "read", "glob", "grep", "subagent", "todowrite", "skill"
+        "read", "glob", "grep", "subagent", "todowrite", "question", "skill"
     )
     assert "apply_patch" not in research.names
     assert not any(tool.spec.mutates for tool in research.tools)

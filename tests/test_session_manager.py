@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+
 import pytest
 
 from nexus.errors import SessionBusy, SessionError
@@ -190,8 +193,9 @@ def test_fork_at_end_preserves_records_exactly(tmp_path):
     child = manager.fork("src")
 
     assert child.id != "src"
-    assert child.records == session.records
-    assert [record.seq for record in child.records] == [record.seq for record in session.records]
+    assert child.records[: len(session.records)] == session.records
+    assert [record.seq for record in child.records[:-1]] == [record.seq for record in session.records]
+    assert child.events[-1].type == "session.forked"
     assert child.events[0].id == event.event.id
     assert child.events[0].ts == event.event.ts
     assert child.events[0].data == {"i": 1}
@@ -224,8 +228,8 @@ def test_fork_future_append_is_monotonic_and_diverges(tmp_path):
 
     child = manager.fork("src")
     appended = child.append_message(_msg("child-only"))
-    assert appended.seq == 3
-    assert child.next_seq() == 4
+    assert appended.seq == 4
+    assert child.next_seq() == 5
 
     assert session.path.read_bytes() == parent_before
     assert session.next_seq() == 3
@@ -242,8 +246,8 @@ def test_fork_at_mid_boundary_copies_only_through_boundary(tmp_path):
     child = manager.fork("src", at_seq=2)
 
     assert [m.content[0].text for m in child.messages] == ["a", "b"]
-    assert child.next_seq() == 3
-    assert child.append_message(_msg("d")).seq == 3
+    assert child.next_seq() == 4
+    assert child.append_message(_msg("d")).seq == 4
     assert [m.content[0].text for m in session.messages] == ["a", "b", "c"]
 
 
@@ -251,8 +255,9 @@ def test_fork_of_empty_session(tmp_path):
     manager = SessionManager(tmp_path)
     manager.open("empty")
     child = manager.fork("empty")
-    assert child.records == []
-    assert child.next_seq() == 1
+    assert len(child.records) == 1
+    assert child.events[0].type == "session.forked"
+    assert child.next_seq() == 2
 
 
 def test_fork_missing_source_is_rejected(tmp_path):
@@ -284,7 +289,7 @@ def test_fork_boundary_between_records_is_rejected(tmp_path):
     session.append_message(_msg("b"), seq=5)  # deliberate gap
     with pytest.raises(SessionError):
         manager.fork("src", at_seq=3)
-    assert manager.fork("src", at_seq=5).next_seq() == 6
+    assert manager.fork("src", at_seq=5).next_seq() == 7
 
 
 def test_fork_generates_safe_collision_resistant_child_id(tmp_path):
@@ -317,9 +322,12 @@ def test_fork_at_event_boundary(tmp_path):
     session.append_message(_msg("after"))
 
     child = manager.fork("src", at_seq=2)
-    assert [e.type for e in child.events] == ["turn.started", "turn.completed"]
+    assert [e.type for e in child.events] == ["turn.started", "turn.completed", "session.forked"]
     assert child.messages == []
-    assert child.next_seq() == 3
+    assert child.next_seq() == 4
+    summary = manager.summary(child.id)
+    assert summary.parent_id == "src"
+    assert summary.fork_seq == 2
 
 
 def test_fork_explicit_new_id_collision_is_rejected(tmp_path):
@@ -375,9 +383,127 @@ def test_fork_does_not_recover_dangling_tool_use(tmp_path):
     session.append_message(_tool_use("call-1"))
     before = session.path.read_bytes()
     child = manager.fork("src")
-    # Fork is an exact copy: no recovery record is appended to either session.
-    assert child.records == session.records
+    # The source prefix stays exact; a durable provenance event follows it.
+    assert child.records[: len(session.records)] == session.records
+    assert child.events[-1].type == "session.forked"
+    assert child.events[-1].data == {"parent": "src", "at_seq": session.next_seq() - 1}
     assert session.path.read_bytes() == before
+
+
+def test_archive_sidecar_hides_and_open_unarchives(tmp_path):
+    manager = SessionManager(tmp_path)
+    session = manager.open("archived")
+    session.append_message(_msg("hello"))
+    record = manager.archive("archived", "user")
+    assert record.reason == "user"
+    assert manager.archive_path.exists()
+    assert "archived" not in [row.id for row in manager.list()]
+    assert "archived" in [row.id for row in manager.list(include_archived=True)]
+
+    reopened = SessionManager(tmp_path).open("archived", create=False)
+    assert reopened.id == "archived"
+    assert manager.archived() == []
+    assert manager.summary("archived").message_count == 1
+
+
+def test_archive_index_corruption_recovers_without_losing_session(tmp_path, caplog):
+    manager = SessionManager(tmp_path)
+    session = manager.open("safe")
+    session.append_message(_msg("still here"))
+    manager.archive_path.write_text("{broken", encoding="utf-8")
+    assert manager.archived() == []
+    assert "corrupt session archive index" in caplog.text
+    manager.archive("safe")
+    assert manager.summary("safe").message_count == 1
+    assert manager.archived()[0].session_id == "safe"
+
+
+def test_archive_index_replacement_is_atomic_and_restart_durable(tmp_path, monkeypatch):
+    manager = SessionManager(tmp_path)
+    session = manager.open("durable")
+    session.append_message(_msg("kept"))
+    original_replace = os.replace
+    replacements = []
+
+    def checked_replace(source, destination):
+        source, destination = Path(source), Path(destination)
+        replacements.append((source.parent, destination))
+        return original_replace(source, destination)
+
+    monkeypatch.setattr("nexus.session.manager.os.replace", checked_replace)
+    manager.archive("durable")
+    assert replacements == [(tmp_path, manager.archive_path)]
+    assert list(tmp_path.glob(".archive-*.tmp")) == []
+    restarted = SessionManager(tmp_path)
+    assert [row.session_id for row in restarted.archived()] == ["durable"]
+
+
+def test_archive_stale_skips_live_handles_and_archives_only_old_idle_sessions(tmp_path):
+    first = SessionManager(tmp_path)
+    live = first.open("live")
+    live.append_event(Event(type="turn.completed", ts=1))
+    old = first.open("old")
+    old.append_event(Event(type="turn.completed", ts=2))
+    # The second manager has no local open handles, as a daemon startup sweep
+    # would. The `live` record's lock is not held, so mark it as open only in
+    # the first manager and exercise the manager's in-process exclusion there.
+    assert first.archive_stale(now=1000, older_than=100) == []
+    sweep = SessionManager(tmp_path)
+    rows = sweep.archive_stale(now=1000, older_than=100)
+    assert [row.session_id for row in rows] == ["live", "old"]
+
+
+def test_archive_stale_rotates_bounded_cursor_past_recent_sessions(tmp_path, monkeypatch):
+    from nexus.session.manager import ArchiveRecord, SessionSummary
+
+    manager = SessionManager(tmp_path / "sessions")
+    manager.open("seed")
+    ids = [f"session-{index:04d}" for index in range(501)]
+    monkeypatch.setattr(manager, "_session_ids", lambda: ids)
+    monkeypatch.setattr(
+        manager,
+        "summary",
+        lambda session_id: SessionSummary(
+            id=session_id, last_activity=950 if session_id != ids[-1] else 1
+        ),
+    )
+    monkeypatch.setattr(manager, "_has_pending_work", lambda _session_id: False)
+    monkeypatch.setattr(
+        manager,
+        "archive",
+        lambda session_id, reason: ArchiveRecord(
+            session_id=session_id, archived_at=1000, reason=reason
+        ),
+    )
+
+    assert manager.archive_stale(now=1000, older_than=100) == []
+    archived = manager.archive_stale(now=1000, older_than=100)
+    assert [row.session_id for row in archived] == [ids[-1]]
+
+
+@pytest.mark.parametrize(
+    "event_type,data",
+    [
+        ("turn.started", {}),
+        ("input.queued", {"queued_id": "q1"}),
+        ("permission.requested", {"id": "p1"}),
+    ],
+)
+def test_archive_stale_skips_durable_pending_work(tmp_path, event_type, data):
+    first = SessionManager(tmp_path)
+    session = first.open("pending")
+    session.append_event(Event(type=event_type, data=data, ts=1))
+    sweep = SessionManager(tmp_path)
+    assert sweep.archive_stale(now=1000, older_than=100) == []
+
+
+def test_open_archive_does_not_touch_purgeable_trash(tmp_path):
+    manager = SessionManager(tmp_path)
+    session = manager.open("trashable")
+    session.append_message(_msg("x"))
+    manager.delete("trashable")
+    assert manager.purge_expired(now=10**12)
+    assert not manager.archived()
 
 
 # ---------------------------------------------------------------------------

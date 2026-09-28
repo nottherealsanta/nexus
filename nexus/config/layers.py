@@ -22,7 +22,11 @@ from typing import Any
 import msgspec
 
 from ..errors import ConfigError
-from .paths import user_config_path, workspace_config_path
+from .paths import (
+    user_config_path,
+    workspace_config_path,
+    workspace_settings_config_path,
+)
 from .schema import ConfigV2
 
 LEGACY_KEYS = frozenset(
@@ -50,6 +54,8 @@ V2_SECTION_KEYS = frozenset(
         "hooks",
         "mcp",
         "session",
+        "sessions",
+        "settings",
         "telemetry",
     }
 )
@@ -333,6 +339,9 @@ def _read_docs(
     workspace_file = workspace_config_path(workspace)
     if workspace_file.exists():
         docs.append((str(workspace_file), read_toml(workspace_file)))
+    settings_file = workspace_settings_config_path(workspace)
+    if settings_file.exists():
+        docs.append((str(settings_file), read_toml(settings_file)))
     return docs
 
 

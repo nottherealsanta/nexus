@@ -5,8 +5,10 @@ much of each part fits, not to fail a turn because an estimate was a few percent
 off. Concretely:
 
 1. ``input_budget = min(config.max_tokens, caps.max_context_tokens)
-   - effective_max_output_tokens - safety_margin``.
-   The capability ceiling is ignored when it is unknown (``<= 0``), so a
+   - effective_max_output_tokens - safety_margin``, further capped at
+   ``caps.max_input_tokens - safety_margin`` when the catalogue states a
+   separate prompt limit (models.dev ``limit.input``).
+   A capability ceiling is ignored when it is unknown (``<= 0``), so a
    provider that does not advertise a limit falls back to configuration.
 2. Priority-0 parts (identity, soul, tools, the current user turn) are required.
    If they alone exceed the budget the turn fails with an actionable error that
@@ -51,6 +53,7 @@ def compute_input_budget(
     caps_max_context_tokens: int,
     config_max_output_tokens: int | None, provider_default_max_output_tokens: int | None, caps_max_output_tokens: int | None,
     safety_margin_tokens: int,
+    caps_max_input_tokens: int = 0,
 ) -> int:
     """Exact input-budget formula (may be negative for a misconfigured setup)."""
     if type(config_max_tokens) is not int or config_max_tokens < 0:
@@ -59,7 +62,10 @@ def compute_input_budget(
     if type(caps_max_context_tokens) is int and caps_max_context_tokens > 0:
         context_limit = min(context_limit, caps_max_context_tokens)
     margin = max(0, safety_margin_tokens) if type(safety_margin_tokens) is int else 0
-    return context_limit - effective_max_output_tokens(config_max_output_tokens, provider_default_max_output_tokens, caps_max_output_tokens) - margin
+    budget = context_limit - effective_max_output_tokens(config_max_output_tokens, provider_default_max_output_tokens, caps_max_output_tokens) - margin
+    if type(caps_max_input_tokens) is int and caps_max_input_tokens > 0:
+        budget = min(budget, caps_max_input_tokens - margin)
+    return budget
 @dataclass(frozen=True)
 class BudgetInputs:
     """Everything the allocation algorithm needs, frozen for one assembly."""
@@ -70,6 +76,12 @@ class BudgetInputs:
     provider_default_max_output_tokens: int | None = None
     caps_max_output_tokens: int | None = None
     safety_margin_tokens: int = 0
+    caps_max_input_tokens: int = 0
+    @property
+    def context_window(self) -> int:
+        """The window usage is shown against: ``min(config.max_tokens, caps context)``."""
+        caps = self.caps_max_context_tokens
+        return min(self.config_max_tokens, caps) if caps > 0 else self.config_max_tokens
     @property
     def effective_max_output_tokens(self) -> int:
         return effective_max_output_tokens(
@@ -77,7 +89,7 @@ class BudgetInputs:
         )
     @property
     def input_budget(self) -> int:
-        return compute_input_budget(self.config_max_tokens, self.caps_max_context_tokens, self.config_max_output_tokens, self.provider_default_max_output_tokens, self.caps_max_output_tokens, self.safety_margin_tokens)
+        return compute_input_budget(self.config_max_tokens, self.caps_max_context_tokens, self.config_max_output_tokens, self.provider_default_max_output_tokens, self.caps_max_output_tokens, self.safety_margin_tokens, self.caps_max_input_tokens)
     @classmethod
     def from_config_and_caps(
         cls, config: Any, capabilities: Any
@@ -89,10 +101,15 @@ class BudgetInputs:
             # Legacy v1 bridge: the old budget was measured in characters.
             config_max = max(1, int(getattr(config, "context_chars", 0)) // 4)
             safety = 0
-        else: config_max, safety = context.max_tokens, context.safety_margin_tokens
+        else:
+            # Unset ``context.max_tokens`` means the model's own window.
+            from ..config.schema import DEFAULT_CONTEXT_TOKENS
+            caps_window = int(getattr(capabilities, "max_context_tokens", 0) or 0)
+            config_max = context.max_tokens if context.max_tokens is not None else caps_window or DEFAULT_CONTEXT_TOKENS
+            safety = context.safety_margin_tokens
         params = getattr(getattr(v2, "model", None), "params", None)
         config_output = getattr(params, "max_output_tokens", None)
-        return cls(config_max, int(getattr(capabilities, "max_context_tokens", 0) or 0), config_output, int(getattr(capabilities, "default_max_output_tokens", 0) or 0), int(getattr(capabilities, "max_output_tokens", 0) or 0), safety)
+        return cls(config_max, int(getattr(capabilities, "max_context_tokens", 0) or 0), config_output, int(getattr(capabilities, "default_max_output_tokens", 0) or 0), int(getattr(capabilities, "max_output_tokens", 0) or 0), safety, int(getattr(capabilities, "max_input_tokens", 0) or 0))
 
 
 @dataclass(frozen=True)

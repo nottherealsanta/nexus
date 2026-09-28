@@ -15,7 +15,6 @@ from nexus.config.schema import (
     ModelSection,
     ModelsSection,
     PermissionsSection,
-    ProviderSection,
     ToolsSection,
 )
 from nexus.host import HostFacade
@@ -168,7 +167,7 @@ async def test_startup_renders_checked_in_default_model_from_host_metadata(tmp_p
             header = app.query_one(RootAgentBar)
             assert config.model == "codex/gpt-6-luna"
             assert app.controller.model == "gpt-6-luna"
-            assert header.render().plain.startswith("General  ·  GPT-6 Luna  ·  OpenAI")
+            assert header.summary().plain.startswith("Build  ·  GPT-6 Luna  ·  OpenAI")
             assert header.query_one("#root-model").render().plain == "GPT-6 Luna"
             assert header.query_one("#root-provider").render().plain == "OpenAI"
             assert header.query_one("#root-model").region.width > 0
@@ -189,8 +188,8 @@ async def test_startup_renders_checked_in_default_model_from_host_metadata(tmp_p
             await pilot.pause()
             persisted_header = persisted_app.query_one(RootAgentBar)
             assert persisted_app.controller.model == "gpt-5.6-luna"
-            assert persisted_header.render().plain.startswith(
-                "General  ·  GPT-5.6 Luna  ·  OpenAI"
+            assert persisted_header.summary().plain.startswith(
+                "Build  ·  GPT-5.6 Luna  ·  OpenAI"
             )
             assert runtime.session("persisted-model").model_selection.reference == (
                 "codex/gpt-5.6-luna"
@@ -237,8 +236,8 @@ async def test_picker_selection_is_durable_replayed_and_session_scoped(tmp_path)
             assert selected_commands == [
                 p.ModelSelect(session="picker-model", ref="openai/beta")
             ]
-            assert "beta" in app.query_one(RootAgentBar).render().plain
-            assert "OpenAI" in app.query_one(RootAgentBar).render().plain
+            assert "beta" in app.query_one(RootAgentBar).summary().plain
+            assert "OpenAI" in app.query_one(RootAgentBar).summary().plain
 
         selected_event = _events(runtime, "picker-model", "model.selected")[0]
         assert selected_event.data["reference"] == "openai/beta"
@@ -314,7 +313,7 @@ async def test_direct_selection_rejects_invalid_and_freezes_active_turn_route(tm
             assert "Command failed" in status and "missing/nope" in status
             assert len(_events(runtime, "direct-model", "model.selected")) == 1
             assert runtime.session("direct-model").model_selection.reference == "openai/beta"
-            assert "beta" in app.query_one(RootAgentBar).render().plain
+            assert "beta" in app.query_one(RootAgentBar).summary().plain
 
             gate.set()
             await facade.wait_idle(timeout=5.0)

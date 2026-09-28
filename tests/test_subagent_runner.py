@@ -153,7 +153,7 @@ def agent_meta(data: dict) -> dict:
 
 def test_task_request_defaults_and_mapping_coercion():
     req = TaskRequest.from_value({"prompt": "go", "tools": ["Read"]})
-    assert req.subagent_type == "general"
+    assert req.subagent_type == "task"
     assert req.tools == ("read",)
     assert req.model is None
     assert req.to_dict()["tools"] == ["read"]
@@ -206,13 +206,13 @@ async def test_named_spawn_intersects_and_reports_drops(tmp_path):
     assert spec.depth == 1
 
 
-async def test_ad_hoc_defaults_to_general_and_inherits_the_ceiling(tmp_path):
+async def test_ad_hoc_defaults_to_task_and_inherits_the_ceiling(tmp_path):
     factory = Factory()
     runner = make_runner(tmp_path, factory)
     outcome = await runner.spawn(TaskRequest(prompt="do it"))
     assert outcome.ok
     spec = factory.specs[-1]
-    assert spec.agent == "general"
+    assert spec.agent == "task"
     assert set(spec.tools) == {"read", "grep"}
     assert spec.dropped_tools == ()
     assert spec.workspace == tmp_path
@@ -362,10 +362,10 @@ async def test_tampered_read_only_declaration_still_cannot_write(tmp_path):
 
 def test_permission_key_uses_type_and_effective_tier(tmp_path):
     runner = make_runner(tmp_path, Factory(), max_tier="medium")
-    assert runner.permission_key({"prompt": "x"}) == "general:medium"
+    assert runner.permission_key({"prompt": "x"}) == "task:medium"
     assert (
         runner.permission_key({"prompt": "x", "model": "low"})
-        == "general:low"
+        == "task:low"
     )
     # The role's declared high tier is clamped in the key, so a
     # ``deny = ["Task(*:high)"]`` rule can never be dodged by omitting ``model``.
@@ -378,11 +378,12 @@ def test_permission_key_uses_type_and_effective_tier(tmp_path):
 async def test_tier_is_clamped_and_reported(tmp_path):
     recorder = Recorder()
     factory = Factory()
+    _write_high_tier_role(tmp_path / "ws")
     runner = make_runner(
         tmp_path, factory, max_tier="medium", event_sink=recorder
     )
     outcome = await runner.spawn(
-        TaskRequest(prompt="plan", subagent_type="planner")
+        TaskRequest(prompt="plan", subagent_type="deep")
     )
     assert outcome.clamped is True
     assert outcome.requested_tier == "high"
@@ -395,11 +396,21 @@ async def test_tier_is_clamped_and_reported(tmp_path):
     assert spawned["clamped"] is True
 
 
+def _write_high_tier_role(root: Path) -> None:
+    agents = root / ".nexus" / "agents"
+    agents.mkdir(parents=True, exist_ok=True)
+    (agents / "deep.md").write_text(
+        "---\nname: deep\ndescription: high tier\nmodel: high\n---\nThink.\n",
+        encoding="utf-8",
+    )
+
+
 async def test_cap_is_configurable_and_never_widens(tmp_path):
     factory = Factory()
+    _write_high_tier_role(tmp_path / "ws")
     runner = make_runner(tmp_path, factory, max_tier="high")
     outcome = await runner.spawn(
-        TaskRequest(prompt="plan", subagent_type="planner")
+        TaskRequest(prompt="plan", subagent_type="deep")
     )
     assert outcome.tier == "high"
     assert outcome.clamped is False
@@ -556,7 +567,36 @@ async def test_unknown_role_is_refused_with_the_defined_set(tmp_path):
     assert outcome.is_error
     assert outcome.status == "refused"
     assert "unknown subagent_type" in outcome.text
-    assert "general" in outcome.text
+    assert "advisor, quick, task" in outcome.text
+    assert "build" not in outcome.text  # root-only agents are not spawnable
+
+
+def test_files_changed_tracks_successful_edit_tools_only(tmp_path):
+    from nexus.agents import files_changed
+    from nexus.model.message import Message, Text, ToolResult, ToolUse
+
+    patch = "*** Begin Patch\n*** Update File: src/a.py\n@@\n-x\n+y\n*** Add File: src/new.py\n+z\n*** End Patch"
+    messages = [
+        Message(role="assistant", content=[
+            ToolUse(id="1", name="edit", input={"path": str(tmp_path / "pkg" / "mod.py")}),
+            ToolUse(id="2", name="write", input={"path": "failed.txt"}),
+            ToolUse(id="3", name="apply_patch", input={"patch": patch}),
+            ToolUse(id="4", name="read", input={"path": "only-read.txt"}),
+            ToolUse(id="5", name="Write", input={"path": "pkg/mod.py"}),
+        ]),
+        Message(role="user", content=[
+            ToolResult(tool_use_id="1", content=[Text("ok")]),
+            ToolResult(tool_use_id="2", content=[Text("denied")], is_error=True),
+            ToolResult(tool_use_id="3", content=[Text("ok")]),
+            ToolResult(tool_use_id="4", content=[Text("ok")]),
+            ToolResult(tool_use_id="5", content=[Text("ok")]),
+        ]),
+    ]
+    assert files_changed(messages, workspace=tmp_path) == ("pkg/mod.py", "src/a.py", "src/new.py")
+    outcome = SubagentOutcome(agent="task", session_id="s", text="Done.", files_changed=("pkg/mod.py",))
+    rendered = outcome.render()
+    assert rendered.startswith("Done.")
+    assert "[files changed by task:" in rendered and "- pkg/mod.py" in rendered
 
 
 async def test_child_runtime_exception_becomes_an_error_outcome(tmp_path):

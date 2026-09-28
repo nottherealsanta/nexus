@@ -6,15 +6,17 @@ from textual import on
 from textual.app import App, ComposeResult
 from textual.widgets import Static
 
-from nexus.ui.tui.agent_transcript import AgentTranscriptScreen, render_agent
+from nexus.ui.tui.agent_transcript import AgentTranscriptScreen
 from nexus.ui.tui.messages import AgentOpenRequested
 from nexus.ui.tui.timeline import (
     AgentActivityLink,
     TaskActivityWidget,
+    ThoughtLine,
     ToolActivityWidget,
     _agent_metrics,
     _latest_activity,
 )
+from nexus.ui_support.timeline import tool_output
 from nexus.view import (
     AgentView,
     BlockView,
@@ -119,68 +121,34 @@ async def test_child_card_is_clickable_and_keyboard_activatable():
         assert app.opened_agent == "child"
 
 
-def test_child_transcript_shows_provider_thought_but_never_signature_or_fabrication():
-    with_thought = _agent(
+async def test_child_modal_shows_provider_thought_but_never_signature():
+    agent = _agent(
         messages=[
             MessageView(
                 role="assistant",
                 blocks=[
-                    BlockView(
-                        kind="thinking",
-                        text="Checking the requested files",
-                        signature="opaque-signature",
-                    )
+                    BlockView(kind="thinking", text="Checking the requested files", signature="opaque-signature"),
+                    BlockView(text="Visible answer"),
                 ],
             )
         ]
     )
-    rendered = render_agent(with_thought)
-    assert "### Thought" in rendered
-    assert "Checking the requested files" in rendered
-    assert "opaque-signature" not in rendered
-
-    without_thought = render_agent(
-        _agent(
-            messages=[
-                MessageView(role="assistant", blocks=[BlockView(text="Visible answer")])
-            ]
-        )
-    )
-    assert "Visible answer" in without_thought
-    assert "Thought" not in without_thought
+    async with App().run_test() as pilot:
+        screen = AgentTranscriptScreen(agent)
+        await pilot.app.push_screen(screen)
+        await pilot.pause(0.2)
+        (thought,) = screen.query(ThoughtLine)
+        rendered = str(thought.render())
+        assert "Checking the requested files" in rendered
+        assert "opaque-signature" not in rendered
 
 
 def test_child_inspector_redacts_and_escapes_hostile_errors():
-    hostile = "api_key=supersecret ``` injected"
-    rendered = render_agent(
-        _agent(
-            tools=[
-                ToolCallView(
-                    call_id="bad",
-                    name="Bash",
-                    status="failed",
-                    error=hostile,
-                )
-            ]
-        )
-    )
-
+    hostile = ToolCallView(call_id="bad", name="Bash", status="failed", error="api_key=supersecret ``` injected")
+    rendered = tool_output(hostile)
     assert "supersecret" not in rendered
     assert "api_key=…" in rendered
-    assert "``` injected" in rendered
-    assert "````text\napi_key=… ``` injected\n````" in rendered
-    escaped = render_agent(
-        _agent(
-            tools=[
-                ToolCallView(
-                    call_id="bad-control",
-                    name="Bash",
-                    status="failed",
-                    error="failure\x1b[31mboom",
-                )
-            ]
-        )
-    )
+    escaped = tool_output(ToolCallView(call_id="c", name="Bash", status="failed", error="failure\x1b[31mboom"))
     assert "\\x1b" in escaped
 
 
@@ -202,24 +170,51 @@ async def test_tool_row_running_label_spinner_and_terminal_cleanup():
         header = widget.query_one("#tool-header", Static)
         timer = widget._spinner
         assert timer is not None
-        assert "running" in str(header.render())
-        assert "Bash" in str(header.render()) and "pytest -q" in str(header.render())
+        # Shell calls read as "$ command" with a live spinner while running.
+        assert str(header.render())[0] in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        assert "$ pytest -q" in str(header.render())
         before = str(header.render())
         await pilot.pause(0.45)
         assert str(header.render()) != before
 
         await widget.set_tool(
             ToolCallView(
-                call_id="live", name="Bash", status="completed", duration_ms=25
+                call_id="live", name="Bash", status="completed", duration_ms=25,
+                display="tests passed", result=[{"text": "42 passed"}],
             )
         )
         assert widget._spinner is None
         terminal = str(header.render())
-        assert "completed" in terminal and "running" not in terminal
+        assert terminal.startswith("$ · tests passed") and not any(ch in terminal for ch in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
         await pilot.pause(0.45)
         assert str(header.render()) == terminal
+        assert "42 passed" not in terminal
         await widget.remove()
         assert widget._spinner is None
+
+
+async def test_tool_row_activation_opens_modal_and_keeps_transcript_compact():
+    tool = ToolCallView(
+        call_id="inspect", name="Glob", status="completed",
+        input={"pattern": "**/*.py"}, result=[{"text": "one.py\ntwo.py"}],
+    )
+    async with _ActivityApp(tool).run_test() as pilot:
+        widget = pilot.app.query_one("#tool", ToolActivityWidget)
+        assert len(widget.children) == 1
+        assert "one.py" not in str(widget.query_one("#tool-header", Static).render())
+        widget.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        from nexus.ui.tui.tool_details import ToolDetailsScreen
+
+        screen = pilot.app.screen
+        assert isinstance(screen, ToolDetailsScreen)
+        body = str(screen.query_one("#tool-details-body", Static).render())
+        assert "**/*.py" in body and "one.py" in body and "two.py" in body
+        await pilot.press("escape")
+        await pilot.pause()
+        assert pilot.app.screen is pilot.app.screen_stack[0]
+        assert widget.is_mounted
 
 
 async def test_failed_tool_stops_spinner_without_inventing_output():
@@ -234,8 +229,12 @@ async def test_failed_tool_stops_spinner_without_inventing_output():
             )
         )
         assert widget._spinner is None
-        assert "failed" in str(widget.query_one("#tool-header", Static).render())
-        assert "missing file" in str(widget.query_one("#tool-detail", Static).render())
+        assert "missing file" in str(widget.query_one("#tool-header", Static).render())
+        await widget.open_details()
+        from nexus.ui.tui.tool_details import ToolDetailsScreen
+
+        assert isinstance(pilot.app.screen, ToolDetailsScreen)
+        assert "missing file" in str(pilot.app.screen.query_one("#tool-details-body", Static).render())
 
 
 async def test_nested_task_call_and_child_inspector_activity_refresh_live():
@@ -266,8 +265,8 @@ async def test_nested_task_call_and_child_inspector_activity_refresh_live():
         await pilot.app.mount(task_widget)
         await task_widget.set_task(task, {child.id: child})
         assert task_widget._spinner is not None
-        assert child.id in task_widget._child_links
-        assert "running" in task_widget._child_links[child.id].label.plain
+        assert child.id in task_widget.tool.child_agent_ids
+        assert "explore" in task_widget._details_text()
 
     nested = _agent()
     parent = _agent()
@@ -308,8 +307,8 @@ async def test_nested_task_call_and_child_inspector_activity_refresh_live():
         assert (
             "Read" in activity and "src/main.py" in activity and "running" in activity
         )
-        row = screen.query_one("#agent-inspector-children AgentRow")
-        assert "Bash" in row.label.plain and "· running" in row.label.plain
+        (tool,) = screen.query("#agent-timeline ToolActivityWidget")
+        assert tool.tool.call_id == "child-tool" and tool.tool.status == "running"
 
         done = _agent(
             tools=[
@@ -335,5 +334,5 @@ async def test_nested_task_call_and_child_inspector_activity_refresh_live():
         assert screen._spinner is None
         activity = str(screen.query_one("#agent-inspector-activity", Static).render())
         assert "completed" in activity and "running" not in activity
-        row = screen.query_one("#agent-inspector-children AgentRow")
-        assert "2 passed" in row.label.plain and "completed" in row.label.plain
+        (tool,) = screen.query("#agent-timeline ToolActivityWidget")
+        assert tool.tool.status == "completed"

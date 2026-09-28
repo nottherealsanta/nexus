@@ -32,7 +32,7 @@ def test_bundle_contents_match_the_plan():
     assert bundle_tools("shell") == ("bash",)
     assert bundle_tools("legacy_fs") == ("ls", "multiedit")
     assert bundle_tools("legacy_shell") == ("BashOutput", "KillShell")
-    assert bundle_tools("task") == ("subagent", "todowrite")
+    assert bundle_tools("task") == ("subagent", "todowrite", "question")
     assert bundle_tools("web") == ("webfetch", "websearch")
     assert bundle_tools("meta") == (
         "ReloadExtensions",
@@ -56,7 +56,7 @@ def test_base_profile_advertises_only_implemented_canonical_tools():
     assert profile_tools("coding") == frozenset(
         {
             "read", "apply_patch", "glob", "grep", "edit", "write", "bash",
-            "subagent", "todowrite", "webfetch", "websearch", "skill",
+            "subagent", "todowrite", "question", "webfetch", "websearch", "skill",
         }
     )
 
@@ -71,7 +71,7 @@ def test_research_profile_is_read_search_only():
     # Phase 6 adds Task: research may delegate, but read_only still strips every
     # mutating and shell tool, so a child can never write.
     assert profile_tools("research") == frozenset(
-        {"read", "glob", "grep", "subagent", "todowrite", "webfetch", "websearch", "skill"}
+        {"read", "glob", "grep", "subagent", "todowrite", "question", "webfetch", "websearch", "skill"}
     )
     assert profile_tools("research").isdisjoint(
         {"apply_patch", "write", "edit", "bash"}

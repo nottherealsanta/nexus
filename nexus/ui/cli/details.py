@@ -7,6 +7,7 @@ and every untrusted label is sanitized before it can reach a terminal.
 """
 from __future__ import annotations
 
+from ...ui_support.context import context_measure
 from ...view import ConversationView
 from .render import sanitize
 
@@ -34,9 +35,8 @@ def _usage(view: ConversationView) -> str:
 
 
 def _context(view: ConversationView) -> str:
-    meta = _meta(view)
-    used = meta.get("used_tokens") if isinstance(meta.get("used_tokens"), int) else 0
-    budget = meta.get("input_budget") if isinstance(meta.get("input_budget"), int) else 0
+    used, budget, _measured = context_measure(view)
+    used, budget = used or 0, budget or 0
     if budget > 0: return f"ctx {used}/{budget} ({used * 100 // budget}%)"
     return f"ctx {used}" if used else "ctx -"
 

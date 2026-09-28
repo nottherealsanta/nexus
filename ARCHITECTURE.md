@@ -329,7 +329,11 @@ mutable runtime-global manager.
   only as an opt-in, off-by-default surface (`NEXUS_HTTP=1`, the daemon
   entrypoint's `--http` flag, or `Daemon(http=True)`), publishes a mode-`0600`
   discovery file beside the socket, and never logs the token. The root `nexus`
-  CLI is a pure client with no switch to enable it, and there is no web frontend.
+  CLI is a pure client with no switch to enable it. The browser client is a
+  separate surface on the same listener: `nexus web` asks the daemon for a
+  one-use launch ticket (`WebLaunch`), and `host/web.py` serves the static app
+  in `ui/web/` plus `/v1/web/*` routes behind a cookie, CSRF token, and strict
+  CSP (see `docs/web.md`).
 
 ### `view/`
 
@@ -346,7 +350,8 @@ the standard library, and owns no execution path of its own. `details.py` is a
 pure function of the reduced `ConversationView` — it formats the phase, the
 **effective** model and provider (`model.started`, or the durable
 `model.selected` until the next turn reports the actual one), token usage,
-context occupancy against the assembled input budget, viewers, queued inputs,
+context occupancy (the provider-measured prompt when reported, else the
+assembler's estimate) against the context window, viewers, queued inputs,
 and the subagent tree. The Textual status line and `/details` render from it, so
 they cannot disagree. Every session,
 model, and agent label is sanitized before it is shown. The renderer escapes

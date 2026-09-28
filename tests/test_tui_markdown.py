@@ -5,8 +5,8 @@ from __future__ import annotations
 from textual.app import App, ComposeResult
 from textual.widgets import Markdown
 
-from nexus.ui.tui.agent_transcript import render_agent
-from nexus.ui.tui.timeline import AssistantMessage, TurnWidget
+from nexus.ui_support.timeline import tool_output
+from nexus.ui.tui.timeline import AssistantMessage, ThoughtLine, TurnWidget
 from nexus.view import (
     AgentView,
     BlockView,
@@ -117,10 +117,14 @@ async def test_root_thought_only_message_is_markdown_and_signature_is_private():
     turn = TurnView(id="turn", messages=[thought])
     async with _TurnApp(turn).run_test() as pilot:
         await pilot.pause()
-        widget = pilot.app.query_one(AssistantMessage)
-        assert "### Thought" in widget._markdown
-        assert "**Checking** the request" in widget._markdown
-        assert "provider-secret-signature" not in widget._markdown
+        # Thinking collapses to one "Thought:" line; the signature stays private.
+        assert not pilot.app.query(AssistantMessage)
+        widget = pilot.app.query_one(ThoughtLine)
+        assert str(widget.render()) == "Thought: Checking the request"
+        widget.expanded = True
+        widget.set_message(thought)
+        assert "**Checking** the request" in str(widget.render())
+        assert "provider-secret-signature" not in str(widget.render())
 
 
 async def test_nested_inspector_renders_message_markdown_with_safe_links():
@@ -141,41 +145,18 @@ async def test_nested_inspector_renders_message_markdown_with_safe_links():
     async with App().run_test() as pilot:
         screen = AgentTranscriptScreen(agent)
         await pilot.app.push_screen(screen)
-        await pilot.pause()
-        widget = screen.query_one("#agent-inspector-transcript", Markdown)
-        assert widget._markdown == render_agent(agent)
+        await pilot.pause(0.2)
+        (widget,) = screen.query("#agent-timeline Markdown")
         assert widget._open_links is False
-        assert "**bold**" in widget._markdown
         assert "[bold] is ordinary message text" in widget._markdown
         assert widget.query("MarkdownHeader")
         assert widget.query("MarkdownFence")
 
 
-def test_nested_transcript_keeps_message_markdown_but_fences_tool_output_literally():
-    content = _rich_markdown() + "\n```\n````"
-    agent = AgentView(
-        id="child",
-        body=ConversationView(
-            turns=[
-                TurnView(
-                    id="child-turn",
-                    messages=[MessageView(role="assistant", blocks=[BlockView(text=content)])],
-                    tools=[
-                        ToolCallView(
-                            name="Bash",
-                            status="completed",
-                            display="output begins ``` then ends ```` and [bold] stays literal",
-                        )
-                    ],
-                )
-            ]
-        ),
+def test_nested_transcript_keeps_tool_output_literal():
+    tool = ToolCallView(
+        name="Bash",
+        status="completed",
+        display="output begins ``` then ends ```` and [bold] stays literal",
     )
-    rendered = render_agent(agent)
-    assert "# Heading" in rendered
-    assert "**bold**" in rendered
-    assert "1. first" in rendered
-    assert "```python" in rendered
-    assert "`````text\n" in rendered  # Dynamic fences exceed embedded runs.
-    assert "output begins ``` then ends ```` and [bold] stays literal" in rendered
-    assert "`````text" in rendered
+    assert tool_output(tool) == "output begins ``` then ends ```` and [bold] stays literal"

@@ -622,3 +622,17 @@ def test_200_message_scripted_session_completes_with_suffix_history(tmp_path):
     assert final[-1].content[0].text == "turn 99"
     assert final == history_at_assembly[len(history_at_assembly) - len(final) :]
     assert [m for m in final if m.content[0].text == "turn 99"] == [final[-1]]
+
+
+def test_catalogue_input_limit_caps_the_budget_but_not_the_window():
+    from nexus.model.registry import _parse_model
+
+    model = _parse_model("gpt-6-luna", {"id": "gpt-6-luna", "limit": {"context": 1_050_000, "input": 922_000, "output": 128_000}})
+    assert (model.context, model.max_input, model.max_output) == (1_050_000, 922_000, 128_000)
+    inputs = BudgetInputs(2_000_000, 1_050_000, None, 4_096, 128_000, 4_000, caps_max_input_tokens=922_000)
+    assert inputs.input_budget == 918_000
+    assert inputs.context_window == 1_050_000
+    # Without a separate input limit, the window minus the output reserve applies.
+    assert BudgetInputs(2_000_000, 400_000, None, 4_096, 128_000, 4_000).input_budget == 391_904
+    # A smaller configured context.max_tokens wins over the catalogue.
+    assert BudgetInputs(16_000, 1_050_000, None, 4_096, 128_000, 4_000, caps_max_input_tokens=922_000).context_window == 16_000

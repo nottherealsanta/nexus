@@ -51,6 +51,12 @@ from ..host_support.context_preview import (
 from ..host_support.context_preview import (
     safe_text as _worktree_text,
 )
+from ..host_support.git_diff import git_diff
+from ..host_support.session_archive import (
+    archive_summary_count,
+    dispatch_archive_command,
+)
+from ..host_support.settings_inventory import dispatch_settings
 from ..host_support.workspace import search_files as _search_files
 from ..host_support.worktree_projection import (
     worktree_diff_row as _worktree_diff_row,
@@ -72,6 +78,7 @@ from ..observability.session import (
     validate_logs_read,
 )
 from ..session.manager import SessionSummary, TrashRecord
+from ..tools.questions import QuestionAnswerError
 from ..util import redact_secrets
 from ..view import (
     ConversationView,
@@ -734,13 +741,15 @@ class HostFacade:
         """
         delay = max(0.1, min(float(interval), 10.0))
         revision = 0
-        previous: list[Any] | None = None
+        previous: tuple[list[Any], int] | None = None
         while True:
             sessions = [jsonable(_asdict(item)) for item in self.list_sessions()]
-            if previous != sessions:
+            archived_count = archive_summary_count(self.runtime.sessions)
+            if previous != (sessions, archived_count):
                 revision += 1
-                yield {"schema_version": 1, "revision": revision, "sessions": sessions}
-                previous = sessions
+                yield {"schema_version": 1, "revision": revision, "sessions": sessions,
+                       "archived_count": archived_count}
+                previous = (sessions, archived_count)
             await asyncio.sleep(delay)
 
     def agent_transcript(self, session_id: str, agent_id: str) -> dict[str, Any]:
@@ -781,6 +790,27 @@ class HostFacade:
             # The request is answered (or stale) either way, so the lease has
             # served its purpose; holding it would only block a future request.
             self.presence.release(session_id, request_id, client_id)
+
+    async def answer_question(
+        self, session_id: str, answer: str, *, call_id: str = "", question_id: str = ""
+    ) -> tuple[bool, str | None]:
+        """Answer one agent question; the first valid answer wins.
+
+        A stale id, an ambiguous call id, or another session's question
+        returns ``(False, None)``; an answer that fails the question's shape
+        returns its reason. Answers never touch permission grants.
+        """
+        broker = self.runtime.questions
+        if not question_id:
+            matches = [q for q in broker.pending_for(session_id) if q.call_id == call_id]
+            if len(matches) != 1:
+                return False, None
+            question_id = matches[0].question_id
+        try:
+            resolved = await broker.resolve(session_id, question_id, answer)
+        except QuestionAnswerError as exc:
+            return False, str(exc)
+        return bool(resolved), None
 
     # -- extensions / models / agents -------------------------------------
 
@@ -1094,7 +1124,7 @@ class HostFacade:
         params = getattr(getattr(v2, "model", None), "params", None)
         budget = getattr(params, "thinking_budget", None)
         return {
-            "name": self._agent_text(name, limit=80) or "general",
+            "name": self._agent_text(name, limit=80) or "build",
             "source": self._agent_text(source, limit=40) or "default",
             "color": color,
             "provider": self._agent_text(route.get("provider"), limit=80) or None,
@@ -1238,13 +1268,28 @@ class HostFacade:
             )
 
     async def _dispatch(self, command: p.Command) -> p.Result:
+        if result := await dispatch_settings(command, self.runtime):
+            return result
+        if isinstance(command, (
+            p.SessionArchive, p.SessionUnarchive, p.SessionListArchived,
+            p.SessionPreview, p.SessionSearch,
+        )):
+            return dispatch_archive_command(command, self.runtime.sessions, self.supervisor)
         if isinstance(command, p.SessionList):
-            return p.SessionListResult(sessions=self.list_sessions())
+            return p.SessionListResult(
+                sessions=self.list_sessions(),
+                archived_count=archive_summary_count(self.runtime.sessions),
+            )
         if isinstance(command, p.FileSearch):
             paths = await asyncio.to_thread(
                 self.search_files, command.query, command.limit
             )
             return p.FileSearchResult(paths=paths)
+        if isinstance(command, p.GitDiff):
+            patch, truncated = await git_diff(
+                self.runtime.workspace, staged=command.staged, ref=command.ref
+            )
+            return p.GitDiffResult(patch=patch, truncated=truncated)
         if isinstance(command, p.WorktreeList):
             rows, has_more = await asyncio.to_thread(self.list_worktrees)
             return p.WorktreeListResult(worktrees=rows, has_more=has_more)
@@ -1394,6 +1439,17 @@ class HostFacade:
                 ),
                 client_id=command.client_id,
             )
+        if isinstance(command, p.QuestionAnswer):
+            resolved, error = await self.answer_question(
+                command.session, command.answer,
+                call_id=command.call_id, question_id=command.question_id,
+            )
+            return p.QuestionAnswerResult(
+                session=command.session,
+                call_id=command.call_id,
+                resolved=resolved,
+                error=error,
+            )
         if isinstance(command, p.ExtensionsReload):
             return _reload_result(await self.reload_extensions(command.trigger))
         if isinstance(command, p.ExtensionsList):
@@ -1488,6 +1544,7 @@ class HostFacade:
             return p.AgentsListResult(
                 generation=getattr(agents, "generation", 0),
                 agents=self.list_agents(),
+                default=getattr(self.runtime, "default_root_agent", lambda: "build")(),
             )
         if isinstance(command, p.AgentCurrent):
             metadata = self.current_agent_metadata(command.session)

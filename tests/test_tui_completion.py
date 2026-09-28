@@ -14,6 +14,14 @@ from nexus.ui.tui.app import NexusTextualApp
 from nexus.ui.tui.widgets import ChatEditor, CompletionPopup
 
 
+def _popup_names(popup) -> list[str]:
+    """Command names from the popup rows (each row also shows a summary)."""
+    return [str(option.prompt.plain).split()[0] for option in popup.options if option.prompt.plain.strip()]
+
+
+def _popup_text(popup) -> str:
+    return "\n".join(option.prompt.plain for option in popup.options)
+
 @pytest.mark.asyncio
 async def test_slash_completion_uses_registry_and_accepts_token_without_sending():
     transport = FakeTransport()
@@ -28,17 +36,15 @@ async def test_slash_completion_uses_registry_and_accepts_token_without_sending(
 
         popup = app.query_one(CompletionPopup)
         assert popup.display
-        assert "/model" in str(popup.render())
+        assert "/model" in _popup_text(popup)
         assert popup.region.y + popup.region.height <= editor.region.y
         assert popup.region.x == editor.region.x
         assert popup.region.right == editor.region.right
-        assert popup.styles.border_top[0] == "solid"
-        assert popup.styles.border_top[1].hex.lower() == "#302b28"
-        assert popup.styles.padding.left == popup.styles.padding.right == 0
-        assert all(
-            span.style.background.hex.lower() == "#33271f"
-            for span in popup.render().spans
-        )
+        # Taui-style list uses full width rows with no accent fill.
+        assert popup.styles.outline_left[0] != "outer"
+        assert popup.styles.padding.left == 1
+        selected = popup.get_option_at_index(0).prompt.plain
+        assert selected.lstrip().startswith("/model")
         await pilot.press("tab")
         await pilot.pause()
 
@@ -61,13 +67,13 @@ async def test_slash_prefix_suggests_every_command_starting_with_prefix(prefix):
         composer.refresh_completion()
         await pilot.pause()
 
-        expected = [
+        expected = sorted(
             spec.name
             for spec in commands.SPECS
-            if spec.name.casefold().startswith(prefix.casefold())
-        ]
+            if not spec.hidden and spec.name.casefold().startswith(prefix.casefold())
+        )
         assert composer._completion_items == expected
-        assert app.query_one(CompletionPopup).render().plain.splitlines() == expected
+        assert _popup_names(app.query_one(CompletionPopup)) == expected
 
 
 @pytest.mark.asyncio
@@ -84,10 +90,10 @@ async def test_typing_slash_n_then_enter_selects_new_session_command():
         assert editor.text == "/n"
         assert app.query_one("#chat-input")._completion_items == ["/new"]
         assert popup.display
-        assert popup.render().plain == "/new"
+        assert _popup_names(popup) == ["/new"]
         # The completion is painted in the visible row immediately above the
         # editor; matching the item alone would not catch a clipped popup.
-        assert popup.region.height == 3  # one text row plus the popup's borders
+        assert popup.region.height == 3  # one row plus the top and bottom rules
         assert 0 <= popup.region.y
         assert popup.region.y + popup.region.height <= editor.region.y
         assert popup.region.y + popup.region.height <= app.size.height
@@ -137,9 +143,9 @@ async def test_empty_slash_token_suggests_registry_but_only_at_cursor():
         await pilot.pause()
         popup = app.query_one(CompletionPopup)
         assert popup.display
-        assert popup.render().plain.count("\n") == 6
-        assert "/new" in popup.render().plain
-        assert popup.region.height == 7
+        assert popup.option_count == len([spec for spec in commands.SPECS if not spec.hidden])
+        assert "/new" in _popup_text(popup)
+        assert popup.region.height == 8
         assert popup.region.right <= app.size.width
 
         editor.move_cursor((0, 0))
@@ -161,7 +167,7 @@ async def test_unmatched_slash_query_hides_previous_completion_list():
         composer.refresh_completion()
         await pilot.pause()
         assert popup.display
-        assert "/model" in str(popup.render())
+        assert "/model" in _popup_text(popup)
 
         editor.text = "/no-such-command"
         editor.move_cursor((0, len(editor.text)))
@@ -182,12 +188,11 @@ async def test_slash_enter_executes_selected_command_instead_of_inserting_it():
         await pilot.pause()
         popup = app.query_one(CompletionPopup)
         assert popup.display
-        assert len(popup.render().plain.splitlines()) == 7
+        assert popup.option_count == len([spec for spec in commands.SPECS if not spec.hidden])
         assert popup.region.y + popup.region.height <= editor.region.y
 
-        # /details is the sixth registered command; the popup window follows
-        # the selection as the list is navigated.
-        for _ in range(5):
+        # Navigation follows alphabetical command order through a scrolled list.
+        for _ in range(app.query_one("#chat-input")._completion_items.index("/details")):
             await pilot.press("down")
         assert app.query_one("#chat-input").selected_completion == "/details"
         await pilot.press("enter")
@@ -218,7 +223,7 @@ async def test_picker_typeahead_filters_without_search_widget_and_backspace_rest
         assert not app.query("#agent-search")
         assert panel.region.y + panel.region.height <= editor.region.y
         assert panel.region.right <= app.size.width
-        assert options.region.height == 7
+        assert options.region.height == 8
         assert options.option_count == 12
 
         await pilot.press("m", "o", "d", "e", "l", "-", "1")
@@ -230,9 +235,26 @@ async def test_picker_typeahead_filters_without_search_widget_and_backspace_rest
         await pilot.press("backspace")
         await pilot.pause()
         assert options.option_count == 12
-        assert options.region.height == 7
+        assert options.region.height == 8
         assert app.focused is options
         assert editor.text == ""
+
+
+@pytest.mark.asyncio
+async def test_inline_picker_tab_accepts_highlighted_item():
+    from nexus.ui.tui.agent_picker import AgentPickerPanel
+
+    app = NexusTextualApp(_client(FakeTransport()), session="s")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._show_inline_picker(
+            "agent", [{"name": "general", "contexts": ["root"]}], current="general"
+        )
+        await pilot.pause()
+        panel = app.query_one("#inline-picker", AgentPickerPanel)
+        await pilot.press("tab")
+        await pilot.pause(0.1)
+        assert not panel.display
 
 
 @pytest.mark.asyncio
@@ -241,7 +263,6 @@ async def test_unmatched_slash_enter_submits_as_free_text():
     app = NexusTextualApp(_client(transport), session="s")
     async with app.run_test() as pilot:
         await pilot.pause()
-        editor = app.query_one(ChatEditor)
         for key in "/nothing":
             await pilot.press(key)
         await pilot.pause()
@@ -272,7 +293,7 @@ async def test_file_completion_handles_nested_tokens_and_is_literal_on_accept():
         await pilot.pause(0.2)
 
         assert searched == [("workspace/src/ma", 30)]
-        assert "@workspace/src/main.py" in str(app.query_one(CompletionPopup).render())
+        assert "@workspace/src/main.py" in _popup_text(app.query_one(CompletionPopup))
         await pilot.press("down")
         await pilot.press("enter")
         await pilot.pause()
@@ -348,7 +369,7 @@ async def test_file_completion_uses_client_file_search_protocol_end_to_end():
         popup = app.query_one(CompletionPopup)
         assert requests == [("workspace/docs/gui", 30)]
         assert popup.display
-        assert "@workspace/docs/guide.md" in popup.render().plain
+        assert "@workspace/docs/guide.md" in _popup_text(popup)
         assert app.focused is editor
 
         await pilot.press("tab")
@@ -445,7 +466,7 @@ async def test_stale_file_search_cannot_replace_newer_token_suggestions():
         release.set()
         await pilot.pause()
 
-        visible = str(app.query_one(CompletionPopup).render())
+        visible = _popup_text(app.query_one(CompletionPopup))
         assert "workspace/new.txt" in visible
         assert "workspace/old.txt" not in visible
         assert "start_turn" not in transport.trace

@@ -116,6 +116,10 @@ def test_session_summary_is_transport_neutral(tmp_path):
         "last_activity",
         "last_seq",
         "viewers",
+        "message_count",
+        "created_at",
+        "parent_id",
+        "fork_seq",
     }
     # msgspec round-trips the frozen struct exactly.
     encoded = msgspec.json.encode(summary)
@@ -903,7 +907,9 @@ def test_fork_child_is_listed_and_exports_independently(tmp_path):
 
     listed = {item.id: item for item in manager.list()}
     assert set(listed) == {"src", "child"}
-    assert listed["child"].last_seq == 2
+    assert listed["child"].last_seq == 3
+    assert listed["child"].parent_id == "src"
+    assert listed["child"].fork_seq == 1
 
     parent_doc = msgspec.json.decode(manager.export("src", format="json").encode())
     child_doc = msgspec.json.decode(manager.export("child", format="json").encode())

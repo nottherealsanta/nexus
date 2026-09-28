@@ -23,6 +23,11 @@ def workspace_config_path(workspace: Path) -> Path:
     return Path(workspace) / "nexus.toml"
 
 
+def workspace_settings_config_path(workspace: Path) -> Path:
+    """Canonical Settings-console project config under the workspace scope."""
+    return Path(workspace) / ".nexus" / "nexus.toml"
+
+
 def resolve_within(workspace: Path, filename: str) -> Path:
     """Resolve ``filename`` under ``workspace``, following symlinks.
 
@@ -44,4 +49,5 @@ __all__ = [
     "user_config_path",
     "user_credentials_path",
     "workspace_config_path",
+    "workspace_settings_config_path",
 ]

@@ -316,12 +316,12 @@ async def test_reload_refreshes_config_soul_memory_skills_next_iteration(tmp_pat
     # Iteration 1: the turn-start snapshot.
     assert "SOUL-A" in first.system and "MEMORY-A" in first.system
     assert "reader:" not in first.system
-    assert len(first.tools) == 14  # base tools plus opt-in extension controls
+    assert len(first.tools) == 15  # base tools plus opt-in extension controls
     # Iteration 2: the reloaded manifest.
     assert "SOUL-B" in second.system and "MEMORY-B" in second.system
     assert "reader: read things" in second.system
     assert {tool.name for tool in second.tools} == {
-        "read", "glob", "grep", "subagent", "todowrite", "webfetch", "skill"
+        "read", "glob", "grep", "subagent", "todowrite", "question", "webfetch", "skill"
     }
     await runtime.aclose()
 

@@ -103,7 +103,7 @@ BUNDLES: Mapping[str, Bundle] = MappingProxyType(
         ),
         "task": Bundle(
             name="task",
-            tools=("subagent", "todowrite"),
+            tools=("subagent", "todowrite", "question"),
         ),
         "web": Bundle(
             name="web",
@@ -135,7 +135,6 @@ BUNDLE_NAMES = frozenset(BUNDLES)
 # Baseline availability explanations for tools that require runtime services.
 # Runtime host listings replace these with config-specific reasons.
 BASE_TOOL_AVAILABILITY: Mapping[str, str] = MappingProxyType({
-    "question": "question broker/service not implemented",
     "websearch": "No HTTPS SearXNG instance and matching allowed origin are configured",
     "webfetch": "Web fetching is disabled or the outbound HTTP service is unavailable",
 })
@@ -156,7 +155,7 @@ PROFILES: Mapping[str, Profile] = MappingProxyType(
         "research": Profile(
             name="research",
             bundles=("fs", "task", "web", "ext", "mcp"),
-            include=("subagent", "todowrite", "skill"),
+            include=("subagent", "todowrite", "question", "skill"),
             exclude=("write", "edit", "bash"),
             read_only=True,
         ),

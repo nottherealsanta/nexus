@@ -49,7 +49,8 @@ async def test_host_reports_resolved_config_model_and_distinct_thinking_budget(t
     try:
         result = await HostFacade(runtime).handle(p.AgentCurrent(session="s"))
         assert isinstance(result, p.AgentCurrentResult)
-        assert (result.name, result.source) == ("general", "config")
+        # A legacy ``general`` config resolves to the built-in root agent.
+        assert (result.name, result.source) == ("build", "config")
         assert (result.provider, result.model) == ("scripted", "configured-model")
         assert result.reasoning_effort is None
         assert result.thinking_budget == 4096
@@ -95,29 +96,43 @@ async def test_agent_metadata_is_compact_optional_and_color_scoped():
             reasoning_effort=None,
             thinking_budget=4096,
         )
-        rendered = header.render()
+        rendered = header.summary()
         assert rendered.plain == "general  ·  configured-model  ·  scripted  ·  unknown"
         assert "#12ab34" in str(rendered.spans[0].style)
         assert all("idle" not in str(span.style) for span in rendered.spans)
 
         header.set_agent("general", "default", "idle")
-        assert header.render().plain == "general  ·  Default  ·  unknown"
+        assert header.summary().plain == "general  ·  Default  ·  unknown"
 
 
 async def test_agent_metadata_handles_partial_fields_and_host_color_fallback():
     async with _HeaderApp().run_test() as pilot:
         header = pilot.app.query_one("#root-agent", RootAgentBar)
         header.set_agent("custom-agent", "default", provider="vendor")
-        rendered = header.render()
+        rendered = header.summary()
         assert rendered.plain == "custom-agent  ·  Default  ·  vendor  ·  unknown"
         assert agent_color("custom-agent") in str(rendered.spans[0].style)
         assert agent_color("custom-agent") == agent_color("CUSTOM-AGENT")
 
 
+async def test_agent_metadata_hides_effort_source_and_keeps_provider_non_italic():
+    async with _HeaderApp().run_test() as pilot:
+        header = pilot.app.query_one("#root-agent", RootAgentBar)
+        header.set_effort_metadata(supported_levels=["xhigh"], effort_source="session")
+        header.set_agent(
+            "build", provider="openai", model="gpt-6-luna", reasoning_effort="xhigh"
+        )
+
+        assert header.summary().plain == "build  ·  GPT-6 Luna  ·  OpenAI  ·  xhigh"
+        provider = header.query_one("#root-provider")
+        assert provider.render().plain == "OpenAI"
+        assert not provider.rich_style.italic
+
+
 def test_context_metadata_only_uses_present_integer_values():
     view = initial_state("s")
-    assert context_usage(view) == "Preview"
+    assert context_usage(view) == "0 (0%)"
     view.context = {"context": {"used_tokens": 23_500, "input_budget": 100_000}}
-    assert context_usage(view) == "24% · 23.5k"
+    assert context_usage(view) == "24k (24%)"
     view.context = {"context": {"used_tokens": 23_500}}
-    assert context_usage(view) == "23.5k"
+    assert context_usage(view) == "24k (0%)"

@@ -11,6 +11,7 @@ from nexus.config.layers import (
     load_effective,
     normalize_v1_to_v2,
 )
+from nexus.config.schema import ConfigV2, SessionsSection, SettingsSection
 from nexus.errors import ConfigError
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +30,55 @@ def test_defaults_when_no_files(tmp_path):
     assert config.sandbox == "workspace-write"
     assert config.context_chars == 64000
     assert config.v2 is None
+    assert ConfigV2().sessions.auto_archive_days == 2
+
+
+@pytest.mark.parametrize("days", [-1, 3651, True, 1.5])
+def test_auto_archive_days_must_be_a_bounded_integer(days):
+    with pytest.raises(ValueError, match="sessions.auto_archive_days"):
+        ConfigV2(sessions=SessionsSection(auto_archive_days=days))
+
+
+def test_auto_archive_days_can_be_disabled():
+    assert ConfigV2(sessions=SessionsSection(auto_archive_days=0)).sessions.auto_archive_days == 0
+
+
+def test_sessions_auto_archive_days_loads_from_plural_config_section(tmp_path):
+    home = _home(tmp_path)
+    (tmp_path / "nexus.toml").write_text(
+        "config_version = 2\n\n[sessions]\nauto_archive_days = 0\n",
+        encoding="utf-8",
+    )
+    config = Config.load(tmp_path, home=home, environ={})
+    assert config.v2.sessions.auto_archive_days == 0
+
+
+def test_settings_confirm_edits_loads_from_config(tmp_path):
+    home = _home(tmp_path)
+    (tmp_path / "nexus.toml").write_text(
+        "config_version = 2\n\n[settings]\nconfirm_edits = true\n",
+        encoding="utf-8",
+    )
+    config = Config.load(tmp_path, home=home, environ={})
+    assert config.v2.settings.confirm_edits is True
+    assert ConfigV2(settings=SettingsSection(confirm_edits=True)).settings.confirm_edits
+
+
+def test_scoped_project_settings_config_overlays_legacy_workspace_config(tmp_path):
+    home = _home(tmp_path)
+    (tmp_path / "nexus.toml").write_text(
+        "config_version = 2\n\n[agent]\nname = 'general'\n\n[tools]\nbash_timeout_s = 10\n",
+        encoding="utf-8",
+    )
+    settings_dir = tmp_path / ".nexus"
+    settings_dir.mkdir()
+    (settings_dir / "nexus.toml").write_text(
+        "config_version = 2\n\n[tools]\nbash_timeout_s = 5\n",
+        encoding="utf-8",
+    )
+    config = Config.load(tmp_path, home=home, environ={})
+    assert config.v2.agent.name == "general"
+    assert config.v2.tools.bash_timeout_s == 5
 
 
 def test_flat_v1_loads_and_unknown_key_rejected(tmp_path):
@@ -111,7 +161,7 @@ timeout_seconds = 42
     assert config.version == 2
     assert config.v2 is not None
     assert config.v2.agent.max_iterations == 12
-    assert config.v2.agent.name == "general"
+    assert config.v2.agent.name == "build"
     assert config.v2.context.max_tokens == 100000
     assert config.instructions_file == "GUIDE.md"
     assert config.memory_file == "NOTES.md"
@@ -407,7 +457,7 @@ def test_detect_version_variants():
 
 def test_build_v2_populates_defaults():
     config = build_v2({"config_version": 2})
-    assert config.context.max_tokens == 180000
+    assert config.context.max_tokens is None  # the model window applies
     assert config.permissions.write_roots == ["./"]
     assert config.telemetry.log_level == "info"
 

@@ -42,6 +42,7 @@ import asyncio
 import contextlib
 import inspect
 import math
+import re
 import threading
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -70,6 +71,7 @@ __all__ = [
     "DEFAULT_MAX_DEPTH",
     "DEFAULT_MAX_FANOUT",
     "DEFAULT_MAX_TIER",
+    "MAX_REPORTED_FILES",
     "WORKTREE_CHILD_TOOLS",
     "ChildRuntime",
     "ChildSpec",
@@ -84,6 +86,7 @@ __all__ = [
     "SubagentRunner",
     "SubagentUsage",
     "TaskRequest",
+    "files_changed",
 ]
 
 #: The event names this module emits (plan sections 3.5 and 15.10). They are
@@ -99,7 +102,7 @@ DEFAULT_MAX_CONCURRENT = 4
 DEFAULT_MAX_DEPTH = 3
 DEFAULT_MAX_FANOUT = 16
 #: The role an ad-hoc ``Task`` request uses when none is named.
-DEFAULT_CHILD_TYPE = "general"
+DEFAULT_CHILD_TYPE = "task"
 # First-release worktree profile: only reviewed, shipped tools are exposed.
 WORKTREE_CHILD_TOOLS = frozenset(
     {
@@ -111,6 +114,7 @@ WORKTREE_CHILD_TOOLS = frozenset(
         "apply_patch",
         "subagent",
         "todowrite",
+        "question",
         "skill",
         "webfetch",
         "websearch",
@@ -326,6 +330,9 @@ class SubagentOutcome:
     metrics: Mapping[str, Any] = field(default_factory=dict)
     worktree: Mapping[str, Any] | None = None
     worktree_scope: bool = False
+    #: Workspace files the child changed through file-editing tools, in first-
+    #: touch order. Shell side effects are not tracked; roles report those.
+    files_changed: tuple[str, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -347,6 +354,7 @@ class SubagentOutcome:
             "requested_tier": self.requested_tier,
             "error": self.error,
             "worktree": dict(self.worktree) if self.worktree is not None else None,
+            "files_changed": list(self.files_changed),
         }
 
     def render(self) -> str:
@@ -375,6 +383,16 @@ class SubagentOutcome:
             lines.append(body)
         elif self.error:
             lines.append(self.error)
+        if self.files_changed:
+            shown = self.files_changed[:MAX_REPORTED_FILES]
+            more = len(self.files_changed) - len(shown)
+            lines.append(
+                f"[files changed by {self.agent}: review these edits and include "
+                "them in your own summary]"
+            )
+            lines.extend(f"- {path}" for path in shown)
+            if more > 0:
+                lines.append(f"- … and {more} more")
         if not lines:
             lines.append(f"{label}: no report")
         return "\n".join(lines)
@@ -382,6 +400,60 @@ class SubagentOutcome:
 
 #: Alias for callers that name the final report a "result".
 SubagentResult = SubagentOutcome
+
+#: Bound on paths listed in a rendered report and tracked per child run.
+MAX_REPORTED_FILES = 100
+#: Canonical file-editing tools whose successful calls count as file changes.
+_PATH_EDIT_TOOLS = frozenset({"write", "edit", "multiedit"})
+_PATCH_TARGET_RE = re.compile(
+    r"^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+?)\s*$", re.MULTILINE
+)
+
+
+def files_changed(messages: Iterable[object], *, workspace: Path | None = None) -> tuple[str, ...]:
+    """Paths a child changed through successful file-editing tool calls.
+
+    Reads the child's own message log: ``tool_use`` blocks for write/edit/
+    multiedit (``path``) and apply_patch (its ``*** … File:`` headers), kept
+    only when the matching ``tool_result`` is not an error. Paths under
+    ``workspace`` are shown relative to it. Bounded by
+    :data:`MAX_REPORTED_FILES` distinct paths.
+    """
+    calls: dict[str, list[str]] = {}
+    failed: set[str] = set()
+    for message in messages:
+        for block in getattr(message, "content", None) or ():
+            name = getattr(block, "name", None)
+            call_id = getattr(block, "id", None)
+            args = getattr(block, "input", None)
+            if isinstance(name, str) and isinstance(call_id, str) and isinstance(args, Mapping):
+                tool = canonical_tool_name(name)
+                if tool in _PATH_EDIT_TOOLS:
+                    path = args.get("path", args.get("file_path"))
+                    if isinstance(path, str) and path.strip():
+                        calls[call_id] = [path.strip()]
+                elif tool in {"apply_patch", "ApplyPatch"}:
+                    patch = args.get("patch")
+                    if isinstance(patch, str):
+                        calls[call_id] = _PATCH_TARGET_RE.findall(patch[:1_000_000])
+            result_id = getattr(block, "tool_use_id", None)
+            if isinstance(result_id, str) and getattr(block, "is_error", False):
+                failed.add(result_id)
+    seen: dict[str, None] = {}
+    for call_id, paths in calls.items():
+        if call_id in failed:
+            continue
+        for raw in paths:
+            shown = raw
+            if workspace is not None:
+                with contextlib.suppress(ValueError, OSError):
+                    candidate = Path(raw)
+                    if candidate.is_absolute():
+                        shown = candidate.relative_to(workspace).as_posix()
+            seen.setdefault(_safe(shown, limit=300), None)
+            if len(seen) >= MAX_REPORTED_FILES:
+                return tuple(seen)
+    return tuple(seen)
 
 
 # ---------------------------------------------------------------------------
@@ -638,6 +710,8 @@ class ChildSpec:
     parent_agent_id: str | None = None
     parent_call_id: str = ""
     root_turn_id: str = ""
+    #: The role's ordered fallback model references (tried before the global chain).
+    fallback: tuple[str, ...] = ()
 
 
 class ChildRuntime(Protocol):
@@ -1105,7 +1179,9 @@ class SubagentRunner:
         except AgentNotFoundError:
             role = None
         if role is None:
-            available = ", ".join(self._agents.names) or "(none)"
+            available = ", ".join(
+                agent.name for agent in self._agents.agents if agent.eligible_in("subagent")
+            ) or "(none)"
             return self._refusal(
                 agent=req.subagent_type,
                 error=(
@@ -1285,6 +1361,7 @@ class SubagentRunner:
                 parent_model=self._parent_model,
                 provider=child_provider,
                 reasoning_effort=role.reasoning_effort,
+                fallback=tuple(role.fallback),
                 tier=tier,
                 requested_tier=resolution.reference or self._parent_tier,
                 clamped=clamped,

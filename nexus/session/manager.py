@@ -41,10 +41,15 @@ open a second handle (or evict and reopen) instead.
 from __future__ import annotations
 
 import asyncio
+import bisect
 import contextlib
+import json
+import logging
+import math
 import os
 import secrets
 import shutil
+import tempfile
 import threading
 import time
 from collections.abc import AsyncIterator, Callable
@@ -82,6 +87,10 @@ TRASH_VERSION = 1
 #: Default retention: one week, matching the extension trash policy (plan §2.3).
 DEFAULT_RETENTION_SECONDS = 7 * 24 * 60 * 60
 
+_ARCHIVE_INDEX = "archive.json"
+_ARCHIVE_MAX_SWEEP = 500
+_LOG = logging.getLogger(__name__)
+
 #: How long ``open(create=True)`` waits for a competing creator's session lock
 #: before refusing. A creator holds the lock only across the atomic empty-log
 #: create, so a losing brand-new opener observes the winner's log instead of
@@ -118,6 +127,10 @@ class SessionSummary(msgspec.Struct, frozen=True):
     last_activity: float = 0.0
     last_seq: int = 0
     viewers: int = 0
+    message_count: int = 0
+    created_at: float = 0.0
+    parent_id: str = ""
+    fork_seq: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return msgspec.structs.asdict(self)
@@ -139,6 +152,17 @@ class TrashRecord(msgspec.Struct, frozen=True):
     @property
     def expired(self) -> bool:
         return self.delete_after <= time.time()
+
+    def to_dict(self) -> dict[str, Any]:
+        return msgspec.structs.asdict(self)
+
+
+class ArchiveRecord(msgspec.Struct, frozen=True):
+    """Durable archive metadata stored outside the append-only session log."""
+
+    session_id: str
+    archived_at: float
+    reason: Literal["auto", "user"] = "user"
 
     def to_dict(self) -> dict[str, Any]:
         return msgspec.structs.asdict(self)
@@ -239,6 +263,11 @@ class SessionManager:
     ):
         self.directory = Path(directory)
         self.store = store if store is not None else SessionStore(self.directory)
+        self._archive_path = self.directory / _ARCHIVE_INDEX
+        self._archive_cursor_path = self.directory / "archive.cursor"
+        # Reuse the hardened cross-process flock primitive for the sidecar's
+        # read/modify/replace transaction. This lock never covers session logs.
+        self._archive_lock = TrashLock(self.directory / ".archive.lock")
         # Trash is a sibling of the sessions directory, so the production layout
         # is ``.nexus/sessions`` -> ``.nexus/trash``. An explicit override keeps
         # tests hermetic (and lets a host relocate it).
@@ -340,6 +369,9 @@ class SessionManager:
         """
         session_id = validate_session_id(session_id)
         self.directory.mkdir(parents=True, exist_ok=True)
+        # Opening is the resume operation: remove the archive marker before a
+        # caller starts work or attaches to the session.
+        self.unarchive(session_id)
         # Best-effort recovery first: a staging directory left by a
         # crash-mid-delete may still hold the only authoritative log. This sweep
         # is non-blocking and may be skipped when a concurrent recoverer holds
@@ -648,9 +680,221 @@ class SessionManager:
         with self._handles_lock:
             return tuple(self._handles)
 
+    @property
+    def archive_path(self) -> Path:
+        """Path to the durable archive index sidecar."""
+        return self._archive_path
+
+    def _read_archive_index(self) -> dict[str, ArchiveRecord]:
+        """Read validated archive rows; recover a corrupt sidecar as empty."""
+        try:
+            raw = json.loads(self._archive_path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                raise ValueError("archive index must be an object")  # noqa: TRY004 - corrupt on-disk data
+            records: dict[str, ArchiveRecord] = {}
+            for session_id, value in raw.items():
+                if not is_valid_session_id(session_id) or not isinstance(value, dict):
+                    continue
+                reason = value.get("reason")
+                archived_at = value.get("archived_at")
+                if (
+                    not isinstance(reason, str)
+                    or reason not in {"auto", "user"}
+                    or isinstance(archived_at, bool)
+                    or not isinstance(archived_at, (int, float))
+                    or not math.isfinite(archived_at)
+                    or archived_at < 0
+                ):
+                    continue
+                records[session_id] = ArchiveRecord(
+                    session_id=session_id,
+                    archived_at=float(archived_at),
+                    reason=reason,
+                )
+            return records
+        except FileNotFoundError:
+            return {}
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+            _LOG.warning("ignoring corrupt session archive index %s: %s", self._archive_path, exc)
+            return {}
+
+    def _write_archive_index(self, records: dict[str, ArchiveRecord]) -> None:
+        """Atomically replace the archive index and persist its directory entry."""
+        self.directory.mkdir(parents=True, exist_ok=True)
+        payload = {
+            session_id: {"archived_at": row.archived_at, "reason": row.reason}
+            for session_id, row in sorted(records.items())
+        }
+        data = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+        fd, raw_path = tempfile.mkstemp(prefix=".archive-", suffix=".tmp", dir=self.directory)
+        temp_path = Path(raw_path)
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_path, self._archive_path)
+            with contextlib.suppress(OSError):
+                directory_fd = os.open(self.directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+            with contextlib.suppress(OSError):
+                temp_path.unlink()
+            raise
+
+    def archived(self) -> list[ArchiveRecord]:
+        """Return archive metadata newest first, ignoring missing session logs."""
+        with self._archive_lock.guard():
+            records = self._read_archive_index()
+        present = set(self._session_ids())
+        result = [row for session_id, row in records.items() if session_id in present]
+        return sorted(result, key=lambda row: (-row.archived_at, row.session_id))
+
+    def archive(self, session_id: str, reason: Literal["auto", "user"] = "user") -> ArchiveRecord:
+        """Mark an existing session archived without changing its conversation log."""
+        session_id = validate_session_id(session_id)
+        if not isinstance(reason, str) or reason not in {"auto", "user"}:
+            raise ValueError("archive reason must be 'auto' or 'user'")
+        if not self._artifacts_exist(session_id):
+            raise SessionError(f"Session {session_id!r} does not exist")
+        if self._has_pending_work(session_id):
+            raise SessionBusy(f"Session {session_id!r} has running or pending work")
+        lock = SessionLock.for_session(self.directory, session_id)
+        with lock.exclusive(blocking=False), self._archive_lock.guard():
+            records = self._read_archive_index()
+            existing = records.get(session_id)
+            if existing is not None:
+                return existing
+            record = ArchiveRecord(session_id, time.time(), reason)
+            records[session_id] = record
+            self._write_archive_index(records)
+            return record
+
+    def unarchive(self, session_id: str) -> bool:
+        """Remove one archive marker; return whether a marker was present."""
+        session_id = validate_session_id(session_id)
+        with self._archive_lock.guard():
+            if not self._archive_path.exists():
+                return False
+            records = self._read_archive_index()
+            if session_id not in records:
+                return False
+            del records[session_id]
+            self._write_archive_index(records)
+            return True
+
+    def archive_stale(
+        self, *, now: float | None = None, older_than: float
+    ) -> list[ArchiveRecord]:
+        """Archive up to 500 old, idle, unopened sessions."""
+        if isinstance(older_than, bool) or not isinstance(older_than, (int, float)) or older_than < 0:
+            raise ValueError("older_than must be a non-negative number of seconds")
+        moment = time.time() if now is None else float(now)
+        threshold = moment - float(older_than)
+        open_ids = set(self.live_sessions)
+        session_ids = self._session_ids()
+        with self._archive_lock.guard():
+            already_archived = set(self._read_archive_index())
+            cursor = self._read_archive_cursor()
+            start = bisect.bisect_right(session_ids, cursor) if cursor else 0
+            ordered = session_ids[start:] + session_ids[:start]
+            batch = ordered[:_ARCHIVE_MAX_SWEEP]
+            if batch:
+                self._write_archive_cursor(batch[-1])
+        candidates = []
+        for session_id in batch:
+            if session_id in open_ids or session_id in already_archived:
+                continue
+            try:
+                summary = self.summary(session_id)
+            except (SessionError, OSError, ValueError):
+                continue
+            if (
+                summary.state == "idle"
+                and summary.viewers == 0
+                and summary.last_activity <= threshold
+                and not self._has_pending_work(session_id)
+            ):
+                candidates.append(session_id)
+        archived = []
+        for session_id in candidates[:_ARCHIVE_MAX_SWEEP]:
+            try:
+                archived.append(self.archive(session_id, "auto"))
+            except (SessionBusy, SessionError):
+                continue
+        return archived
+
+    def _read_archive_cursor(self) -> str:
+        try:
+            if self._archive_cursor_path.is_symlink():
+                return ""
+            value = self._archive_cursor_path.read_text(encoding="ascii").strip()
+            return value if is_valid_session_id(value) else ""
+        except (OSError, UnicodeError):
+            return ""
+
+    def _write_archive_cursor(self, session_id: str) -> None:
+        fd, temporary = tempfile.mkstemp(
+            prefix=".archive-cursor-", dir=str(self.directory)
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="ascii") as stream:
+                os.fchmod(stream.fileno(), 0o600)
+                stream.write(session_id + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self._archive_cursor_path)
+            directory_fd = os.open(self.directory, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        finally:
+            with contextlib.suppress(OSError):
+                os.unlink(temporary)
+
+    def _has_pending_work(self, session_id: str) -> bool:
+        """Inspect durable queue/approval/turn markers without opening a handle."""
+        try:
+            events = tuple(self._consistent_read(session_id).events())
+        except (SessionError, OSError, ValueError):
+            return True
+        queued: set[str] = set()
+        approvals: set[str] = set()
+        running = False
+        for event in events:
+            data = event.data if isinstance(event.data, dict) else {}
+            if event.type == "turn.started":
+                running = True
+            elif event.type in {"turn.completed", "turn.failed", "turn.cancelled"}:
+                running = False
+            elif event.type == "input.queued":
+                queued_id = data.get("queued_id")
+                if isinstance(queued_id, str) and queued_id:
+                    queued.add(queued_id)
+            elif event.type in {"input.consumed", "input.dropped"}:
+                queued_id = data.get("queued_id")
+                if isinstance(queued_id, str):
+                    queued.discard(queued_id)
+            elif event.type == "permission.requested":
+                request_id = data.get("id")
+                if isinstance(request_id, str) and request_id:
+                    approvals.add(request_id)
+            elif event.type == "permission.resolved":
+                request_id = data.get("id")
+                if isinstance(request_id, str):
+                    approvals.discard(request_id)
+        return running or bool(queued) or bool(approvals)
+
     # -- list / summary ----------------------------------------------------
 
-    def list(self) -> list[SessionSummary]:
+    def list(self, *, include_archived: bool = False) -> list[SessionSummary]:
         """Summarize every session, newest activity first.
 
         Both live handles and on-disk logs (including an unmigrated legacy
@@ -666,8 +910,13 @@ class SessionManager:
         # the trash directory; no lock is taken and neither ``open`` nor ``list``
         # is re-entered, so this cannot recurse.
         self._recover_trash()
+        archived_ids = set() if include_archived else {
+            record.session_id for record in self.archived()
+        }
         summaries: list[SessionSummary] = []
         for session_id in self._session_ids():
+            if session_id in archived_ids:
+                continue
             try:
                 summaries.append(self.summary(session_id))
             except (SessionError, OSError, ValueError):
@@ -689,6 +938,17 @@ class SessionManager:
     ) -> SessionSummary:
         loaded = snapshot_mod.load(self.directory, session_id, read)
         state = snapshot_mod.current_state(read, loaded)
+        parent_id = ""
+        fork_seq = 0
+        for record in read.records:
+            if isinstance(record, EventRecord) and record.event.type == "session.forked":
+                parent = record.event.data.get("parent")
+                boundary = record.event.data.get("at_seq")
+                if isinstance(parent, str):
+                    parent_id = parent
+                if isinstance(boundary, int) and not isinstance(boundary, bool):
+                    fork_seq = boundary
+        created_at = next((record.ts for record in read.records if record.ts > 0), 0.0)
         return SessionSummary(
             id=session_id,
             title=export_mod.derive_title(state.messages),
@@ -698,6 +958,10 @@ class SessionManager:
             ),
             last_seq=read.next_seq,
             viewers=handle.viewers if handle is not None else 0,
+            message_count=sum(1 for message in state.messages if getattr(message, "role", "") == "user"),
+            created_at=created_at,
+            parent_id=parent_id,
+            fork_seq=fork_seq,
         )
 
     def _live_handle(self, session_id: str) -> Session | None:
@@ -1248,6 +1512,7 @@ class SessionManager:
         derived snapshot cache could not be written.
         """
         source_id = validate_session_id(source_id)
+        self.unarchive(source_id)
         if not self.store.exists(source_id):
             raise SessionError(f"Session {source_id!r} does not exist")
         read = self._consistent_read(source_id)
@@ -1255,6 +1520,10 @@ class SessionManager:
         records = [record for record in read.records if record.seq <= boundary]
         child_id = self._child_id(source_id, new_id)
         self.store.create_from_records(child_id, records)
+        self.store.append_event(
+            child_id,
+            Event("session.forked", {"parent": source_id, "at_seq": boundary}, session=child_id),
+        )
         self._inherit_snapshot(source_id, child_id, read, records, boundary)
         # ``recover=False`` keeps the copied prefix byte-for-byte exact; a
         # dangling tool use is recovered on the next ordinary ``open``.

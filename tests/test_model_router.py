@@ -139,3 +139,21 @@ def test_capabilities_come_from_the_resolved_provider():
     router = ModelRouter({"anthropic": provider})
     router.resolve(ModelRequest(messages=[], model="anthropic/claude-x"))
     assert provider.capability_calls == ["claude-x"]
+
+
+def test_agent_fallback_from_request_metadata_is_tried_before_the_global_chain():
+    providers = {"a": FakeProvider("a"), "b": FakeProvider("b"), "c": FakeProvider("c")}
+    router = ModelRouter(providers, default="a/m1", fallback=["c/m3"])
+    request = ModelRequest(
+        messages=[],
+        metadata={"agent_fallback": ["b/m2", "a/m1", "c/m3", 7, "missing/x"]},
+    )
+    chain = [(r.provider.name, r.model) for r in router.fallbacks(request)]
+    # Agent refs first, then global; the primary and duplicates are dropped and
+    # malformed or unresolvable entries are skipped.
+    assert chain == [("b", "m2"), ("c", "m3")]
+    no_global = ModelRouter(providers, default="a/m1")
+    assert [(r.provider.name, r.model) for r in no_global.fallbacks(request)] == [
+        ("b", "m2"), ("c", "m3"),
+    ]
+    assert no_global.fallbacks(ModelRequest(messages=[])) == []

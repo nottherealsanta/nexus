@@ -105,6 +105,7 @@ def test_assembled_metadata_has_budget_and_cache_accounting(tmp_path):
     context = request.metadata["context"]
     assert {
         "input_budget",
+        "context_window",
         "effective_max_output_tokens",
         "safety_margin_tokens",
         "history_budget",

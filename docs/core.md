@@ -41,7 +41,7 @@ events ──► session log ──► view/reduce.py (pure) ──► Conversat
 | Sessions: open, fork, replay, delete/trash, export, locks | `session/` | `manager.py` (`SessionManager`, `SessionSummary`, `_state_for` gives idle/running/awaiting_*), `session.py` (handle), `store.py` (JSONL log, `EventRecord`, `MessageRecord`), `snapshot.py` |
 | Context assembly and budget | `context/` | `manager.py`, `parts.py`, `budget.py`, `compact.py`, `counting.py`, `cache.py` |
 | Tools and permissions | `tools/` | `spec.py` (tool contract), `manager.py` (dispatch), `permissions.py` (rule grammar, path security, approvals), `bundles.py` (profiles), `names.py` (public names), `questions.py` (agent questions), `builtin/*.py` (read, edit, multiedit, write, apply_patch, bash + jobs, glob, grep, ls, task, todo, skill, webfetch, websearch, meta) |
-| Subagents and worktrees | `agents/` | `manager.py`, `model.py` (`*.md` definitions), `runner.py`, `worktrees.py`, `worktree_review.py`, `worktree_integrate.py`, built-in roles in `agents/data/*.md` |
+| Subagents and worktrees | `agents/` | `manager.py`, `model.py` (`*.md` definitions), `runner.py`, `worktrees.py`, `worktree_review.py`, `worktree_integrate.py`, built-in roles in `agents/data/*.md` (root `build`; subagents `advisor` (read-only), `task`, `quick`; user overrides in `~/.nexus/agents/`) |
 | Skills | `skills/` | `manager.py`, `frontmatter.py`, `activation.py` |
 | Hooks | `hooks/` | `manager.py`, `model.py` |
 | MCP | `mcp/` | `manager.py` (`MCPServerStatus`, `MCPHealth`, `statuses()`), `client.py` (stdio/http/sse, `parse_server_config`), `bridge.py` |
@@ -53,7 +53,7 @@ events ──► session log ──► view/reduce.py (pure) ──► Conversat
 
 | File | Role |
 | --- | --- |
-| `host/protocol.py` | Wire contract: frozen, tagged `msgspec` commands and `*Result` structs, `PROTOCOL_VERSION`, `decode_command`. Commands include `SessionList/Open/Start/Enqueue/Cancel/Subscribe/State/Fork/Delete/Restore/Export`, `PermissionResolve`, `ModelsList/ModelSelect/ReasoningEffortSelect`, `AgentsList/AgentCurrent/AgentSelect/AgentReset`, `ToolsList`, `ContextInspect`, `FileSearch`, `LogsRead`, `Worktree*`, `Doctor` (includes MCP status), `Health`, `WebLaunch`, `Shutdown`. |
+| `host/protocol.py` | Wire contract: frozen, tagged `msgspec` commands and `*Result` structs, `PROTOCOL_VERSION`, `decode_command`. Commands include `SessionList/Open/Start/Enqueue/Cancel/Subscribe/State/Fork/Delete/Restore/Export`, `PermissionResolve`, `ModelsList/ModelSelect/ReasoningEffortSelect`, `AgentsList` (its `default` is `[agent] name`, the agent new sessions start with)`/AgentCurrent/AgentSelect/AgentReset/AgentDefaultSet` (writes `[agent] name` via `host_support/settings_inventory.py`), `ToolsList`, `ContextInspect`, `FileSearch`, `LogsRead`, `Worktree*`, `Doctor` (includes MCP status), `Health`, `WebLaunch`, `Shutdown`. |
 | `host/facade.py` | `HostFacade`: implements every command (`handle`), `list_sessions`, `start_turn`, `resolve_permission`, `delete`/`restore`, `doctor` (+ `_mcp_report`), `web_snapshot` and `subscribe_workspace` for the browser. |
 | `host/daemon.py` | Process lifecycle, UDS socket + handshake, idle shutdown, `web_launch()` (starts the HTTP listener, mints a one-use URL). |
 | `host/supervisor.py` | Turn scheduling under the global concurrency cap. |
@@ -81,6 +81,16 @@ written mid-turn are visible on the next iteration. The assistant message is
 persisted before any tool runs. The permission gate checks the whole batch
 first. Concurrency planning serializes mutating tools. Cancellation is
 cooperative. Failure handling and limits are in `core/turn.py`.
+
+Context accounting has two sources. `context.assembled` carries the
+assembler's estimate (`used_tokens`, a character heuristic) plus
+`input_budget` and `context_window`. `model.usage` carries `prompt`, the
+provider's own count of the whole request: an adapter whose `input` excludes
+cached tokens sets `usage_input_excludes_cache = True` (Anthropic) and the loop
+adds cache reads and writes back. `view/reduce.py` stores that as
+`measured_tokens` and carries it into the next assembly (measurement plus the
+estimate's growth), so the UI meter (`ui_support/context.py:context_measure`)
+shows a provider number whenever one exists.
 
 ## Testing the core
 

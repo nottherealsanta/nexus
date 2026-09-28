@@ -97,6 +97,7 @@ _MAX_WAIT_S = 30.0
 
 SPEC = ToolSpec(
     name="bash",
+    group="bash",
     description=(
         "Run a non-interactive shell command, or inspect, wait for, or stop a "
         "background job started in this session. Commands default to /bin/sh "

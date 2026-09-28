@@ -15,6 +15,7 @@ __all__ = ["SPEC", "run"]
 
 SPEC = ToolSpec(
     name="KillShell",
+    group="bash",
     description=(
         "Terminate a running background job started by Bash. The whole "
         "process group is stopped (SIGTERM, then SIGKILL)."

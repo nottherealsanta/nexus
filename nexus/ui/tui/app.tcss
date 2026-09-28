@@ -30,6 +30,7 @@ CommandPalette #--results {
 #main-layout {
     width: 100%;
     height: 1fr;
+    layers: base overlay;
 }
 
 #main-column {
@@ -96,23 +97,235 @@ CommandPalette #--results {
 #conversation {
     height: 1fr;
     width: 100%;
-    padding: 0 3;
+    padding: 1 0 1 2;
     scrollbar-size-vertical: 0;
     scrollbar-size-horizontal: 0;
+}
+
+#context-header {
+    width: 100%;
+    height: auto;
+    margin: 0 1 1 1;
+}
+
+.context-block {
+    width: 100%;
+    height: auto;
+    margin: 0 0 1 0;
+    padding: 0 1;
+    color: $nx-muted;
+}
+
+.context-block:hover {
+    background: $nx-element-hi;
+    color: $nx-text;
+}
+
+.context-block.-empty {
+    color: $nx-quiet;
+}
+
+ContextModal {
+    align: center middle;
+    background: $nx-scrim;
+}
+
+#context-modal {
+    width: 86%;
+    height: 80%;
+    padding: 1 2;
+    background: $nx-dialog;
+}
+
+#context-modal-title {
+    height: 2;
+    color: $nx-accent;
+    text-style: bold;
+    border-bottom: solid $nx-border;
+}
+
+#context-modal-scroll {
+    height: 1fr;
+    padding: 1;
+}
+
+#context-modal-body {
+    width: 100%;
+    height: auto;
+    color: $nx-text;
+}
+
+#context-modal-close {
+    width: auto;
+    margin-top: 1;
+}
+
+ToolsModal {
+    align: center middle;
+    background: $nx-scrim;
+}
+
+#context-modal-actions {
+    width: 100%;
+    height: auto;
+}
+
+#context-modal-actions Button {
+    width: auto;
+    margin: 1 1 0 0;
+}
+
+#tools-modal-note {
+    height: auto;
+    margin-top: 1;
+    color: $nx-warning;
+}
+
+/* Context and Tools dialogs: a collapsible per group, one per entry inside. */
+Collapsible.context-group {
+    background: transparent;
+    border-top: none;
+    padding: 0;
+    margin-bottom: 1;
+}
+
+Collapsible.context-group > CollapsibleTitle {
+    color: $nx-accent;
+    padding: 0;
+}
+
+Collapsible.context-group > Contents {
+    padding: 0 0 0 2;
+}
+
+Collapsible.context-entry {
+    background: transparent;
+    border-top: none;
+    padding: 0;
+}
+
+Collapsible.context-entry > CollapsibleTitle {
+    color: $nx-text;
+    padding: 0;
+}
+
+Collapsible.context-entry.-error > CollapsibleTitle {
+    color: $nx-error;
+}
+
+Collapsible.context-entry > Contents {
+    padding: 0 0 1 2;
+}
+
+Collapsible.context-group > CollapsibleTitle:hover,
+Collapsible.context-entry > CollapsibleTitle:hover,
+Collapsible.context-group > CollapsibleTitle:focus,
+Collapsible.context-entry > CollapsibleTitle:focus {
+    background: $nx-element-hi;
+    color: $nx-text;
+}
+
+.context-entry-body {
+    width: 1fr;
+    height: auto;
+    padding: 0 1;
+    background: $nx-element;
+    color: $nx-text;
+}
+
+.context-entry-empty {
+    color: $nx-quiet;
+}
+
+ArchivedSessionsScreen {
+    align: center middle;
+    background: $nx-scrim;
+}
+
+#archived-dialog {
+    width: 120;
+    max-width: 95%;
+    max-height: 86%;
+    height: auto;
+    padding: 1 2;
+    background: $nx-dialog;
+}
+
+#archived-title {
+    height: 2;
+    content-align: center middle;
+    color: $nx-accent;
+    text-style: bold;
+}
+
+#archived-search-row {
+    height: 3;
+    width: 100%;
+}
+
+#archived-search {
+    width: 1fr;
+    border: solid $nx-border;
+    background: $nx-field;
+}
+
+#archived-search:focus {
+    border: solid $nx-border-focus;
+}
+
+#archived-content-toggle {
+    width: 19;
+    padding: 1;
+    color: $nx-muted;
+}
+
+#archived-body {
+    height: 20;
+    width: 100%;
+}
+
+#archived-list {
+    width: 2fr;
+    height: 100%;
+    border: none;
+    background: $nx-dialog;
+    scrollbar-size-vertical: 1;
+    scrollbar-color: $nx-accent;
+}
+
+#archived-list > .option-list--option-highlighted {
+    background: $nx-element-hi;
+    color: $nx-text;
+    text-style: bold;
+}
+
+#archived-detail {
+    width: 1fr;
+    height: 100%;
+    padding: 1 2;
+    color: $nx-muted;
+    background: $nx-panel;
+}
+
+#archived-hint {
+    height: 1;
+    margin-top: 1;
+    color: $nx-quiet;
 }
 
 .turn {
     width: 100%;
     height: auto;
+    margin-bottom: 1;
 }
 
 .timeline-user {
     width: 100%;
     height: auto;
-    margin: 0 0 1 0;
-    padding: 1 2;
+    margin: 0;
+    padding: 1 2 1 1;
     border: none;
-    background: $nx-element;
+    background: $nx-panel;
     color: $nx-text;
 }
 
@@ -120,57 +333,45 @@ CommandPalette #--results {
     width: 100%;
     height: auto;
     margin: 0 0 1 0;
-    padding: 0 1;
+    padding: 0 2;
     color: $nx-text;
 }
 
 .timeline-summary {
     width: 100%;
     height: auto;
-    margin: 0 0 1 0;
-    padding: 0 1;
+    margin: 1 0 0 0;
+    padding: 0 2;
     color: $nx-quiet;
+}
+
+.turn-collapsed {
+    width: 100%;
+    height: 1;
+    padding: 0 2 0 4;
+    color: $nx-muted;
 }
 
 .tool-card {
     width: 100%;
-    height: auto;
-    margin: 0 0 0 1;
-    padding: 0 1;
-    border-left: tall $nx-border;
-    background: $nx-panel;
-    color: $nx-muted;
+    height: 1;
+    margin: 0;
+    padding: 0 2;
+    background: transparent;
+    color: $nx-quiet;
 }
 
 .tool-card:hover, .tool-card:focus {
-    background: $nx-element-hi;
-    border-left: tall $nx-accent;
+    background: $nx-element;
 }
 
 .tool-card #tool-header {
     width: 100%;
-    height: auto;
-    color: $nx-accent;
-    text-style: bold;
-}
-
-.tool-card #tool-detail, .tool-card #tool-expanded {
-    width: 100%;
-    height: auto;
-    color: $nx-muted;
-    padding-left: 1;
-}
-
-.tool-card #tool-expanded {
-    max-height: 14;
-    overflow-y: auto;
-}
-
-.tool-diff-view {
-    width: 100%;
-    height: auto;
-    max-height: 24;
-    margin: 0 0 1 0;
+    height: 1;
+    color: $nx-quiet;
+    text-overflow: ellipsis;
+    text-wrap: nowrap;
+    overflow-x: hidden;
 }
 
 .task-child {
@@ -192,9 +393,9 @@ CommandPalette #--results {
 }
 
 #agent-inspector {
-    width: 95%;
-    max-width: 112;
-    height: 86%;
+    width: 96%;
+    max-width: 160;
+    height: 92%;
     padding: 1 2;
     background: $nx-panel;
     border: tall $nx-border-strong;
@@ -205,19 +406,18 @@ CommandPalette #--results {
     max-height: 3;
     color: $nx-purple;
     text-style: bold;
+}
+
+#agent-inspector-activity {
+    height: auto;
+    max-height: 2;
+    color: $nx-muted;
     margin-bottom: 1;
 }
 
-#agent-inspector-scroll {
+#agent-timeline {
     height: 1fr;
     width: 1fr;
-    scrollbar-size-vertical: 0;
-    scrollbar-size-horizontal: 0;
-}
-
-#agent-inspector-transcript {
-    width: 1fr;
-    padding: 0 1;
 }
 
 #agent-inspector-help {
@@ -228,31 +428,33 @@ CommandPalette #--results {
 
 #chat-input {
     height: auto;
-    max-height: 16;
+    max-height: 22;
+    margin: 0 2;
     padding: 0;
     border: none;
-    background: $nx-element;
+    background: $nx-panel;
 }
 
 #inline-picker {
     display: none;
-    width: 100%;
+    width: 1fr;
     height: auto;
-    max-height: 11;
-    margin: 0;
+    max-height: 8;
+    margin: 0 2;
     padding: 0;
-    background: $nx-element;
-    border: solid $nx-border;
+    background: $nx-list;
+    border: none;
+    outline-left: none;
 }
 
 #inline-picker #agent-options {
     width: 100%;
     height: auto;
-    max-height: 7;
+    max-height: 8;
     padding: 0;
     margin: 0;
     border: none;
-    background: $nx-element;
+    background: $nx-list;
     scrollbar-size-vertical: 1;
 }
 
@@ -294,13 +496,40 @@ CommandPalette #--results {
 #root-separator-model, #root-separator-provider, #root-separator-effort {
     width: auto;
     min-width: 0;
-    max-width: 1;
+    max-width: 3;
     height: 1;
     padding: 0;
 }
 
 #root-agent-name {
     text-style: bold;
+}
+
+#root-agent-name, #root-model, #root-provider, #root-effort {
+    padding: 0;
+}
+
+#root-model {
+    color: $nx-text;
+}
+
+#root-provider {
+    color: $nx-muted;
+    text-style: none;
+}
+
+#root-effort {
+    color: $nx-muted;
+}
+
+#root-separator-model, #root-separator-effort {
+    color: $nx-quiet;
+}
+
+#commands-hint {
+    width: auto;
+    height: 1;
+    color: $nx-quiet;
 }
 
 #root-agent-name:hover, #root-agent-name:focus,
@@ -328,10 +557,10 @@ CommandPalette #--results {
     min-width: 1;
     max-width: 18;
     height: 1;
-    color: $nx-accent;
+    color: $nx-quiet;
     content-align: right middle;
     text-align: right;
-    padding: 0;
+    padding: 0 2 0 0;
     overflow-x: hidden;
     text-overflow: ellipsis;
 }
@@ -344,19 +573,28 @@ CommandPalette #--results {
 #runtime-info {
     width: 100%;
     height: 1;
+    padding: 0 2;
+    background: $nx-panel;
+}
+
+#activity-progress {
+    width: 1fr;
+    height: 1;
+    margin: 0 2;
     padding: 0;
-    background: $nx-element;
+    background: transparent;
 }
 
 #context-preview {
-    width: 100%;
+    width: 1fr;
     height: auto;
-    max-height: 14;
+    max-height: 16;
     min-height: 6;
     overflow: hidden;
-    padding: 0 1;
+    margin: 1 2 0 2;
+    padding: 1 2;
     background: $nx-panel;
-    border-top: solid $nx-border;
+    outline-left: outer $nx-accent;
     color: $nx-muted;
 }
 
@@ -436,16 +674,19 @@ CommandPalette #--results {
 #bottom-info {
     width: 100%;
     height: 1;
+    margin: 0;
     padding: 0;
-    background: $nx-element;
+    background: $nx-panel;
+    align-horizontal: right;
 }
 
 #chat-editor {
-    height: 3;
+    height: auto;
     min-height: 3;
-    padding: 0 1;
+    max-height: 8;
+    padding: 1 2;
     border: none;
-    background: $nx-element;
+    background: transparent;
     color: $nx-text;
 }
 
@@ -456,12 +697,15 @@ CommandPalette #--results {
 #completion-popup {
     width: 100%;
     height: auto;
-    max-height: 7;
+    max-height: 8;
     margin: 0;
-    padding: 0;
-    background: $nx-panel;
-    border: solid $nx-border;
-    color: $nx-muted;
+    padding: 0 0 0 1;
+    background: $nx-list;
+    border-top: tall $nx-element-hi;
+    border-bottom: tall $nx-element-hi;
+    border-left: none;
+    border-right: none;
+    color: $nx-quiet;
 }
 
 #completion-popup Static {
@@ -481,7 +725,7 @@ CommandPalette #--results {
     color: $nx-error;
 }
 
-#agent-picker-dialog, #permission-dialog {
+#agent-picker-dialog {
     width: 72;
     max-width: 90%;
     height: auto;
@@ -517,7 +761,8 @@ CommandPalette #--results {
 #context-details {
     width: 1fr;
     height: auto;
-    color: $nx-text;
+    margin-bottom: 1;
+    color: $nx-muted;
 }
 
 #context-help {
@@ -527,7 +772,7 @@ CommandPalette #--results {
 }
 
 #agent-options {
-    margin-bottom: 1;
+    margin-bottom: 0;
 }
 
 #inline-picker #agent-options {
@@ -552,8 +797,8 @@ OptionList {
 }
 
 OptionList > .option-list--option-highlighted {
-    background: $nx-accent;
-    color: $nx-on-accent;
+    background: $nx-element-hi;
+    color: $nx-text;
 }
 
 /* Screenshot fixture for the reference Terminal TUI; the live shell keeps its
@@ -617,8 +862,8 @@ OptionList > .option-list--option-highlighted {
 }
 
 .reference-demo #chat-editor {
-    height: 4;
-    min-height: 4;
+    height: 3;
+    min-height: 3;
     padding: 0;
 }
 
@@ -684,13 +929,6 @@ OptionList > .option-list--option-highlighted {
     background: transparent;
     padding: 0;
     color: $nx-error !important;
-}
-
-#permission-description {
-    height: auto;
-    width: 1fr;
-    margin-bottom: 1;
-    color: $nx-text;
 }
 
 #worktrees-dialog, #worktree-confirm-dialog {
@@ -802,20 +1040,792 @@ OptionList > .option-list--option-highlighted {
     overflow-y: auto;
 }
 
-#permission-dialog Button {
-    width: 100%;
-    height: 1;
-    min-height: 1;
-    margin: 0;
-    padding: 0 1;
-    border: none;
-    background: transparent;
-    color: $nx-muted;
-    text-align: left;
+/* ---------------------------------------------------------------- sidebars */
+#session-sidebar {
+    width: 34;
+    height: 1fr;
+    padding: 1 1 0 1;
+    background: $nx-panel;
+    border-right: solid $nx-border;
 }
 
-#permission-dialog Button:hover, #permission-dialog Button:focus {
+/* Narrow widths: the toggle opens the sidebar over the chat column. */
+#session-sidebar.-overlay {
+    position: absolute;
+    layer: overlay;
+    height: 100%;
+    border-right: solid $nx-accent;
+}
+
+#new-session {
+    height: 1;
+    padding: 0 1;
+    background: $nx-element;
+    color: $nx-text;
+}
+
+#new-session:hover {
     background: $nx-element-hi;
     color: $nx-accent;
-    border-left: tall $nx-accent;
+}
+
+#session-filter {
+    height: 1;
+    margin: 1 0 0 0;
+    padding: 0 1;
+    border: none;
+    background: $nx-panel;
+    color: $nx-text;
+}
+
+#session-filter:focus {
+    background: $nx-element;
+}
+
+#sessions-heading {
+    height: 1;
+    margin: 1 0 0 0;
+    padding: 0 1;
+    color: $nx-quiet;
+    text-style: bold;
+}
+
+#session-list {
+    height: 1fr;
+    scrollbar-size-vertical: 0;
+}
+
+.session-day {
+    height: 1;
+    margin: 1 0 0 0;
+    padding: 0 1;
+    color: $nx-purple;
+    text-style: bold;
+}
+
+.session-row {
+    height: 1;
+    padding: 0 0 0 1;
+    background: $nx-panel;
+}
+
+.session-row:hover {
+    background: $nx-element;
+}
+
+.session-row:focus {
+    background: $nx-element-hi;
+}
+
+.session-row.-active {
+    background: $nx-element-hi;
+}
+
+.session-glyph {
+    width: 2;
+    height: 1;
+    color: $nx-quiet;
+}
+
+.session-row.-active .session-glyph {
+    color: $nx-accent;
+}
+
+.session-row.-working .session-glyph, .session-row.-working .session-sub {
+    color: $nx-accent;
+}
+
+.session-row.-input .session-glyph, .session-row.-input .session-sub {
+    color: $nx-warning;
+}
+
+.session-row.-done .session-glyph, .session-row.-done .session-sub {
+    color: $nx-success;
+}
+
+.session-row.-done .session-title, .session-row.-active .session-title {
+    color: $nx-text;
+    text-style: bold;
+}
+
+.session-title {
+    width: 1fr;
+    height: 1;
+    color: $nx-muted;
+    text-overflow: ellipsis;
+    text-wrap: nowrap;
+}
+
+.session-sub {
+    width: auto;
+    max-width: 12;
+    height: 1;
+    padding: 0 0 0 1;
+    color: $nx-quiet;
+    text-overflow: ellipsis;
+    text-wrap: nowrap;
+}
+
+.session-delete {
+    width: 2;
+    height: 1;
+    padding: 0 0 0 1;
+    color: $nx-quiet;
+    visibility: visible;
+}
+
+.session-delete:hover {
+    color: $nx-error;
+}
+
+.session-row.-archived .session-title, .session-row.-archived .session-glyph {
+    color: $nx-quiet;
+}
+
+#sidebar-archived {
+    height: 1;
+    padding: 0 1;
+    color: $nx-muted;
+}
+
+#sidebar-archived:hover {
+    background: $nx-element-hi;
+    color: $nx-text;
+}
+
+#sidebar-hint {
+    height: 1;
+    margin: 1 0 1 0;
+    padding: 0 1;
+    color: $nx-quiet;
+}
+
+/* ---------------------------------------------------------------- top bar */
+#top-bar {
+    height: 2;
+    width: 100%;
+    background: $nx-panel;
+    border-bottom: solid $nx-border;
+}
+
+.topbar-button {
+    width: 3;
+    height: 1;
+    content-align: center middle;
+    color: $nx-muted;
+}
+
+.topbar-button:hover {
+    background: $nx-element-hi;
+    color: $nx-text;
+}
+
+.topbar-button.-on {
+    color: $nx-accent;
+}
+
+#topbar-crumb {
+    width: 1fr;
+    height: 1;
+    padding: 0 0 0 1;
+    color: $nx-text;
+    text-style: bold;
+    text-overflow: ellipsis;
+    text-wrap: nowrap;
+}
+
+#topbar-status {
+    width: auto;
+    padding: 0 2;
+    color: $nx-quiet;
+}
+
+#top-bar.-working #topbar-status {
+    color: $nx-accent;
+}
+
+#top-bar.-input #topbar-status {
+    color: $nx-warning;
+}
+
+#top-bar.-done #topbar-status {
+    color: $nx-success;
+}
+
+#details-sidebar {
+    width: 42;
+    height: 1fr;
+    padding: 1 2;
+    background: $nx-panel;
+    border-left: solid $nx-border;
+    scrollbar-size-vertical: 0;
+}
+
+.panel-title, #mcp-title {
+    height: 1;
+    margin: 1 0 1 0;
+    color: $nx-quiet;
+    text-style: bold;
+}
+
+#details-sidebar > .panel-title:first-child {
+    margin-top: 0;
+}
+
+#details-session {
+    height: auto;
+    color: $nx-text;
+}
+
+#details-files {
+    height: auto;
+}
+
+.file-row {
+    height: 1;
+    padding: 0 1;
+    margin: 0 -1;
+    color: $nx-text;
+    text-overflow: ellipsis;
+    text-wrap: nowrap;
+}
+
+.file-row:hover, .file-row:focus {
+    background: $nx-element-hi;
+}
+
+.file-diff {
+    height: auto;
+    max-height: 18;
+    margin: 0 0 1 0;
+    padding: 0 1;
+    background: $nx-bg;
+    overflow-y: auto;
+}
+
+.panel-empty {
+    height: auto;
+    color: $nx-quiet;
+}
+
+#mcp-heading {
+    height: 3;
+}
+
+#mcp-title {
+    width: 1fr;
+}
+
+#mcp-refresh {
+    width: 3;
+    height: 1;
+    margin: 1 0 0 0;
+    color: $nx-quiet;
+    content-align: right middle;
+}
+
+#mcp-refresh:hover {
+    color: $nx-accent;
+}
+
+#details-mcp {
+    height: auto;
+}
+
+/* ---------------------------------------------------------------- settings */
+SettingsScreen {
+    align: center middle;
+    background: $nx-bg 60%;
+}
+
+#settings-dialog {
+    width: 96;
+    max-width: 96%;
+    height: 28;
+    max-height: 90%;
+    background: $nx-panel;
+}
+
+SettingsConsole {
+    align: left top;
+    background: $nx-bg;
+}
+
+/* Full-screen page: left sidebar of areas, content on the right. */
+#settings-console {
+    width: 100%;
+    height: 1fr;
+    background: $nx-bg;
+}
+
+#settings-console #settings-nav {
+    width: 26;
+    height: 100%;
+}
+
+#settings-console #settings-sections > .option-list--option-disabled {
+    color: $nx-quiet;
+    text-style: bold;
+}
+
+#settings-console #settings-panes {
+    width: 1fr;
+    height: 100%;
+}
+
+#settings-file-pane {
+    width: 100%;
+    height: 100%;
+    padding: 1 3;
+}
+
+#settings-scope-row {
+    width: 100%;
+    height: 1;
+    margin-bottom: 1;
+}
+
+#settings-scope-row Button {
+    width: auto;
+    min-width: 9;
+    height: 1;
+    min-height: 1;
+    border: none;
+    margin-right: 1;
+    background: $nx-panel;
+    color: $nx-muted;
+}
+
+#settings-scope-row Button.-current {
+    background: $nx-settings-border;
+    color: $nx-settings-accent;
+}
+
+#settings-default-agent-row {
+    width: 100%;
+    height: 1;
+    margin-bottom: 1;
+}
+
+#settings-default-agent-label {
+    width: auto;
+    height: 1;
+    margin-right: 2;
+    color: $nx-muted;
+}
+
+#settings-default-agent-choices {
+    width: auto;
+    height: 1;
+}
+
+#settings-default-agent-choices Button {
+    width: auto;
+    min-width: 7;
+    height: 1;
+    min-height: 1;
+    border: none;
+    margin-right: 1;
+    background: $nx-panel;
+    color: $nx-muted;
+}
+
+#settings-default-agent-choices Button.-current {
+    background: $nx-settings-border;
+    color: $nx-settings-accent;
+}
+
+#settings-default-agent-note {
+    width: 1fr;
+    height: 1;
+    color: $nx-quiet;
+}
+
+#settings-scope-path {
+    width: 1fr;
+    height: 1;
+    text-align: right;
+    color: $nx-muted;
+}
+
+#settings-file-body {
+    width: 100%;
+    height: 1fr;
+}
+
+#settings-file-list-pane {
+    width: 30;
+    height: 100%;
+    padding-right: 1;
+}
+
+#settings-file-list {
+    width: 100%;
+    height: 1fr;
+    border: none;
+    background: $nx-bg;
+    scrollbar-color: $nx-settings-accent;
+}
+
+#settings-file-list > .option-list--option-highlighted {
+    background: $nx-element-hi;
+    color: $nx-text;
+}
+
+#settings-file-editor-pane {
+    width: 1fr;
+    height: 100%;
+    padding: 0 1;
+}
+
+#settings-file-title {
+    width: 100%;
+    height: 2;
+    color: $nx-settings-accent;
+    text-style: bold;
+}
+
+#agent-form {
+    width: 100%;
+    height: auto;
+    margin-bottom: 1;
+}
+
+.agent-form-row {
+    width: 100%;
+    height: 3;
+}
+
+.agent-form-label {
+    width: 12;
+    height: 3;
+    content-align: left middle;
+    color: $nx-muted;
+}
+
+.agent-form-input {
+    width: 1fr;
+}
+
+#settings-file-editor {
+    width: 100%;
+    height: 1fr;
+    background: $nx-field;
+    border: solid $nx-settings-border;
+}
+
+#settings-file-status {
+    width: 100%;
+    height: 2;
+    color: $nx-muted;
+}
+
+#settings-file-actions {
+    height: 3;
+}
+
+#settings-file-actions Button {
+    width: auto;
+    min-width: 8;
+    margin-right: 1;
+}
+
+#settings-file-actions #settings-delete {
+    min-width: 20;
+}
+
+#settings-console-hint {
+    dock: bottom;
+    height: 1;
+    padding: 0 2;
+    color: $nx-quiet;
+}
+
+ConfirmSettingsAction {
+    align: center middle;
+    background: $nx-scrim;
+}
+
+#settings-confirm-dialog {
+    width: 60;
+    padding: 2;
+    background: $nx-settings-panel;
+    border: solid $nx-settings-border;
+}
+
+#settings-confirm-text {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#settings-nav {
+    width: 24;
+    height: 1fr;
+    padding: 1 1;
+    background: $nx-bg;
+    border-right: solid $nx-border;
+}
+
+#settings-title {
+    height: 1;
+    margin: 0 1 1 1;
+    color: $nx-text;
+    text-style: bold;
+}
+
+#settings-sections {
+    height: 1fr;
+    border: none;
+    padding: 0;
+    background: $nx-bg;
+}
+
+#settings-sections > .option-list--option {
+    padding: 0 1;
+}
+
+#settings-hint {
+    height: 1;
+    padding: 0 1;
+    color: $nx-quiet;
+}
+
+#settings-panes {
+    width: 1fr;
+    height: 1fr;
+}
+
+#settings-panes > VerticalScroll {
+    padding: 1 3;
+}
+
+.settings-heading {
+    height: 1;
+    color: $nx-text;
+    text-style: bold;
+}
+
+.settings-help {
+    height: auto;
+    margin: 0 0 1 0;
+    color: $nx-muted;
+}
+
+#settings-theme {
+    width: 100%;
+    border: none;
+    background: $nx-panel;
+    padding: 0;
+}
+
+#settings-theme RadioButton {
+    background: $nx-panel;
+    padding: 0 1;
+}
+
+.settings-row {
+    height: 3;
+    border-bottom: solid $nx-border;
+}
+
+.settings-label {
+    width: 1fr;
+    height: 3;
+    content-align: left middle;
+    color: $nx-text;
+}
+
+.settings-key {
+    width: 10;
+    height: 3;
+    content-align: right middle;
+    color: $nx-quiet;
+}
+
+.settings-row Switch {
+    height: 3;
+    border: none;
+    background: $nx-panel;
+}
+
+#settings-keys, #settings-health {
+    height: auto;
+    color: $nx-text;
+}
+
+/* ---------------------------------------------------------------- opencode timeline */
+.timeline-thought {
+    width: 100%;
+    height: auto;
+    margin: 0 0 1 0;
+    padding: 0 3;
+    color: $nx-accent 70%;
+}
+
+.timeline-thought:hover, .timeline-thought:focus {
+    color: $nx-accent;
+}
+
+.tool-card.-failed #tool-header {
+    color: $nx-error;
+}
+
+.tool-card.task-card {
+    background: transparent;
+    border-left: none;
+    padding: 0 3;
+}
+
+.tool-card.task-card:hover, .tool-card.task-card:focus {
+    background: $nx-panel;
+}
+
+
+.timeline-assistant MarkdownBlock > .code_inline {
+    color: $nx-warning;
+    background: $nx-element-hi;
+}
+
+.timeline-assistant .markdown-h1 {
+    color: $nx-accent;
+}
+
+.timeline-assistant .markdown-h2 {
+    color: $nx-purple;
+}
+
+.timeline-assistant .markdown-h3 {
+    color: $nx-success;
+}
+
+.timeline-assistant .markdown-h4 {
+    color: $nx-warning;
+}
+
+.timeline-assistant MarkdownFence,
+.timeline-assistant MarkdownBlockQuote {
+    background: $nx-panel;
+}
+
+.timeline-assistant MarkdownBlockQuote {
+    border-left: solid $nx-accent;
+}
+
+.timeline-error {
+    width: 100%;
+    height: auto;
+    margin: 1 0 0 0;
+    padding: 0 2;
+    background: transparent;
+    color: $nx-error;
+}
+
+/* ---------------------------------------------------------------- sessions dialog */
+SessionsScreen {
+    align: center middle;
+    background: $nx-bg 60%;
+}
+
+#sessions-dialog {
+    width: 100;
+    max-width: 94%;
+    height: auto;
+    max-height: 80%;
+    padding: 1 2;
+    background: $nx-panel;
+}
+
+#sessions-header {
+    height: 1;
+    margin: 0 1 1 1;
+}
+
+#sessions-title {
+    width: 1fr;
+    color: $nx-text;
+    text-style: bold;
+}
+
+#sessions-esc {
+    width: auto;
+    color: $nx-quiet;
+}
+
+#sessions-search {
+    height: 1;
+    margin: 0 0 1 0;
+    padding: 0 1;
+    border: none;
+    background: $nx-panel;
+    color: $nx-text;
+}
+
+#sessions-search:focus {
+    border: none;
+}
+
+#sessions-options {
+    height: auto;
+    max-height: 24;
+    border: none;
+    padding: 0;
+    background: $nx-panel;
+    scrollbar-size-vertical: 0;
+}
+
+#sessions-options > .option-list--option {
+    padding: 0 1;
+}
+
+#sessions-options > .option-list--option-disabled {
+    text-style: none;
+    color: $nx-text;
+}
+
+#sessions-footer {
+    height: 1;
+    margin: 1 1 0 1;
+    color: $nx-quiet;
+}
+
+#paste-attachments {
+    height: auto;
+    max-height: 4;
+    margin: 0 2;
+    display: none;
+}
+
+.pasted-content-pill {
+    width: auto;
+    height: 1;
+    margin-right: 1;
+    background: $nx-element;
+}
+
+.pasted-content-label {
+    width: auto;
+    padding: 0 1;
+    color: $nx-muted;
+    background: $nx-element;
+}
+
+.pasted-content-label:hover {
+    color: $nx-text;
+    background: $nx-element-hi;
+}
+
+.pasted-content-remove {
+    width: 3;
+    min-width: 3;
+    height: 1;
+    min-height: 1;
+    padding: 0;
+    border: none;
+    background: $nx-element;
+    color: $nx-quiet;
+}
+
+.pasted-content-remove:hover, .pasted-content-remove:focus {
+    background: $nx-element-hi;
+    color: $nx-error;
 }

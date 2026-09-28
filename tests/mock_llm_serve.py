@@ -19,7 +19,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from textual.widgets import Button
+from textual.widgets import Button, Static
 
 from nexus.config import Config
 from nexus.config.schema import (
@@ -220,15 +220,10 @@ class MockTextualApp(NexusTextualApp):
                     row["region"] = [region.x, region.y, region.width, region.height]
                 if isinstance(widget, ToolActivityWidget):
                     row["header"] = str(widget.query_one("#tool-header").render())
-                    row["detail"] = str(widget.query_one("#tool-detail").render())
-                    row["expanded_text"] = str(widget.query_one("#tool-expanded").render())
+                    row["detail"] = ""
+                    row["expanded_text"] = widget._details_text()
                     if isinstance(widget, TaskActivityWidget) and widget.tool.child_agent_ids:
-                        child_link = widget._child_links.get(widget.tool.child_agent_ids[0])
-                        if child_link is not None:
-                            row["child_metrics"] = str(child_link.label)
-                            if child_link.region is not None:
-                                region = child_link.region
-                                row["child_link_region"] = [region.x, region.y, region.width, region.height]
+                        row["child_metrics"] = widget._details_text()
                 rows.append(row)
         users = list(base.query(UserMessage))
         root_agent = base.query_one("#root-agent")
@@ -236,7 +231,7 @@ class MockTextualApp(NexusTextualApp):
         completion = base.query_one("#completion-popup")
         editor = base.query_one("#chat-editor")
         composer = base.query_one("#chat-input")
-        rendered_agent = root_agent.render()
+        rendered_agent = root_agent.summary()
         child = self.controller.find_agent(CHILD_AGENT_ID)
         child_view = None
         if child is not None:
@@ -254,7 +249,7 @@ class MockTextualApp(NexusTextualApp):
             "fixture": (self.mock_facade.runtime.workspace / FIXTURE_NAME).read_text(encoding="utf-8"),
             "ui": {
                 "status": str(base.query_one("#connection-status").render()),
-                "root_agent": root_agent.render().plain,
+                "root_agent": root_agent.summary().plain,
                 "root_agent_spans": [
                     {
                         "text": rendered_agent.plain[span.start:span.end],
@@ -264,10 +259,10 @@ class MockTextualApp(NexusTextualApp):
                 ],
                 "root_agent_color": _style_color_hex(rendered_agent.spans[0].style),
                 "root_agent_region": [root_agent.region.x, root_agent.region.y, root_agent.region.width, root_agent.region.height],
-                "context_usage": context_usage.render().plain,
+                "context_usage": context_usage.render().plain if isinstance(context_usage.render(), Static) else str(context_usage.render()),
                 "context_region": [context_usage.region.x, context_usage.region.y, context_usage.region.width, context_usage.region.height],
                 "completion_visible": completion.display,
-                "completion_text": completion.render().plain,
+                "completion_text": completion.render().plain if isinstance(completion.render(), Static) else str(completion.render()),
                 "completion_region": [completion.region.x, completion.region.y, completion.region.width, completion.region.height] if completion.region is not None else None,
                 "editor_text": editor.text,
                 "editor_region": [editor.region.x, editor.region.y, editor.region.width, editor.region.height],
@@ -317,11 +312,14 @@ class MockTextualApp(NexusTextualApp):
                 if type(screen).__name__ != "AgentTranscriptScreen":
                     status, body = 409, {"screen": type(screen).__name__}
                 else:
-                    await screen._update_content(True)
+                    timeline = screen.query_one("#agent-timeline")
+                    await timeline.set_view(screen.agent.body)
+                    parts = [getattr(w, "_markdown", "") for w in timeline.query("Markdown")]
+                    parts += [str(w.render()) for w in timeline.query("Static")]
                     status, body = 200, {
                         "screen": type(screen).__name__,
                         "heading": str(screen.query_one("#agent-inspector-heading").render()),
-                        "transcript": getattr(screen.query_one("#agent-inspector-transcript"), "_markdown", ""),
+                        "transcript": "\n".join(part for part in parts if part),
                     }
             elif method == "POST" and path == "/release":
                 self.mock_gate.release.set()
@@ -329,12 +327,36 @@ class MockTextualApp(NexusTextualApp):
             elif method == "POST" and path.startswith("/ui/tool-detail/"):
                 call_id = path.rsplit("/", 1)[-1]
                 widget = next(item for item in self.screen_stack[0].query(ToolActivityWidget) if item.call_id == call_id)
-                await widget.toggle()
-                status, body = 200, {"expanded": widget.expanded}
+                await widget.open_details()
+                status, body = 200, {"opened": type(self.screen).__name__ == "ToolDetailsScreen"}
+            elif method == "POST" and path.startswith("/ui/tool-agent/"):
+                call_id = path.rsplit("/", 1)[-1]
+                widget = next(item for item in self.screen_stack[0].query(ToolActivityWidget) if item.call_id == call_id)
+                if isinstance(widget, TaskActivityWidget):
+                    child = next(iter(widget._children()), None)
+                    if child is not None:
+                        from nexus.ui.tui.messages import AgentOpenRequested
+
+                        self.screen.dismiss(None)
+                        await self._agent_open_requested(AgentOpenRequested(child.id))
+                status, body = 200, {"opened": type(self.screen).__name__ == "AgentTranscriptScreen"}
             elif method == "POST" and path == "/ui/focus-editor":
                 self.screen_stack[0].query_one("#chat-editor").focus()
                 status, body = 200, {"focused": True}
             elif method == "POST" and path == "/ui/agent-transcript":
+                await self.action_open_agent(CHILD_AGENT_ID)
+                status, body = 200, {"opened": type(self.screen).__name__ == "AgentTranscriptScreen"}
+            elif method == "POST" and path.startswith("/ui/tool-agent/"):
+                widget = next(item for item in self.screen_stack[0].query(ToolActivityWidget) if item.call_id == path.rsplit("/", 1)[-1])
+                await widget.open_details()
+                self.screen.dismiss(None)
+                await self.action_open_agent(CHILD_AGENT_ID)
+                status, body = 200, {"opened": type(self.screen).__name__ == "AgentTranscriptScreen"}
+            elif method == "POST" and path.startswith("/ui/tool-agent/"):
+                call_id = path.rsplit("/", 1)[-1]
+                widget = next(item for item in self.screen_stack[0].query(ToolActivityWidget) if item.call_id == call_id)
+                await widget.open_details()
+                self.screen.dismiss(None)
                 await self.action_open_agent(CHILD_AGENT_ID)
                 status, body = 200, {"opened": type(self.screen).__name__ == "AgentTranscriptScreen"}
             elif method == "POST" and path == "/ui/agent-transcript/click":

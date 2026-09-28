@@ -30,13 +30,13 @@ from nexus.errors import SessionBusy, SessionError
 from nexus.events import Event
 from nexus.host import PROTOCOL_VERSION, HostFacade, Presence
 from nexus.host import protocol as p
+from nexus.model.message import Text, ToolResult, ToolUse
 from nexus.model.providers.scripted import (
     ScriptedProvider,
     Wait,
     text_response,
     tool_response,
 )
-from nexus.model.message import Text, ToolResult, ToolUse
 from nexus.model.stream import MessageStart, MessageStop, TextDelta
 from nexus.runtime import Runtime
 from nexus.session.manager import SessionSummary, TrashRecord
@@ -295,6 +295,15 @@ class _SecretRuntime(_FakeRuntime):
 def test_protocol_round_trips_every_command_and_result():
     commands = [
         p.SessionList(),
+        p.SettingsInventory(scope="project"),
+        p.SettingsRead(scope="project", category="agents", id="helper"),
+        p.SettingsWrite(scope="project", category="agents", id="helper", body=""),
+        p.SettingsDelete(scope="project", category="agents", id="helper"),
+        p.SessionArchive(session="s"),
+        p.SessionUnarchive(session="s"),
+        p.SessionListArchived(),
+        p.SessionPreview(session="s"),
+        p.SessionSearch(query="term"),
         p.SessionOpen(session="s"),
         p.SessionStart(session="s", content="hi"),
         p.SessionEnqueue(session="s", content="hi"),
@@ -308,6 +317,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.SessionRestore(trash_id="t"),
         p.SessionExport(session="s", format="markdown"),
         p.PermissionResolve(session="s", request_id="r", decision="allow_once"),
+        p.QuestionAnswer(session="s", answer="1", call_id="c"),
         p.ExtensionsReload(),
         p.ExtensionsList(),
         p.ExtensionsValidate(target="a.py"),
@@ -319,6 +329,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.ModelSelect(session="s", ref="high"),
         p.ReasoningEffortSelect(session="s", effort="high"),
         p.FileSearch(query="src"),
+        p.GitDiff(staged=True, ref="HEAD"),
         p.WorktreeList(),
         p.WorktreeInspect(child_id="s/sub/1"),
         p.WorktreeReview(child_id="s/sub/1", review_id="a" * 32, cursor=2, limit=8),
@@ -329,6 +340,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.AgentCurrent(session="s"),
         p.AgentSelect(session="s", name="general"),
         p.AgentReset(session="s"),
+        p.AgentDefaultSet(name="build"),
         p.ToolsList(),
         p.ContextInspect(session="s"),
         p.Doctor(explain_reload=True),
@@ -342,7 +354,16 @@ def test_protocol_round_trips_every_command_and_result():
 
     summary = SessionSummary(id="s", title="hello", last_seq=4, viewers=2)
     results = [
+        p.SettingsInventoryResult(scope="project", root_display="<project>/.nexus"),
+        p.SettingsReadResult(body="", rel_path="agents/a.md", builtin=False, sha256=""),
+        p.SettingsWriteResult(status="written"),
+        p.SettingsDeleteResult(status="trashed", trash_id="t"),
         p.SessionListResult(sessions=[summary]),
+        p.SessionArchiveResult(session=summary),
+        p.SessionUnarchiveResult(session=summary),
+        p.SessionListArchivedResult(sessions=[p.ArchivedSummary(id="s")]),
+        p.SessionPreviewResult(text="user: hi"),
+        p.SessionSearchResult(ids=["s"]),
         p.SessionOpenResult(session=summary),
         p.SessionStartResult(session="s", turn_id="t"),
         p.SessionEnqueueResult(session="s", queued_id="q", depth=1),
@@ -358,6 +379,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.SessionRestoreResult(session="s"),
         p.SessionExportResult(session="s", format="json", content="{}"),
         p.PermissionResolveResult(session="s", request_id="r", resolved=True),
+        p.QuestionAnswerResult(session="s", call_id="c", resolved=True),
         p.ExtensionsReloadResult(generation=8),
         p.ExtensionsListResult(generation=8, extensions=[{"name": "m"}]),
         p.ExtensionsValidateResult(generation=8, valid=True, checked=1, results=[{"ok": True}]),
@@ -372,6 +394,7 @@ def test_protocol_round_trips_every_command_and_result():
             source="session", supported_levels=["low", "high"],
         ),
         p.FileSearchResult(paths=["src/main.py"]),
+        p.GitDiffResult(patch="+line", truncated=False),
         p.WorktreeListResult(worktrees=[{"child_id": "s/sub/1"}]),
         p.WorktreeInspectResult(child_id="s/sub/1", status="finalized"),
         p.WorktreeReviewResult(
@@ -393,6 +416,7 @@ def test_protocol_round_trips_every_command_and_result():
             stored_override="high", reasoning_effort_source="session",
         ),
         p.AgentSelectResult(session="s", name="build"),
+        p.AgentDefaultSetResult(name="build", effective="build", scope="global"),
         p.ToolsListResult(count=1, tools=[{"name": "Read"}]),
         p.ContextInspectResult(
             session="s",
@@ -417,7 +441,7 @@ def test_protocol_round_trips_every_command_and_result():
         b'"source":"default","reasoning_effort":"high"}'
     )
     assert legacy_current == p.AgentCurrentResult(
-        session="s", reasoning_effort="high"
+        session="s", name="general", reasoning_effort="high"
     )
 
 

@@ -181,6 +181,7 @@ class QuestionRequest:
 class _PendingQuestion:
     request: QuestionRequest
     future: asyncio.Future[str]
+    emit: QuestionEventSink | None = None
 
 
 class QuestionBroker:
@@ -235,11 +236,14 @@ class QuestionBroker:
         pattern: str | None = None,
         timeout_s: float | None = None,
         cancel: object | None = None,
+        emit: QuestionEventSink | None = None,
     ) -> str:
         """Publish a question and wait for a validated answer.
 
         ``cancel`` may be any object with ``wait()`` (including Nexus's
         ``CancelToken``). Caller-task cancellation also removes the waiter.
+        ``emit`` overrides the broker sink for this question's lifecycle
+        events, so each asker persists to its own turn's log.
         """
         requested_timeout = (
             self._timeout_s
@@ -263,8 +267,9 @@ class QuestionBroker:
                 deadline=now + timedelta(seconds=requested_timeout),
             )
             # Persistence must succeed before the ID can be observed or resolved.
-            await self._emit_event("question.requested", request.to_dict())
-            pending = _PendingQuestion(request, loop.create_future())
+            sink = emit if emit is not None else self._emit
+            await self._emit_event("question.requested", request.to_dict(), sink)
+            pending = _PendingQuestion(request, loop.create_future(), sink)
             self._pending_by_id[request.question_id] = pending
             self._pending_by_root.setdefault(root_session_id, {})[
                 request.question_id
@@ -337,13 +342,16 @@ class QuestionBroker:
             if pending is None or pending.request.root_session_id != root_session_id:
                 return False
             self._validate_answer(pending.request, answer)
+            labels = {choice.id: choice.label for choice in pending.request.choices}
             await self._emit_event(
                 "question.resolved",
                 {
                     "question_id": question_id,
                     "root_session_id": root_session_id,
                     "answer": answer,
+                    "answer_label": labels.get(answer, answer),
                 },
+                pending.emit,
             )
             self._remove_pending(question_id, pending)
             if not pending.future.done():
@@ -381,10 +389,16 @@ class QuestionBroker:
                     pending.future.set_exception(OperationCancelled(reason))
             return len(pending_for_root)
 
-    async def _emit_event(self, event_type: str, data: dict[str, Any]) -> None:
-        if self._emit is None:
+    async def _emit_event(
+        self,
+        event_type: str,
+        data: dict[str, Any],
+        sink: QuestionEventSink | None = None,
+    ) -> None:
+        sink = sink if sink is not None else self._emit
+        if sink is None:
             return
-        outcome = self._emit(event_type, data)
+        outcome = sink(event_type, data)
         if inspect.isawaitable(outcome):
             await outcome
 

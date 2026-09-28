@@ -65,7 +65,7 @@ def make_config(
     max_fanout: int | None = None,
     token_budget: int | None = None,
     cost_budget: float | None = None,
-    seed_roles: bool = True,
+    seed_roles: bool = False,
     max_tokens: int = 180000,
     compact_at_fraction: float = 0.85,
     compaction: str = "hybrid",
@@ -184,7 +184,7 @@ def clean_git_repo(path: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 
-async def test_manifest_discovers_seeded_agents_and_hooks(tmp_path):
+async def test_manifest_discovers_builtin_agents_and_hooks(tmp_path):
     write_hook_module(
         tmp_path,
         "observer",
@@ -197,12 +197,11 @@ async def test_manifest_discovers_seeded_agents_and_hooks(tmp_path):
     await runtime.ensure_started()
 
     manifest = runtime.manifest
-    assert {"general", "build", "explore", "plan"} <= set(manifest.agents)
+    assert {"build", "advisor", "task", "quick"} <= set(manifest.agents)
     assert "SessionStart" in manifest.hooks
     assert [spec.name for spec in manifest.hooks["SessionStart"]] == ["observer"]
-    # The roles are real, editable workspace files.
-    agents_dir = tmp_path / ".nexus" / "agents"
-    assert (agents_dir / "general.md").is_file()
+    # Built-ins are global: nothing is copied into the workspace.
+    assert not (tmp_path / ".nexus" / "agents" / "task.md").exists()
     await runtime.aclose()
 
 
@@ -241,23 +240,23 @@ async def test_unchanged_agents_and_hooks_do_not_churn_the_generation(tmp_path):
     assert report.changed is False
     assert runtime.manifest.generation == generation
     # Object reuse: an equal rebuild keeps the same definition objects.
-    assert runtime.manifest.agents["general"] is first_agents["general"]
+    assert runtime.manifest.agents["task"] is first_agents["task"]
     assert runtime.manifest.hooks == first_hooks
     await runtime.aclose()
 
 
-async def test_deleted_seeded_role_is_not_resurrected(tmp_path):
+async def test_deleted_override_falls_back_to_the_builtin_role(tmp_path):
+    write_agent(tmp_path, "task", description="custom task")
     runtime = make_runtime(tmp_path, ScriptedProvider(text_response("ok")))
     await runtime.ensure_started()
-    (tmp_path / ".nexus" / "agents" / "general.md").unlink()
+    assert runtime.manifest.agents["task"].description == "custom task"
+    (tmp_path / ".nexus" / "agents" / "task.md").unlink()
 
     await runtime.extensions.reload(trigger="test")
 
-    # The marker prevents re-seeding; the deleted workspace file is never
-    # recreated, and the role still resolves from a lower tier.
-    assert not (tmp_path / ".nexus" / "agents" / "general.md").exists()
-    assert (tmp_path / ".nexus" / "agents" / ".seeded").exists()
-    assert "general" in runtime.manifest.agents
+    # Nothing is re-seeded; the role resolves from the built-in tier again.
+    assert not (tmp_path / ".nexus" / "agents" / "task.md").exists()
+    assert runtime.manifest.agents["task"].description != "custom task"
     await runtime.aclose()
 
 
@@ -945,8 +944,8 @@ async def test_research_parent_cannot_write_through_task(tmp_path):
     await runtime.aclose()
 
 
-async def test_explore_and_planner_have_no_shell_or_write_path(tmp_path):
-    for role in ("explore", "planner"):
+async def test_advisor_and_legacy_read_only_names_have_no_shell_or_write_path(tmp_path):
+    for role in ("advisor", "explore", "planner"):
         provider = ScriptedProvider(
             tool_response(("t1", "Task", {"prompt": "x", "subagent_type": role})),
             text_response("read-only report"),
@@ -960,8 +959,9 @@ async def test_explore_and_planner_have_no_shell_or_write_path(tmp_path):
         ]
         assert spawned, role
         tools = set(spawned[-1].data["tools"])
-        assert not (tools & {"write", "edit", "multiedit", "bash"}), role
-        assert tools <= {"read", "glob", "grep", "todowrite", "skill", "subagent"}, role
+        assert spawned[-1].data["type"] == "advisor", role
+        assert not (tools & {"write", "edit", "multiedit", "bash", "apply_patch"}), role
+        assert tools <= {"read", "glob", "grep", "todowrite", "question", "skill", "subagent", "webfetch", "websearch"}, role
         await runtime.aclose()
 
 
@@ -2294,7 +2294,7 @@ def test_seed_failure_is_surfaced_as_a_diagnostic(tmp_path):
     from nexus.agents.model import AgentDiagnosticCode
 
     manager = AgentManager.for_workspace(
-        tmp_path / "ws", seed_source=tmp_path / "missing-source"
+        tmp_path / "ws", seed=True, seed_source=tmp_path / "missing-source"
     )
     codes = {diagnostic.code for diagnostic in manager.diagnostics}
     assert AgentDiagnosticCode.SEED_ERROR in codes

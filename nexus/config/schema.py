@@ -135,7 +135,7 @@ class ModelParams(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
 
 class AgentSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    name: str = "general"
+    name: str = "build"
     profile: str = "coding"
     instructions_file: str = "SOUL.md"
     memory_file: str = "MEMORY.md"
@@ -280,14 +280,14 @@ class AgentsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     """
 
     enabled: bool = True
-    default_type: str = "general"
+    default_type: str = "task"
     max_depth: int = 3
     max_concurrent: int = 4
     max_fanout: int | None = 16
     max_tier: str = "medium"
     token_budget: int | None = None
     cost_budget: float | None = None
-    seed_roles: bool = True
+    seed_roles: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.default_type, str) or not self.default_type.strip():
@@ -448,8 +448,15 @@ class ContextLimits(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     attachments: int = 20000
 
 
+#: The context window assumed when neither ``context.max_tokens`` nor the
+#: model catalogue states one.
+DEFAULT_CONTEXT_TOKENS = 180000
+
+
 class ContextSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    max_tokens: int = 180000
+    #: Caps the context window. Unset (the default) uses the model's own
+    #: window from the catalogue (models.dev ``limit.context``).
+    max_tokens: int | None = None
     safety_margin_tokens: int = 4000
     compaction: Compaction = "hybrid"
     compact_at_fraction: float = 0.85
@@ -466,7 +473,7 @@ class ContextSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
             raise ValueError(
                 "context.compact_at_fraction must be a finite number in (0, 1]"
             )
-        if (
+        if self.max_tokens is not None and (
             isinstance(self.max_tokens, bool)
             or not isinstance(self.max_tokens, int)
             or self.max_tokens < 0
@@ -483,7 +490,7 @@ class ContextSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
 
 class PermissionsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    mode: PermissionMode = "ask"
+    mode: PermissionMode = "allow"
     allow: list[str] = msgspec.field(default_factory=list)
     ask: list[str] = msgspec.field(default_factory=list)
     deny: list[str] = msgspec.field(default_factory=list)
@@ -663,6 +670,18 @@ class SessionSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     snapshot_every: int = 20
 
 
+class SessionsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    auto_archive_days: int = 2
+
+    def __post_init__(self) -> None:
+        if type(self.auto_archive_days) is not int or not 0 <= self.auto_archive_days <= 3650:
+            raise ValueError("sessions.auto_archive_days must be an integer from 0 to 3650")
+
+
+class SettingsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    confirm_edits: bool = False
+
+
 class TelemetrySection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     log_level: str = "info"
     log_file: str = ".nexus/logs/nexus.log"
@@ -685,6 +704,8 @@ class ConfigV2(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     hooks: HooksSection = msgspec.field(default_factory=HooksSection)
     mcp: MCPSection = msgspec.field(default_factory=MCPSection)
     session: SessionSection = msgspec.field(default_factory=SessionSection)
+    sessions: SessionsSection = msgspec.field(default_factory=SessionsSection)
+    settings: SettingsSection = msgspec.field(default_factory=SettingsSection)
     telemetry: TelemetrySection = msgspec.field(default_factory=TelemetrySection)
 
     def __post_init__(self) -> None:
@@ -750,6 +771,8 @@ __all__ = [
     "ProviderSection",
     "SandboxMode",
     "SessionSection",
+    "SessionsSection",
+    "SettingsSection",
     "TelemetrySection",
     "ToolsSection",
     "WebSection",

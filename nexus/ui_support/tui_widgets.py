@@ -5,17 +5,19 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
+import uuid
 from datetime import datetime
-from pathlib import Path
 from typing import ClassVar
 
 from rich.text import Text
-from textual import on
+from textual import events, on
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.content import Content
 from textual.message import Message
 from textual.screen import ModalScreen, Screen
-from textual.widgets import Button, Markdown, Static, TextArea
+from textual.widgets import Button, Collapsible, Markdown, Static, TextArea
 
 from ..client.protocol import ClientError
 from ..host import TransportError
@@ -25,14 +27,18 @@ from ..ui.tui.messages import InputSubmitted
 from .context import (
     MAX_ROWS,
     MAX_TEXT,
-    _plain,
+    ContextEntry,
+    ContextGroup,
+    _compact_tokens,
     context_detail_usage,
-    context_details_renderable,
+    context_groups,
+    context_summary,
     context_usage,
-    render_context_details,
     render_context_summary,
 )
 from .text import escape_controls, redact, sanitize
+from .tui_history import append_history, load_history
+from .tui_list import ListItem, ListPanel
 
 _WORKTREE_REVIEW_ID = re.compile(r"^[0-9a-f]{32}$")
 _WORKTREE_DIGEST = re.compile(r"^[0-9a-f]{64}$")
@@ -101,6 +107,37 @@ class ChatEditor(TextArea):
         {"shift+enter", "ctrl+enter", "ctrl+shift+enter", "alt+enter", "ctrl+j"}
     )
 
+    #: TextArea binds word motion to Ctrl+Left/Right only. macOS terminals send
+    #: Option+Left/Right as ``alt+left``/``alt+right`` (``ESC [ 1 ; 3 D``), so the
+    #: editor maps those, and their Shift-selecting forms, to the same actions.
+    BINDINGS: ClassVar[list[Binding]] = [
+        Binding("alt+left", "cursor_word_left", "Cursor word left", show=False),
+        Binding("alt+right", "cursor_word_right", "Cursor word right", show=False),
+        Binding("alt+shift+left", "cursor_word_left(True)", "Cursor left word select", show=False),
+        Binding("alt+shift+right", "cursor_word_right(True)", "Cursor right word select", show=False),
+    ]
+
+    async def _on_paste(self, event: events.Paste) -> None:
+        """Collapse large terminal pastes into editable composer attachments."""
+        if self._collapse_paste(event.text):
+            event.stop()
+            event.prevent_default()
+            return
+        await super()._on_paste(event)
+
+    def action_paste(self) -> None:
+        """Apply the same collapse rule to Textual's local clipboard action."""
+        text = self.app.clipboard
+        if self._collapse_paste(text):
+            return
+        super().action_paste()
+
+    def _collapse_paste(self, text: str) -> bool:
+        if not is_large_paste(text):
+            return False
+        self.parent.add_pasted_content(text, self)
+        return True
+
     class SubmitRequested(Message):
         """Enter was pressed with a non-empty draft."""
 
@@ -122,7 +159,7 @@ class ChatEditor(TextArea):
             event.stop()
             event.prevent_default()
             if event.key == "ctrl+t":
-                self.app.run_worker(self.app._open_effort_picker(), group="inline-picker")
+                self.app.run_worker(self.app.action_cycle_reasoning_effort(), group="reasoning-effort")
             else:
                 self.app.action_toggle_logs()
         elif event.key in {"escape", "up", "down", "enter", "tab"} and self.parent.completion_visible:
@@ -133,7 +170,7 @@ class ChatEditor(TextArea):
             elif event.key in {"up", "down"}:
                 self.parent.move_completion(-1 if event.key == "up" else 1)
             elif event.key == "enter" and self.parent.is_completed_standalone_command(self):
-                command = self.parent.selected_completion
+                command = self.text if self.parent.is_exact_argument_completion(self) else self.parent.selected_completion
                 self.parent.close_completion()
                 if command:
                     self.post_message(self.SubmitRequested(command))
@@ -150,12 +187,17 @@ class ChatEditor(TextArea):
             event.stop()
             event.prevent_default()
             self.insert("\n")
+        elif event.key in {"up", "down"} and self.parent.recall_history(
+            -1 if event.key == "up" else 1, self
+        ):
+            event.stop()
+            event.prevent_default()
         else:
             # TextArea moves its cursor after this handler. Refresh once the
             # default key action has completed so suggestions track that cursor.
             self.app.call_after_refresh(self.parent.refresh_completion)
 
-class CompletionPopup(Static):
+class CompletionPopup(ListPanel):
     """Small, non-focusable completion list rendered above composer metadata."""
 
     can_focus = False
@@ -165,16 +207,17 @@ class CompletionPopup(Static):
         self.display = False
 
     def show_items(self, items: list[str], selected: int) -> None:
-        rendered = Text()
-        visible = min(7, len(items))
-        start = min(max(0, selected - visible // 2), max(0, len(items) - visible))
-        for index, item in enumerate(items[start : start + visible], start):
-            if index:
-                rendered.append("\n")
-            selected_background = " on #33271f" if index == selected else ""
-            item_style = f"bold #f1ede8{selected_background}" if index == selected else "#b8b0a9"
-            rendered.append(item, style=item_style)
-        self.update(rendered)
+        """Full-width rows with an eight-row viewport and native scrolling."""
+        rows = []
+        for item in items:
+            spec = commands.BY_NAME.get(item) if item.startswith("/") else None
+            summary = f"{spec.summary} ({spec.name} {spec.usage})" if spec and spec.usage else spec.summary if spec else ""
+            if spec and spec.aliases:
+                summary += f" · also {', '.join(spec.aliases)}"
+            summary = sanitize(summary, 120)
+            name = sanitize(item, 60)
+            rows.append(ListItem(name, summary))
+        self.set_items(rows, selected=selected)
 
 
 class Transcript(Markdown):
@@ -242,6 +285,59 @@ class TranscriptPane(Vertical):
         self.query_one("#transcript", Transcript).update(content)
 
 
+PASTE_COLLAPSE_LINES = 20
+PASTE_COLLAPSE_CHARS = 2000
+MAX_PASTED_CONTENT_CHARS = 128_000
+MAX_PASTED_CONTENT_ATTACHMENTS = 8
+
+
+def is_large_paste(text: str) -> bool:
+    """Whether pasted text should be kept in a composer attachment."""
+    return len(text) > PASTE_COLLAPSE_CHARS or len(text.splitlines()) > PASTE_COLLAPSE_LINES
+
+
+class PastedContentScreen(ModalScreen[tuple[str, str] | None]):
+    """Preview and edit the full content behind a collapsed paste."""
+
+    DEFAULT_CSS = """
+    PastedContentScreen { align: center middle; background: $nx-scrim; }
+    #pasted-content-dialog { width: 80%; height: 80%; max-width: 100; background: $nx-dialog; border: round $nx-border-focus; padding: 1 2; }
+    #pasted-content-title { color: $nx-accent; text-style: bold; height: 1; margin-bottom: 1; }
+    #pasted-content-editor { height: 1fr; }
+    #pasted-content-actions { height: 3; align-horizontal: right; }
+    #pasted-content-actions Button { margin-left: 1; }
+    """
+
+    def __init__(self, number: int, content: str) -> None:
+        super().__init__()
+        self.number = number
+        self.content = content
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="pasted-content-dialog"):
+            yield Static(f"Pasted content #{self.number}", id="pasted-content-title")
+            yield TextArea(self.content, id="pasted-content-editor", soft_wrap=True)
+            with Horizontal(id="pasted-content-actions"):
+                yield Button("Remove", id="pasted-content-remove")
+                yield Button("Cancel", id="pasted-content-cancel")
+                yield Button("Save", variant="primary", id="pasted-content-save")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "pasted-content-save":
+            content = self.query_one("#pasted-content-editor", TextArea).text
+            if len(content) > MAX_PASTED_CONTENT_CHARS:
+                self.app.notify(
+                    "Edited paste exceeds the 128,000 character attachment limit",
+                    severity="warning",
+                )
+                return
+            self.dismiss(("save", content))
+        elif event.button.id == "pasted-content-remove":
+            self.dismiss(("remove", ""))
+        elif event.button.id == "pasted-content-cancel":
+            self.dismiss(None)
+
+
 class ChatInput(Vertical):
     """Keyboard-first multiline prompt editor.
 
@@ -254,11 +350,11 @@ class ChatInput(Vertical):
         popup = CompletionPopup("", id="completion-popup")
         popup.display = False
         yield popup
+        yield Vertical(id="paste-attachments")
         yield ChatEditor(id="chat-editor", soft_wrap=True, tab_behavior="indent")
         with Horizontal(id="runtime-info"):
             yield RootAgentBar(id="root-agent")
         with Horizontal(id="bottom-info"):
-            yield Static(str(Path.cwd()), id="cwd-path", markup=False)
             yield ContextUsage("", id="context-usage", markup=False)
 
     async def on_mount(self) -> None:
@@ -269,6 +365,12 @@ class ChatInput(Vertical):
         self._completion_selected = 0
         self._completion_query: str | None = None
         self._dismissed_token: tuple[str, int, int, int, str] | None = None
+        self._history_index = -1
+        self._history_value = ""
+        self._history_draft = ""
+        self._pasted_content: dict[int, str] = {}
+        self._paste_markers: dict[int, str] = {}
+        self._next_paste_id = 1
         self.query_one(CompletionPopup).display = False
         self._sync_completion_layout()
         self.query_one(ChatEditor).focus()
@@ -276,6 +378,138 @@ class ChatInput(Vertical):
     @property
     def completion_visible(self) -> bool:
         return bool(self._completion_items)
+
+    def add_pasted_content(self, content: str, editor: ChatEditor) -> None:
+        """Replace the current selection with a marker backed by full text."""
+        if len(content) > MAX_PASTED_CONTENT_CHARS:
+            self.app.notify("Paste exceeds the 128,000 character attachment limit", severity="warning")
+            return
+        if len(self._pasted_content) >= MAX_PASTED_CONTENT_ATTACHMENTS:
+            self.app.notify("Only 8 pasted attachments can be kept in one draft", severity="warning")
+            return
+        number = self._next_paste_id
+        self._next_paste_id += 1
+        # The short nonce distinguishes this marker from user-authored text
+        # such as a literal "[Pasted #1]" in the same prompt.
+        marker = f"[Pasted #{number} · {uuid.uuid4().hex[:8]}]"
+        self._pasted_content[number] = content
+        self._paste_markers[number] = marker
+        replaced = editor._replace_via_keyboard(marker, *editor.selection)
+        if replaced:
+            editor.move_cursor(replaced.end_location)
+        self._refresh_pasted_content()
+
+    def _refresh_pasted_content(self) -> None:
+        if not self.is_mounted:
+            return
+        row = self.query_one("#paste-attachments", Vertical)
+        row.remove_children()
+        row.display = bool(self._pasted_content)
+        for number, content in self._pasted_content.items():
+            lines = max(1, len(content.splitlines()))
+            pill = Horizontal(
+                Static(f"Pasted #{number} · {lines} lines", classes="pasted-content-label", markup=False),
+                Button("×", id=f"pasted-content-remove-{number}", classes="pasted-content-remove"),
+                classes="pasted-content-pill",
+            )
+            row.mount(pill)
+
+    def _expand_pasted_content(self, text: str) -> str:
+        markers = {marker: self._pasted_content[number]
+                   for number, marker in self._paste_markers.items()
+                   if number in self._pasted_content}
+        if not markers:
+            return text
+        pattern = re.compile("|".join(re.escape(marker) for marker in markers))
+        return pattern.sub(lambda match: markers[match.group(0)], text)
+
+    def _sync_pasted_content_markers(self, text: str) -> None:
+        """Drop attachments whose editor markers the user removed or replaced."""
+        orphaned = [number for number, marker in self._paste_markers.items() if marker not in text]
+        if not orphaned:
+            return
+        for number in orphaned:
+            self._pasted_content.pop(number, None)
+            self._paste_markers.pop(number, None)
+        self._refresh_pasted_content()
+
+    def _edit_pasted_content(self, number: int) -> None:
+        content = self._pasted_content.get(number)
+        if content is None:
+            return
+
+        def finished(result: tuple[str, str] | None) -> None:
+            if result is None:
+                return
+            action, value = result
+            if action == "remove":
+                self._remove_pasted_content(number)
+            else:
+                self._pasted_content[number] = value
+                self._refresh_pasted_content()
+
+        self.app.push_screen(PastedContentScreen(number, content), callback=finished)
+
+    def _remove_pasted_content(self, number: int) -> None:
+        self._pasted_content.pop(number, None)
+        marker = self._paste_markers.pop(number, None)
+        editor = self.query_one(ChatEditor)
+        if marker:
+            editor.text = editor.text.replace(marker, "")
+        self._refresh_pasted_content()
+
+    def on_click(self, event) -> None:
+        widget = event.widget
+        classes = getattr(widget, "classes", ())
+        if "pasted-content-label" in classes:
+            event.stop()
+            row = widget.parent
+            try:
+                number = int(row.query_one("Button").id.rsplit("-", 1)[1])
+            except (AttributeError, ValueError):
+                return
+            self._edit_pasted_content(number)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        button_id = event.button.id or ""
+        if button_id.startswith("pasted-content-remove-"):
+            try:
+                self._remove_pasted_content(int(button_id.rsplit("-", 1)[1]))
+            except ValueError:
+                return
+
+    def recall_history(self, direction: int, editor: ChatEditor) -> bool:
+        """Recall at the editor boundary, preserving a draft for the return trip."""
+        lines = editor.text.splitlines() or [""]
+        row = editor.cursor_location[0]
+        if direction < 0 and row != 0 or direction > 0 and row != len(lines) - 1:
+            return False
+        if editor.text and (self._history_index < 0 or editor.text != self._history_value):
+            return False
+        view = self.app.controller.view
+        session_prompts = [message.text for turn in view.turns for message in turn.messages
+                           if message.role == "user" and message.text and len(message.text) <= 4096]
+        entries = list(dict.fromkeys([*load_history(), *session_prompts]))[-500:]
+        if not entries:
+            return False
+        if self._history_index < 0:
+            if direction > 0:
+                return False
+            self._history_draft = editor.text
+            index = len(entries) - 1
+        else:
+            index = self._history_index + direction
+        if index >= len(entries):
+            self._history_index = -1
+            self._history_value = ""
+            editor.text = self._history_draft
+            return True
+        index = max(0, index)
+        self._history_index = index
+        self._history_value = entries[index]
+        editor.text = self._history_value
+        editor.move_cursor((len(editor.text.splitlines()) - 1, len(editor.text.splitlines()[-1])))
+        return True
 
     @property
     def selected_completion(self) -> str | None:
@@ -294,7 +528,7 @@ class ChatInput(Vertical):
         if self.is_mounted:
             popup = self.query_one(CompletionPopup)
             popup.display = False
-            popup.update("")
+            popup.set_items([])
             self._sync_completion_layout()
 
     def _sync_completion_layout(self) -> None:
@@ -318,12 +552,19 @@ class ChatInput(Vertical):
         if self._completion_token is None:
             return False
         marker, row, start, end = self._completion_token
-        return (
+        return self.is_exact_argument_completion(editor) or (
             marker == "/"
             and row == 0
             and start == 0
             and end == len(editor.text)
         )
+
+    def is_exact_argument_completion(self, editor: ChatEditor) -> bool:
+        if self._completion_token is None:
+            return False
+        marker, row, start, end = self._completion_token
+        return (marker in {"model", "agent"} and row == 0
+                and end == len(editor.text) and editor.text[start:end] in self._completion_items)
 
     def accept_completion(self) -> None:
         if not self._completion_items or self._completion_token is None:
@@ -346,6 +587,12 @@ class ChatInput(Vertical):
             return None
         line = lines[row]
         column = min(column, len(line))
+        if row == 0:
+            argument = re.fullmatch(r"/(model|agent)\s+([^\s]*)", line[:column])
+            if argument:
+                token = argument.group(2)
+                start = column - len(token)
+                return argument.group(1), row, start, column, token
         match = re.search(r"(?:^|\s)([/@][^\s]*)$", line[:column])
         if match:
             token = match.group(1)
@@ -380,11 +627,12 @@ class ChatInput(Vertical):
             self._completion_items = []
             self._completion_token = None
             self._completion_query = token
-            matches = [
+            matches = sorted(
                 spec.name
                 for spec in commands.SPECS
-                if spec.name.casefold().startswith(token.casefold())
-            ]
+                if not spec.hidden
+                and any(name.casefold().startswith(token.casefold()) for name in (spec.name, *spec.aliases))
+            )
             if matches:
                 self._completion_token = (marker, row, start, end)
                 self._completion_items = matches
@@ -395,7 +643,7 @@ class ChatInput(Vertical):
                 self._sync_completion_layout()
             else:
                 popup = self.query_one(CompletionPopup)
-                popup.update("")
+                popup.set_items([])
                 popup.display = False
                 self._sync_completion_layout()
             return
@@ -422,13 +670,41 @@ class ChatInput(Vertical):
         generation = self._completion_generation
         if self._completion_task is not None:
             self._completion_task.cancel()
-        search = getattr(self.app.controller.client, "search_files", None)
-        if not callable(search):
-            self.close_completion()
+        if marker in {"model", "agent"}:
+            self._completion_task = asyncio.create_task(
+                self._load_argument_completions(marker, token, key, generation)
+            )
+        else:
+            search = getattr(self.app.controller.client, "search_files", None)
+            if not callable(search):
+                self.close_completion()
+                return
+            self._completion_task = asyncio.create_task(
+                self._load_file_completions(search, token[1:], key, generation)
+            )
+
+    async def _load_argument_completions(self, kind: str, query: str, key, generation: int) -> None:
+        try:
+            await asyncio.sleep(0.12)
+            if kind == "agent":
+                rows = getattr(self.app, "_agents", ()) or await self.app.controller.client.list_agents()
+                values = [str(row.get("name", "")) for row in rows]
+            else:
+                rows = await self.app.controller.client.list_models(selectable_only=True)
+                values = [f"{row.get('provider')}/{row.get('id')}" for row in rows
+                          if row.get("provider") and row.get("id")]
+        except asyncio.CancelledError:
             return
-        self._completion_task = asyncio.create_task(
-            self._load_file_completions(search, token[1:], key, generation)
-        )
+        except (ClientError, TransportError, OSError, ValueError):
+            values = []
+        if generation != self._completion_generation or self._active_token(self.query_one(ChatEditor)) != key:
+            return
+        self._completion_items = [value for value in values if value.casefold().startswith(query.casefold())][:100]
+        self._completion_selected = 0
+        popup = self.query_one(CompletionPopup)
+        popup.show_items(self._completion_items, 0)
+        popup.display = bool(self._completion_items)
+        self._sync_completion_layout()
 
     async def _load_file_completions(self, search, query: str, key, generation: int) -> None:
         try:
@@ -471,11 +747,22 @@ class ChatInput(Vertical):
 
     @on(TextArea.Changed, "#chat-editor")
     def _editor_changed(self, _: TextArea.Changed) -> None:
+        editor = self.query_one(ChatEditor)
+        self._sync_pasted_content_markers(editor.text)
+        if self._history_index >= 0 and editor.text != self._history_value:
+            self._history_index = -1
         self.app.call_after_refresh(self.refresh_completion)
 
     @on(ChatEditor.SubmitRequested)
     def _editor_submitted(self, message: ChatEditor.SubmitRequested) -> None:
-        self.post_message(InputSubmitted(message.content))
+        self._history_index = -1
+        content = self._expand_pasted_content(message.content)
+        if not content.lstrip().startswith("/"):
+            append_history(content)
+        self._pasted_content.clear()
+        self._paste_markers.clear()
+        self._refresh_pasted_content()
+        self.post_message(InputSubmitted(content))
         self.query_one(ChatEditor).focus()
 
 class PickerLink(Static):
@@ -514,11 +801,11 @@ class RootAgentBar(Horizontal):
 
     def compose(self) -> ComposeResult:
         yield PickerLink(self._name, picker_kind="agent", id="root-agent-name")
-        yield Static(" · ", id="root-separator-model", markup=False)
+        yield Static("  ", id="root-separator-model", markup=False)
         yield PickerLink("", picker_kind="model", id="root-model")
-        yield Static(" · ", id="root-separator-provider", markup=False)
+        yield Static(" ", id="root-separator-provider", markup=False)
         yield PickerLink("", picker_kind="model", id="root-provider")
-        yield Static(" · ", id="root-separator-effort", markup=False)
+        yield Static("  ", id="root-separator-effort", markup=False)
         yield PickerLink("", picker_kind="model", id="root-effort")
 
     def on_mount(self) -> None:
@@ -535,6 +822,8 @@ class RootAgentBar(Horizontal):
         self.query_one("#root-provider", PickerLink).update(provider)
         effort_link = self.query_one("#root-effort", PickerLink)
         effort_link.update(effort)
+        # An effort the model cannot take is noise in the composer line.
+        effort = effort if effort not in {"Unsupported", "unknown"} else ""
         effort_link.display = bool(effort)
         for selector, value in (("#root-separator-model", model),
                                 ("#root-separator-provider", provider),
@@ -565,14 +854,11 @@ class RootAgentBar(Horizontal):
             else None
         )
         if applied_effort:
-            source = getattr(self, "effort_source", None)
-            effort = f"{applied_effort} · {source}" if source else applied_effort
+            effort = applied_effort
         elif self.supported_levels is None:
             effort = "unknown"
         elif self.supported_levels == ():
             effort = "Unsupported"
-        elif getattr(self, "effort_source", None):
-            effort = f"Default · {self.effort_source}"
         else:
             effort = "Default"
         if getattr(self, "stored_override", None) and not applied_effort:
@@ -599,8 +885,8 @@ class RootAgentBar(Horizontal):
         self.stored_override = stored_override
         self.effort_source = effort_source
 
-    def render(self) -> Text:
-        """Retain the full compact summary for accessibility and diagnostics."""
+    def summary(self) -> Text:
+        """Return the metadata summary for diagnostics and accessible clients."""
         rendered = Text()
         rendered.append(self._name, style=f"bold {self._identity_color}")
         if self._model_summary and self._model_summary.startswith(self._name):
@@ -615,6 +901,64 @@ class ConnectionStatus(Static):
         self.update(text)
         self.set_class(error, "error")
         self.display = bool(text)
+
+
+class ActivityProgress(Static):
+    """One-row context meter with a timer only while a turn is active."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__("", markup=True, **kwargs)
+        self._fraction = 0.0
+        self._running = False
+        self._loading = False
+        self._color = "$nx-accent"
+        self._tick = 0
+        self._timer = None
+
+    def set_state(self, *, used: int = 0, budget: int = 0, running: bool = False,
+                  loading: bool = False, color: str = "$nx-accent") -> None:
+        self._fraction = max(0.0, min(1.0, used / budget)) if budget > 0 else 0.0
+        self._running, self._loading, self._color = running, loading, color
+        if running or loading:
+            if self._timer is None and self.is_mounted:
+                self._timer = self.set_interval(0.05 if running else 0.2, self._advance)
+        elif self._timer is not None:
+            self._timer.stop()
+            self._timer = None
+        self._draw()
+
+    def on_mount(self) -> None:
+        self.set_state(used=int(self._fraction * 1000), budget=1000,
+                       running=self._running, loading=self._loading, color=self._color)
+
+    def on_resize(self, _event) -> None:
+        self._draw()
+
+    def on_unmount(self) -> None:
+        if self._timer is not None:
+            self._timer.stop()
+            self._timer = None
+
+    def _advance(self) -> None:
+        self._tick += 1
+        self._draw()
+
+    def _draw(self) -> None:
+        width = max(1, self.size.width)
+        if self._running:
+            size = max(1, width // 5)
+            travel = max(1, width - size)
+            offset = self._tick % (travel * 2)
+            start = min(offset, travel * 2 - offset)
+            segments = [(start, "$nx-border"), (size, self._color),
+                        (width - start - size, "$nx-border")]
+        elif self._loading:
+            segments = [(width, self._color if (self._tick // 3) % 2 else "$nx-border")]
+        else:
+            color = "$nx-success" if self._fraction < 0.5 else "$nx-warning" if self._fraction < 0.75 else "$nx-error"
+            filled = round(width * self._fraction)
+            segments = [(filled, color), (width - filled, "$nx-border")]
+        self.update("".join(f"[{color}]{'━' * count}[/]" for count, color in segments if count))
 
 
 class ContextUsage(Static):
@@ -716,15 +1060,68 @@ class ContextPreview(Vertical):
             event.prevent_default()
             self.app.run_worker(self.app.action_open_context(), group="context-inspect")
 
-    def on_key(self, event) -> None:
-        if event.key in {"enter", "space"}:
-            event.stop()
-            event.prevent_default()
-            self.app.run_worker(self.app.action_open_context(), group="context-inspect")
+
+#: Entry bodies above this render as plain text instead of Markdown.
+MARKDOWN_LIMIT = 60_000
+
+
+def _group_title(title: str, tokens: int, detail: str) -> Content:
+    parts: list[str | tuple[str, str]] = [(title, "bold")]
+    if tokens:
+        parts.append((f"  ~{_compact_tokens(tokens)} tokens", "dim"))
+    if detail:
+        parts.append((f"  · {detail}", "dim"))
+    return Content.assemble(*parts)
+
+
+class ContextEntryWidget(Collapsible):
+    """One collapsed row: title, estimate and summary. The body mounts on first expand."""
+
+    def __init__(self, entry: ContextEntry) -> None:
+        super().__init__(
+            title=_group_title(entry.title, entry.tokens, entry.detail),
+            classes="context-entry" + (" -error" if entry.error else ""),
+        )
+        self.entry = entry
+        self._filled = False
+
+    async def on_collapsible_expanded(self, event: Collapsible.Expanded) -> None:
+        if event.collapsible is not self or self._filled:
+            return
+        self._filled = True
+        body = self.entry.body[:MAX_TEXT] or "(empty)"
+        widget = (
+            Markdown(body, classes="context-entry-body") if len(body) <= MARKDOWN_LIMIT
+            else Static(Text(body), classes="context-entry-body")
+        )
+        await self.query_one(Collapsible.Contents).mount(widget)
+
+
+def context_group_widgets(
+    groups: list[ContextGroup], *, expanded: tuple[str, ...] = (), flatten_single: bool = False,
+) -> list[Collapsible]:
+    """A collapsible per group holding a collapsible per entry (bounded).
+
+    ``flatten_single`` shows a one-entry group as just its entry, so a tool
+    family of one does not repeat the same name and estimate.
+    """
+    widgets: list[Collapsible] = []
+    for group in groups:
+        if flatten_single and len(group.entries) == 1:
+            widgets.append(ContextEntryWidget(group.entries[0]))
+            continue
+        rows: list[Static | Collapsible] = [ContextEntryWidget(entry) for entry in group.entries[:MAX_ROWS]]
+        if not rows:
+            rows.append(Static("(none)", classes="context-entry-empty", markup=False))
+        widgets.append(Collapsible(
+            *rows, title=_group_title(group.title, group.tokens, group.detail),
+            collapsed=group.key not in expanded, classes="context-group",
+        ))
+    return widgets
 
 
 class ContextDetailsScreen(ModalScreen[None]):
-    """Readable, explicit next-turn context preview."""
+    """The next request grouped as it is sent: system prompt, tools, then each turn."""
 
     BINDINGS: ClassVar[list[tuple[str, str, str]]] = [
         ("escape", "close", "Close"), ("q", "close", "Close"),
@@ -752,11 +1149,13 @@ class ContextDetailsScreen(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="context-dialog"):
-            yield Static("Context details", id="context-title", markup=False)
+            yield Static(f"Context · {sanitize(self.session, 80)}" if self.session else "Context", id="context-title", markup=False)
+            yield Static(context_summary(self.inspection, self.usage, error=self.error), id="context-details", markup=False)
             with VerticalScroll(id="context-scroll"):
-                yield Static(self._render_details(), id="context-details", markup=False)
+                if self.inspection is not None and not self.error:
+                    yield from context_group_widgets(context_groups(self.inspection))
             yield Static(
-                "↑/↓ or j/k scroll · PgUp/PgDn · Home/End · Esc close",
+                "tab/shift+tab move · enter expands · j/k scroll · PgUp/PgDn · esc close",
                 id="context-help",
                 markup=False,
             )
@@ -785,24 +1184,6 @@ class ContextDetailsScreen(ModalScreen[None]):
 
     def action_scroll_end(self) -> None:
         self.query_one("#context-scroll", VerticalScroll).scroll_end(animate=False)
-
-    @classmethod
-    def _plain(cls, value: object, limit: int | None = MAX_TEXT) -> str:
-        return _plain(value, limit)
-
-    @classmethod
-    def _list_rows(cls, rows, render) -> list[str]:
-        result = [render(row) for row in list(rows or ())[: cls.MAX_ROWS]]
-        count = len(rows or ())
-        if count > cls.MAX_ROWS:
-            result.append(f"… {count - cls.MAX_ROWS} more entries omitted from display")
-        return result
-
-    def _render_details(self) -> str:
-        width = self.size.width or 100
-        return context_details_renderable(
-            self.inspection, self.usage, error=self.error, session=self.session, width=width
-        )
 
 
 class LogsDrawer(Vertical):
@@ -1476,6 +1857,7 @@ def _worktree_patch_line(value: str) -> str:
 
 
 __all__ = [
+    "ActivityProgress",
     "ChatEditor",
     "ChatInput",
     "ConnectionStatus",

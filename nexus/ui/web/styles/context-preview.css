@@ -24,7 +24,7 @@
   min-width: 0;
   padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 0;
   background: color-mix(in srgb, var(--canvas) 60%, transparent);
 }
 
@@ -50,7 +50,7 @@
   place-items: center;
   padding: 0 6px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 0;
   color: var(--muted);
   font-size: 11px;
   font-weight: 550;
@@ -66,7 +66,7 @@
   min-width: 0;
   padding: 9px 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 0;
   background: var(--elevated);
 }
 
@@ -102,7 +102,7 @@
   margin: 0;
   padding: 10px 11px;
   border: 1px dashed var(--border-strong, #73766f);
-  border-radius: 8px;
+  border-radius: 0;
   background: color-mix(in srgb, var(--canvas) 72%, transparent);
   color: var(--quiet, #8a8d85);
   font-size: 12px;
@@ -112,7 +112,7 @@
   margin: 0;
   padding: 9px 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 0;
   background: var(--elevated);
 }
 
@@ -164,14 +164,14 @@
 .context-markdown code, .context-markdown pre {
   font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
-.context-markdown :not(pre) > code { padding: 1px 4px; border-radius: 4px; background: var(--code); }
+.context-markdown :not(pre) > code { padding: 1px 4px; border-radius: 0; background: var(--code); }
 .context-markdown .context-code {
   max-width: 100%;
   margin: 0 0 .65em;
   padding: 8px 10px;
   overflow: auto;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 0;
   background: var(--code);
   white-space: pre;
 }

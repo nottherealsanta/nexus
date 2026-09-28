@@ -51,8 +51,9 @@ nexus --workspace /path/to/project chat          # interactive Textual shell
 `init` creates editable files without overwriting anything that exists; it is
 local and needs no daemon. `run` takes a prompt, or `-` to read the prompt from
 stdin. `chat` is the full-screen Textual shell; `Ctrl+P` opens chat commands,
-`Ctrl+N` starts a session, `Ctrl+O` lists sessions, `Ctrl+F` forks, and
-`Shift+Tab` cycles root agents. `Enter` sends the prompt, and `Shift+Enter` (or
+`Ctrl+N` starts a session, `Ctrl+O` opens the Sessions dialog, `Ctrl+F` forks,
+`Ctrl+B` / `Ctrl+L` toggle the sessions and details sidebars, `Ctrl+S` opens
+Settings, and `Shift+Tab` cycles root agents. `Enter` sends the prompt, and `Shift+Enter` (or
 `Ctrl+Enter`) inserts a newline; `Alt+Enter` does the same only when the
 terminal's key protocol preserves the modifier; `Ctrl+J` inserts one too, which
 is the fallback for terminals that cannot report a modified Enter. A non-TTY
@@ -148,6 +149,7 @@ nexus daemon stop        # graceful shutdown
 | `nexus doctor [--explain-reload] [--json]` | Validate config, providers, registry, extensions, MCP, and state what is hot vs. restart-only. |
 | `nexus run <prompt\|->` | One turn. `--session NAME`, `--json` for headless JSONL. |
 | `nexus chat` | Interactive Textual shell. `--session NAME`. Requires stdin/stdout TTY. |
+| `nexus web [--no-browser]` | Open the workspace in a local browser client served by the running daemon (one-use launch URL). |
 | `nexus replay <id> [--json]` | Re-render a session from its log (same path as `sessions replay`). |
 | `nexus daemon status\|stop\|logs` | Manage the workspace daemon. `status --json`; `logs --lines N`. |
 | `nexus sessions list` | List sessions with state, `last_seq`, viewers, title. |
@@ -173,20 +175,51 @@ restorable from the CLI.
 
 ### Commands in `chat`
 
-`/new`, `/sessions`, `/model`, `/agent`, `/tools`, `/details`, `/reconnect`,
-`/cancel`, `/fork`, `/export`, `/help`, `/exit`. They are available in the
+`/new` (`/clear`), `/sessions`, `/archived` (`/resume`), `/model`, `/effort`
+(`/reasoning`), `/agent`, `/tools`, `/skills`, `/mcp`, `/settings`, `/details`, `/cost`,
+`/copy`, `/diff`, `/theme`, `/verbose`, `/hotkeys`, `/reload`, `/review`, `/commit`,
+`/reconnect`, `/cancel`, `/fork`, `/export`, `/help`, `/exit` (`/quit`). Aliases in
+parentheses run the same command. `/effort` opens the reasoning-effort picker
+(`/effort LEVEL` sets it directly); `Ctrl+T` cycles the supported levels in place.
+They are available in the
 multiline editor and the searchable `Ctrl+P` command palette. Model selection,
 root-agent selection, session switching, fork, export, details, and reconnect
 remain daemon operations through the host client.
 
-The status bar is reducer-backed and shows session phase, root-agent identity,
-and event sequence. `/details` expands the same `ConversationView` into model,
+The conversation begins with a four-block context header for the system prompt,
+tools, skills, and MCP servers. User turns can be collapsed by their chevron.
+The composer shows agent, model, provider, effort, and context usage such as
+`24k (24%)`: the last request's size as the provider reported it (cached tokens
+included), plus the estimated growth since, against the model's context window
+(models.dev `limit.context`; `limit.input` also caps the prompt budget when
+stated). `[context] max_tokens` is unset by default; set it only to cap the
+window below the model's.
+Before the first reply it is the assembler's estimate. The bar below it shows
+context fill or turn activity. Clicking the System prompt block shows it
+rendered as Markdown; the Tools block opens every tool definition, one
+expandable row per tool (families of several tools are grouped). `Ctrl+I` (or
+`/context`) opens the next request grouped as it is sent: the system prompt by
+part, the tools, then each turn with its user message, replies, and every tool
+call paired with its result, each with a token estimate. On wide terminals a
+sessions sidebar (all current and archived sessions, live status, a spinner for
+running turns, and a Delete button that moves each session to restorable trash)
+and a details sidebar (session facts, files modified this session
+with diffs, MCP server health) sit beside it; both hide on narrow terminals and
+toggle with `Ctrl+B` / `Ctrl+L`. `Ctrl+O` (or `/sessions`) opens a searchable
+Sessions dialog grouped by day, where `Ctrl+D` archives a session and `Ctrl+Z`
+undoes it. Old idle sessions auto-archive after two days by default. `/archived`
+opens the searchable archive browser to preview or resume them. `Ctrl+S` opens
+Settings (a full-screen page with a sidebar: theme, panels, keyboard, workspace,
+agents with model/effort/fallback fields, tools, MCP, skills, hooks, config, and soul),
+saved to `$XDG_CONFIG_HOME/nexus/tui.json`. `/details` expands the reduced `ConversationView` into model,
 usage, context budget/compaction, queued inputs, pending approvals, and the
 subagent tree. `/reconnect` re-attaches from the last reduced `seq`, replays the
 missed tail, and resumes an active turn without polling.
 
-Tool calls stream with their name, status, and duration, and a bounded preview
-where the event carries one (a permission request's key/preview, a tool's
+Tool calls stream as blocks headed `$ command`, `→ Read path`, or
+`← Edit path`, showing the first lines of output; click a tool to expand it (edits
+show their diff). Clicking a subagent's task opens a large modal with that
+agent's whole conversation, rendered like the root and updated live while it runs, and a bounded preview where the event carries one (a permission request's key/preview, a tool's
 progress line, or a result/summary field); control characters and obvious
 credentials are escaped or redacted, and byte payloads are shown by size rather
 than dumped. Assistant prose is rendered as Markdown with terminal controls
@@ -199,9 +232,18 @@ durable turn/message/call IDs, so replay and reconnect update in place rather
 than duplicate content. `Task` cards render their linked child agents inline;
 Enter or click opens a live reducer-backed child transcript, including nested
 agents. Scrolling away pauses tail-follow until the conversation is returned to
-the bottom. New and empty sessions intentionally show no transcript chrome.
+the bottom. Provider thinking collapses to a `Thought: …` line, and each
+completed turn ends with `AGENT · model · duration`. The context header stays at
+the top of the timeline and opens request details on click. `Ctrl+I` opens the
+full request inspection view.
 
 ### Approval prompts
+
+By default nothing asks: `permissions.mode` is `"allow"`, so every tool runs
+without a prompt (hard path boundaries and any `deny` rules still apply). Set
+`mode = "ask"`, or add `ask` rules, to approve calls. The chat and web clients
+show an approval as a list above the composer, like the model and command
+pickers: ↑/↓ and Enter, or `y`/`a`/`n`/`d`, with Esc denying once.
 
 Interactive runs prompt before an `ask` action with four choices: `y` allow
 once, `a` allow always (a session-scoped grant, replayed on later turns), `n`
@@ -239,9 +281,8 @@ default = "medium"            # a tier name, "provider/model", or a bare id
 api_key = "${env:ANTHROPIC_API_KEY}"
 
 [permissions]
-mode = "ask"
-allow = ["Read(**)", "Glob(**)", "Grep(**)", "LS(**)"]
-deny  = ["Bash(rm -rf*)", "Read(**/.env)"]
+mode = "allow"                # default: no prompts; "ask" approves each call
+deny  = ["Bash(rm -rf*)", "Read(**/.env)"]   # optional; deny always wins
 write_roots = ["./"]
 on_unattended = "deny"
 ```
@@ -437,7 +478,7 @@ Bundles group tools; profiles compose bundles. Nothing in `core/` knows what
 | --- | --- |
 | `fs` | Read, Write, Edit, MultiEdit, Glob, Grep, LS |
 | `shell` | Bash, BashOutput, KillShell |
-| `task` | Task, TodoWrite |
+| `task` | Task, TodoWrite, question |
 | `meta` | ReloadExtensions, ListExtensions, WriteTool |
 | `ext` | Skill |
 | `mcp` | Everything bridged from MCP |
@@ -448,6 +489,18 @@ Bundles group tools; profiles compose bundles. Nothing in `core/` knows what
 | `research` | fs, mcp, + Task | Structurally read-only: Write/Edit/MultiEdit are dropped, and no mutating tool can be enabled. |
 | `chat` | none | |
 | `ops` | shell, mcp | |
+
+### Asking the user (`question`)
+
+The `question` tool lets the root agent or any subagent pause for a decision
+that is genuinely the user's: a prompt with one to three options, or free text.
+The chat and web clients show it as the same list prompt as approvals (number
+keys pick an option); the answer returns to the waiting agent as its tool
+result. `question.requested`/`question.resolved` are durable events, and a
+pending question is simply the running `question` call, so it reappears after a
+reconnect. A question never opens an approval of its own and its answer never
+changes a permission. With no one attached, it fails fast and tells the model to
+proceed on its own judgment; an unanswered question times out after 15 minutes.
 
 ### Permission rules
 
@@ -540,24 +593,44 @@ max_tier = "medium"        # requested tiers clamp, never widen
 max_concurrent = 4
 max_depth = 3
 max_fanout = 16
-default_type = "general"
+default_type = "task"
 ```
 
-Four roles seed into `.nexus/agents/` on first run and are ordinary, editable,
-deletable extensions. `plan` is the canonical planning role; the legacy
-`planner` spelling remains a compatibility alias.
+Nexus ships one root agent and three subagents. They are built in and apply to
+every workspace. Edit them in **Settings → Agents**: saving writes an override to
+`~/.nexus/agents/<name>.md`, and "Reset to default" moves that override to trash.
 
-| Role | Tools | Model | Purpose |
+Every new session starts with `build`. To change that, pick another root agent
+under **New sessions start with** in Settings → Agents (terminal and browser).
+It writes `[agent] name` to `~/.nexus/config.toml`, or to `.nexus/nexus.toml`
+with the project scope, which wins over the global one. Choosing an agent inside
+a session (`/agent`, `Shift+Tab`) changes only that session.
+
+| Agent | Kind | Tools | Purpose |
 | --- | --- | --- | --- |
-| `general` | inherits the parent's set | `medium` | Catch-all delegation; the only role that can write. |
-| `build` | inherits the parent's set | `medium` | Implements focused changes and verifies them. |
-| `explore` | read-only | `low` | Broad fan-out search; returns findings, not file dumps. |
-| `plan` | read-only | `high` | Designs an approach; cannot execute it. |
+| `build` | root | the session's set | The default agent. Makes the change, verifies it, and delegates. |
+| `advisor` | subagent | read-only | Gives a reasoned recommendation on a design, plan, or bug. Cannot edit files. |
+| `task` | subagent | inherits the parent's set | Does a self-contained, multi-step piece of work. |
+| `quick` | subagent | inherits the parent's set | Handles small, well-specified jobs fast. |
+
+Model, provider, reasoning effort, and an ordered `fallback` list are unset by
+default, so every agent inherits the session model. Set them per agent in
+Settings. An agent's fallbacks are tried, in order, before the workspace
+`models.fallback` chain when its model fails before replying.
+
+Every subagent ends with a report. When `task` or `quick` edit files, the report
+lists them, and Nexus appends the files each child changed through its edit
+tools to the report the root agent receives.
 
 A child can never exceed its parent: tool sets intersect, permissions inherit,
 `deny` stays absolute, tier is capped by `agents.max_tier`, and fan-out/depth
-are bounded. `explore` and `plan` have no write path at all, enforced
-structurally rather than by prompt.
+are bounded. `advisor` has no write path at all, enforced structurally rather
+than by prompt. The legacy names `general` (now `task`, or `build` as a root)
+and `explore`/`plan`/`planner` (now `advisor`) still resolve when no definition
+with that name exists. Older releases copied the roles into `.nexus/agents/`;
+copies you never edited are moved to `.nexus/trash/agents/` once, so they stop
+shadowing the built-ins. Set `agents.seed_roles = true` to copy the built-ins
+into a workspace for per-project editing.
 
 ## Hooks
 
@@ -639,7 +712,9 @@ sessions.delete(id), sessions.restore(trash_id), sessions.export(id, format=...)
 Context is assembled from composable, priority-budgeted parts (identity, SOUL,
 environment, tools, skills index, MCP index, memory, attachments, history,
 user). The budget is `min(config.context.max_tokens, model context) −
-max_output − safety_margin`. Priority-0 parts are never dropped; if they alone
+max_output − safety_margin`, and at most the model's input limit minus the
+safety margin when the catalogue states one. An unset `context.max_tokens` means
+the model's window (180,000 if the catalogue does not know the model). Priority-0 parts are never dropped; if they alone
 overflow, the turn fails with an actionable error. Compaction strategies are
 `drop_oldest`, `evict_tool_results`, `summarize`, and `hybrid` (default), all
 explicit and observable via `context.compacted`.
@@ -666,7 +741,14 @@ CLI speaks a length-framed JSON protocol over a Unix domain socket.
   traverse the facade in either direction, and every error the wire can observe
   is redacted.
 
-`http_sse` is the peer transport for a future browser surface: commands as POST,
+`nexus web` opens the browser client: the daemon starts a loopback listener and
+prints a one-use launch URL whose ticket is exchanged for an `HttpOnly` cookie
+and CSRF token (`nexus/host/web.py`). The page (`nexus/ui/web/`, plain
+HTML/CSS/JS) shows the same sessions with live status and archive, the
+conversation, approvals, a details panel with modified files and MCP health,
+and settings. See `docs/web.md`.
+
+`http_sse` is also the peer transport: commands as POST,
 events as SSE (whose `Last-Event-ID` maps exactly onto the log's `seq`). It is
 implemented and tested in `nexus/host/transports/http_sse.py` and
 `tests/test_http_sse_transport.py`, with its constraints fixed: bind `127.0.0.1`

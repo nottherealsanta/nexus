@@ -12,6 +12,11 @@ Keep the existing architecture: one provider-neutral loop; daemon-owned sessions
 
 Nexus already has a mature base: provider adapters and conformance tests, a model registry and tiers, context compaction, host-side permissions, append-only session logs, bounded subagents, hot extensions, a daemon, and a Textual chat UI (`README.md`, `ARCHITECTURE.md`). The UI already supports multiline input, a command palette, model and agent selection, session commands, approval prompts, replay/reconnect, a subagent transcript, and tool-level Edit/MultiEdit diff previews. The current worktree includes substantial uncommitted TUI/host changes and new TUI tests, so these need to be treated as in-progress baseline work rather than proposed features.
 
+The taui port defers `/compact`: Nexus currently compacts automatically while
+assembling a request, but the runtime has no explicit compaction command for a
+client to call. Add a host action and durable compaction event before exposing
+manual compaction in the Textual shell.
+
 The largest observed operator gaps are: the composer cannot attach files or images and has no `@path` completion; `/sessions` lists IDs in a notice instead of a searchable picker; the empty session gives little setup guidance; the main timeline does not render provider-supplied reasoning; a tool preview does not summarize the full repository change; there is no first-class worktree lifecycle; and there is no structured question flow for either the main agent or subagents. The current theme also forces a near-black background, while model/context details sit above the composer rather than in a compact row below it. Release automation and task-quality evals are missing or not discoverable in this checkout. Evidence and boundaries appear below.
 
 ## Priority order

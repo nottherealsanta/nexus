@@ -26,8 +26,7 @@ from collections.abc import AsyncIterator
 from types import SimpleNamespace
 
 from rich.text import Text
-from textual.containers import Horizontal
-from textual.widgets import Label, Static, TextArea
+from textual.widgets import Label, TextArea
 
 from nexus.events import Event
 from nexus.host import protocol as p
@@ -48,8 +47,16 @@ def _event(kind: str, seq: int, data: dict | None = None, *, turn: str = "turn-1
 
 
 def _seed_events(state: str) -> list[Event]:
-    if state in ("empty", "functional"):
+    if state in ("empty", "functional", "slash_menu"):
         return []
+    if state == "first_message":
+        return [
+            _event("input.queued", 1, {"queued_id": "hi", "content": [{"text": "hi"}]}),
+            _event("turn.started", 2, {"agent": {"name": "build"}}),
+            _event("input.consumed", 3, {"queued_id": "hi", "turn": "turn-1"}),
+            _event("model.started", 4, {"provider": "openai", "model": "gpt-5.6-luna"}),
+            _event("turn.failed", 5, {"error": "HTTP 400: invalid request"}),
+        ]
     if state == "reference":
         first = "reference-1"
         second = "reference-2"
@@ -151,6 +158,8 @@ class DemoTransport:
     async def request(self, command: p.Command) -> p.Result:
         if isinstance(command, p.Health):
             return p.HealthResult(sessions=1)
+        if isinstance(command, p.Doctor):
+            return p.DoctorResult(report={"status": "ok", "checks": []})
         if isinstance(command, p.SessionOpen):
             return p.SessionOpenResult(session=SimpleNamespace(id=command.session))
         if isinstance(command, p.SessionState):
@@ -171,6 +180,20 @@ class DemoTransport:
                 {"name": "build", "description": "Focused product changes", "contexts": ["root"]},
                 {"name": "explore", "description": "Read-only investigation", "contexts": ["root"]},
             ])
+        if isinstance(command, p.ContextInspect):
+            return p.ContextInspectResult(
+                session=command.session,
+                agent={"name": "build"},
+                system_text="You are a pragmatic coding assistant.\nRead the workspace before editing.",
+                tools=[
+                    {"name": "bash", "group": "bash", "description": "Run a command", "input_schema": {"type": "object"}},
+                    {"name": "BashOutput", "group": "bash", "description": "Read command output", "input_schema": {"type": "object"}},
+                    {"name": "Read", "group": "Read", "description": "Read a file", "input_schema": {"type": "object"}},
+                    {"name": "Edit", "group": "Edit", "description": "Edit a file", "input_schema": {"type": "object"}},
+                ],
+                skills_index=[{"name": "prompt-toolkit", "description": "Terminal skill", "included": True}],
+                mcp_servers=[{"name": "cvc", "status": "connected", "tool_count": 4, "tools": ["search"]}],
+            )
         if isinstance(command, p.SessionStart):
             # A functional turn: later subscribers replay the scripted events.
             _record_submission(command.content)
@@ -227,7 +250,12 @@ class VisualDemoApp(NexusTextualApp):
         elif self.visual_state == "transcript":
             card = self.query(ToolActivityWidget)
             if card:
-                self.run_worker(card[-1].toggle(), group="visual-diff", exclusive=True)
+                self.run_worker(card[-1].open_details(), group="visual-diff", exclusive=True)
+        elif self.visual_state == "slash_menu":
+            editor = self.query_one("#chat-editor", TextArea)
+            editor.text = "/"
+            editor.move_cursor((0, 1))
+            self.query_one("#chat-input").refresh_completion()
         elif self.visual_state == "reference":
             self._present_reference()
             # Agent metadata sync may run again as replay settles; keep the
@@ -246,7 +274,8 @@ class VisualDemoApp(NexusTextualApp):
         composer_label.append("GPT-6 Luna OpenAI", style="#aaaaaa")
         self.query_one("#root-agent-name").update(composer_label)
         self.query_one("#bottom-info").display = True
-        self.query_one("#cwd-path").update("/Users/santa/repos/nexus")
+        if self.query("#cwd-path"):
+            self.query_one("#cwd-path").update("/Users/santa/repos/nexus")
         self.query_one("#context-usage").update("13.3K (1%)  ctrl+p commands")
         for selector in (
             "#root-separator-model", "#root-model", "#root-separator-provider",
@@ -313,8 +342,6 @@ class VisualDemoApp(NexusTextualApp):
                     "read": "→ Read README.md [offset=90, limit=38]",
                 }.get(tool.call_id, "")
                 tool.query_one("#tool-header").update(Text(command, style="#9b9b9b"))
-                tool.query_one("#tool-detail").update("")
-                tool.query_one("#tool-expanded").update("")
                 tool.styles.height = 1
 
 
@@ -323,7 +350,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Serve a deterministic Nexus Textual visual fixture")
     parser.add_argument(
         "--state",
-        choices=("empty", "transcript", "permission", "picker", "functional", "reference"),
+        choices=("empty", "transcript", "permission", "picker", "functional", "reference", "first_message", "slash_menu"),
         default="empty",
     )
     args = parser.parse_args()

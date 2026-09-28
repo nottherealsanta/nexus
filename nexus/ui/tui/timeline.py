@@ -1,39 +1,63 @@
-"""Reducer-backed conversation timeline and inline tool activity cards."""
+"""Reducer-backed conversation timeline and compact tool activity rows."""
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Mapping
 from typing import Any
 
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.events import Click, Key
+from textual.markup import escape
 from textual.widget import Widget
 from textual.widgets import Button, Markdown, Static
 
-from ...view import AgentView, ConversationView, MessageView, ToolCallView, TurnView
+from ...ui_support.text import redact
 from ...ui_support.timeline import (
-    _DETAIL_LIMIT,
     _agent_metrics,
-    _diff_text,
     _has_message_content,
     _latest_activity,
     _literal,
     _message_markdown,
-    _output,
     _setup_failure,
     _stale_greeting,
     _text,
+    _turn_duration,
+    _turn_models,
     _turn_setup_failure,
-    _turn_summary,
     format_arguments,
+    thought_title,
+    tool_heading,
+    tool_output,
     tool_status,
     tool_summary,
 )
-from ..cli.render import escape_controls, sanitize
+from ...ui_support.tui_context_header import ContextHeader
+from ...view import AgentView, ConversationView, MessageView, ToolCallView, TurnView
+from ..cli.render import escape_controls
 from .messages import AgentOpenRequested
+from .tool_details import ToolDetailsScreen
 
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+_FALLBACK_AGENT_COLOR = "$nx-blue"
+
+
+def _agent_key(turn: TurnView) -> str:
+    agent = turn.agent if isinstance(turn.agent, Mapping) else {}
+    name = agent.get("name")
+    return name.casefold() if isinstance(name, str) else ""
+
+
+def _turn_footer(turn: TurnView) -> str:
+    """Model and elapsed time for a completed turn (the agent shows elsewhere)."""
+    model = _turn_models(turn).split(", ")[0].rsplit("/", 1)[-1]
+    parts = [
+        escape(part)
+        for part in (model if model != "unknown" else "", _turn_duration(turn) or "")
+        if part
+    ]
+    return f"[$nx-quiet]{' · '.join(parts)}[/]" if parts else ""
 class AssistantMessage(Markdown):
     """One stable streamed Markdown message, updating only its appended suffix."""
 
@@ -89,12 +113,57 @@ class AssistantMessage(Markdown):
 
 
 class UserMessage(Static):
-    def __init__(self, message: MessageView, **kwargs: Any) -> None:
+    """The prompt block, with no metadata inside the body."""
+
+    def __init__(self, message: MessageView, ts: float | None = None, **kwargs: Any) -> None:
         self.message_id = message.id
-        super().__init__(_literal(message.text), markup=False, **kwargs)
+        self._message = message
+        self._ts = message.ts or ts
+        self.collapsed = False
+        super().__init__(self._content(message), **kwargs)
+
+    def _content(self, message: MessageView) -> str:
+        chevron = "▶" if self.collapsed else "▼"
+        return f"[$nx-border-strong]{chevron}[/]  {escape(_literal(message.text))}"
 
     def set_message(self, message: MessageView) -> None:
-        self.update(_literal(message.text))
+        self._message = message
+        self._ts = message.ts or self._ts
+        self.update(self._content(message))
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        self.collapsed = collapsed
+        self.update(self._content(self._message))
+
+
+class ThoughtLine(Static):
+    """Provider thinking collapsed to ``Thought: title``; Enter or click expands."""
+
+    can_focus = True
+
+    def __init__(self, message: MessageView, **kwargs: Any) -> None:
+        self.message = message
+        self.expanded = False
+        super().__init__("", **kwargs)
+        self.set_message(message)
+
+    def set_message(self, message: MessageView) -> None:
+        self.message = message
+        text = message.thinking
+        head = f"Thought: {escape(thought_title(text))}"
+        if self.expanded:
+            head += f"\n\n[$nx-muted]{escape(_literal(text))}[/]"
+        self.update(head)
+
+    def on_click(self, event: Click) -> None:
+        event.stop()
+        self.expanded = not self.expanded
+        self.set_message(self.message)
+
+    def on_key(self, event: Key) -> None:
+        if event.key in {"enter", "space"}:
+            event.stop()
+            self.on_click(event)  # type: ignore[arg-type]
 
 
 class ToolActivityWidget(Widget):
@@ -106,16 +175,11 @@ class ToolActivityWidget(Widget):
         super().__init__(**kwargs)
         self.call_id = tool.call_id
         self.tool = tool
-        self.expanded = False
-        self._diff_signature: tuple[object, ...] | None = None
-        self._diff_widget: Widget | None = None
         self._spinner_index = 0
         self._spinner = None
 
     def compose(self) -> ComposeResult:
         yield Static("", id="tool-header", markup=False)
-        yield Static("", id="tool-detail", markup=False)
-        yield Static("", id="tool-expanded", markup=False)
 
     async def on_mount(self) -> None:
         await self.set_tool(self.tool)
@@ -129,25 +193,34 @@ class ToolActivityWidget(Widget):
             self._spinner.stop()
             self._spinner = None
         self._render_header()
-        self.query_one("#tool-detail", Static).update(tool_summary(tool))
-        self.query_one("#tool-expanded", Static).update(
-            self._expanded_text() if self.expanded else ""
-        )
-        await self._sync_diff()
+        self.set_class(tool_status(tool) == "failed", "-failed")
 
     def _render_header(self) -> None:
         tool = self.tool
-        name = _text(tool.name or "tool", 80)
-        args = format_arguments(tool)
-        duration = f" {tool.duration_ms}ms" if isinstance(tool.duration_ms, int) else ""
         marker = tool_status(tool)
-        active = marker == "running"
-        indicator = f"{_SPINNER[self._spinner_index]} " if active else ""
-        self.query_one("#tool-header", Static).update(
-            f"{indicator}{name}"
-            + (f"  {args}" if args else "")
-            + f"  [{marker}{duration}]"
-        )
+        indicator = f"{_SPINNER[self._spinner_index]} " if marker == "running" else ""
+        summary = ""
+        if marker == "completed" and tool.display:
+            summary = _text(tool.display.splitlines()[0], 88)
+            if tool.name.casefold() == "write":
+                content = tool.input.get("content") if isinstance(tool.input, Mapping) else None
+                lines = content.count("\n") + 1 if isinstance(content, str) and content else 0
+                summary = f"written · {lines} lines" if lines else "written"
+        elif marker == "failed" and tool.error:
+            summary = _text(tool.error.splitlines()[0], 88)
+        if summary.casefold().startswith(f"{tool.name.casefold()}:"):
+            summary = summary[len(tool.name) + 1 :].strip()
+        summary = redact(summary)
+        suffix = f" · {summary}" if summary else (f" · {marker}" if marker != "completed" else "")
+        header = self.query_one("#tool-header", Static)
+        header.update(f"{indicator}{tool_heading(tool)}{suffix}")
+        self._style_header()
+
+    def _style_header(self) -> None:
+        header = self.query_one("#tool-header", Static)
+        header.styles.text_overflow = "ellipsis"
+        header.styles.text_wrap = "nowrap"
+        header.styles.overflow_x = "hidden"
 
     def _spin(self) -> None:
         if tool_status(self.tool) != "running":
@@ -160,82 +233,50 @@ class ToolActivityWidget(Widget):
             self._spinner.stop()
             self._spinner = None
 
-    def _expanded_text(self) -> str:
+    def _details_text(self) -> str:
         tool = self.tool
-        lines: list[str] = []
+        sections = [f"Status: {tool_status(tool)}"]
+        if tool.duration_ms is not None:
+            sections.append(f"Duration: {tool.duration_ms} ms")
+        if tool.input:
+            payload = json.dumps(tool.input, ensure_ascii=True, indent=2, default=str)
+            sections.append("Call parameters:\n" + redact(escape_controls(payload))[:8192])
+        if tool.progress:
+            progress = "\n".join(redact(_literal(item, 300)) for item in tool.progress)
+            sections.append("Progress:\n" + progress)
+        if tool.display:
+            sections.append("Summary:\n" + redact(_literal(tool.display, 8192)))
+        if tool.result:
+            result = json.dumps(tool.result, ensure_ascii=True, indent=2, default=str)
+            sections.append("Result:\n" + redact(escape_controls(result))[:8192])
+        if tool.error:
+            sections.append("Error:\n" + tool_output(tool))
+        if tool.context_note:
+            sections.append("Context:\n" + redact(_literal(tool.context_note, 400)))
         if isinstance(tool.diff, Mapping):
             path = _text(tool.diff.get("path") or "edit", 160)
-            added = tool.diff.get("added_lines", 0)
-            removed = tool.diff.get("removed_lines", 0)
-            suffix = " (preview truncated)" if tool.diff.get("truncated") else ""
-            lines.append(f"{path}: +{added} -{removed}{suffix}")
             hunk = tool.diff.get("hunk")
-            if isinstance(hunk, str):
-                lines.append(_literal(hunk, _DETAIL_LIMIT))
-        if tool.progress:
-            lines.extend(_literal(item, 300) for item in tool.progress[-6:])
-        # Write content is intentionally never replayed into a transcript. Its
-        # canonical output is already the compact status shown on the card.
-        value = "" if tool.name.casefold() == "write" else _output(tool)
-        if value:
-            lines.append(value)
-        if tool.error:
-            lines.append("error: " + _text(tool.error, 600))
-        if tool.context_note:
-            lines.append("context: " + _literal(tool.context_note, 400))
-        return "\n".join(lines)[:_DETAIL_LIMIT]
+            diff = f"{path}: +{tool.diff.get('added_lines', 0)} -{tool.diff.get('removed_lines', 0)}"
+            if tool.diff.get("truncated"):
+                diff += " (preview truncated)"
+            if isinstance(hunk, str) and hunk:
+                diff += "\n" + redact(_literal(hunk, 8192))
+            sections.append("Diff:\n" + diff)
+        text = "\n\n".join(sections)
+        return text if len(text) <= 32_000 else text[:32_000] + "\n[Details clipped]"
 
-    async def _sync_diff(self) -> None:
-        """Mount the optional dependency only for valid, wide Edit artifacts."""
-        diff = (
-            self.tool.diff
-            if self.tool.name.casefold() in {"edit", "multiedit"}
-            else None
-        )
-        if not isinstance(diff, Mapping) or self.size.width < 72:
-            await self._clear_diff()
-            return
-        text = _diff_text(diff)
-        signature = (diff.get("path"), diff.get("hunk"), diff.get("truncated"))
-        if text is None or signature == self._diff_signature:
-            return
-        self._diff_signature = signature
-        try:
-            from textual_diff_view import DiffView
-
-            path = _text(diff.get("path") or "edit", 160)
-            if self._diff_widget is not None:
-                await self._diff_widget.remove()
-            view = DiffView(
-                path, path, text[0], text[1], split=True, annotations=True, wrap=True
-            )
-            view.add_class("tool-diff-view")
-            await view.prepare()
-            await self.mount(view)
-            self._diff_widget = view
-        except Exception:
-            # The durable unified hunk remains visible in the expanded fallback.
-            self.query_one("#tool-expanded", Static).update(self._expanded_text())
-
-    async def _clear_diff(self) -> None:
-        """Return to the durable text fallback when a diff preview cannot fit."""
-        if self._diff_widget is not None:
-            await self._diff_widget.remove()
-            self._diff_widget = None
-        self._diff_signature = None
-
-    async def toggle(self) -> None:
-        self.expanded = not self.expanded
-        await self.set_tool(self.tool)
+    async def open_details(self) -> None:
+        title = f"{tool_heading(self.tool)} · {tool_status(self.tool)}"
+        await self.app.push_screen(ToolDetailsScreen(title, self._details_text()))
 
     async def on_click(self, event: Click) -> None:
         event.stop()
-        await self.toggle()
+        await self.open_details()
 
     async def on_key(self, event: Key) -> None:
         if event.key in {"enter", "space"}:
             event.stop()
-            await self.toggle()
+            await self.open_details()
 
 
 class TaskActivityWidget(ToolActivityWidget):
@@ -246,26 +287,26 @@ class TaskActivityWidget(ToolActivityWidget):
     ) -> None:
         super().__init__(tool, **kwargs)
         self.agents = agents
-        self._child_links: dict[str, AgentActivityLink] = {}
 
     async def set_task(
         self, tool: ToolCallView, agents: Mapping[str, AgentView]
     ) -> None:
         self.agents = agents
         await self.set_tool(tool)
-        wanted = {agent.id for agent in self._children()}
-        for agent_id, link in tuple(self._child_links.items()):
-            if agent_id not in wanted:
-                await link.remove()
-                del self._child_links[agent_id]
-        for agent in self._children():
-            link = self._child_links.get(agent.id)
-            if link is None:
-                link = AgentActivityLink(agent, classes="task-child")
-                self._child_links[agent.id] = link
-                await self.mount(link)
-            else:
-                link.set_agent(agent)
+
+    def _render_header(self) -> None:
+        tool = self.tool
+        marker = tool_status(tool)
+        mark = {"completed": "✓", "failed": "✗"}.get(marker, _SPINNER[self._spinner_index])
+        child = next(iter(self._children()), None)
+        kind = (child.type if child and child.type else tool.input.get("subagent_type") if isinstance(tool.input, Mapping) else None) or "General"
+        description = format_arguments(tool) or "Task"
+        self.query_one("#tool-header", Static).update(f"{mark} {_text(str(kind), 32).title()} Task — {description}")
+        self._style_header()
+
+    async def set_tool(self, tool: ToolCallView) -> None:
+        await super().set_tool(tool)
+        self.add_class("task-card")
 
     def _children(self) -> Iterable[AgentView]:
         return (
@@ -274,36 +315,24 @@ class TaskActivityWidget(ToolActivityWidget):
             if agent_id in self.agents
         )
 
-    def _expanded_text(self) -> str:
+    def _details_text(self) -> str:
+        details = super()._details_text()
         rows = []
         for agent in self._children():
-            latest = _latest_activity(agent)
             rows.append(
                 f"{_text(agent.type or agent.id, 48)} · {_text(agent.task or agent.description, 96)}"
-                f" · {_text(agent.status, 24)} · {_agent_metrics(agent)}\n  {latest}"
+                f" · {_text(agent.status, 24)} · {_agent_metrics(agent)}\n  {_latest_activity(agent)}"
             )
-        return "\n".join(rows) or super()._expanded_text()
+        return details + ("\n\nChild agents:\n" + "\n".join(rows) if rows else "")
 
-    async def on_click(self, event: Click) -> None:
-        event.stop()
-        children = list(self._children())
-        if len(children) == 1:
-            self.post_message(AgentOpenRequested(children[0].id))
-            return
-        await self.toggle()
-
-    async def on_key(self, event: Key) -> None:
-        if event.key == "enter":
-            event.stop()
-            children = list(self._children())
-            if children:
-                self.post_message(AgentOpenRequested(children[0].id))
-            else:
-                await self.toggle()
-        elif event.key == "space":
-            event.stop()
-            await self.toggle()
-
+    async def open_details(self) -> None:
+        title = f"{tool_heading(self.tool)} · {tool_status(self.tool)}"
+        child = next(iter(self._children()), None)
+        await self.app.push_screen(
+            ToolDetailsScreen(
+                title, self._details_text(), agent_id=child.id if child else None
+            )
+        )
 
 class AgentActivityLink(Button):
     """Focusable child projection; it holds no activity state of its own."""
@@ -351,6 +380,10 @@ class TurnWidget(Widget):
         self.turn = turn
         self.agents = agents
         self._summary_widget: Static | None = None
+        self._collapsed_summary: Static | None = None
+        self.collapsed = False
+        #: Host-reported agent colors by lowercase name (set by the timeline).
+        self.agent_colors: Mapping[str, str] = {}
 
     def render(self) -> str:
         """Never let Textual's default childless-widget label reach the screen."""
@@ -369,13 +402,16 @@ class TurnWidget(Widget):
     ) -> None:
         self.turn = turn
         self.agents = agents
+        if turn.phase == "active" and self.collapsed:
+            self.collapsed = False
         entries: list[tuple[int, str, object]] = []
-        entries.extend(
-            (message.event_seq, f"message:{message.id or index}", message)
-            for index, message in enumerate(turn.messages)
-            if _has_message_content(message)
-            and f"{self.turn_id}:message:{message.id or index}" != hide_greeting_key
-        )
+        for index, message in enumerate(turn.messages):
+            if f"{self.turn_id}:message:{message.id or index}" == hide_greeting_key:
+                continue
+            if message.role == "assistant" and message.thinking:
+                entries.append((message.event_seq, f"message-thought:{message.id or index}", ("thought", message)))
+            if message.text if message.role == "assistant" else _has_message_content(message):
+                entries.append((message.event_seq, f"message:{message.id or index}", message))
         entries.extend(
             (tool.event_seq, f"tool:{tool.call_id}", tool) for tool in turn.tools
         )
@@ -403,6 +439,8 @@ class TurnWidget(Widget):
                 entry[1],
             )
         )
+        if self.collapsed:
+            entries = [entry for entry in entries if isinstance(entry[2], MessageView) and entry[2].role == "user"]
         wanted = {key for _, key, _ in entries}
         for key, widget in tuple(self._items.items()):
             if key not in wanted:
@@ -410,10 +448,17 @@ class TurnWidget(Widget):
                 del self._items[key]
         for _, key, value in entries:
             widget = self._items.get(key)
-            if isinstance(value, MessageView):
+            if isinstance(value, tuple):
+                if widget is None:
+                    widget = ThoughtLine(value[1], classes="timeline-thought")
+                    self._items[key] = widget
+                    await self.mount(widget)
+                elif isinstance(widget, ThoughtLine):
+                    widget.set_message(value[1])
+            elif isinstance(value, MessageView):
                 if widget is None:
                     widget = (
-                        UserMessage(value, classes="timeline-user")
+                        UserMessage(value, turn.user_ts, classes="timeline-user")
                         if value.role == "user"
                         else AssistantMessage(value, classes="timeline-assistant")
                     )
@@ -441,19 +486,32 @@ class TurnWidget(Widget):
             elif isinstance(value, str):
                 if widget is None:
                     widget = Static(
-                        _text(value), markup=False, classes="timeline-error"
+                        f"Error: {_text(value)}", markup=False, classes="timeline-error"
                     )
                     self._items[key] = widget
                     await self.mount(widget)
                 elif isinstance(widget, Static):
-                    widget.update(_text(value))
+                    widget.update(f"Error: {_text(value)}")
 
-        if turn.phase == "completed":
-            summary = _turn_summary(turn)
+        for item in self._items.values():
+            if isinstance(item, UserMessage):
+                item.set_collapsed(self.collapsed)
+        if self.collapsed:
+            reply = next((message.text.splitlines()[0] for message in turn.messages if message.role == "assistant" and message.text), "")
+            metrics = " · ".join(part for part in (str(turn.usage.total_tokens) + " tokens" if turn.usage.total_tokens else "", _turn_duration(turn) or "") if part)
+            collapsed = f"[$nx-muted]{len(turn.tools)} tools · {escape(_text(reply, 120))}[/]  [$nx-quiet]{metrics}[/]"
+            if self._collapsed_summary is None:
+                self._collapsed_summary = Static(collapsed, classes="turn-collapsed")
+                await self.mount(self._collapsed_summary)
+            else:
+                self._collapsed_summary.update(collapsed)
+        elif self._collapsed_summary is not None:
+            await self._collapsed_summary.remove()
+            self._collapsed_summary = None
+        if turn.terminal and not self.collapsed:
+            summary = _turn_footer(turn)
             if self._summary_widget is None:
-                self._summary_widget = Static(
-                    summary, markup=False, classes="timeline-summary"
-                )
+                self._summary_widget = Static(summary, classes="timeline-summary")
                 await self.mount(self._summary_widget)
             else:
                 self._summary_widget.update(summary)
@@ -461,15 +519,30 @@ class TurnWidget(Widget):
             await self._summary_widget.remove()
             self._summary_widget = None
 
+    async def on_click(self, event: Click) -> None:
+        if not isinstance(event.widget, UserMessage) or event.offset.x > 3:
+            return
+        event.stop()
+        if self.turn.phase == "active":
+            return
+        self.collapsed = not self.collapsed
+        await self.set_turn(self.turn, self.agents)
+
 
 class ConversationTimeline(VerticalScroll):
     """Single-column reducer projection with tail-follow only when pinned."""
 
     can_focus = True
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, *, header: bool = True, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._turns: dict[str, TurnWidget] = {}
+        self.agent_colors: dict[str, str] = {}
+        self._header = header
+
+    def compose(self) -> ComposeResult:
+        if self._header:
+            yield ContextHeader(id="context-header")
 
     @property
     def at_bottom(self) -> bool:
@@ -519,6 +592,7 @@ class ConversationTimeline(VerticalScroll):
                 widget = TurnWidget(turn, view.agents, classes="turn")
                 self._turns[turn.id] = widget
                 await self.mount(widget)
+            widget.agent_colors = self.agent_colors
             await widget.set_turn(
                 turn,
                 view.agents,
@@ -528,21 +602,12 @@ class ConversationTimeline(VerticalScroll):
         if follow:
             self.call_after_refresh(self.scroll_end, animate=False)
 
-    def on_resize(self, _event: object) -> None:
-        for turn in self._turns.values():
-            for widget in turn._items.values():
-                if isinstance(widget, ToolActivityWidget):
-                    self.run_worker(
-                        widget.set_tool(widget.tool),
-                        group="timeline-resize",
-                        exclusive=False,
-                    )
-
-
 __all__ = [
     "ConversationTimeline",
     "TaskActivityWidget",
+    "ThoughtLine",
     "ToolActivityWidget",
     "TurnWidget",
     "format_arguments",
+    "tool_summary",
 ]

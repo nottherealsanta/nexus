@@ -8,9 +8,6 @@ memory_file = "MEMORY.md"
 [models]
 default = "codex/gpt-6-luna"
 
-[context]
-max_tokens = 16000
-
 [providers.codex]
 auth = "chatgpt_oauth"
 profile = "default"

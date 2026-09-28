@@ -555,9 +555,18 @@ def _on_thinking(state: ConversationView, event: Event, data: Mapping[str, Any])
 
 def _on_model_usage(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
     state, index = _turn_for(state, event)
-    turn = state.turns[index]
-    turn = replace(turn, usage=turn.usage.merge(UsageTotals.from_stream(dict(data))), updated_ts=event.ts)
-    return _put(state, index, turn)
+    state = _put(state, index, replace(state.turns[index], usage=state.turns[index].usage.merge(UsageTotals.from_stream(dict(data))), updated_ts=event.ts))
+    prompt, ctx = _as_int(data.get("prompt")) or _as_int(data.get("input")), (state.context or {}).get("context")
+    if prompt > 0 and isinstance(ctx, dict):  # the provider's count (+ the reply, now history) replaces the estimate
+        state = replace(state, context={**state.context, "context": {**ctx, "measured_tokens": prompt + max(0, _as_int(data.get("output"))), "measured_prompt": prompt, "measured_estimate": ctx.get("used_tokens")}})
+    return state
+
+def _carry_measurement(old: Any, new: dict[str, Any]) -> dict[str, Any]:
+    """A new estimate keeps the last measurement plus the estimated growth since it."""
+    prior, ctx = old.get("context") if isinstance(old, dict) else None, new.get("context")
+    base = [_opt_int(prior.get(k)) for k in ("measured_prompt", "measured_estimate")] if isinstance(prior, dict) else [None]
+    carry = None not in base and isinstance(ctx, dict) and _opt_int(ctx.get("used_tokens")) is not None
+    return {**new, "context": {**ctx, "measured_tokens": max(0, base[0] + ctx["used_tokens"] - base[1]), "measured_prompt": base[0], "measured_estimate": base[1]}} if carry else new
 
 def _on_model_stopped(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
     state, index = _turn_for(state, event)
@@ -820,7 +829,7 @@ def _on_context(state: ConversationView, event: Event, data: Mapping[str, Any], 
             "model": _as_str(data.get("model")), "tools": _as_int(data.get("tools")),
             "messages": _as_int(data.get("messages")),
         }
-        return replace(state, context=jsonable(payload), model=model_info)
+        return replace(state, context=_carry_measurement(state.context, jsonable(payload)), model=model_info)
     return state
 
 def _on_skill_invoked(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
@@ -1456,6 +1465,9 @@ def _apply(state: ConversationView, event: Event) -> ConversationView:
         )
     if event_type == "session.closed":
         return replace(state, closed=True)
+    if event_type == "session.forked":
+        # Fork provenance is durable session metadata, not conversation content.
+        return state
     if event_type == "daemon.started":
         return replace(state, opened=True) if not state.opened else state
     if event_type == "error":

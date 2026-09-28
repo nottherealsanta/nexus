@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from importlib.resources import files
+from pathlib import Path
 from typing import ClassVar
 
 from textual import constants, on
@@ -18,12 +20,16 @@ from textual.widgets import Button, Input, OptionList, Static, TextArea
 from ...client.protocol import Client, ClientError
 from ...events import Event
 from ...host import protocol as p
+from ...ui_support.context import context_measure
+from ...ui_support.tui_context_header import ContextBlock, ContextHeader, ContextModal
+from ...ui_support.tui_panels import DetailsSidebar, SessionSidebar, TuiPreferences
 from ..cli import commands
 from ..cli.details import detail_lines
 from ..cli.render import sanitize
 from .agent_picker import AgentPicker, AgentPickerPanel, _display_name
 from .agent_transcript import AgentTranscriptScreen
 from .controller import TuiController
+from .extras import ExtraCommandsMixin
 from .keys import NexusDriver
 from .messages import (
     AgentOpenRequested,
@@ -35,10 +41,12 @@ from .messages import (
     StreamDisconnected,
     TurnFinished,
 )
-from .permission import PermissionScreen
-from .theme import NEXUS_DARK
+from .panels import MainLayout, PanelsMixin, TopBar
+from .permission import ListPrompt, PermissionScreen, ask_pending_question
+from .theme import NEXUS_THEMES
 from .timeline import ConversationTimeline
 from .widgets import (
+    ActivityProgress,
     ChatInput,
     ConnectionStatus,
     ContextDetailsScreen,
@@ -63,8 +71,11 @@ SHORTCUTS: tuple[tuple[str, str | None, str], ...] = (
     ("ctrl+o", "list_sessions", "List sessions"),
     ("ctrl+f", "fork_session", "Fork session"),
     ("ctrl+g", "pick_agent", "Open the root-agent picker"),
+    ("ctrl+b", "toggle_sessions", "Toggle the sessions sidebar"),
+    ("ctrl+l", "toggle_details", "Toggle the details sidebar"),
+    ("ctrl+s", "open_settings", "Settings"),
     ("ctrl+i", "open_context", "Inspect context preview and usage"),
-    ("ctrl+t", None, "Choose root reasoning effort"),
+    ("ctrl+t", None, "Cycle root reasoning effort"),
     ("ctrl+e", None, "Toggle the Logs drawer"),
     ("a", None, "Open the root-agent picker"),
     ("shift+tab", None, "Cycle root agent"),
@@ -151,10 +162,12 @@ class ChatCommandProvider(Provider):
                 help="Review, acknowledge, integrate, or discard daemon-owned child worktrees",
             )
         for spec in commands.SPECS:
+            if spec.hidden:
+                continue
             label = (
                 f"Quit chat — {spec.summary}"
                 if spec.name == "/exit"
-                else f"{spec.name} {spec.usage} — {spec.summary}".strip()
+                else f"{', '.join((spec.name, *spec.aliases))} {spec.usage} — {spec.summary}".strip()
             )
             raw = "/exit" if spec.name == "/exit" else spec.name
             score = matcher.match(label)
@@ -171,7 +184,7 @@ class ChatCommandProvider(Provider):
                 )
 
 
-class NexusTextualApp(App[int]):
+class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
     """Full-screen interactive client of the existing Nexus daemon protocol."""
 
     TITLE = "Nexus"
@@ -180,6 +193,7 @@ class NexusTextualApp(App[int]):
         lambda: ShortcutsCommandProvider,
     }
     ENABLE_COMMAND_PALETTE = True
+    SHORTCUT_TABLE = SHORTCUTS
     LOGS_POLL_INTERVAL = 1.0
     CSS = files(__package__).joinpath("app.tcss").read_text(encoding="utf-8")
     #: Derived from :data:`SHORTCUTS`, the single source for the key reference.
@@ -195,9 +209,15 @@ class NexusTextualApp(App[int]):
         *,
         session: str = "default",
         reconnect: Callable[[], Awaitable[Client]] | None = None,
+        preferences_path: Path | None = None,
     ) -> None:
         super().__init__()
+        self.prefs = TuiPreferences(preferences_path)
+        self._health: dict | None = None
+        self._health_error: str | None = None
+        self._last_archive: tuple[str, str] | None = None
         self.controller = TuiController(client, session)
+        self.controller.on_stream_end = self._sync_activity
         self._agents: list[dict] = []
         self._reconnect_factory = reconnect
         self._pending_permission_id: str | None = None
@@ -209,6 +229,7 @@ class NexusTextualApp(App[int]):
         self._picker_selected_model: str | None = None
         self._status_error = False
         self._status_text = ""
+        self._last_ctrl_c = 0.0
         self._logs_open = False
         self._logs_generation = 0
         self._logs_daemon_cursor: str | None = None
@@ -222,8 +243,10 @@ class NexusTextualApp(App[int]):
         self._context_preview: p.ContextInspectResult | None = None
         self._context_preview_error: str | None = None
         self._context_preview_loading = False
-        self.register_theme(NEXUS_DARK)
-        self.theme = NEXUS_DARK.name
+        for theme in NEXUS_THEMES:
+            self.register_theme(theme)
+        names = {theme.name for theme in NEXUS_THEMES}
+        self.theme = self.prefs["theme"] if self.prefs["theme"] in names else NEXUS_THEMES[0].name
 
     def get_driver_class(self):
         """Install the terminal key-protocol driver on POSIX terminals.
@@ -238,26 +261,38 @@ class NexusTextualApp(App[int]):
         return super().get_driver_class()
 
     def compose(self) -> ComposeResult:
-        from textual.containers import Horizontal, Vertical
+        from textual.containers import Vertical
 
-        with Horizontal(id="main-layout"):
+        yield TopBar(id="top-bar")
+        with MainLayout(id="main-layout"):
+            yield SessionSidebar(id="session-sidebar")
             with Vertical(id="main-column"):
                 yield ContextPreview(id="context-preview")
                 yield ConversationTimeline(id="conversation")
                 yield ConnectionStatus("Connecting to Nexus daemon…", id="connection-status")
                 yield AgentPickerPanel(id="inline-picker")
                 yield ChatInput(id="chat-input")
+                yield ActivityProgress(id="activity-progress")
+            yield DetailsSidebar(id="details-sidebar")
             yield LogsDrawer(id="logs-drawer")
 
     async def on_mount(self) -> None:
+        self._sync_panels()
         try:
             await self.controller.bootstrap()
             self._agents = await self.controller.client.list_agents()
+            self._sync_agent_colors()
             self._sync_status("")
             self._sync_agent()
             await self._sync_timeline()
             self.call_after_refresh(self.query_one("#chat-editor", TextArea).focus)
+            await ask_pending_question(self)
             self._start_context_preview()
+            self._sync_panels()
+            self.set_interval(2.0, self._poll_sessions)
+            self.set_interval(30.0, self._poll_health)
+            self.run_worker(self._poll_sessions(), group="sessions")
+            self.run_worker(self._poll_health(), group="health")
         except ClientError as exc:
             self._sync_status(f"Disconnected · {exc}", error=True)
 
@@ -282,7 +317,7 @@ class NexusTextualApp(App[int]):
         elif event.key == "ctrl+t" and isinstance(self.focused, TextArea) and self._is_main_screen():
             event.stop()
             event.prevent_default()
-            self.run_worker(self._open_effort_picker(), group="inline-picker")
+            self.run_worker(self.action_cycle_reasoning_effort(), group="reasoning-effort")
         elif (
             event.key.lower() == "a"
             and not isinstance(self.focused, (TextArea, Input))
@@ -293,10 +328,8 @@ class NexusTextualApp(App[int]):
 
     def _is_main_screen(self) -> bool:
         from .agent_picker import AgentPicker
-        from .permission import PermissionScreen
-
         return self.screen is self.screen_stack[0] and not isinstance(
-            self.screen, (AgentPicker, PermissionScreen)
+            self.screen, (AgentPicker, ListPrompt)
         )
 
     def action_toggle_logs(self) -> None:
@@ -316,6 +349,7 @@ class NexusTextualApp(App[int]):
         timeline = self.query_one("#conversation", ConversationTimeline)
         self._logs_saved_scroll_y = timeline.scroll_offset.y
         drawer.display = True
+        self._sync_panels()
         self._sync_logs_layout()
         self._sync_main_width()
         self._start_logs_polling()
@@ -327,6 +361,7 @@ class NexusTextualApp(App[int]):
         self._logs_generation += 1
         self._cancel_logs_polling()
         self.query_one(LogsDrawer).display = False
+        self._sync_panels()
         self._sync_logs_layout()
         self._sync_main_width()
         self._restore_logs_scroll()
@@ -352,11 +387,8 @@ class NexusTextualApp(App[int]):
     def _sync_main_width(self) -> None:
         if not self.is_mounted:
             return
-        main = self.query_one("#main-column")
-        if self._logs_open:
-            main.styles.width = "1fr"
-        else:
-            main.styles.width = "100%"
+        # Side panels share the row, so the chat column always takes the rest.
+        self.query_one("#main-column").styles.width = "1fr"
 
     def _restore_logs_scroll(self) -> None:
         if self._logs_saved_scroll_y is None or not self.is_mounted:
@@ -424,6 +456,7 @@ class NexusTextualApp(App[int]):
                 self._logs_poll_task = None
 
     async def on_resize(self, event) -> None:
+        self._sync_panels()
         self._sync_logs_layout()
         self._sync_main_width()
         if self._logs_open and self._logs_saved_scroll_y is not None:
@@ -475,7 +508,26 @@ class NexusTextualApp(App[int]):
             elif parsed.name == "/new":
                 session = args[0] if args else f"session-{uuid.uuid4().hex[:8]}"
                 await self._switch_session(session)
-            elif parsed.name in {"/sessions", "/session", "/sesssion"}:
+            elif parsed.name == "/hotkeys":
+                self.push_screen(ShortcutsScreen(KEYBOARD_SHORTCUTS))
+            elif parsed.name == "/theme":
+                requested = args[0].casefold() if args else ("light" if self.theme == "nexus-dark" else "dark")
+                theme = next((item for item in NEXUS_THEMES if item.name.endswith(requested)), None)
+                if theme is None:
+                    await self._show_notice("Use /theme dark or /theme light")
+                else:
+                    self.theme = theme.name
+                    self.prefs.set("theme", theme.name)
+            elif parsed.name == "/settings":
+                self.action_open_settings()
+            elif parsed.name == "/verbose":
+                await self._show_notice("Tool details open in a modal when selected")
+            elif parsed.name in {"/mcp", "/skills"}:
+                block = self.query_one("#context-mcp" if parsed.name == "/mcp" else "#context-skills", ContextBlock)
+                self.push_screen(ContextModal(block.label, block.detail, category="mcp" if parsed.name == "/mcp" else "skills"))
+            elif parsed.name in {"/copy", "/cost", "/diff", "/tasks", "/reload", "/review", "/commit"}:
+                await self._dispatch_extra_command(parsed.name, args)
+            elif parsed.name == "/sessions":
                 summaries = await self.controller.client.list_sessions()
                 if args:
                     matched = next((row for row in summaries if row.id == args[0] or row.id.startswith(args[0])), None)
@@ -484,10 +536,11 @@ class NexusTextualApp(App[int]):
                     else:
                         await self._switch_session(matched.id)
                 else:
-                    await self._show_notice("\n".join(
-                        f"{row.id} [{row.state}] seq={row.last_seq} viewers={row.viewers} {row.title}"
-                        for row in summaries
-                    ) or "No sessions")
+                    self._open_sessions_dialog()
+            elif parsed.name == "/archived":
+                self._open_archived_dialog()
+            elif parsed.name == "/effort":
+                await self._effort_command(args)
             elif parsed.name == "/model":
                 if args:
                     if args[0] == "list":
@@ -551,6 +604,7 @@ class NexusTextualApp(App[int]):
         self._context_preview = None
         self._context_preview_error = None
         self._context_preview_loading = False
+        self.query_one(ContextHeader).set_unavailable()
         self._logs_generation += 1
         self._cancel_logs_polling()
         self._logs_session_cursor = None
@@ -569,10 +623,10 @@ class NexusTextualApp(App[int]):
             self._start_logs_polling()
 
     async def _model_command(self, args: tuple[str, ...]) -> None:
-        result = await self.controller.select_model(args[0])
+        await self.controller.select_model(args[0])
         self._sync_agent()
         self._refresh_context_after_selection(self.controller.session)
-        await self._show_notice(f"model -> {result.provider}/{result.model} (applies next turn)")
+        self._sync_status("")
 
     async def action_cycle_reasoning_effort(self) -> None:
         """Cycle the host-supported reasoning effort for the root session."""
@@ -617,10 +671,7 @@ class NexusTextualApp(App[int]):
             ):
                 return
             self._sync_agent()
-            notice = f"Reasoning effort → {next_effort} (applies next turn)"
-            if self.controller.running:
-                notice = f"Reasoning effort → {next_effort} (applies next turn; current turn unchanged)"
-            self._sync_status(notice)
+            self._sync_status("")
         except ClientError as exc:
             if (
                 session == self.controller.session
@@ -670,16 +721,13 @@ class NexusTextualApp(App[int]):
             result = await self.controller.client.current_agent(self.controller.session)
             await self._show_notice(f"{_display_name(result.name)} ({result.source})")
             return
-        result = (
+        if action == "reset":
             await self.controller.reset_agent()
-            if action == "reset"
-            else await self.controller.select_agent(action)
-        )
+        else:
+            await self.controller.select_agent(action)
         self._sync_agent()
         self._refresh_context_after_selection(self.controller.session)
-        await self._show_notice(
-            f"Agent {_display_name(result.name)} selected · applies next turn"
-        )
+        self._sync_status("")
 
     def _post_event(self, event: Event | None) -> asyncio.Future[None] | None:
         if event is None:
@@ -719,6 +767,7 @@ class NexusTextualApp(App[int]):
                 self._sync_status()
             await self._sync_timeline()
             self._refresh_open_inspector()
+            await ask_pending_question(self)
         if message.handled is not None and not message.handled.done():
             message.handled.set_result(None)
 
@@ -735,19 +784,18 @@ class NexusTextualApp(App[int]):
         if not self.is_mounted:
             return
         await self.query_one("#conversation", ConversationTimeline).set_view(self.controller.view)
+        self.query_one(SessionSidebar).set_current_running(self.controller.view.phase == "running")
+        self._sync_topbar()
         self.query_one("#context-usage", Static).update(context_usage(self.controller.view))
+        self._sync_activity()
         if self.controller.session and self._context_preview_session != self.controller.session:
             self._start_context_preview()
+        self._sync_details()
         preview = self.query_one("#context-preview", ContextPreview)
         active = self.controller.view.active_turn is not None
-        preview.display = bool(self.controller.session)
+        preview.display = self._preview_visible()
         if active:
-            self._context_preview_generation += 1
-            self._context_preview_session = None
-            self._context_preview = None
-            self._context_preview_error = "Next-turn context is unavailable while a turn is active."
-            self._context_preview_loading = False
-            preview.set_preview(None, error=self._context_preview_error)
+            pass  # keep the last assembled context visible during a turn
         elif self._context_preview_session == self.controller.session:
             preview.set_preview(
                 self._context_preview,
@@ -764,11 +812,6 @@ class NexusTextualApp(App[int]):
         preview = self.query_one("#context-preview", ContextPreview)
         view = self.controller.view
         if view.active_turn is not None:
-            preview.display = bool(self.controller.session)
-            self._context_preview = None
-            self._context_preview_error = "Next-turn context is unavailable while a turn is active."
-            self._context_preview_loading = False
-            preview.set_preview(None, error=self._context_preview_error)
             return
         session = self.controller.session
         self._context_preview_generation += 1
@@ -777,7 +820,7 @@ class NexusTextualApp(App[int]):
         self._context_preview = None
         self._context_preview_error = None
         self._context_preview_loading = True
-        preview.display = True
+        preview.display = self._preview_visible()
         preview.set_preview(None, loading=True)
         previous = self._context_preview_task
         if previous is not None and not previous.done():
@@ -823,6 +866,12 @@ class NexusTextualApp(App[int]):
         preview = self.query_one("#context-preview", ContextPreview)
         if self.controller.view.active_turn is None:
             preview.set_preview(self._context_preview, loading=self._context_preview_loading, error=self._context_preview_error)
+        header = self.query_one(ContextHeader)
+        if self._context_preview is not None:
+            header.set_data(self._context_preview, color=self._agent_color_for(
+                str(self._context_preview.agent.get("name") or self.controller.agent_name)))
+        elif self._context_preview_error:
+            header.set_unavailable()
 
     async def action_open_context(self) -> None:
         """Show the host-generated current request and its accounting."""
@@ -994,6 +1043,7 @@ class NexusTextualApp(App[int]):
             current = await self.controller.client.current_agent(self.controller.session)
             levels = list(getattr(current, "supported_levels", ()) or ())
             if not levels:
+                await self._show_notice("Reasoning effort unavailable for this model")
                 return
             current_effort = getattr(current, "reasoning_effort", None)
             rows = [
@@ -1020,24 +1070,41 @@ class NexusTextualApp(App[int]):
                 message.value, message.effort, commit_effort=message.commit_effort
             )
         elif kind == "effort":
-            session = self.controller.session
-            revision = self.controller._agent_metadata_revision
-            self._reasoning_effort_in_flight = True
-            try:
-                effort = message.value
-                await self.controller.client.select_reasoning_effort(session, effort)
-                if session != self.controller.session or revision != self.controller._agent_metadata_revision:
-                    return
-                await self.controller.refresh_agent_metadata()
-                if session != self.controller.session or revision != self.controller._agent_metadata_revision:
-                    return
-                self._sync_agent()
-                self._sync_status(f"Reasoning effort → {effort or 'Default'} (applies next turn)")
-                self._refresh_context_after_selection(session)
-            except ClientError as exc:
-                self._sync_status(f"Reasoning effort selection failed · {exc}", error=True)
-            finally:
-                self._reasoning_effort_in_flight = False
+            await self._apply_effort_selection(message.value)
+
+    async def _apply_effort_selection(self, effort: str) -> None:
+        session = self.controller.session
+        revision = self.controller._agent_metadata_revision
+        self._reasoning_effort_in_flight = True
+        try:
+            await self.controller.client.select_reasoning_effort(session, effort)
+            if session != self.controller.session or revision != self.controller._agent_metadata_revision:
+                return
+            await self.controller.refresh_agent_metadata()
+            if session != self.controller.session or revision != self.controller._agent_metadata_revision:
+                return
+            self._sync_agent()
+            self._sync_status("")
+            self._refresh_context_after_selection(session)
+        except ClientError as exc:
+            self._sync_status(f"Reasoning effort selection failed · {exc}", error=True)
+        finally:
+            self._reasoning_effort_in_flight = False
+
+    async def _effort_command(self, args: tuple[str, ...]) -> None:
+        """``/effort`` opens the effort picker; ``/effort LEVEL`` selects directly."""
+        if not args:
+            await self._open_effort_picker()
+            return
+        current = await self.controller.client.current_agent(self.controller.session)
+        levels = [str(level) for level in getattr(current, "supported_levels", ()) or ()]
+        level = args[0].casefold()
+        if level in levels:
+            await self._apply_effort_selection(level)
+        elif levels:
+            await self._show_notice(f"Use /effort {'|'.join(levels)}")
+        else:
+            await self._show_notice("Reasoning effort unavailable for this model")
 
     @on(AgentPickerPanel.Cancelled)
     def _inline_picker_cancelled(self, _: AgentPickerPanel.Cancelled) -> None:
@@ -1045,12 +1112,10 @@ class NexusTextualApp(App[int]):
 
     async def _apply_agent_selection(self, name: str) -> None:
         try:
-            result = await self.controller.select_agent(name)
+            await self.controller.select_agent(name)
             self._sync_agent()
             self._refresh_context_after_selection(self.controller.session)
-            self._sync_status(
-                f"Agent {_display_name(result.name)} selected · applies next turn"
-            )
+            self._sync_status("")
         except ClientError as exc:
             self._sync_status(f"Agent selection failed · {exc}", error=True)
 
@@ -1059,29 +1124,14 @@ class NexusTextualApp(App[int]):
     ) -> None:
         session = self.controller.session
         try:
-            result = (
+            if commit_effort:
                 await self.controller.select_model_and_effort(name, effort)
-                if commit_effort else await self.controller.select_model(name)
-            )
+            else:
+                await self.controller.select_model(name)
             if session != self.controller.session:
                 return
             self._sync_agent()
-            if commit_effort:
-                effort_status = f"effort {effort or 'Default'}"
-            elif self.controller.stored_override:
-                effort_status = (
-                    f"effort {self.controller.reasoning_effort} (kept)"
-                    if self.controller.reasoning_effort
-                    else f"effort override {self.controller.stored_override} dormant (kept)"
-                )
-            elif self.controller.reasoning_effort:
-                source = self.controller.reasoning_effort_source or "effective"
-                effort_status = f"effort {self.controller.reasoning_effort} ({source})"
-            else:
-                effort_status = "model default effort"
-            self._sync_status(
-                f"model -> {result.provider}/{result.model} · {effort_status} (applies next turn)"
-            )
+            self._sync_status("")
             self._refresh_context_after_selection(session)
         except ClientError as exc:
             if session != self.controller.session:
@@ -1101,6 +1151,22 @@ class NexusTextualApp(App[int]):
         await self.action_cancel_turn()
 
     async def action_cancel_turn(self) -> None:
+        if not self.controller.running:
+            editor = self.query_one("#chat-editor", TextArea)
+            if editor.text:
+                editor.clear()
+                self._last_ctrl_c = 0.0
+                self._sync_status("")
+                return
+            now = time.monotonic()
+            if now - self._last_ctrl_c <= 1.5:
+                await self.action_quit_shell()
+                return
+            self._last_ctrl_c = now
+            self._sync_status("Press ctrl+c again to quit")
+            self.set_timer(1.5, lambda: self._sync_status("") if self._last_ctrl_c == now else None)
+            return
+        self._last_ctrl_c = 0.0
         try:
             cancelled, dropped = await self.controller.cancel()
             self._sync_status(f"Cancel requested · cancelled={cancelled} · dropped={dropped}")
@@ -1135,7 +1201,7 @@ class NexusTextualApp(App[int]):
         await self._dispatch_chat_command("/new")
 
     async def action_list_sessions(self) -> None:
-        await self._dispatch_chat_command("/sessions")
+        self._open_sessions_dialog()
 
     async def action_fork_session(self) -> None:
         await self._dispatch_chat_command("/fork")
@@ -1154,6 +1220,25 @@ class NexusTextualApp(App[int]):
                     return
             self.screen.dismiss(None)
 
+
+    def _agent_color_for(self, name: str) -> str | None:
+        """The host-declared color of agent ``name`` (the ``color:`` in its file)."""
+        for row in self._agents:
+            if str(row.get("name", "")).casefold() == name.casefold() and isinstance(row.get("color"), str):
+                return row["color"] or None
+        return self.controller.agent_color if name.casefold() == self.controller.agent_name.casefold() else None
+
+    def _sync_agent_colors(self) -> None:
+        colors = {
+            str(row.get("name", "")).casefold(): row["color"]
+            for row in self._agents
+            if isinstance(row.get("color"), str) and row.get("color")
+        }
+        self.query_one("#conversation", ConversationTimeline).agent_colors.update(colors)
+        if self._context_preview is not None:
+            self.query_one(ContextHeader).set_data(self._context_preview, color=self._agent_color_for(
+                str(self._context_preview.agent.get("name") or self.controller.agent_name)))
+
     def _sync_agent(self) -> None:
         status = self.controller.view.phase
         bar = self.query_one("#root-agent", RootAgentBar)
@@ -1169,6 +1254,23 @@ class NexusTextualApp(App[int]):
             provider=self.controller.provider, model=self.controller.model,
             reasoning_effort=self.controller.reasoning_effort,
             thinking_budget=self.controller.thinking_budget)
+        self._sync_details()
+        self._sync_activity()
+
+    def _sync_activity(self) -> None:
+        if not self.is_mounted:
+            return
+        used, window, _measured = context_measure(self.controller.view)
+        self.query_one(ActivityProgress).set_state(
+            used=used or 0,
+            budget=window or 0,
+            # The durable view is authoritative: once it has no active turn
+            # (completed, failed, cancelled), stop animating even if the live
+            # stream has not wound down yet.
+            running=self.controller.running and self.controller.view.active_turn is not None,
+            loading=self._status_text.startswith(("Connecting", "Reconnecting")),
+            color=self.controller.agent_color or "$nx-accent",
+        )
 
     async def _cycle_root_agent(self) -> None:
         """Select the next root-capable agent through the host contract."""
@@ -1179,9 +1281,9 @@ class NexusTextualApp(App[int]):
                 for row in self._agents
                 if row.get("name") and ("contexts" not in row or "root" in row.get("contexts", ()))
             ]
-            canonical = [name for name in ("general", "plan", "build", "explore") if name in eligible]
+            canonical = [name for name in ("build",) if name in eligible]
             custom = sorted(
-                (name for name in eligible if name not in {"general", "plan", "build", "explore"}),
+                (name for name in eligible if name not in {"build"}),
                 key=str.casefold,
             )
             ordered = [*canonical, *custom]
@@ -1214,6 +1316,7 @@ class NexusTextualApp(App[int]):
         self._status_error = error
         self._status_text = text
         self.query_one("#connection-status", ConnectionStatus).set_status(text, error=error)
+        self._sync_activity()
 
     async def on_unmount(self) -> None:
         self._context_preview_generation += 1

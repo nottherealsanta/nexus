@@ -49,7 +49,7 @@ import msgspec
 
 from .agents import SubagentOutcome, SubagentRunner, SubagentUsage
 from .agents.model import AgentError, AgentNotFoundError
-from .agents.runner import WORKTREE_CHILD_TOOLS
+from .agents.runner import WORKTREE_CHILD_TOOLS, files_changed
 from .config import Config
 from .context import ContextManager
 from .context.cache import TokenCountCache
@@ -85,6 +85,7 @@ from .net import OutboundHTTPService, SafeOutboundHTTPService
 from .session import Session, SessionManager
 from .session.agent_selection import AgentSelection
 from .tools.builtin._jobs import JobRegistry
+from .tools.builtin.question import ANSWER_WINDOW_S
 from .tools.builtin.todo import TodoStore
 from .tools.manager import ToolManager
 from .tools.permissions import (
@@ -96,6 +97,7 @@ from .tools.permissions import (
     PermissionEngine,
     collect_grants,
 )
+from .tools.questions import QuestionBroker
 from .tools.spec import ToolCall, ToolContext
 from .util import redact_secrets, redact_url_userinfo
 
@@ -171,6 +173,7 @@ class _ToolDispatcherAdapter:
         activations: Any | None = None,
         subagents: Any | None = None,
         outbound_http: OutboundHTTPService | None = None,
+        questions: Any | None = None,
     ) -> None:
         self.manager = manager
         self._workspace = Path(workspace)
@@ -188,6 +191,7 @@ class _ToolDispatcherAdapter:
         #: ``ToolContext`` so the builtin never imports ``nexus.agents``.
         self._subagents = subagents
         self._outbound_http = outbound_http
+        self._questions = questions
 
     def prepare(self, tool_uses):
         calls = [ToolCall.from_tool_use(block) for block in tool_uses]
@@ -217,6 +221,7 @@ class _ToolDispatcherAdapter:
             activations=self._activations,
             subagents=self._subagents,
             outbound_http=self._outbound_http,
+            questions=self._questions,
         )
 
     async def dispatch(
@@ -241,6 +246,57 @@ class _ToolDispatcherAdapter:
             cancel=cancel,
         )
         return prepared.to_ir_results(results)
+
+
+class _OperatorWatch:
+    """Cancel source for a question: the turn's token, or losing every viewer.
+
+    Presence can drop to zero while a question is open; polling the root
+    session's ``attended`` flag lets the waiter end instead of parking the turn
+    until the answer window closes.
+    """
+
+    _POLL_S = 1.0
+
+    def __init__(self, token: Any | None, session: Any | None) -> None:
+        self._token = token
+        self._session = session
+        self.reason: str | None = None
+
+    async def wait(self) -> None:
+        while True:
+            token_wait = getattr(self._token, "wait", None)
+            try:
+                if callable(token_wait):
+                    await asyncio.wait_for(token_wait(), self._POLL_S)
+                    self.reason = getattr(self._token, "reason", None) or "cancelled"
+                    return
+                await asyncio.sleep(self._POLL_S)
+            except TimeoutError:
+                pass
+            if self._session is not None and not getattr(self._session, "attended", True):
+                self.reason = "the operator disconnected"
+                return
+
+
+class _QuestionService:
+    """Binds the runtime's :class:`QuestionBroker` to one root session."""
+
+    def __init__(self, broker: QuestionBroker, root_session_id: str, session: Any | None) -> None:
+        self._broker = broker
+        self._root = root_session_id
+        self._session = session
+
+    @property
+    def attended(self) -> bool:
+        return bool(getattr(self._session, "attended", False))
+
+    async def ask(self, *, cancel: Any = None, **request: Any) -> str:
+        return await self._broker.request(
+            root_session_id=self._root,
+            cancel=_OperatorWatch(cancel, self._session),
+            **request,
+        )
 
 
 class _UnattendedTurnFailure(RuntimeError):
@@ -685,6 +741,13 @@ class _ContextCoordinator:
         )
         return {"provider": provider, "model": model}
 
+    def _configured_agent_exists(self, name: object) -> bool:
+        """Whether ``agent.name`` resolves to a root agent (legacy aliases included)."""
+        try:
+            return self._agents is not None and self._agents.resolve(name, context="root") is not None
+        except AgentError:
+            return False
+
     def _root_agent_definition(self, session: Any, config: Any | None) -> Any | None:
         if self._agents is None:
             return None
@@ -695,7 +758,7 @@ class _ContextCoordinator:
                 pass
         selection = getattr(session, "agent_selection", None)
         configured_name = getattr(
-            getattr(getattr(config, "v2", None), "agent", None), "name", "general"
+            getattr(getattr(config, "v2", None), "agent", None), "name", "build"
         )
         name = getattr(selection, "name", None) or configured_name
         try:
@@ -828,7 +891,7 @@ class _ContextCoordinator:
         config = self.effective_config()
         selection = getattr(session, "agent_selection", None) if session is not None else None
         configured_name = getattr(
-            getattr(getattr(config, "v2", None), "agent", None), "name", "general"
+            getattr(getattr(config, "v2", None), "agent", None), "name", "build"
         )
         if self._agents is not None:
             self._agents.refresh()
@@ -899,13 +962,13 @@ class _ContextCoordinator:
                 assembler._agent_effort_supported = selected_agent_effort is not None
             assembler.agent_selection_source = (
                 "session" if getattr(session, "agent_selection", None) is not None else
-                "config" if self._agents.get(configured_name) is not None else
+                "config" if self._configured_agent_exists(configured_name) else
                 "default"
             )
             assembler._context_agent_definition = agent_definition
             assembler.agent_selection_source = (
                 "session" if getattr(session, "agent_selection", None) is not None else
-                "config" if self._agents.get(configured_name) is not None else
+                "config" if self._configured_agent_exists(configured_name) else
                 "default"
             )
             if session is not None:
@@ -1239,6 +1302,11 @@ class _ManifestEnvironmentFactory:
             activations=runtime._activations,
             subagents=runner,
             outbound_http=runtime._outbound_http_service,
+            questions=(
+                runtime._question_service(session_id)
+                if hasattr(runtime, "_question_service")
+                else None
+            ),
         )
         return _IterationEnv(
             assembler=assembler,
@@ -1830,6 +1898,11 @@ class _ChildRuntime:
                 agent_id=spec.agent_id,
                 subagents=self._runner,
                 outbound_http=getattr(runtime, "_outbound_http_service", None),
+                questions=(
+                    runtime._question_service(spec.session_id)
+                    if hasattr(runtime, "_question_service")
+                    else None
+                ),
             )
             max_iterations = int(spec.max_iterations or 60)
             limits = TurnLimits(max_iterations=max_iterations, max_seconds=1800.0)
@@ -1936,6 +2009,9 @@ class Runtime:
         self._tool_factory = tool_factory
         self._job_registry = job_registry
         self._todo_store = todo_store
+        #: One broker for every root session's operator questions. Answers are
+        #: routed by (root session, question id), never by turn or agent alone.
+        self._questions = QuestionBroker(timeout_s=ANSWER_WINDOW_S)
         self._owns_job_registry = False
         #: Explicit ownership. An injected manager is only closed when the
         #: caller says so; a manager the runtime builds is always owned. Keep
@@ -2202,6 +2278,18 @@ class Runtime:
     def todo_store(self) -> Any | None:
         """The runtime-owned todo store (keyed by session and agent id)."""
         return self._todo_store
+
+    @property
+    def questions(self) -> QuestionBroker:
+        """The operator-question broker the host answers through."""
+        return self._questions
+
+    def _question_service(self, session_id: str) -> _QuestionService:
+        """Bind questions to the root of ``session_id`` (``<root>/sub/<n>...``)."""
+        root_id = str(session_id).split("/sub/", 1)[0]
+        live = getattr(self._sessions, "_live_handle", None)
+        root = live(root_id) if callable(live) else None
+        return _QuestionService(self._questions, root_id, root)
 
     @property
     def extensions(self) -> ExtensionManager | None:
@@ -2543,6 +2631,20 @@ class Runtime:
                 if isinstance(getattr(manifest, "skills", None), Mapping)
                 else ()
             )
+            tool_specs = {
+                spec.name: spec for spec in tool_turn.manager.specs
+            } if tool_turn is not None else {}
+            mcp_servers = []
+            if self._mcp is not None:
+                for status in self._mcp.statuses()[:64]:
+                    snapshot = self._mcp.server_snapshot(status.name)
+                    names = list(snapshot.tool_names())[:256] if snapshot else []
+                    mcp_servers.append({
+                        "name": status.name,
+                        "status": "connected" if status.connected else "disabled" if not status.enabled else "failed",
+                        "tool_count": status.tool_count,
+                        "tools": names,
+                    })
             return {
                 "manifest_generation": generation,
                 "agent": agent_info,
@@ -2567,15 +2669,23 @@ class Runtime:
                                 for line in parts.get("skills_index", "").splitlines()
                             )
                         ),
+                        "scope": str(getattr(getattr(entry, "provenance", None), "tier", "")),
+                        "origin": str(getattr(getattr(entry, "provenance", None), "relpath", "")),
                     }
                     for entry in skills_snapshot[:512]
                 ],
                 "mcp_index": parts.get("mcp_index", ""),
+                "mcp_servers": mcp_servers,
                 "tools": [
                     {
                         "name": schema.name,
                         "description": schema.description,
                         "input_schema": dict(schema.input_schema),
+                        "group": (
+                            f"mcp:{schema.name.split('__', 2)[1]}" if schema.name.startswith("mcp__")
+                            else getattr(tool_specs.get(schema.name), "group", "") or schema.name
+                        ),
+                        "bundle": getattr(tool_specs.get(schema.name), "bundle", ""),
                     }
                     for schema in request.tools[:512]
                 ] if tools_supported else [],
@@ -2740,15 +2850,23 @@ class Runtime:
     def effective_session_agent(self, handle: Session) -> tuple[str, str]:
         selection = getattr(handle, "agent_selection", None)
         if selection is not None:
-            return selection.name or "general", "session"
+            return selection.name or "build", "session"
+        return self.default_root_agent(), "config"
+
+    def default_root_agent(self) -> str:
+        """The root agent a session without a selection runs: ``[agent] name``.
+
+        New sessions start with it (``build`` unless configured otherwise).
+        Read from disk on each call, so a Settings change applies at once.
+        """
         config = self._load_config()
-        name = getattr(getattr(getattr(config, "v2", None), "agent", None), "name", "general")
+        name = getattr(getattr(getattr(config, "v2", None), "agent", None), "name", "build")
         if self._agents is not None:
             try:
                 name = self._agents.resolve(name, context="root").name
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 - an unresolvable name is still reported
                 pass
-        return str(name or "general"), "config"
+        return str(name or "build")
 
     def _validate_model_selection(self, reference: str) -> ModelSelection:
         """Resolve and validate one model/tier reference, or raise ``ConfigError``.
@@ -2904,6 +3022,14 @@ class Runtime:
         if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
             return value
         return None
+
+    def auto_archive_days(self) -> int:
+        """Return the validated archive inactivity threshold from config."""
+        config = self._load_config()
+        v2 = getattr(config, "v2", None)
+        section = getattr(v2, "sessions", None)
+        value = getattr(section, "auto_archive_days", 2)
+        return value if type(value) is int and 0 <= value <= 3650 else 14
 
     def _unattended_decision(self) -> str:
         """Derived-presence fallback policy from ``permissions.on_unattended``.
@@ -3086,6 +3212,17 @@ class Runtime:
                     restrict=tuple(name for name in manager.names if name in selected.selected),
                     path_guard=manager.path_guard,
                 )
+        if agent_definition is not None and getattr(agent_definition, "write_roots", ()):
+            settings_guard = self._settings_agent_guard(
+                manager.path_guard, agent_definition.write_roots
+            )
+            manager = self._build_iteration_manager(
+                config,
+                self.manifest,
+                catalog=manager.tools,
+                restrict=manager.names,
+                path_guard=settings_guard,
+            )
         engine = self._permissions
         if engine is None:
             permissions = getattr(getattr(config, "v2", None), "permissions", None)
@@ -3095,6 +3232,14 @@ class Runtime:
                 engine = PermissionEngine.from_config(
                     permissions, workspace=self.workspace, home=self._home
                 )
+        if (
+            agent_definition is not None
+            and getattr(agent_definition, "write_roots", ())
+            and getattr(getattr(getattr(config, "v2", None), "settings", None), "confirm_edits", False)
+        ):
+            engine.require_confirmation_for(
+                spec.name for spec in manager.specs if getattr(spec, "mutates", False)
+            )
         grants = _grants_from_events(session.events)
         gate = _PermissionGateAdapter(
             engine, manager=manager, grants=grants, attended=attended
@@ -3181,6 +3326,7 @@ class Runtime:
             activations=self._activations,
             subagents=runner,
             outbound_http=self._outbound_http_service,
+            questions=self._question_service(session.id),
         )
         # Per-iteration environment path: only when the runtime (not a caller)
         # owns the tool catalog and an extension world exists. An injected
@@ -3211,6 +3357,33 @@ class Runtime:
             manifest_ref=manifest_ref,
             environment_for=environment_for,
             hooks=hooks_service,
+        )
+
+    def _settings_agent_guard(
+        self, current: PathGuard, allowed_scopes: Sequence[str]
+    ) -> PathGuard:
+        """Narrow a Settings agent's write roots without adding authority."""
+        home = self._home or Path.home()
+        roots = {
+            "global": (home / ".nexus").resolve(),
+            "project": (self.workspace / ".nexus").resolve(),
+        }
+        requested = [roots[name] for name in allowed_scopes if name in roots]
+        intersections: list[Path] = []
+        for scope_root in requested:
+            for existing in current.write_roots:
+                if scope_root.is_relative_to(existing):
+                    intersections.append(scope_root)
+                elif existing.is_relative_to(scope_root):
+                    intersections.append(existing)
+        intersections = list(dict.fromkeys(intersections))
+        return PathGuard(
+            self.workspace,
+            write_roots=[str(root) for root in intersections],
+            read_denyroots=[str(root) for root in current.read_denyroots],
+            home=home,
+            _allow_empty_write_roots=True,
+            settings_scopes=[str(root) for root in roots.values()],
         )
 
     def _build_iteration_manager(
@@ -3795,7 +3968,7 @@ class Runtime:
             manager = AgentManager.for_workspace(
                 self.workspace,
                 home=self._home,
-                seed=bool(getattr(section, "seed_roles", True)),
+                seed=bool(getattr(section, "seed_roles", False)),
                 known_tools=known_tools,
                 known_bundles=known_bundles,
             )
@@ -4093,7 +4266,7 @@ class Runtime:
                 max_fanout=getattr(section, "max_fanout", 16),
                 token_budget=getattr(section, "token_budget", None),
                 cost_budget=getattr(section, "cost_budget", None),
-                default_type=str(getattr(section, "default_type", "general")),
+                default_type=str(getattr(section, "default_type", "task")),
                 profile_for=profile_for or profile_tools,
                 config=effective,
                 event_sink=event_sink,
@@ -4520,7 +4693,10 @@ class Runtime:
         assembler.agent_definition = type(
             "ChildAgentDefinition",
             (),
-            {"reasoning_effort": selected_agent_effort},
+            {
+                "reasoning_effort": selected_agent_effort,
+                "fallback": tuple(getattr(spec, "fallback", ()) or ()),
+            },
         )()
         assembler._agent_effort_supported = selected_agent_effort is not None
         return assembler
@@ -4653,6 +4829,9 @@ class Runtime:
             tier=spec.tier,
             requested_tier=spec.requested_tier,
             error=getattr(outcome, "error", None),
+            files_changed=files_changed(
+                session.messages, workspace=getattr(spec, "workspace", None)
+            ),
         )
 
     def _child_cost(self, session: Any, outcome: Any) -> float | None:

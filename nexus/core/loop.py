@@ -1193,6 +1193,23 @@ def _stream_usage_data(usage: StreamUsage) -> dict:
     }
 
 
+def _usage_event_data(usage: StreamUsage, provider: object) -> dict:
+    """``model.usage`` payload plus ``prompt``: every input token the request held.
+
+    Adapters disagree on whether ``input`` already counts cached tokens. One
+    that reports them separately sets ``usage_input_excludes_cache``, so the
+    prompt size (what the request occupied in the context window) is the same
+    measurement for every provider.
+    """
+    data = _stream_usage_data(usage)
+    prompt = usage.input
+    if getattr(provider, "usage_input_excludes_cache", False) is True:
+        prompt += usage.cache_read + usage.cache_write
+    if prompt > 0:
+        data["prompt"] = prompt
+    return data
+
+
 def _turn_usage_data(usage: TurnUsage) -> dict:
     return {
         "input_tokens": usage.input_tokens,
@@ -1978,7 +1995,9 @@ async def run_turn(
             has_tools = any(isinstance(block, ToolUse) for block in blocks)
             effective_stop = stop_reason or ("tool_use" if has_tools else "end_turn")
             if usage is not None:
-                await emitter.emit("model.usage", _stream_usage_data(usage))
+                await emitter.emit(
+                    "model.usage", _usage_event_data(usage, resolved.provider)
+                )
             await emitter.emit("model.stopped", {"stop_reason": effective_stop})
 
             call_usage = (

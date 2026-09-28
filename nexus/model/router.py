@@ -129,7 +129,8 @@ class ModelRouter:
         commitment -- the loop only tries one after a provider-level failure
         that produced no output (plan section 8).
         """
-        if not self._fallback:
+        agent_refs = _agent_fallback(request)
+        if not self._fallback and not agent_refs:
             return []
         seen: set[tuple[str, str]] = set()
         try:
@@ -138,7 +139,7 @@ class ModelRouter:
         except ConfigError:
             pass
         candidates: list[ResolvedModel] = []
-        for reference in self._fallback:
+        for reference in (*agent_refs, *self._fallback):
             candidate = ModelRequest(messages=[], model=reference)
             try:
                 resolved = self.resolve(candidate)
@@ -302,3 +303,19 @@ class ModelRouter:
         if not provider or not model:
             raise ConfigError(f"Malformed model reference: {ref!r}")
         return provider, model
+
+
+def _agent_fallback(request: ModelRequest) -> tuple[str, ...]:
+    """The selected agent's own fallback references, carried in request metadata.
+
+    The context assembler copies an agent definition's ``fallback`` list into
+    ``metadata["agent_fallback"]``; those references are tried first, then the
+    workspace chain. Malformed entries are ignored.
+    """
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    refs = metadata.get("agent_fallback")
+    if not isinstance(refs, list):
+        return ()
+    return tuple(
+        ref for ref in refs[:8] if isinstance(ref, str) and ref.strip() and len(ref) <= 256
+    )

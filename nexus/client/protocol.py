@@ -93,10 +93,58 @@ class Client:
         return result
 
     async def list_sessions(self) -> list[Any]:
-        return list((await self._request(p.SessionList())).sessions)  # type: ignore[union-attr]
+        return list((await self.session_list_result()).sessions)
+
+    async def session_list_result(self) -> p.SessionListResult:
+        """Return the regular session page plus its archived count."""
+        return await self._request(p.SessionList())  # type: ignore[return-value]
+
+    async def archive_session(self, session: str, *, reason: str = "user") -> Any:
+        return (await self._request(p.SessionArchive(session=session, reason=reason))).session  # type: ignore[union-attr]
+
+    async def unarchive_session(self, session: str) -> Any:
+        return (await self._request(p.SessionUnarchive(session=session))).session  # type: ignore[union-attr]
+
+    async def list_archived_sessions(
+        self, query: str = "", *, limit: int = 200, cursor: int = 0
+    ) -> p.SessionListArchivedResult:
+        return await self._request(
+            p.SessionListArchived(query=query, limit=limit, cursor=cursor)
+        )  # type: ignore[return-value]
+
+    async def preview_session(self, session: str, *, max_chars: int = 6000) -> p.SessionPreviewResult:
+        return await self._request(
+            p.SessionPreview(session=session, max_chars=max_chars)
+        )  # type: ignore[return-value]
+
+    async def search_sessions(
+        self, query: str, *, archived_only: bool = True, limit: int = 50
+    ) -> list[str]:
+        result = await self._request(
+            p.SessionSearch(query=query, archived_only=archived_only, limit=limit)
+        )
+        return list(result.ids)  # type: ignore[union-attr]
+
+    async def settings_inventory(self, scope: str) -> p.SettingsInventoryResult:
+        return await self._request(p.SettingsInventory(scope=scope))  # type: ignore[return-value]
+
+    async def settings_read(self, scope: str, category: str, id: str) -> p.SettingsReadResult:
+        return await self._request(p.SettingsRead(scope=scope, category=category, id=id))  # type: ignore[return-value]
+
+    async def settings_write(self, scope: str, category: str, id: str, body: str,
+                             expected_sha256: str | None = None) -> p.SettingsWriteResult:
+        command = p.SettingsWrite(scope=scope, category=category, id=id, body=body,
+                                  expected_sha256=expected_sha256)
+        return await self._request(command)  # type: ignore[return-value]
+
+    async def settings_delete(self, scope: str, category: str, id: str) -> p.SettingsDeleteResult:
+        return await self._request(p.SettingsDelete(scope=scope, category=category, id=id))  # type: ignore[return-value]
 
     async def search_files(self, query: str, limit: int = 30) -> list[str]:
         return list((await self._request(p.FileSearch(query=query, limit=limit))).paths)  # type: ignore[union-attr]
+
+    async def git_diff(self, *, staged: bool = False, ref: str = "") -> p.GitDiffResult:
+        return await self._request(p.GitDiff(staged=staged, ref=ref))  # type: ignore[return-value]
 
     async def list_worktrees(self) -> p.WorktreeListResult: return await self._request(p.WorktreeList())  # type: ignore[return-value]
 
@@ -173,6 +221,10 @@ class Client:
         result = await self._request(command)
         return bool(result.resolved)  # type: ignore[union-attr]
 
+    async def answer_question(self, session: str, call_id: str, answer: str) -> tuple[bool, str | None]:
+        result = await self._request(p.QuestionAnswer(session=session, call_id=call_id, answer=answer))
+        return bool(result.resolved), result.error  # type: ignore[union-attr]
+
     async def reload_extensions(self, trigger: str = "api") -> Any: return await self._request(p.ExtensionsReload(trigger=trigger))
 
     async def list_extensions(self) -> tuple[int, list[dict[str, Any]]]:
@@ -202,6 +254,11 @@ class Client:
     async def refresh_models(self) -> Any: return await self._request(p.ModelsRefresh())
 
     async def list_agents(self) -> list[dict[str, Any]]: return list((await self._request(p.AgentsList())).agents)  # type: ignore[union-attr]
+
+    async def default_agent(self) -> str: return str((await self._request(p.AgentsList())).default)  # type: ignore[union-attr]
+
+    async def set_default_agent(self, name: str, scope: str = "global") -> p.AgentDefaultSetResult:
+        return await self._request(p.AgentDefaultSet(name=name, scope=scope))  # type: ignore[return-value]
 
     async def current_agent(self, session: str) -> Any: return await self._request(p.AgentCurrent(session=session))
 

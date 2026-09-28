@@ -1,111 +1,153 @@
-/* Design tokens. Dark is the default; light mirrors every role. The palette is
-   a quiet near-black workbench with one warm accent and four status colors. */
+/* Monaspace Argon (Latin, 400), vendored under assets/ because the CSP allows no
+   external hosts. Source: fontsource monaspace-argon@5.3.0 (SIL OFL 1.1). */
+@font-face {
+  font-family: "Monaspace Argon";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url("/assets/monaspace-argon-latin-400.woff2") format("woff2"),
+       url("/assets/monaspace-argon-latin-400.woff") format("woff");
+}
+
+/* Design tokens: the "Signal" finish (design.md). Role names map one to one
+   to nexus/ui/tui/theme.py (nx-accent -> --accent, nx-blue -> --info, ...); the
+   values are the web's five signal colors on a near-black canvas. Dark is
+   the default; light mirrors every role. */
 :root {
   color-scheme: dark;
-  --canvas: #0b0b0b;
-  --sidebar: #111111;
-  --elevated: #161616;
-  --raised: #1c1c1c;
+  --canvas: #141414;
+  --sidebar: #0f0f0f;
+  --elevated: #181818;
+  --raised: #1f1f1f;
   --hover: #1f1f1f;
   --active: #262626;
-  --border: #232323;
-  --border-strong: #353535;
-  --text: #ececec;
-  --muted: #a3a3a3;
-  --quiet: #737373;
-  --accent: #fab283;
-  --accent-soft: #fab28317;
-  --accent-ink: #fab283;
-  --on-accent: #1a0f08;
-  --info: #5c9cf5;
-  --info-soft: #5c9cf51c;
-  --purple: #b294f0;
-  --success: #7fd88f;
-  --success-soft: #7fd88f1a;
-  --warning: #f5a742;
-  --warning-soft: #f5a7421f;
-  --danger: #e06c75;
-  --danger-soft: #e06c751f;
-  --code: #111111;
-  --diff-add: #7fd88f14;
-  --diff-remove: #e06c7517;
-  --scrim: #000000a6;
-  --shadow: 0 18px 50px #000000b3, 0 0 0 1px #ffffff0a;
+  --border: #2e2e2e;
+  --border-strong: #4a4a4a;
+  --frame: #d6d6d6;
+  --text: #ededed;
+  --muted: #a0a0a0;
+  --quiet: #6b6b6b;
+  --accent: #f55b1b;
+  --accent-ink: #f55b1b;
+  --on-accent: #111111;
+  --on-signal: #111111;
+  --info: #3dbefa;
+  --purple: #f274f5;
+  --success: #7ee34a;
+  --warning: #fdd329;
+  --danger: #ff4d6a;
+  --label-neutral: #8a8a8a;
+  --list: #0f0f0f;
+  --dialog: #0f0f0f;
+  --field: #121212;
+  --code: #181818;
+  --scrim: #070707b3;
+  --drop: #000000;
+  --tint-mix: 20%;
+  --shade-mix: 55%;
+  /* Derived per signal: tint (tag and bar fill) and shade (offset shadow). */
+  --accent-tint: color-mix(in srgb, var(--accent) var(--tint-mix), var(--canvas));
+  --accent-shade: color-mix(in srgb, var(--accent) var(--shade-mix), #000);
+  --info-tint: color-mix(in srgb, var(--info) var(--tint-mix), var(--canvas));
+  --info-shade: color-mix(in srgb, var(--info) var(--shade-mix), #000);
+  --purple-tint: color-mix(in srgb, var(--purple) var(--tint-mix), var(--canvas));
+  --purple-shade: color-mix(in srgb, var(--purple) var(--shade-mix), #000);
+  --success-tint: color-mix(in srgb, var(--success) var(--tint-mix), var(--canvas));
+  --success-shade: color-mix(in srgb, var(--success) var(--shade-mix), #000);
+  --warning-tint: color-mix(in srgb, var(--warning) var(--tint-mix), var(--canvas));
+  --warning-shade: color-mix(in srgb, var(--warning) var(--shade-mix), #000);
+  --danger-tint: color-mix(in srgb, var(--danger) var(--tint-mix), var(--canvas));
+  --danger-shade: color-mix(in srgb, var(--danger) var(--shade-mix), #000);
+  --accent-soft: var(--accent-tint);
+  --info-soft: var(--info-tint);
+  --success-soft: var(--success-tint);
+  --warning-soft: var(--warning-tint);
+  --danger-soft: var(--danger-tint);
+  --diff-add: color-mix(in srgb, var(--success) 14%, var(--canvas));
+  --diff-remove: color-mix(in srgb, var(--danger) 14%, var(--canvas));
+  /* Depth is a hard offset shadow, never a blur. */
+  --shadow: 8px 8px 0 var(--drop);
   --ease: cubic-bezier(.2, .75, .25, 1);
-  --fast: 140ms;
-  --radius: 8px;
-  --radius-sm: 6px;
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", "Berkeley Mono", "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-family: var(--font-sans);
+  --fast: 120ms;
+  /* Layout follows the terminal's cells (8px columns); rows are taller (20px).
+     Corners are square everywhere. */
+  --cell: 8px;
+  --row: 20px;
+  --radius: 0;
+  --radius-sm: 0;
+  --font-sans: "Monaspace Argon", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-mono: "Monaspace Argon", "JetBrains Mono", "Berkeley Mono", "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
 }
 :root[data-theme=dark] { color-scheme: dark; }
 :root[data-theme=system] { color-scheme: dark; }
 
 :root[data-theme=light] {
   color-scheme: light;
-  --canvas: #ffffff;
-  --sidebar: #f7f7f6;
-  --elevated: #fbfbfa;
-  --raised: #ffffff;
-  --hover: #f0f0ee;
-  --active: #e8e8e5;
-  --border: #e7e7e4;
-  --border-strong: #d2d2ce;
-  --text: #1b1b1b;
-  --muted: #5e5e5e;
-  --quiet: #8b8b8b;
-  --accent: #c8672f;
-  --accent-soft: #c8672f14;
-  --accent-ink: #a9511f;
+  --canvas: #f4f4f2;
+  --sidebar: #ececea;
+  --elevated: #fafaf8;
+  --raised: #e6e6e2;
+  --hover: #e6e6e2;
+  --active: #dcdcd7;
+  --border: #d2d2cc;
+  --border-strong: #a9a9a2;
+  --frame: #1a1a1a;
+  --text: #141414;
+  --muted: #555555;
+  --quiet: #8a8a86;
+  --accent: #cc4a10;
+  --accent-ink: #cc4a10;
   --on-accent: #ffffff;
-  --info: #2f6fd6;
-  --info-soft: #2f6fd614;
-  --purple: #7a52c7;
-  --success: #268044;
-  --success-soft: #26804414;
-  --warning: #a86200;
-  --warning-soft: #a8620014;
-  --danger: #c23a4a;
-  --danger-soft: #c23a4a12;
-  --code: #f6f6f4;
-  --diff-add: #26804412;
-  --diff-remove: #c23a4a10;
-  --scrim: #0f0f0f47;
-  --shadow: 0 18px 50px #1b1b1b24, 0 0 0 1px #0000000d;
+  --on-signal: #ffffff;
+  --info: #0b7fb5;
+  --purple: #b03ab4;
+  --success: #3a8a18;
+  --warning: #9a7400;
+  --danger: #cf2448;
+  --label-neutral: #6f6f6f;
+  --list: #fafaf8;
+  --dialog: #fafaf8;
+  --field: #ffffff;
+  --code: #fafaf8;
+  --scrim: #1f232866;
+  --drop: #a9a9a2;
+  --tint-mix: 14%;
+  --shade-mix: 70%;
 }
 
 @media (prefers-color-scheme: light) {
   :root[data-theme=system] {
     color-scheme: light;
-    --canvas: #ffffff;
-    --sidebar: #f7f7f6;
-    --elevated: #fbfbfa;
-    --raised: #ffffff;
-    --hover: #f0f0ee;
-    --active: #e8e8e5;
-    --border: #e7e7e4;
-    --border-strong: #d2d2ce;
-    --text: #1b1b1b;
-    --muted: #5e5e5e;
-    --quiet: #8b8b8b;
-    --accent: #c8672f;
-    --accent-soft: #c8672f14;
-    --accent-ink: #a9511f;
+    --canvas: #f4f4f2;
+    --sidebar: #ececea;
+    --elevated: #fafaf8;
+    --raised: #e6e6e2;
+    --hover: #e6e6e2;
+    --active: #dcdcd7;
+    --border: #d2d2cc;
+    --border-strong: #a9a9a2;
+    --frame: #1a1a1a;
+    --text: #141414;
+    --muted: #555555;
+    --quiet: #8a8a86;
+    --accent: #cc4a10;
+    --accent-ink: #cc4a10;
     --on-accent: #ffffff;
-    --info: #2f6fd6;
-    --info-soft: #2f6fd614;
-    --purple: #7a52c7;
-    --success: #268044;
-    --success-soft: #26804414;
-    --warning: #a86200;
-    --warning-soft: #a8620014;
-    --danger: #c23a4a;
-    --danger-soft: #c23a4a12;
-    --code: #f6f6f4;
-    --diff-add: #26804412;
-    --diff-remove: #c23a4a10;
-    --scrim: #0f0f0f47;
-    --shadow: 0 18px 50px #1b1b1b24, 0 0 0 1px #0000000d;
+    --on-signal: #ffffff;
+    --info: #0b7fb5;
+    --purple: #b03ab4;
+    --success: #3a8a18;
+    --warning: #9a7400;
+    --danger: #cf2448;
+    --label-neutral: #6f6f6f;
+    --list: #fafaf8;
+    --dialog: #fafaf8;
+    --field: #ffffff;
+    --code: #fafaf8;
+    --scrim: #1f232866;
+    --drop: #a9a9a2;
+    --tint-mix: 14%;
+    --shade-mix: 70%;
   }
 }

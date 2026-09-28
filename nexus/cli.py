@@ -29,7 +29,7 @@ DEFAULT_CONFIG = '''# Nexus reloads configuration before each turn. Unknown keys
 config_version = 2
 
 [agent]
-name = "general"
+name = "build"
 profile = "coding"
 instructions_file = "SOUL.md"
 memory_file = "MEMORY.md"
@@ -38,9 +38,9 @@ memory_file = "MEMORY.md"
 default = "medium"
 
 [permissions]
-mode = "ask"
-allow = ["Read(**)", "Glob(**)", "Grep(**)", "LS(**)"]
-deny = ["Bash(rm -rf*)", "Read(**/.env)"]
+# Every tool runs without asking. Use mode = "ask" to approve each call, or
+# add rules, e.g. deny = ["Bash(rm -rf*)", "Read(**/.env)"] or ask = ["Bash(git push*)"].
+mode = "allow"
 write_roots = ["./"]
 on_unattended = "deny"
 '''

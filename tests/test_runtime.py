@@ -207,7 +207,7 @@ async def test_runtime_builds_native_tools_and_closes_owned_registry(tmp_path):
         config=config, session=session, turn_id="turn-1", attended=False
     )
     assert turn is not None
-    assert len(turn.schemas) == 11
+    assert len(turn.schemas) == 12
     assert turn.gate is not None
 
     await runtime.aclose()
@@ -226,8 +226,8 @@ async def test_runtime_injected_tool_manager_is_used(tmp_path):
         config=config, session=session, turn_id="turn-1", attended=False
     )
     assert turn.manager.profile == manager.profile
-    assert turn.manager.names == ("read", "glob", "grep", "todowrite", "skill")
-    assert [schema.name for schema in turn.schemas] == ["read", "glob", "grep", "todowrite", "skill"]
+    assert turn.manager.names == ("read", "glob", "grep", "todowrite", "question", "skill")
+    assert [schema.name for schema in turn.schemas] == ["read", "glob", "grep", "todowrite", "question", "skill"]
     await runtime.aclose()
 
 

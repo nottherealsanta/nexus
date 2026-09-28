@@ -16,6 +16,7 @@
       <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
       <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
       <symbol id="i-archive" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m-9 0 1 13h10l1-13M10 11v5m4-5v5"/></symbol>
       <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
       <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></symbol>
       <symbol id="i-sidebar" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></symbol>
@@ -31,19 +32,34 @@
     </defs>
   </svg>
   <div class="app-shell" id="app">
+    <header class="topbar">
+      <button class="topbar-glyph" id="sidebar-toggle" type="button" aria-label="Toggle sessions sidebar" title="Toggle sessions sidebar">▌</button>
+      <button class="icon-button mobile-nav" id="mobile-nav" title="Sessions" aria-label="Open sessions"><svg><use href="#i-menu"/></svg></button>
+      <div class="topbar-title"><h1 id="session-title">New Session</h1><div class="session-meta sr-only"><span id="workspace-name">Nexus</span><span class="meta-separator">/</span><span id="session-id">Ready when you are</span></div></div>
+      <div class="topbar-actions">
+        <button class="topbar-text context-toolbar" id="context-toolbar" type="button" aria-haspopup="dialog" title="Inspect the next request">Context</button>
+        <button class="topbar-text logs-toggle" id="logs-toggle" title="Open logs (Ctrl+E)" aria-label="Open logs">Logs</button>
+        <button class="topbar-text" id="session-menu" title="Export session as Markdown" aria-label="Export session as Markdown">Export</button>
+        <span class="live-state" id="live-state"><i></i> <span>Idle</span></span>
+        <button class="topbar-glyph" id="topbar-new" type="button" title="New session (⌘N)" aria-label="New session">+</button>
+        <button class="topbar-glyph inspector-toggle" id="inspector-toggle" title="Toggle details panel" aria-label="Open details">▐</button>
+      </div>
+    </header>
     <aside class="sidebar" id="sidebar" aria-label="Sessions">
-      <header class="sidebar-top">
-        <div class="brand"><span class="brand-mark" aria-hidden="true"></span><div class="brand-text"><strong>nexus</strong><span class="workspace-label" id="workspace-label">workspace</span></div></div>
-        <button class="icon-button sidebar-toggle" id="sidebar-toggle" aria-label="Toggle sidebar" title="Toggle sidebar"><svg><use href="#i-sidebar"/></svg></button>
-      </header>
-      <button class="new-session" id="new-session" title="New session (⌘N)"><svg aria-hidden="true"><use href="#i-plus"/></svg><span>New session</span><kbd>⌘N</kbd></button>
-      <label class="session-search"><svg aria-hidden="true"><use href="#i-search"/></svg><span class="sr-only">Filter sessions</span><input id="session-filter" type="search" placeholder="Filter sessions" autocomplete="off" spellcheck="false"></label>
+      <span class="sr-only" id="workspace-label">workspace</span>
+      <button class="new-session" id="new-session" title="New session (⌘N)"><span>+ New session</span><kbd>ctrl+n</kbd></button>
+      <label class="session-search"><span class="sr-only">Filter sessions</span><input id="session-filter" type="search" placeholder="Filter sessions" autocomplete="off" spellcheck="false"></label>
       <div class="session-scroll">
         <section class="session-group">
           <h2><span>Sessions</span><span class="session-count" id="session-count"></span></h2>
           <div id="session-list" role="list"></div>
         </section>
+        <section class="session-group" id="archived-group" hidden>
+          <h2><span>Archived</span><span class="session-count" id="archived-count"></span></h2>
+          <div id="archived-list" role="list"></div>
+        </section>
       </div>
+      <p class="sidebar-hint">↵ open · × delete · ⌘K commands</p>
       <footer class="sidebar-footer">
         <span class="connection" title="Connection to the Nexus daemon"><span class="connection-dot" id="connection-dot"></span><span id="connection-label">Connecting…</span></span>
         <button class="icon-button" id="reconnect" aria-label="Reconnect" title="Reconnect"><svg><use href="#i-refresh"/></svg></button>
@@ -52,17 +68,6 @@
       </footer>
     </aside>
     <main class="main-pane">
-      <header class="topbar">
-        <button class="icon-button mobile-nav" id="mobile-nav" title="Sessions" aria-label="Open sessions"><svg><use href="#i-menu"/></svg></button>
-        <div class="topbar-title"><h1 id="session-title">New session</h1><div class="session-meta"><span id="workspace-name">Nexus</span><span class="meta-separator">/</span><span id="session-id">Ready when you are</span></div></div>
-        <div class="topbar-actions">
-          <span class="live-state" id="live-state"><i></i> <span>Idle</span></span>
-          <button class="toolbar-button context-toolbar" id="context-toolbar" type="button" aria-haspopup="dialog">Context</button>
-          <button class="toolbar-button logs-toggle" id="logs-toggle" title="Open logs (Ctrl+E)" aria-label="Open logs">Logs</button>
-          <button class="icon-button" id="session-menu" title="Export session as Markdown" aria-label="Export session as Markdown"><svg><use href="#i-download"/></svg></button>
-          <button class="icon-button inspector-toggle" id="inspector-toggle" title="Toggle details panel" aria-label="Open details"><svg><use href="#i-panel"/></svg></button>
-        </div>
-      </header>
       <div class="connection-banner" id="connection-banner" role="status" hidden><span>Connection lost. The session may still be running.</span><button class="text-button" id="banner-reconnect">Reconnect</button></div>
       <div class="sync-error" id="sync-error" role="alert" hidden>Could not sync this session. <button class="text-button" id="sync-retry">Retry</button></div>
       <section class="conversation" id="conversation" aria-label="Conversation">
@@ -83,13 +88,15 @@
         <div class="slash-menu" id="slash-menu" role="listbox" aria-label="Commands" hidden></div>
         <form class="composer" id="composer-form">
           <label class="sr-only" for="composer-input">Message Nexus</label>
-          <textarea id="composer-input" rows="1" placeholder="Ask anything…  / for commands" autocomplete="off" aria-controls="slash-menu"></textarea>
+          <textarea id="composer-input" rows="1" placeholder="" autocomplete="off" aria-controls="slash-menu"></textarea>
           <div class="composer-bottom">
-            <div class="composer-context"><button type="button" class="chip agent-chip" id="composer-agent" aria-haspopup="dialog" aria-label="Choose agent">Default agent</button><span class="chip-sep" aria-hidden="true">·</span><button type="button" class="chip model-chip" id="composer-model" aria-haspopup="dialog" aria-label="Choose model">Default model</button><button type="button" class="chip reasoning-effort" id="reasoning-effort" aria-haspopup="dialog" aria-live="polite" title="Current root effort for the next turn">Effort: default</button></div>
-            <div class="composer-actions"><span class="composer-hint" id="composer-hint"></span><button class="send-button" id="send-button" type="submit" aria-label="Send message"><svg aria-hidden="true"><use href="#i-arrow-up"/></svg></button><button class="stop-button" id="stop-button" type="button" aria-label="Stop" hidden><svg aria-hidden="true"><use href="#i-stop"/></svg><span>Stop</span></button></div>
+            <div class="composer-context"><button type="button" class="chip agent-chip" id="composer-agent" aria-haspopup="dialog" aria-label="Choose agent">Default agent</button><button type="button" class="chip model-chip" id="composer-model" aria-haspopup="dialog" aria-label="Choose model">Default model</button><button type="button" class="chip reasoning-effort" id="reasoning-effort" aria-haspopup="dialog" aria-live="polite" title="Current root effort for the next turn">Effort: default</button></div>
+            <div class="composer-actions"><span class="composer-hint" id="composer-hint"></span><button class="stop-button" id="stop-button" type="button" aria-label="Stop" title="Stop the running turn" hidden>■ stop</button></div>
           </div>
+          <div class="composer-status"><span class="context-meter" id="context-meter"></span></div>
         </form>
-        <div class="composer-footnote"><span class="composer-path" id="composer-path"></span><span class="composer-status-right"><span class="context-meter" id="context-meter"></span><span><kbd>⌘K</kbd> commands</span></span></div>
+        <div class="activity-bar" id="activity-bar" aria-hidden="true"><i></i></div>
+        <div class="composer-footnote" hidden><span class="composer-path" id="composer-path"></span></div>
       </footer>
     </main>
     <aside class="inspector" id="inspector" aria-label="Session details">
@@ -115,6 +122,7 @@
         <a href="#settings-detail">Conversation detail</a>
         <a href="#settings-keys">Keyboard</a>
         <a href="#settings-workspace">Workspace</a>
+        <a href="#settings-agents">Agents</a>
       </nav>
       <div class="settings-body" id="settings-body">
         <header class="settings-header"><span class="settings-crumb" id="settings-crumb">Appearance</span><button class="icon-button" id="settings-close" aria-label="Close settings"><svg><use href="#i-x"/></svg></button></header>
@@ -164,19 +172,44 @@
         </section>
         <section class="settings-section" id="settings-keys" aria-labelledby="settings-keys-title">
           <h3 id="settings-keys-title">Keyboard</h3>
+          <p class="settings-help">The same keys as <code>nexus chat</code>. ⌘K also opens Commands.</p>
           <dl class="shortcut-list">
             <div><dt>Send message</dt><dd><kbd>↵</kbd></dd></div>
             <div><dt>New line</dt><dd><kbd>⇧</kbd><kbd>↵</kbd></dd></div>
-            <div><dt>Command palette</dt><dd><kbd>⌘</kbd><kbd>K</kbd></dd></div>
-            <div><dt>New session</dt><dd><kbd>⌘</kbd><kbd>N</kbd></dd></div>
-            <div><dt>Cycle reasoning effort</dt><dd><kbd>Ctrl</kbd><kbd>T</kbd></dd></div>
+            <div><dt>Commands</dt><dd><kbd>Ctrl</kbd><kbd>P</kbd></dd></div>
+            <div><dt>New session</dt><dd><kbd>Ctrl</kbd><kbd>N</kbd></dd></div>
+            <div><dt>List sessions</dt><dd><kbd>Ctrl</kbd><kbd>O</kbd></dd></div>
+            <div><dt>Fork session</dt><dd><kbd>Ctrl</kbd><kbd>F</kbd></dd></div>
+            <div><dt>Root-agent picker</dt><dd><kbd>Ctrl</kbd><kbd>G</kbd></dd></div>
+            <div><dt>Cycle root agent</dt><dd><kbd>⇧</kbd><kbd>Tab</kbd></dd></div>
+            <div><dt>Toggle sessions sidebar</dt><dd><kbd>Ctrl</kbd><kbd>B</kbd></dd></div>
+            <div><dt>Toggle details sidebar</dt><dd><kbd>Ctrl</kbd><kbd>L</kbd></dd></div>
+            <div><dt>Settings</dt><dd><kbd>Ctrl</kbd><kbd>S</kbd></dd></div>
+            <div><dt>Inspect context</dt><dd><kbd>Ctrl</kbd><kbd>I</kbd></dd></div>
+            <div><dt>Reasoning effort</dt><dd><kbd>Ctrl</kbd><kbd>T</kbd></dd></div>
             <div><dt>Toggle logs</dt><dd><kbd>Ctrl</kbd><kbd>E</kbd></dd></div>
+            <div><dt>Cancel the active turn</dt><dd><kbd>Ctrl</kbd><kbd>C</kbd></dd></div>
+            <div><dt>Reconnect</dt><dd><kbd>Ctrl</kbd><kbd>R</kbd></dd></div>
             <div><dt>Close panel or dialog</dt><dd><kbd>Esc</kbd></dd></div>
           </dl>
         </section>
         <section class="settings-section" id="settings-workspace" aria-labelledby="settings-workspace-title">
           <h3 id="settings-workspace-title">Workspace</h3>
           <div class="settings-workspace" id="settings-workspace-info"><p class="settings-help">Loading workspace health…</p></div>
+        </section>
+        <section class="settings-section" id="settings-agents" aria-labelledby="settings-agents-title">
+          <h3 id="settings-agents-title">Agents</h3>
+          <p class="settings-help">The root agent every new session starts with. Written to <code>[agent] name</code>; a project setting overrides the global one.</p>
+          <fieldset class="detail-scope"><legend>Save to</legend>
+            <div class="segmented" id="default-agent-scope">
+              <label><input type="radio" name="default-agent-scope" value="global" checked><span>Global · ~/.nexus</span></label>
+              <label><input type="radio" name="default-agent-scope" value="project"><span>Project · .nexus</span></label>
+            </div>
+          </fieldset>
+          <fieldset class="detail-scope"><legend>New sessions start with</legend>
+            <div class="segmented" id="default-agent-choices" role="radiogroup" aria-label="Default agent"></div>
+            <p class="settings-help" id="default-agent-note" role="status" aria-live="polite"></p>
+          </fieldset>
         </section>
         </div>
       </div>
@@ -188,6 +221,24 @@
       <p id="worktree-confirm-summary"></p>
       <p class="worktree-warning" id="worktree-confirm-warning" hidden></p>
       <div class="worktree-actions"><button class="toolbar-button" id="worktree-confirm-cancel" type="button">Cancel</button><button class="worktree-danger" id="worktree-confirm-submit" type="button">Confirm</button></div>
+    </section>
+  </div>
+  <div class="overlay text-overlay" id="text-overlay" hidden>
+    <section class="dialog text-dialog" role="dialog" aria-modal="true" aria-labelledby="text-title">
+      <header class="text-dialog-header"><h2 id="text-title">Details</h2><button class="icon-button" id="text-close" type="button" aria-label="Close"><svg><use href="#i-x"/></svg></button></header>
+      <pre class="text-body" id="text-body"></pre>
+      <button class="toolbar-button tool-details-agent" id="tool-details-agent" type="button" hidden>Open child agent</button>
+    </section>
+  </div>
+  <div class="overlay agent-overlay" id="agent-overlay" hidden>
+    <section class="dialog agent-dialog" role="dialog" aria-modal="true" aria-labelledby="agent-title" aria-describedby="agent-task">
+      <header class="agent-dialog-header">
+        <button class="toolbar-button" id="agent-back" type="button" hidden>← Parent agent</button>
+        <div class="agent-dialog-heading"><h2 id="agent-title">Subagent</h2><span class="status-pill" id="agent-status"></span><span class="agent-meta" id="agent-meta"></span></div>
+        <button class="icon-button" id="agent-close" type="button" aria-label="Close agent"><svg><use href="#i-x"/></svg></button>
+      </header>
+      <p class="agent-task" id="agent-task"></p>
+      <div class="agent-timeline" id="agent-timeline" role="log" aria-live="off"></div>
     </section>
   </div>
   <div class="overlay context-overlay" id="context-overlay" hidden>

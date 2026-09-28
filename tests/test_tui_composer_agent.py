@@ -35,14 +35,14 @@ async def test_host_agent_color_is_limited_to_identity_and_composer_has_no_edge(
 
         assert composer.styles.border_left[0] == ""
         assert editor.styles.border_left[0] == ""
-        rendered = metadata.render()
+        rendered = metadata.summary()
         assert rendered.plain == "Custom  ·  model-x  ·  vendor  ·  high"
         assert "#22aacc" in str(rendered.spans[0].style)
         assert all("#22aacc" not in str(span.style) for span in rendered.spans[1:])
         assert context.display
         assert context.region.right <= app.query_one("#bottom-info").region.right
         assert context.region.width >= len(context.render().plain)
-        assert app.query_one("#cwd-path").render().plain
+        assert app.query_one("#activity-progress").display
         assert metadata.region.y < context.region.y
         assert str(app.query_one("#connection-status").render()).strip() == ""
 
@@ -77,7 +77,7 @@ async def test_narrow_composer_keeps_context_entry_visible_and_routine_status_hi
         await pilot.pause()
 
         assert app.query_one("#context-usage").display
-        assert "Unsupported" in app.query_one("#root-agent").render().plain
+        assert "Unsupported" in app.query_one("#root-agent").summary().plain
         assert str(app.query_one("#connection-status").render()).strip() == ""
         assert app.query_one(ChatInput).region.width <= 48
         assert app.query_one(ChatEditor).region.right <= 48

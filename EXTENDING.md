@@ -34,6 +34,7 @@ SPEC = ToolSpec(
         "additionalProperties": False,
     },
     bundle="ext",          # fs | shell | task | meta | ext
+    group="metrics",       # optional context-header group label
     mutates=False,         # mutating tools run exclusively and are gated
     timeout_s=15.0,
 )
@@ -58,6 +59,8 @@ Rules:
 - The active profile must include your bundle. In the default `coding` profile,
   `ext` and `meta` are enabled, so the model can call `ReloadExtensions()` and
   then your tool in the same turn.
+- `group` is presentation metadata for the Textual context header. It does not
+  change tool permissions or bundle selection.
 
 Call `ReloadExtensions()` (or edit the file and let the watcher fire) to make it
 live; `nexus ext reload` runs the same rebuild from the CLI, and
@@ -149,14 +152,22 @@ active. Precedence is workspace > user > builtin.
 
 `.nexus/agents/<name>.md`. The frontmatter grammar is deliberately restricted
 (no YAML library): the keys are `name`, `description`, `bundles`, `tools`,
-`model`, `provider`, `reasoning_effort`, `color`, `max_iterations`,
-`context_tokens`, `contexts`, and `profile`. A `tools` item may carry a leading
+`model`, `provider`, `reasoning_effort`, `fallback`, `color`, `max_iterations`,
+`context_tokens`, `contexts`, `profile`, and `write_roots`. A `tools` item may carry a leading
 `-` to exclude. Empty or omitted `tools` and `bundles` inherit the parent/profile
 tool ceiling; they never grant tools. Omitted `contexts` keeps the legacy
 subagent-only default. `provider` is optional and must agree with a qualified
 `model: provider/model`; `reasoning_effort` accepts `minimal`, `low`, `medium`,
 `high`, or `xhigh`. `color` is optional and must be `#RRGGBB`; when omitted, a
 stable palette color is derived from the case-normalized agent name.
+`fallback: [provider/model, ...]` (up to 8) lists models tried in order, before
+the workspace `models.fallback` chain, when the agent's model fails before any
+output. A definition in `~/.nexus/agents/` or `.nexus/agents/` with a built-in's
+name (`build`, `advisor`, `task`, `quick`) overrides it.
+`write_roots: [global, project]` narrows an agent's mutating file tools to
+`~/.nexus/` and `<workspace>/.nexus/`. It never widens the normal permission
+roots. Credential, session, cache, trash, and daemon files remain blocked in
+both scopes.
 
 ```markdown
 ---
@@ -180,9 +191,10 @@ The parent spawns it with `Task(subagent_type="security-reviewer", prompt="...")
 or as an ad-hoc agent with an explicit `tools=` list. A child can never exceed
 its parent: tools intersect, permissions inherit, `deny` stays absolute, the
 tier is clamped by `agents.max_tier`, and depth/fan-out are bounded. The
-`explore` and `plan` roles are structurally read-only; naming one of those names
-makes a definition read-only regardless of what it declares. The legacy
-`planner` name remains structurally read-only for compatibility.
+`advisor` role is structurally read-only; naming a definition `advisor` (or the
+legacy `explore`, `plan`, or `planner`) makes it read-only regardless of what it
+declares. Subagents that edit files should list them in their report; the
+runner also appends every file a child changed through its edit tools.
 
 ## A custom hook
 
@@ -285,7 +297,9 @@ permission keys are canonical paths; use absolute paths or `read_denyroots` for
 home locations. A keyed grant persists only as an exact-action rule, so an
 `ALLOW_ALWAYS` cannot widen.
 
-`[ext]`, `[agents]`, `[hooks]`, and `[mcp]` tune the extension subsystems:
+`[ext]`, `[agents]`, `[hooks]`, `[mcp]`, `[sessions]`, and `[settings]` tune the
+extension and session subsystems. Settings writes project config to
+`<workspace>/.nexus/nexus.toml`, which overlays legacy `<workspace>/nexus.toml`:
 
 ```toml
 [ext]
@@ -298,6 +312,12 @@ max_file_bytes = 262144
 max_tier = "medium"
 max_concurrent = 4
 max_depth = 3
+
+[sessions]
+auto_archive_days = 2  # idle sessions; 0 disables the sweep
+
+[settings]
+confirm_edits = false  # true asks before mutating tools edit settings files
 ```
 
 ## A UI renderer

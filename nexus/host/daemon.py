@@ -53,6 +53,7 @@ import msgspec
 
 from ..errors import NexusError
 from ..events import Event
+from ..host_support.session_archive import reap_with_archive_sweep, sweep_stale_sessions
 from ..observability.daemon import DaemonDiagnostics
 from ..util import new_id, redact_secrets
 from . import protocol as p
@@ -717,14 +718,25 @@ class Daemon:
     # -- idle policy -------------------------------------------------------
 
     async def _reap(self) -> None:
-        while not self._stop_event.is_set():
-            await asyncio.sleep(self._reap_interval)
-            if self._stop_event.is_set():
-                return
-            if self._idle():
-                self._log("daemon.idle_shutdown")
-                self.request_stop("idle")
-                return
+        await reap_with_archive_sweep(
+            self._stop_event,
+            self._reap_interval,
+            self._archive_sweep,
+            self._idle,
+            self.request_stop,
+            self._log,
+        )
+
+    async def _archive_sweep(self) -> None:
+        """Best-effort startup/hourly auto-archive; never blocks request handling."""
+        runtime = self._runtime
+        sessions = getattr(runtime, "sessions", None)
+        days = getattr(runtime, "auto_archive_days", None)
+        if sessions is None or not callable(days):
+            return
+        count = await sweep_stale_sessions(sessions, days)
+        if count:
+            self._log("sessions.auto_archived", count=count)
 
     def _idle(self) -> bool:
         if self.idle_timeout <= 0 or self._facade is None:

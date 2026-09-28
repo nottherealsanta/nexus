@@ -47,6 +47,7 @@ _WAIT = {
 
 SPEC = ToolSpec(
     name="BashOutput",
+    group="bash",
     description=(
         "Read stdout, stderr, and status for a background shell job started "
         "by Bash. Pass the returned offsets back to poll incrementally."

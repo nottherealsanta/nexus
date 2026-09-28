@@ -19,11 +19,10 @@ from nexus.host import protocol as p
 from nexus.session.manager import SessionSummary
 from nexus.ui.cli.client import Client, TransportClosed
 from nexus.ui.tui.agent_picker import AgentPicker
-from nexus.ui.tui.agent_transcript import AgentTranscriptScreen, render_agent
+from nexus.ui.tui.agent_transcript import AgentTranscriptScreen
 from nexus.ui.tui.app import NexusTextualApp
-from nexus.ui.tui.messages import AgentOpenRequested, EventReceived
+from nexus.ui.tui.messages import EventReceived
 from nexus.ui.tui.timeline import (
-    AgentActivityLink,
     ConversationTimeline,
     TaskActivityWidget,
     ToolActivityWidget,
@@ -121,6 +120,9 @@ class FakeTransport:
             self.last_input = command.content
             self.started.set()
             return p.SessionStartResult(session=command.session, turn_id="turn-1")
+        if isinstance(command, p.QuestionAnswer):
+            self.question_answer = (command.call_id, command.answer)
+            return p.QuestionAnswerResult(session=command.session, call_id=command.call_id, resolved=True)
         if isinstance(command, p.PermissionResolve):
             self.permission_decision = command.decision
             self.permission_resolved.set()
@@ -330,7 +332,7 @@ async def test_root_agent_picker_mouse_and_next_turn_feedback():
         await pilot.press("enter")
         await pilot.pause(0.05)
         assert app.controller.agent_name == "plan"
-        assert "applies next turn" in str(app.query_one("#connection-status").render())
+        assert "applies next turn" not in str(app.query_one("#connection-status").render())
 
 
 @pytest.mark.asyncio
@@ -399,15 +401,13 @@ async def test_fresh_session_is_empty_and_editor_focused_without_agent_panel():
     async with app.run_test(size=(48, 24)) as pilot:
         await pilot.pause()
         timeline = app.query_one("#conversation", ConversationTimeline)
-        assert not list(timeline.children)
+        assert [child.id for child in timeline.children] == ["context-header"]
         assert app.focused is app.query_one("#chat-editor", TextArea)
         assert not app.query("#agent-tracker")
-        assert app.query_one("#context-preview").display
+        assert not app.query_one("#context-preview").display
         await pilot.pause()
-        current = app.query_one("#context-preview-content").render().plain
-        assert "SYSTEM PROMPT · request.system" in current
-        assert "TOOLS · structured request.tools" in current
-        assert "MESSAGES · ordered request.messages" in current
+        assert "Selected system prompt" in app.query_one("#context-prompt").render().plain
+        assert "Read" in app.query_one("#context-tools").render().plain
 
 
 @pytest.mark.asyncio
@@ -419,19 +419,26 @@ async def test_context_entry_opens_readable_next_turn_preview_and_is_keyboard_ac
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         entry = app.query_one("#context-usage")
-        assert entry.render().plain == "Preview"
+        assert entry.render().plain == "0 (0%)"
         await pilot.press("ctrl+i")
         await pilot.pause()
         assert isinstance(app.screen, ContextDetailsScreen)
-        assert "Provider call: No" in app.screen.query_one("#context-details").render().plain
-        details = app.screen.query_one("#context-details").render().plain
-        for expected in (
-            "CURRENT REQUEST", "SYSTEM PROMPT · request.system", "Selected system prompt",
-            "SOUL.md", "MEMORY.md", "TOOLS · structured request.tools", "Read a file",
-            "SKILLS INDEX", "Search workspace", "MCP INDEX", "mcp__docs__search",
-            "Earlier request", "MESSAGES · ordered request.messages", "Provider call: No",
-        ):
-            assert expected in details
+        summary = app.screen.query_one("#context-details").render().plain
+        assert "general · fake/preview-model" in summary and "Provider call: No" in summary
+        assert "system ~" in summary and "tools ~" in summary and "1 turn(s)" in summary
+        groups = [str(group._title.label) for group in app.screen.query("Collapsible.context-group")]
+        assert [title.split("  ")[0] for title in groups] == ["System prompt", "Tools", "Turn 1", "Request details"]
+        entries = [str(entry._title.label).split("  ")[0] for entry in app.screen.query("Collapsible.context-entry")]
+        for expected in ("system", "soul", "memory", "Skills index", "MCP index", "Full system prompt",
+                         "Read", "User message", "Accounting", "System files", "Display limitations"):
+            assert expected in entries
+        # Everything starts collapsed; Enter on a focused title expands it.
+        assert all(group.collapsed for group in app.screen.query("Collapsible.context-group"))
+        first = app.screen.query_one("Collapsible.context-group")
+        first._title.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert not first.collapsed
         assert "ContextInspect" in transport.trace
         await pilot.press("escape")
         await pilot.pause()
@@ -476,47 +483,26 @@ async def test_empty_context_preview_shows_ten_lines_then_full_details_with_safe
     app = NexusTextualApp(_client(transport), session="new-session")
     async with app.run_test(size=(100, 38)) as pilot:
         await pilot.pause()
-        preview = app.query_one("#context-preview-content").render().plain
-        for expected in (
-            "CURRENT REQUEST CONTEXT", "fake-provider/fake-model", "SYSTEM PROMPT · request.system",
-            "first", "ninth", "TOOLS · structured request.tools · 1", "Read",
-            "MESSAGES · ordered request.messages · 2", "Earlier reply", "800 / 8000 tokens",
-                "...",
-            "field-0",
-        ):
-            assert expected in preview
-        assert "tenth" not in preview
-        assert "eleventh\\x1b[31munsafe" not in preview
-        assert "Request line 12" not in preview and "Part line 12" not in preview
-        assert preview.count("...") >= 3
-        assert not app.query("#context-preview-scroll")
-        assert not list(app.query_one("#conversation").children)
-        assert app.query_one("#context-preview-agent").render().plain == "Agent · general"
-        assert app.query_one("#context-preview-model").render().plain == "Model · fake-provider/fake-model"
+        preview = app.query_one("#context-prompt").render().plain
+        assert "first" in preview and "fifth" in preview
+        assert "+6 more lines" in preview
+        assert "sixth" not in preview
+        assert "Read" in app.query_one("#context-tools").render().plain
+        assert "active-skill" in app.query_one("#context-skills").render().plain
+        assert "available-skill" not in app.query_one("#context-skills").render().plain
+        assert app.query_one("#context-header") in app.query_one("#conversation").children
 
-        await pilot.click("#context-preview-model")
+        await pilot.click("#context-prompt")
         await pilot.pause()
-        assert app._inline_picker_kind == "model"
-        assert app.query_one("#inline-picker").display
+        assert app.screen.query_one("#context-modal-title").render().plain == "System prompt"
+        assert "eleventh" in app.screen.query_one("#context-modal-body").source
         await pilot.press("escape")
         await pilot.pause()
-
-        await pilot.click("#context-preview-content")
-        await pilot.pause()
-        assert isinstance(app.screen, ContextDetailsScreen)
-        details = app.screen.query_one("#context-details").render().plain
-        assert "Provider call: No" in details
-        assert "DISPLAY LIMITATIONS" in details
-        assert "eleventh\\x1b[31munsafe" in details
-        assert "Input schema:" in details
-        assert "field-11" in details and "Request line 12" in details and "Part line 12" in details
-        assert "available, not included" in details
-        assert "TOOLS · structured request.tools" in details
-        assert "Request line 12" in details
+        assert not isinstance(app.screen, ContextDetailsScreen)
 
 
 @pytest.mark.asyncio
-async def test_context_main_pane_stays_available_for_existing_conversation():
+async def test_context_main_pane_yields_to_an_existing_conversation():
     from nexus.view import apply
 
     client = _client(FakeTransport())
@@ -529,11 +515,9 @@ async def test_context_main_pane_stays_available_for_existing_conversation():
         app.controller.view = apply(app.controller.view, _event("turn.completed", 3))
         await app._sync_timeline()
         await pilot.pause()
-        assert app.query_one("#context-preview").display
-        content = app.query_one("#context-preview-content").render().plain
-        assert "CURRENT REQUEST CONTEXT" in content
-        assert "SYSTEM PROMPT · request.system" in content
-        assert "MESSAGES · ordered request.messages" in content
+        # The inline preview introduces a new session; once there is a
+        # conversation the chat owns the pane and Ctrl+I opens full context.
+        assert not app.query_one("#context-preview").display
 
 
 @pytest.mark.asyncio
@@ -577,10 +561,10 @@ async def test_inline_context_preview_discards_late_response_after_session_switc
         await entered_old.wait()
         await app._switch_session("new")
         await pilot.pause()
-        assert "prompt for new" in app.query_one("#context-preview-content").render().plain
+        assert "prompt for new" in app.query_one("#context-prompt").render().plain
         release_old.set()
         await pilot.pause()
-        rendered = app.query_one("#context-preview-content").render().plain
+        rendered = app.query_one("#context-prompt").render().plain
         assert "prompt for new" in rendered
         assert "stale old prompt" not in rendered
         assert app.controller.session == "new"
@@ -619,7 +603,8 @@ async def test_empty_turn_render_lines_are_blank_and_current_failed_turn_shows_e
 
     view = apply(initial_state("s"), _event("turn.started", 1))
     app = NexusTextualApp(_client(FakeTransport()))
-    async with app.run_test(size=(60, 24)) as pilot:
+    # Tall enough for the new-session context preview plus the timeline.
+    async with app.run_test(size=(60, 40)) as pilot:
         await pilot.pause()
         timeline = app.query_one("#conversation", ConversationTimeline)
         await timeline.set_view(view)
@@ -652,9 +637,9 @@ async def test_empty_turn_render_lines_are_blank_and_current_failed_turn_shows_e
         error_widget = turn_widget.query_one(".timeline-error", Static)
         error_area = Region(0, 0, error_widget.size.width, error_widget.size.height)
         rendered_error = " ".join(
-            "".join(line.text for line in error_widget.render_lines(error_area)).split()
+            "".join(line.text for line in error_widget.render_lines(error_area)).strip("").replace("▏", "").replace("▎", "").replace("▌", "").split()
         )
-        assert rendered_error == error
+        assert rendered_error == f"Error: {error}"
         user_message = turn_widget.query_one(".timeline-user", Static)
         rendered_user = user_message.render().plain
         assert "keep my prompt" in rendered_user
@@ -747,14 +732,12 @@ async def test_completed_turn_summary_uses_frozen_replayed_metadata_and_is_idemp
         summary = timeline._turns["summary-turn"].query_one(
             ".timeline-summary", Static
         ).render().plain
-        assert "Model saved-provider/saved-model" in summary
+        # The agent is shown in the composer, not repeated per turn.
+        assert summary == "saved-model · 2.0s"
         assert "later-model" not in summary
-        assert "2.0s" in summary
         assert "Elapsed" not in summary
-        assert "Agent Plan" in summary
         assert "later-agent" not in summary
-        assert "Effort high" in summary
-        assert "Effort low" not in summary
+        assert " low" not in summary
 
         # Re-rendering the same replayed state updates the single summary card
         # instead of duplicating it.
@@ -809,9 +792,7 @@ async def test_completed_turn_summary_omits_unknown_duration_and_describes_unset
         ).render().plain
         assert "Elapsed" not in summary
         assert "45.0s" not in summary and "44.0s" not in summary
-        assert "Model unknown" in summary
-        assert "Agent No agent" in summary
-        assert "Effort Default" in summary
+        assert summary.strip() == ""
 
 
 @pytest.mark.asyncio
@@ -893,7 +874,7 @@ async def test_superseded_setup_errors_and_pre_prompt_greetings_are_hidden_only_
         for turn_id in ("config", "provider"):
             tool = timeline._turns[turn_id]._items[f"tool:preview-{turn_id}"]
             assert "credentials reference: unauthorized" in str(
-                tool.query_one("#tool-detail").render()
+                tool.query_one("#tool-header").render()
             )
         assert view.turns[1].error and view.turns[2].error
         # The canonical reducer still owns every failed turn for inspection/export.
@@ -943,32 +924,26 @@ async def test_switch_session_detaches_an_active_prior_stream():
 
 @pytest.mark.asyncio
 async def test_inspector_tail_follow_obeys_user_scroll_state():
-    from nexus.view import AgentView, ConversationView, MessageView, TurnView
+    from nexus.ui.tui.timeline import ConversationTimeline
+    from nexus.view import AgentView, BlockView, ConversationView, MessageView, TurnView
 
     body = ConversationView(
         session_id="agent",
-        turns=[TurnView(id=f"t{i}", messages=[MessageView(role="assistant")]) for i in range(20)],
+        turns=[TurnView(id=f"t{i}", messages=[MessageView(role="assistant", blocks=[BlockView(text=f"line {i}")])]) for i in range(40)],
     )
     app = NexusTextualApp(_client(FakeTransport()))
     async with app.run_test() as pilot:
         await pilot.pause()
         screen = AgentTranscriptScreen(AgentView(id="agent", body=body))
         app.push_screen(screen)
-        await pilot.pause(0.1)
-        scroll = screen.query_one("#agent-inspector-scroll")
+        await pilot.pause(0.2)
+        timeline = screen.query_one("#agent-timeline", ConversationTimeline)
         assert screen.scroll_at_bottom
-        screen._at_bottom = False
-        calls = []
-        original = scroll.scroll_end
-        scroll.scroll_end = lambda **kwargs: calls.append(True)
-        screen.refresh_agent(AgentView(id="agent", body=body))
+        timeline.scroll_home(animate=False)
         await pilot.pause(0.1)
-        assert calls == []
-        screen._at_bottom = True
         screen.refresh_agent(AgentView(id="agent", body=body))
-        await pilot.pause(0.1)
-        assert calls == [True]
-        scroll.scroll_end = original
+        await pilot.pause(0.2)
+        assert timeline.scroll_y == 0 and not screen.scroll_at_bottom
 
 
 @pytest.mark.asyncio
@@ -1003,11 +978,11 @@ async def test_permission_modal_shows_all_multi_target_paths():
             "permission.requested", 1, {"id": "many", "tool": "Move", "targets": targets}
         )))
         await pilot.pause()
-        description = app.screen.query_one("#permission-description", Static).render().plain
+        description = app.screen.query_one("#prompt-body", Static).render().plain
         assert "targets (64)" in description
         for target in targets:
             assert target["path"] in description
-        scroll = app.screen.query_one("#permission-details-scroll", VerticalScroll)
+        scroll = app.screen.query_one("#prompt-body-scroll", VerticalScroll)
         assert scroll.max_scroll_y > 0
 
 
@@ -1022,7 +997,7 @@ async def test_permission_modal_shows_all_multi_target_paths():
 )
 @pytest.mark.parametrize("key", ["y", "a"])
 async def test_permission_unavailable_targets_fail_closed_for_keyboard_allow(targets, key):
-    from textual.widgets import Button, Static
+    from textual.widgets import Static
 
     transport = FakeTransport()
     app = NexusTextualApp(_client(transport))
@@ -1034,11 +1009,10 @@ async def test_permission_unavailable_targets_fail_closed_for_keyboard_allow(tar
         )))
         await pilot.pause()
         screen = app.screen
-        description = screen.query_one("#permission-description", Static).render().plain
+        description = screen.query_one("#prompt-body", Static).render().plain
         assert "targets: unavailable" in description
         assert "approval: unavailable; this request will be denied" in description
-        assert screen.query_one("#allow-once", Button).disabled
-        assert screen.query_one("#allow-always", Button).disabled
+        assert [c.disabled for c in screen.choices] == [True, True, False, False]
 
         await pilot.press(key)
         await pilot.pause()
@@ -1076,11 +1050,34 @@ async def test_permission_valid_complete_multi_target_list_allows_normal_choice(
             {"id": "valid-targets", "tool": "Move", "targets": targets},
         )))
         await pilot.pause()
-        assert not app.screen.query_one("#allow-once").disabled
-        assert not app.screen.query_one("#allow-always").disabled
+        assert not any(choice.disabled for choice in app.screen.choices)
         await pilot.press("a")
         await pilot.pause()
         assert transport.permission_decision == "allow_always"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("tool_input", "keys", "answer"), [
+    ({"question": "Which DB?", "options": ["Postgres", "SQLite"]}, ["2"], "2"),
+    ({"question": "Name it?"}, ["n", "o", "v", "a", "enter"], "nova"),
+])
+async def test_question_opens_list_prompt_and_answers_by_call_id(tool_input, keys, answer):
+    from nexus.ui.tui.permission import QuestionScreen
+
+    transport = FakeTransport()
+    app = NexusTextualApp(_client(transport))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.post_message(EventReceived(_event("tool.requested", 1, {"call_id": "q1", "tool": "question", "input": tool_input})))
+        app.post_message(EventReceived(_event("tool.started", 2, {"call_id": "q1", "tool": "question"})))
+        await pilot.pause()
+        assert isinstance(app.screen, QuestionScreen)
+        assert tool_input["question"] in app.screen.query_one("#prompt-body").render().plain
+        for key in keys:
+            await pilot.press(key)
+        await pilot.pause()
+        assert transport.question_answer == ("q1", answer)
+        assert not isinstance(app.screen, QuestionScreen)
 
 
 @pytest.mark.asyncio
@@ -1100,7 +1097,7 @@ async def test_permission_scalar_approval_still_allows_once():
 
 
 @pytest.mark.asyncio
-async def test_task_cards_are_inline_and_open_their_linked_live_child():
+async def test_task_details_include_child_agents_and_modal_can_open_child():
     from nexus.view import apply, initial_state
 
     view = initial_state("s")
@@ -1114,14 +1111,20 @@ async def test_task_cards_are_inline_and_open_their_linked_live_child():
         app.controller.view = view
         await app._sync_timeline()
         card = app.query_one(TaskActivityWidget)
-        assert "explore" in card._expanded_text()
-        assert len(card.query(AgentActivityLink)) == 2
-        await app.on_agent_open_requested(AgentOpenRequested("a"))
+        details = card._details_text()
+        assert "explore" in details and "build" in details
+        await card.open_details()
+        await pilot.pause()
+        await pilot.click("#tool-details-agent")
         await pilot.pause()
         assert app.screen.__class__.__name__ == "AgentTranscriptScreen"
 
 
-def test_child_transcript_safe_bounded_content():
+@pytest.mark.asyncio
+async def test_child_modal_renders_with_the_root_timeline_widgets():
+    from textual.app import App
+
+    from nexus.ui.tui.timeline import ToolActivityWidget, TurnWidget
     from nexus.view import (
         AgentView,
         BlockView,
@@ -1133,17 +1136,23 @@ def test_child_transcript_safe_bounded_content():
 
     body = ConversationView(turns=[TurnView(
         id="child",
-        messages=[MessageView(role="assistant", blocks=[BlockView(kind="text", text="child **answer**\x1b[31m")])],
-        tools=[ToolCallView(name="Write", status="failed", input={"secret": "x" * 6000}, error="failed")],
+        messages=[MessageView(role="assistant", blocks=[BlockView(kind="text", text="child answer")])],
+        tools=[ToolCallView(call_id="w", name="Write", status="failed", input={"secret": "x" * 6000}, error="failed")],
     )])
-    rendered = render_agent(AgentView(id="a", body=body))
-    assert "child **answer**" in rendered
-    assert "\\x1b" in rendered
-    assert "Name/status: `Write` · `failed`" in rendered
-    assert len(rendered) < 6000
+    async with App().run_test() as pilot:
+        screen = AgentTranscriptScreen(AgentView(id="a", body=body))
+        await pilot.app.push_screen(screen)
+        await pilot.pause(0.2)
+        assert screen.query(TurnWidget)
+        (tool,) = screen.query(ToolActivityWidget)
+        assert tool.has_class("-failed")
+        assert "x" * 6000 not in " ".join(str(w.render()) for w in screen.query("#agent-timeline Static"))
 
 
-def test_child_transcript_does_not_leak_write_content():
+@pytest.mark.asyncio
+async def test_child_transcript_does_not_leak_write_content():
+    from textual.app import App
+
     from nexus.view import AgentView, ConversationView, ToolCallView, TurnView
 
     secret = "do-not-render-this-write-payload"
@@ -1151,14 +1160,18 @@ def test_child_transcript_does_not_leak_write_content():
         id="a",
         body=ConversationView(turns=[TurnView(
             id="child", tools=[ToolCallView(
-                name="Write", input={"path": "secret.txt", "content": secret},
+                call_id="w", name="Write", status="completed", input={"path": "secret.txt", "content": secret},
                 display=secret, result=[{"type": "text", "text": secret}],
             )]
         )]),
     )
-    rendered = render_agent(agent)
-    assert "secret.txt (1 lines)" in rendered
-    assert secret not in rendered
+    async with App().run_test() as pilot:
+        screen = AgentTranscriptScreen(agent)
+        await pilot.app.push_screen(screen)
+        await pilot.pause(0.2)
+        rendered = " ".join(str(w.render()) for w in screen.query("#agent-timeline Static"))
+        assert "secret.txt" in rendered
+        assert secret not in rendered
 
 
 def test_inline_tool_formatters_are_bounded_and_literal():
@@ -1175,6 +1188,8 @@ def test_inline_tool_formatters_are_bounded_and_literal():
 
 @pytest.mark.asyncio
 async def test_tool_card_lifecycle_updates_in_place_and_diff_falls_back_narrow():
+    from textual.widgets import Static
+
     from nexus.view import ToolCallView
 
     app = NexusTextualApp(_client(FakeTransport()))
@@ -1188,13 +1203,16 @@ async def test_tool_card_lifecycle_updates_in_place_and_diff_falls_back_narrow()
             call_id="e", name="Edit", status="completed", duration_ms=7,
             diff={"path": "f.py", "hunk": "--- a/f.py\n+++ b/f.py\n@@ -1 +1 @@\n-old\n+new", "added_lines": 1, "removed_lines": 1, "truncated": True},
         ))
-        await card.toggle()
-        assert "+1 -1" in str(card.query_one("#tool-expanded").render())
-        assert not card.query(".tool-diff-view")
+        await card.open_details()
+        from nexus.ui.tui.tool_details import ToolDetailsScreen
+
+        assert isinstance(app.screen, ToolDetailsScreen)
+        details = str(app.screen.query_one("#tool-details-body", Static).render())
+        assert "@@ -1 +1 @@" in details and "-old" in details and "+new" in details
 
 
 @pytest.mark.asyncio
-async def test_wide_diff_unmounts_when_the_card_becomes_narrow():
+async def test_tool_diff_is_never_mounted_inline_and_stays_available_in_modal():
     from textual.widgets import Static
 
     from nexus.view import ToolCallView
@@ -1204,16 +1222,18 @@ async def test_wide_diff_unmounts_when_the_card_becomes_narrow():
         call_id="e", name="Edit", status="completed",
         diff={"path": "f.py", "hunk": "--- a/f.py\n+++ b/f.py\n@@ -1 +1 @@\n-old\n+new"},
     )
-    async with app.run_test(size=(60, 24)) as pilot:
+    async with app.run_test(size=(90, 24)) as pilot:
         await pilot.pause()
         card = ToolActivityWidget(tool)
         await app.query_one("#conversation", ConversationTimeline).mount(card)
         await pilot.pause()
-        preview = Static(classes="tool-diff-view")
-        await card.mount(preview)
-        card._diff_widget = preview
         await card.set_tool(tool)
         assert not card.query(".tool-diff-view")
+        assert len(card.children) == 1
+        await card.open_details()
+        await pilot.pause()
+        details = str(app.screen.query_one("#tool-details-body", Static).render())
+        assert "@@ -1 +1 @@" in details and "-old" in details and "+new" in details
 
 
 @pytest.mark.asyncio
@@ -1331,6 +1351,25 @@ async def test_textual_ctrl_c_cancels_and_quit_is_safe():
         assert transport.closed
 
 
+@pytest.mark.asyncio
+async def test_idle_ctrl_c_clears_draft_then_requires_second_press_to_quit():
+    app = NexusTextualApp(_client(FakeTransport()))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        editor = app.query_one("#chat-editor", TextArea)
+        editor.text = "draft"
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+        assert editor.text == ""
+        assert not app.controller._closed
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+        assert "Press ctrl+c again" in app.query_one("#connection-status").render().plain
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+        assert app.controller._closed
+
+
 def test_textual_package_css_and_base_cli_import_seam():
     css = importlib.resources.files("nexus.ui.tui").joinpath("app.tcss")
     assert css.is_file()
@@ -1345,9 +1384,11 @@ def test_textual_package_css_and_base_cli_import_seam():
 
 def test_opencode_visual_shell_tokens_and_fixture_states_are_available():
     css = importlib.resources.files("nexus.ui.tui").joinpath("app.tcss").read_text(encoding="utf-8")
-    assert "#d18a38" in css  # amber active/focus accent
-    assert "#a78bfa" in css  # purple identity
-    assert "#86b97a" in css  # success/task accent
+    # Colors come from theme variables so dark and light themes both apply.
+    assert "$nx-accent" in css and "$nx-purple" in css and "$nx-success" in css
+    from nexus.ui.tui.theme import NEXUS_DARK, NEXUS_LIGHT
+    for theme in (NEXUS_DARK, NEXUS_LIGHT):
+        assert {"nx-accent", "nx-purple", "nx-success", "nx-bg"} <= set(theme.variables)
     import runpy
 
     VisualDemoApp = runpy.run_path(
@@ -1551,23 +1592,60 @@ async def test_ctrl_t_cycles_root_reasoning_effort_and_preserves_draft(effective
         await pilot.press("ctrl+t")
         await pilot.pause()
 
+        # Ctrl+T cycles in place; the picker belongs to /effort.
         assert editor.text == "keep this draft"
-        assert app.query_one("#inline-picker").display
-        from textual.widgets import OptionList
-
-        assert app.focused is app.query_one("#agent-options", OptionList)
-        assert selected == []
-        if effective == "high":
-            await pilot.press("down", "enter")
-        else:
-            await pilot.press("enter")
-        await pilot.pause()
+        assert not app.query_one("#inline-picker").display
         assert app.focused is editor
         assert selected == [("s", expected)]
-        assert current_calls == 3  # bootstrap, picker query, then metadata refresh
+        assert current_calls == 3  # bootstrap, cycle query, then metadata refresh
         assert app.controller.reasoning_effort == expected
-        assert expected in str(app.query_one("#root-agent").render())
-        assert "applies next turn" in str(app.query_one("#connection-status").render())
+        assert expected in str(app.query_one("#root-agent").summary())
+        assert "applies next turn" not in str(app.query_one("#connection-status").render())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command", ["/effort", "/reasoning"])
+async def test_effort_command_opens_picker_and_selects(command):
+    from textual.widgets import OptionList
+
+    from nexus.ui.tui.widgets import ChatEditor
+
+    client = _client(FakeTransport())
+    selected = []
+    metadata = SimpleNamespace(
+        name="general", supported_levels=["low", "high"], reasoning_effort="low"
+    )
+
+    async def current_agent(session):
+        return metadata
+
+    async def select_reasoning_effort(session, effort):
+        selected.append((session, effort))
+        metadata.reasoning_effort = effort
+
+    client.current_agent = current_agent
+    client.select_reasoning_effort = select_reasoning_effort
+    app = NexusTextualApp(client, session="s")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        editor = app.query_one(ChatEditor)
+        await app._dispatch_chat_command(command)
+        await pilot.pause()
+        assert app.query_one("#inline-picker").display
+        assert app.focused is app.query_one("#agent-options", OptionList)
+        assert selected == []
+        await pilot.press("down", "enter")
+        await pilot.pause()
+        assert selected == [("s", "high")]
+        assert app.focused is editor
+
+        await app._dispatch_chat_command(f"{command} low")
+        await pilot.pause()
+        assert selected == [("s", "high"), ("s", "low")]
+        await app._dispatch_chat_command(f"{command} extreme")
+        await pilot.pause()
+        assert len(selected) == 2
+        assert "Use /effort low|high" in str(app.query_one("#connection-status").render())
 
 
 @pytest.mark.asyncio
@@ -1626,9 +1704,7 @@ async def test_ctrl_t_reports_host_selection_errors():
         await pilot.press("ctrl+t")
         await pilot.pause()
         assert editor.text == "keep me"
-        assert app.query_one("#inline-picker").display
-        await pilot.press("down", "enter")
-        await pilot.pause()
+        assert not app.query_one("#inline-picker").display
         assert app.focused is editor
         status = str(app.query_one("#connection-status").render())
         assert "Reasoning effort selection failed" in status
@@ -1840,11 +1916,8 @@ async def test_ctrl_t_is_only_handled_by_main_composer():
 
         await pilot.press("ctrl+t")
         await pilot.pause()
-        assert selections == []
-        assert app.query_one("#inline-picker").display
-        await pilot.press("down", "enter")
-        await pilot.pause()
         assert selections == [("s", "high")]
+        assert not app.query_one("#inline-picker").display
 
 
 async def _feed_terminal(app, sequence: str, parser=None):

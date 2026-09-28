@@ -734,6 +734,7 @@ class PathGuard:
         "_home",
         "_read_denyroot_specs",
         "_read_denyroots",
+        "_settings_scopes",
         "_workspace",
         "_worktree_boundary",
         "_write_root_specs",
@@ -749,6 +750,7 @@ class PathGuard:
         home: str | Path | None = None,
         _allow_empty_write_roots: bool = False,
         _worktree_boundary: bool = False,
+        settings_scopes: Sequence[str | Path] = (),
     ) -> None:
         self._workspace = _canonical(Path(workspace))
         self._home = Path(home) if home is not None else Path.home()
@@ -768,6 +770,7 @@ class PathGuard:
             self._write_root_specs = ()
             self._write_roots = ()
         self._worktree_boundary = _worktree_boundary
+        self._settings_scopes = tuple(_canonical(Path(root)) for root in settings_scopes)
 
     def _root(
         self, value: object, *, home: str | Path | None, label: str
@@ -858,6 +861,7 @@ class PathGuard:
             home=self._home,
             _allow_empty_write_roots=True,
             _worktree_boundary=True,
+            settings_scopes=self._settings_scopes,
         )
 
     def resolve(self, raw: object, *, for_write: bool) -> ResolvedPath:
@@ -906,6 +910,20 @@ class PathGuard:
                 f"Write denied: {display} is outside the write roots",
                 code="write_root",
             )
+        for root in self._settings_scopes:
+            try:
+                relative = resolved.relative_to(root)
+            except ValueError:
+                continue
+            if any(
+                part in {"credentials.json", "sessions", "cache", "daemon", "daemon.sock", "daemon.pid", "daemon.lock"}
+                or part.startswith("trash")
+                for part in relative.parts
+            ):
+                raise PathSecurityError(
+                    f"Access denied: {display} is outside the Settings agent's allowed files",
+                    code="settings_scope",
+                )
         if any(_is_within(resolved, root) for root in self._read_denyroots):
             raise PathSecurityError(
                 f"Access denied: {display} is under a read-deny root",
@@ -1126,6 +1144,10 @@ class PreparedCall:
 # ---------------------------------------------------------------------------
 
 
+#: Builtins whose only effect is talking to the operator; they never ask first.
+_NEVER_ASK_TOOLS = frozenset({"question"})
+
+
 class PermissionEngine:
     """First-match permission evaluation with hard path boundaries.
 
@@ -1156,6 +1178,7 @@ class PermissionEngine:
         self.on_unattended: UnattendedMode = on_unattended  # type: ignore[assignment]
         self._allow = tuple(parse_rule(rule) for rule in allow)
         self._ask = tuple(parse_rule(rule) for rule in ask)
+        self._force_ask_tools: frozenset[str] = frozenset()
         self._deny = tuple(parse_rule(rule) for rule in deny)
         if path_guard is not None:
             self.path_guard = path_guard
@@ -1192,6 +1215,12 @@ class PermissionEngine:
             ),
             workspace=workspace,
             home=home,
+        )
+
+    def require_confirmation_for(self, tools: Iterable[str]) -> None:
+        """Force matching tools to ask even when an allow rule would match."""
+        self._force_ask_tools = frozenset(
+            canonical_tool_name(name) for name in tools if isinstance(name, str)
         )
 
     # -- evaluation --------------------------------------------------------
@@ -1271,6 +1300,11 @@ class PermissionEngine:
                 call, spec, key, Outcome.DENY, denied, "deny", f"Denied by rule {denied.raw!r}", suggestions
             )
 
+        if public_name in self._force_ask_tools:
+            return self._ask_verdict(
+                call, spec, key, None, attended, suggestions
+            )
+
         grant_effect, grant = self._first_grant(
             grants, public_name, key, bundle, input_data=call.input
         )
@@ -1292,6 +1326,14 @@ class PermissionEngine:
             return self._verdict(
                 call, spec, key, Outcome.ALLOW, allowed, "allow",
                 f"Allowed by rule {allowed.raw!r}", suggestions,
+            )
+
+        # Asking the operator a question is itself the approval surface, so it
+        # never opens an approval of its own; deny rules and deny mode still win.
+        if public_name in _NEVER_ASK_TOOLS and self.mode != "deny":
+            return self._verdict(
+                call, spec, key, Outcome.ALLOW, None, "user_interaction",
+                "Questions go to the operator directly", suggestions,
             )
 
         ask = self._first_match(
@@ -1560,6 +1602,18 @@ class PermissionEngine:
                 "deny",
                 f"Denied by rule {denied.raw!r}",
                 denied,
+            )
+
+        if tool in self._force_ask_tools:
+            verdict = self._ask_verdict(call, spec, key, None, attended, ())
+            return PathTargetEvaluation(
+                target.role,
+                key,
+                verdict.outcome,
+                verdict.decision,
+                verdict.code,
+                verdict.reason,
+                verdict.rule,
             )
         effect, grant = self._first_grant(
             grants, tool, key, spec.bundle, input_data=call.input

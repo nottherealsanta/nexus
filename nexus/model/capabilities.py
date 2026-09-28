@@ -40,6 +40,7 @@ REGISTRY_CAPABILITY_FIELDS: tuple[str, ...] = (
 REGISTRY_LIMIT_FIELDS: tuple[str, ...] = (
     "max_context_tokens",
     "max_output_tokens",
+    "max_input_tokens",
 )
 
 #: Every feature a degradation retry can disable, in a stable order.
@@ -79,6 +80,8 @@ class Capabilities(msgspec.Struct, frozen=True):
     max_context_tokens: int = 0
     max_output_tokens: int = 0
     default_max_output_tokens: int = 0
+    #: The provider's prompt cap when it is below ``context - output``.
+    max_input_tokens: int = 0
     degradation: dict[str, DegradationPolicy] = msgspec.field(default_factory=dict)
 
     @classmethod

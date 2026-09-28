@@ -121,11 +121,11 @@ def test_task_spec_shape_and_bundle():
 @pytest.mark.parametrize(
     ("data", "expected"),
     [
-        ({"prompt": "x"}, "general:inherit"),
+        ({"prompt": "x"}, "task:inherit"),
         ({"prompt": "x", "subagent_type": "explore"}, "explore:inherit"),
-        ({"prompt": "x", "model": "low"}, "general:low"),
-        ({"prompt": "x", "model": "high"}, "general:high"),
-        ({"prompt": "x", "model": "anthropic/claude-opus-5"}, "general:auto"),
+        ({"prompt": "x", "model": "low"}, "task:low"),
+        ({"prompt": "x", "model": "high"}, "task:high"),
+        ({"prompt": "x", "model": "anthropic/claude-opus-5"}, "task:auto"),
         (
             {"prompt": "x", "subagent_type": "explore", "model": "medium"},
             "explore:medium",

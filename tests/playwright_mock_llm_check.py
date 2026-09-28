@@ -369,36 +369,20 @@ def _wait_complete(timeout: float = 25) -> dict:
 
 
 def _open_child_transcript(page: Page, state: dict) -> None:
-    # Click Edit, then its child Button, using Textual cell bounds.
-    columns, rows = state["ui"]["screen_grid"]
-    terminal = page.locator(".terminal").bounding_box()
-    assert terminal is not None
-    edit = next(item for item in state["ui"]["turn_items"] if item["call_id"] == "root-edit")
-    region = edit["region"]
-    page.mouse.click(
-        terminal["x"] + (region[0] + 4) * terminal["width"] / columns,
-        terminal["y"] + (region[1] + 1.5) * terminal["height"] / rows,
-    )
-    if not next(item for item in _control("/state")["ui"]["turn_items"] if item["call_id"] == "root-edit")["expanded"]:
-        _control("/ui/tool-detail/root-edit", post=True)
-    expanded = _wait_control(
-        "/state",
-        lambda value: next(x for x in value["ui"]["turn_items"] if x["call_id"] == "root-edit")["expanded"],
-        5,
-    )
-    edit = next(item for item in expanded["ui"]["turn_items"] if item["call_id"] == "root-edit")
+    # Tool calls have a one-line summary and a modal inspector.
+    opened = _control("/ui/tool-detail/root-edit", post=True)
+    assert opened["opened"]
+    _wait_control("/screen", lambda value: value["screen"] == "ToolDetailsScreen", 5)
+    details = _control("/state")
+    edit = next(item for item in details["ui"]["turn_items"] if item["call_id"] == "root-edit")
     assert "-beta" in edit["expanded_text"] and "+nexus" in edit["expanded_text"]
+    _control("/ui/back", post=True)
 
-    # Click the Task child Button by translating its mounted Textual cell bounds.
-    task = next(item for item in expanded["ui"]["turn_items"] if item["call_id"] == "root-task")
-    child_region = task["child_link_region"]
-    assert child_region is not None
-    page.mouse.click(
-        terminal["x"] + (child_region[0] + 12) * terminal["width"] / columns,
-        terminal["y"] + (child_region[1] + 0.5) * terminal["height"] / rows,
-    )
-    if _control("/screen")["screen"] != "AgentTranscriptScreen":
-        _control("/ui/agent-transcript/click", post=True)
+    task = next(item for item in details["ui"]["turn_items"] if item["call_id"] == "root-task")
+    assert "explore" in task["child_metrics"]
+    _control("/ui/tool-detail/root-task", post=True)
+    _wait_control("/screen", lambda value: value["screen"] == "ToolDetailsScreen", 5)
+    _control("/ui/tool-agent/root-task", post=True)
     _wait_control("/screen", lambda value: value["screen"] == "AgentTranscriptScreen", 8)
     inspector = _wait_control(
         "/inspector",

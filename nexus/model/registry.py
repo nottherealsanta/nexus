@@ -192,6 +192,9 @@ class ModelInfo(msgspec.Struct, frozen=True):
     aliases: tuple[str, ...] = ()
     context: int = 0
     max_output: int = 0
+    #: models.dev ``limit.input``: the most prompt tokens the API accepts, when
+    #: lower than ``context - output`` (0 = not stated).
+    max_input: int = 0
     tool_call: bool = False
     reasoning: bool = False
     structured_output: bool = False
@@ -223,6 +226,7 @@ class ModelInfo(msgspec.Struct, frozen=True):
             documents="pdf" in self.input_modalities,
             max_context_tokens=self.context,
             max_output_tokens=self.max_output,
+            max_input_tokens=self.max_input,
         )
 
 
@@ -263,6 +267,9 @@ class CatalogueModel(msgspec.Struct, frozen=True):
     family: str | None = None
     context: int = 0
     max_output: int = 0
+    #: models.dev ``limit.input``: the most prompt tokens the API accepts, when
+    #: lower than ``context - output`` (0 = not stated).
+    max_input: int = 0
     tool_call: bool = False
     reasoning: bool = False
     structured_output: bool = False
@@ -501,16 +508,19 @@ def _parse_model(key: str, value: object) -> CatalogueModel:
     limit = entry.get("limit")
     context = 0
     max_output = 0
+    max_input = 0
     if limit is not None:
         limit_entry = _require_mapping(limit, "limit")
         context = _opt_nonneg_int(limit_entry, "context")
         max_output = _opt_nonneg_int(limit_entry, "output")
+        max_input = _opt_nonneg_int(limit_entry, "input")
     return CatalogueModel(
         id=model_id,
         name=name,
         family=family,
         context=context,
         max_output=max_output,
+        max_input=max_input,
         tool_call=_opt_bool(entry, "tool_call"),
         reasoning=_opt_bool(entry, "reasoning"),
         structured_output=_opt_bool(entry, "structured_output"),
@@ -756,6 +766,7 @@ def build_index(
                 family=model.family,
                 context=model.context,
                 max_output=model.max_output,
+                max_input=model.max_input,
                 tool_call=model.tool_call,
                 reasoning=model.reasoning,
                 structured_output=model.structured_output,
