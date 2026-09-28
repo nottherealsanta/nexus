@@ -3942,7 +3942,9 @@ class Runtime:
             return injected
         self._owns_agents = True
         section = self._agents_section(config)
-        if section is None or not getattr(section, "enabled", True):
+        # A workspace with no v2 config still uses the packaged Build agent.
+        # Only an explicit v2 [agents] disable suppresses agent definitions.
+        if section is not None and not getattr(section, "enabled", True):
             return None
         try:
             from .agents import AgentManager

@@ -38,7 +38,7 @@ def sort_models(rows: list[dict], *, by: str = "updated") -> list[dict]:
         if by == "name":
             return (name, ref)
         return (
-            _date(row, "last_updated"),
+            _date(row, "last_updated") if row.get("last_updated") else _date(row, "release_date"),
             _date(row, "release_date"),
             name, ref,
         )
@@ -111,9 +111,15 @@ class ModelPickerScreen(ModalScreen[tuple[str, str | None, bool] | None]):
         if not query:
             groups.extend((title, [by_ref[ref] for ref in refs if ref in by_ref])
                           for title, refs in (("Favorites", self.favorites), ("Recent", self.recent)))
-        providers = sorted({str(row["provider"]) for row in matching}, key=str.casefold)
-        groups.extend((provider, [row for row in matching if row["provider"] == provider])
-                      for provider in providers)
+        if self.sort_mode == "updated":
+            groups.append(("Recently updated", matching))
+        else:
+            providers = sorted({str(row["provider"]) for row in matching}, key=str.casefold)
+            groups.extend((provider, [row for row in matching if row["provider"] == provider])
+                          for provider in providers)
+        self.query_one("#model-picker-title", Static).update(
+            f"Select model · {'Updated ↓' if self.sort_mode == 'updated' else 'Name A–Z'}"
+        )
         options: list[Option] = []
         self._visible_rows = []
         seen: set[str] = set()
@@ -129,6 +135,10 @@ class ModelPickerScreen(ModalScreen[tuple[str, str | None, bool] | None]):
                 label = Text("  ")
                 label.append(sanitize(str(row.get("name") or row["id"]), 70), style="bold")
                 label.append("  " + sanitize(str(row["provider"]), 40), style="dim")
+                if self.sort_mode == "updated":
+                    updated = row.get("last_updated") or row.get("release_date")
+                    if isinstance(updated, str) and updated:
+                        label.append("  " + sanitize(updated, 10), style="dim")
                 if ref in self.favorites:
                     label.append("  ★", style="yellow")
                 if ref == self.current:

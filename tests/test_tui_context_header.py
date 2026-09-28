@@ -28,6 +28,15 @@ def test_context_summary_helpers_group_and_bound_data():
     assert list(mcp) == ["docs"]
     assert render_columns(["bash(2)", "read", "write", "edit"]).splitlines()[1].strip() == "edit"
     assert prompt_preview("\n".join(str(n) for n in range(7))) == "0\n1\n2\n3\n4\n… +2 more lines"
+    assembled = (
+        "You are Nexus\n\n<environment>\nworkspace: /elsewhere\n</environment>\n"
+        "--- Selected agent instructions ---\nYou are Build, the coding agent.\n"
+        "Verify your work.\nMore instructions"
+    )
+    preview = prompt_preview(assembled)
+    assert "You are Nexus" in preview and "You are Build" in preview
+    assert "workspace: /elsewhere" not in preview
+    assert "… open for full prompt" in preview
     assert format_schema_type({"type": "array", "items": {"type": "string"}}) == "array<string>"
     assert schema_param_rows({"properties": {"path": {"type": "string", "description": "File"}}, "required": ["path"]}) == ["* path  string  — File"]
 

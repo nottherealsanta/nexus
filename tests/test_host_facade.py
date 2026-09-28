@@ -565,6 +565,24 @@ async def test_context_inspect_is_a_read_only_current_request_projection(tmp_pat
         await runtime.aclose()
 
 
+async def test_new_workspace_context_includes_packaged_build_prompt(tmp_path):
+    workspace = tmp_path / "elsewhere"
+    workspace.mkdir()
+    config = Config.load(workspace, home=tmp_path / "home", environ={})
+    runtime = Runtime(workspace, config=config,
+                      providers={"scripted": ScriptedProvider(text_response("unused"))})
+    facade = HostFacade(runtime)
+    try:
+        facade.open_session("new-session")
+        result = await facade.handle(p.ContextInspect(session="new-session"))
+        assert isinstance(result, p.ContextInspectResult)
+        assert result.agent["name"] == "build"
+        assert result.agent["instructions_included"] is True
+        assert "You are Build, the primary coding agent" in (result.system_text or "")
+    finally:
+        await runtime.aclose()
+
+
 def test_context_block_projection_preserves_tool_call_result_linkage():
     call = Runtime._context_block(ToolUse(id="call-7", name="Read", input={"path": "a.py"}))
     result = Runtime._context_block(

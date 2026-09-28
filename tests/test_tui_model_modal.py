@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from test_tui_model_picker_repro import ModelPickerTransport
@@ -73,6 +73,31 @@ async def test_modal_is_compact_and_sort_toggle_reorders_results():
         await pilot.pause()
         assert modal.sort_mode == "updated"
         assert [row["id"] for row in modal._visible_rows if row] == ["z", "a"]
+
+
+@pytest.mark.asyncio
+async def test_updated_sort_is_global_across_providers_and_shows_dates():
+    now = datetime.now(UTC).date()
+    transport = ModelPickerTransport()
+    transport.models = [
+        {"provider": "aaa", "id": "old", "name": "Alpha", "last_updated": (now - timedelta(days=20)).isoformat()},
+        {"provider": "zzz", "id": "new", "name": "Zed", "last_updated": now.isoformat()},
+        {"provider": "bbb", "id": "middle", "name": "Beta", "release_date": (now - timedelta(days=10)).isoformat()},
+    ]
+    app = NexusTextualApp(Client(transport), session="global-sort")
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause()
+        await app._push_model_picker()
+        await pilot.pause()
+        modal = app.screen
+        assert isinstance(modal, ModelPickerScreen)
+        assert [row["id"] for row in modal._visible_rows if row] == ["new", "middle", "old"]
+        assert modal._visible_rows.count(None) == 1
+        assert "Recently updated" in str(modal.query_one("#model-picker-options").get_option_at_index(0).prompt)
+        assert now.isoformat() in str(modal.query_one("#model-picker-options").get_option_at_index(1).prompt)
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert [row["id"] for row in modal._visible_rows if row] == ["old", "middle", "new"]
 
 
 @pytest.mark.asyncio

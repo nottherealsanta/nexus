@@ -20,6 +20,11 @@ from .tui_widgets import agent_color, context_group_widgets
 
 def prompt_preview(text: str, lines: int = 5) -> str:
     parts = text.splitlines()
+    marker = "--- Selected agent instructions ---"
+    if marker in parts:
+        index = parts.index(marker)
+        agent_lines = [line for line in parts[index + 1:] if line.strip()][:2]
+        return "\n".join([*parts[:2], marker, *agent_lines, "… open for full prompt"])
     shown = parts[:lines]
     if len(parts) > lines:
         shown.append(f"… +{len(parts) - lines} more lines")
