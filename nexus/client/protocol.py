@@ -253,6 +253,12 @@ class Client:
 
     async def refresh_models(self) -> Any: return await self._request(p.ModelsRefresh())
 
+    async def setup_status(self) -> p.SetupStatusResult:
+        return await self._request(p.SetupStatus())  # type: ignore[return-value]
+
+    async def setup_save(self, provider: str, model: str) -> p.SetupSaveResult:
+        return await self._request(p.SetupSave(provider=provider, model=model))  # type: ignore[return-value]
+
     async def list_agents(self) -> list[dict[str, Any]]: return list((await self._request(p.AgentsList())).agents)  # type: ignore[union-attr]
 
     async def default_agent(self) -> str: return str((await self._request(p.AgentsList())).default)  # type: ignore[union-attr]

@@ -33,29 +33,39 @@ def test_defaults_when_no_files(tmp_path):
     assert ConfigV2().sessions.auto_archive_days == 2
 
 
-def test_nested_git_workspace_inherits_project_models_without_changing_workspace(tmp_path):
+def test_global_models_apply_across_workspaces_and_exact_workspace_wins(tmp_path):
     home = _home(tmp_path)
+    nexus_home = home / ".nexus"
+    nexus_home.mkdir()
+    (nexus_home / "config.toml").write_text(
+        'config_version = 2\n[models]\ndefault = "codex/build"\n',
+        encoding="utf-8",
+    )
+
     project = tmp_path / "project"
     project.mkdir()
     (project / ".git").mkdir()
     (project / "nexus.toml").write_text(
-        'config_version = 2\n[models]\ndefault = "codex/gpt-test"\n'
-        '[providers.codex]\nauth = "chatgpt_oauth"\napi = "responses"\n',
+        'config_version = 2\n[models]\ndefault = "codex/root"\n', encoding="utf-8"
+    )
+    child = project / "benchmark"
+    child.mkdir()
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+
+    for workspace in (child, unrelated):
+        config = Config.load(workspace, home=home, environ={})
+        assert config.version == 2
+        assert config.model == "codex/build"
+        assert config.source == str(nexus_home / "config.toml")
+
+    (child / "nexus.toml").write_text(
+        'config_version = 2\n[models]\ndefault = "codex/local"\n',
         encoding="utf-8",
     )
-    workspace = project / "benchmark"
-    workspace.mkdir()
-    config = Config.load(workspace, home=home, environ={})
-    assert config.version == 2
-    assert config.model == "codex/gpt-test"
-    assert config.v2.models_configured()
-    assert "codex" in config.v2.providers
-    assert config.source == str(project / "nexus.toml")
-
-    (workspace / "nexus.toml").write_text(
-        'config_version = 2\n[models]\ndefault = "codex/local"\n', encoding="utf-8"
-    )
-    assert Config.load(workspace, home=home, environ={}).model == "codex/local"
+    config = Config.load(child, home=home, environ={})
+    assert config.model == "codex/local"
+    assert config.source == str(child / "nexus.toml")
 
 
 def test_git_config_does_not_cross_repository_or_unrelated_parent(tmp_path):

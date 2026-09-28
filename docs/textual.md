@@ -26,6 +26,7 @@ Textual is pinned (`textual==8.2.8`, `textual-diff-view==0.1.5` in `pyproject.to
 | `ui/tui/tool_details.py` | `ToolDetailsScreen`: bounded, scrollable modal for full tool call parameters, results, errors and diffs; Escape and Close return focus to the transcript row. |
 | `ui/tui/agent_picker.py` | `AgentPickerPanel` (inline picker for agents and effort; posts `Selected`/`Cancelled`) and the modal `AgentPicker`. |
 | `ui_support/tui_model_picker.py` | Dedicated searchable `/model` modal, newest update/release by default (`Ctrl+S` toggles natural name order), with user-level favorites and recent selections. Dated models older than six calendar months are omitted; undated fallback entries remain available. |
+| `ui_support/tui_setup.py` | Guided first-run provider connection and global model selection; credentials stay local, and saving prompts for a daemon restart. |
 | `ui/tui/agent_transcript.py` | `AgentTranscriptScreen`: a large live modal that renders the child agent's `body` with the root `ConversationTimeline(header=False)`, so its tools and messages look and expand exactly as at the root. |
 | `ui/tui/agent_row.py` | Selectable row for one `AgentView`. |
 | `ui/tui/permission.py` | `PermissionScreen` and `QuestionScreen`: list prompts (`ListPrompt` in `ui_support/tui_list.py`) docked above the composer like the pickers; `ask_pending_question` opens pending `question` calls. Arbitration stays daemon-side. |

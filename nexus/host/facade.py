@@ -57,6 +57,7 @@ from ..host_support.session_archive import (
     dispatch_archive_command,
 )
 from ..host_support.settings_inventory import dispatch_settings
+from ..host_support.setup import setup_save, setup_status
 from ..host_support.workspace import search_files as _search_files
 from ..host_support.worktree_projection import (
     worktree_diff_row as _worktree_diff_row,
@@ -1474,6 +1475,10 @@ class HostFacade:
         if isinstance(command, p.ModelsRefresh):
             status = await self.refresh_models()
             return p.ModelsRefreshResult(status=_status_dict(status))
+        if isinstance(command, p.SetupStatus):
+            return p.SetupStatusResult(**await setup_status(self.runtime))
+        if isinstance(command, p.SetupSave):
+            return p.SetupSaveResult(**await setup_save(self.runtime, command.provider, command.model))
         if isinstance(command, p.ModelsList):
             models = self.list_models(
                 provider=command.provider,

@@ -41,6 +41,15 @@ skip the key entirely — see [Offline and local](#offline-and-local).
 
 ## Get started
 
+On first opening `nexus chat` or `nexus web`, Nexus guides you through
+connecting one provider and choosing a model. That model is saved in
+`~/.nexus/config.toml` as the default for every workspace; an exact workspace
+config may override it. Codex login runs locally with `nexus auth codex login`;
+for API-key providers, set the named environment variable **before** starting
+the daemon. Credentials are never entered into the browser or sent by setup
+commands. After saving, restart the daemon when its turns finish to activate
+the new provider route. Noninteractive `nexus run` requires a configured model.
+
 ```sh
 nexus --workspace /path/to/project init          # create nexus.toml, SOUL.md, MEMORY.md
 nexus --workspace /path/to/project doctor        # validate config, providers, extensions, MCP

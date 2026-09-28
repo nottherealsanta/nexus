@@ -1873,3 +1873,63 @@ SessionsScreen {
     background: $nx-element-hi;
     color: $nx-error;
 }
+
+/* First-run provider setup */
+SetupScreen {
+    align: center middle;
+    background: $nx-bg 80%;
+}
+
+#setup-dialog {
+    width: 76;
+    max-width: 94%;
+    height: 90%;
+    max-height: 48;
+    padding: 1 2;
+    background: $nx-panel;
+    border: tall $nx-border-strong;
+}
+
+#setup-title {
+    height: 2;
+    color: $nx-accent;
+    text-style: bold;
+}
+
+#setup-intro, #setup-instruction, #setup-message {
+    height: auto;
+    margin-bottom: 1;
+    color: $nx-muted;
+}
+
+.setup-label {
+    height: 1;
+    color: $nx-quiet;
+    text-style: bold;
+}
+
+#setup-providers {
+    height: 7;
+    margin-bottom: 1;
+    background: $nx-element;
+}
+
+#setup-search {
+    margin-bottom: 1;
+}
+
+#setup-models {
+    height: 1fr;
+    min-height: 5;
+    margin-bottom: 1;
+    background: $nx-element;
+}
+
+#setup-buttons {
+    height: 3;
+    align-horizontal: right;
+}
+
+#setup-buttons Button {
+    margin-left: 1;
+}

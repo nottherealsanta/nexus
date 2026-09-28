@@ -51,12 +51,19 @@ events ──► session log ──► view/reduce.py (pure) ──► Conversat
 
 ## Host layer (the surface every UI talks to)
 
-For a workspace inside a Git repository, configuration loads the repository
-root's `nexus.toml` as a lower-precedence project layer. The exact workspace's
-`nexus.toml` and `.nexus/nexus.toml` override it; the workspace and its relative
-context-file paths do not change. Nexus does not inherit arbitrary parent
-configuration outside the nearest Git root. `~/.nexus/config.toml` supplies
-defaults for unrelated workspaces.
+Configuration is loaded from `~/.nexus/config.toml` and the exact workspace's
+`nexus.toml` and `.nexus/nexus.toml`, in that precedence order. Parent
+directories and Git roots do not contribute configuration, so global model and
+agent defaults apply consistently regardless of the current working directory;
+an exact workspace config can override them.
+
+On first launch without a connected global provider/model, `SetupStatus` offers
+packaged candidate models and local connection instructions. `SetupSave`
+validates the choice and writes `[providers.*]` and `[models].default` to
+`~/.nexus/config.toml` through the host settings path. Credentials remain in
+the OAuth store or daemon environment and never enter setup commands. The
+running daemon needs a restart after saving because provider routes are built
+at startup.
 
 | File | Role |
 | --- | --- |

@@ -250,6 +250,18 @@
       <footer class="context-dialog-footer"><span id="context-refreshed-at"></span><button class="toolbar-button" id="context-refresh" type="button">Refresh context</button><button class="toolbar-button" id="context-done" type="button">Close</button></footer>
     </section>
   </div>
+  <div class="overlay setup-overlay" id="setup-overlay" hidden>
+    <section class="dialog setup-dialog" id="setup-dialog" role="dialog" aria-modal="true" aria-labelledby="setup-title" aria-describedby="setup-description" tabindex="-1">
+      <header class="setup-header"><p class="eyebrow">First-run setup · global default</p><h2 id="setup-title">Choose your default model</h2><p id="setup-description">Connect a provider and select the model new Nexus sessions should use by default.</p></header>
+      <div class="setup-content" id="setup-content">
+        <section class="setup-section" aria-labelledby="setup-provider-heading"><h3 id="setup-provider-heading">1 · Provider</h3><div class="setup-providers" id="setup-providers" role="radiogroup" aria-label="Provider"></div></section>
+        <section class="setup-section" aria-labelledby="setup-connection-heading"><h3 id="setup-connection-heading">Connection</h3><div class="setup-instruction" id="setup-instruction"></div><button class="toolbar-button" id="setup-retry" type="button">Retry connection check</button><p class="setup-status" id="setup-status" role="status" aria-live="polite"></p></section>
+        <section class="setup-section" aria-labelledby="setup-model-heading"><h3 id="setup-model-heading">2 · Global default model</h3><label class="setup-search"><span class="sr-only">Search candidate models</span><input id="setup-search" type="search" placeholder="Search models…" autocomplete="off"></label><div class="setup-models" id="setup-models" role="listbox" aria-label="Candidate models" aria-describedby="setup-model-note"></div><p class="setup-model-note" id="setup-model-note"></p></section>
+      </div>
+      <div class="setup-success" id="setup-success" role="status" aria-live="polite" hidden><h3>Default saved</h3><p id="setup-success-model"></p><p><strong>Restart the Nexus daemon to apply this global default.</strong> The running daemon does not hot-reload this setting. Stop it with <code>nexus daemon stop</code>, then start Nexus again.</p></div>
+      <footer class="setup-actions"><button class="toolbar-button" id="setup-dismiss" type="button">Not now</button><span class="setup-action-status" id="setup-action-status" role="status" aria-live="polite"></span><button class="btn-signal setup-save" id="setup-save" type="button" disabled>Save global default</button></footer>
+    </section>
+  </div>
   <div class="toast-region" id="toast-region" aria-live="polite"></div>
   <div class="sr-only" id="completion-announcements" aria-live="polite" aria-atomic="true"></div>
   <script type="module" src="/js/app.js"></script>

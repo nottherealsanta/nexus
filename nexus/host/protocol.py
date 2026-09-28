@@ -72,6 +72,17 @@ class SettingsDelete(msgspec.Struct, tag=True, frozen=True):
     id: str
 
 
+class SetupStatus(msgspec.Struct, tag=True, frozen=True):
+    """Read-only first-run provider/model choices; no credentials cross the wire."""
+
+
+class SetupSave(msgspec.Struct, tag=True, frozen=True):
+    """Save one authenticated provider and explicit model as user-global defaults."""
+
+    provider: str
+    model: str
+
+
 class SessionOpen(msgspec.Struct, tag=True, frozen=True):
     session: str
     create: bool = True
@@ -380,6 +391,8 @@ Command = (
     | SettingsRead
     | SettingsWrite
     | SettingsDelete
+    | SetupStatus
+    | SetupSave
     | SessionArchive
     | SessionUnarchive
     | SessionListArchived
@@ -436,6 +449,8 @@ COMMANDS: tuple[type, ...] = (
     SettingsRead,
     SettingsWrite,
     SettingsDelete,
+    SetupStatus,
+    SetupSave,
     SessionArchive,
     SessionUnarchive,
     SessionListArchived,
@@ -536,6 +551,19 @@ class SettingsWriteResult(msgspec.Struct, tag=True, frozen=True):
 class SettingsDeleteResult(msgspec.Struct, tag=True, frozen=True):
     status: str
     trash_id: str = ""
+
+
+class SetupStatusResult(msgspec.Struct, tag=True, frozen=True):
+    required: bool
+    global_model: str = ""
+    effective_model: str = ""
+    providers: list[dict[str, Any]] = msgspec.field(default_factory=list)
+    models: list[dict[str, Any]] = msgspec.field(default_factory=list)
+
+
+class SetupSaveResult(msgspec.Struct, tag=True, frozen=True):
+    global_model: str
+    restart_required: bool = True
 
 
 class SessionOpenResult(msgspec.Struct, tag=True, frozen=True):
@@ -925,6 +953,8 @@ Result = (
     | SettingsReadResult
     | SettingsWriteResult
     | SettingsDeleteResult
+    | SetupStatusResult
+    | SetupSaveResult
     | SessionListResult
     | SessionArchiveResult
     | SessionUnarchiveResult
@@ -980,6 +1010,8 @@ RESULTS: tuple[type, ...] = (
     SettingsReadResult,
     SettingsWriteResult,
     SettingsDeleteResult,
+    SetupStatusResult,
+    SetupSaveResult,
     SessionListResult,
     SessionArchiveResult,
     SessionUnarchiveResult,
@@ -1161,6 +1193,10 @@ __all__ = [
     "SettingsReadResult",
     "SettingsWrite",
     "SettingsWriteResult",
+    "SetupSave",
+    "SetupSaveResult",
+    "SetupStatus",
+    "SetupStatusResult",
     "Shutdown",
     "ShutdownResult",
     "ToolsList",

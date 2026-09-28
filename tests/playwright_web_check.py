@@ -332,6 +332,34 @@ async def main() -> None:
                         await route.fallback()
                         return
                     command = json.loads(request.post_data or "{}")
+                    if command.get("type") == "SetupStatus":
+                        result = {
+                            "type": "SetupStatusResult", "required": True, "global_model": "",
+                            "effective_model": "scripted/m", "providers": [
+                                {"id": "codex", "label": "ChatGPT (Codex)", "connected": False,
+                                 "instruction": "Sign in with `nexus auth codex login` to use your ChatGPT account."},
+                                {"id": "openai", "label": "OpenAI", "connected": True,
+                                 "instruction": "Set OPENAI_API_KEY in the daemon environment."},
+                                {"id": "anthropic", "label": "Anthropic", "connected": False,
+                                 "instruction": "Set ANTHROPIC_API_KEY in the daemon environment."},
+                                {"id": "google", "label": "Google Gemini", "connected": False,
+                                 "instruction": "Set GEMINI_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY in the daemon environment."},
+                                {"id": "ollama", "label": "Ollama", "connected": True,
+                                 "instruction": "Local provider; availability is not checked. Install and run Ollama locally."},
+                            ], "models": [
+                                {"provider": "codex", "id": "gpt-5-codex", "name": "GPT-5 Codex", "date": "2025-09-01"},
+                                {"provider": "openai", "id": "gpt-4.1", "name": "GPT-4.1", "date": "2025-04-14"},
+                                {"provider": "openai", "id": "gpt-4.1-mini", "name": "GPT-4.1 mini", "date": "2025-04-14"},
+                            ],
+                        }
+                        await route.fulfill(status=200, content_type="application/json", body=json.dumps(result))
+                        return
+                    if command.get("type") == "SetupSave":
+                        assert command.get("provider") == "openai" and command.get("model") == "gpt-4.1-mini", command
+                        await route.fulfill(status=200, content_type="application/json", body=json.dumps({
+                            "type": "SetupSaveResult", "global_model": "openai/gpt-4.1-mini", "restart_required": True,
+                        }))
+                        return
                     if command.get("type") != "ContextInspect":
                         await route.fallback()
                         return
@@ -355,6 +383,34 @@ async def main() -> None:
 
                 await page.route("**/v1/web/command", route_context_command)
                 await page.goto(launch_url, wait_until="domcontentloaded")
+                setup_dialog = page.get_by_role("dialog", name="Choose your default model")
+                await setup_dialog.wait_for(state="visible", timeout=5_000)
+                assert await page.locator("#app").evaluate("node => node.inert")
+                assert await setup_dialog.get_by_role("radio", name="OpenAI · connected").get_attribute("aria-checked") == "true"
+                await setup_dialog.get_by_role("radio", name="ChatGPT (Codex) · not connected").click()
+                assert "nexus auth codex login" in await setup_dialog.locator("#setup-instruction").inner_text()
+                assert await setup_dialog.locator("#setup-save").is_disabled()
+                await setup_dialog.get_by_role("radio", name="OpenAI · connected").click()
+                assert "OPENAI_API_KEY" in await setup_dialog.locator("#setup-instruction").inner_text()
+                await setup_dialog.get_by_role("searchbox", name="Search candidate models").fill("mini")
+                await setup_dialog.get_by_role("option", name="GPT-4.1 mini gpt-4.1-mini 2025-04-14").click()
+                assert await setup_dialog.locator("#setup-save").is_enabled()
+                await page.keyboard.press("Tab")
+                assert await setup_dialog.evaluate("node => node.contains(document.activeElement)")
+                await page.keyboard.press("Escape")
+                await setup_dialog.wait_for(state="hidden")
+                assert not await page.locator("#app").evaluate("node => node.inert")
+                # Re-open by refresh to test save/restart messaging in the same first-run state.
+                await page.reload(wait_until="domcontentloaded")
+                setup_dialog = page.get_by_role("dialog", name="Choose your default model")
+                await setup_dialog.wait_for(state="visible", timeout=5_000)
+                await setup_dialog.get_by_role("radio", name="OpenAI · connected").click()
+                await setup_dialog.get_by_role("searchbox", name="Search candidate models").fill("mini")
+                await setup_dialog.get_by_role("option", name="GPT-4.1 mini gpt-4.1-mini 2025-04-14").click()
+                await setup_dialog.get_by_role("button", name="Save global default").click()
+                await setup_dialog.get_by_text("The running daemon does not hot-reload this setting.").wait_for()
+                assert "nexus daemon stop" in await setup_dialog.inner_text()
+                await setup_dialog.get_by_role("button", name="Close").click()
                 await page.locator("#new-session").click()
                 try:
                     await page.wait_for_url("**/s/*", timeout=10_000)

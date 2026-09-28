@@ -77,6 +77,7 @@ files are listed in `pyproject.toml` (`"nexus.ui.web" = ["index.html", "styles/*
 | --- | --- |
 | `ui/web/index.html` | The whole DOM: SVG icon sprite (`#i-*`), `.app-shell` grid (areas `top`/`side`/`main`/`insp`) with the full-width `.topbar` (`▌` `#sidebar-toggle`, title, Context/Logs/Export, `#live-state`, `+` `#topbar-new`, `▐` `#inspector-toggle`), `#sidebar`, `.main-pane` (`#conversation` holding the hidden legacy `#context-preview`, `#timeline` and `#empty-state`, then `.composer-wrap` holding `#approval-strip`, `#slash-menu`, `#composer-form` and `#activity-bar`), `#inspector`, and the overlays `#overlay` (palette/picker), `#settings-overlay`, `#context-overlay`, `#worktree-confirm-overlay`, `#toast-region`. |
 | `ui/web/js/app.js` | All behavior. Dense one-function-per-line style, so search by function name. |
+| `#setup-overlay` | First-run provider/model setup using host `SetupStatus`/`SetupSave`; it transmits no credentials and explains the restart required after saving. |
 | `ui/web/js/api.js` | `bootstrap()`, `command(cmd)`, `snapshot(session)`, `eventUrl(session, seq)`, `exportSession`. |
 | `ui/web/js/projection.js` | `applyOperations(root, ops)`: validates and applies patches on a detached copy (atomic). |
 | `ui/web/js/preferences.js` | localStorage detail level (session → workspace → browser precedence) and theme. |

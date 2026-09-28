@@ -24,6 +24,7 @@ from ...ui_support.context import context_measure
 from ...ui_support.tui_context_header import ContextBlock, ContextHeader, ContextModal
 from ...ui_support.tui_model_picker import ModelPickerScreen
 from ...ui_support.tui_panels import DetailsSidebar, SessionSidebar, TuiPreferences
+from ...ui_support.tui_setup import block_unconfigured_turn, open_first_run_setup
 from ..cli import commands
 from ..cli.details import detail_lines
 from ..cli.render import sanitize
@@ -286,6 +287,7 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
             await self._sync_timeline()
             self.call_after_refresh(self.query_one("#chat-editor", TextArea).focus)
             await ask_pending_question(self)
+            self._setup_required = await open_first_run_setup(self, self.controller.client)
             self._start_context_preview()
             self._sync_panels()
             self.set_interval(2.0, self._poll_sessions)
@@ -476,6 +478,7 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
         if parsed is not None and parsed.name in commands.BY_NAME:
             await self._dispatch_chat_command(stripped)
             return
+        if block_unconfigured_turn(self, message.content): return
         if self.controller.running:
             editor = self.query_one("#chat-editor", TextArea)
             if editor.text:
