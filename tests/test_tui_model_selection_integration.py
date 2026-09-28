@@ -24,9 +24,9 @@ from nexus.model.registry import ModelRegistry
 from nexus.model.tiers import TierTable
 from nexus.runtime import Runtime
 from nexus.ui.cli.client import Client
-from nexus.ui.tui.agent_picker import AgentPickerPanel
 from nexus.ui.tui.app import NexusTextualApp
 from nexus.ui.tui.widgets import ChatEditor, RootAgentBar
+from nexus.ui_support.tui_model_picker import ModelPickerScreen
 
 
 class _FacadeTransport:
@@ -212,12 +212,20 @@ async def test_picker_selection_is_durable_replayed_and_session_scoped(tmp_path)
         async with app.run_test(size=(100, 35)) as pilot:
             await pilot.pause()
             await _type_command(pilot, app.query_one(ChatEditor), "/model")
-            panel = app.query_one("#inline-picker", AgentPickerPanel)
-            assert panel.display
-            options = panel.query_one("#agent-options", OptionList)
-            assert options.option_count == 2, [
-                row.to_dict() for row in runtime.registry.list(selectable_only=True)
+            screen = app.screen
+            assert isinstance(screen, ModelPickerScreen)
+            await pilot.pause(0.1)
+            options = screen.query_one("#model-picker-options", OptionList)
+            selectable = runtime.registry.list(selectable_only=True)
+            assert options.option_count == len(screen._visible_rows) == 3, [
+                row.to_dict() for row in selectable
             ]
+            assert [row["id"] if row else None for row in screen._visible_rows] == [
+                None, "alpha", "beta"
+            ]
+            assert app.focused is app.screen.query_one("#model-picker-search")
+            await pilot.press("down")
+            assert app.focused is options
             await pilot.press("down", "enter")
             await _wait_for(
                 lambda: any(

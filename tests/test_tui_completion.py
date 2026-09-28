@@ -128,7 +128,25 @@ async def test_partial_slash_completion_enter_executes_selected_command():
         assert not app.query_one(CompletionPopup).display
         assert "start_turn" not in transport.trace
         assert "ModelsList" in transport.trace
-        assert app.query_one("#inline-picker").display
+        from nexus.ui_support.tui_model_picker import ModelPickerScreen
+        assert isinstance(app.screen, ModelPickerScreen)
+
+
+@pytest.mark.asyncio
+async def test_model_arguments_do_not_open_a_second_completion_list():
+    app = NexusTextualApp(_client(FakeTransport()), session="s")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        editor = app.query_one(ChatEditor)
+        editor.text = "/model "
+        editor.move_cursor((0, len(editor.text)))
+        app.query_one("#chat-input").refresh_completion()
+        await pilot.pause()
+        assert not app.query_one(CompletionPopup).display
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+        from nexus.ui_support.tui_model_picker import ModelPickerScreen
+        assert isinstance(app.screen, ModelPickerScreen)
 
 
 @pytest.mark.asyncio

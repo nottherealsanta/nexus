@@ -592,10 +592,8 @@ def _check_model_picker_keyboard(playwright, browser: Browser, command_log: Path
             f"stdin={_sent_stdin(sent)!r}"
         )
         _shot(page, "functional-model-picker-keyboard.png")
-        assert page.get_by_role("textbox", name="Search agents or models…").count() == 0, (
-            "inline model picker should not render a separate search field"
-        )
-        # The list owns focus immediately; ArrowDown selects beta.
+        # The modal starts in Search; first Down enters the model list.
+        page.keyboard.press("ArrowDown")
         page.keyboard.press("ArrowDown")
         page.keyboard.press("Enter")
         rows = _wait_acceptance_rows(
@@ -639,7 +637,12 @@ def _check_model_picker_mouse(playwright, browser: Browser, command_log: Path) -
         assert sum(row["command"] == "ModelsList" for row in rows) == 1
         page.wait_for_timeout(500)
         _shot(page, "functional-model-picker-mouse-open.png")
-        geometry = _click_inline_picker_option(page, 0, option_count=2)
+        geometry = _terminal_grid(page)
+        # Centered 80%-height dialog: title/search occupy six rows and the
+        # first selectable model follows its provider heading.
+        row = round(geometry["rows"] * .1) + 9
+        x, y = _terminal_cell_point(page, 10, row)
+        page.mouse.click(x, y)
         rows = _wait_acceptance_rows(
             command_log,
             lambda current: any(row["command"] == "ModelSelect" for row in current),
@@ -647,7 +650,7 @@ def _check_model_picker_mouse(playwright, browser: Browser, command_log: Path) -
         selected = [row for row in rows if row["command"] == "ModelSelect"]
         assert selected and selected[-1].get("selected_model") == "alpha", (
             f"mouse click did not select first fixture model alpha: {selected!r}; "
-            f"target_geometry={geometry!r}; mouse bytes={_sent_stdin(sent)!r}"
+            f"target_geometry={geometry!r}; target_row={row}; mouse bytes={_sent_stdin(sent)!r}"
         )
         _shot(page, "functional-model-picker-mouse-selected.png")
         print("model picker mouse: pointer click on first terminal option selected fixture/alpha")

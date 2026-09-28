@@ -126,11 +126,18 @@ class TuiPreferences:
         "sessions_sidebar": True,
         "details_sidebar": True,
         "context_preview": True,
+        "model_favorites": [],
+        "model_recent": [],
     }
+
+    MODEL_FAVORITES_LIMIT: ClassVar[int] = 100
+    MODEL_FAVORITE_MAX_LENGTH: ClassVar[int] = 256
 
     def __init__(self, path: Path | None = None) -> None:
         self.path = path
         self.values = dict(self.DEFAULTS)
+        self.values["model_favorites"] = []
+        self.values["model_recent"] = []
         if path is not None:
             try:
                 stored = json.loads(path.read_text(encoding="utf-8"))
@@ -138,14 +145,41 @@ class TuiPreferences:
                 stored = {}
             if isinstance(stored, dict):
                 for key, default in self.DEFAULTS.items():
-                    if isinstance(stored.get(key), type(default)):
+                    if key in {"model_favorites", "model_recent"}:
+                        favorites = self._validated_model_favorites(stored.get(key))
+                        if favorites is not None:
+                            self.values[key] = favorites
+                    elif isinstance(stored.get(key), type(default)):
                         self.values[key] = stored[key]
+
+    @classmethod
+    def _validated_model_favorites(cls, value: Any) -> list[str] | None:
+        """Copy, validate, deduplicate, and bound globally saved model refs."""
+        if not isinstance(value, list):
+            return None
+        favorites: list[str] = []
+        seen: set[str] = set()
+        for ref in value:
+            if not isinstance(ref, str) or not ref.strip() or len(ref) > cls.MODEL_FAVORITE_MAX_LENGTH:
+                continue
+            if ref in seen:
+                continue
+            seen.add(ref)
+            favorites.append(ref)
+            if len(favorites) == cls.MODEL_FAVORITES_LIMIT:
+                break
+        return favorites
 
     def __getitem__(self, key: str) -> Any:
         return self.values[key]
 
     def set(self, key: str, value: Any) -> None:
-        if key not in self.DEFAULTS or not isinstance(value, type(self.DEFAULTS[key])):
+        if key in {"model_favorites", "model_recent"}:
+            favorites = self._validated_model_favorites(value)
+            if favorites is None:
+                return
+            value = favorites
+        elif key not in self.DEFAULTS or not isinstance(value, type(self.DEFAULTS[key])):
             return
         self.values[key] = value
         if self.path is None:

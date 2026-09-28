@@ -22,6 +22,7 @@ from ...events import Event
 from ...host import protocol as p
 from ...ui_support.context import context_measure
 from ...ui_support.tui_context_header import ContextBlock, ContextHeader, ContextModal
+from ...ui_support.tui_model_picker import ModelPickerScreen
 from ...ui_support.tui_panels import DetailsSidebar, SessionSidebar, TuiPreferences
 from ..cli import commands
 from ..cli.details import detail_lines
@@ -225,8 +226,6 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
         self._reasoning_effort_in_flight = False
         self._inline_picker_kind: str | None = None
         self._picker_restore_focus = None
-        self._picker_model_rows: dict[str, dict] = {}
-        self._picker_selected_model: str | None = None
         self._status_error = False
         self._status_text = ""
         self._last_ctrl_c = 0.0
@@ -624,6 +623,7 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
 
     async def _model_command(self, args: tuple[str, ...]) -> None:
         await self.controller.select_model(args[0])
+        self._remember_model(args[0])
         self._sync_agent()
         self._refresh_context_after_selection(self.controller.session)
         self._sync_status("")
@@ -683,28 +683,24 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
 
     async def _push_model_picker(self) -> None:
         models = await self.controller.client.list_models(selectable_only=True)
-        choices = []
-        for row in models:
-            ref = _model_reference(row)
-            if not ref:
-                continue
-            # The canonical reference is the selection id; models.dev's name
-            # is only a display label. Missing/blank names safely fall back to
-            # the canonical reference.
-            choices.append({
-                "name": ref,
-                "_value": ref,
-                "_label": _model_display_name(row),
-                "description": f"{row.get('tier', '')} · {row.get('context', '?')} ctx",
-            "supported_efforts": list(row.get("supported_efforts", ()))
-                if isinstance(row.get("supported_efforts"), (list, tuple)) else None,
-                "contexts": ["root"],
-            })
-
-        self._picker_model_rows = {row["_value"]: row for row in choices}
         current_ref = f"{self.controller.provider}/{self.controller.model}" if self.controller.provider and self.controller.model else ""
-        self._picker_selected_model = current_ref
-        self._show_inline_picker("model", choices)
+        session = self.controller.session
+        def selected(choice: tuple[str, str | None, bool] | None) -> None:
+            if choice is not None and session == self.controller.session:
+                self.run_worker(self._apply_model_selection(choice[0], choice[1],
+                                commit_effort=choice[2]), group="model-selection")
+        self.push_screen(ModelPickerScreen(
+            [row for row in models if _model_reference(row)], current=current_ref,
+            current_effort=self.controller.reasoning_effort,
+            stored_override=self.controller.stored_override,
+            effort_source=self.controller.reasoning_effort_source,
+            favorites=self.prefs["model_favorites"], recent=self.prefs["model_recent"],
+            on_favorites=lambda refs: self.prefs.set("model_favorites", refs),
+        ), callback=selected)
+
+    def _remember_model(self, ref: str) -> None:
+        self.prefs.set("model_recent", [ref, *(value for value in self.prefs["model_recent"]
+                                           if value != ref)][:20])
 
     async def _open_picker(self, kind: str) -> None:
         if kind == "agent":
@@ -1005,9 +1001,10 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
         panel = self.query_one("#inline-picker", AgentPickerPanel)
         self._picker_restore_focus = self.focused
         self._inline_picker_kind = kind
+        panel.kind = kind
         panel.set_agents(
             rows,
-            current=(self._picker_selected_model if kind == "model" else self.controller.agent_name)
+            current=self.controller.agent_name
             if current is None else current,
         )
         panel.configure(
@@ -1022,6 +1019,7 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
         )
         panel.display = True
         self.query_one("#chat-input", ChatInput).close_completion()
+        self.query_one("#chat-editor", TextArea).disabled = True
         self.call_after_refresh(lambda: panel.query_one("#agent-options", OptionList).focus())
 
     def _close_inline_picker(self) -> None:
@@ -1031,6 +1029,7 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
         panel = self.query_one("#inline-picker", AgentPickerPanel)
         panel.display = False
         panel._filter = ""
+        self.query_one("#chat-editor", TextArea).disabled = False
         target = self._picker_restore_focus
         self._picker_restore_focus = None
         self.call_after_refresh(
@@ -1130,6 +1129,7 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
                 await self.controller.select_model(name)
             if session != self.controller.session:
                 return
+            self._remember_model(name)
             self._sync_agent()
             self._sync_status("")
             self._refresh_context_after_selection(session)

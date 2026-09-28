@@ -130,8 +130,9 @@ async def test_agent_and_model_picker_mouse_selection_updates_host_and_root_bar(
 
         await app._push_model_picker()
         await pilot.pause()
-        assert panel.display
-        await pilot.click("#agent-options", offset=(2, 0))
+        from nexus.ui_support.tui_model_picker import ModelPickerScreen
+        assert isinstance(app.screen, ModelPickerScreen)
+        await pilot.click("#model-picker-options", offset=(3, 1))
         await pilot.pause(0.05)
         assert p.ModelSelect(session="pick", ref="fake/m") in journey_transport.commands
         assert "fake" in app.query_one(RootAgentBar).summary().plain

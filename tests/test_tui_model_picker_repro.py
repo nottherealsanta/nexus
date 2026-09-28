@@ -10,6 +10,7 @@ from nexus.ui.cli.client import Client
 from nexus.ui.tui.agent_picker import AgentPicker, AgentPickerPanel
 from nexus.ui.tui.app import NexusTextualApp
 from nexus.ui.tui.widgets import ChatEditor, RootAgentBar
+from nexus.ui_support.tui_model_picker import ModelPickerScreen
 
 
 class ModelPickerTransport:
@@ -128,7 +129,7 @@ async def _type_command(pilot, editor: ChatEditor, text: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_typing_model_and_enter_opens_picker_with_one_models_request():
+async def test_typing_model_and_enter_opens_modal_with_one_models_request():
     transport = ModelPickerTransport()
     app = NexusTextualApp(Client(transport), session="picker-session")
     async with app.run_test() as pilot:
@@ -136,15 +137,17 @@ async def test_typing_model_and_enter_opens_picker_with_one_models_request():
         await _type_command(pilot, app.query_one(ChatEditor), "/model")
 
         model_list_requests = _commands(transport, p.ModelsList)
-        panel = app.query_one("#inline-picker", AgentPickerPanel)
-        assert panel.display and len(model_list_requests) == 1, (
-            "expected visible inline picker and exactly one ModelsList request after /model; "
-            f"panel_visible={panel.display}, ModelsList requests={len(model_list_requests)}, "
+        screen = app.screen
+        assert isinstance(screen, ModelPickerScreen) and len(model_list_requests) == 1, (
+            "expected visible model modal and exactly one ModelsList request after /model; "
+            f"screen={type(screen).__name__}, ModelsList requests={len(model_list_requests)}, "
             f"protocol commands={[type(command).__name__ for command in transport.commands]}, "
             f"editor={app.query_one(ChatEditor).text!r}, "
             f"completion_visible={app.query_one(ChatEditor).parent.completion_visible}"
         )
 
+        search = screen.query_one("#model-picker-search")
+        assert app.focused is search
         await pilot.press("enter")
         await pilot.pause(0.1)
         assert p.ModelSelect(session="picker-session", ref="fake/chosen") in transport.commands
@@ -161,7 +164,7 @@ async def test_direct_model_reference_uses_model_select_without_opening_picker()
         await pilot.pause()
         await _type_command(pilot, app.query_one(ChatEditor), "/model fake/chosen")
 
-        assert not app.query_one("#inline-picker", AgentPickerPanel).display
+        assert not isinstance(app.screen, ModelPickerScreen)
         assert len(_commands(transport, p.ModelsList)) <= 1
         assert _commands(transport, p.ModelSelect) == [
             p.ModelSelect(session="direct-session", ref="fake/chosen")
@@ -176,11 +179,12 @@ async def test_picker_keyboard_selection_sends_model_select_and_updates_root_met
     async with app.run_test() as pilot:
         await pilot.pause()
         await app._push_model_picker()
-        await pilot.pause()
-        panel = app.query_one("#inline-picker", AgentPickerPanel)
-        assert panel.display
+        await pilot.pause(0.1)
+        screen = app.screen
+        assert isinstance(screen, ModelPickerScreen)
         assert len(_commands(transport, p.ModelsList)) == 1
-        option = panel.query_one("#agent-options").get_option_at_index(0)
+        options = screen.query_one("#model-picker-options")
+        option = options.get_option_at_index(1)
         assert "A Chosen Display Name" in str(option.prompt)
         assert "Fake/chosen" not in str(option.prompt)
 
@@ -195,27 +199,113 @@ async def test_picker_keyboard_selection_sends_model_select_and_updates_root_met
 
 
 @pytest.mark.asyncio
-async def test_inline_picker_owns_navigation_escape_and_restores_composer_focus():
+async def test_model_modal_owns_navigation_escape_and_restores_composer_focus():
     transport = ModelPickerTransport()
     app = NexusTextualApp(Client(transport), session="focus-session")
     async with app.run_test() as pilot:
         await pilot.pause()
         editor = app.query_one(ChatEditor)
         await app._push_model_picker()
-        await pilot.pause()
-        panel = app.query_one("#inline-picker", AgentPickerPanel)
-        options = panel.query_one("#agent-options")
-        assert panel.region.y + panel.region.height <= editor.region.y
-        assert app.focused is options
+        await pilot.pause(0.1)
+        screen = app.screen
+        assert isinstance(screen, ModelPickerScreen)
+        options = screen.query_one("#model-picker-options")
+        assert app.focused is screen.query_one("#model-picker-search")
 
         await pilot.press("down")
-        assert app.focused is panel.query_one("#agent-options")
+        assert app.focused is options
         await pilot.press("escape")
         await pilot.pause()
 
-        assert not panel.display
+        assert not isinstance(app.screen, ModelPickerScreen)
         assert app.focused is editor
         assert _commands(transport, p.ModelSelect) == []
+
+
+@pytest.mark.asyncio
+async def test_model_modal_groups_rows_and_keeps_effort_hint_below_options():
+    transport = ModelPickerTransport()
+    app = NexusTextualApp(Client(transport), session="panel-session")
+    async with app.run_test(size=(100, 26)) as pilot:
+        await pilot.pause()
+        await app._push_model_picker()
+        await pilot.pause()
+
+        screen = app.screen
+        options = screen.query_one("#model-picker-options")
+        hint = screen.query_one("#model-picker-help")
+        assert isinstance(screen, ModelPickerScreen)
+        assert hint.region.y >= options.region.y
+        assert screen._visible_rows == [None, transport.models[0]]
+        assert "Effort:" in hint.render().plain
+
+
+@pytest.mark.asyncio
+async def test_model_modal_search_filters_rows_and_ctrl_f_toggles_favorite():
+    transport = ModelPickerTransport()
+    transport.models = [
+        {"provider": "fake", "id": "chosen", "name": "Chosen", "tier": "medium"},
+        {"provider": "other", "id": "second", "name": "Second", "tier": "low"},
+    ]
+    app = NexusTextualApp(Client(transport), session="search-picker")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app._push_model_picker()
+        await pilot.pause(0.1)
+        screen = app.screen
+        assert isinstance(screen, ModelPickerScreen)
+
+        search = screen.query_one("#model-picker-search")
+        search.value = "second"
+        await pilot.pause()
+        assert [row["id"] if row else None for row in screen._visible_rows] == [
+            None, "second"
+        ]
+
+        search.value = ""
+        await pilot.pause()
+        await pilot.press("down")
+        await pilot.press("ctrl+f")
+        await pilot.pause()
+        assert screen.favorites == ["fake/chosen"]
+        assert "★" in str(screen.query_one("#model-picker-options").get_option_at_index(1).prompt)
+        assert [row["id"] if row else None for row in screen._visible_rows] == [
+            None, "chosen", None, "second"
+        ]
+
+
+@pytest.mark.asyncio
+async def test_model_click_and_slash_open_same_modal_rows_without_losing_draft():
+    transport = ModelPickerTransport()
+    app = NexusTextualApp(Client(transport), session="same-picker")
+    async with app.run_test(size=(100, 26)) as pilot:
+        await pilot.pause()
+        editor = app.query_one(ChatEditor)
+        editor.text = "Keep this draft"
+        await app._open_picker("model")  # composer model link
+        await pilot.pause(0.1)
+        screen = app.screen
+        assert isinstance(screen, ModelPickerScreen)
+        options = screen.query_one("#model-picker-options")
+        clicked_row = str(options.get_option_at_index(1).prompt)
+        assert clicked_row.startswith("  A Chosen Display Name  fake")
+        assert not editor.disabled and app.focused is screen.query_one("#model-picker-search")
+        await pilot.press("x")
+        assert editor.text == "Keep this draft"
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not editor.disabled
+
+        editor.text = ""
+        await _type_command(pilot, editor, "/model")
+        screen = app.screen
+        assert isinstance(screen, ModelPickerScreen)
+        options = screen.query_one("#model-picker-options")
+        assert str(options.get_option_at_index(1).prompt) == clicked_row
+        assert app.focused is screen.query_one("#model-picker-search")
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not editor.disabled and app.focused is editor
 
 
 @pytest.mark.asyncio
@@ -247,9 +337,11 @@ async def test_picker_uses_canonical_ids_when_display_name_is_missing_and_upperc
         assert selected == ["general"]
 
         await app._push_model_picker()
-        await pilot.pause()
-        option = app.query_one("#inline-picker", AgentPickerPanel).query_one("#agent-options").get_option_at_index(0)
-        assert str(option.prompt).startswith("fake/fallback")
+        await pilot.pause(0.1)
+        screen = app.screen
+        assert isinstance(screen, ModelPickerScreen)
+        option = app.screen.query_one("#model-picker-options").get_option_at_index(1)
+        assert str(option.prompt).startswith("  fallback  fake")
         await pilot.press("enter")
         await pilot.pause(0.1)
         assert p.ModelSelect(session="canonical-picker", ref="fake/fallback") in transport.commands
@@ -294,13 +386,13 @@ async def test_model_picker_escape_cancels_without_selecting():
     async with app.run_test() as pilot:
         await pilot.pause()
         await app._push_model_picker()
-        await pilot.pause()
-        assert app.query_one("#inline-picker", AgentPickerPanel).display
+        await pilot.pause(0.1)
+        assert isinstance(app.screen, ModelPickerScreen)
 
         await pilot.press("escape")
         await pilot.pause()
 
-        assert not app.query_one("#inline-picker", AgentPickerPanel).display
+        assert not isinstance(app.screen, ModelPickerScreen)
         assert _commands(transport, p.ModelsList)
         assert _commands(transport, p.ModelSelect) == []
         assert _commands(transport, p.ReasoningEffortSelect) == []
@@ -314,20 +406,22 @@ async def test_model_picker_effort_is_pending_until_enter_and_commits_after_mode
     async with app.run_test() as pilot:
         await pilot.pause()
         await app._push_model_picker()
-        await pilot.pause()
-        panel = app.query_one("#inline-picker", AgentPickerPanel)
-        options = panel.query_one("#agent-options")
-        assert app.focused is options
-        assert "model default" in panel.query_one("#picker-help").render().plain
+        await pilot.pause(0.1)
+        screen = app.screen
+        assert isinstance(screen, ModelPickerScreen)
+        help_text = screen.query_one("#model-picker-help")
+        assert app.focused is screen.query_one("#model-picker-search")
+        assert "model default" in help_text.render().plain
 
+        await pilot.press("down")
         await pilot.press("right")
         await pilot.pause()
-        assert "Effort: low" in panel.query_one("#picker-help").render().plain
+        assert "Effort: low" in help_text.render().plain
         assert _commands(transport, p.ModelSelect) == []
         assert _commands(transport, p.ReasoningEffortSelect) == []
 
         await pilot.press("right")
-        assert "Effort: high" in panel.query_one("#picker-help").render().plain
+        assert "Effort: high" in help_text.render().plain
         await pilot.press("enter")
         await pilot.pause(0.1)
 
@@ -352,9 +446,10 @@ async def test_enter_on_current_model_preserves_stored_effort_without_effort_mut
     async with app.run_test() as pilot:
         await pilot.pause()
         await app._push_model_picker()
-        await pilot.pause()
-        panel = app.query_one("#inline-picker", AgentPickerPanel)
-        assert "Effort: high (keep)" in panel.query_one("#picker-help").render().plain
+        await pilot.pause(0.1)
+        screen = app.screen
+        assert isinstance(screen, ModelPickerScreen)
+        assert "Effort: high" in screen.query_one("#model-picker-help").render().plain
 
         await pilot.press("enter")
         await pilot.pause(0.1)
@@ -376,9 +471,10 @@ async def test_enter_on_current_model_preserves_effective_agent_default_effort()
     async with app.run_test() as pilot:
         await pilot.pause()
         await app._push_model_picker()
-        await pilot.pause()
-        panel = app.query_one("#inline-picker", AgentPickerPanel)
-        assert "Effort: low (agent; preserve)" in panel.query_one("#picker-help").render().plain
+        await pilot.pause(0.1)
+        screen = app.screen
+        assert isinstance(screen, ModelPickerScreen)
+        assert "Effort: low" in screen.query_one("#model-picker-help").render().plain
 
         await pilot.press("enter")
         await pilot.pause(0.1)
@@ -408,7 +504,7 @@ async def test_new_model_keeps_supported_stored_effort_without_reapplying_it():
     async with app.run_test() as pilot:
         await pilot.pause()
         await app._push_model_picker()
-        await pilot.pause()
+        await pilot.pause(0.1)
         await pilot.press("enter")
         await pilot.pause(0.1)
 
@@ -431,9 +527,10 @@ async def test_incompatible_stored_effort_is_kept_dormant_and_not_sent_to_new_mo
     async with app.run_test() as pilot:
         await pilot.pause()
         await app._push_model_picker()
-        await pilot.pause()
-        panel = app.query_one("#inline-picker", AgentPickerPanel)
-        assert "Dormant high (kept; unsupported)" in panel.query_one("#picker-help").render().plain
+        await pilot.pause(0.1)
+        screen = app.screen
+        assert isinstance(screen, ModelPickerScreen)
+        assert "model default" in screen.query_one("#model-picker-help").render().plain
 
         await pilot.press("enter")
         await pilot.pause(0.1)
@@ -458,11 +555,9 @@ async def test_default_clear_is_committed_only_after_explicit_effort_cycle():
         await pilot.pause()
         await app._push_model_picker()
         await pilot.pause()
-        await pilot.press("right")
+        await pilot.press("down", "right")
         await pilot.pause()
-        assert "Default / clear (apply)" in app.query_one(
-            "#inline-picker", AgentPickerPanel
-        ).query_one("#picker-help").render().plain
+        assert "model default" in app.screen.query_one("#model-picker-help").render().plain
         await pilot.press("enter")
         await pilot.pause(0.1)
 
@@ -495,7 +590,7 @@ async def test_header_agent_and_model_targets_are_distinct_and_keyboard_focusabl
         model_link.focus()
         await pilot.press("enter")
         await pilot.pause()
-        assert panel.display and app._inline_picker_kind == "model"
+        assert isinstance(app.screen, ModelPickerScreen)
         await pilot.press("escape")
         await pilot.pause()
         assert app.focused is model_link
@@ -511,7 +606,7 @@ async def test_effort_failure_after_model_selection_refreshes_authoritative_stat
         await pilot.pause()
         await app._push_model_picker()
         await pilot.pause()
-        await pilot.press("right", "enter")
+        await pilot.press("down", "right", "enter")
         await pilot.pause(0.1)
 
         assert _commands(transport, p.ModelSelect) == [
@@ -584,7 +679,7 @@ async def test_picker_model_rejection_reports_error_and_preserves_current_metada
         await pilot.pause()
         await app._push_model_picker()
         await pilot.pause()
-        assert app.query_one("#inline-picker", AgentPickerPanel).display
+        assert isinstance(app.screen, ModelPickerScreen)
 
         await pilot.press("enter")
         await pilot.pause(0.1)

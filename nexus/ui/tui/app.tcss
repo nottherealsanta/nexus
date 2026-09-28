@@ -549,7 +549,7 @@ ArchivedSessionsScreen {
     min-height: 1;
     padding: 0 1;
     color: $nx-muted;
-    background: $nx-element;
+    background: $nx-list;
 }
 
 #context-usage {
@@ -733,6 +733,49 @@ ArchivedSessionsScreen {
     padding: 1 2;
     background: $nx-panel;
     border: tall $nx-border-strong;
+}
+
+ModelPickerScreen {
+    align: center middle;
+    background: $nx-bg 65%;
+}
+
+#model-picker-dialog {
+    width: 90%;
+    max-width: 100;
+    height: 80%;
+    padding: 1 2;
+    background: $nx-panel;
+}
+
+#model-picker-title {
+    height: 2;
+    color: $nx-text;
+    text-style: bold;
+}
+
+#model-picker-search {
+    height: 3;
+    margin-bottom: 1;
+    border: none;
+    background: $nx-panel;
+}
+
+#model-picker-options {
+    height: 1fr;
+    border: none;
+    background: $nx-panel;
+    scrollbar-size-vertical: 1;
+}
+
+#model-picker-options > .option-list--option {
+    height: 1;
+    padding: 0 1;
+}
+
+#model-picker-help {
+    height: 2;
+    color: $nx-muted;
 }
 
 #context-dialog {

@@ -252,7 +252,6 @@ class AgentPickerPanel(Vertical):
                 if row.get("model"):
                     secondary = f"{secondary}/{row['model']}" if secondary else str(row["model"])
             elif self.kind == "model":
-                primary = f"{primary:<45}"
                 context = row.get("context_window") or row.get("context")
                 secondary = f"{round(int(context) / 1000)}k ctx" if isinstance(context, int) else ""
                 if row.get("supports_reasoning"):

@@ -169,6 +169,48 @@ def test_session_status_relative_time_and_preferences(tmp_path):
     assert TuiPreferences(None)["theme"] == "nexus-dark"
 
 
+def test_model_favorites_preferences_are_validated_bounded_and_copied(tmp_path):
+    path = tmp_path / "tui.json"
+    caller_list = ["openai/gpt-5", "anthropic/claude-sonnet-5", "openai/gpt-5", "", "x" * 257, 42]
+    prefs = TuiPreferences(path)
+    prefs.set("model_favorites", caller_list)
+
+    expected = ["openai/gpt-5", "anthropic/claude-sonnet-5"]
+    assert caller_list == ["openai/gpt-5", "anthropic/claude-sonnet-5", "openai/gpt-5", "", "x" * 257, 42]
+    assert prefs["model_favorites"] == expected
+    assert json.loads(path.read_text())["model_favorites"] == expected
+
+    long_but_valid_ref = "x" * 256
+    prefs.set("model_favorites", [long_but_valid_ref, *[f"model-{i}" for i in range(105)]])
+    assert len(prefs["model_favorites"]) == TuiPreferences.MODEL_FAVORITES_LIMIT
+    assert prefs["model_favorites"][-1] == "model-98"
+    assert len(TuiPreferences(path)["model_favorites"]) == 100
+
+    # Invalid set values do not replace the last valid value.
+    prefs.set("model_favorites", "openai/gpt-5")
+    assert len(prefs["model_favorites"]) == 100
+
+
+def test_model_favorites_preferences_sanitize_loaded_values_and_default_independently(tmp_path):
+    path = tmp_path / "tui.json"
+    loaded_favorites = ["provider/model", None, "provider/model", "", "z" * 257, 12, "other/model"]
+    loaded_favorites.extend(f"loaded-{i}" for i in range(105))
+    path.write_text(json.dumps({
+        "model_favorites": loaded_favorites,
+        "theme": "nexus-light",
+    }))
+
+    prefs = TuiPreferences(path)
+    assert prefs["model_favorites"] == ["provider/model", "other/model", *[f"loaded-{i}" for i in range(98)]]
+    assert prefs["theme"] == "nexus-light"
+
+    first = TuiPreferences(None)
+    second = TuiPreferences(None)
+    assert first["model_favorites"] == []
+    first.set("model_favorites", ["provider/model"])
+    assert second["model_favorites"] == []
+
+
 def test_mcp_markup_covers_disabled_empty_and_failed_servers():
     assert "disabled" in mcp_markup({})
     assert "No servers" in mcp_markup({"mcp": {"servers": []}})

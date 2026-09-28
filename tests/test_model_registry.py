@@ -168,6 +168,128 @@ def test_parse_valid_catalogue():
     assert opus.output_modalities == ("text",)
 
 
+def test_model_dates_parse_optional_iso_values_and_reach_model_info():
+    raw = json.dumps(
+        {
+            "openai": {
+                "models": {
+                    "dated": {
+                        "last_updated": "2026-09-28",
+                        "release_date": "2025-03-14",
+                        "modalities": {"output": ["text"]},
+                    },
+                    "undated": {"modalities": {"output": ["text"]}},
+                }
+            }
+        }
+    ).encode()
+
+    catalogue = parse_catalogue(raw)
+    parsed = {model.id: model for model in catalogue.providers[0].models}
+    assert parsed["dated"].last_updated == "2026-09-28"
+    assert parsed["dated"].release_date == "2025-03-14"
+    assert parsed["undated"].last_updated is None
+    assert parsed["undated"].release_date is None
+
+    registry = make_registry(
+        raw=raw,
+        env={},
+        providers={"openai": {}},
+        tier_table=type("TierTable", (), {"assign": lambda self, info: "high"})(),
+    )
+    info = registry.resolve("openai/dated")
+    assert (info.last_updated, info.release_date) == ("2026-09-28", "2025-03-14")
+    encoded = msgspec.json.decode(msgspec.json.encode(info))
+    assert encoded["last_updated"] == "2026-09-28"
+    assert encoded["release_date"] == "2025-03-14"
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("last_updated", "2026-02-29"),
+        ("last_updated", "2026-09-28T00:00:00Z"),
+        ("release_date", "2026-9-28"),
+        ("release_date", 20260928),
+    ],
+)
+def test_parse_rejects_invalid_model_dates(field, value):
+    raw = json.dumps(
+        {"openai": {"models": {"m": {field: value}}}}
+    ).encode()
+    with pytest.raises(CatalogueError, match=field):
+        parse_catalogue(raw)
+
+
+def test_model_dates_survive_canonical_alias_projection():
+    raw = json.dumps(
+        {
+            "openai": {
+                "models": {
+                    "m": {
+                        "last_updated": "2026-09-28",
+                        "release_date": "2025-03-14",
+                        "modalities": {"output": ["text"]},
+                    }
+                }
+            },
+            "openrouter": {
+                "models": {
+                    "openai/m": {
+                        "last_updated": "2024-01-01",
+                        "release_date": "2023-01-01",
+                        "modalities": {"output": ["text"]},
+                    }
+                }
+            },
+        }
+    ).encode()
+    registry = make_registry(
+        raw=raw,
+        env={},
+        providers={"openai": {}, "openrouter": {}},
+    )
+
+    canonical = registry.resolve("openai/m")
+    assert canonical.aliases == ("openrouter/openai/m",)
+    assert (canonical.last_updated, canonical.release_date) == (
+        "2026-09-28",
+        "2025-03-14",
+    )
+    alias = registry.get("openrouter/openai/m")
+    assert (alias.last_updated, alias.release_date) == (
+        "2026-09-28",
+        "2025-03-14",
+    )
+
+
+def test_model_dates_survive_runtime_provider_alias_projection():
+    raw = json.dumps(
+        {
+            "openai": {
+                "models": {
+                    "m": {
+                        "last_updated": "2026-09-28",
+                        "release_date": "2025-03-14",
+                        "modalities": {"output": ["text"]},
+                    }
+                }
+            }
+        }
+    ).encode()
+    registry = ModelRegistry(
+        providers={"codex": {"kind": "openai"}},
+        provider_aliases={"codex": "openai"},
+        env={},
+        snapshot_path=MISSING,
+    )
+    registry.install_raw(raw)
+
+    info = registry.resolve("codex/m")
+    assert info.catalogue_provider == "openai"
+    assert (info.last_updated, info.release_date) == ("2026-09-28", "2025-03-14")
+
+
 def test_reasoning_efforts_are_optional_and_canonically_ordered():
     raw = json.dumps(
         {

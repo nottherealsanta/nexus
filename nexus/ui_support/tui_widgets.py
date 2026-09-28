@@ -563,7 +563,7 @@ class ChatInput(Vertical):
         if self._completion_token is None:
             return False
         marker, row, start, end = self._completion_token
-        return (marker in {"model", "agent"} and row == 0
+        return (marker == "agent" and row == 0
                 and end == len(editor.text) and editor.text[start:end] in self._completion_items)
 
     def accept_completion(self) -> None:
@@ -588,7 +588,7 @@ class ChatInput(Vertical):
         line = lines[row]
         column = min(column, len(line))
         if row == 0:
-            argument = re.fullmatch(r"/(model|agent)\s+([^\s]*)", line[:column])
+            argument = re.fullmatch(r"/(agent)\s+([^\s]*)", line[:column])
             if argument:
                 token = argument.group(2)
                 start = column - len(token)

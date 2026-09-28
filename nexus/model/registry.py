@@ -27,6 +27,7 @@ import tempfile
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
@@ -205,6 +206,8 @@ class ModelInfo(msgspec.Struct, frozen=True):
     tier: str = "low"
     source: Literal["catalogue", "config", "builtin"] = "catalogue"
     reasoning_efforts: tuple[str, ...] = ()
+    last_updated: str | None = None
+    release_date: str | None = None
 
     @property
     def ref(self) -> str:
@@ -278,6 +281,8 @@ class CatalogueModel(msgspec.Struct, frozen=True):
     output_modalities: tuple[str, ...] = ()
     cost: Cost | None = None
     reasoning_efforts: tuple[str, ...] = ()
+    last_updated: str | None = None
+    release_date: str | None = None
 
 
 class CatalogueProvider(msgspec.Struct, frozen=True):
@@ -329,6 +334,24 @@ def _opt_str(
         raise CatalogueError(f"{key!r} must be a string")
     if len(value) > max_len:
         raise CatalogueError(f"{key!r} exceeds {max_len} characters")
+    return value
+
+
+def _opt_date(entry: Mapping[str, object], key: str) -> str | None:
+    """Read one optional, bounded ISO calendar date from catalogue metadata."""
+    value = entry.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise CatalogueError(f"{key!r} must be an ISO date string")
+    if len(value) != 10:
+        raise CatalogueError(f"{key!r} must be a 10-character ISO date")
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError as exc:
+        raise CatalogueError(f"{key!r} must be a valid ISO date") from exc
+    if parsed.isoformat() != value:
+        raise CatalogueError(f"{key!r} must be a valid ISO date")
     return value
 
 
@@ -529,6 +552,8 @@ def _parse_model(key: str, value: object) -> CatalogueModel:
         output_modalities=output_modalities,
         cost=_parse_cost(entry.get("cost")),
         reasoning_efforts=_parse_reasoning_efforts(entry),
+        last_updated=_opt_date(entry, "last_updated"),
+        release_date=_opt_date(entry, "release_date"),
     )
 
 
@@ -777,6 +802,8 @@ def build_index(
                 tier=default_tier,
                 source=source,
                 reasoning_efforts=model.reasoning_efforts,
+                last_updated=model.last_updated,
+                release_date=model.release_date,
             )
             if tier_table is not None:
                 tier = str(tier_table.assign(info))
