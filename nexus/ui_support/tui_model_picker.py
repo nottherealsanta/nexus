@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+from calendar import monthrange
+from datetime import UTC, date, datetime
 
 from rich.text import Text
 from textual import on
@@ -28,14 +30,39 @@ def _date(row: dict, field: str) -> tuple[int, int, int]:
     return tuple(-int(part) for part in value.split("-"))
 
 
-def sort_models(rows: list[dict]) -> list[dict]:
-    """Newest update, then release, then natural name/reference (missing dates last)."""
-    return sorted(rows, key=lambda row: (
-        _date(row, "last_updated"),
-        _date(row, "release_date"),
-        _natural(str(row.get("name") or row.get("id") or "")),
-        _natural(str(row.get("provider") or "") + "/" + str(row.get("id") or "")),
-    ))
+def sort_models(rows: list[dict], *, by: str = "updated") -> list[dict]:
+    """Order by update/release date (default), or natural alphanumeric name."""
+    def key(row: dict):
+        name = _natural(str(row.get("name") or row.get("id") or ""))
+        ref = _natural(str(row.get("provider") or "") + "/" + str(row.get("id") or ""))
+        if by == "name":
+            return (name, ref)
+        return (
+            _date(row, "last_updated"),
+            _date(row, "release_date"),
+            name, ref,
+        )
+    return sorted(rows, key=key)
+
+
+def recent_models(rows: list[dict], *, today: date | None = None) -> list[dict]:
+    """Exclude known stale entries; undated models cannot be classified as old."""
+    today = today or datetime.now(UTC).date()
+    month = today.month - 6
+    year = today.year
+    if month <= 0:
+        month += 12
+        year -= 1
+    cutoff = date(year, month, min(today.day, monthrange(year, month)[1]))
+    def fresh(row: dict) -> bool:
+        stamp = row.get("last_updated") or row.get("release_date")
+        if not isinstance(stamp, str):
+            return True
+        try:
+            return date.fromisoformat(stamp) >= cutoff
+        except ValueError:
+            return True
+    return [row for row in rows if fresh(row)]
 
 
 def _ref(row: dict) -> str:
@@ -49,7 +76,8 @@ class ModelPickerScreen(ModalScreen[tuple[str, str | None, bool] | None]):
                  stored_override: str | None, effort_source: str | None,
                  favorites: list[str], recent: list[str], on_favorites) -> None:
         super().__init__()
-        self.rows = sort_models(rows)[:2000]
+        self.rows = recent_models(rows)[:2000]
+        self.sort_mode = "updated"
         self.current = current
         self.current_effort = current_effort
         self.stored_override = stored_override
@@ -66,7 +94,7 @@ class ModelPickerScreen(ModalScreen[tuple[str, str | None, bool] | None]):
             yield Static("Select model                                      esc", id="model-picker-title")
             yield Input(placeholder="Search models and providers", id="model-picker-search")
             yield OptionList(id="model-picker-options")
-            yield Static("↑/↓ navigate · Enter select · Ctrl+F favorite · ←/→ effort · Esc close",
+            yield Static("↑/↓ navigate · Enter select · Ctrl+F favorite · Ctrl+S sort · Esc close",
                          id="model-picker-help")
 
     def on_mount(self) -> None:
@@ -75,9 +103,9 @@ class ModelPickerScreen(ModalScreen[tuple[str, str | None, bool] | None]):
 
     def _render_models(self, *, selected_ref: str | None = None) -> None:
         query = self.query_one(Input).value.casefold().strip()
-        matching = [row for row in self.rows if query in (
+        matching = sort_models([row for row in self.rows if query in (
             f"{row.get('name', '')} {row.get('provider', '')} {row.get('id', '')}"
-        ).casefold()]
+        ).casefold()], by=self.sort_mode)
         by_ref = {_ref(row): row for row in matching}
         groups: list[tuple[str, list[dict]]] = []
         if not query:
@@ -135,7 +163,7 @@ class ModelPickerScreen(ModalScreen[tuple[str, str | None, bool] | None]):
                                     and self.current_effort in levels else None)
         effort = self._pending_effort or "model default"
         self.query_one("#model-picker-help", Static).update(
-            f"Effort: {effort} · ←/→ change · Enter select · Ctrl+F favorite · Esc close"
+            f"Effort: {effort} · ←/→ change · Ctrl+F favorite · Ctrl+S sort: {self.sort_mode} · Esc"
         )
 
     @on(Input.Changed)
@@ -176,6 +204,12 @@ class ModelPickerScreen(ModalScreen[tuple[str, str | None, bool] | None]):
                                   if ref in self.favorites else [ref, *self.favorites][:100])
                 self.on_favorites(self.favorites)
                 self._render_models(selected_ref=ref)
+        elif event.key == "ctrl+s":
+            event.stop()
+            event.prevent_default()
+            row = self._selected_row()
+            self.sort_mode = "name" if self.sort_mode == "updated" else "updated"
+            self._render_models(selected_ref=_ref(row) if row else None)
         elif event.key in {"left", "right"} and isinstance(self.focused, OptionList):
             event.stop()
             event.prevent_default()

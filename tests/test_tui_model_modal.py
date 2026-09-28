@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+from datetime import UTC, date, datetime
+
 import pytest
 from test_tui_model_picker_repro import ModelPickerTransport
 
 from nexus.ui.cli.client import Client
 from nexus.ui.tui.app import NexusTextualApp
-from nexus.ui_support.tui_model_picker import ModelPickerScreen, sort_models
+from nexus.ui_support.tui_model_picker import (
+    ModelPickerScreen,
+    recent_models,
+    sort_models,
+)
 
 
 def test_models_sort_by_update_release_then_natural_name():
@@ -19,6 +25,54 @@ def test_models_sort_by_update_release_then_natural_name():
         {"provider": "p", "id": "d", "name": "No dates"},
     ]
     assert [row["id"] for row in sort_models(rows)] == ["b", "a", "z", "c", "d"]
+    assert [row["id"] for row in sort_models(rows, by="name")] == ["a", "z", "b", "d", "c"]
+
+
+def test_six_calendar_month_filter_uses_update_then_release_and_keeps_unknown():
+    rows = [
+        {"id": "boundary", "last_updated": "2026-03-28"},
+        {"id": "old", "last_updated": "2026-03-27"},
+        {"id": "release", "release_date": "2026-04-01"},
+        {"id": "old-release", "release_date": "2026-02-01"},
+        {"id": "undated"},
+        {"id": "updated", "last_updated": "2026-09-01", "release_date": "2020-01-01"},
+    ]
+    assert [row["id"] for row in recent_models(rows, today=date(2026, 9, 28))] == [
+        "boundary", "release", "undated", "updated"
+    ]
+    assert [row["id"] for row in recent_models([
+        {"id": "leap", "last_updated": "2024-02-29"},
+        {"id": "before", "last_updated": "2024-02-28"},
+    ], today=date(2024, 8, 31))] == ["leap"]
+
+
+@pytest.mark.asyncio
+async def test_modal_is_compact_and_sort_toggle_reorders_results():
+    transport = ModelPickerTransport()
+    transport.models = [
+        {"provider": "fake", "id": "z", "name": "Zed", "last_updated": datetime.now(UTC).date().isoformat()},
+        {"provider": "fake", "id": "a", "name": "Alpha"},
+    ]
+    app = NexusTextualApp(Client(transport), session="sort")
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause()
+        await app._push_model_picker()
+        await pilot.pause()
+        modal = app.screen
+        assert isinstance(modal, ModelPickerScreen)
+        search = modal.query_one("#model-picker-search")
+        assert search.region.height == 1
+        assert modal.query_one("#model-picker-dialog").region.width <= 90
+        assert modal.query_one("#model-picker-dialog").region.height <= 29
+        assert [row["id"] for row in modal._visible_rows if row] == ["z", "a"]
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert modal.sort_mode == "name"
+        assert [row["id"] for row in modal._visible_rows if row] == ["a", "z"]
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert modal.sort_mode == "updated"
+        assert [row["id"] for row in modal._visible_rows if row] == ["z", "a"]
 
 
 @pytest.mark.asyncio
