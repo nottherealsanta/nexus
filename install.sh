@@ -3,13 +3,13 @@
 #
 #   curl -LsSf https://raw.githubusercontent.com/nottherealsanta/nexus/main/install.sh | sh
 #
-# Installs uv when missing, lets uv provide Python >= 3.11, installs Nexus as an
+# Installs uv when missing, lets uv provide Python >= 3.13, installs Nexus as an
 # isolated uv tool, and puts `nexus` on PATH. Re-running upgrades in place.
 # Options (flags win over environment variables):
 #   --version X         NEXUS_VERSION      pin a release (or git tag for the git source)
 #   --source S          NEXUS_SOURCE       git (default) | pypi | any package spec or path
 #   --git-ref R         NEXUS_GIT_REF      branch, tag or commit for the git source (main)
-#   --python V          NEXUS_PYTHON       Python for the tool venv (3.12)
+#   --python V          NEXUS_PYTHON       Python for the tool venv (3.13)
 #   --extras E          NEXUS_EXTRAS       e.g. documents
 #   --no-modify-path    NEXUS_NO_MODIFY_PATH
 #   --no-doctor         NEXUS_NO_DOCTOR    skip the post-install smoke check
@@ -22,7 +22,7 @@
 REPO_URL="https://github.com/nottherealsanta/nexus"
 UV_INSTALLER_URL="https://astral.sh/uv/install.sh"
 PACKAGE="nexus-harness"
-MIN_PYTHON="3.11"
+MIN_PYTHON="3.13"
 
 say() { printf 'nexus-install: %s\n' "$*"; }
 warn() { printf 'nexus-install: warning: %s\n' "$*" >&2; }
@@ -52,7 +52,7 @@ parse_args() {
     done
     NEXUS_SOURCE=${NEXUS_SOURCE:-git}
     NEXUS_GIT_REF=${NEXUS_GIT_REF:-main}
-    NEXUS_PYTHON=${NEXUS_PYTHON:-3.12}
+    NEXUS_PYTHON=${NEXUS_PYTHON:-3.13}
     NEXUS_EXTRAS=${NEXUS_EXTRAS:-}
 }
 

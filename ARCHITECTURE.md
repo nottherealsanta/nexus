@@ -435,4 +435,4 @@ subagent authority) only ever narrows.
 - **End-to-end** — recorded live runs, network-gated behind `-m live`, excluded
   from CI.
 
-The offline suite runs on Linux and macOS, Python 3.11–3.14.
+The offline suite runs on Linux and macOS, Python 3.13–3.14.

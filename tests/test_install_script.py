@@ -80,7 +80,7 @@ def test_installs_from_git_by_default(env):
     assert result.returncode == 0, result.stderr
     calls = log.read_text()
     assert (
-        "tool install --force --python 3.12 "
+        "tool install --force --python 3.13 "
         "nexus-harness @ git+https://github.com/nottherealsanta/nexus@main"
     ) in calls
     assert "nexus --version" in calls
@@ -95,17 +95,17 @@ def test_pypi_source_with_version_and_extras(env):
         "--no-doctor",
     )
     assert result.returncode == 0, result.stderr
-    assert "tool install --force --python 3.12 nexus-harness[documents]==0.2.0" in log.read_text()
+    assert "tool install --force --python 3.13 nexus-harness[documents]==0.2.0" in log.read_text()
 
 
 def test_flags_beat_environment(env):
     vars_, log, _ = env
     result = run(
         {**vars_, "NEXUS_SOURCE": "git", "NEXUS_PYTHON": "3.13"},
-        "--source", "pypi", "--python", "3.11", "--no-doctor",
+        "--source", "pypi", "--python", "3.14", "--no-doctor",
     )
     assert result.returncode == 0, result.stderr
-    assert "tool install --force --python 3.11 nexus-harness" in log.read_text()
+    assert "tool install --force --python 3.14 nexus-harness" in log.read_text()
     assert "git+" not in log.read_text()
 
 

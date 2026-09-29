@@ -23,7 +23,7 @@ section X.Y"), `webplan.md` and `design.md` (browser plan and visual spec),
 ## Setup and commands
 
 ```sh
-uv sync --extra dev            # or: pip install -e '.[dev]'  (Python ≥3.11; the venv is .venv/)
+uv sync --extra dev            # or: pip install -e '.[dev]'  (Python ≥3.13; the venv is .venv/)
 .venv/bin/python -m pytest -q  # full offline suite; `live` tests are deselected by default
 .venv/bin/python -m pytest -q tests/test_host_facade.py -k name   # one area
 ruff check nexus tests         # ruff is installed separately

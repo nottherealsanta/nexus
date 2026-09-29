@@ -5,7 +5,7 @@ the message and tool contracts, permissions, sessions, context, and the
 extension system; model providers are pluggable adapters behind one protocol.
 
 Runtime dependencies are `httpx`, `msgspec`, `mcp`, `keyring`, `textual`, and
-`textual-diff-view`. Python 3.11+ on macOS or
+`textual-diff-view`. Python 3.13+ on macOS or
 Linux. No vendor SDK, no agent framework, no OS sandbox.
 
 New here? Read [ARCHITECTURE.md](ARCHITECTURE.md) for the design and
@@ -15,7 +15,7 @@ or providers.
 ## Install
 
 One line (macOS, Linux, WSL). It installs [uv](https://docs.astral.sh/uv/) if it is
-missing, lets uv provide Python 3.11+, installs Nexus as an isolated tool, and puts
+missing, lets uv provide Python 3.13+, installs Nexus as an isolated tool, and puts
 `nexus` on your `PATH`:
 
 ```sh

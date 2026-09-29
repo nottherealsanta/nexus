@@ -5,7 +5,7 @@ provider. Run every command below from the repository root.
 
 ## Prerequisites
 
-- Python 3.11 or newer and the Nexus project dependencies installed (for
+- Python 3.13 or newer and the Nexus project dependencies installed (for
   example, `pip install -e .` in the project environment).
 - A repository or `~/.nexus/config.toml` Nexus config with a default model and a
   configured provider that can serve it. Supply provider credentials through
