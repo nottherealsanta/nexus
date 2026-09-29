@@ -290,6 +290,119 @@ def _latest_activity(agent: AgentView) -> str:
     return "waiting for activity"
 
 
+def _task_short_phrase(value: object) -> str:
+    if value is None:
+        return ""
+    phrase = redact(_text(value, 240))
+    phrase = " ".join(phrase.split())
+    phrase = re.split(r"(?<=[.!?])\s+", phrase, maxsplit=1)[0]
+    return _text(phrase, 100)
+
+
+def _task_result(tool: ToolCallView) -> str:
+    result = tool.display or ""
+    if not result:
+        result = "\n".join(
+            str(block.get("text") or block.get("content") or "")
+            for block in tool.result[:4]
+            if isinstance(block, Mapping)
+        )
+    if result:
+        result = re.sub(r"^\s*task\s*:\s*", "", result, flags=re.IGNORECASE)
+    return _task_short_phrase(result or tool.error or "")
+
+
+def _task_phrase(tool: ToolCallView, agent: AgentView | None) -> str:
+    description = tool.input.get("description") if isinstance(tool.input, Mapping) else None
+    prompt = tool.input.get("prompt") if isinstance(tool.input, Mapping) else None
+    for candidate in (
+        description,
+        agent.description if agent is not None else None,
+        prompt,
+        _task_result(tool),
+        agent.error if agent is not None else None,
+    ):
+        phrase = _task_short_phrase(candidate)
+        if phrase:
+            return phrase
+    return ""
+
+
+def _task_header(tool: ToolCallView, agent: AgentView | None, spinner_index: int) -> tuple[str, bool]:
+    marker = tool_status(tool)
+    kind = (
+        agent.type
+        if agent and agent.type
+        else tool.input.get("subagent_type")
+        if isinstance(tool.input, Mapping)
+        else None
+    ) or "General"
+    kind = redact(_text(str(kind), 32)).title()
+    running = marker == "running" and (agent is None or agent.status == "spawned")
+    phrase = _task_phrase(tool, agent) or ("failed" if marker == "failed" else "completed")
+    spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    mark = spinner[spinner_index] if running else "✗" if marker == "failed" else "✓"
+    return f"{mark} {kind} · {phrase}", running
+
+
+def _task_child_activity(agent: AgentView) -> str:
+    tools = sorted(
+        (tool for turn in agent.body.turns for tool in turn.tools),
+        key=lambda item: item.event_seq,
+    )
+    if not tools:
+        return "Starting…"
+    calls = []
+    for tool in tools[-2:]:
+        name = redact(_text(tool.name or "tool", 32))
+        target = "" if tool.name.casefold() in {"task", "subagent"} else format_arguments(tool)
+        progress = tool.progress[-1] if tool.progress else ""
+        detail = redact(_text(" · ".join(part for part in (target, progress) if part), 90))
+        calls.append(f"{name}: {detail}" if detail else name)
+    return "  →  ".join(calls)
+
+
+def _task_children(tool: ToolCallView, agents: Mapping[str, AgentView]) -> tuple[AgentView, ...]:
+    return tuple(agents[agent_id] for agent_id in tool.child_agent_ids if agent_id in agents)
+
+
+def _task_metrics(tool: ToolCallView, agent: AgentView | None, running: bool) -> str:
+    if running:
+        summary = _task_child_activity(agent) if agent is not None else "Starting…"
+    elif agent is not None:
+        summary = _agent_metrics(agent)
+    else:
+        elapsed = tool.duration_ms
+        summary = f"0 tool calls · {elapsed / 1000:.1f}s" if elapsed is not None else "0 tool calls"
+    return re.sub(
+        r"\b(\d+) tools?\b(?! calls?\b)",
+        lambda match: f"{match.group(1)} tool call" + ("s" if match.group(1) != "1" else ""),
+        summary,
+    )
+
+
+def _task_child_details(agents: tuple[AgentView, ...]) -> list[str]:
+    return [
+        f"{_text(agent.type or agent.id, 48)} · {_text(agent.task or agent.description, 96)}"
+        f" · {_text(agent.status, 24)} · {_agent_metrics(agent)}\n  {_latest_activity(agent)}"
+        for agent in agents
+    ]
+
+
+def _agent_link_label(agent: AgentView) -> str:
+    activity = _latest_activity(agent)
+    tool = next(
+        (tool for turn in reversed(agent.body.turns) for tool in reversed(turn.tools)),
+        None,
+    )
+    if tool is not None:
+        activity += f" · {tool_status(tool)}"
+    return (
+        f"{_text(agent.type or agent.id, 36)} · "
+        f"{_text(agent.status, 18)} · {_agent_metrics(agent)} · {activity}"
+    )
+
+
 def _agent_metrics(agent: AgentView) -> str:
     """Summarize reducer-owned child calls and timestamps without a wall clock."""
     tools = [tool for turn in agent.body.turns for tool in turn.tools]
@@ -362,6 +475,7 @@ __all__ = [
     "DIFF_TOOLS",
     "_DETAIL_LIMIT",
     "DiffSection",
+    "_agent_link_label",
     "_agent_metrics",
     "_has_message_content",
     "_latest_activity",
@@ -370,6 +484,13 @@ __all__ = [
     "_output",
     "_setup_failure",
     "_stale_greeting",
+    "_task_child_details",
+    "_task_children",
+    "_task_header",
+    "_task_metrics",
+    "_task_phrase",
+    "_task_result",
+    "_task_short_phrase",
     "_text",
     "_turn_setup_failure",
     "_turn_summary",

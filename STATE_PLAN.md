@@ -1,7 +1,16 @@
 # STATE_PLAN — sessions in one SQLite DB under `~/.nexus`, project files under `.agents/`
 
-Status: planned 2026-09-29. Supersedes the "workspace state lives in
-`<workspace>/.nexus/`" convention in `AGENTS.md` once landed.
+> **Superseding development-phase note (2026-09-29):** This is a historical
+> implementation plan; its migration and downgrade instructions below do not
+> describe current behavior. Current session storage is SQLite-only, with JSONL
+> available for export. Old session and trash files are not imported. Export
+> sessions before switching to this storage if they need to be retained. The
+> `.nexus/` read fallback applies to project extensions and settings only.
+
+Status: implemented 2026-09-29. Shared SQLite sessions and `.agents/` project
+extensions are the current convention; `<workspace>/.nexus/` remains a legacy
+read fallback for project extensions and settings only. The checks in §6 and
+historical phases in §8 document the rollout rather than pending work.
 
 ## 1. Goal
 

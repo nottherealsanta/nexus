@@ -591,6 +591,7 @@ def test_200_message_scripted_session_completes_with_suffix_history(tmp_path):
     from nexus.core.loop import ResolvedModel
     from nexus.model.providers.scripted import ScriptedProvider, text_response
     from nexus.session.manager import SessionManager
+    from nexus.session.records import MessageRecord
 
     config = v2_config(max_tokens=1200, safety=0)
     context = ContextManager(tmp_path, config=config, counter=char_counter())
@@ -612,7 +613,8 @@ def test_200_message_scripted_session_completes_with_suffix_history(tmp_path):
 
     # Full original history remains authoritative: 100 user + 100 assistant.
     assert len(session.messages) == 200
-    assert session.path.read_bytes().count(b'"type":"message"') == 200
+    records = manager.store.read("long").records
+    assert sum(isinstance(record, MessageRecord) for record in records) == 200
     # The last assembled request is a contiguous suffix of the history that
     # existed at assembly time (before the final assistant reply was appended),
     # and the current user turn appears exactly once.

@@ -667,7 +667,7 @@ def mcp_markup(report: Mapping[str, Any] | None, *, error: str | None = None) ->
         return "[$nx-quiet]MCP is disabled for this workspace.[/]"
     servers = [row for row in mcp.get("servers") or () if isinstance(row, Mapping)]
     if not servers:
-        return "[$nx-quiet]No servers in .nexus/mcp.json[/]"
+        return "[$nx-quiet]No servers in .agents/mcp.json[/]"
     lines = []
     for row in servers:
         health = str(row.get("health") or "unknown").casefold()

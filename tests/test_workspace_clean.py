@@ -52,6 +52,53 @@ async def test_fresh_workspace_writes_no_session_state_before_any_turn(tmp_path)
     assert not (workspace / ".nexus" / "trash").exists()
 
 
+async def test_runtime_ignores_preexisting_legacy_session_and_trash_files(tmp_path):
+    workspace = tmp_path / "project"
+    legacy_sessions = workspace / ".nexus" / "sessions"
+    legacy_trash = workspace / ".nexus" / "trash" / "deleted-session"
+    legacy_sessions.mkdir(parents=True)
+    legacy_trash.mkdir(parents=True)
+    (legacy_sessions / "old.jsonl").write_text('{"legacy": "session"}\n')
+    (legacy_trash / "old.jsonl").write_text('{"legacy": "trash"}\n')
+
+    def legacy_tree():
+        paths = workspace / ".nexus"
+        directories = {path.relative_to(paths) for path in paths.rglob("*") if path.is_dir()}
+        files = {
+            path.relative_to(paths): (path.read_bytes(), path.stat().st_mtime_ns)
+            for path in paths.rglob("*")
+            if path.is_file()
+        }
+        return directories, files
+
+    original_legacy_tree = legacy_tree()
+    provider = ScriptedProvider(text_response("ok"))
+    runtime = Runtime(
+        workspace,
+        home=tmp_path / "home",
+        config=_config(),
+        providers={"scripted": provider},
+    )
+    try:
+        assert [summary.id for summary in runtime.sessions.list()] == []
+        assert not runtime.sessions.exists("old")
+
+        session = runtime.session("main")
+        events = [event async for event in session.send("hello")]
+        assert events[-1].type == "turn.completed"
+        assert [summary.id for summary in runtime.sessions.list()] == ["main"]
+        assert runtime.sessions.summary("main").message_count == 1
+
+        exported = runtime.sessions.export("main", format="jsonl")
+        assert exported.endswith("\n")
+        assert '"hello"' in exported
+        assert (legacy_tree() == original_legacy_tree)
+    finally:
+        await runtime.aclose()
+
+    assert legacy_tree() == original_legacy_tree
+
+
 async def test_deleted_and_restored_session_still_leaves_no_sessions_directory(tmp_path):
     workspace = tmp_path / "project"
     workspace.mkdir()

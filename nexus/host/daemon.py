@@ -50,10 +50,17 @@ from typing import Any
 
 import msgspec
 
-from ..config.paths import project_key
+from ..config.paths import nexus_home, project_key
 from ..errors import NexusError
 from ..events import Event
 from ..host_support.session_archive import reap_with_archive_sweep, sweep_stale_sessions
+from ..host_support.socket_dir import (
+    MAX_SOCKET_PATH_BYTES,
+    ensure_private_dir,
+)
+from ..host_support.socket_dir import (
+    fallback_daemon_dir as _fallback_daemon_dir,
+)
 from ..observability.daemon import DaemonDiagnostics
 from ..util import new_id, redact_secrets
 from . import protocol as p
@@ -96,9 +103,6 @@ MAX_SUBSCRIPTIONS_PER_CLIENT = 64
 #: The only host the opt-in HTTP/SSE surface may bind (PLAN section 14.12).
 DEFAULT_HTTP_HOST = LOOPBACK_HOST
 
-_DAEMON_DIR = Path(".nexus") / "daemon"
-
-
 class DaemonError(NexusError, RuntimeError):
     """The daemon could not start, or a peer refused the connection."""
 
@@ -118,15 +122,31 @@ def workspace_hash(workspace: str | Path) -> str:
 
 
 def daemon_dir(home: str | Path | None = None) -> Path:
-    base = Path(home).expanduser() if home is not None else Path.home()
-    return base / _DAEMON_DIR
+    return nexus_home(home) / "daemon"
+
+
+def _ensure_private_fallback_dir(path: Path) -> None:
+    try:
+        ensure_private_dir(path)
+    except OSError as exc:
+        raise DaemonError(f"cannot prepare daemon directory: {exc}") from exc
 
 
 def default_socket_path(
     workspace: str | Path, *, home: str | Path | None = None
 ) -> Path:
     """The one socket a workspace's daemon listens on."""
-    return daemon_dir(home) / f"{workspace_hash(workspace)}.sock"
+    filename = f"{workspace_hash(workspace)}.sock"
+    path = daemon_dir(home) / filename
+    if len(str(path).encode("utf-8")) <= MAX_SOCKET_PATH_BYTES:
+        return path
+
+    fallback = _fallback_daemon_dir(home)
+    _ensure_private_fallback_dir(fallback)
+    path = fallback / filename
+    if len(str(path).encode("utf-8")) > MAX_SOCKET_PATH_BYTES:
+        raise DaemonError("daemon fallback socket path exceeds the Unix socket limit")
+    return path
 
 
 def _auxiliary(socket: Path, suffix: str) -> Path:
@@ -767,6 +787,11 @@ class Daemon:
     # -- lock / files ------------------------------------------------------
 
     def _prepare_dir(self) -> None:
+        fallback_dir = _fallback_daemon_dir(self._home)
+        if self._socket.parent == fallback_dir:
+            # Revalidate at startup immediately before any lock/socket access;
+            # default_socket_path may have been computed well before this point.
+            _ensure_private_fallback_dir(fallback_dir)
         for path in (
             self._socket,
             self._pid_file,
@@ -1151,6 +1176,10 @@ async def stop(
     try:
         result = await client.call(p.Shutdown(reason="stop"), timeout=timeout)
         return isinstance(result, p.ShutdownResult) and result.stopping
+    except (DaemonUnavailable, TransportError, OSError):
+        # Teardown may close the socket before its ShutdownResult reaches us.
+        # A disconnected peer after the shutdown request is an expected stop.
+        return True
     finally:
         with contextlib.suppress(Exception):
             await client.close()

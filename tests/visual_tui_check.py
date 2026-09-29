@@ -7,15 +7,13 @@ Browser binaries are intentionally external to the repository; install once with
 
 from __future__ import annotations
 
-import subprocess
-import sys
-import time
 import os
 import signal
+import subprocess
+import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
-
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = ROOT / "artifacts" / "visual-tui"

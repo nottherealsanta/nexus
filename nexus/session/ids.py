@@ -1,7 +1,6 @@
-"""Session ID validation shared by the store, lock, and migration paths.
+"""Session ID validation shared by SQLite session rows and lock paths.
 
-The grammar is intentionally identical to the legacy ``nexus.store.SessionStore``
-so a new-runtime lock and a legacy lock resolve to the same ``<id>.lock`` file.
+The stable grammar gives each persisted row a safe, deterministic lock filename.
 """
 from __future__ import annotations
 

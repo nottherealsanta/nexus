@@ -17,8 +17,8 @@ client (TUI / CLI / browser)
                                                      ├─ model/        Provider adapters, router, registry
                                                      ├─ context/      request assembly + budget
                                                      ├─ tools/        tool manager, permissions, builtins
-                                                     └─ session/      append-only JSONL log
-events ──► session log ──► view/reduce.py (pure) ──► ConversationView ──► every UI
+                                                      └─ session/      SQLite append-only records
+events ──► session records ──► view/reduce.py (pure) ──► ConversationView ──► every UI
 ```
 
 ## Layers and where things are
@@ -38,7 +38,7 @@ events ──► session log ──► view/reduce.py (pure) ──► Conversat
 
 | Concern | Package | Start at |
 | --- | --- | --- |
-| Sessions: open, fork, replay, delete/trash, export, locks | `session/` | `manager.py` (`SessionManager`, `SessionSummary`, `_state_for` gives idle/running/awaiting_*), `session.py` (handle), `store.py` (JSONL log, `EventRecord`, `MessageRecord`), `snapshot.py` |
+| Sessions: open, fork, replay, delete/trash, export, locks | `session/` | `manager.py` (`SessionManager`, `SessionSummary`, `_state_for` gives idle/running/awaiting_*), `session.py` (handle), SQLite record store (`EventRecord`, `MessageRecord`), JSONL export, `snapshot.py` |
 | Context assembly and budget | `context/` | `manager.py`, `parts.py`, `budget.py`, `compact.py`, `counting.py`, `cache.py` |
 | Tools and permissions | `tools/` | `spec.py` (tool contract), `manager.py` (dispatch), `permissions.py` (rule grammar, path security, approvals), `bundles.py` (profiles), `names.py` (public names), `questions.py` (agent questions), `builtin/*.py` (read, edit, multiedit, write, apply_patch (numbered unified hunks or Codex-style `@@ anchor` context hunks, located by content; `_patch_parse.py` → `_patch_stage.py` → `_patch_commit.py`), bash + jobs, glob, grep, ls, task, todo, skill, webfetch, websearch, meta) |
 | Subagents and worktrees | `agents/` | `manager.py`, `model.py` (`*.md` definitions), `runner.py`, `worktrees.py`, `worktree_review.py`, `worktree_integrate.py`, built-in roles in `agents/data/*.md` (root `build`; subagents `advisor` (read-only), `task`, `quick`; user overrides in `~/.nexus/agents/`) |
@@ -51,11 +51,11 @@ events ──► session log ──► view/reduce.py (pure) ──► Conversat
 
 ## Host layer (the surface every UI talks to)
 
-Configuration is loaded from `~/.nexus/config.toml` and the exact workspace's
-`nexus.toml` and `.nexus/nexus.toml`, in that precedence order. Parent
-directories and Git roots do not contribute configuration, so global model and
-agent defaults apply consistently regardless of the current working directory;
-an exact workspace config can override them.
+Configuration is loaded in this order: `~/.nexus/config.toml`, the exact
+workspace's `nexus.toml`, legacy `.nexus/nexus.toml`, then `.agents/nexus.toml`
+(highest precedence). Parent directories and Git roots do not contribute
+configuration, so global model and agent defaults apply consistently regardless
+of the current working directory; an exact workspace config can override them.
 
 On first launch without a connected global provider/model, `SetupStatus` offers
 packaged candidate models and local connection instructions. `SetupSave`
@@ -97,6 +97,19 @@ to `~/.nexus/config.toml`; restart the daemon to route turns through it.
 
 The browser may send any command except `Shutdown` and `WebLaunch` (`host/web.py`).
 
+### Durable and machine state
+
+All projects share the append-only SQLite database at `~/.nexus/nexus.db`;
+record rows retain the existing encoded record format, and JSONL is available
+only as an export format. Per-project locks and machine state (cache, logs,
+staging, and extension trash) live under `~/.nexus/locks/` and
+`~/.nexus/projects/<project-hash>/`; the shared models.dev cache lives at
+`~/.nexus/cache/`. Project extensions and project settings are stored in
+`<workspace>/.agents/`. Existing `<workspace>/.nexus/` extensions and settings
+are read as a lower-precedence legacy fallback, with writes going to `.agents/`.
+Legacy session and trash directories are not imported; export sessions before
+switching to this storage if they need to be retained.
+
 ## The loop, briefly
 
 `core/loop.py` refreshes the extension manifest on every iteration, so tools
@@ -120,3 +133,17 @@ shows a provider number whenever one exists.
 - Scripted runs: `ScriptedProvider(text_response(...), tool_response(("id", "Edit", {...})), [MessageStart(...), TextDelta(...), Wait(event), ...])`. Each script is consumed once, in order, across all sessions.
 - Full stack in-process: `Runtime(path, config=Config(...), providers={"scripted": provider})`, wrapped in `Daemon(workspace, socket_path=..., runtime_factory=...)`. See `tests/playwright_web_check.py` `main()` for a complete example. **macOS limits Unix socket paths to about 104 bytes**, so keep `socket_path` short or relative.
 - Useful suites: `test_core_*`, `test_session_*`, `test_context_*`, `test_model_*`, `test_tool*`, `test_builtin_*`, `test_mcp_*`, `test_host_*`, `test_view_reduce.py`, `test_layering.py`, `test_phase3_exit.py`.
+
+## Dev mode and mock scenarios (`nexus/devtools/`)
+
+`nexus --dev` / `NEXUS_DEV=1` swaps the workspace for a seeded sandbox under an
+isolated home and registers `MockProvider` (`mock/<scenario>` models). The
+provider is stateless: the actor comes from a `⟦mock …⟧` directive in the first
+user message and the step from the number of assistant messages, so parallel
+subagents, forks and replays all work. A request without a directive fails
+closed. Scenarios are data (`devtools/mock/scenarios/`, DSL in `dsl.py`);
+tools run for real inside the sandbox and never touch the network.
+
+Host contract: `MockList`, `MockStart`, `MockClean` (errors outside dev mode),
+`HealthResult.dev`. Headless: `nexus mock list|run NAME|all|clean`. Tests:
+`tests/test_mock_scenarios.py`, `test_mock_host.py`, `test_mock_tui.py`.

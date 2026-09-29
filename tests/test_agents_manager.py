@@ -558,14 +558,14 @@ def test_deleted_seed_is_not_recreated_but_falls_back_to_builtin(tmp_path):
     assert not target.exists()
 
 
-def test_untouched_legacy_seeds_are_retired_once_and_edited_ones_kept(tmp_path):
+def test_untouched_current_seeds_are_retired_once_and_edited_ones_kept(tmp_path):
     import json
     import os
 
     from nexus.config.paths import project_state_dir
 
     workspace = tmp_path / "ws"
-    agents_dir = workspace / ".nexus" / "agents"
+    agents_dir = workspace / ".agents" / "agents"
     old_build = write_agent(agents_dir, "build", description="old", body="OLD")
     edited = write_agent(agents_dir, "general", description="mine", body="EDITED")
     marker = agents_dir / SEED_MARKER_NAME
@@ -580,15 +580,51 @@ def test_untouched_legacy_seeds_are_retired_once_and_edited_ones_kept(tmp_path):
     assert list(trash_root.glob("*/build.md"))
     assert mgr.require("build").source is AgentSource.BUILTIN
     # The retired copy never lands back in the project.
-    assert not (workspace / ".nexus" / "trash").exists()
+    assert not (workspace / ".agents" / "trash").exists()
     assert (
         edited.exists()
-        and mgr.require("general").source is AgentSource.WORKSPACE_LEGACY
+        and mgr.require("general").source is AgentSource.WORKSPACE
     )
     state = json.loads(marker.read_text())
     assert state["version"] == SEED_VERSION and state["retired"] == ["build"]
     # A second run is a no-op.
     assert retire_seeded_roles(workspace) == ()
+
+
+def test_manager_construction_leaves_legacy_seeded_roles_untouched(tmp_path):
+    import json
+    import os
+
+    workspace = tmp_path / "ws"
+    agents_dir = workspace / ".nexus" / "agents"
+    old_build = write_agent(agents_dir, "build", description="old", body="OLD")
+    marker = agents_dir / SEED_MARKER_NAME
+    marker.write_text(
+        json.dumps({"version": 1, "seeded": ["build"]}), encoding="utf-8"
+    )
+    stamp = marker.stat().st_mtime
+    os.utime(old_build, (stamp, stamp))
+    original_marker = marker.read_bytes()
+    original_role = old_build.read_bytes()
+
+    manager = AgentManager.for_workspace(workspace)
+
+    assert old_build.read_bytes() == original_role
+    assert marker.read_bytes() == original_marker
+    assert manager.require("build").source is AgentSource.WORKSPACE_LEGACY
+
+
+def test_default_user_agents_are_discovered_from_nexus_home(tmp_path, monkeypatch):
+    nexus_home = tmp_path / "nexus-home"
+    user_agents = nexus_home / "agents"
+    write_agent(user_agents, "user-role", body="USER ROLE")
+    monkeypatch.setenv("NEXUS_HOME", str(nexus_home))
+
+    manager = AgentManager.for_workspace(tmp_path / "ws")
+
+    agent = manager.require("user-role")
+    assert agent.source is AgentSource.USER
+    assert agent.path == user_agents / "user-role.md"
 
 
 def test_marker_alone_prevents_seeding(tmp_path):

@@ -50,6 +50,12 @@ Textual is pinned (`textual==8.2.8`, `textual-diff-view==0.1.5` in `pyproject.to
 | `ui/cli/commands.py` | Slash commands as data (`SPECS`, `BY_NAME`, `parse`, `help_text`). The TUI palette and the CLI share it. |
 | `ui/cli/details.py` | `detail_lines(session, view)`, used by `/details` and the status line. |
 
+Project-scoped settings and extensions are written under `<workspace>/.agents/`;
+existing `.nexus/` project extensions and settings remain readable as a
+lower-precedence fallback. Session records for all workspaces are stored in the
+shared `~/.nexus/nexus.db` database, while caches and logs are machine state
+under `~/.nexus/`.
+
 ## Look
 
 - A one-row top bar spans the shell: `▌` toggles the sessions sidebar (`ctrl+b`), then the session title (`New session` before the first message), the session status, `+` for a new session, and `▐` for the details sidebar (`ctrl+l`). Toggles are accent-colored while their panel is visible.
@@ -79,3 +85,19 @@ Textual is pinned (`textual==8.2.8`, `textual-diff-view==0.1.5` in `pyproject.to
 - Against a scripted model through the real stack: `tests/mock_llm_serve.py` and `tests/playwright_mock_llm_check.py`.
 - Screenshots against a live scripted daemon: run the app with `app.run_test(size=(200, 55))`, call `app.export_screenshot()` (SVG), and render it to PNG with Playwright. This is more reliable than textual-serve for layout checks.
 - The layering rule (`tests/test_ui_layering.py`) keeps Textual imports inside `ui/tui/` and `ui_support/`, and caps the pure-client files (`ui/cli/`, `jsonl.py`, `tui/app.py`) at 2,400 lines. Put new shell behavior in its own `ui/tui/` module, as `panels.py` does. The whole `ui/` budget is 5,000 physical lines (`tests/test_phase3_exit.py`).
+
+## Dev mode and `/mock`
+
+`nexus --dev chat` (or `NEXUS_DEV=1`) runs the shell against an isolated home
+(`~/.nexus/dev`) and a seeded sandbox workspace, never your real one. `/mock`
+exists only in dev mode (`commands.DEV_SPECS`, added to `SPECS` at import when
+`NEXUS_DEV` is set):
+
+- `/mock` lists scenarios; `/mock NAME [--speed N] [--seed N]` starts one in a
+  new `mock-NAME-N` session, switches to it and follows the live run
+  (`ui/tui/mock.py`, routed through `ExtraCommandsMixin`); `/mock clean`
+  restores the sandbox.
+- Every scenario ends with an in-band `✓ mock verdict — …` message.
+- Setup is never required in dev mode (mock models need no provider).
+
+See `plans/MOCK_PLAN.md` and `nexus/devtools/mock/`.

@@ -4,7 +4,7 @@ These tests drive the whole hot-extension flow through a real ``Runtime`` and an
 offline scripted provider, covering the plan section 6.5 walkthrough and the
 P4-H additions:
 
-* the model reads ``.nexus/tools/_template.py``, ``WriteTool`` authors a valid
+* the model reads ``.agents/tools/_template.py``, ``WriteTool`` authors a valid
   extension, ``ReloadExtensions`` swaps it in, the *next* iteration advertises
   it, the permission gate asks first, and the tool runs -- all in one turn;
 * a broken extension reload is a model-visible error, the previous manifest
@@ -87,7 +87,7 @@ def make_runtime(tmp_path, provider, *, config=None, home=None) -> Runtime:
     )
 
 
-def write_tool(tmp_path, name, *, source, subdir=".nexus/tools"):
+def write_tool(tmp_path, name, *, source, subdir=".agents/tools"):
     tools = tmp_path / subdir
     tools.mkdir(parents=True, exist_ok=True)
     (tools / f"{name}.py").write_text(source, encoding="utf-8")
@@ -101,7 +101,7 @@ def write_skill(
     allowed=None,
     bundles=None,
     tools=None,
-    subdir=".nexus/skills",
+    subdir=".agents/skills",
 ):
     directory = root / subdir / name
     directory.mkdir(parents=True, exist_ok=True)
@@ -189,7 +189,7 @@ async def drain(session, *, deny=()):
 async def test_walkthrough_read_template_write_reload_call(tmp_path):
     provider = ScriptedProvider(
         tool_response(
-            ("r1", "Read", {"path": f".nexus/tools/{TOOL_TEMPLATE_FILENAME}"})
+            ("r1", "Read", {"path": f".agents/tools/{TOOL_TEMPLATE_FILENAME}"})
         ),
         tool_response(
             ("w1", "WriteTool", {"filename": "metrics_query.py", "content": METRICS_SOURCE})
@@ -483,6 +483,7 @@ async def test_deleting_workspace_skill_falls_back_to_user_tools(tmp_path):
         "reader",
         description="user",
         tools={"user_ping.py": tool_source("UserPing", body="user-pong")},
+        subdir=".nexus/skills",
     )
     runtime = Runtime(
         workspace,
@@ -496,7 +497,7 @@ async def test_deleting_workspace_skill_falls_back_to_user_tools(tmp_path):
     # Deleting the workspace skill reveals the user skill and its bundled tool.
     import shutil
 
-    shutil.rmtree(workspace / ".nexus" / "skills" / "reader")
+    shutil.rmtree(workspace / ".agents" / "skills" / "reader")
     await runtime.extensions.reload(trigger="test")
     assert runtime.manifest.skills["reader"].description == "user"
     assert runtime.manifest.skill_tools["reader"].tool_names == ("UserPing",)
@@ -689,10 +690,10 @@ async def test_config_system_files_and_skills_are_hot_next_iteration(tmp_path):
     assert "SOUL-A" in provider.requests[0].system
     assert "SOUL-B" in provider.requests[1].system
     assert "reader: read things" in provider.requests[1].system
-    assert len(provider.requests[0].tools) == 15
+    assert len(provider.requests[0].tools) == 16
     next_tools = set(names(provider.requests[1]))
     assert next_tools == {
-        "read", "glob", "grep", "subagent", "todowrite", "question", "webfetch", "skill"
+        "read", "glob", "grep", "subagent", "todowrite", "question", "webfetch", "websearch", "skill"
     }
     assert not (next_tools & {"write", "edit", "multiedit", "bash"})
     await runtime.aclose()
@@ -707,7 +708,7 @@ async def test_template_is_seeded_ignored_and_never_overwritten(tmp_path):
     runtime = make_runtime(tmp_path, ScriptedProvider(text_response("ok")))
     await runtime.ensure_started()
 
-    template = tmp_path / ".nexus" / "tools" / TOOL_TEMPLATE_FILENAME
+    template = tmp_path / ".agents" / "tools" / TOOL_TEMPLATE_FILENAME
     assert template.is_file()
     assert "SPEC" in template.read_text(encoding="utf-8")
     # Ignored by the loader: never a tool and never a loaded module.

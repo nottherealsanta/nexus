@@ -420,6 +420,27 @@ class Health(msgspec.Struct, tag=True, frozen=True):
     """Daemon-level liveness and scheduling counters."""
 
 
+class MockList(msgspec.Struct, tag=True, frozen=True):
+    """List the mock scenarios (dev mode only; MOCK_PLAN §4.1)."""
+
+
+class MockStart(msgspec.Struct, tag=True, frozen=True):
+    """Start a scripted mock scenario in a new session (dev mode only).
+
+    ``speed`` scales streaming/tool pacing (``0`` is instant); ``seed`` fixes
+    jitter. ``session`` may name the session; the host generates one otherwise.
+    """
+
+    scenario: str
+    speed: float = 1.0
+    seed: int = 0
+    session: str = ""
+
+
+class MockClean(msgspec.Struct, tag=True, frozen=True):
+    """Restore the dev sandbox workspace to its seeded state (dev mode only)."""
+
+
 class Shutdown(msgspec.Struct, tag=True, frozen=True):
     reason: str = ""
 
@@ -493,6 +514,9 @@ Command = (
     | WorktreeDiscard
     | Doctor
     | Health
+    | MockList
+    | MockStart
+    | MockClean
     | WebLaunch
     | Shutdown
 )
@@ -557,6 +581,9 @@ COMMANDS: tuple[type, ...] = (
     WorktreeDiscard,
     Doctor,
     Health,
+    MockList,
+    MockStart,
+    MockClean,
     WebLaunch,
     Shutdown,
 )
@@ -1011,6 +1038,32 @@ class HealthResult(msgspec.Struct, tag=True, frozen=True):
     max_concurrent: int = 0
     viewers: int = 0
     uptime: float = 0.0
+    #: Dev mode (isolated home, sandbox workspace, ``/mock``); MOCK_PLAN §3.1.
+    dev: bool = False
+
+
+class MockScenarioInfo(msgspec.Struct, frozen=True):
+    name: str
+    summary: str
+    tags: list[str] = msgspec.field(default_factory=list)
+    est_seconds: int = 0
+    interactive: bool = False
+    slow: bool = False
+
+
+class MockListResult(msgspec.Struct, tag=True, frozen=True):
+    scenarios: list[MockScenarioInfo] = msgspec.field(default_factory=list)
+
+
+class MockStartResult(msgspec.Struct, tag=True, frozen=True):
+    session: str
+    scenario: str
+    turn_id: str = ""
+    interactive: bool = False
+
+
+class MockCleanResult(msgspec.Struct, tag=True, frozen=True):
+    restored: bool = True
 
 
 class ShutdownResult(msgspec.Struct, tag=True, frozen=True):
@@ -1087,6 +1140,9 @@ Result = (
     | WorktreeMutationResult
     | DoctorResult
     | HealthResult
+    | MockListResult
+    | MockStartResult
+    | MockCleanResult
     | WebLaunchResult
     | ShutdownResult
     | ErrorResult
@@ -1152,6 +1208,9 @@ RESULTS: tuple[type, ...] = (
     WorktreeMutationResult,
     DoctorResult,
     HealthResult,
+    MockListResult,
+    MockStartResult,
+    MockCleanResult,
     WebLaunchResult,
     ShutdownResult,
     ErrorResult,
@@ -1223,6 +1282,13 @@ __all__ = [
     "LogEntry",
     "LogsRead",
     "LogsReadResult",
+    "MockClean",
+    "MockCleanResult",
+    "MockList",
+    "MockListResult",
+    "MockScenarioInfo",
+    "MockStart",
+    "MockStartResult",
     "ModelSelect",
     "ModelSelectResult",
     "ModelShow",

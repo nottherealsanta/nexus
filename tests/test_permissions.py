@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
 from nexus.config import Config
+from nexus.config.paths import state_db_path
 from nexus.config.schema import ConfigV2, PermissionsSection
 from nexus.tools.builtin import read as read_tool
 from nexus.tools.permissions import (
@@ -928,6 +930,66 @@ def test_write_root_wins_over_allow_rule(tmp_path):
     evaluation = engine.evaluate(call("Write", path=str(outside / "x")), spec)
     assert evaluation.outcome is Outcome.DENY
     assert evaluation.code == "write_root"
+
+
+@pytest.mark.parametrize("for_write", [False, True])
+def test_path_guard_always_protects_shared_state_database(
+    tmp_path, monkeypatch, for_write
+):
+    nexus_home = tmp_path / "nexus-home"
+    workspace = tmp_path / "workspace"
+    nexus_home.mkdir()
+    workspace.mkdir()
+    monkeypatch.setenv("NEXUS_HOME", str(nexus_home))
+
+    database = state_db_path()
+    database.touch()
+    sidecars = [Path(f"{database}-wal"), Path(f"{database}-shm")]
+    for sidecar in sidecars:
+        sidecar.touch()
+    alias = nexus_home / "database-alias.db"
+    alias.symlink_to(database)
+
+    guard = PathGuard(workspace, write_roots=[str(tmp_path)])
+    for protected in (database, *sidecars, alias):
+        with pytest.raises(PathSecurityError) as exc_info:
+            guard.resolve(str(protected), for_write=for_write)
+        assert exc_info.value.code == "state_db"
+
+    # The basename alone is not special: project files with this name remain
+    # governed by the configured roots and normal settings-scope policy.
+    project_db = workspace / "nexus.db"
+    project_db.touch()
+    assert guard.resolve(str(project_db), for_write=for_write).absolute == project_db
+
+
+@pytest.mark.parametrize("for_write", [False, True])
+def test_path_guard_protects_explicit_home_database_after_worktree_rebase(
+    tmp_path, for_write
+):
+    home = tmp_path / "explicit-home"
+    state_dir = home / ".nexus"
+    parent = tmp_path / "parent"
+    child = tmp_path / "child"
+    state_dir.mkdir(parents=True)
+    parent.mkdir()
+    child.mkdir()
+
+    database = state_db_path(home)
+    database.touch()
+    sidecars = [Path(f"{database}-wal"), Path(f"{database}-shm")]
+    for sidecar in sidecars:
+        sidecar.touch()
+    alias = state_dir / "database-alias.db"
+    alias.symlink_to(database)
+
+    guard = PathGuard(parent, write_roots=[str(tmp_path)], home=home).for_worktree(
+        child
+    )
+    for protected in (database, *sidecars, alias):
+        with pytest.raises(PathSecurityError) as exc_info:
+            guard.resolve(str(protected), for_write=for_write)
+        assert exc_info.value.code == "state_db"
 
 
 def test_worktree_guard_preserves_absolute_permission_denies_without_rewriting_rules(

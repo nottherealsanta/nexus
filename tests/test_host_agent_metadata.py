@@ -34,7 +34,7 @@ def _config(*, agent: str, model: str | None) -> Config:
 
 
 def _write_agent(root, name: str, *, extra: str = "") -> None:
-    directory = root / ".nexus" / "agents"
+    directory = root / ".agents" / "agents"
     directory.mkdir(parents=True, exist_ok=True)
     (directory / f"{name}.md").write_text(
         "---\n"

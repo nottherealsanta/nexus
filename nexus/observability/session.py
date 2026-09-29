@@ -3,23 +3,14 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from pathlib import Path
 from typing import Any
 
-import msgspec
-
-from ..session.store import (
-    SESSION_LOG_VERSION,
-    EventRecord,
-    SessionRecord,
-)
+from ..session.records import EventRecord
 
 MAX_SESSION_LOG_PAGE = 100
 # A poll never inspects more than this many persisted records, even when a
 # session has a very long history or the supplied cursor is far behind.
 SESSION_LOG_SCAN_WINDOW = 4096
-SESSION_LOG_READ_BYTES = 1024 * 1024
-SESSION_LOG_MAX_RECORD_BYTES = 64 * 1024
 
 # Event fields are deliberately not interpolated. In particular, tool names,
 # error text, permission previews, and all message/thinking payloads stay private.
@@ -122,9 +113,11 @@ def read_session_page(
         if latest_seq is not None and count and cursor >= _record_seq(records[-1]):
             return {
                 "entries": [],
-                "next_cursor": latest_seq,
+                # The watermark may include records appended after this bounded
+                # read. Keep the caller's cursor until those records are read.
+                "next_cursor": cursor,
                 "truncated": False,
-                "has_more": False,
+                "has_more": cursor < latest_seq,
             }
         if truncated:
             start = window_start
@@ -170,7 +163,10 @@ def read_session_page(
             }
         )
 
-    if not tail and stop < count and not has_more:
+    if not tail and not has_more and (
+        stop < count
+        or (latest_seq is not None and count and latest_seq > _record_seq(records[-1]))
+    ):
         has_more = True
     if tail:
         # Tail reads return the newest diagnostics in the bounded window, in
@@ -204,12 +200,8 @@ def read_session_page(
             if len(tail_entries) > limit:
                 break
         entries = list(reversed(tail_entries[:limit]))
-        scanned_to = (
-            latest_seq
-            if latest_seq is not None
-            else (_record_seq(records[-1]) if count else 0)
-        )
-        has_more = False
+        scanned_to = _record_seq(records[-1]) if count else (latest_seq or 0)
+        has_more = bool(latest_seq is not None and latest_seq > scanned_to)
     return {
         "entries": entries,
         "next_cursor": scanned_to,
@@ -221,94 +213,60 @@ def read_session_page(
 def session_records(
     handle: Any | None, *, store: Any | None = None, session_id: str | None = None
 ) -> tuple[Sequence[Any], bool, int | None]:
-    """Return an already-loaded log or a bounded tail from a validated handle.
+    """Return cached records or a bounded SQLite tail for host diagnostics.
 
-    ``Session.read()`` may reload and parse an arbitrarily large JSONL file after
-    each append invalidates its cache. Prefer its current cache; otherwise read a
-    bounded byte tail through the session manager's store path. The facade
-    validates existence and obtains any live handle from that manager without
-    opening, creating, migrating, or recovering the session.
+    Prefer a live handle's already-loaded cache. Otherwise use the store's
+    bounded record-tail API. Store sequence metadata, when available, supplies
+    the authoritative pagination boundary. A deliberately injected fake handle
+    may expose records directly. The facade validates existence and obtains any
+    live handle from that manager without opening, creating, migrating, or
+    recovering the session.
     """
-    cached = getattr(handle, "_read", None)
-    if cached is not None and isinstance(getattr(cached, "records", None), tuple):
-        return (
-            cached.records,
-            bool(getattr(cached, "truncated_tail", False)),
-            _record_seq(cached.records[-1]) if cached.records else 0,
-        )
     store = store if store is not None else getattr(handle, "_store", None)
     session_id = session_id if session_id is not None else getattr(handle, "id", None)
-    log_path = getattr(store, "log_path", None)
-    if not isinstance(session_id, str) or not callable(log_path):
-        # A deliberately injected fake/session adapter may expose only records.
-        records = getattr(handle, "records", ()) if handle is not None else ()
+    cached = getattr(handle, "_read", None)
+    if cached is not None and isinstance(getattr(cached, "records", None), tuple):
+        records = cached.records
+        return (
+            records,
+            bool(getattr(cached, "truncated_tail", False)),
+            _latest_store_seq(
+                store,
+                session_id,
+                _record_seq(records[-1]) if records else 0,
+            ),
+        )
+    read_tail = getattr(store, "read_tail", None)
+    if isinstance(session_id, str) and callable(read_tail):
+        result = read_tail(session_id, max_records=SESSION_LOG_SCAN_WINDOW)
+        records = getattr(result, "records", ())
         records = records if isinstance(records, (tuple, list)) else ()
-        return records, False, _record_seq(records[-1]) if records else 0
-    path = Path(log_path(session_id))
-    try:
-        with path.open("rb") as stream:
-            size = stream.seek(0, 2)
-            start = max(0, size - SESSION_LOG_READ_BYTES)
-            stream.seek(start)
-            payload = stream.read(SESSION_LOG_READ_BYTES)
-    except OSError:
-        return (), False, 0
-    clipped = start > 0
-    lines = payload.splitlines()
-    if clipped and lines:
-        lines = lines[1:]  # discard a possible partial first JSONL record
-    unterminated_tail = bool(payload and not payload.endswith(b"\n"))
-    if unterminated_tail and lines:
-        # SessionStore treats an invalid final fragment as a crash tail. A
-        # complete record without its newline remains a valid record.
-        try:
-            _decode_record(lines[-1])
-        except (msgspec.DecodeError, msgspec.ValidationError, ValueError):
-            lines.pop()
-            clipped = True
-    records: list[Any] = []
-    skipped_window = len(lines) > SESSION_LOG_SCAN_WINDOW
-    for line in lines[-SESSION_LOG_SCAN_WINDOW:]:
-        if not line or len(line) > SESSION_LOG_MAX_RECORD_BYTES:
-            if line and len(line) > SESSION_LOG_MAX_RECORD_BYTES:
-                clipped = True
-            continue
-        try:
-            record = _decode_record(line)
-            records.append(record)
-        except (msgspec.DecodeError, msgspec.ValidationError, ValueError):
-            clipped = True
-            continue
-    latest_seq: int | None = None
-    if size == 0:
-        latest_seq = 0
-    elif not payload or unterminated_tail and not lines:
-        # No valid boundary is available after a discarded crash tail.
-        latest_seq = _record_seq(records[-1]) if records else None
-    else:
-        final_line = payload.rstrip(b"\n").rsplit(b"\n", 1)[-1]
-        if len(final_line) <= SESSION_LOG_MAX_RECORD_BYTES:
-            try:
-                # Cursor metadata may still be trustworthy when a supported
-                # typed decode rejects only the envelope version.
-                latest_seq = _record_seq(
-                    msgspec.json.decode(final_line, type=SessionRecord)
-                )
-            except (msgspec.DecodeError, msgspec.ValidationError, ValueError):
-                latest_seq = None
-    if unterminated_tail and latest_seq is None and records:
-        # The unterminated fragment was discarded, but prior decoded records
-        # still provide a safe cursor boundary for the valid prefix.
-        latest_seq = _record_seq(records[-1])
-    return records, bool(clipped or skipped_window or unterminated_tail and latest_seq is None), latest_seq
+        latest_seq = _latest_store_seq(
+            store, session_id, _record_seq(records[-1]) if records else 0
+        )
+        clipped = bool(
+            (records and _record_seq(records[0]) > 1)
+            or (not records and latest_seq > 0)
+        )
+        return records, clipped, latest_seq
+
+    # A deliberately injected fake/session adapter may expose only records.
+    records = getattr(handle, "records", ()) if handle is not None else ()
+    records = records if isinstance(records, (tuple, list)) else ()
+    latest_seq = _latest_store_seq(
+        store, session_id, _record_seq(records[-1]) if records else 0
+    )
+    return records, False, latest_seq
 
 
-def _decode_record(raw: bytes) -> SessionRecord:
-    """Decode only envelopes supported by this session-log reader."""
-    record = msgspec.json.decode(raw, type=SessionRecord)
-    if record.v != SESSION_LOG_VERSION:
-        raise ValueError("unsupported session log version")
-    return record
+def _latest_store_seq(store: Any, session_id: Any, fallback: int) -> int:
+    """Return the store's inclusive latest sequence when it exposes a watermark."""
+    next_seq = getattr(store, "next_seq", None)
+    if isinstance(session_id, str) and callable(next_seq):
+        value = next_seq(session_id)
+        if type(value) is int and value >= 1:
+            return value - 1
+    return fallback
 
 
 def _record_seq(record: Any) -> int:

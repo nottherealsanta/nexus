@@ -92,3 +92,14 @@ def test_built_wheel_contains_catalogue_and_notice(tmp_path: Path):
     assert "models.dev" in notice
     assert b"pending" not in payload.lower()
     assert b'"logo' not in payload.lower()
+
+
+def test_built_wheel_ships_web_tui_and_agent_assets(tmp_path: Path):
+    """A one-line install must not lose the browser client, TUI styles, or agents."""
+    wheel = _build_wheel(tmp_path)
+    with zipfile.ZipFile(wheel) as archive:
+        names = archive.namelist()
+    assert "nexus/ui/web/index.html" in names
+    assert "nexus/ui/web/js/app.js" in names
+    assert any(n.startswith("nexus/ui/tui/") and n.endswith(".tcss") for n in names)
+    assert any(n.startswith("nexus/agents/data/") and n.endswith(".md") for n in names)

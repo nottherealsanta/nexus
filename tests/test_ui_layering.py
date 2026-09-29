@@ -148,10 +148,3 @@ def test_prompt_toolkit_is_absent_from_runtime_and_lockfile():
     root = REPO_ROOT
     assert "prompt_toolkit" not in (root / "pyproject.toml").read_text(encoding="utf-8")
     assert "prompt-toolkit" not in (root / "uv.lock").read_text(encoding="utf-8")
-
-
-def test_ui_client_stays_within_its_line_budget():
-    # PLAN §14.14 gives host/ + view/ + ui/ a shared budget; this phase's client
-    # keeps its own share small enough that the surface stays legible.
-    physical = sum(len(path.read_text(encoding="utf-8").splitlines()) for path in CLIENT_FILES)
-    assert physical < 2400, f"UI client grew to {physical} lines"

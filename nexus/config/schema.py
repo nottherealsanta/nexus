@@ -587,16 +587,15 @@ class ToolsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 class WebSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     """Limits and destinations for web tools (``[tools.web]``).
 
-    Search is available only when an HTTPS SearXNG instance is configured, and
-    each configured SearXNG origin must also appear in ``allowed_origins``.
-    HTTP instances are never accepted through config; tests that need an
-    insecure local service must inject that service directly. ``allowed_origins``
-    is an optional public HTTP(S) origin allowlist for WebFetch: when empty, any
-    safe public origin may be fetched directly; when set, it limits requested
-    origins. Fetch approvals permit same-origin redirects only. DNS results
-    still require runtime validation by the outbound service.
+    Local search uses a fixed endpoint in its isolated client and cannot be
+    redirected through URL settings. Remote SearXNG instances remain opt-in and
+    must use HTTPS; their public origins are validated separately by the
+    outbound service. ``allowed_origins`` is the optional public HTTP(S) origin
+    allowlist for WebFetch. Fetch approvals permit same-origin redirects only.
+    DNS results still require runtime validation by the outbound service.
     """
 
+    local_search_enabled: bool = True
     searxng_instances: list[str] = msgspec.field(default_factory=list)
     allowed_origins: list[str] = msgspec.field(default_factory=list)
     fetch_enabled: bool = True
@@ -608,12 +607,15 @@ class WebSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
     @property
     def search_available(self) -> bool:
-        return bool(self.searxng_instances)
+        return self.local_search_enabled or bool(self.searxng_instances)
 
     @property
     def search_unavailable_reason(self) -> str | None:
-        if not self.searxng_instances:
-            return "No HTTPS SearXNG instance is configured in tools.web.searxng_instances."
+        if not self.search_available:
+            return (
+                "Local search is disabled and no HTTPS SearXNG instance is "
+                "configured in tools.web.searxng_instances."
+            )
         return None
 
     def __post_init__(self) -> None:

@@ -6,9 +6,10 @@ changes sorted by path, and the first call only establishes a baseline.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Literal
+from typing import Literal
 
 ChangeKind = Literal["created", "changed", "deleted"]
 
@@ -83,4 +84,4 @@ class DirectoryWatcher:
         return dict(self._state)
 
 
-__all__ = ["DirectoryWatcher", "FileState", "Change", "ChangeKind"]
+__all__ = ["Change", "ChangeKind", "DirectoryWatcher", "FileState"]

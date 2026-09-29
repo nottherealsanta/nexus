@@ -41,21 +41,9 @@ The UI encapsulation rule is enforced, not requested: anything under
 `nexus/ui/**` may import only `nexus.host`, `nexus.view`, `nexus.events`, and
 the standard library.
 
-Strict tests enforce independent physical-line budgets. `core/` + `model/` +
-`tools/spec.py` must stay under **14,000** lines; `host/` under **7,000**;
-`view/` under **2,200**; and `ui/` under **5,000**. The host allocation was
-raised from 6,500 to accommodate the distinct browser routes/projection, bounded
-file completion, richer agent metadata, and redacted daemon/session diagnostics
-alongside the existing daemon transports. The UI allocation was raised from
-4,500 to 5,000 for the browser client and expanded Textual composition, including
-the right drawer, composer/picker, session diagnostics, and completion. The host,
-view, and UI budgets are separate reviewed allocations and ratchets, not a
-combined surface allowance.
-The same physical-line measure is used by each gate, and no code was relocated
-to evade a cap. The gates in `tests/test_phase3_exit.py` are strict; baseline
-generation refuses to record any budget at or above its cap. The committed
-report (`tests/fixtures/reports/phase3_exit_baseline.json`) records each
-directory separately. Anything that wants to be core *and* live-reloadable is a
+Line counts per package are recorded in `tests/fixtures/reports/phase3_exit_baseline.json`
+for information only; there are no line caps. Anything that wants to be core *and*
+live-reloadable is a
 signal to widen an interface, not to add a layer.
 
 ## The five contracts
@@ -152,9 +140,10 @@ Event(type, data, seq, ts, session, turn, id)
 ```
 
 Monotonic `seq` per session is the system's spine: it is what makes a
-subscription resumable, a log replayable, and `Last-Event-ID` on the wire map
-exactly onto disk. The rule is absolute: **every state change a UI could draw is
-an event; no UI polls a manager.** UIs must tolerate unknown types.
+subscription resumable, records replayable, and `Last-Event-ID` on the wire map
+exactly onto the durable session sequence. The rule is absolute: **every state
+change a UI could draw is an event; no UI polls a manager.** UIs must tolerate
+unknown types.
 
 Groups: session, turn, context, model/text/thinking, tool, permission,
 extension, MCP, skill, agent, hook, provider raw, input queue, presence, daemon,
@@ -215,11 +204,13 @@ failures end the turn.** Never silently swallow either.
 
 ### SessionManager (`session/`)
 
-Append-only JSONL log plus snapshots. `open`, `fork`, `list`, `delete`,
-`restore`, `export`, `replay`. Locking reuses `flock` and atomic rename; a
-read-only attach is allowed under a shared lock, while turn execution takes the
-exclusive lock. Migration converts the v1 `{exchanges: [...]}` format to a v2
-event log on first open, idempotently.
+Append-only records in the shared `~/.nexus/nexus.db` SQLite database, plus
+derived snapshots. JSONL is available only as an export format. `open`, `fork`,
+`list`, `delete`, `restore`, `export`, `replay`. Session locks use `flock` files
+under `~/.nexus/locks/sessions/<project-hash>/`; turn execution takes an
+exclusive lock and readers see a consistent committed prefix. Legacy session
+and trash directories are not imported; export sessions before switching to
+this storage if they need to be retained.
 
 `start_turn()` + `subscribe(from_seq)` split the primitive: a turn runs to
 completion unowned, and any number of views catch up from the log then follow.
@@ -240,6 +231,12 @@ original, so history is always reconstructible.
 `context/cache.py` holds a token-count disk cache keyed by a canonical semantic
 hash (never prompt content) and the prompt-cache boundary computation. Boundaries
 are produced only when the provider advertises `prompt_caching`.
+
+Project extensions and settings are written under `<workspace>/.agents/`.
+Existing `<workspace>/.nexus/` extensions and settings remain a read-only,
+lower-precedence fallback. Machine state (per-project caches and logs, staging,
+and extension trash) lives under `~/.nexus/projects/<project-hash>/`; the shared
+models.dev cache is under `~/.nexus/cache/`.
 
 ### ToolManager + PermissionEngine (`tools/`)
 

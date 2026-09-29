@@ -16,9 +16,9 @@ from nexus.config.schema import (
     PermissionsSection,
     ProviderSection,
 )
+from nexus.context.manager import ContextManager
 from nexus.host import HostFacade
 from nexus.host import protocol as p
-from nexus.context.manager import ContextManager
 from nexus.model.capabilities import Capabilities
 from nexus.model.message import Message, Text
 from nexus.model.providers.openai import (

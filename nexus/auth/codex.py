@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import hmac
 import html
-import hashlib
 import json
 import math
 import secrets
@@ -20,13 +20,17 @@ import webbrowser
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlencode
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import httpx
 
 from ..errors import ProviderError
-from .store import CredentialRecord, CredentialStore, KeyringCredentialStore, validate_profile
+from .store import (
+    CredentialRecord,
+    CredentialStore,
+    KeyringCredentialStore,
+    validate_profile,
+)
 
 ISSUER = "https://auth.openai.com"
 CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -260,7 +264,7 @@ class CodexOAuthManager:
             code = await asyncio.wait_for(result, timeout=300)
             token = await self._token({"grant_type": "authorization_code", "code": code, "code_verifier": verifier, "redirect_uri": REDIRECT_URI})
             await self._persist_login(token)
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             raise ProviderError("codex: browser login timed out") from exc
         finally:
             server.close()

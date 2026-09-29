@@ -13,7 +13,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, TextIO
 
 from .render import sanitize
-from ...host_support.approval import (
+from ...host_support.approval import (  # noqa: F401  (re-exported for callers and tests)
     MAX_PERMISSION_TARGETS,
     MAX_PERMISSION_TARGET_REQUEST_CHARS,
     MAX_PERMISSION_TARGET_ROLE_CHARS,

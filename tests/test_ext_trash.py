@@ -9,8 +9,9 @@ require:
   refused, and nothing outside the managed tree is ever deleted;
 * **symlink/path-traversal protection** -- a symlinked candidate, a ``..``
   escape, a null byte, and a symlinked component below a root all fail closed;
-* **atomic move + retention metadata** -- the file lands in ``.nexus/trash/
-  extensions`` with a durable record whose hash/retention match the removal;
+* **atomic move + retention metadata** -- the file lands in the per-project
+  machine-state ``trash/extensions`` directory with a durable record whose
+  hash/retention match the removal;
 * **failure rollback** -- a failed metadata write or an aborted rebuild leaves
   the original file exactly where it was;
 * **pin-aware generation lifecycle** -- a live lease keeps the retired module
@@ -31,6 +32,7 @@ import msgspec
 import pytest
 
 from nexus.config import Config
+from nexus.config.paths import project_state_dir
 from nexus.config.schema import (
     AgentSection,
     ConfigV2,
@@ -69,7 +71,7 @@ def make_config(*, dirs: list[str] | None = None, enabled: bool = True) -> Confi
             ext=ExtSection(
                 enabled=enabled,
                 watch_interval_ms=0,
-                dirs=dirs or [".nexus/tools", "~/.nexus/tools"],
+                dirs=dirs or [".agents/tools", ".nexus/tools", "~/.nexus/tools"],
                 quarantine=False,
                 max_file_bytes=100_000,
             )
@@ -118,14 +120,13 @@ def make_manager(
             root=workspace,
             stage_root=tmp_path / "stage",
         ),
-        trash_dir=tmp_path / "ext-trash",
         retention_seconds=3600.0,
     )
     return manager, box, workspace, home
 
 
 def tool_dir(root: Path) -> Path:
-    return root / ".nexus" / "tools"
+    return root / ".agents" / "tools"
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -250,7 +251,7 @@ async def test_reject_symlinked_components_below_a_root(tmp_path: Path):
 
 
 async def test_trash_removes_the_tool_and_records_retention(tmp_path: Path):
-    manager, _box, ws, _home = make_manager(tmp_path)
+    manager, _box, ws, home = make_manager(tmp_path)
     path = write_tool(tool_dir(ws), "alpha", "Alpha")
     await manager.reload()
     assert "Alpha" in manager.manifest.tools
@@ -270,6 +271,7 @@ async def test_trash_removes_the_tool_and_records_retention(tmp_path: Path):
     assert record.modules and record.modules[0].endswith(f"__g{previous}")
     assert record.delete_after > record.trashed_at
     assert record.delete_after - record.trashed_at == pytest.approx(3600.0)
+    assert manager.trash_dir == project_state_dir(ws, home) / "trash" / "extensions"
     assert (manager.trash_dir / record.trash_id / "meta.json").exists()
     assert manager.list_trashed() == (record,)
     assert all(row["name"] != record.modules[0] for row in manager.list_extensions())
@@ -384,7 +386,7 @@ def test_listing_ignores_an_entry_whose_name_is_not_its_trash_id(tmp_path: Path)
     (entry / "evil.py").write_text(tool_source("Evil"), encoding="utf-8")
     record = ExtensionTrashRecord(
         trash_id="alpha-abc123",
-        source_path=str(ws / ".nexus" / "tools" / "evil.py"),
+        source_path=str(ws / ".agents" / "tools" / "evil.py"),
         trashed_at=1.0,
         delete_after=9_999_999_999.0,
     )
@@ -500,7 +502,7 @@ def _runtime_config(tmp_path: Path) -> Config:
             ext=ExtSection(
                 enabled=True,
                 watch_interval_ms=0,
-                dirs=[".nexus/tools"],
+                dirs=[".agents/tools", ".nexus/tools"],
                 quarantine=False,
                 max_file_bytes=100_000,
             ),
@@ -714,13 +716,13 @@ async def test_facade_trash_makes_the_tool_disappear_from_future_runs(tmp_path: 
         tmp_path, config=_runtime_config(tmp_path), providers={"scripted": provider}
     )
     facade = HostFacade(runtime)
-    path = write_tool(tmp_path / ".nexus" / "tools", "ping", "Ping")
+    path = write_tool(tmp_path / ".agents" / "tools", "ping", "Ping")
 
     await facade.reload_extensions(trigger="test")
     tools = [row["name"] for row in await facade.list_tools()]
     assert "Ping" in tools
 
-    result = await facade.handle(p.ExtensionsTrash(target=".nexus/tools/ping.py"))
+    result = await facade.handle(p.ExtensionsTrash(target=".agents/tools/ping.py"))
 
     assert isinstance(result, p.ExtensionsTrashResult)
     assert result.changed is True
@@ -814,7 +816,7 @@ def test_recover_skips_while_a_producer_holds_the_trash_lock(tmp_path: Path):
                 ext=ExtSection(
                     enabled=True,
                     watch_interval_ms=0,
-                    dirs=[".nexus/tools"],
+                    dirs=[".agents/tools", ".nexus/tools"],
                     quarantine=False,
                     max_file_bytes=100_000,
                 )

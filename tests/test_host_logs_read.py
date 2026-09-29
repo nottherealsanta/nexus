@@ -6,22 +6,20 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
-import msgspec
 import pytest
 
 from nexus.events import Event
 from nexus.host import protocol as p
 from nexus.host.diagnostics import DaemonDiagnostics
 from nexus.host.facade import HostFacade
-from nexus.host.session_diagnostics import (
-    SESSION_LOG_READ_BYTES,
+from nexus.observability.session import (
     SESSION_LOG_SCAN_WINDOW,
     read_session_page,
     session_records,
 )
+from nexus.session.db import SqliteSessionStore, StateDatabase
 from nexus.session.ids import validate_session_id
-from nexus.session.store import (
-    SESSION_LOG_VERSION,
+from nexus.session.records import (
     EventRecord,
     ReadResult,
     SummaryRecord,
@@ -228,28 +226,85 @@ async def test_logs_read_large_history_is_bounded_and_stale_cursor_truncates():
     assert [entry.seq for entry in following.session.entries] == list(range(1006, 1011))
 
 
-def test_cold_session_scan_reads_only_a_bounded_tail(tmp_path):
-    path = tmp_path / "safe-session.jsonl"
-    with path.open("wb") as stream:
-        for seq in range(1, 30_001):
-            stream.write(
-                msgspec.json.encode(_event(seq, "turn.started")) + b"\n"
-            )
+@pytest.mark.asyncio
+async def test_logs_read_uncached_sqlite_session_uses_bounded_store_tail(tmp_path):
+    store = SqliteSessionStore(StateDatabase(tmp_path / "nexus.db"), "project")
+    records = [
+        _event(seq, "turn.started")
+        for seq in range(1, SESSION_LOG_SCAN_WINDOW + 25)
+    ]
+    store.create_from_records("cold-session", records)
+    original_read_tail = store.read_tail
+    read_tail_limits = []
 
+    def bounded_read_tail(session_id, *, max_records):
+        read_tail_limits.append(max_records)
+        result = original_read_tail(session_id, max_records=max_records)
+        store.append_event(session_id, Event(type="turn.started", seq=len(records) + 1))
+        return result
+
+    store.read = lambda _session_id: pytest.fail("unbounded store.read was used")
+    store.read_tail = bounded_read_tail
+    sessions = SimpleNamespace(
+        store=store,
+        open=lambda *_args, **_kwargs: pytest.fail("session handle was opened"),
+        _live_handle=lambda _session_id: None,
+    )
+    facade = HostFacade(SimpleNamespace(sessions=sessions))
+
+    result = await facade.handle(p.LogsRead(session="cold-session", limit=3))
+
+    assert read_tail_limits == [SESSION_LOG_SCAN_WINDOW]
+    assert [entry.seq for entry in result.session.entries] == list(
+        range(len(records) - 2, len(records) + 1)
+    )
+    assert result.session.truncated is True
+    assert result.session.next_cursor == len(records)
+    assert result.session.has_more is True
+
+
+@pytest.mark.asyncio
+async def test_logs_read_tail_cursor_does_not_skip_append_after_tail_read():
     class Store:
-        def log_path(self, session_id):
-            assert session_id == "safe-session"
-            return path
+        def __init__(self):
+            self.records = [_event(1, "turn.started")]
+            self.appended = False
 
-    handle = SimpleNamespace(id="safe-session", _read=None, _store=Store())
-    records, clipped, latest_seq = session_records(handle)
-    assert path.stat().st_size > SESSION_LOG_READ_BYTES
-    assert len(records) <= SESSION_LOG_SCAN_WINDOW
-    assert clipped is True
-    page = read_session_page(records, cursor=0, limit=3, latest_seq=latest_seq)
-    assert page["truncated"] is True
-    assert len(page["entries"]) == 3
-    assert page["entries"][0]["seq"] > 1
+        def exists(self, _session_id):
+            return True
+
+        def read_tail(self, _session_id, *, max_records):
+            assert max_records == SESSION_LOG_SCAN_WINDOW
+            return ReadResult(records=tuple(self.records))
+
+        def next_seq(self, _session_id):
+            if not self.appended:
+                self.records.append(_event(2, "turn.completed"))
+                self.appended = True
+            return self.records[-1].seq + 1
+
+    store = Store()
+    sessions = SimpleNamespace(
+        store=store,
+        open=lambda *_args, **_kwargs: pytest.fail("session handle was opened"),
+        _live_handle=lambda _session_id: None,
+    )
+    facade = HostFacade(SimpleNamespace(sessions=sessions))
+
+    initial = await facade.handle(p.LogsRead(session="racing-session", limit=10))
+    assert [entry.seq for entry in initial.session.entries] == [1]
+    assert initial.session.next_cursor == 1
+    assert initial.session.has_more is True
+
+    following = await facade.handle(
+        p.LogsRead(
+            session="racing-session",
+            session_cursor=initial.session.next_cursor,
+            limit=10,
+        )
+    )
+    assert [entry.seq for entry in following.session.entries] == [2]
+    assert following.session.next_cursor == 2
 
 
 @pytest.mark.asyncio
@@ -289,31 +344,6 @@ def test_session_page_advances_and_marks_truncation_when_all_records_filtered():
     assert tail["truncated"] is True
 
 
-def test_cold_session_scan_skips_unsupported_envelopes_and_flags_them(tmp_path):
-    path = tmp_path / "versioned-session.jsonl"
-    supported = msgspec.json.encode(_event(1, "turn.started"))
-    unsupported = msgspec.json.encode(
-        {**msgspec.json.decode(supported), "seq": 2, "v": SESSION_LOG_VERSION + 1}
-    )
-    with path.open("wb") as stream:
-        stream.write(unsupported + b"\n")
-
-    class Store:
-        def log_path(self, session_id):
-            return path
-
-    records, clipped, latest_seq = session_records(
-        SimpleNamespace(id="versioned-session", _read=None, _store=Store())
-    )
-
-    assert records == []
-    assert clipped is True
-    assert latest_seq == 2
-    page = read_session_page(records, cursor=0, limit=10, latest_seq=latest_seq)
-    assert page["next_cursor"] == 2
-    assert page["truncated"] is True
-
-
 def test_cached_truncated_tail_is_reported(tmp_path):
     record = _event(5, "turn.started")
     handle = SimpleNamespace(
@@ -326,25 +356,6 @@ def test_cached_truncated_tail_is_reported(tmp_path):
 
     assert clipped is True
     assert page["entries"][0]["seq"] == 5
-
-
-def test_cold_session_scan_discards_crash_tail_and_uses_valid_cursor(tmp_path):
-    path = tmp_path / "crash-tail-session.jsonl"
-    with path.open("wb") as stream:
-        stream.write(msgspec.json.encode(_event(5, "turn.started")) + b"\n{broken")
-
-    class Store:
-        def log_path(self, session_id):
-            return path
-
-    records, clipped, latest_seq = session_records(
-        SimpleNamespace(id="crash-tail-session", _read=None, _store=Store())
-    )
-    page = read_session_page(records, cursor=0, limit=10, latest_seq=latest_seq)
-
-    assert clipped is True
-    assert [entry["seq"] for entry in page["entries"]] == [5]
-    assert page["next_cursor"] == 5
 
 
 @pytest.mark.asyncio

@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import contextlib
 import hashlib
 import hmac
 import os  # noqa: F401 - preserves the facade's historical scandir patch seam
@@ -40,6 +39,7 @@ from typing import Any
 
 import msgspec
 
+from ..devtools import dev_enabled
 from ..errors import ExtensionTrashError, SessionBusy
 from ..events import Event
 from ..ext.quarantine import sanitize_text
@@ -52,7 +52,9 @@ from ..host_support.context_preview import (
 from ..host_support.context_preview import (
     safe_text as _worktree_text,
 )
+from ..host_support.doctor import doctor_report
 from ..host_support.git_diff import git_diff
+from ..host_support.mock import dispatch_mock
 from ..host_support.provider_auth import dispatch_providers
 from ..host_support.session_archive import (
     archive_summary_count,
@@ -90,7 +92,6 @@ from ..view import (
     jsonable,
 )
 from . import protocol as p
-from .doctor import mismatch_summary
 from .presence import Presence
 from .supervisor import Supervisor
 
@@ -878,62 +879,17 @@ class HostFacade:
 
         ``registry_mismatches`` aggregates the durable catalogue defects the loop
         records when a provider rejects a claimed capability (PLAN §15.5). The
-        scan is bounded and best-effort: a bounded set of session logs is read
-        from a bounded tail, an inaccessible/corrupt log is skipped, and no
+        scan is bounded and best-effort: a bounded set of session record tails
+        is read, an inaccessible/corrupt session is skipped, and no
         session handle is opened. Only counts, provider/model/reason tallies, and
         bounded samples cross the boundary; the raw provider ``detail`` does not.
         """
-        report: dict[str, Any] = {
-            "workspace": str(getattr(self.runtime, "workspace", "") or ""),
-            "providers": self._provider_report(),
-            "registry": _status_dict(getattr(self.runtime.registry, "status", lambda: None)()),
-            "registry_mismatches": mismatch_summary(
-                getattr(getattr(self.runtime, "sessions", None), "directory", None)
-            ),
-            "sessions": len(self.list_sessions()),
-        }
-        mcp = self._mcp_report()
-        if mcp is not None:
-            report["mcp"] = mcp
-        extensions = self.runtime.extensions
-        if extensions is not None:
-            report["extensions"] = {
-                "generation": getattr(extensions, "generation", 0),
-                "loaded": len(self.list_extensions()),
-                "diagnostics": [_asdict(item) for item in getattr(extensions, "diagnostics", lambda: ())()],
-            }
-        if explain_reload:
-            report["reload"] = _reload_boundary()
-        return report
-
-    def _provider_report(self) -> list[dict[str, Any]]:
-        rows: list[dict[str, Any]] = []
-        for name in sorted(self.runtime.providers):
-            provider = self.runtime.providers[name]
-            rows.append({"name": name, "kind": type(provider).__name__})
-        return rows
-
-    def _mcp_report(self) -> dict[str, Any] | None:
-        """Point-in-time MCP server health, redacted and counter-only.
-
-        ``None`` when the runtime has no MCP manager (MCP disabled). Every row
-        is the manager's own sanitized ``to_dict``; the facade never reaches
-        into a server connection or a credential.
-        """
-        mcp = getattr(self.runtime, "mcp", None)
-        statuses = getattr(mcp, "statuses", None)
-        if mcp is None or not callable(statuses):
-            return None
-        try:
-            servers = [_asdict(status) for status in statuses()]
-        except Exception:  # noqa: BLE001 - health must never raise
-            servers = []
-        diagnostics = getattr(mcp, "diagnostics", None)
-        rows: list[dict[str, Any]] = []
-        if callable(diagnostics):
-            with contextlib.suppress(Exception):
-                rows = [_asdict(row) for row in (diagnostics() or ())]
-        return {"servers": servers, "diagnostics": rows}
+        return doctor_report(
+            self.runtime,
+            list_sessions=self.list_sessions,
+            list_extensions=self.list_extensions,
+            explain_reload=explain_reload,
+        )
 
     async def refresh_models(self) -> Any | None:
         """Force a catalogue acquisition; return the registry status."""
@@ -1245,6 +1201,7 @@ class HostFacade:
             "max_concurrent": self.supervisor.max_concurrent,
             "viewers": self.presence.total_viewers(),
             "uptime": max(0.0, time.time() - self._started),
+            "dev": dev_enabled(),
         }
 
     async def shutdown(self, reason: str = "") -> bool:
@@ -1273,6 +1230,8 @@ class HostFacade:
 
     async def _dispatch(self, command: p.Command) -> p.Result:
         if result := await dispatch_settings(command, self.runtime):
+            return result
+        if result := await dispatch_mock(command, self):
             return result
         if result := await dispatch_providers(command, self.runtime):
             return result
@@ -1733,35 +1692,6 @@ def _trash_result(target: str, outcome: Any) -> p.ExtensionsTrashResult:
         generation=getattr(report, "generation", 0),
         previous_generation=getattr(report, "previous_generation", 0),
     )
-
-
-def _reload_boundary() -> dict[str, Any]:
-    """The hot-vs-restart boundary, stated plainly (PLAN section 6.6)."""
-    return {
-        "hot": [
-            ".nexus/tools/*.py",
-            ".nexus/providers/*.py",
-            ".nexus/hooks/*.py",
-            ".nexus/skills/**/SKILL.md",
-            ".nexus/agents/*.md",
-            ".nexus/mcp.json",
-            "nexus.toml",
-            "SOUL.md",
-            "MEMORY.md",
-        ],
-        "restart_only": [
-            "nexus/core/**",
-            "nexus/model/message.py",
-            "nexus/runtime.py",
-            "the Manifest shape itself",
-            "new pip installs",
-        ],
-        "note": (
-            "Hot extensions swap at the next loop iteration in the same turn. "
-            "Core source, the manifest shape, and new imports need a daemon "
-            "restart; use `nexus daemon stop` and the next command auto-starts."
-        ),
-    }
 
 
 __all__ = ["DEFAULT_MAX_CONCURRENT_TURNS", "HostFacade"]

@@ -6,8 +6,9 @@ held reference is a single assignment readers never observe half-done.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Generic, Mapping, TypeVar
+from typing import Generic, TypeVar
 
 T = TypeVar("T")
 
@@ -15,7 +16,7 @@ T = TypeVar("T")
 class Registry(Generic[T]):
     """An immutable name -> item mapping with a monotonically increasing generation."""
 
-    __slots__ = ("_items", "_generation")
+    __slots__ = ("_generation", "_items")
 
     def __init__(self, items: Mapping[str, T] | None = None, *, generation: int = 0):
         self._items: Mapping[str, T] = MappingProxyType(dict(items or {}))
@@ -34,17 +35,17 @@ class Registry(Generic[T]):
     def names(self) -> tuple[str, ...]:
         return tuple(self._items)
 
-    def replace(self, items: Mapping[str, T]) -> "Registry[T]":
+    def replace(self, items: Mapping[str, T]) -> Registry[T]:
         """Return a new generation containing exactly ``items``."""
         return Registry(items, generation=self._generation + 1)
 
-    def merge(self, items: Mapping[str, T]) -> "Registry[T]":
+    def merge(self, items: Mapping[str, T]) -> Registry[T]:
         """Return a new generation with ``items`` overlaid on the current ones."""
         combined = dict(self._items)
         combined.update(items)
         return self.replace(combined)
 
-    def without(self, *names: str) -> "Registry[T]":
+    def without(self, *names: str) -> Registry[T]:
         remaining = {k: v for k, v in self._items.items() if k not in names}
         return self.replace(remaining)
 

@@ -13,14 +13,22 @@ from typing import ClassVar
 
 from textual import constants, on
 from textual.app import App, ComposeResult
-from textual.command import Hit, Hits, Provider
-from textual.screen import Screen
+from textual.command import Provider
 from textual.widgets import Button, Input, OptionList, Static, TextArea
 
 from ...client.protocol import Client, ClientError
 from ...events import Event
 from ...host import protocol as p
 from ...ui_support.context import context_measure
+from ...ui_support.tui_command_palette import (
+    KEYBOARD_SHORTCUTS,
+    SHORTCUTS,
+    ChatCommandProvider,
+    ShortcutsCommandProvider,
+    ShortcutsScreen,
+    model_display_name,
+    model_reference,
+)
 from ...ui_support.tui_context_header import ContextBlock, ContextHeader, ContextModal
 from ...ui_support.tui_model_picker import ModelPickerScreen
 from ...ui_support.tui_panels import DetailsSidebar, SessionSidebar, TuiPreferences
@@ -60,131 +68,6 @@ from .widgets import (
     context_detail_usage,
     context_usage,
 )
-
-#: The shell's complete keyboard reference, in one place:
-#: ``(key, action, description)``. ``action`` is the Textual binding action, or
-#: ``None`` for a key owned by a focused editor (``ChatEditor``) or an inline
-#: ``on_key`` handler. ``BINDINGS`` and the Commands palette reference are both
-#: derived from this, so the live keys and their documentation cannot drift.
-SHORTCUTS: tuple[tuple[str, str | None, str], ...] = (
-    ("enter", None, "Send message"),
-    ("shift+enter", None, "Insert newline (Alt+Enter, Ctrl+Enter, or Ctrl+J)"),
-    ("ctrl+p", "command_palette", "Commands (Show keyboard shortcuts, chat commands)"),
-    ("ctrl+n", "new_session", "New session"),
-    ("ctrl+o", "list_sessions", "List sessions"),
-    ("ctrl+f", "fork_session", "Fork session"),
-    ("ctrl+g", "pick_agent", "Open the root-agent picker"),
-    ("ctrl+b", "toggle_sessions", "Toggle the sessions sidebar"),
-    ("ctrl+l", "toggle_details", "Toggle the details sidebar"),
-    ("ctrl+s", "open_settings", "Settings"),
-    ("ctrl+i", "open_context", "Inspect context preview and usage"),
-    ("ctrl+t", None, "Cycle root reasoning effort"),
-    ("ctrl+e", None, "Toggle the Logs drawer"),
-    ("a", None, "Open the root-agent picker"),
-    ("shift+tab", None, "Cycle root agent"),
-    ("ctrl+c", "cancel_turn", "Cancel the active turn"),
-    ("ctrl+r", "reconnect", "Reconnect"),
-    ("ctrl+q", "quit_shell", "Quit"),
-    ("escape", None, "Back from an agent transcript"),
-)
-
-
-def _shortcut_lines() -> tuple[str, ...]:
-    labels = [(key.title(), description) for key, _, description in SHORTCUTS]
-    width = max(len(key) for key, _ in labels)
-    return (
-        "Keyboard shortcuts",
-        *(f"  {key:<{width}} {description}" for key, description in labels),
-    )
-
-
-#: Rendered keyboard reference shown by Commands → Show keyboard shortcuts. The
-#: normal screen carries no shortcut hints; this is their single home.
-KEYBOARD_SHORTCUTS = _shortcut_lines()
-
-
-def _model_reference(row: dict) -> str:
-    provider, model_id = row.get("provider"), row.get("id")
-    if isinstance(provider, str) and provider and isinstance(model_id, str) and model_id:
-        return f"{provider}/{model_id}"
-    return ""
-
-
-def _model_display_name(row: dict) -> str:
-    reference = _model_reference(row)
-    value = row.get("name")
-    label = value.strip() if isinstance(value, str) else ""
-    return label or reference or "?"
-
-
-class ShortcutsScreen(Screen):
-    """Read-only modal that shows the full keyboard reference."""
-
-    BINDINGS: ClassVar[list[tuple[str, str, str]]] = [
-        ("escape", "dismiss", "Close"), ("q", "dismiss", "Close")
-    ]
-
-    def __init__(self, lines: tuple[str, ...]) -> None:
-        super().__init__()
-        self._lines = lines
-
-    def compose(self) -> ComposeResult:
-        yield Static("\n".join(self._lines), id="shortcuts")
-
-
-class ShortcutsCommandProvider(Provider):
-    """Palette entry that opens the keyboard-shortcut reference."""
-
-    async def search(self, query: str) -> Hits:
-        app, matcher = self.app, self.matcher(query)
-        label = "Show keyboard shortcuts"
-
-        def show() -> None:
-            app.push_screen(ShortcutsScreen(KEYBOARD_SHORTCUTS))
-
-        if (score := matcher.match(label)) > 0:
-            yield Hit(score, matcher.highlight(label), show, help=label)
-
-
-class ChatCommandProvider(Provider):
-    """Textual command palette backed by the established chat command specs."""
-
-    async def search(self, query: str) -> Hits:
-        app = self.app
-        matcher = self.matcher(query)
-        worktrees_score = matcher.match("/worktrees review child worktree lifecycle")
-        if worktrees_score > 0:
-            yield Hit(
-                worktrees_score,
-                matcher.highlight("/worktrees — review and manage child worktrees"),
-                lambda: app.run_worker(
-                    app._dispatch_chat_command("/worktrees"),
-                    group="chat-command",
-                    exclusive=True,
-                ),
-                help="Review, acknowledge, integrate, or discard daemon-owned child worktrees",
-            )
-        for spec in commands.SPECS:
-            if spec.hidden:
-                continue
-            label = (
-                f"Quit chat — {spec.summary}"
-                if spec.name == "/exit"
-                else f"{', '.join((spec.name, *spec.aliases))} {spec.usage} — {spec.summary}".strip()
-            )
-            raw = "/exit" if spec.name == "/exit" else spec.name
-            score = matcher.match(label)
-            if score > 0:
-                yield Hit(
-                    score,
-                    matcher.highlight(label),
-                    lambda command=raw: app.run_worker(
-                        app._dispatch_chat_command(command),
-                        group="chat-command",
-                        exclusive=True,
-                    ),
-                    help=spec.summary,
-                )
 
 
 class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
@@ -527,7 +410,7 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
             elif parsed.name in {"/mcp", "/skills"}:
                 block = self.query_one("#context-mcp" if parsed.name == "/mcp" else "#context-skills", ContextBlock)
                 self.push_screen(ContextModal(block.label, block.detail, category="mcp" if parsed.name == "/mcp" else "skills"))
-            elif parsed.name in {"/copy", "/cost", "/diff", "/tasks", "/reload", "/review", "/commit"}:
+            elif parsed.name in {"/copy", "/cost", "/diff", "/tasks", "/reload", "/review", "/commit", "/mock"}:
                 await self._dispatch_extra_command(parsed.name, args)
             elif parsed.name == "/sessions":
                 summaries = await self.controller.client.list_sessions()
@@ -551,8 +434,8 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
                             search=args[1] if len(args) > 1 else None,
                         )
                         await self._show_notice("\n".join(
-                            f"{_model_display_name(row)} "
-                            f"[{_model_reference(row) or '?'}] "
+                            f"{model_display_name(row)} "
+                            f"[{model_reference(row) or '?'}] "
                             f"[{row.get('tier', '')}]"
                             for row in models
                         ))
@@ -693,7 +576,7 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
                 self.run_worker(self._apply_model_selection(choice[0], choice[1],
                                 commit_effort=choice[2]), group="model-selection")
         self.push_screen(ModelPickerScreen(
-            [row for row in models if _model_reference(row)], current=current_ref,
+            [row for row in models if model_reference(row)], current=current_ref,
             current_effort=self.controller.reasoning_effort,
             stored_override=self.controller.stored_override,
             effort_source=self.controller.reasoning_effort_source,

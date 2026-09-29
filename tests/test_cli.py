@@ -55,7 +55,10 @@ def make_runtime(workspace, **kwargs):
         permissions=PermissionsSection(mode="ask", on_unattended="deny"),
         tools=ToolsSection(),
     ))
-    return Runtime(workspace, config=config, providers={"scripted": provider})
+    return Runtime(
+        workspace, home=kwargs.get("home"), config=config,
+        providers={"scripted": provider},
+    )
 
 
 def main():
@@ -103,6 +106,8 @@ def test_parser_exposes_the_canonical_command_set():
         "tools",
         "worktrees",
         "auth",
+        "update",
+        "mock",
     } == choices
 
     for action, expected in (
@@ -144,7 +149,7 @@ def test_parser_exposes_the_canonical_command_set():
         ["ext", "list"],
         ["ext", "reload"],
         ["ext", "validate"],
-        ["ext", "trash", ".nexus/tools/foo.py"],
+        ["ext", "trash", ".agents/tools/foo.py"],
         ["ext", "trash", "foo.py", "--reason", "cleanup", "--force"],
         ["models", "list"],
         ["models", "show", "p/m"],
@@ -413,7 +418,7 @@ def test_print_doctor_names_the_reload_boundary():
             "registry": {"source": "cache", "models": 3, "stale": False},
             "extensions": {"generation": 2, "loaded": 1, "diagnostics": []},
             "reload": {
-                "hot": [".nexus/tools/*.py"],
+                "hot": [".agents/tools/*.py"],
                 "restart_only": ["nexus/core/**"],
                 "note": "hot vs restart",
             },
@@ -422,8 +427,36 @@ def test_print_doctor_names_the_reload_boundary():
     )
     text = out.getvalue()
     assert "scripted" in text
-    assert "hot:" in text and ".nexus/tools/*.py" in text
+    assert "hot:" in text and ".agents/tools/*.py" in text
     assert "restart only:" in text and "nexus/core/**" in text
+
+
+def test_print_doctor_database_and_legacy_warnings_are_bounded():
+    out = io.StringIO()
+    cli._print_doctor(
+        {
+            "workspace": "/tmp/ws",
+            "database": {
+                "path": "/home/user/.nexus/nexus.db\nforged output",
+                "schema_user_version": 3,
+                "quick_check": "ok",
+                "size_bytes": 2048,
+                "wal_size_bytes": 64,
+            },
+            "legacy_extensions_pending": [
+                "skills", "agents", "tools", "hooks", "providers", "mcp.json",
+                "hooks.toml", "nexus.toml", "unexpected", "x" * 10000,
+            ],
+        },
+        out,
+    )
+
+    text = out.getvalue()
+    assert "database: quick_check=ok schema=3 size=2048B wal=64B" in text
+    assert "forged output" in text
+    assert text.count("WARNING:") == 1
+    assert "move them to .agents/" in text
+    assert "unexpected" not in text and "x" * 1000 not in text
 
 
 # ---------------------------------------------------------------------------
@@ -464,7 +497,7 @@ def cli_env():
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        env={**os.environ, "HOME": str(home), "PYTHONPATH": str(REPO_ROOT)},
+        env={**os.environ, "HOME": str(home), "NEXUS_HOME": str(home / ".nexus"), "PYTHONPATH": str(REPO_ROOT)},
     )
     _wait_for_socket(socket)
     try:
@@ -504,7 +537,7 @@ def _cli(cli_env, *argv: str, check: bool = True) -> subprocess.CompletedProcess
         capture_output=True,
         text=True,
         timeout=60,
-        env={**os.environ, "HOME": str(home), "PYTHONPATH": str(REPO_ROOT)},
+        env={**os.environ, "HOME": str(home), "NEXUS_HOME": str(home / ".nexus"), "PYTHONPATH": str(REPO_ROOT)},
         check=False,
     )
     if check and result.returncode != 0:
@@ -537,37 +570,33 @@ def test_doctor_explain_reload_json(cli_env):
 
 def test_doctor_reports_aggregated_registry_mismatches(cli_env):
     """`nexus doctor` surfaces durable registry.mismatch events (PLAN §15.5)."""
-    import msgspec
-
+    from nexus.config.paths import project_key, state_db_path
     from nexus.events import Event
+    from nexus.session.db import SqliteSessionStore, StateDatabase
 
-    workspace, _home, _socket = cli_env
-    sessions_dir = workspace / ".nexus" / "sessions"
-    sessions_dir.mkdir(parents=True, exist_ok=True)
-    log = sessions_dir / "probe.jsonl"
-    line = msgspec.json.encode(
-        {
-            "type": "event",
-            "seq": 1,
-            "ts": 1.0,
-            "v": 1,
-            "event": Event(
-                type="registry.mismatch",
-                data={
-                    "provider": "anthropic",
-                    "model": "claude-opus-5",
-                    "feature": "tools",
-                    "source": "provider-rejection",
-                    "detail": "Authorization: Bearer sk-secret1234567",
-                },
-                seq=1,
-                session="probe",
-                ts=1.0,
-            ).to_dict(),
-        }
+    workspace, home, _socket = cli_env
+    store = SqliteSessionStore(
+        StateDatabase(state_db_path(home)),
+        project_key(workspace),
+        root=str(workspace),
     )
-    log.write_bytes(line + b"\n")
-
+    store.create("probe")
+    store.append_event(
+        "probe",
+        Event(
+            type="registry.mismatch",
+            data={
+                "provider": "anthropic",
+                "model": "claude-opus-5",
+                "feature": "tools",
+                "source": "provider-rejection",
+                "detail": "Authorization: Bearer sk-secret1234567",
+            },
+            seq=1,
+            session="probe",
+            ts=1.0,
+        ),
+    )
     human = _cli(cli_env, "doctor")
     assert "registry mismatches: 1" in human.stdout
     assert "feature=tools" in human.stdout
@@ -615,7 +644,7 @@ def test_models_select_sets_a_session_model(cli_env):
 
 def test_ext_trash_over_the_daemon(cli_env):
     workspace, _home, _socket = cli_env
-    tools = workspace / ".nexus" / "tools"
+    tools = workspace / ".agents" / "tools"
     tools.mkdir(parents=True, exist_ok=True)
     target = tools / "scratch.py"
     target.write_text(
@@ -627,12 +656,16 @@ def test_ext_trash_over_the_daemon(cli_env):
         encoding="utf-8",
     )
 
-    result = _cli(cli_env, "ext", "trash", ".nexus/tools/scratch.py")
+    result = _cli(cli_env, "ext", "trash", ".agents/tools/scratch.py")
 
     assert "trashed" in result.stdout
     assert "delete_after" in result.stdout
     assert not target.exists()
-    entries = list((workspace / ".nexus" / "trash" / "extensions").iterdir())
+    from nexus.config.paths import project_state_dir
+
+    entries = list(
+        (project_state_dir(workspace, _home) / "trash" / "extensions").iterdir()
+    )
     assert entries and (entries[0] / "meta.json").exists()
 
 

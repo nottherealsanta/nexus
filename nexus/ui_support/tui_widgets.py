@@ -122,8 +122,8 @@ class ChatEditor(TextArea):
         if self._collapse_paste(event.text):
             event.stop()
             event.prevent_default()
-            return
-        await super()._on_paste(event)
+        # Otherwise return: Textual's MRO dispatch runs TextArea._on_paste itself,
+        # so calling super() here would insert the text twice.
 
     def action_paste(self) -> None:
         """Apply the same collapse rule to Textual's local clipboard action."""

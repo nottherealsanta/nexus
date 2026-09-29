@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import secrets
 import threading
 import time
@@ -68,8 +69,8 @@ from . import snapshot as snapshot_mod
 from .db import SqliteSessionStore, StateDatabase
 from .ids import validate_session_id
 from .lock import SessionLock
+from .records import EventRecord, ReadResult
 from .session import DEFAULT_EVENT_BUFFER, Session
-from .store import EventRecord, ReadResult
 
 #: Length of the random suffix appended to a fork's generated child id.
 _FORK_TOKEN_BYTES = 6
@@ -179,7 +180,6 @@ class SessionManager:
         ensure_ready: Callable[[], Any] | None = None,
         turn_cleanup: Callable[[str, str], None] | None = None,
         hooks: Callable[[], Any] | None = None,
-        trash_dir: str | Path | None = None,
         retention_seconds: float = DEFAULT_RETENTION_SECONDS,
     ):
         if store is not None:
@@ -208,11 +208,6 @@ class SessionManager:
                 private_db, project_id, namespace, root=str(base), lock_dir=resolved_lock_dir
             )
             self.directory = base
-        # ``trash_dir`` is accepted for constructor compatibility with the
-        # pre-STATE_PLAN file store; trash is now rows in place (STATE_PLAN
-        # §4.2), so this has no functional effect and exists only for callers
-        # that still pass it.
-        self._trash_dir_hint = Path(trash_dir) if trash_dir is not None else None
         if not isinstance(retention_seconds, (int, float)) or retention_seconds <= 0:
             raise ValueError("retention_seconds must be a positive number")
         self._retention_seconds = float(retention_seconds)
@@ -250,11 +245,6 @@ class SessionManager:
         return handle.queue_depth if handle is not None else 0
 
     @property
-    def trash_dir(self) -> Path:
-        """Legacy display path; trash is DB rows now (kept for compatibility)."""
-        return self._trash_dir_hint if self._trash_dir_hint is not None else self.directory / "trash"
-
-    @property
     def retention_seconds(self) -> float:
         """How long a trashed session is retained before ``purge_expired``."""
         return self._retention_seconds
@@ -267,15 +257,13 @@ class SessionManager:
         *,
         create: bool = True,
         recover: bool = True,
-        migrate: bool = True,
     ) -> Session:
         """Open a session, reusing the live handle for an id when one exists.
 
         ``create=False`` raises when the session has no row. With ``recover``
         the handle's dangling-tool crash recovery runs (idempotently) before it
-        is returned, whether it was just built or already cached. ``migrate``
-        is accepted for compatibility; legacy ``.json``/JSONL migration now
-        happens once, up front, via :mod:`nexus.session.import_legacy`.
+        is returned, whether it was just built or already cached. Only SQLite
+        session rows are opened; filesystem session logs are not imported.
 
         Exactly one :class:`Session` handle exists per id per manager, so
         repeated ``Runtime.session(id)`` calls share the same bus, presence
@@ -682,17 +670,6 @@ class SessionManager:
         """Remove trash rows past ``delete_after``; returns their trash ids."""
         return self.store.purge_expired(now=now)
 
-    # -- migration (compatibility thin wrapper) -----------------------------
-
-    def migrate(self, session_id: str) -> None:
-        """No-op: legacy ``.json``/JSONL migration now runs once at startup.
-
-        Kept only so callers written against the pre-STATE_PLAN manager (which
-        migrated lazily on open) do not need an unconditional guard. See
-        :mod:`nexus.session.import_legacy`.
-        """
-        return None
-
     # -- fork --------------------------------------------------------------
 
     def fork(
@@ -732,7 +709,7 @@ class SessionManager:
             child_id, [*prefix, fork_record], parent_id=source_id, fork_seq=boundary
         )
         self._inherit_snapshot(source_id, child_id, read, boundary)
-        return self.open(child_id, create=False, recover=False, migrate=False)
+        return self.open(child_id, create=False, recover=False)
 
     def _inherit_snapshot(
         self, source_id: str, child_id: str, read: ReadResult, boundary: int
@@ -745,8 +722,10 @@ class SessionManager:
         try:
             built = snapshot_mod.build_from_records(child_id, read.records, boundary)
             self.store.write_snapshot(child_id, built)
-        except Exception:  # noqa: BLE001 - derived cache only
-            pass
+        except Exception:  # derived cache only
+            logging.getLogger(__name__).warning(
+                "Could not inherit derived snapshot for %s", child_id, exc_info=True
+            )
 
     def _child_id(self, source_id: str, new_id: str | None) -> str:
         if new_id is not None:

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
-import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from typing import Any
 
 from textual.app import ComposeResult
@@ -16,6 +16,7 @@ from textual.widgets import Button, Markdown, Static
 
 from ...ui_support.text import redact
 from ...ui_support.timeline import (
+    _agent_link_label,
     _agent_metrics,
     _has_message_content,
     _latest_activity,
@@ -23,6 +24,14 @@ from ...ui_support.timeline import (
     _message_markdown,
     _setup_failure,
     _stale_greeting,
+    _task_child_activity,
+    _task_child_details,
+    _task_children,
+    _task_header,
+    _task_metrics,
+    _task_phrase,
+    _task_result,
+    _task_short_phrase,
     _text,
     _turn_duration,
     _turn_models,
@@ -314,117 +323,40 @@ class TaskActivityWidget(ToolActivityWidget):
 
     def _render_header(self) -> None:
         tool = self.tool
-        marker = tool_status(tool)
         child = next(iter(self._children()), None)
-        kind = (
-            child.type
-            if child and child.type
-            else tool.input.get("subagent_type")
-            if isinstance(tool.input, Mapping)
-            else None
-        ) or "General"
-        kind = redact(_text(str(kind), 32)).title()
-        running = marker == "running" and (child is None or child.status == "spawned")
-        phrase = self._task_phrase(child) or ("failed" if marker == "failed" else "completed")
-        mark = _SPINNER[self._spinner_index] if running else "✗" if marker == "failed" else "✓"
-        line = f"{mark} {kind} · {phrase}"
+        line, running = _task_header(tool, child, self._spinner_index)
         self.query_one("#tool-header", Static).update(line)
         self._sync_metrics(child, running)
         self._style_header()
 
     def _child_activity(self, agent: AgentView) -> str:
-        tools = sorted(
-            (tool for turn in agent.body.turns for tool in turn.tools),
-            key=lambda item: item.event_seq,
-        )
-        if not tools:
-            return "Starting…"
-        calls = []
-        for tool in tools[-2:]:
-            name = redact(_text(tool.name or "tool", 32))
-            target = "" if tool.name.casefold() in {"task", "subagent"} else format_arguments(tool)
-            progress = tool.progress[-1] if tool.progress else ""
-            detail = redact(_text(" · ".join(part for part in (target, progress) if part), 90))
-            calls.append(f"{name}: {detail}" if detail else name)
-        return "  →  ".join(calls)
+        return _task_child_activity(agent)
 
     def _task_phrase(self, agent: AgentView | None) -> str:
-        description = (
-            self.tool.input.get("description")
-            if isinstance(self.tool.input, Mapping)
-            else None
-        )
-        for candidate in (
-            description,
-            agent.description if agent is not None else None,
-            self.tool.input.get("prompt") if isinstance(self.tool.input, Mapping) else None,
-            self._task_result(),
-            agent.error if agent is not None else None,
-        ):
-            phrase = self._short_phrase(candidate)
-            if phrase:
-                return phrase
-        return ""
+        return _task_phrase(self.tool, agent)
 
     def _task_result(self) -> str:
-        tool = self.tool
-        result = tool.display or ""
-        if not result:
-            result = "\n".join(
-                str(block.get("text") or block.get("content") or "")
-                for block in tool.result[:4]
-                if isinstance(block, Mapping)
-            )
-        if result:
-            result = re.sub(r"^\s*task\s*:\s*", "", result, flags=re.IGNORECASE)
-        return self._short_phrase(result or tool.error or "")
+        return _task_result(self.tool)
 
     @staticmethod
     def _short_phrase(value: object) -> str:
-        if value is None:
-            return ""
-        phrase = redact(_text(value, 240))
-        phrase = " ".join(phrase.split())
-        phrase = re.split(r"(?<=[.!?])\s+", phrase, maxsplit=1)[0]
-        return _text(phrase, 100)
+        return _task_short_phrase(value)
 
     def _sync_metrics(self, child: AgentView | None, running: bool) -> None:
         metrics = self.query_one("#task-metrics", Static)
-        if running:
-            summary = self._child_activity(child) if child is not None else "Starting…"
-        elif child is not None:
-            summary = _agent_metrics(child)
-        else:
-            elapsed = self.tool.duration_ms
-            summary = f"0 tool calls · {elapsed / 1000:.1f}s" if elapsed is not None else "0 tool calls"
-        summary = re.sub(
-            r"\b(\d+) tools?\b(?! calls?\b)",
-            lambda match: f"{match.group(1)} tool call"
-            + ("s" if match.group(1) != "1" else ""),
-            summary,
-        )
-        metrics.update(summary)
+        metrics.update(_task_metrics(self.tool, child, running))
         metrics.styles.display = "block"
 
     async def set_tool(self, tool: ToolCallView) -> None:
         await super().set_tool(tool)
         self.add_class("task-card")
 
-    def _children(self) -> Iterable[AgentView]:
-        return (
-            self.agents[agent_id]
-            for agent_id in self.tool.child_agent_ids
-            if agent_id in self.agents
-        )
+    def _children(self) -> tuple[AgentView, ...]:
+        return _task_children(self.tool, self.agents)
 
     def _details_text(self) -> str:
         details = super()._details_text()
-        rows = []
-        for agent in self._children():
-            rows.append(
-                f"{_text(agent.type or agent.id, 48)} · {_text(agent.task or agent.description, 96)}"
-                f" · {_text(agent.status, 24)} · {_agent_metrics(agent)}\n  {_latest_activity(agent)}"
-            )
+        rows = _task_child_details(self._children())
         return details + ("\n\nChild agents:\n" + "\n".join(rows) if rows else "")
 
     async def open_details(self) -> None:
@@ -445,22 +377,7 @@ class AgentActivityLink(Button):
         super().__init__(self._label(), **kwargs)
 
     def _label(self) -> str:
-        activity = _latest_activity(self.agent)
-        tool = next(
-            (
-                tool
-                for turn in reversed(self.agent.body.turns)
-                for tool in reversed(turn.tools)
-            ),
-            None,
-        )
-        if tool is not None:
-            status = tool_status(tool)
-            activity += f" · {status}"
-        return (
-            f"{_text(self.agent.type or self.agent.id, 36)} · "
-            f"{_text(self.agent.status, 18)} · {_agent_metrics(self.agent)} · {activity}"
-        )
+        return _agent_link_label(self.agent)
 
     def set_agent(self, agent: AgentView) -> None:
         self.agent = agent
@@ -480,6 +397,7 @@ class TurnWidget(Widget):
         super().__init__(**kwargs)
         self.turn_id = turn.id
         self._items: dict[str, Widget] = {}
+        self._set_turn_lock = asyncio.Lock()
         self.turn = turn
         self.agents = agents
         self._summary_widget: Static | None = None
@@ -502,6 +420,24 @@ class TurnWidget(Widget):
         *,
         hide_setup_error: bool = False,
         hide_greeting_key: str | None = None,
+    ) -> None:
+        async with self._set_turn_lock:
+            if not self.is_attached:
+                return
+            await self._reconcile_turn(
+                turn,
+                agents,
+                hide_setup_error=hide_setup_error,
+                hide_greeting_key=hide_greeting_key,
+            )
+
+    async def _reconcile_turn(
+        self,
+        turn: TurnView,
+        agents: Mapping[str, AgentView],
+        *,
+        hide_setup_error: bool,
+        hide_greeting_key: str | None,
     ) -> None:
         self.turn = turn
         self.agents = agents
@@ -546,16 +482,24 @@ class TurnWidget(Widget):
             entries = [entry for entry in entries if isinstance(entry[2], MessageView) and entry[2].role == "user"]
         wanted = {key for _, key, _ in entries}
         for key, widget in tuple(self._items.items()):
+            if not self.is_attached:
+                return
             if key not in wanted:
                 await widget.remove()
                 del self._items[key]
         for _, key, value in entries:
+            if not self.is_attached:
+                return
             widget = self._items.get(key)
+            if widget is not None and not widget.is_attached:
+                del self._items[key]
+                widget = None
             if isinstance(value, tuple):
                 if widget is None:
                     widget = ThoughtLine(value[1], classes="timeline-thought")
+                    if not await self._mount_item(widget):
+                        return
                     self._items[key] = widget
-                    await self.mount(widget)
                 elif isinstance(widget, ThoughtLine):
                     widget.set_message(value[1])
             elif isinstance(value, MessageView):
@@ -565,8 +509,9 @@ class TurnWidget(Widget):
                         if value.role == "user"
                         else AssistantMessage(value, classes="timeline-assistant")
                     )
+                    if not await self._mount_item(widget):
+                        return
                     self._items[key] = widget
-                    await self.mount(widget)
                 elif isinstance(widget, (UserMessage, AssistantMessage)):
                     await widget.set_message(value) if isinstance(
                         widget, AssistantMessage
@@ -578,8 +523,9 @@ class TurnWidget(Widget):
                         if value.name.casefold() in {"task", "subagent"}
                         else ToolActivityWidget(value, classes="tool-card")
                     )
+                    if not await self._mount_item(widget):
+                        return
                     self._items[key] = widget
-                    await self.mount(widget)
                     if isinstance(widget, TaskActivityWidget):
                         await widget.set_task(value, agents)
                 elif isinstance(widget, TaskActivityWidget):
@@ -591,8 +537,9 @@ class TurnWidget(Widget):
                     widget = Static(
                         f"Error: {_text(value)}", markup=False, classes="timeline-error"
                     )
+                    if not await self._mount_item(widget):
+                        return
                     self._items[key] = widget
-                    await self.mount(widget)
                 elif isinstance(widget, Static):
                     widget.update(f"Error: {_text(value)}")
 
@@ -622,8 +569,10 @@ class TurnWidget(Widget):
             metrics = " · ".join(part for part in (str(turn.usage.total_tokens) + " tokens" if turn.usage.total_tokens else "", _turn_duration(turn) or "") if part)
             collapsed = f"[$nx-muted]{len(turn.tools)} tools · {escape(_text(reply, 120))}[/]  [$nx-quiet]{metrics}[/]"
             if self._collapsed_summary is None:
-                self._collapsed_summary = Static(collapsed, classes="turn-collapsed")
-                await self.mount(self._collapsed_summary)
+                summary = Static(collapsed, classes="turn-collapsed")
+                if not await self._mount_item(summary):
+                    return
+                self._collapsed_summary = summary
             else:
                 self._collapsed_summary.update(collapsed)
         elif self._collapsed_summary is not None:
@@ -632,8 +581,10 @@ class TurnWidget(Widget):
         if turn.terminal and not self.collapsed:
             summary = _turn_footer(turn)
             if self._summary_widget is None:
-                self._summary_widget = Static(summary, classes="timeline-summary")
-                await self.mount(self._summary_widget)
+                summary_widget = Static(summary, classes="timeline-summary")
+                if not await self._mount_item(summary_widget):
+                    return
+                self._summary_widget = summary_widget
             else:
                 self._summary_widget.update(summary)
             self._summary_widget.set_class(
@@ -649,6 +600,21 @@ class TurnWidget(Widget):
         elif self._summary_widget is not None:
             await self._summary_widget.remove()
             self._summary_widget = None
+
+    async def _mount_item(self, widget: Widget) -> bool:
+        if not self.is_attached:
+            return False
+        try:
+            await self.mount(widget)
+        except asyncio.CancelledError:
+            if widget.is_attached:
+                await widget.remove()
+            raise
+        if not self.is_attached:
+            if widget.is_attached:
+                await widget.remove()
+            return False
+        return True
 
     async def on_click(self, event: Click) -> None:
         if not isinstance(event.widget, UserMessage) or event.offset.x > 3:
@@ -668,6 +634,7 @@ class ConversationTimeline(VerticalScroll):
     def __init__(self, *, header: bool = True, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._turns: dict[str, TurnWidget] = {}
+        self._set_view_lock = asyncio.Lock()
         self.agent_colors: dict[str, str] = {}
         self._header = header
 
@@ -680,6 +647,11 @@ class ConversationTimeline(VerticalScroll):
         return self.scroll_offset.y >= self.max_scroll_y - 1
 
     async def set_view(self, view: ConversationView) -> None:
+        async with self._set_view_lock:
+            if self.is_attached:
+                await self._reconcile_view(view)
+
+    async def _reconcile_view(self, view: ConversationView) -> None:
         follow = self.at_bottom
         first_user_seq = min(
             (
@@ -714,15 +686,34 @@ class ConversationTimeline(VerticalScroll):
                 later_success = True
         wanted = {turn.id for turn in view.turns}
         for turn_id, widget in tuple(self._turns.items()):
+            if not self.is_attached:
+                return
             if turn_id not in wanted:
                 await widget.remove()
                 del self._turns[turn_id]
         for turn in view.turns:
+            if not self.is_attached:
+                return
             widget = self._turns.get(turn.id)
+            if widget is not None and not widget.is_attached:
+                del self._turns[turn.id]
+                widget = None
             if widget is None:
                 widget = TurnWidget(turn, view.agents, classes="turn")
+                try:
+                    await self.mount(widget)
+                except asyncio.CancelledError:
+                    if widget.is_attached:
+                        await widget.remove()
+                    raise
+                if not self.is_attached:
+                    if widget.is_attached:
+                        await widget.remove()
+                    return
                 self._turns[turn.id] = widget
-                await self.mount(widget)
+            if not widget.is_attached:
+                del self._turns[turn.id]
+                continue
             widget.agent_colors = self.agent_colors
             await widget.set_turn(
                 turn,
@@ -730,6 +721,8 @@ class ConversationTimeline(VerticalScroll):
                 hide_setup_error=turn.id in hidden_errors,
                 hide_greeting_key=initial_greeting_key,
             )
+            if not self.is_attached:
+                return
         if follow:
             self.call_after_refresh(self.scroll_end, animate=False)
 
@@ -739,6 +732,8 @@ __all__ = [
     "ThoughtLine",
     "ToolActivityWidget",
     "TurnWidget",
+    "_agent_metrics",
+    "_latest_activity",
     "format_arguments",
     "tool_summary",
 ]

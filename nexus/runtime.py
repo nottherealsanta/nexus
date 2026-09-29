@@ -35,7 +35,6 @@ import contextlib
 import copy
 import hashlib
 import inspect
-import logging
 import re
 import subprocess
 import threading
@@ -53,7 +52,6 @@ from .agents.model import AgentError, AgentNotFoundError
 from .agents.runner import WORKTREE_CHILD_TOOLS, files_changed
 from .config import Config
 from .config.paths import (
-    legacy_project_dir,
     nexus_home,
     project_agents_dir,
     project_key,
@@ -92,10 +90,10 @@ from .model.router import ModelRouter
 from .model.selection import ModelSelection
 from .model.tiers import DEFAULT_TIER, TierTable
 from .net import OutboundHTTPService, SafeOutboundHTTPService
+from .net.local_search import LocalSearchHTTPService
 from .session import Session, SessionManager
-from .session.db import StateDatabase
-from .session.import_legacy import import_workspace_sessions
 from .session.agent_selection import AgentSelection
+from .session.db import StateDatabase
 from .tools.builtin._jobs import JobRegistry
 from .tools.builtin.question import ANSWER_WINDOW_S
 from .tools.builtin.todo import TodoStore
@@ -185,6 +183,7 @@ class _ToolDispatcherAdapter:
         activations: Any | None = None,
         subagents: Any | None = None,
         outbound_http: OutboundHTTPService | None = None,
+        local_search_http: LocalSearchHTTPService | None = None,
         questions: Any | None = None,
     ) -> None:
         self.manager = manager
@@ -203,6 +202,7 @@ class _ToolDispatcherAdapter:
         #: ``ToolContext`` so the builtin never imports ``nexus.agents``.
         self._subagents = subagents
         self._outbound_http = outbound_http
+        self._local_search_http = local_search_http
         self._questions = questions
 
     def prepare(self, tool_uses):
@@ -233,6 +233,7 @@ class _ToolDispatcherAdapter:
             activations=self._activations,
             subagents=self._subagents,
             outbound_http=self._outbound_http,
+            local_search_http=self._local_search_http,
             questions=self._questions,
         )
 
@@ -1314,6 +1315,7 @@ class _ManifestEnvironmentFactory:
             activations=runtime._activations,
             subagents=runner,
             outbound_http=runtime._outbound_http_service,
+            local_search_http=getattr(runtime, "_local_search_http_service", None),
             questions=(
                 runtime._question_service(session_id)
                 if hasattr(runtime, "_question_service")
@@ -1909,6 +1911,7 @@ class _ChildRuntime:
                 agent_id=spec.agent_id,
                 subagents=self._runner,
                 outbound_http=getattr(runtime, "_outbound_http_service", None),
+                local_search_http=getattr(runtime, "_local_search_http_service", None),
                 questions=(
                     runtime._question_service(spec.session_id)
                     if hasattr(runtime, "_question_service")
@@ -2077,6 +2080,7 @@ class Runtime:
             if owns_outbound_http_service is None
             else bool(owns_outbound_http_service)
         )
+        self._local_search_http_service = LocalSearchHTTPService()
 
         # Model registry and tier table (plan sections 15.3-15.4). The runtime
         # owns both; an injected registry/tier table is the caller's. A registry
@@ -2215,7 +2219,6 @@ class Runtime:
         #: touch it. Reused by :meth:`_ensure_child_sessions` so the parent and
         #: its child (``namespace="agents"``) sessions share one connection pool.
         self._state_db: StateDatabase | None = None
-        self._legacy_import_task: asyncio.Task | None = None
         if sessions is not None:
             self._sessions = sessions
             self._owns_sessions = False
@@ -2253,7 +2256,6 @@ class Runtime:
                 hooks=self._session_hooks,
             )
             self._owns_sessions = True
-            self._schedule_legacy_session_import()
 
     # -- construction ------------------------------------------------------
 
@@ -2369,45 +2371,6 @@ class Runtime:
     @property
     def closed(self) -> bool:
         return self._closed
-
-    # -- session import (STATE_PLAN §5.1) -----------------------------------
-
-    def _schedule_legacy_session_import(self) -> None:
-        """Fire-and-forget the one-time legacy ``.nexus/sessions`` import.
-
-        Runs at runtime construction, but the scan/flock/SQL work happens in a
-        worker thread (``asyncio.to_thread``) so it never blocks the daemon's
-        event loop; a second call for an already-imported project is a fast
-        no-op (one row read). Every failure is caught and logged -- an import
-        problem must never break startup or a turn. Outside a running event
-        loop (most synchronous test construction) this is simply skipped; the
-        import still runs lazily and safely the next time a runtime with a
-        loop starts, and is otherwise unnecessary for tests that inject
-        ``sessions=``/``session_dir=``.
-        """
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return
-        state_db = self._state_db
-        if state_db is None:
-            return
-        workspace = self.workspace
-        home = self._home
-        project_id = project_key(workspace)
-        legacy_dir = legacy_project_dir(workspace)
-
-        async def _run() -> None:
-            try:
-                await asyncio.to_thread(
-                    import_workspace_sessions, state_db, project_id, legacy_dir, home=home
-                )
-            except Exception:  # noqa: BLE001 - never breaks startup
-                logging.getLogger(__name__).warning(
-                    "legacy session import failed for %s", workspace, exc_info=True
-                )
-
-        self._legacy_import_task = loop.create_task(_run())
 
     # -- extensions --------------------------------------------------------
 
@@ -3404,6 +3367,7 @@ class Runtime:
             activations=self._activations,
             subagents=runner,
             outbound_http=self._outbound_http_service,
+            local_search_http=self._local_search_http_service,
             questions=self._question_service(session.id),
         )
         # Per-iteration environment path: only when the runtime (not a caller)
@@ -3441,9 +3405,9 @@ class Runtime:
         self, current: PathGuard, allowed_scopes: Sequence[str]
     ) -> PathGuard:
         """Narrow a Settings agent's write roots without adding authority."""
-        home = self._home or Path.home()
+        home = self._home
         roots = {
-            "global": (home / ".nexus").resolve(),
+            "global": nexus_home(home).resolve(),
             "project": project_agents_dir(self.workspace).resolve(),
         }
         requested = [roots[name] for name in allowed_scopes if name in roots]
@@ -3504,7 +3468,12 @@ class Runtime:
             restrict=restrict,
             job_registry=self._job_registry,
             todo_store=self._effective_todo_store(),
-            path_guard=path_guard,
+            path_guard=path_guard or PathGuard(
+                self.workspace,
+                write_roots=tuple(config.v2.permissions.write_roots) if config.v2 else ("./",),
+                read_denyroots=tuple(config.v2.permissions.read_denyroots) if config.v2 else (),
+                home=self._home,
+            ),
         )
         self._track_tool_manager(manager)
         return manager
@@ -3531,12 +3500,14 @@ class Runtime:
         else:
             available.add(webfetch.SPEC.name)
 
-        if self._outbound_http_service is None:
-            unavailable[websearch.SPEC.name] = "Outbound HTTP service is not configured."
+        if not web.searxng_instances and web.local_search_enabled:
+            available.add(websearch.SPEC.name)
         elif not web.searxng_instances:
             unavailable[websearch.SPEC.name] = (
-                "No HTTPS SearXNG instance is configured in tools.web.searxng_instances."
+                "Local search is disabled and no HTTPS SearXNG instance is configured."
             )
+        elif self._outbound_http_service is None:
+            unavailable[websearch.SPEC.name] = "Outbound HTTP service is not configured."
         else:
             def origin(value: str) -> tuple[str, str, int] | None:
                 try:
@@ -3768,7 +3739,11 @@ class Runtime:
                 api = "chat" if kind == OPENAI_COMPATIBLE else "responses"
             if auth == "chatgpt_oauth":
                 if name != "codex": raise ConfigError("chatgpt_oauth is supported only by providers.codex")
-                from .auth.codex import CODEX_BASE_URL, ChatGPTOAuthHeaders, CodexOAuthManager
+                from .auth.codex import (
+                    CODEX_BASE_URL,
+                    ChatGPTOAuthHeaders,
+                    CodexOAuthManager,
+                )
                 factory = self._codex_auth_factory or CodexOAuthManager
                 manager = factory(profile=getattr(section, "profile", None) or "default")
                 # The private endpoint requires transient Responses without an output limit.
@@ -3943,6 +3918,12 @@ class Runtime:
         self._provider_file_diagnostics = tuple(
             diagnostic.to_dict() for diagnostic in file_result.diagnostics
         )
+        from .devtools import dev_enabled
+
+        if dev_enabled(self._environ):  # MOCK_PLAN §3.1: scenarios only in dev mode
+            from .devtools.mock.provider import MOCK_PROVIDER, MockProvider
+
+            providers.setdefault(MOCK_PROVIDER, MockProvider())
         return providers
 
     def _load_provider_files(self, config: Config) -> Any:
@@ -4795,7 +4776,11 @@ class Runtime:
             return manager
         context_manager = manager._context
         child_context = context_manager
-        if workspace is not None and context_manager.workspace != workspace:
+        if (
+            context_manager is not None
+            and workspace is not None
+            and context_manager.workspace != workspace
+        ):
             child_context = copy.copy(context_manager)
             child_context.workspace = workspace.resolve()
             if child_context._env is not None:
@@ -4804,11 +4789,12 @@ class Runtime:
                 )
         # A subagent is not the harness's root identity: no "You are Nexus"
         # preamble; its role body alone opens the system prompt.
-        if child_context is context_manager:
-            child_context = copy.copy(context_manager)
-        child_context._identity = ""
-        if child_context._env is not None:
-            child_context._env = replace(child_context._env, identity="")
+        if child_context is not None:
+            if child_context is context_manager:
+                child_context = copy.copy(context_manager)
+            child_context._identity = ""
+            if child_context._env is not None:
+                child_context._env = replace(child_context._env, identity="")
         child_coordinator = copy.copy(manager)
         child_coordinator._context = child_context
         # The agent body is the child's SOUL; MEMORY is deliberately empty.
@@ -5197,6 +5183,7 @@ class Runtime:
                 if inspect.isawaitable(outcome):
                     await outcome
             self._owns_outbound_http_service = False
+        await self._local_search_http_service.aclose()
         managers = [*self._owned_tools, *self._tracked_tools]
         for manager in managers:
             aclose = getattr(manager, "aclose", None)

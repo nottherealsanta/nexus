@@ -8,5 +8,5 @@ SPEC = {
 }
 
 
-async def run(args, ctx):  # noqa: ANN001, ANN201
+async def run(args, ctx):
     return None

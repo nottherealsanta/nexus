@@ -39,7 +39,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
-from ..config.paths import legacy_project_dir, project_agents_dir
+from ..config.paths import legacy_project_dir, nexus_home, project_agents_dir
 from .errors import (
     SkillError,
     SkillNotFoundError,
@@ -184,8 +184,7 @@ class SkillManager:
             builtin_paths = builtin
         for path in builtin_paths:
             roots.append((SkillSource.BUILTIN, Path(path)))
-        if home is not None:
-            roots.append((SkillSource.USER, Path(home) / ".nexus" / "skills"))
+        roots.append((SkillSource.USER, nexus_home(home) / "skills"))
         roots.append(
             (SkillSource.WORKSPACE_LEGACY, legacy_project_dir(workspace) / "skills")
         )

@@ -218,10 +218,10 @@ async def test_empty_manifest_catalog_has_no_tools(tmp_path):
     runtime = make_runtime(tmp_path)
     empty = Manifest(generation=1, config=config, tools={})
     manager = runtime._build_iteration_manager(config, empty)
-    # Web fetching is a runtime-owned capability, not an extension-manifest
+    # Web search and fetching are runtime-owned capabilities, not extension-manifest
     # builtin; no other tools are filled in from the default builtin catalog.
-    assert manager.names == ("webfetch",)
-    assert tuple(schema.name for schema in manager.schemas()) == ("webfetch",)
+    assert manager.names == ("webfetch", "websearch")
+    assert tuple(schema.name for schema in manager.schemas()) == ("webfetch", "websearch")
     await runtime.aclose()
 
 
@@ -232,7 +232,7 @@ async def test_limited_manifest_catalog_exposes_only_its_tools(tmp_path):
         generation=1, config=config, tools={"OnlyOne": _registered("OnlyOne")}
     )
     manager = runtime._build_iteration_manager(config, manifest)
-    assert manager.names == ("OnlyOne", "webfetch")
+    assert manager.names == ("OnlyOne", "webfetch", "websearch")
     assert "Read" not in manager.names
     await runtime.aclose()
 

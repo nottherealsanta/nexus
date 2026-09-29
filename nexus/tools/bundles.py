@@ -135,7 +135,7 @@ BUNDLE_NAMES = frozenset(BUNDLES)
 # Baseline availability explanations for tools that require runtime services.
 # Runtime host listings replace these with config-specific reasons.
 BASE_TOOL_AVAILABILITY: Mapping[str, str] = MappingProxyType({
-    "websearch": "No HTTPS SearXNG instance and matching allowed origin are configured",
+    "websearch": "Local search is disabled and no allowed HTTPS SearXNG instance is configured",
     "webfetch": "Web fetching is disabled or the outbound HTTP service is unavailable",
 })
 

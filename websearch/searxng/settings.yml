@@ -1,0 +1,15 @@
+use_default_settings: true
+
+search:
+  formats:
+    - html
+    - json
+
+server:
+  # The container publishes this only on the host loopback interface.
+  bind_address: "0.0.0.0"
+  port: 8080
+  public_instance: false
+  limiter: false
+  # The container environment overrides this placeholder at runtime.
+  secret_key: "change-me-with-SEARXNG_SECRET"

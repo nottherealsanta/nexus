@@ -35,6 +35,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
+from ..config.paths import state_db_path
 from ..errors import NexusError
 from ..util import new_id
 from .names import (
@@ -735,6 +736,7 @@ class PathGuard:
         "_read_denyroot_specs",
         "_read_denyroots",
         "_settings_scopes",
+        "_state_db_paths",
         "_workspace",
         "_worktree_boundary",
         "_write_root_specs",
@@ -763,6 +765,11 @@ class PathGuard:
         self._read_denyroots = tuple(
             self._root(root, home=home, label="read_denyroots")
             for root in read_denyroots
+        )
+        state_db = state_db_path(home)
+        self._state_db_paths = frozenset(
+            _canonical(Path(f"{state_db}{suffix}"))
+            for suffix in ("", "-wal", "-shm")
         )
         # A rebased policy can have no writable intersection with the child.
         # The normal constructor's empty-list default remains unchanged.
@@ -898,6 +905,11 @@ class PathGuard:
             if inside_workspace
             else str(resolved)
         )
+        if resolved in self._state_db_paths:
+            raise PathSecurityError(
+                f"Access denied: {display} is shared Nexus state",
+                code="state_db",
+            )
         if for_write and self._worktree_boundary and not inside_workspace:
             raise PathSecurityError(
                 f"Write denied: {display} is outside the child workspace",

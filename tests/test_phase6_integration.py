@@ -140,13 +140,13 @@ def tool_result_for(session, call_id):
 
 
 def write_hook_module(tmp_path: Path, name: str, body: str) -> None:
-    directory = tmp_path / ".nexus" / "hooks"
+    directory = tmp_path / ".agents" / "hooks"
     directory.mkdir(parents=True, exist_ok=True)
     (directory / f"{name}.py").write_text(body, encoding="utf-8")
 
 
 def write_agent(tmp_path: Path, name: str, *, description: str, body: str = "body") -> None:
-    directory = tmp_path / ".nexus" / "agents"
+    directory = tmp_path / ".agents" / "agents"
     directory.mkdir(parents=True, exist_ok=True)
     (directory / f"{name}.md").write_text(
         f"---\nname: {name}\ndescription: {description}\n---\n{body}\n",
@@ -172,11 +172,18 @@ def clean_git_repo(path: Path) -> Path:
     git(path, "init", "-q")
     git(path, "config", "user.name", "Nexus Worktree Test")
     git(path, "config", "user.email", "nexus-worktree@example.invalid")
-    (path / ".gitignore").write_text(".nexus/\n", encoding="utf-8")
+    (path / ".gitignore").write_text(".agents/\n.nexus/\n", encoding="utf-8")
     (path / "tracked.txt").write_text("parent base\n", encoding="utf-8")
     git(path, "add", ".gitignore", "tracked.txt")
     git(path, "commit", "-qm", "initial")
     return path
+
+
+def child_records(runtime: Runtime, logical_id: str):
+    from nexus.runtime import _child_session_id
+
+    manager = runtime._ensure_child_sessions().manager
+    return manager.store.read(_child_session_id(logical_id)).records
 
 
 # ---------------------------------------------------------------------------
@@ -201,7 +208,7 @@ async def test_manifest_discovers_builtin_agents_and_hooks(tmp_path):
     assert "SessionStart" in manifest.hooks
     assert [spec.name for spec in manifest.hooks["SessionStart"]] == ["observer"]
     # Built-ins are global: nothing is copied into the workspace.
-    assert not (tmp_path / ".nexus" / "agents" / "task.md").exists()
+    assert not (tmp_path / ".agents" / "agents" / "task.md").exists()
     await runtime.aclose()
 
 
@@ -250,12 +257,12 @@ async def test_deleted_override_falls_back_to_the_builtin_role(tmp_path):
     runtime = make_runtime(tmp_path, ScriptedProvider(text_response("ok")))
     await runtime.ensure_started()
     assert runtime.manifest.agents["task"].description == "custom task"
-    (tmp_path / ".nexus" / "agents" / "task.md").unlink()
+    (tmp_path / ".agents" / "agents" / "task.md").unlink()
 
     await runtime.extensions.reload(trigger="test")
 
     # Nothing is re-seeded; the role resolves from the built-in tier again.
-    assert not (tmp_path / ".nexus" / "agents" / "task.md").exists()
+    assert not (tmp_path / ".agents" / "agents" / "task.md").exists()
     assert runtime.manifest.agents["task"].description != "custom task"
     await runtime.aclose()
 
@@ -301,7 +308,7 @@ async def test_named_task_runs_a_child_and_replays_nested_events(tmp_path):
     assert transcript["view"]["body"]["messages"][-1]["blocks"][-1]["text"] == "child findings"
 
     # A real, replayable child session was written under the agents directory.
-    assert (tmp_path / ".nexus" / "sessions" / "agents").is_dir()
+    assert child_records(runtime, meta["session"])
     await runtime.aclose()
 
 
@@ -403,12 +410,11 @@ async def test_worktree_child_runtime_is_workspace_scoped_and_logs_in_parent(
     assert not (parent / "parent-write.txt").exists()
     assert (parent / "tracked.txt").read_text(encoding="utf-8") == "parent base\n"
     assert git(parent, "status", "--porcelain", "--untracked-files=all") == ""
-    child_session_log = next(
-        (parent / ".nexus" / "sessions" / "agents").glob("*.jsonl")
-    ).read_text(encoding="utf-8")
-    assert str(checkout) in child_session_log
-    assert (parent / ".nexus" / "sessions" / "agents").is_dir()
-    assert not (checkout / ".nexus" / "sessions" / "agents").exists()
+    child_id = next(iter(fold(events).agents.values())).id
+    child_session_records = child_records(runtime, child_id)
+    assert str(checkout) in str(child_session_records)
+    assert child_session_records
+    assert not (checkout / ".agents" / "sessions").exists()
     from nexus.agents.worktrees import WorktreeService
 
     daemon = parent.parent / f".nexus-worktrees-{parent.name}"
@@ -419,7 +425,7 @@ async def test_worktree_child_runtime_is_workspace_scoped_and_logs_in_parent(
 
 async def test_worktree_child_catalog_cannot_run_shell_or_custom_writer(tmp_path):
     parent = clean_git_repo(tmp_path / "repository")
-    extension_dir = parent / ".nexus" / "tools"
+    extension_dir = parent / ".agents" / "tools"
     extension_dir.mkdir(parents=True)
     (extension_dir / "custom_writer.py").write_text(
         "from pathlib import Path\n"
@@ -907,15 +913,19 @@ async def test_child_transcript_caps_results_and_redacts_argument_secrets(tmp_pa
 
 
 def test_child_transcript_event_result_payload_is_bounded():
-    from nexus.core.loop import _tool_result_event_view
+    from nexus.core.loop import _MAX_TRANSCRIPT_RESULT_CHARS, _tool_result_event_view
 
+    secret = "sk-live-secret-value"
+    text = "z " * ((_MAX_TRANSCRIPT_RESULT_CHARS - 10) // 2) + secret + "z" * 500_000
     result = _tool_result_event_view(
         ToolResult(
             tool_use_id="read-call",
-            content=[Text(text="z" * 500_000)],
+            content=[Text(text=text)],
         )
     )
     assert sum(len(item.get("text", "")) for item in result["content"]) <= 100_000 + 32
+    assert "[result truncated]" in [item.get("text") for item in result["content"]]
+    assert secret not in str(result["content"])
 
 
 async def test_running_child_transcript_is_partial(tmp_path):
@@ -1248,8 +1258,8 @@ async def test_extension_loaded_hook_fires_on_reload(tmp_path):
 
 
 async def test_command_hook_block_and_nonzero_policy(tmp_path):
-    (tmp_path / ".nexus").mkdir()
-    (tmp_path / ".nexus" / "hooks.toml").write_text(
+    (tmp_path / ".agents").mkdir()
+    (tmp_path / ".agents" / "hooks.toml").write_text(
         "[[hooks.PreToolUse]]\n"
         "name = 'block'\n"
         "matcher = 'Bash'\n"
@@ -1586,8 +1596,8 @@ async def test_precompact_typed_options_contract():
 
 
 async def test_precompact_command_hook_can_block(tmp_path):
-    (tmp_path / ".nexus").mkdir(parents=True, exist_ok=True)
-    (tmp_path / ".nexus" / "hooks.toml").write_text(
+    (tmp_path / ".agents").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".agents" / "hooks.toml").write_text(
         "[[hooks.PreCompact]]\n"
         "name = 'compactor'\n"
         "command = ['/bin/sh', '-c', 'echo nope; exit 3']\n"
@@ -2063,11 +2073,8 @@ async def test_ad_hoc_child_hook_modifies_its_input(tmp_path):
     await drain(session)
 
     # The child's own log proves the hook rewrote the Read to b.txt.
-    child_logs = list((tmp_path / ".nexus" / "sessions" / "agents").glob("*.jsonl"))
-    assert child_logs
-    child_text = "\n".join(
-        path.read_text(encoding="utf-8") for path in child_logs
-    )
+    child_text = str(child_records(runtime, "root/sub/1"))
+    assert child_text
     assert "BBB" in child_text
     assert "AAA" not in child_text
     await runtime.aclose()
@@ -2093,7 +2100,7 @@ class _PricingRegistry:
 
 
 def _write_concrete_agent(tmp_path: Path, name: str, model: str) -> None:
-    directory = tmp_path / ".nexus" / "agents"
+    directory = tmp_path / ".agents" / "agents"
     directory.mkdir(parents=True, exist_ok=True)
     (directory / f"{name}.md").write_text(
         f"---\nname: {name}\ndescription: {name}\nmodel: {model}\n---\nbody\n",
@@ -2180,9 +2187,13 @@ async def test_child_lifecycle_events_are_not_relayed_to_the_parent(tmp_path):
     # The agent tree is still complete.
     assert "agent.spawned" in types and "agent.completed" in types
     # The child's own log keeps its lifecycle events.
-    child_logs = list((tmp_path / ".nexus" / "sessions" / "agents").glob("*.jsonl"))
-    assert child_logs
-    assert "turn.started" in child_logs[0].read_text(encoding="utf-8")
+    child_events = [
+        record.event
+        for record in child_records(runtime, "root/sub/1")
+        if hasattr(record, "event")
+    ]
+    assert child_events
+    assert "turn.started" in {event.type for event in child_events}
     await runtime.aclose()
 
 
@@ -2247,9 +2258,9 @@ async def test_precompact_request_carries_real_turn_context(tmp_path):
 
 
 async def test_precompact_command_hook_is_cancelled_with_the_turn(tmp_path):
-    (tmp_path / ".nexus").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".agents").mkdir(parents=True, exist_ok=True)
     marker = tmp_path / "started"
-    (tmp_path / ".nexus" / "hooks.toml").write_text(
+    (tmp_path / ".agents" / "hooks.toml").write_text(
         "[[hooks.PreCompact]]\n"
         "name = 'slow'\n"
         f"command = ['/bin/sh', '-c', 'touch {marker}; sleep 30']\n",
@@ -2296,7 +2307,7 @@ def test_child_session_ids_are_collision_resistant():
 
 
 async def test_unavailable_declared_tool_is_reported_as_dropped(tmp_path):
-    directory = tmp_path / ".nexus" / "agents"
+    directory = tmp_path / ".agents" / "agents"
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "probe.md").write_text(
         "---\nname: probe\ndescription: probe\ntools: [NoSuchSkillTool, Read]\n---\nbody\n",

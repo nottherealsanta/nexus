@@ -16,10 +16,9 @@ from nexus.events import Event
 from nexus.model.message import Message, Text
 from nexus.model.providers.scripted import ScriptedProvider, text_response
 from nexus.model.request import ModelRequest
-from nexus.session import snapshot as snapshot_mod
 from nexus.session.manager import SessionManager
-from nexus.session.snapshot import SnapshotSummary, load
-from nexus.session.store import SummaryRecord
+from nexus.session.records import SummaryRecord
+from nexus.session.snapshot import Snapshot, SnapshotSummary
 
 
 class RecordingSummarizer:
@@ -105,7 +104,8 @@ def test_summaries_are_append_only_and_ordered(tmp_path):
 
 
 def test_snapshot_carries_and_validates_latest_summary(tmp_path):
-    session = SessionManager(tmp_path).open("s")
+    manager = SessionManager(tmp_path)
+    session = manager.open("s")
     session.append_message(Message(role="user", content=[Text(text="old")]))
     record = session.append_summary(
         text="condensed",
@@ -123,7 +123,7 @@ def test_snapshot_carries_and_validates_latest_summary(tmp_path):
     assert snap.summary.text == "condensed"
     assert snap.summary.through_seq == record.source_to_seq
 
-    loaded = load(tmp_path, "s", session.read(force=True))
+    loaded = manager.store.load_snapshot("s", session.read(force=True))
     assert loaded is not None and loaded.summary == snap.summary
     assert session.current.summary == snap.summary
 
@@ -134,8 +134,12 @@ def test_snapshot_with_summary_disagreeing_with_log_is_ignored(tmp_path):
     session.append_summary(text="real", summary_id="sum-1", source_to_seq=1)
     read = session.read(force=True)
     wrong = SnapshotSummary(text="forged", through_seq=1, summary_id="sum-1")
-    snapshot_mod.write(tmp_path, "s", snapshot_mod.Snapshot(id="s", seq=read.next_seq, messages=read.messages(), summary=wrong))
-    assert load(tmp_path, "s", read) is None
+    manager = SessionManager(tmp_path)
+    manager.store.write_snapshot(
+        "s",
+        Snapshot(id="s", seq=read.next_seq, messages=read.messages(), summary=wrong),
+    )
+    assert manager.store.load_snapshot("s", read) is None
     assert session.current.snapshot_seq is None
     # The authoritative summary still wins in current state.
     assert session.current.summary.summary_id == "sum-1"

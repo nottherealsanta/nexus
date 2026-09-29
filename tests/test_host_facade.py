@@ -353,6 +353,9 @@ def test_protocol_round_trips_every_command_and_result():
         p.ContextInspect(session="s"),
         p.Doctor(explain_reload=True),
         p.Health(),
+        p.MockList(),
+        p.MockStart(scenario="hello", speed=0.0, seed=1, session="mock-hello-1"),
+        p.MockClean(),
         p.WebLaunch(),
         p.Shutdown(reason="bye"),
     ]
@@ -438,6 +441,9 @@ def test_protocol_round_trips_every_command_and_result():
         ),
         p.DoctorResult(ok=True, report={"workspace": "/tmp/ws"}),
         p.HealthResult(ok=True, version=PROTOCOL_VERSION),
+        p.MockListResult(scenarios=[p.MockScenarioInfo(name="hello", summary="s")]),
+        p.MockStartResult(session="mock-hello-1", scenario="hello", turn_id="t"),
+        p.MockCleanResult(restored=True),
         p.WebLaunchResult(url="http://127.0.0.1:8080/#ticket"),
         p.ShutdownResult(stopping=True),
         p.ErrorResult(kind="SessionError", message="no"),
@@ -670,6 +676,7 @@ async def test_facade_health_exposes_counters_only():
         "max_concurrent",
         "viewers",
         "uptime",
+        "dev",
     }
     assert not hasattr(facade, "config")
     assert not hasattr(facade, "environ")
@@ -1034,11 +1041,16 @@ async def test_facade_doctor_aggregates_durable_registry_mismatches(tmp_path):
     )
     facade = HostFacade(runtime)
 
-    summary = facade.doctor()["registry_mismatches"]
+    report = facade.doctor()
+    summary = report["registry_mismatches"]
     assert summary["count"] == 1
     assert summary["by_provider"] == {"anthropic": 1}
     assert summary["samples"][0]["session"] == "probe"
     assert "sk-secret1234567" not in str(summary)
+    assert summary["sessions_scanned"] == 1
+    assert report["database"]["schema_user_version"] == 1
+    assert report["database"]["quick_check"] == "ok"
+    assert report["database"]["size_bytes"] > 0
     await runtime.aclose()
 
 
@@ -1248,29 +1260,29 @@ async def test_facade_delete_refuses_a_session_only_queued_input(tmp_path):
 
 
 async def test_facade_force_delete_then_view_disconnect_no_resurrection(tmp_path):
-    """Detaching a view after a force-delete must not recreate the log."""
+    """Detaching a view after a force-delete must not recreate the session."""
     runtime = _runtime(tmp_path, ScriptedProvider(text_response("bye")))
     facade = HostFacade(runtime)
     facade.open_session("s")
     await facade.start_turn("s", "hi")
     await facade.wait_idle(timeout=5.0)
-    handle = runtime.session("s")
-    log_path = handle.path
-
+    store = runtime.sessions.store
     view = facade.subscribe("s", 0, follow=True, client_id="view")
     await view.__anext__()
     assert facade.presence.viewers("s") == 1
+    records_before_delete = store.read("s").records
 
     record = facade.delete("s", force=True)
     assert not runtime.sessions.exists("s")
-    assert not log_path.exists()
+    assert store.row_exists("s")
+    assert store.read("s").records == records_before_delete
 
-    # Closing the view runs the same presence cleanup that used to append to the
-    # moved log and resurrect the session.
+    # Closing the view runs presence cleanup; it must not recreate the session.
     await view.aclose()
     assert facade.presence.viewers("s") == 0
-    assert not log_path.exists()
     assert not runtime.sessions.exists("s")
+    assert store.row_exists("s")
+    assert store.read("s").records == records_before_delete
     assert [item.session_id for item in facade.list_trashed()] == ["s"]
     assert runtime.sessions.restore(record.trash_id) == "s"
     await runtime.aclose()

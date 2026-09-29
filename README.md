@@ -14,7 +14,27 @@ or providers.
 
 ## Install
 
-From a clean checkout:
+One line (macOS, Linux, WSL). It installs [uv](https://docs.astral.sh/uv/) if it is
+missing, lets uv provide Python 3.11+, installs Nexus as an isolated tool, and puts
+`nexus` on your `PATH`:
+
+```sh
+curl -LsSf https://raw.githubusercontent.com/nottherealsanta/nexus/main/install.sh | sh
+```
+
+Prefer to read it first? `curl -LsSf …/install.sh -o install.sh && less install.sh && sh install.sh`.
+Options (also as `sh -s -- --flag`): `NEXUS_VERSION`, `NEXUS_SOURCE` (`git` or
+`pypi`), `NEXUS_GIT_REF`, `NEXUS_PYTHON`, `NEXUS_EXTRAS` (e.g. `documents`),
+`NEXUS_NO_MODIFY_PATH`, `NEXUS_NO_DOCTOR`. Native Windows is not supported yet
+(the daemon needs Unix sockets); use WSL.
+
+Update with `nexus update`: it upgrades through uv and restarts running daemons.
+`nexus --version` prints the version, `nexus daemon stop --all` stops every
+workspace daemon, and `nexus doctor` warns about duplicate `nexus` binaries and
+daemons still running an older version. Uninstall with `uv tool uninstall nexus-harness`
+(sessions in `~/.nexus` are kept).
+
+### From a clean checkout
 
 ```sh
 python3 -m venv .venv
@@ -277,8 +297,18 @@ Configuration is layered, increasing precedence:
 
 ```
 built-in defaults  <  ~/.nexus/config.toml  <  <workspace>/nexus.toml
+                   <  <workspace>/.nexus/nexus.toml (legacy read fallback)
+                   <  <workspace>/.agents/nexus.toml
                    <  NEXUS_* environment  <  CLI flags
 ```
+
+Project extensions and settings are written under `<workspace>/.agents/`.
+Existing `.nexus/` project extensions and settings remain readable as a
+lower-precedence fallback. Session records for all workspaces live in the shared
+append-only SQLite database `~/.nexus/nexus.db`; JSONL is the session export
+format. Caches and logs are machine state under `~/.nexus/` (per-project state
+under `~/.nexus/projects/`, with the shared models.dev cache at
+`~/.nexus/cache/`).
 
 It is validated with `msgspec` and reread at the start of every turn; unknown
 keys are hard errors. A minimal `nexus.toml`:
@@ -405,7 +435,7 @@ Nexus reads the [models.dev](https://models.dev) catalogue to know what models
 exist, which adapter serves them, and what they cost. The catalogue is
 descriptive data only: it can never set an endpoint or a credential.
 
-- Fetched on first use to `.nexus/cache/models.dev.json`, TTL
+- Fetched on first use to `~/.nexus/cache/models.dev.json`, TTL
   `models.refresh_ttl_days` (default 7). `[models] offline = true` pins to the
   vendored snapshot and never fetches.
 - Only providers whose env vars are present (or that appear in
@@ -486,6 +516,36 @@ worker runs as the same OS user as Nexus with a scrubbed environment, not inside
 a strong OS sandbox. Images remain a separate future goal and are not attached
 or converted by this document feature.
 
+### Web search
+
+Web search uses a local SearXNG instance by default at
+`http://127.0.0.1:18765/search`; Nexus does not use a public search provider by
+default. Start the Docker Compose service from the repository root:
+
+```sh
+cd websearch
+umask 077
+printf 'SEARXNG_SECRET=%s\n' "$(openssl rand -hex 32)" > .env
+docker compose -f compose.yaml up -d
+```
+
+The JSON search endpoint is
+`http://127.0.0.1:18765/search?q=nexus&format=json`. See
+[websearch/README.md](websearch/README.md) for setup, checks, and shutdown
+instructions. To use a remote HTTPS SearXNG instead, explicitly configure its
+search URL and allowed origin; this replaces the local instance as the search
+provider:
+
+```toml
+[tools.web]
+searxng_instances = ["https://search.example.org/search"]
+allowed_origins = ["https://search.example.org"]
+```
+
+Set `local_search_enabled = false` under `[tools.web]` to disable the local
+default. `WebFetch` remains public-only and does not fetch from the local search
+service.
+
 Bundles group tools; profiles compose bundles. Nothing in `core/` knows what
 "coding" means.
 
@@ -547,8 +607,8 @@ Extensions come in two tiers:
 
 - **Data** — skills, agents, hooks, MCP servers, `nexus.toml`, `SOUL.md`,
   `MEMORY.md`. Parsed, not imported.
-- **Code** — `*.py` tools and in-process hooks under `.nexus/tools/` and
-  `.nexus/hooks/`. Imported under a version-stamped module name, never
+- **Code** — `*.py` tools and in-process hooks under `.agents/tools/` and
+  `.agents/hooks/`. Imported under a version-stamped module name, never
   `importlib.reload`, so an in-flight call keeps its generation while new calls
   get the next one.
 
@@ -617,9 +677,10 @@ every workspace. Edit them in **Settings → Agents**: saving writes an override
 
 Every new session starts with `build`. To change that, pick another root agent
 under **New sessions start with** in Settings → Agents (terminal and browser).
-It writes `[agent] name` to `~/.nexus/config.toml`, or to `.nexus/nexus.toml`
-with the project scope, which wins over the global one. Choosing an agent inside
-a session (`/agent`, `Shift+Tab`) changes only that session.
+It writes `[agent] name` to `~/.nexus/config.toml`, or to
+`.agents/nexus.toml` with the project scope, which wins over the global one.
+Choosing an agent inside a session (`/agent`, `Shift+Tab`) changes only that
+session.
 
 | Agent | Kind | Tools | Purpose |
 | --- | --- | --- | --- |
@@ -656,7 +717,7 @@ Events: `SessionStart`, `UserPromptSubmit`, `ContextAssembled`, `PreToolUse`,
 `PostToolUse`, `PreCompact`, `TurnEnd`, `SessionEnd`, `ExtensionLoaded`.
 
 ```toml
-# .nexus/hooks.toml
+# .agents/hooks.toml
 [[hooks.PreToolUse]]
 matcher = "Write(**)"
 type = "command"
@@ -667,14 +728,14 @@ timeout_s = 10
 
 Command hooks are argv with no shell unless `shell = true` is opted into; they
 receive a bounded `NEXUS_*` environment and the invocation as JSON on stdin.
-In-process Python hooks live in `.nexus/hooks/*.py`, load through the same
+In-process Python hooks live in `.agents/hooks/*.py`, load through the same
 quarantine path as tools, and are trusted code. A `modify` decision must be
 revalidated and re-gated by the caller; a hook is policy, not a permission
 grant.
 
 ## MCP
 
-MCP servers are declared in `.nexus/mcp.json` (JSONC: comments and trailing
+MCP servers are declared in `.agents/mcp.json` (JSONC: comments and trailing
 commas allowed):
 
 ```jsonc
@@ -708,15 +769,16 @@ real backstop.
 
 ## Sessions, context, and cache
 
-Sessions are an append-only JSONL event log plus periodic snapshots:
-
-```
-.nexus/sessions/<id>.jsonl       one event per line, fsync'd, never rewritten
-.nexus/sessions/<id>.snap.json   {seq, messages, summary?, usage}
-```
+Sessions for all workspaces are append-only records in the shared SQLite
+database `~/.nexus/nexus.db`; JSONL is available only as an export format, and
+periodic snapshots are derived caches. Session locks, caches, and logs are
+machine state under `~/.nexus/`; per-project cache/log state is under
+`~/.nexus/projects/<project-hash>/`. Legacy session and trash directories are
+not imported. Export sessions before switching to this storage if they need to
+be retained.
 
 Fork, replay, and compaction are cheap and lossless: compaction writes a new
-snapshot, and the log still holds the original. "Omission from the prompt does
+snapshot, and the durable records still hold the original. "Omission from the prompt does
 not delete history." `nexus sessions export` renders a consistent prefix.
 
 ```python
@@ -786,15 +848,7 @@ and the terminal CLI still speaks only the Unix socket.
 A UI may import only `nexus.host`, `nexus.view`, `nexus.events`, and the
 standard library. That boundary is enforced by a test, not by discipline.
 
-Strict tests enforce independent physical-line budgets: `core/` + `model/` +
-`tools/spec.py` under 14,000; `host/` under 7,000; `view/` under 2,200; and `ui/`
-under 5,000. The host allocation was raised from 6,500 for the added browser,
-file-completion, metadata, and redacted-diagnostics surfaces; the UI allocation
-was raised from 4,500 to 5,000 for the browser client and expanded Textual
-composition, including the right drawer, composer/picker, session diagnostics,
-and completion. The host/view/ui values are separate reviewed budgets and
-ratchets, not a combined allowance.
-The closeout report refuses to record any directory at or above its cap. See
+Line counts per package are recorded in the closeout report; there are no line caps. See
 `ARCHITECTURE.md` and `tests/test_phase3_exit.py`.
 
 ## Offline and local
@@ -933,3 +987,10 @@ python tests/playwright_tui_check.py
 Tests use temporary workspaces and recorded fixtures; they need no network and
 no authentication. Provider conformance runs every adapter against the same
 fixture suite, which is what makes "add a provider later" safe.
+
+### Dev mode
+
+`nexus --dev chat` (also `web`, `run`) uses an isolated home and a sandbox
+workspace, and adds `/mock` to run scripted scenarios with no real model calls:
+long tool chains, parallel tools, parallel and nested subagents, errors, and
+more. `nexus mock all --speed 0` runs every non-interactive scenario headlessly.

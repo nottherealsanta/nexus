@@ -6,7 +6,7 @@ from nexus.model.message import Message, Text, ToolResult, ToolUse
 from nexus.session import snapshot as snapshot_mod
 from nexus.session.ids import is_valid_session_id
 from nexus.session.manager import SessionManager
-from nexus.session.store import MessageRecord
+from nexus.session.records import MessageRecord
 
 
 def _msg(text, role="user"):

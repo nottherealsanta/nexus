@@ -10,9 +10,14 @@ are two tiers:
 
 Read the honesty note at the end before you load any code extension.
 
+Project extensions and settings are written under `<workspace>/.agents/`.
+Existing `<workspace>/.nexus/` extensions/settings remain readable as a
+lower-precedence legacy fallback; changes are written to `.agents/`. User-scope
+extensions remain under `~/.nexus/`.
+
 ## A custom tool
 
-Create `.nexus/tools/my_tool.py`. A tool module declares either a module-level
+Create `.agents/tools/my_tool.py`. A tool module declares either a module-level
 `SPEC` plus `async def run(args, ctx)`, or a synchronous `register()` returning
 tool declarations. The two are mutually exclusive.
 
@@ -87,7 +92,7 @@ def register():
 ## A custom provider
 
 An adapter is one file implementing the `Provider` protocol against a wire
-protocol. Drop it in `.nexus/providers/<name>.py` (workspace) or
+protocol. Drop it in `.agents/providers/<name>.py` (workspace) or
 `~/.nexus/providers/<name>.py` (user); discovery validates and loads it through
 the same quarantine path as tools. A file defines one of `PROVIDER` (one
 provider object), `PROVIDERS` (a name-to-provider mapping), or
@@ -123,7 +128,7 @@ recorded fixture before relying on it. If it passes, the loop will drive it.
 
 ## A custom skill
 
-`.nexus/skills/<dir>/SKILL.md`. The six supported keys are exactly `name`,
+`.agents/skills/<dir>/SKILL.md`. The six supported keys are exactly `name`,
 `description`, `allowed-tools`, `bundles`, `model`, `version`; `name` and
 `description` are required.
 
@@ -150,7 +155,7 @@ active. Precedence is workspace > user > builtin.
 
 ## A custom agent
 
-`.nexus/agents/<name>.md`. The frontmatter grammar is deliberately restricted
+`.agents/agents/<name>.md`. The frontmatter grammar is deliberately restricted
 (no YAML library): the keys are `name`, `description`, `bundles`, `tools`,
 `model`, `provider`, `reasoning_effort`, `fallback`, `color`, `max_iterations`,
 `context_tokens`, `contexts`, `profile`, and `write_roots`. A `tools` item may carry a leading
@@ -162,10 +167,10 @@ subagent-only default. `provider` is optional and must agree with a qualified
 stable palette color is derived from the case-normalized agent name.
 `fallback: [provider/model, ...]` (up to 8) lists models tried in order, before
 the workspace `models.fallback` chain, when the agent's model fails before any
-output. A definition in `~/.nexus/agents/` or `.nexus/agents/` with a built-in's
+output. A definition in `~/.nexus/agents/` or `.agents/agents/` with a built-in's
 name (`build`, `advisor`, `task`, `quick`) overrides it.
 `write_roots: [global, project]` narrows an agent's mutating file tools to
-`~/.nexus/` and `<workspace>/.nexus/`. It never widens the normal permission
+`~/.nexus/` and `<workspace>/.agents/`. It never widens the normal permission
 roots. Credential, session, cache, trash, and daemon files remain blocked in
 both scopes.
 
@@ -198,7 +203,7 @@ runner also appends every file a child changed through its edit tools.
 
 ## A custom hook
 
-Declarative command hooks live in `.nexus/hooks.toml`:
+Declarative command hooks live in `.agents/hooks.toml`:
 
 ```toml
 [[hooks.PreToolUse]]
@@ -215,7 +220,7 @@ environment (`NEXUS_HOOK_EVENT`, `NEXUS_TOOL_NAME`, `NEXUS_TOOL_KEY`,
 and a fixed safe OS environment. Set `shell = true` and `command = "..."` only
 when you deliberately want a shell.
 
-In-process Python hooks live in `.nexus/hooks/*.py` and declare `HOOKS` or a
+In-process Python hooks live in `.agents/hooks/*.py` and declare `HOOKS` or a
 synchronous `register()` returning an iterable of declarations. Each declaration
 names an event and carries a `run(invocation, ctx)` callable:
 
@@ -248,7 +253,7 @@ a permission grant. A block becomes an error tool result the model sees.
 
 ## An MCP server
 
-`.nexus/mcp.json` (JSONC: comments and trailing commas are accepted):
+`.agents/mcp.json` (JSONC: comments and trailing commas are accepted):
 
 ```jsonc
 {
@@ -273,8 +278,9 @@ are an error. Only `${env:VAR}` interpolation is performed; a bare `$VAR` is
 left literal. Editing the file takes effect live.
 
 Bridged tools appear as `mcp__<server>__<tool>` in the `mcp` bundle and are
-gated like any other tool. Server stderr is captured to `.nexus/logs/mcp/`,
-never into context. Tool descriptions and results are untrusted data.
+gated like any other tool. Server stderr is captured to
+`~/.nexus/projects/<project-hash>/logs/mcp/`, never into context. Tool
+descriptions and results are untrusted data.
 
 ## Config and permissions
 
@@ -299,7 +305,8 @@ home locations. A keyed grant persists only as an exact-action rule, so an
 
 `[ext]`, `[agents]`, `[hooks]`, `[mcp]`, `[sessions]`, and `[settings]` tune the
 extension and session subsystems. Settings writes project config to
-`<workspace>/.nexus/nexus.toml`, which overlays legacy `<workspace>/nexus.toml`:
+`<workspace>/.agents/nexus.toml`; existing `<workspace>/.nexus/nexus.toml` is a
+read-only fallback, and both overlay `<workspace>/nexus.toml`:
 
 ```toml
 [ext]

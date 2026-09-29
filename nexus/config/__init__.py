@@ -13,16 +13,17 @@ from __future__ import annotations
 
 import math
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from ..errors import ConfigError
 from . import layers
 from .paths import resolve_within
 from .schema import DEFAULT_CONTEXT_TOKENS, ConfigV2
 
-__all__ = ["Config", "ConfigV2", "ConfigError", "resolve_within"]
+__all__ = ["Config", "ConfigError", "ConfigV2", "resolve_within"]
 
 
 @dataclass(frozen=True)
@@ -72,7 +73,7 @@ class Config:
         environ: Mapping[str, str] | None = None,
         flags: Mapping[str, Any] | None = None,
         session: Mapping[str, Any] | None = None,
-    ) -> "Config":
+    ) -> Config:
         """Load and merge every layer. ``home``/``environ`` are injectable for tests."""
         effective = layers.load_effective(
             Path(workspace),
@@ -86,7 +87,7 @@ class Config:
         return cls(**effective.values, version=1, source=effective.source)
 
     @classmethod
-    def _from_v2(cls, v2: ConfigV2, *, source: str | None) -> "Config":
+    def _from_v2(cls, v2: ConfigV2, *, source: str | None) -> Config:
         codex = v2.providers.get("codex")
         return cls(
             executable=(codex.executable if codex and codex.executable else "codex"),

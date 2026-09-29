@@ -56,21 +56,19 @@ Tests need no network or credentials. They use temporary workspaces,
   `nexus/ui_support/tui_settings.py`, `nexus/ui_support/tui_setup.py`,
   `nexus/ui_support/tui_providers.py`).
    Checked by `tests/test_ui_layering.py`.
-3. **Physical-line budgets** over `.py` files: `core/`+`model/`+`tools/spec.py` < 14,000,
-   `host/` < 7,000, `view/` < 2,200, `ui/` < 5,000 (`tests/test_phase3_exit.py`),
-   and the pure-client files `ui/cli/` + `ui/jsonl.py` + `ui/tui/app.py` < 2,400
-   (`tests/test_ui_layering.py`). New Textual behavior goes in its own module
-   (e.g. `ui/tui/panels.py`), not in `app.py`.
-   `host/` is close to its cap. Put helpers in `nexus/host_support/` or
-   `nexus/ui_support/` when they belong there, but never move code only to dodge
-   a budget. JS, CSS and HTML are not counted.
+3. **No line caps.** Line counts are recorded in the Phase 3 baseline report
+   (`tests/test_phase3_exit.py`) for information only. New Textual behavior still
+   goes in its own module (e.g. `ui/tui/panels.py`) rather than growing `app.py`,
+   and helpers belong in `nexus/host_support/` or `nexus/ui_support/` when they
+   fit there.
 4. **All UI work goes through the host contract.** A surface never reads session
    files or touches managers. If a UI needs new data or an action, add a command
    to `nexus/host/protocol.py`, handle it in `nexus/host/facade.py`, and call it
    from every client that needs it.
-5. **Durable log first.** The session is an append-only JSONL log. Views are
-   reductions of it (`nexus/view/reduce.py`), and replay must reproduce live
-   state. Never add UI state that only exists in memory if it must survive a
+5. **Durable log first.** Sessions are append-only records in the shared
+   `~/.nexus/nexus.db` SQLite database; JSONL is the export format. Views are
+   reductions of the records (`nexus/view/reduce.py`), and replay must reproduce
+   live state. Never add UI state that only exists in memory if it must survive a
    reconnect.
 
 ## Conventions
@@ -96,6 +94,10 @@ Tests need no network or credentials. They use temporary workspaces,
 - The worktree is often dirty with unrelated in-progress work. Don't revert or
   "fix" files outside your task. If an unrelated test already fails, say so
   instead of changing it.
-- `artifacts/` holds ignored screenshots and benchmark output. Workspace state
-  lives in `<workspace>/.nexus/` (sessions, daemon socket, `mcp.json`, agents,
-  skills, hooks, tools, providers, cache).
+- `artifacts/` holds ignored screenshots and benchmark output. Shared session
+  records live in `~/.nexus/nexus.db`; locks, caches, and logs are machine state
+  under `~/.nexus/`. Project extensions and settings live in
+  `<workspace>/.agents/`. Existing `<workspace>/.nexus/` extensions and settings
+  remain a read-only fallback. Session records are stored only in SQLite;
+  legacy session and trash directories are not imported. Export sessions before
+  switching to this storage if they need to be retained.

@@ -260,7 +260,7 @@ class SettingsConsole(SettingsScreen):
         except Exception as exc:  # noqa: BLE001 - host validation error
             self.query_one("#settings-default-agent-note", Static).update(sanitize(str(exc), 120))
             return
-        where = "~/.nexus" if self.scope == "global" else "<project>/.nexus"
+        where = "~/.nexus" if self.scope == "global" else "<project>/.agents"
         path = f"{where}/{_field(result, 'rel_path', '')}"
         effective = str(_field(result, "effective", name))
         note = f"saved to {path}" if effective == name else f"saved to {path} · {effective} still applies (project config)"
@@ -290,7 +290,7 @@ class SettingsConsole(SettingsScreen):
             return
         self._items = list(_field(result, "items", ()))[:512]
         self.query_one("#settings-scope-path", Static).update(
-            str(_field(result, "root_display", "~/.nexus" if self.scope == "global" else "<project>/.nexus"))
+            str(_field(result, "root_display", "~/.nexus" if self.scope == "global" else "<project>/.agents"))
         )
         for button in ("global", "project"):
             self.query_one(f"#settings-scope-{button}", Button).set_class(button == self.scope, "-current")
@@ -346,7 +346,7 @@ class SettingsConsole(SettingsScreen):
         self.query_one("#settings-file-title", Static).update(str(_field(result, "rel_path", item_id)))
         self._sync_agent_form()
         self._sync_actions()
-        where = "~/.nexus" if self.scope == "global" else "<project>/.nexus"
+        where = "~/.nexus" if self.scope == "global" else "<project>/.agents"
         self._status(f"Built-in default · saving writes an override to {where}" if self._builtin else "")
 
     def _sync_agent_form(self) -> None:

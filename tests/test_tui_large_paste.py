@@ -33,7 +33,7 @@ async def test_small_paste_stays_inline_and_large_paste_is_an_editable_attachmen
     async with app.run_test() as pilot:
         await pilot.pause()
         editor = app.query_one(ChatEditor)
-        await editor._on_paste(Paste("short paste"))
+        app.post_message(Paste("short paste"))
         await pilot.pause()
         assert editor.text == "short paste"
         assert app.query_one("#paste-attachments").display is False
@@ -110,7 +110,7 @@ async def test_small_paste_submits_unchanged_on_enter():
     async with app.run_test() as pilot:
         await pilot.pause()
         editor = app.query_one(ChatEditor)
-        await editor._on_paste(Paste("short paste"))
+        app.post_message(Paste("short paste"))
         editor.focus()
         await pilot.press("enter")
         await pilot.pause(0.1)

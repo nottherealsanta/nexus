@@ -53,8 +53,8 @@ instructions, use tools to inspect, edit, and verify your work, and report
 outcomes and limitations.
 
 Configuration and instructions reload at the start of every turn. Workspace
-extensions under `.nexus/tools/`, `.nexus/hooks/`, `.nexus/skills/`, and
-`.nexus/agents/` are hot and take effect without a restart. Core Nexus source
+extensions under `.agents/tools/`, `.agents/hooks/`, `.agents/skills/`, and
+`.agents/agents/` are hot and take effect without a restart. Core Nexus source
 changes require restarting the daemon (`nexus daemon stop`).
 
 Keep this harness small: prefer focused changes, verify them, and do not claim
@@ -107,6 +107,40 @@ async def _run(
             stderr=stderr,
             json_output=json_output,
             approver=approver,
+        )
+    finally:
+        await client.aclose()
+
+
+def _dev_env() -> bool:
+    return os.environ.get("NEXUS_DEV", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _enter_dev_mode(stderr: TextIO) -> Path:
+    """Turn on dev mode for this process and every daemon it spawns (MOCK_PLAN §3.1).
+
+    Sets ``NEXUS_DEV`` (inherited by the daemon), keeps state in an isolated home
+    (``~/.nexus/dev`` unless ``NEXUS_HOME`` is already set) and returns a seeded
+    sandbox workspace, so no real workspace is ever touched.
+    """
+    from .devtools.mock.sandbox import DEFAULT_DEV_HOME, ensure_sandbox
+
+    os.environ["NEXUS_DEV"] = "1"
+    os.environ.setdefault("NEXUS_HOME", str(DEFAULT_DEV_HOME.expanduser()))
+    sandbox = ensure_sandbox(os.environ["NEXUS_HOME"])
+    stderr.write(f"dev mode: workspace={sandbox} home={os.environ['NEXUS_HOME']}\n")
+    return sandbox
+
+
+async def _mock(workspace: Path, args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> int:
+    from .ui.cli import open_client
+    from .ui_support.mock_cli import run_mock
+
+    client = await open_client(workspace)
+    try:
+        return await run_mock(
+            client, action=args.mock_action, scenario=args.scenario, speed=args.speed,
+            seed=args.seed, stdout=stdout, stderr=stderr, json_output=args.json,
         )
     finally:
         await client.aclose()
@@ -689,7 +723,10 @@ async def _doctor(
     client = await open_client(workspace)
     try:
         result = await client.doctor(explain_reload=args.explain_reload)
-        report = getattr(result, "report", None) or {}
+        report = dict(getattr(result, "report", None) or {})
+        from .host_support.install import install_report
+
+        report["install"] = await install_report()
         if args.json:
             stdout.write(json.dumps(report, ensure_ascii=False, sort_keys=True) + "\n")
             return 0
@@ -728,6 +765,12 @@ async def _daemon_command(
         else:
             stdout.write(f"not running socket={report.get('socket')}\n")
         return 0 if report.get("running") else 1
+    if action == "stop" and args.all:
+        from .host_support.install import stop_all_daemons
+
+        count = await stop_all_daemons()
+        stdout.write(f"stopped {count} daemon{'' if count == 1 else 's'}\n")
+        return 0
     if action == "stop":
         stopped = await daemon_mod.stop(workspace)
         stdout.write("stopped\n" if stopped else "not running\n")
@@ -753,6 +796,68 @@ async def _daemon_command(
         stdout.write(text if text.endswith("\n") or not text else text + "\n")
         return 0
     raise ValueError(f"unknown daemon action {action!r}")
+
+
+async def _update(args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> int:
+    """Upgrade through uv, then restart every daemon that was running.
+
+    This process still holds the old code, so the restart runs the freshly
+    installed ``nexus`` binary in child processes.
+    """
+    import shutil
+    import subprocess
+
+    from .host_support import install
+
+    method = install.install_method()
+    if method == "editable":
+        stderr.write("Error: this is an editable install; update it with `git pull`.\n")
+        return 1
+    uv = install.find_uv()
+    if uv is None or method == "pip":
+        stderr.write(
+            "Error: Nexus was not installed with uv. Reinstall with the one-line "
+            "installer from the README, then `nexus update` works.\n"
+        )
+        return 1
+    before = install.package_version()
+    running = await install.running_daemons()
+    stdout.write(f"Updating nexus (currently {before}) ...\n")
+    stdout.flush()
+    code = await asyncio.to_thread(install.run_update, uv, method)
+    if code != 0:
+        stderr.write(f"Error: uv exited with status {code}; Nexus was not changed.\n")
+        return 1
+    binary = shutil.which("nexus") or "nexus"
+    after = install.installed_version_after_update(binary) or before
+    stdout.write(
+        f"Nexus is already up to date ({after}).\n"
+        if after == before
+        else f"Updated nexus {before} -> {after}.\n"
+    )
+    if args.no_restart or not running:
+        if running:
+            stdout.write("Running daemons keep the old code; `nexus daemon stop --all`.\n")
+        return 0
+    await install.stop_all_daemons()
+    failed = 0
+    for entry in running:
+        workspace = entry.get("workspace") or ""
+        if not workspace:
+            continue
+        result = await asyncio.to_thread(
+            subprocess.run,
+            [binary, "--workspace", workspace, "daemon", "restart"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            stdout.write(f"Restarted daemon for {workspace}\n")
+        else:
+            failed += 1
+            stderr.write(f"Could not restart the daemon for {workspace}\n")
+    return 1 if failed else 0
 
 
 async def _auth_command(args: argparse.Namespace, stdout: TextIO) -> int:
@@ -847,6 +952,50 @@ def _render_view_dict(view: dict[str, Any]) -> str:
 
 def _print_doctor(report: dict[str, Any], stdout: TextIO) -> None:
     stdout.write(f"workspace: {report.get('workspace', '?')}\n")
+    install = report.get("install")
+    if isinstance(install, dict):
+        stdout.write(
+            f"install: nexus {install.get('version', '?')} via {install.get('method', '?')}"
+            f" ({install.get('python', '?')})\n"
+        )
+        stdout.writelines(f"  warning: {w}\n" for w in install.get("warnings", ()) or ())
+    database = report.get("database")
+    if isinstance(database, dict):
+        schema = database.get("schema_user_version")
+        schema_text = str(schema) if type(schema) is int and schema >= 0 else "?"
+        quick_check = database.get("quick_check")
+        if quick_check not in ("ok", "issues", "unavailable"):
+            quick_check = "?"
+        size = database.get("size_bytes")
+        size_text = str(size) if type(size) is int and size >= 0 else "?"
+        wal_size = database.get("wal_size_bytes")
+        wal_text = str(wal_size) if type(wal_size) is int and wal_size >= 0 else "?"
+        path = database.get("path")
+        if isinstance(path, str):
+            path = "".join(char for char in path if char.isprintable())[:160]
+        else:
+            path = ""
+        path_text = f" path={path}" if path else ""
+        stdout.write(
+            f"database: quick_check={quick_check} schema={schema_text} "
+            f"size={size_text}B wal={wal_text}B{path_text}\n"
+        )
+    legacy_extensions = report.get("legacy_extensions_pending")
+    if isinstance(legacy_extensions, list):
+        documented = {
+            "skills", "agents", "tools", "hooks", "providers", "mcp.json",
+            "hooks.toml", "nexus.toml",
+        }
+        names = [
+            name for name in legacy_extensions[:8]
+            if isinstance(name, str) and name in documented
+        ]
+        if names:
+            entries = ", ".join(f".nexus/{name}" for name in names)
+            stdout.write(
+                f"WARNING: legacy extensions found ({entries}); move them to "
+                ".agents/ to keep them active.\n"
+            )
     providers = report.get("providers", []) or []
     stdout.write(f"providers: {len(providers)}\n")
     stdout.writelines(
@@ -957,7 +1106,12 @@ def build_parser() -> argparse.ArgumentParser:
         prog="nexus", description="Nexus: a provider-agnostic agent harness"
     )
     parser.add_argument("--workspace", type=Path, default=Path.cwd())
-    sub = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument("--version", action="store_true", help="Print the version and exit")
+    parser.add_argument(
+        "--dev", action="store_true",
+        help="Dev mode: isolated home, sandbox workspace and /mock scenarios (also NEXUS_DEV=1)",
+    )
+    sub = parser.add_subparsers(dest="command")
 
     sub.add_parser(
         "init",
@@ -987,6 +1141,15 @@ def build_parser() -> argparse.ArgumentParser:
     web = sub.add_parser("web", help="Open the workspace in a local browser")
     web.add_argument("--no-browser", action="store_true", help="Print the one-time launch URL")
 
+    for dev_capable in (run, chat, web):  # `nexus chat --dev` as well as `nexus --dev chat`
+        dev_capable.add_argument("--dev", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    mock = sub.add_parser("mock", help="Dev mode: run scripted mock scenarios headlessly")
+    mock.add_argument("mock_action", choices=["list", "run", "all", "clean"])
+    mock.add_argument("scenario", nargs="?", default="", help="Scenario name (for `run`)")
+    mock.add_argument("--speed", type=float, default=0.0, help="Pacing multiplier (0 = instant)")
+    mock.add_argument("--seed", type=int, default=0)
+    mock.add_argument("--json", action="store_true", help="One JSON object per scenario")
+
     replay = sub.add_parser("replay", help="Re-render a session from its log")
     replay.add_argument("session_id")
     replay.add_argument("--json", action="store_true", help="Emit the view model as JSON")
@@ -995,10 +1158,18 @@ def build_parser() -> argparse.ArgumentParser:
     daemon_sub = daemon.add_subparsers(dest="daemon_action", required=True)
     daemon_status = daemon_sub.add_parser("status", help="Report daemon liveness")
     daemon_status.add_argument("--json", action="store_true")
-    daemon_sub.add_parser("stop", help="Gracefully stop the daemon")
+    daemon_stop = daemon_sub.add_parser("stop", help="Gracefully stop the daemon")
+    daemon_stop.add_argument(
+        "--all", action="store_true", help="Stop every workspace's daemon"
+    )
     daemon_sub.add_parser("restart", help="Stop the daemon and start a fresh one")
     daemon_logs = daemon_sub.add_parser("logs", help="Tail the daemon log")
     daemon_logs.add_argument("--lines", type=int, default=200)
+
+    update = sub.add_parser("update", help="Upgrade Nexus and restart running daemons")
+    update.add_argument(
+        "--no-restart", action="store_true", help="Leave running daemons on the old version"
+    )
 
     auth = sub.add_parser("auth", help="Manage local provider credentials")
     auth_sub = auth.add_subparsers(dest="auth_provider", required=True)
@@ -1131,7 +1302,18 @@ def _json_error(args: argparse.Namespace, exc: BaseException) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.version:
+        from .host_support.install import package_version
+
+        print(f"nexus {package_version()}")
+        return 0
+    if args.command is None:
+        parser.error("the following arguments are required: command")
     workspace = args.workspace.resolve()
+    if args.command == "mock" and args.mock_action == "run" and not args.scenario:
+        parser.error("`nexus mock run` needs a scenario name")
+    if args.dev or args.command == "mock" or _dev_env():
+        workspace = _enter_dev_mode(sys.stderr)
     stdout = sys.stdout
     stderr = sys.stderr
     try:
@@ -1180,6 +1362,8 @@ def main(argv: list[str] | None = None) -> int:
                     stderr.write("Error: Textual is required for chat; reinstall Nexus with its runtime dependencies.\n")
                     return 1
                 raise
+        if args.command == "mock":
+            return asyncio.run(_mock(workspace, args, stdout, stderr))
         if args.command == "web":
             return asyncio.run(_web(workspace, open_browser=not args.no_browser))
         if args.command == "replay":
@@ -1204,6 +1388,8 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(_worktrees_command(workspace, args, stdout, stderr))
         if args.command == "doctor":
             return asyncio.run(_doctor(workspace, args, stdout))
+        if args.command == "update":
+            return asyncio.run(_update(args, stdout, stderr))
         parser.error(f"unknown command {args.command!r}")
         return 2
     except KeyboardInterrupt:

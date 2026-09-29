@@ -2,9 +2,9 @@
 
 Closes §16.5 item 3. Two layers are covered:
 
-* :mod:`nexus.host.doctor` directly -- bounded discovery/reads, dedupe, open
-  sessions, corrupt tails, inaccessible/missing directories, and the
-  "no secrets, no raw error text" rule against hostile logs.
+* :mod:`nexus.host.doctor` directly -- bounded SQLite discovery/tail reads,
+  project and namespace isolation, open sessions, and the "no secrets, no raw
+  error text" rule against hostile records.
 * the facade and CLI surfaces -- the report shape, the human rendering, and the
   JSON output a caller actually sees.
 """
@@ -12,8 +12,6 @@ from __future__ import annotations
 
 import io
 import json
-import os
-import threading
 from pathlib import Path
 
 import pytest
@@ -22,11 +20,11 @@ from nexus import cli
 from nexus.events import Event
 from nexus.host.doctor import MISMATCH_EVENT, ScanLimits, mismatch_summary
 from nexus.host.facade import HostFacade
-from nexus.session.store import SessionStore
+from nexus.session.db import SqliteSessionStore, StateDatabase
 
 
 def _write_mismatch(
-    store: SessionStore,
+    store: SqliteSessionStore,
     session_id: str,
     *,
     provider: str = "anthropic",
@@ -36,6 +34,8 @@ def _write_mismatch(
     detail: str = "Bearer sk-deadbeefdeadbeef should never surface",
     ts: float = 1.5,
 ) -> None:
+    if not store.exists(session_id):
+        store.create(session_id)
     store.append_event(
         session_id,
         Event(
@@ -53,10 +53,8 @@ def _write_mismatch(
     )
 
 
-def _store(tmp_path: Path) -> SessionStore:
-    directory = tmp_path / "sessions"
-    directory.mkdir(parents=True, exist_ok=True)
-    return SessionStore(directory)
+def _store(tmp_path: Path) -> SqliteSessionStore:
+    return SqliteSessionStore(StateDatabase(tmp_path / "state.db"), "project-a")
 
 
 # ---------------------------------------------------------------------------
@@ -70,7 +68,7 @@ def test_mismatch_summary_counts_and_groupings(tmp_path: Path) -> None:
     _write_mismatch(store, "alpha", provider="openai", model="m2", source="provider-rejection")
     _write_mismatch(store, "beta", provider="anthropic", model="m1", feature="context")
 
-    summary = mismatch_summary(store.directory)
+    summary = mismatch_summary(store)
     assert summary["count"] == 3
     assert summary["sessions_scanned"] == 2
     assert summary["sessions_with_mismatches"] == 2
@@ -85,9 +83,32 @@ def test_mismatch_summary_counts_and_groupings(tmp_path: Path) -> None:
     assert "seq" in summary["samples"][0]
 
 
-def test_mismatch_summary_empty_or_absent_directory(tmp_path: Path) -> None:
-    absent = tmp_path / "nope"
-    summary = mismatch_summary(absent)
+def test_mismatch_summary_scans_bounded_sqlite_store_namespace(tmp_path: Path) -> None:
+    db = StateDatabase(tmp_path / "state.db")
+    store = SqliteSessionStore(db, "project-a", "main")
+    for session_id in ("alpha", "beta", "gamma"):
+        store.create(session_id)
+        _write_mismatch(store, session_id, provider=session_id)
+    other_project = SqliteSessionStore(db, "project-b", "main")
+    other_project.create("outside-project")
+    _write_mismatch(other_project, "outside-project", provider="foreign")
+    other_namespace = SqliteSessionStore(db, "project-a", "agents")
+    other_namespace.create("outside-namespace")
+    _write_mismatch(other_namespace, "outside-namespace", provider="agent")
+
+    summary = mismatch_summary(store, limits=ScanLimits(max_sessions=2))
+
+    assert summary["sessions_scanned"] == 2
+    assert summary["sessions_with_mismatches"] == 2
+    assert summary["count"] == 2
+    assert summary["by_session"] == {"alpha": 1, "beta": 1}
+    assert summary["truncated"] is True
+    assert "foreign" not in summary["by_provider"]
+    assert "agent" not in summary["by_provider"]
+
+
+def test_mismatch_summary_empty_sqlite_store(tmp_path: Path) -> None:
+    summary = mismatch_summary(_store(tmp_path))
     assert summary["count"] == 0 and summary["sessions_scanned"] == 0
     assert summary["by_provider"] == {} and summary["samples"] == []
     assert summary["truncated"] is False
@@ -105,129 +126,42 @@ def test_mismatch_summary_ignores_non_mismatch_records(tmp_path: Path) -> None:
         store.append_event("keep", Event(type=event_type, data={}, session="keep"))
     store.append_message("keep", _message("hello"))
 
-    summary = mismatch_summary(store.directory)
+    summary = mismatch_summary(store)
     assert summary["count"] == 1
     assert summary["by_provider"] == {"anthropic": 1}
 
 
-def test_mismatch_summary_dedupes_duplicate_events_across_reopen(tmp_path: Path) -> None:
-    """A re-read log must not double count; the same event id is folded once."""
+def test_mismatch_summary_is_stable_across_repeated_reads(tmp_path: Path) -> None:
+    """Repeated summaries of the same SQLite records have identical counts."""
     store = _store(tmp_path)
     _write_mismatch(store, "dup")
-    first = mismatch_summary(store.directory)
-    second = mismatch_summary(store.directory)
+    first = mismatch_summary(store)
+    second = mismatch_summary(store)
     assert first["count"] == second["count"] == 1
     assert first["by_provider"] == second["by_provider"] == {"anthropic": 1}
 
-    # A genuinely duplicated line (same id) is also folded once.
-    path = store.log_path("dup")
-    line = path.read_bytes()
-    path.write_bytes(line + line)
-    assert mismatch_summary(store.directory)["count"] == 1
+    assert mismatch_summary(store)["count"] == 1
 
 
 def test_mismatch_summary_tolerates_open_session_without_handle(tmp_path: Path) -> None:
     """The scan reads bytes only; it never opens/creates/rehydrates a handle."""
     store = _store(tmp_path)
     _write_mismatch(store, "live")
-    before = store.log_path("live").read_bytes()
+    before = store.tail_bytes("live", max_bytes=4096)
 
-    summary = mismatch_summary(store.directory)
+    summary = mismatch_summary(store)
     assert summary["count"] == 1
-    assert store.log_path("live").read_bytes() == before
+    assert store.tail_bytes("live", max_bytes=4096) == before
 
 
-def test_mismatch_summary_tolerates_corrupt_tail_and_bad_lines(tmp_path: Path) -> None:
+def test_mismatch_summary_bounds_sqlite_tail_bytes(tmp_path: Path) -> None:
+    """An oversized SQLite record is clipped to the configured byte bound."""
     store = _store(tmp_path)
-    _write_mismatch(store, "corrupt", provider="p1")
-    path = store.log_path("corrupt")
-    # An interior malformed line plus an unterminated crash tail.
-    path.write_bytes(
-        path.read_bytes()
-        + b"not-json-at-all\n"
-        + b'{"type":"event","event":{"type":"registry.mismatch"'  # truncated tail
-    )
-
-    summary = mismatch_summary(store.directory)
-    assert summary["count"] == 1
-    assert summary["by_provider"] == {"p1": 1}
-
-
-def test_mismatch_summary_skips_interior_corrupt_log_without_crashing(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-    _write_mismatch(store, "good")
-    bad = store.log_path("bad")
-    bad.write_bytes(b"garbage\n")
-
-    summary = mismatch_summary(store.directory)
-    assert summary["count"] == 1
-    assert summary["sessions_scanned"] == 2
-
-
-def test_mismatch_summary_skips_symlinked_log(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-    _write_mismatch(store, "real")
-    target = tmp_path / "outside.jsonl"
-    other = SessionStore(tmp_path / "other")
-    _write_mismatch(other, "x")
-    target.write_bytes(other.log_path("x").read_bytes())
-    try:
-        (store.directory / "link.jsonl").symlink_to(target)
-    except OSError:
-        return  # platform without symlinks
-    summary = mismatch_summary(store.directory)
-    assert summary["count"] == 1
-    assert summary["sessions_skipped"] == 1
-
-
-def test_mismatch_summary_does_not_block_on_named_fifo(tmp_path: Path) -> None:
-    """A FIFO named like a log is refused without opening for a blocking read."""
-    if not hasattr(os, "mkfifo"):
-        pytest.skip("platform has no mkfifo")
-    store = _store(tmp_path)
-    fifo = store.directory / "fifo.jsonl"
-    os.mkfifo(fifo)
-
-    result: dict[str, object] = {}
-    thread = threading.Thread(target=lambda: result.update(mismatch_summary(store.directory)))
-    thread.start()
-    thread.join(timeout=5)
-    assert not thread.is_alive(), "mismatch_summary blocked on a named FIFO"
-    assert result["count"] == 0
-    assert result["sessions_scanned"] == 0
-    assert result["sessions_skipped"] == 1
-
-
-def test_mismatch_summary_bounds_a_concurrently_growing_log(tmp_path: Path) -> None:
-    """A log appended to during the scan is still read with a hard byte cap."""
-    store = _store(tmp_path)
-    _write_mismatch(store, "growing")
-    path = store.log_path("growing")
-    stop = threading.Event()
-
-    def grow() -> None:
-        line = (
-            b'{"type":"event","event":{"type":"registry.mismatch",'
-            b'"data":{"provider":"p"}}}\n'
-        )
-        while not stop.is_set():
-            with open(path, "ab") as handle:
-                handle.write(line)
-
-    thread = threading.Thread(target=grow, daemon=True)
-    thread.start()
-    try:
-        for _ in range(25):
-            summary = mismatch_summary(
-                store.directory, limits=ScanLimits(max_bytes_per_log=2048)
-            )
-            assert summary["sessions_scanned"] == 1
-            # 2048 bytes of ~60-byte lines is at most a few dozen records; the
-            # read can never run away with the growing file.
-            assert 0 < summary["count"] < 200
-    finally:
-        stop.set()
-        thread.join(timeout=5)
+    _write_mismatch(store, "growing", detail="x" * 4000)
+    summary = mismatch_summary(store, limits=ScanLimits(max_bytes_per_log=2048))
+    assert summary["sessions_scanned"] == 1
+    assert summary["count"] == 0
+    assert summary["truncated"] is True
 
 
 def test_mismatch_summary_never_surfaces_secret_or_raw_detail(tmp_path: Path) -> None:
@@ -239,7 +173,7 @@ def test_mismatch_summary_never_surfaces_secret_or_raw_detail(tmp_path: Path) ->
         model="sk-proj-abcdefghijklmnop",
         detail="Authorization: Bearer supersecrettoken12345",
     )
-    blob = json.dumps(mismatch_summary(store.directory))
+    blob = json.dumps(mismatch_summary(store))
     assert "supersecrettoken" not in blob
     assert "sk-proj-abcdefghijklmnop" not in blob
     assert "pk_liveABCDEFGH" not in blob
@@ -248,6 +182,7 @@ def test_mismatch_summary_never_surfaces_secret_or_raw_detail(tmp_path: Path) ->
 
 def test_mismatch_summary_redacts_secret_in_session_and_reason(tmp_path: Path) -> None:
     store = _store(tmp_path)
+    store.create("hostile")
     store.append_event(
         "hostile",
         Event(
@@ -261,7 +196,7 @@ def test_mismatch_summary_redacts_secret_in_session_and_reason(tmp_path: Path) -
             session="hostile",
         ),
     )
-    summary = mismatch_summary(store.directory)
+    summary = mismatch_summary(store)
     rendered = json.dumps(summary)
     assert "sk-secrettoken" not in rendered
     assert "never surfaced" not in rendered
@@ -270,6 +205,7 @@ def test_mismatch_summary_redacts_secret_in_session_and_reason(tmp_path: Path) -
 def test_mismatch_summary_handles_absent_or_hostile_fields(tmp_path: Path) -> None:
     store = _store(tmp_path)
     # Missing data entirely.
+    store.create("s")
     store.append_event("s", Event(type=MISMATCH_EVENT, data={}, session="s"))
     # Non-string, nested, and boolean values.
     store.append_event(
@@ -280,7 +216,7 @@ def test_mismatch_summary_handles_absent_or_hostile_fields(tmp_path: Path) -> No
             session="s",
         ),
     )
-    summary = mismatch_summary(store.directory)
+    summary = mismatch_summary(store)
     assert summary["count"] == 2
     assert summary["by_provider"]  # grouped without raising
     assert summary["by_reason"]  # "unknown" fallback present
@@ -295,7 +231,7 @@ def test_mismatch_summary_bounds_sessions_and_marks_truncated(tmp_path: Path) ->
     store = _store(tmp_path)
     for index in range(5):
         _write_mismatch(store, f"s{index}")
-    summary = mismatch_summary(store.directory, limits=ScanLimits(max_sessions=2))
+    summary = mismatch_summary(store, limits=ScanLimits(max_sessions=2))
     assert summary["sessions_scanned"] == 2
     assert summary["truncated"] is True
     assert summary["count"] == 2
@@ -306,7 +242,7 @@ def test_mismatch_summary_enumeration_is_deterministic(tmp_path: Path) -> None:
     store = _store(tmp_path)
     for index in (5, 2, 4, 0, 3, 1):  # deliberately not sorted
         _write_mismatch(store, f"s{index}", provider=f"p{index}")
-    summary = mismatch_summary(store.directory, limits=ScanLimits(max_sessions=3))
+    summary = mismatch_summary(store, limits=ScanLimits(max_sessions=3))
     assert summary["truncated"] is True
     assert set(summary["by_session"]) == {"s0", "s1", "s2"}
     assert summary["count"] == 3
@@ -341,7 +277,7 @@ def test_mismatch_summary_bounds_tail_bytes(tmp_path: Path) -> None:
     for index in range(40):
         _write_mismatch(store, "big", provider=f"p{index}")
     summary = mismatch_summary(
-        store.directory, limits=ScanLimits(max_bytes_per_log=800)
+        store, limits=ScanLimits(max_bytes_per_log=800)
     )
     assert summary["truncated"] is True
     assert 0 < summary["count"] < 40
@@ -352,7 +288,7 @@ def test_mismatch_summary_bounds_lines_per_log(tmp_path: Path) -> None:
     for _ in range(10):
         _write_mismatch(store, "lines")
     summary = mismatch_summary(
-        store.directory, limits=ScanLimits(max_lines_per_log=3)
+        store, limits=ScanLimits(max_lines_per_log=3)
     )
     assert summary["count"] == 3
     assert summary["truncated"] is True
@@ -363,7 +299,7 @@ def test_mismatch_summary_bounds_groups_and_samples(tmp_path: Path) -> None:
     for index in range(30):
         _write_mismatch(store, "g", provider=f"provider-{index}")
     summary = mismatch_summary(
-        store.directory, limits=ScanLimits(max_groups=4, max_samples=3)
+        store, limits=ScanLimits(max_groups=4, max_samples=3)
     )
     assert summary["truncated"] is True
     assert len(summary["by_provider"]) == 5  # four kept + "(other)"
@@ -382,7 +318,7 @@ def test_facade_doctor_reports_registry_mismatches(tmp_path: Path) -> None:
     store = _store(tmp_path)
     _write_mismatch(store, "alpha")
     _write_mismatch(store, "alpha", provider="openai")
-    runtime = _FakeRuntime(store.directory)
+    runtime = _FakeRuntime(store)
     facade = HostFacade(runtime)
 
     report = facade.doctor()
@@ -392,11 +328,62 @@ def test_facade_doctor_reports_registry_mismatches(tmp_path: Path) -> None:
     assert mismatches["sessions_scanned"] == 1
 
 
-def test_facade_doctor_mismatches_zero_without_sessions_dir() -> None:
-    runtime = _FakeRuntime(None)
+def test_facade_doctor_mismatches_zero_without_sessions(tmp_path: Path) -> None:
+    runtime = _FakeRuntime(_store(tmp_path))
     facade = HostFacade(runtime)
     report = facade.doctor()
     assert report["registry_mismatches"]["count"] == 0
+
+
+def test_facade_doctor_uses_runtime_sqlite_session_store(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _write_mismatch(store, "alpha", provider="sqlite")
+    runtime = _FakeRuntime(store)
+
+    mismatches = HostFacade(runtime).doctor()["registry_mismatches"]
+
+    assert mismatches["count"] == 1
+    assert mismatches["by_provider"] == {"sqlite": 1}
+
+
+def test_facade_doctor_lists_only_documented_legacy_extension_entries(
+    tmp_path: Path,
+) -> None:
+    legacy = tmp_path / ".nexus"
+    for name in ("skills", "agents", "tools", "hooks", "providers"):
+        (legacy / name).mkdir(parents=True)
+    (legacy / "mcp.json").write_text('{"token":"sk-secret-value"}')
+    (legacy / "hooks.toml").write_text('secret = "sk-another-secret"')
+    (legacy / "nexus.toml").write_text('api_key = "sk-config-secret"')
+    (legacy / "credentials.json").write_text('{"secret":"do-not-report"}')
+    (legacy / "cache").mkdir()
+    (legacy / "skills" / "nested-secret-name").mkdir()
+
+    runtime = _FakeRuntime(None)
+    runtime.workspace = str(tmp_path)
+    report = HostFacade(runtime).doctor()
+
+    assert report["legacy_extensions_pending"] == [
+        "skills",
+        "agents",
+        "tools",
+        "hooks",
+        "providers",
+        "mcp.json",
+        "hooks.toml",
+        "nexus.toml",
+    ]
+    rendered = json.dumps(report["legacy_extensions_pending"])
+    assert "secret" not in rendered
+    assert "credentials.json" not in rendered
+    assert "nested-secret-name" not in rendered
+
+
+def test_facade_doctor_reports_empty_legacy_extensions_list(tmp_path: Path) -> None:
+    runtime = _FakeRuntime(None)
+    runtime.workspace = str(tmp_path)
+
+    assert HostFacade(runtime).doctor()["legacy_extensions_pending"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -465,8 +452,8 @@ def _message(text: str):
 
 
 class _FakeSessions:
-    def __init__(self, directory: Path | None) -> None:
-        self.directory = directory
+    def __init__(self, store: SqliteSessionStore | None) -> None:
+        self.store = store
 
     def list(self):
         return []
@@ -484,9 +471,9 @@ def _status():
 
 
 class _FakeRuntime:
-    def __init__(self, directory: Path | None) -> None:
+    def __init__(self, store: SqliteSessionStore | None) -> None:
         self.workspace = "/tmp/ws"
-        self.sessions = _FakeSessions(directory)
+        self.sessions = _FakeSessions(store)
         self.registry = _FakeRegistry()
         self.providers: dict[str, object] = {}
         self.extensions = None

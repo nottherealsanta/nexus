@@ -7,5 +7,5 @@ SPEC = {
     "bundle": "fs",
 }
 
-while True:  # noqa: PLE1205,SIM115 - deliberately an infinite import-time loop
+while True:
     pass

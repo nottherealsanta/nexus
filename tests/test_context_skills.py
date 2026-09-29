@@ -213,6 +213,25 @@ def test_skill_manager_snapshot_is_accepted(tmp_path):
     assert frozen == ("alpha: alpha description", "beta: beta description")
 
 
+def test_skill_manager_discovers_user_skills_from_nexus_home(tmp_path, monkeypatch):
+    from nexus.skills.manager import SkillManager
+
+    nexus_home = tmp_path / "nexus-home"
+    skill_dir = nexus_home / "skills" / "user-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: user-skill\ndescription: from user home\n---\nBODY",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NEXUS_HOME", str(nexus_home))
+
+    manager = SkillManager.for_workspace(tmp_path / "workspace")
+
+    skill = manager.require("user-skill")
+    assert skill.source is SkillSource.USER
+    assert skill.provenance.root == nexus_home / "skills"
+
+
 def test_equal_snapshots_render_byte_identically(tmp_path):
     snapshot = [("alpha", "one"), ("beta", "two")]
     first = ContextManager(tmp_path, config=config(), skills_index=snapshot)

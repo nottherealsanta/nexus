@@ -91,9 +91,8 @@ from ..model.stream import (
     ToolCallEnd,
     ToolCallStart,
 )
-from ..util import redact_secrets
 from ..model.stream import Usage as StreamUsage
-from ..util import redact_url_userinfo
+from ..util import redact_secrets, redact_url_userinfo
 from .cancel import CancelToken
 from .turn import TurnLimits, TurnOutcome, TurnState, TurnUsage
 
@@ -1344,6 +1343,8 @@ _MAX_TRANSCRIPT_ARGUMENT_CHARS = 8192
 _MAX_TRANSCRIPT_ARGUMENT_DEPTH = 8
 _MAX_TRANSCRIPT_ARGUMENT_ITEMS = 256
 _MAX_TRANSCRIPT_RESULT_CHARS = 100_000
+_TRANSCRIPT_RESULT_REDACTION_MARGIN_CHARS = 1024
+_TRANSCRIPT_LONG_TOKEN = re.compile(r"[A-Za-z0-9+/=_-]{4096,}")
 _MAX_TRANSCRIPT_RESULT_BLOCKS = 256
 _MAX_TRANSCRIPT_DIFF_CHARS = 24_000
 _MAX_TRANSCRIPT_DIFF_LINES = 240
@@ -1430,12 +1431,29 @@ def _tool_result_event_view(result: ToolResult) -> dict[str, Any]:
     remaining = _MAX_TRANSCRIPT_RESULT_CHARS
     for block in result.content[:_MAX_TRANSCRIPT_RESULT_BLOCKS]:
         if isinstance(block, Text):
-            text = redact_secrets(block.text)
+            redaction_limit = (
+                _MAX_TRANSCRIPT_RESULT_CHARS + _TRANSCRIPT_RESULT_REDACTION_MARGIN_CHARS
+            )
+            bounded_input = block.text[:redaction_limit]
+            if len(block.text) > redaction_limit:
+                # Supply an end boundary for token patterns when the bounded
+                # prefix ends in a credential; this sentinel remains beyond
+                # the emitted clip.
+                bounded_input += " "
+            # The generic opaque-token rule has a trailing word boundary that
+            # backtracks over very long unbroken strings. Collapse those runs
+            # first; they are opaque credentials by the same policy.
+            bounded_input = _TRANSCRIPT_LONG_TOKEN.sub("***", bounded_input)
+            text = redact_secrets(bounded_input)
             clipped = text[:remaining]
             if clipped:
                 content.append({"type": "text", "text": clipped})
                 remaining -= len(clipped)
-            if len(clipped) < len(text) or remaining == 0:
+            if (
+                len(block.text) > _MAX_TRANSCRIPT_RESULT_CHARS
+                or len(clipped) < len(text)
+                or remaining == 0
+            ):
                 content.append({"type": "text", "text": "[result truncated]"})
                 break
         elif isinstance(block, Image):

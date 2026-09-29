@@ -15,7 +15,6 @@ from nexus.context import ContextManager
 from nexus.context.compact import SummaryArtifact
 from nexus.model.message import Message, Text
 from nexus.session.manager import SessionManager
-from nexus.session.snapshot import load
 
 
 class RecordingSummarizer:
@@ -195,14 +194,15 @@ def test_snapshot_reconstructs_same_summary_prompt(tmp_path):
     context = ContextManager(
         tmp_path, config=_config(), summarizer=summarizer, counter=len
     )
-    session = SessionManager(tmp_path, assemble=context).open("s")
+    manager = SessionManager(tmp_path, assemble=context)
+    session = manager.open("s")
     _seed(session, 8)
     session.append_message(Message(role="user", content=[Text(text="current")]))
     request = _assemble(context, session)
     summary_text = request.messages[0].content[0].text
 
     session.write_snapshot()
-    loaded = load(tmp_path, "s", session.read(force=True))
+    loaded = manager.store.load_snapshot("s", session.read(force=True))
     assert loaded is not None and loaded.summary is not None
     assert loaded.summary.text  # the persisted artifact text is in the snapshot
     assert session.current.summary.text

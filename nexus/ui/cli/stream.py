@@ -12,10 +12,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, TextIO
 
-from ...events import Event
+from ...client.protocol import Client, ClientError
 from ...client.turn_stream import turn_events
 from .approve import Approver
-from ...client.protocol import Client, ClientError
+
 
 async def answer_permission(
     client: Client,

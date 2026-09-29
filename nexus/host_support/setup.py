@@ -14,10 +14,10 @@ import os
 import re
 import tomllib
 from collections.abc import Mapping
-from pathlib import Path
 from typing import Any
 
 from ..config.paths import nexus_home
+from ..devtools import dev_enabled
 from ..errors import ConfigError
 from ..model.registry import DEFAULT_CATALOGUE_URL, ModelInfo, ModelRegistry
 from . import provider_auth, settings_inventory
@@ -186,7 +186,7 @@ async def setup_status(runtime: object) -> dict[str, Any]:
     configured = isinstance(document.get("providers"), dict) and selected_provider in document["providers"]
     connected = next((row["connected"] for row in providers if row["id"] == selected_provider), False)
     return {
-        "required": not (bool(global_model) and configured and connected),
+        "required": not dev_enabled() and not (bool(global_model) and configured and connected),  # dev mode runs on mock models
         "global_model": global_model,
         "effective_model": _effective_model(runtime),
         "providers": providers,

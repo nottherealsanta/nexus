@@ -42,10 +42,9 @@ What the manager guarantees:
   and happens at most once per marker (a pre-existing legacy marker under
   ``.nexus/agents`` also counts, so an upgraded workspace is not reseeded).
 * **Retiring old seeds.** Earlier releases copied the built-ins into every
-  workspace. :func:`retire_seeded_roles` moves those copies out of the project
-  entirely, to ``project_state_dir()/trash/agents/`` (STATE_PLAN §5.4), once,
-  but only the ones the user never edited, so the current built-ins (and
-  ``~/.nexus`` overrides) are no longer shadowed.
+  workspace. :func:`retire_seeded_roles` moves untouched copies from the current
+  ``.agents/agents`` directory to ``project_state_dir()/trash/agents/`` (STATE_PLAN
+  §5.4). The legacy ``.nexus/agents`` directory remains read-only.
 * **Legacy names.** ``general`` resolves to ``task`` (``build`` as a root) and
   ``explore``/``plan``/``planner`` to the read-only ``advisor`` when no
   definition with the exact name exists.
@@ -63,7 +62,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..config.paths import legacy_project_dir, project_agents_dir, project_state_dir
+from ..config.paths import (
+    legacy_project_dir,
+    nexus_home,
+    project_agents_dir,
+    project_state_dir,
+)
 from ..tools.names import canonical_tool_name, canonical_tool_names
 from .model import (
     FORBIDDEN_ROLE_BUNDLES,
@@ -304,12 +308,13 @@ def retire_seeded_roles(
     :data:`SEED_VERSION` and rewrites the marker afterwards. A seeded file whose
     mtime is later than the marker's was edited by the user and is kept (it
     keeps shadowing the built-in, which discovery reports). Files are moved, not
-    deleted, so a retired copy can be restored by hand. Pre-v2 seeds lived in
-    the legacy ``<workspace>/.nexus/agents``; the retired copies go to
+    deleted, so a retired copy can be restored by hand. Only seeds in the
+    current ``<workspace>/.agents/agents`` are retired; the legacy directory is
+    read-only. Retired copies go to
     ``project_state_dir()/trash/agents`` (STATE_PLAN §5.4), never back into the
     project, since trash is machine state, not repo content.
     """
-    agents_dir = legacy_project_dir(workspace) / "agents"
+    agents_dir = project_agents_dir(workspace) / "agents"
     marker = agents_dir / marker_name
     if not marker.is_file() or marker.is_symlink():
         return ()
@@ -503,9 +508,10 @@ class AgentManager:
         (legacy, read-only fallback) < ``<workspace>/.agents/agents``
         (STATE_PLAN §5.4; seeding and writes always go to ``.agents``).
 
-        Pre-v2 seeded copies are retired first (see :func:`retire_seeded_roles`).
-        When ``seed`` is true the built-in roles are then written into the
-        workspace (once) as editable workspace definitions.
+        Untouched pre-v2 seed copies in ``.agents/agents`` are retired first
+        (see :func:`retire_seeded_roles`); the legacy ``.nexus/agents`` fallback
+        remains read-only. When ``seed`` is true the built-in roles are then
+        written into the workspace (once) as editable workspace definitions.
         """
         roots: list[RootSpec] = []
         if builtin is None:
@@ -516,8 +522,7 @@ class AgentManager:
             builtin_paths = builtin
         for path in builtin_paths:
             roots.append((AgentSource.BUILTIN, Path(path)))
-        if home is not None:
-            roots.append((AgentSource.USER, Path(home) / ".nexus" / "agents"))
+        roots.append((AgentSource.USER, nexus_home(home) / "agents"))
         roots.append(
             (AgentSource.WORKSPACE_LEGACY, legacy_project_dir(workspace) / "agents")
         )

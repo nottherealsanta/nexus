@@ -7,7 +7,13 @@ import httpx
 import pytest
 
 from nexus.config import Config
-from nexus.config.schema import AgentsSection, ConfigV2, ModelSection, ProviderSection
+from nexus.config.schema import (
+    AgentsSection,
+    ConfigV2,
+    ModelSection,
+    PermissionsSection,
+    ProviderSection,
+)
 from nexus.events import Event
 from nexus.model.providers.scripted import ScriptedProvider, text_response
 from nexus.runtime import Runtime, _ChildEventSink
@@ -95,6 +101,53 @@ async def test_runtime_open_and_default_session_stored_in_state_db(tmp_path):
 
     assert runtime.sessions.exists("main")
     assert not (tmp_path / ".nexus").exists()
+
+
+async def test_iteration_path_guard_protects_explicit_home_state_database(tmp_path):
+    from types import SimpleNamespace
+
+    from nexus.config.paths import state_db_path
+    from nexus.session.db import StateDatabase
+    from nexus.tools.permissions import PathSecurityError
+
+    workspace = tmp_path / "workspace"
+    home = tmp_path / "custom-home"
+    workspace.mkdir()
+    home.mkdir()
+    config = Config(
+        model="scripted/sm",
+        version=2,
+        v2=ConfigV2(
+            model=ModelSection(default="scripted/sm"),
+            permissions=PermissionsSection(write_roots=[str(tmp_path)]),
+        ),
+    )
+    runtime = Runtime(
+        workspace,
+        home=home,
+        config=config,
+        providers={"scripted": ScriptedProvider(text_response("unused"))},
+    )
+
+    database = state_db_path(home)
+    assert isinstance(runtime._state_db, StateDatabase)
+    assert runtime._state_db.path == database
+    manager = runtime._build_iteration_manager(
+        config, SimpleNamespace(tools={})
+    )
+
+    try:
+        for protected in (
+            database,
+            Path(f"{database}-wal"),
+            Path(f"{database}-shm"),
+        ):
+            for for_write in (False, True):
+                with pytest.raises(PathSecurityError) as exc_info:
+                    manager.path_guard.resolve(str(protected), for_write=for_write)
+                assert exc_info.value.code == "state_db"
+    finally:
+        await runtime.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +261,7 @@ async def test_runtime_builds_native_tools_and_closes_owned_registry(tmp_path):
         config=config, session=session, turn_id="turn-1", attended=False
     )
     assert turn is not None
-    assert len(turn.schemas) == 12
+    assert len(turn.schemas) == 13
     assert turn.gate is not None
 
     await runtime.aclose()
@@ -243,7 +296,7 @@ async def test_injected_todo_store_survives_agent_definition_rebuild_and_reopen(
             agents=AgentsSection(enabled=True),
         ),
     )
-    role_dir = tmp_path / ".nexus" / "agents"
+    role_dir = tmp_path / ".agents" / "agents"
     role_dir.mkdir(parents=True)
     (role_dir / "reviewer.md").write_text(
         "---\nname: reviewer\ndescription: review\ncontexts: [root]\n"

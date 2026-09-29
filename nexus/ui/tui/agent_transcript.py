@@ -21,6 +21,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Static
+from textual.worker import Worker
 
 from ...ui_support.tui_context_header import ContextHeader
 from ...ui_support.tui_panels import DetailsSidebar, TopBar
@@ -51,6 +52,7 @@ class AgentTranscriptScreen(Screen[None]):
         self._spinner = None
         self._context_pending = False
         self._context_ts = 0.0
+        self._timeline_worker: Worker[None] | None = None
 
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("escape", "return_to_conversation", "Back", priority=True)
@@ -137,8 +139,14 @@ class AgentTranscriptScreen(Screen[None]):
         timeline = self.query_one("#agent-timeline", ConversationTimeline)
         root = self.app.screen_stack[0].query("#conversation")
         timeline.agent_colors = getattr(root.first(), "agent_colors", {}) if root else {}
-        self.run_worker(
-            timeline.set_view(agent.body), group="agent-transcript", exclusive=True
+        if self._timeline_worker is not None and self._timeline_worker.is_running:
+            self._timeline_worker.cancel()
+
+        async def update_timeline() -> None:
+            await timeline.set_view(agent.body)
+
+        self._timeline_worker = self.run_worker(
+            update_timeline, group="agent-transcript"
         )
 
     def _task_prompt(self) -> str:
@@ -198,6 +206,9 @@ class AgentTranscriptScreen(Screen[None]):
         if self._spinner is not None:
             self._spinner.stop()
             self._spinner = None
+        if self._timeline_worker is not None:
+            self._timeline_worker.cancel()
+            self._timeline_worker = None
 
     def on_top_bar_details_toggled(self, event: TopBar.DetailsToggled) -> None:
         event.stop()  # ▐ toggles this page's details; ▌ and + are hidden here

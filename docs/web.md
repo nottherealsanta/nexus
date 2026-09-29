@@ -23,6 +23,12 @@ and behave the same. Only the finish may be more modern.
 | Keys: `ui/tui/app.py:SHORTCUTS` (Ctrl+P/N/O/F/G/B/L/S/I/T/E/C/R, Shift+Tab, `a`, Esc). ⌘K and ⌘N also work. | global `keydown` handler, `SHORTCUTS` |
 | Agent color: the host's `color` first, else the TUI's name hash (`agent_color`) | `agentColor` |
 
+Project-scoped settings and extensions are written under `<workspace>/.agents/`;
+existing `.nexus/` project extensions and settings remain readable as a
+lower-precedence fallback. Session records for all workspaces are stored in the
+shared `~/.nexus/nexus.db` database, while caches and logs are machine state
+under `~/.nexus/`.
+
 What may differ is the finish only, specified in [design.md](../design.md)
 ("Signal"): Monaspace Argon, 20px lines (`--row`), square corners
 (`--radius: 0`), flat surfaces, signal-colored tags and rule headings, and hard offset shadows (never blur) on primary buttons and
@@ -119,7 +125,7 @@ transitions.
 Dev loop against a real daemon with a scripted model (no API key):
 
 1. Write a small script modeled on `tests/playwright_web_check.py:main()`: build a `ScriptedProvider(...)`, then `Runtime(path, config=Config(...), providers={"scripted": provider})`, then `Daemon(workspace, socket_path=Path("d.sock"), runtime_factory=...)`. Keep the socket path short, because macOS caps UDS paths at about 104 bytes. Print `await daemon.web_launch()`.
-2. Pre-create sessions with `daemon.facade.open_session(id, create=True, recover=True)` + `await daemon.facade.start_turn(id, prompt)`. Add `.nexus/mcp.json` (`{"servers": {...}}`; `tests/fixtures/mcp/fs_server.py` is a working stdio server) to exercise the MCP panel.
+2. Pre-create sessions with `daemon.facade.open_session(id, create=True, recover=True)` + `await daemon.facade.start_turn(id, prompt)`. Add `.agents/mcp.json` (`{"servers": {...}}`; `tests/fixtures/mcp/fs_server.py` is a working stdio server) to exercise the MCP panel.
 3. Tickets are one-use. Mint more from the daemon, or over UDS with `UDSClient.connect(sock).call(p.WebLaunch())`.
 4. Permission prompts only wait while a viewer is attached. With no viewer, `on_unattended` (default `deny`) applies.
 5. Screenshot with Python Playwright (`.venv`) at 1440, 1024 and 400px, in dark and light.
@@ -140,3 +146,10 @@ Rules of thumb:
 - `.venv/bin/python tests/playwright_web_check.py`: the end-to-end browser check (handoff between terminal and browser, streaming, approvals, detail levels, settings, logs, worktrees, breakpoints, reduced motion, XSS probes). It writes screenshots to `artifacts/web-e2e/` and takes a few minutes. It seeds localStorage `nexus-web-panel=closed` so its panel toggles start closed.
 - `tests/test_web_transport.py`: routes, auth, CSRF, CSP and snapshot/patch transport. `tests/test_browser_serve.py` covers the Textual browser bridge, not this app.
 - Host projection: `tests/test_host_facade.py` (web snapshot and patches), `tests/test_host_logs_read.py`, `tests/test_client_context_inspect.py`.
+
+## Dev mode and `/mock`
+
+In dev mode (`nexus --dev web`) the browser mirrors the TUI: `js/mock.js`
+asks the daemon for `Health.dev` after login and, when true, registers `/mock`
+with the same arguments as the terminal and shows a `DEV` badge in the top bar.
+Outside dev mode the command does not exist.

@@ -1,22 +1,21 @@
-"""Bounded, redacted aggregation of durable ``registry.mismatch`` events.
+"""Bounded, redacted health projections for doctor.
 
 PLAN §15.5/§15.12 call for ``nexus doctor`` to surface accumulated catalogue
 defects: the loop records a ``registry.mismatch`` whenever a provider rejects a
 capability the registry claimed, and doctor reports them so a bad upstream entry
-can be fixed. This module is the read half of that loop.
+can be fixed. STATE_PLAN §5.3 also calls for identifying legacy project
+extensions. This module is the read half of those checks.
 
-Design constraints (all defensive, because a session log is untrusted input):
+Design constraints (all defensive, because persisted records are untrusted input):
 
-* **Bounded and deterministic.** A workspace may hold thousands of sessions and
-  arbitrarily large logs, so every read is capped: the ``max_sessions`` lowest
-  session ids (chosen by sorting directory entry names, so selection does not
-  depend on filesystem order), a bounded tail of each, and at most
-  ``max_lines_per_log`` records. No unbounded file read, no unbounded whole-log
-  tail, and no session handle is opened (so a health check never migrates,
-  recovers, or writes).
-* **Never raises.** An unreadable, symlinked, or interior-corrupt log is skipped
-  rather than allowed to fail the report; malformed individual lines are skipped
-  in place.
+* **Bounded and deterministic.** A workspace may hold thousands of sessions
+  and arbitrarily large histories, so every read is capped: the
+  ``max_sessions`` lowest session ids (selected with SQL ``ORDER BY id``), a
+  bounded tail of each, and at most ``max_lines_per_log`` records. No session
+  handle is opened (so a health check never migrates, recovers, or writes).
+* **Never raises.** An unavailable database or corrupt record is skipped rather
+  than allowed to fail the report; malformed individual lines are skipped in
+  place.
 * **Redacted.** Only descriptive fields cross the boundary -- a count, grouped
   provider/model/reason tallies, and a bounded sample of ``session``/``seq``/
   ``ts`` plus those descriptive fields. The event's raw ``detail`` (which may
@@ -25,8 +24,8 @@ Design constraints (all defensive, because a session log is untrusted input):
 """
 from __future__ import annotations
 
+import contextlib
 import math
-import os
 import stat as stat_mod
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,12 +48,6 @@ _OTHER = "(other)"
 
 #: Longest descriptive field kept after sanitizing.
 _FIELD_LIMIT = 120
-
-#: Open flags that make a log read safe against a hostile path: never follow a
-#: symlink and never block on a FIFO/device. ``O_NONBLOCK``/``O_NOFOLLOW`` are
-#: missing on some platforms, so each contributes 0 there and the ``fstat``
-#: regular-file check below remains the backstop.
-_OPEN_FLAGS = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
 
 #: Every cap must be a positive integer; a zero/negative cap is a caller bug,
 #: not a request for an unbounded scan, so construction rejects it.
@@ -96,18 +89,224 @@ class ScanLimits:
 
 
 def mismatch_summary(
-    sessions_dir: object, *, limits: ScanLimits | None = None
+    sessions: object, *, limits: ScanLimits | None = None
 ) -> dict[str, Any]:
-    """Aggregate ``registry.mismatch`` events from a sessions directory.
+    """Aggregate ``registry.mismatch`` events from a SQLite session store.
 
     Returns a counter-only, redacted summary. The result is always a well-formed
-    dict: a missing/absent/inaccessible directory yields zeroed counters rather
-    than an exception. ``sessions_dir`` is accepted as an opaque value so a
-    facade can pass whatever its runtime exposes without this module importing a
-    manager type.
+    dict: a missing, unsupported, or inaccessible source yields zeroed counters
+    rather than an exception. A SQLite store is detected by its ``tail_bytes``
+    and ``db`` attributes; this module deliberately does not import a concrete
+    manager/store type.
     """
     limits = limits or ScanLimits()
-    result: dict[str, Any] = {
+    result = _empty_summary()
+    if not _is_sqlite_store(sessions):
+        return result
+    _scan_sqlite_store(sessions, limits, result)
+    return result
+
+
+def database_diagnostics(sessions: object) -> dict[str, Any] | None:
+    """Return bounded, redacted SQLite health metadata for a duck-typed store."""
+    if not _is_sqlite_store(sessions):
+        return None
+    db = getattr(sessions, "db", None)
+    path_value = getattr(db, "path", None)
+    path = _as_path(path_value)
+    if path is None:
+        return {"path": "", "schema_user_version": None, "quick_check": "unavailable",
+                "size_bytes": 0, "wal_size_bytes": 0}
+
+    try:
+        schema = getattr(db, "schema_version", None)
+        schema_version = schema() if callable(schema) else None
+        if type(schema_version) is not int or schema_version < 0:
+            schema_version = None
+    except Exception:  # noqa: BLE001 - diagnostics must never break doctor
+        schema_version = None
+    try:
+        check = getattr(db, "quick_check", None)
+        raw_check = check() if callable(check) else "unavailable"
+        quick_check = "ok" if raw_check == "ok" else "issues"
+    except Exception:  # noqa: BLE001 - diagnostics must never break doctor
+        quick_check = "unavailable"
+
+    size_bytes = _file_size(path)
+    wal_size_bytes = _file_size(path.with_name(path.name + "-wal"))
+    return {
+        "path": _clean(str(path))[:240],
+        "schema_user_version": schema_version,
+        "quick_check": quick_check,
+        "size_bytes": size_bytes,
+        "wal_size_bytes": wal_size_bytes,
+    }
+
+
+_LEGACY_EXTENSION_ENTRIES = (
+    "skills",
+    "agents",
+    "tools",
+    "hooks",
+    "providers",
+    "mcp.json",
+    "hooks.toml",
+    "nexus.toml",
+)
+
+
+def legacy_extensions_pending(workspace: object) -> list[str]:
+    """List documented legacy extension entries without reading their contents.
+
+    The fixed allowlist bounds the result and avoids enumerating or traversing
+    workspace-controlled directories. ``lstat`` recognizes an entry itself
+    without following a symlink (including a symlinked ``.nexus`` root).
+    """
+    root = _as_path(workspace)
+    if root is None:
+        return []
+    legacy = root / ".nexus"
+    try:
+        if not stat_mod.S_ISDIR(legacy.lstat().st_mode):
+            return []
+    except OSError:
+        return []
+
+    pending: list[str] = []
+    for name in _LEGACY_EXTENSION_ENTRIES:
+        try:
+            (legacy / name).lstat()
+        except OSError:
+            continue
+        pending.append(name)
+    return pending
+
+
+def doctor_report(
+    runtime: object,
+    *,
+    list_sessions: Any,
+    list_extensions: Any,
+    explain_reload: bool = False,
+) -> dict[str, Any]:
+    """Assemble a bounded health projection without coupling host support to host."""
+    report: dict[str, Any] = {
+        "workspace": str(getattr(runtime, "workspace", "") or ""),
+        "providers": _provider_report(runtime),
+        "registry": _status_dict(
+            getattr(getattr(runtime, "registry", None), "status", lambda: None)()
+        ),
+        "registry_mismatches": mismatch_summary(_session_source(runtime)),
+        "sessions": len(list_sessions()),
+        "legacy_extensions_pending": legacy_extensions_pending(
+            getattr(runtime, "workspace", None)
+        ),
+    }
+    sessions = getattr(runtime, "sessions", None)
+    database = database_diagnostics(getattr(sessions, "store", None))
+    if database is not None:
+        report["database"] = database
+    mcp = _mcp_report(runtime)
+    if mcp is not None:
+        report["mcp"] = mcp
+    extensions = getattr(runtime, "extensions", None)
+    if extensions is not None:
+        report["extensions"] = {
+            "generation": getattr(extensions, "generation", 0),
+            "loaded": len(list_extensions()),
+            "diagnostics": [
+                _asdict(item)
+                for item in getattr(extensions, "diagnostics", lambda: ())()
+            ],
+        }
+    if explain_reload:
+        report["reload"] = _reload_boundary()
+    return report
+
+
+def _session_source(runtime: object) -> object:
+    sessions = getattr(runtime, "sessions", None)
+    return getattr(sessions, "store", None)
+
+
+def _provider_report(runtime: object) -> list[dict[str, Any]]:
+    providers = getattr(runtime, "providers", {})
+    return [
+        {"name": name, "kind": type(providers[name]).__name__}
+        for name in sorted(providers)
+    ]
+
+
+def _mcp_report(runtime: object) -> dict[str, Any] | None:
+    """Point-in-time MCP server health, redacted and counter-only."""
+    mcp = getattr(runtime, "mcp", None)
+    statuses = getattr(mcp, "statuses", None)
+    if mcp is None or not callable(statuses):
+        return None
+    try:
+        servers = [_asdict(status) for status in statuses()]
+    except Exception:  # noqa: BLE001 - health must never raise
+        servers = []
+    diagnostics = getattr(mcp, "diagnostics", None)
+    rows: list[dict[str, Any]] = []
+    if callable(diagnostics):
+        with contextlib.suppress(Exception):
+            rows = [_asdict(row) for row in (diagnostics() or ())]
+    return {"servers": servers, "diagnostics": rows}
+
+
+def _asdict(value: Any) -> dict[str, Any]:
+    if isinstance(value, msgspec.Struct):
+        return msgspec.structs.asdict(value)
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        return dict(to_dict())
+    if hasattr(value, "__dict__"):
+        return dict(vars(value))
+    return dict(value)
+
+
+def _status_dict(status: Any) -> dict[str, Any] | None:
+    return _asdict(status) if status is not None else None
+
+
+def _reload_boundary() -> dict[str, Any]:
+    """The hot-vs-restart boundary, stated plainly (PLAN section 6.6)."""
+    return {
+        "hot": [
+            ".agents/tools/*.py",
+            ".agents/providers/*.py",
+            ".agents/hooks/*.py",
+            ".agents/skills/**/SKILL.md",
+            ".agents/agents/*.md",
+            ".agents/mcp.json",
+            ".nexus/tools/*.py",
+            ".nexus/providers/*.py",
+            ".nexus/hooks/*.py",
+            ".nexus/skills/**/SKILL.md",
+            ".nexus/agents/*.md",
+            ".nexus/mcp.json",
+            "nexus.toml",
+            "SOUL.md",
+            "MEMORY.md",
+        ],
+        "restart_only": [
+            "nexus/core/**",
+            "nexus/model/message.py",
+            "nexus/runtime.py",
+            "the Manifest shape itself",
+            "new pip installs",
+        ],
+        "note": (
+            "Hot extensions swap at the next loop iteration in the same turn. "
+            "Core source, the manifest shape, and new imports need a daemon "
+            "restart; use `nexus daemon stop` and the next command auto-starts."
+        ),
+    }
+
+
+def _empty_summary() -> dict[str, Any]:
+    return {
         "count": 0,
         "sessions_scanned": 0,
         "sessions_skipped": 0,
@@ -119,146 +318,80 @@ def mismatch_summary(
         "by_session": {},
         "samples": [],
     }
-    directory = _as_directory(sessions_dir)
-    if directory is None or not _is_dir(directory):
-        return result
 
-    logs, truncated = _candidate_logs(directory, limits.max_sessions)
-    result["truncated"] = truncated
-    for session_id, path in logs:
-        if _is_symlink(path):
+
+def _is_sqlite_store(value: object) -> bool:
+    try:
+        return (
+            callable(getattr(value, "tail_bytes", None))
+            and getattr(value, "db", None) is not None
+        )
+    except Exception:  # noqa: BLE001 - unsupported adapters yield an empty report
+        return False
+
+
+def _scan_sqlite_store(
+    store: object, limits: ScanLimits, result: dict[str, Any]
+) -> None:
+    """Scan at most ``max_sessions`` namespaced SQLite record tails."""
+    try:
+        db = getattr(store, "db", None)
+        connection = getattr(db, "_connection", None)
+        project_id = getattr(store, "project_id", None)
+        namespace = getattr(store, "namespace", None)
+        tail_bytes = getattr(store, "tail_bytes", None)
+    except Exception:  # noqa: BLE001 - unsupported adapters yield zero counters
+        return
+    if (
+        not callable(connection)
+        or not isinstance(project_id, str)
+        or not isinstance(namespace, str)
+    ):
+        return
+    try:
+        rows = connection().execute(
+            "SELECT id FROM sessions WHERE project_id=? AND namespace=? "
+            "AND trash_id IS NULL "
+            "ORDER BY id LIMIT ?",
+            (project_id, namespace, limits.max_sessions + 1),
+        ).fetchall()
+    except Exception:  # noqa: BLE001 - a damaged/unavailable DB is best-effort
+        return
+    result["truncated"] = len(rows) > limits.max_sessions
+    for row in rows[: limits.max_sessions]:
+        try:
+            session_id = row[0]
+            if not isinstance(session_id, str) or not is_valid_session_id(session_id):
+                result["sessions_skipped"] += 1
+                continue
+            data = tail_bytes(session_id, max_bytes=limits.max_bytes_per_log)
+            if not isinstance(data, bytes):
+                result["sessions_skipped"] += 1
+                continue
+        except Exception:  # noqa: BLE001 - malformed rows/read failures are skipped
             result["sessions_skipped"] += 1
             continue
-        tail = _read_tail(path, limits.max_bytes_per_log)
-        if tail is None:
-            result["sessions_skipped"] += 1
-            continue
-        data, cut = tail
-        if cut:
+        if len(data) >= limits.max_bytes_per_log:
             result["truncated"] = True
+            # A bounded SQL tail can begin part-way through a JSON record.
+            newline = data.find(b"\n")
+            data = data[newline + 1 :] if newline >= 0 else b""
         result["sessions_scanned"] += 1
         if _scan_session(session_id, data, limits, result):
             result["sessions_with_mismatches"] += 1
-    return result
 
 
-# -- discovery --------------------------------------------------------------
-
-
-def _as_directory(value: object) -> Path | None:
-    if value is None:
-        return None
+def _as_path(value: object) -> Path | None:
     if isinstance(value, (str, Path)):
         return Path(value)
     return None
 
 
-def _is_dir(directory: Path) -> bool:
+def _file_size(path: Path) -> int:
     try:
-        return directory.is_dir()
+        return max(0, path.stat().st_size)
     except OSError:
-        return False
-
-
-def _is_symlink(path: Path) -> bool:
-    try:
-        return path.is_symlink()
-    except OSError:
-        return True
-
-
-def _candidate_logs(
-    directory: Path, max_sessions: int
-) -> tuple[list[tuple[str, Path]], bool]:
-    """The first ``max_sessions`` ``(session_id, path)`` pairs, sorted by id.
-
-    Enumeration reads directory entry *names* only (never file contents), then
-    sorts the valid ids and slices, so which logs are examined is deterministic
-    regardless of filesystem iteration order. The expensive bound -- reading at
-    most ``max_sessions`` bounded tails -- is applied after selection, and
-    ``truncated`` is true exactly when more valid logs existed than the cap.
-    """
-    if max_sessions < 1:
-        return [], True
-    found: list[tuple[str, Path]] = []
-    try:
-        for path in directory.iterdir():
-            name = path.name
-            if not name.endswith(".jsonl"):
-                continue
-            session_id = name[: -len(".jsonl")]
-            if not is_valid_session_id(session_id):
-                continue
-            found.append((session_id, path))
-    except OSError:
-        return [], False
-    found.sort(key=lambda item: item[0])
-    truncated = len(found) > max_sessions
-    if truncated:
-        found = found[:max_sessions]
-    return found, truncated
-
-
-# -- reading ----------------------------------------------------------------
-
-
-def _read_tail(path: Path, max_bytes: int) -> tuple[bytes, bool] | None:
-    """A bounded tail of ``path``, or ``None`` when it is not a readable file.
-
-    The path is opened by descriptor with ``O_NONBLOCK``/``O_NOFOLLOW`` (where
-    available) so a symlink is refused rather than followed and a named pipe or
-    device cannot block the open, and ``fstat`` confirms a regular file before a
-    single byte is read. The size is taken from that descriptor, the tail is
-    sought, and at most ``max_bytes`` bytes are read -- so a file that grows
-    while being read can never push the read past the cap. The descriptor is
-    always closed, and any ``OSError`` (a race that replaced the path, a
-    permission denial) yields ``None`` rather than raising.
-
-    Returns ``(data, cut)``. ``data`` starts on a line boundary (a leading
-    partial line from the seek is dropped) and ``cut`` is ``True`` when the file
-    was larger than the cap.
-    """
-    if max_bytes < 1:
-        return None
-    try:
-        fd = os.open(path, _OPEN_FLAGS)
-    except OSError:
-        return None
-    try:
-        info = os.fstat(fd)
-        if not stat_mod.S_ISREG(info.st_mode):
-            return None
-        size = info.st_size
-        cut = size > max_bytes
-        if cut:
-            os.lseek(fd, size - max_bytes, os.SEEK_SET)
-        data = _read_capped(fd, max_bytes)
-    except OSError:
-        return None
-    finally:
-        try:
-            os.close(fd)
-        except OSError:  # pragma: no cover - a descriptor close rarely fails
-            pass
-    if not cut:
-        return data, False
-    newline = data.find(b"\n")
-    if newline == -1:
-        return b"", True
-    return data[newline + 1 :], True
-
-
-def _read_capped(fd: int, limit: int) -> bytes:
-    """Read at most ``limit`` bytes from ``fd``, looping over short reads."""
-    chunks: list[bytes] = []
-    remaining = limit
-    while remaining > 0:
-        chunk = os.read(fd, remaining)
-        if not chunk:
-            break
-        chunks.append(chunk)
-        remaining -= len(chunk)
-    return b"".join(chunks)
+        return 0
 
 
 def _scan_session(

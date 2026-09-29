@@ -131,14 +131,13 @@ async def test_default_root_catalog_advertises_canonical_tools(tmp_path):
 
     assert {tool.name for tool in provider.requests[0].tools} == {
         "read", "glob", "grep", "edit", "write", "bash", "apply_patch",
-        "subagent", "todowrite", "question", "webfetch", "skill",
+        "subagent", "todowrite", "question", "webfetch", "websearch", "skill",
     }
     assert all(tool.name == tool.name.lower() for tool in provider.requests[0].tools)
     rows = await runtime.list_tools()
-    unavailable_search = next(row for row in rows if row["name"] == "websearch")
-    assert unavailable_search["availability"] == "unavailable"
-    assert "SearXNG" in unavailable_search["reason"]
-    assert "input_schema" not in unavailable_search
+    search = next(row for row in rows if row["name"] == "websearch")
+    assert search.get("availability", "available") == "available"
+    assert search["input_schema"]["required"] == ["query"]
     await runtime.aclose()
 
 
@@ -162,12 +161,14 @@ async def test_missing_outbound_service_is_reported_as_unavailable(tmp_path):
     runtime = Runtime(tmp_path, config=_config(), providers={"scripted": provider})
     runtime._outbound_http_service = None
     [event async for event in runtime.session("http-unavailable").send("inspect")]
-    assert not ({"webfetch", "websearch"} & {tool.name for tool in provider.requests[0].tools})
+    assert "webfetch" not in {tool.name for tool in provider.requests[0].tools}
+    assert "websearch" in {tool.name for tool in provider.requests[0].tools}
     rows = await runtime.list_tools()
-    for name in ("webfetch", "websearch"):
-        row = next(row for row in rows if row["name"] == name)
-        assert row["availability"] == "unavailable"
-        assert "Outbound HTTP service" in row["reason"]
+    fetch = next(row for row in rows if row["name"] == "webfetch")
+    assert fetch["availability"] == "unavailable"
+    assert "Outbound HTTP service" in fetch["reason"]
+    search = next(row for row in rows if row["name"] == "websearch")
+    assert search.get("availability", "available") == "available"
     await runtime.aclose()
 
 
@@ -234,7 +235,7 @@ async def test_research_profile_keeps_web_read_only_through_grandchildren(tmp_pa
     await runtime.aclose()
 
 
-async def test_read_only_explore_cannot_request_unavailable_websearch_or_widen(tmp_path):
+async def test_read_only_explore_cannot_widen_declared_tools(tmp_path):
     from nexus.model.providers.scripted import tool_response
 
     (tmp_path / ".nexus" / "agents").mkdir(parents=True)
@@ -252,9 +253,9 @@ async def test_read_only_explore_cannot_request_unavailable_websearch_or_widen(t
     runtime = Runtime(tmp_path, config=_config(), providers={"scripted": provider})
     [event async for event in runtime.session("explore-ceiling").send("delegate")]
     spawned = next(event for event in runtime.session("explore-ceiling").events if event.type == "agent.spawned")
-    assert set(spawned.data["tools"]) == {"read", "glob", "grep", "subagent", "todowrite", "webfetch"}
-    assert "websearch" in spawned.data["dropped_tools"]
-    assert all("websearch" not in {tool.name for tool in request.tools} for request in provider.requests[1:])
+    assert set(spawned.data["tools"]) == {"read", "glob", "grep", "subagent", "todowrite", "webfetch", "websearch"}
+    assert {"bash", "write"} <= set(spawned.data["dropped_tools"])
+    assert "websearch" in {tool.name for tool in provider.requests[1].tools}
     await runtime.aclose()
 
 
@@ -313,7 +314,7 @@ async def test_read_only_declaration_cannot_widen_parent_tool_authority(tmp_path
     )
     runtime = Runtime(tmp_path, config=_config(), providers={"scripted": provider})
     # The root catalog contains the full coding authority; the read-only role's
-    # own declarations still cannot add bash/write or any unavailable tools.
+    # own declarations still cannot add bash/write.
     [event async for event in runtime.session("readonly-ceiling").send("delegate")]
 
     spawned = next(
@@ -321,14 +322,14 @@ async def test_read_only_declaration_cannot_widen_parent_tool_authority(tmp_path
         if event.type == "agent.spawned"
     )
     assert set(spawned.data["tools"]) == {
-        "read", "glob", "grep", "subagent", "todowrite", "webfetch", "skill"
+        "read", "glob", "grep", "subagent", "todowrite", "webfetch", "websearch", "skill"
     }
     assert not ({"bash", "write", "edit", "multiedit"} & set(spawned.data["tools"]))
     # A skill activation's declared tools are intersected with this iteration's
     # catalog; declarations by a role never create a catalog entry.
     assert {tool.name for tool in provider.requests[0].tools} == {
         "read", "glob", "grep", "edit", "write", "bash", "apply_patch",
-        "subagent", "todowrite", "question", "webfetch", "skill",
+        "subagent", "todowrite", "question", "webfetch", "websearch", "skill",
     }
     await runtime.aclose()
 
@@ -362,13 +363,13 @@ async def test_skill_activation_cannot_widen_child_catalog(tmp_path):
     runtime = Runtime(tmp_path, config=_config(), providers={"scripted": provider})
     [event async for event in runtime.session("skill-ceiling").send("delegate")]
 
-    expected = {"read", "glob", "grep", "subagent", "todowrite", "question", "webfetch", "skill"}
+    expected = {"read", "glob", "grep", "subagent", "todowrite", "question", "webfetch", "websearch", "skill"}
     assert len(provider.requests) == 4
     assert {tool.name for tool in provider.requests[1].tools} == expected
     assert {tool.name for tool in provider.requests[2].tools} == expected
     assert {tool.name for tool in provider.requests[3].tools} == {
         "read", "glob", "grep", "edit", "write", "bash", "apply_patch",
-        "subagent", "todowrite", "question", "webfetch", "skill",
+        "subagent", "todowrite", "question", "webfetch", "websearch", "skill",
     }
     await runtime.aclose()
 

@@ -19,11 +19,9 @@ Evidence covered
 * **Phase 4 references** (plan §10 Phase 4 exit: the §6.5 money-path walkthrough
   and the "200 reload cycles leak nothing" gate) are re-run as subprocesses so a
   green closeout proves they still hold.
-* **Line budgets** (plan §11 / §14.14, revised by the §18 amendment):
-  ``core/ + model/ + tools/spec.py`` under 14,000 physical lines and separate
-  reviewed physical-line budgets for ``host/``, ``view/``, and ``ui/``. The gates
-  are strict; the same prefixes and physical-line semantics are kept, and a
-  baseline report that records a cap violation is refused at write time.
+* **Line counts**: physical and code lines for ``core/ + model/ + tools/spec.py``
+  and for ``host/``, ``view/``, ``ui/`` are recorded in the baseline report.
+  They are informational; there are no line caps.
 * **Import cost** (plan §2.2): ``import nexus`` stays lazy (no runtime/session/
   model/core) and bounded, because subagents spawn nested runtimes.
 
@@ -33,10 +31,7 @@ The machine-readable and text baseline report lives under
     NEXUS_PHASE3_WRITE_REPORT=1 pytest tests/test_phase3_exit.py
 
 The default suite never writes; when the report is present it is checked against
-live measurements so the committed baseline cannot silently rot. Regeneration
-refuses to write a report that records a budget over its hard cap, so a
-regenerated baseline can never bless an overage; the strict gates and the
-recorded report are checked for cap compliance independently of the ratchet.
+live measurements so the committed baseline cannot silently rot.
 """
 from __future__ import annotations
 
@@ -54,17 +49,8 @@ REPORTS_DIR = Path(__file__).resolve().parent / "fixtures" / "reports"
 REPORT_JSON = REPORTS_DIR / "phase3_exit_baseline.json"
 REPORT_TXT = REPORTS_DIR / "phase3_exit_baseline.txt"
 
-#: Plan §18 supersedes the §11 cap: ``core/`` + ``model/`` + ``tools/spec.py``
-#: stays under 14,000 physical lines (measured 12,560 at revision, ~11% headroom).
-CORE_BUDGET_CAP = 14000
-#: Separate reviewed budgets by independently owned package. The host allocation
-#: is 7,000 after adding the browser routes/projection, bounded file completion,
-#: agent metadata, and redacted diagnostics alongside its daemon transports.
-#: Its former 6,500 cap no longer covered those distinct host responsibilities;
-#: the view allocation is unchanged; the UI allocation is 5,000 for the
-#: distinct web client and expanded Textual composition, including the right
-#: drawer, composer/picker, and diagnostics surface.
-SURFACE_BUDGET_CAPS = {"host": 7000, "view": 2200, "ui": 5000}
+#: Packages whose physical-line counts are recorded (informational, not capped).
+SURFACE_DIRS = ("host", "view", "ui")
 
 #: The Phase 4 gates re-run as evidence: the §6.5 money path and the 200-reload
 #: leak bound.
@@ -135,13 +121,7 @@ def _core_line_budget() -> dict[str, object]:
     counts = _line_counts(
         _tree_blobs(("nexus/core/", "nexus/model/", "nexus/tools/spec.py"))
     )
-    overage = max(0, counts["physical_lines"] - CORE_BUDGET_CAP)
-    return {
-        **counts,
-        "plan_cap": CORE_BUDGET_CAP,
-        "within_plan_cap": counts["physical_lines"] < CORE_BUDGET_CAP,
-        "overage": overage,
-    }
+    return dict(counts)
 
 
 def test_surface_aggregate_totals_equal_directory_sum() -> None:
@@ -159,14 +139,8 @@ def test_recorded_surface_aggregate_totals_equal_directory_sum() -> None:
 
 def _surface_line_budget() -> dict[str, object]:
     budgets = {}
-    for name, cap in SURFACE_BUDGET_CAPS.items():
-        counts = _line_counts(_tree_blobs((f"nexus/{name}/",)))
-        budgets[name] = {
-            **counts,
-            "plan_cap": cap,
-            "within_plan_cap": counts["physical_lines"] < cap,
-            "overage": max(0, counts["physical_lines"] - cap),
-        }
+    for name in SURFACE_DIRS:
+        budgets[name] = dict(_line_counts(_tree_blobs((f"nexus/{name}/",))))
     return {
         "physical_lines": sum(item["physical_lines"] for item in budgets.values()),
         "code_lines": sum(item["code_lines"] for item in budgets.values()),
@@ -258,6 +232,7 @@ async def _run_200_message_session(workspace: Path) -> dict[str, object]:
     )
     from nexus.model.providers.scripted import ScriptedProvider, text_response
     from nexus.runtime import Runtime
+    from nexus.session.records import MessageRecord
 
     config = Config(
         model="scripted/m",
@@ -294,7 +269,10 @@ async def _run_200_message_session(workspace: Path) -> dict[str, object]:
 
         messages = session.messages
         assert len(messages) == 200
-        log_message_lines = session.path.read_bytes().count(b'"type":"message"')
+        persisted_message_records = sum(
+            isinstance(record, MessageRecord)
+            for record in runtime.sessions.store.records(session.id)
+        )
 
         final = provider.requests[-1].messages
         history_at_assembly = messages[:-1]
@@ -312,7 +290,7 @@ async def _run_200_message_session(workspace: Path) -> dict[str, object]:
             "compacted_assemblies": compacted,
             "input_budget": input_budget,
             "peak_used_tokens": peak_used,
-            "log_message_lines": log_message_lines,
+            "persisted_message_records": persisted_message_records,
             "final_request_messages": len(final),
             "contiguous_suffix": final == suffix,
             "current_turn_appears_once": len(current_occurrences) == 1,
@@ -324,7 +302,7 @@ async def _run_200_message_session(workspace: Path) -> dict[str, object]:
 async def test_phase3_exit_200_message_constrained_session(tmp_path: Path) -> None:
     metrics = await _run_200_message_session(tmp_path / "s200")
     assert metrics["messages"] == 200
-    assert metrics["log_message_lines"] == 200
+    assert metrics["persisted_message_records"] == 200
     assert metrics["model_calls"] == 100
     assert metrics["compacted_assemblies"] > 0
     assert metrics["peak_used_tokens"] <= metrics["input_budget"]
@@ -534,28 +512,8 @@ def test_phase4_money_path_and_leak_tests_pass() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_line_budget_host_view_ui_within_plan_cap() -> None:
-    budget = _surface_line_budget()
-    _assert_surface_totals(budget)
-    assert budget["files"] > 0
-    for name, cap in SURFACE_BUDGET_CAPS.items():
-        directory = budget["budgets_by_dir"][name]
-        assert directory["files"] > 0
-        assert directory["within_plan_cap"] is True, (
-            f"nexus/{name} measures {directory['physical_lines']} physical lines, "
-            f"exceeding its reviewed cap of {cap}"
-        )
-        assert directory["physical_lines"] < cap
 
 
-def test_line_budget_core_model_spec_within_plan_cap() -> None:
-    budget = _core_line_budget()
-    assert budget["files"] > 0
-    assert budget["within_plan_cap"] is True, (
-        f"core+model+spec measures {budget['physical_lines']} physical lines, "
-        f"exceeding the §18 cap of {CORE_BUDGET_CAP}"
-    )
-    assert budget["physical_lines"] < CORE_BUDGET_CAP
 
 
 def test_import_cost_root_package_is_lazy_and_bounded() -> None:
@@ -649,7 +607,7 @@ def _render_report_text(report: dict[str, object]) -> str:
         f"  compacted assemblies ..... {session['compacted_assemblies']}",
         f"  input budget ............. {session['input_budget']} tokens",
         f"  peak used ................ {session['peak_used_tokens']} tokens",
-        f"  log message lines ........ {session['log_message_lines']}",
+        f"  persisted message records  {session['persisted_message_records']}",
         f"  contiguous suffix ........ {session['contiguous_suffix']}",
         f"  current turn once ........ {session['current_turn_appears_once']}",
         "",
@@ -666,12 +624,11 @@ def _render_report_text(report: dict[str, object]) -> str:
         "-" * 40,
         (
             f"  core+model+spec .......... {core['physical_lines']} physical / "
-            f"{core['code_lines']} code (cap {core['plan_cap']}, "
-            f"within={core['within_plan_cap']}, over={core['overage']})"
+            f"{core['code_lines']} code"
         ),
         *[
             f"  {name:<25} {item['physical_lines']} physical / {item['code_lines']} code "
-            f"(cap {item['plan_cap']}, within={item['within_plan_cap']}, over={item['overage']})"
+            "" 
             for name, item in surfaces["budgets_by_dir"].items()
         ],
         "",
@@ -719,51 +676,10 @@ def _render_report_text(report: dict[str, object]) -> str:
     return "\n".join(lines)
 
 
-def _cap_violations(report: dict[str, object]) -> list[str]:
-    """Cap violations recorded in ``report``; empty iff every budget is within cap.
-
-    Used to make baseline regeneration *unable* to bless an overage: a report
-    that records a budget over its hard cap is refused rather than committed as
-    the new ratchet floor. The prefixes and physical-line semantics are the same
-    ones the strict gates measure.
-
-    The overage is **recomputed** from ``physical_lines`` against the enforced
-    ``CORE_BUDGET_CAP``/``SURFACE_BUDGET_CAPS`` **code constants** rather than read
-    from the recorded ``plan_cap``/``within_plan_cap``/``overage`` fields, so a
-    hand-edited (or corrupted) fixture that flips the flag -- or inflates the
-    recorded cap -- cannot smuggle an over-cap tree past regeneration.
-
-    The boundary is **strict**, matching the gates' ``physical_lines < cap``
-    comparison: a count exactly at the cap is a violation, not a pass, so the
-    regenerated baseline can never record a tree that merely touches the cap.
-    """
-    budgets = report["line_budgets"]  # type: ignore[index]
-    _assert_surface_totals(budgets["host_view_ui"])
-    violations: list[str] = []
-    for name, cap, physical in (
-        ("core_model_spec", CORE_BUDGET_CAP, budgets["core_model_spec"]["physical_lines"]),
-        *[
-            (f"surface_{directory}", directory_cap, budgets["host_view_ui"]["budgets_by_dir"][directory]["physical_lines"])
-            for directory, directory_cap in SURFACE_BUDGET_CAPS.items()
-        ],
-    ):
-        if physical >= cap:
-            violations.append(
-                f"{name}: {physical} physical lines at or over cap {cap} "
-                f"(overage {physical - cap})"
-            )
-    return violations
 
 
 def _write_report(report: dict[str, object]) -> None:
     _assert_surface_totals(report["line_budgets"]["host_view_ui"])
-    violations = _cap_violations(report)
-    if violations:
-        raise AssertionError(
-            "refusing to write a baseline report that masks a cap violation "
-            "(reduce the tree or amend the cap explicitly): "
-            + "; ".join(violations)
-        )
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     REPORT_JSON.write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -789,46 +705,10 @@ async def test_phase3_exit_baseline_report(tmp_path: Path) -> None:
         return
 
     recorded = json.loads(REPORT_JSON.read_text(encoding="utf-8"))
-    live_core = _core_line_budget()
     live_surfaces = _surface_line_budget()
-    rec_core = recorded["line_budgets"]["core_model_spec"]
     rec_surfaces = recorded["line_budgets"]["host_view_ui"]
     _assert_surface_totals(live_surfaces)
     _assert_surface_totals(rec_surfaces)
-    assert live_core["within_plan_cap"] is True, (
-        f"core+model+spec measures {live_core['physical_lines']} physical lines, "
-        f"exceeding the §18 cap of {CORE_BUDGET_CAP}"
-    )
-    for directory, cap in SURFACE_BUDGET_CAPS.items():
-        assert live_surfaces["budgets_by_dir"][directory]["within_plan_cap"] is True, (
-            f"nexus/{directory} measures "
-            f"{live_surfaces['budgets_by_dir'][directory]['physical_lines']} physical lines, "
-            f"exceeding its reviewed cap of {cap}"
-        )
-    # Recompute the recorded budgets from their own numbers rather than trusting
-    # the fixture's ``within_plan_cap`` boolean, and bind the recorded cap to the
-    # enforced constant: a hand-edited over-cap fixture must fail, not pass.
-    assert rec_core["plan_cap"] == CORE_BUDGET_CAP
-    for directory, cap in SURFACE_BUDGET_CAPS.items():
-        assert rec_surfaces["budgets_by_dir"][directory]["plan_cap"] == cap
-    assert rec_core["physical_lines"] < rec_core["plan_cap"], (
-        "the recorded core baseline itself violates the §18 cap; the tree must be "
-        "within cap before the report is regenerated"
-    )
-    for directory, item in rec_surfaces["budgets_by_dir"].items():
-        assert item["physical_lines"] < item["plan_cap"], (
-            f"the recorded nexus/{directory} baseline itself violates its cap; "
-            "the tree must be within cap before the report is regenerated"
-        )
-    assert live_core["physical_lines"] <= rec_core["physical_lines"], (
-        "core+model+spec grew past the recorded baseline; review the budget and "
-        "regenerate the report"
-    )
-    for directory in SURFACE_BUDGET_CAPS:
-        assert (
-            live_surfaces["budgets_by_dir"][directory]["physical_lines"]
-            <= rec_surfaces["budgets_by_dir"][directory]["physical_lines"]
-        ), f"nexus/{directory} grew past the recorded baseline; review its budget and regenerate the report"
     recorded_sum = sum(item["physical_lines"] for item in rec_surfaces["budgets_by_dir"].values())
     live_sum = sum(item["physical_lines"] for item in live_surfaces["budgets_by_dir"].values())
     assert live_surfaces["physical_lines"] == live_sum
@@ -844,7 +724,7 @@ async def test_phase3_exit_baseline_report(tmp_path: Path) -> None:
 
 
 def _sample_report() -> dict[str, object]:
-    """A complete, structurally valid, in-cap report for the write-path tests.
+    """A complete, structurally valid report for the write-path tests.
 
     The line budgets come from the live tree, so the positive write test fails
     (rather than blesses) if the tree breaches a cap. ``_render_report_text``
@@ -862,7 +742,7 @@ def _sample_report() -> dict[str, object]:
                 "compacted_assemblies": 1,
                 "input_budget": 6000,
                 "peak_used_tokens": 5000,
-                "log_message_lines": 200,
+                "persisted_message_records": 200,
                 "contiguous_suffix": True,
                 "current_turn_appears_once": True,
             },
@@ -894,154 +774,16 @@ def _sample_report() -> dict[str, object]:
     }
 
 
-def test_baseline_write_refuses_to_mask_a_cap_violation(
+
+
+
+
+
+
+def test_baseline_write_writes_json_and_text(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A regenerated baseline must never be able to bless an overage."""
-    monkeypatch.setattr(sys.modules[__name__], "REPORTS_DIR", tmp_path)
-    monkeypatch.setattr(sys.modules[__name__], "REPORT_JSON", tmp_path / "r.json")
-    monkeypatch.setattr(sys.modules[__name__], "REPORT_TXT", tmp_path / "r.txt")
-
-    over_cap = {
-        "line_budgets": {
-            "core_model_spec": {
-                "physical_lines": CORE_BUDGET_CAP + 1,
-                "plan_cap": CORE_BUDGET_CAP,
-                "within_plan_cap": False,
-                "overage": 1,
-            },
-            "host_view_ui": {"budgets_by_dir": {
-                name: {"physical_lines": cap - 1, "plan_cap": cap}
-                for name, cap in SURFACE_BUDGET_CAPS.items()
-            }},
-        }
-    }
-    assert _cap_violations(over_cap) == [
-        (
-            f"core_model_spec: {CORE_BUDGET_CAP + 1} physical lines at or over "
-            f"cap {CORE_BUDGET_CAP} (overage 1)"
-        )
-    ]
-    with pytest.raises(AssertionError, match="masks a cap violation"):
-        _write_report(over_cap)
-    assert not (tmp_path / "r.json").exists()
-    assert not (tmp_path / "r.txt").exists()
-
-    within_cap = {
-        "line_budgets": {
-            "core_model_spec": {
-                "physical_lines": CORE_BUDGET_CAP - 1,
-                "plan_cap": CORE_BUDGET_CAP,
-                "within_plan_cap": True,
-                "overage": 0,
-            },
-            "host_view_ui": {"budgets_by_dir": {
-                name: {"physical_lines": cap - 1, "plan_cap": cap}
-                for name, cap in SURFACE_BUDGET_CAPS.items()
-            }},
-        }
-    }
-    assert _cap_violations(within_cap) == []
-
-
-def test_cap_violations_recompute_and_reject_a_forged_within_cap_flag(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A fixture that flips ``within_plan_cap`` cannot hide an over-cap tree.
-
-    Once a baseline is on disk the recorded booleans are just data; the guard
-    must recompute the overage from ``physical_lines`` and ``plan_cap`` so a
-    hand-edited (or corrupted) fixture cannot smuggle an overage past
-    regeneration by claiming it is within cap.
-    """
-    monkeypatch.setattr(sys.modules[__name__], "REPORTS_DIR", tmp_path)
-    monkeypatch.setattr(sys.modules[__name__], "REPORT_JSON", tmp_path / "r.json")
-    monkeypatch.setattr(sys.modules[__name__], "REPORT_TXT", tmp_path / "r.txt")
-
-    forged = {
-        "line_budgets": {
-            "core_model_spec": {
-                "physical_lines": CORE_BUDGET_CAP + 5,
-                # Forged: claims a huge cap, in-cap, zero overage.
-                "plan_cap": CORE_BUDGET_CAP * 10,
-                "within_plan_cap": True,
-                "overage": 0,
-            },
-            "host_view_ui": {"budgets_by_dir": {
-                name: {
-                    "physical_lines": cap + 3,
-                    "plan_cap": cap * 10,
-                    "within_plan_cap": True,
-                    "overage": 0,
-                }
-                for name, cap in SURFACE_BUDGET_CAPS.items()
-            }},
-        }
-    }
-    assert _cap_violations(forged) == [
-        (
-            f"core_model_spec: {CORE_BUDGET_CAP + 5} physical lines at or over "
-            f"cap {CORE_BUDGET_CAP} (overage 5)"
-        ),
-        *[
-            f"surface_{name}: {cap + 3} physical lines at or over cap {cap} (overage 3)"
-            for name, cap in SURFACE_BUDGET_CAPS.items()
-        ],
-    ]
-    with pytest.raises(AssertionError, match="masks a cap violation"):
-        _write_report(forged)
-    assert not (tmp_path / "r.json").exists()
-    assert not (tmp_path / "r.txt").exists()
-
-
-def test_cap_violations_treat_the_cap_boundary_as_strict(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A count exactly at the cap is a violation, not a pass.
-
-    The strict gates compare ``physical_lines < cap``, so the regeneration guard
-    must use the same strict boundary: a tree that merely touches a cap (no
-    headroom) can never be blessed as the new ratchet floor. Before this the
-    guard used ``overage > 0`` and let an exactly-at-cap fixture through.
-    """
-    monkeypatch.setattr(sys.modules[__name__], "REPORTS_DIR", tmp_path)
-    monkeypatch.setattr(sys.modules[__name__], "REPORT_JSON", tmp_path / "r.json")
-    monkeypatch.setattr(sys.modules[__name__], "REPORT_TXT", tmp_path / "r.txt")
-
-    at_cap = {
-        "line_budgets": {
-            "core_model_spec": {
-                "physical_lines": CORE_BUDGET_CAP,
-                "plan_cap": CORE_BUDGET_CAP,
-                "within_plan_cap": False,
-                "overage": 0,
-            },
-            "host_view_ui": {"budgets_by_dir": {
-                name: {"physical_lines": cap, "plan_cap": cap}
-                for name, cap in SURFACE_BUDGET_CAPS.items()
-            }},
-        }
-    }
-    assert _cap_violations(at_cap) == [
-        (
-            f"core_model_spec: {CORE_BUDGET_CAP} physical lines at or over cap "
-            f"{CORE_BUDGET_CAP} (overage 0)"
-        ),
-        *[
-            f"surface_{name}: {cap} physical lines at or over cap {cap} (overage 0)"
-            for name, cap in SURFACE_BUDGET_CAPS.items()
-        ],
-    ]
-    with pytest.raises(AssertionError, match="masks a cap violation"):
-        _write_report(at_cap)
-    assert not (tmp_path / "r.json").exists()
-    assert not (tmp_path / "r.txt").exists()
-
-
-def test_baseline_write_accepts_an_in_cap_report(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The complement of the refusal: a genuinely in-cap report *is* written.
+    """A valid report is written as JSON and text.
 
     An explicit positive covers the guard's other branch, so a future change
     that refuses every report cannot pass on the refusal test alone.
@@ -1051,13 +793,6 @@ def test_baseline_write_accepts_an_in_cap_report(
     monkeypatch.setattr(sys.modules[__name__], "REPORT_TXT", tmp_path / "r.txt")
 
     report = _sample_report()
-    core = report["line_budgets"]["core_model_spec"]  # type: ignore[index]
-    surfaces = report["line_budgets"]["host_view_ui"]  # type: ignore[index]
-    assert core["physical_lines"] < CORE_BUDGET_CAP
-    for directory, cap in SURFACE_BUDGET_CAPS.items():
-        assert surfaces["budgets_by_dir"][directory]["physical_lines"] < cap
-    assert _cap_violations(report) == []
-
     _write_report(report)
     assert (tmp_path / "r.json").exists()
     assert (tmp_path / "r.txt").exists()

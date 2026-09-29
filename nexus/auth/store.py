@@ -58,7 +58,7 @@ class CredentialRecord:
         return json.dumps({"v": 1, "refresh_token": self.refresh_token, "account_id": self.account_id, "residency": self.residency, "generation": self.generation}, separators=(",", ":"))
 
     @classmethod
-    def parse(cls, value: str) -> "CredentialRecord":
+    def parse(cls, value: str) -> CredentialRecord:
         if not isinstance(value, str) or len(value.encode()) > _MAX_RECORD_BYTES:
             raise ValueError("invalid OAuth credential record")
         try:

@@ -1133,6 +1133,40 @@ async def test_stop_does_not_signal_an_unrelated_pid(short_dir):
     assert pid_file.exists()
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [ConnectionResetError, t.DaemonUnavailable, t.TransportError],
+)
+async def test_stop_tolerates_disconnect_during_shutdown(tmp_path, monkeypatch, failure):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    sock = tmp_path / "daemon.sock"
+    state = {"connected": False, "command": None, "closed": False}
+
+    class ConnectedClient:
+        async def call(self, command, *, timeout):
+            assert state["connected"]
+            state["command"] = command
+            raise failure("daemon closed during shutdown")
+
+        async def close(self):
+            state["closed"] = True
+
+    client = ConnectedClient()
+
+    async def connect(*args, **kwargs):
+        state["connected"] = True
+        return client
+
+    monkeypatch.setattr(UDSClient, "connect", connect)
+
+    result = await stop(workspace, socket_path=sock)
+    assert state["connected"]
+    assert isinstance(state["command"], p.Shutdown)
+    assert state["closed"]
+    assert result is True
+
+
 async def test_sigterm_is_a_graceful_close(subprocess_env):
     client = await ensure_daemon(
         subprocess_env.workspace,
@@ -1144,7 +1178,12 @@ async def test_sigterm_is_a_graceful_close(subprocess_env):
     await client.close()
     os.kill(pid, signal.SIGTERM)
     await wait_for(lambda: not subprocess_env.socket.exists(), timeout=10.0)
-    text = logs(subprocess_env.workspace, log_path=subprocess_env.socket.with_suffix(".log"))
+    log_path = subprocess_env.socket.with_suffix(".log")
+    await wait_for(
+        lambda: "daemon.stopped" in logs(subprocess_env.workspace, log_path=log_path),
+        timeout=10.0,
+    )
+    text = logs(subprocess_env.workspace, log_path=log_path)
     assert "daemon.stopping" in text
     assert "daemon.stopped" in text
 
@@ -1202,7 +1241,8 @@ async def test_subprocess_idle_shutdown(short_dir):
 
 
 def test_socket_path_is_deterministic_and_per_workspace(tmp_path):
-    home = tmp_path / "home"
+    # Keep this explicit home short so this test exercises the ordinary layout.
+    home = Path("/tmp") / f"nx-{os.getpid()}-{tmp_path.name[-8:]}"
     first = default_socket_path(tmp_path / "a", home=home)
     second = default_socket_path(tmp_path / "a", home=home)
     other = default_socket_path(tmp_path / "b", home=home)
@@ -1210,6 +1250,36 @@ def test_socket_path_is_deterministic_and_per_workspace(tmp_path):
     assert first != other
     assert first.parent == home / ".nexus" / "daemon"
     assert first.name == f"{workspace_hash(tmp_path / 'a')}.sock"
+
+
+def test_socket_path_uses_nexus_home_environment(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    first_home = tmp_path / ("state-a-" + "a" * 100)
+    second_home = tmp_path / ("state-b-" + "b" * 100)
+
+    monkeypatch.setenv("NEXUS_HOME", str(first_home))
+    first = default_socket_path(workspace)
+    repeated = default_socket_path(workspace)
+    monkeypatch.setenv("NEXUS_HOME", str(second_home))
+    second = default_socket_path(workspace)
+
+    assert first != second
+    assert first == repeated
+    assert first.parent != second.parent
+    assert first.name == second.name == f"{workspace_hash(workspace)}.sock"
+    assert len(str(first).encode("utf-8")) <= 100
+    assert len(str(second).encode("utf-8")) <= 100
+    assert first.parent.stat().st_mode & 0o777 == 0o700
+    assert second.parent.stat().st_mode & 0o777 == 0o700
+
+
+def test_socket_path_rejects_insecure_fallback_directory(tmp_path):
+    home = tmp_path / ("state-" + "x" * 100)
+    fallback = daemon_module._fallback_daemon_dir(home)
+    fallback.mkdir(mode=0o755)
+
+    with pytest.raises(DaemonError, match="mode 0700"):
+        default_socket_path(tmp_path / "workspace", home=home)
 
 
 def test_http_path_is_deterministic_and_colocated(tmp_path):

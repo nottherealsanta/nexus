@@ -8,5 +8,5 @@ SPEC = {
 }
 
 
-def run(args, ctx):  # noqa: ANN001, ANN201 - deliberately the wrong shape
+def run(args, ctx):
     return None

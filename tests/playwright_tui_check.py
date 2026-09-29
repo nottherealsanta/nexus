@@ -37,6 +37,7 @@ import json
 import os
 import re
 import signal
+import socket
 import subprocess
 import time
 from pathlib import Path
@@ -45,7 +46,13 @@ from playwright.sync_api import Browser, Page, sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = ROOT / "artifacts" / "visual-tui"
-PORT = 8129
+
+
+def _free_port() -> int:
+    """Choose an available loopback port for this check run."""
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
 
 
 def _shot(page: Page, name: str) -> bytes:
@@ -86,12 +93,12 @@ def _text_pixels(page: Page) -> int:
     )
 
 
-def _empty_text_pixels(browser: Browser) -> int:
+def _empty_text_pixels(browser: Browser, port: int) -> int:
     """Baseline lit-pixel count for the empty shell, which carries chrome only."""
-    server = _start("empty")
+    server = _start("empty", port)
     page = browser.new_page(viewport={"width": 900, "height": 1100}, device_scale_factor=1)
     try:
-        _wait_ready(page, PORT, server)
+        _wait_ready(page, port, server)
         page.wait_for_timeout(800)
         pixels = _text_pixels(page)
         assert pixels > 0, "empty shell exposed no xterm text-layer canvas"
@@ -107,12 +114,16 @@ def _wait_ready(
     deadline = time.monotonic() + 30
     time.sleep(2)
     while time.monotonic() < deadline:
+        if server.poll() is not None:
+            raise RuntimeError(server.stderr.read() or f"browser server exited {server.returncode}")
         try:
             query = f"?fontsize={font_size}" if font_size is not None else ""
             page.goto(f"http://127.0.0.1:{port}{query}", wait_until="domcontentloaded", timeout=10_000)
             page.wait_for_timeout(800)
             box = page.get_by_role("textbox", name="Terminal input")
             if box.count():
+                if server.poll() is not None:
+                    raise RuntimeError(server.stderr.read() or f"browser server exited {server.returncode}")
                 box.click()
                 page.wait_for_timeout(500)
                 return
@@ -123,7 +134,7 @@ def _wait_ready(
     raise RuntimeError("browser server did not expose terminal input in time")
 
 
-def _start(state: str, *, submit_log: Path | None = None) -> subprocess.Popen[str]:
+def _start(state: str, port: int, *, submit_log: Path | None = None) -> subprocess.Popen[str]:
     """Serve a fixture through the bridge-serving layer (not raw ``textual serve``).
 
     Plain ``textual serve``'s frontend cannot report Shift+Enter, so the browser
@@ -138,7 +149,7 @@ def _start(state: str, *, submit_log: Path | None = None) -> subprocess.Popen[st
     return subprocess.Popen(
         [
             "uv", "run", "python", "tests/browser_serve.py",
-            "--host", "127.0.0.1", "--port", str(PORT),
+            "--host", "127.0.0.1", "--port", str(port),
             "--command", f"uv run python tests/visual_tui_demo.py --state {state}",
         ],
         cwd=ROOT,
@@ -151,7 +162,7 @@ def _start(state: str, *, submit_log: Path | None = None) -> subprocess.Popen[st
 
 
 def _start_acceptance(
-    command_log: Path, *, turn_gate: Path | None = None
+    command_log: Path, port: int, *, turn_gate: Path | None = None
 ) -> subprocess.Popen[str]:
     """Serve the real shell against the dedicated deterministic command fixture."""
     command_log.parent.mkdir(parents=True, exist_ok=True)
@@ -163,7 +174,7 @@ def _start_acceptance(
     return subprocess.Popen(
         [
             "uv", "run", "python", "tests/browser_serve.py",
-            "--host", "127.0.0.1", "--port", str(PORT),
+            "--host", "127.0.0.1", "--port", str(port),
             "--command", "uv run python tests/tui_acceptance_fixture.py",
         ],
         cwd=ROOT,
@@ -316,14 +327,14 @@ def _stop(server: subprocess.Popen[str]) -> None:
     time.sleep(0.5)
 
 
-def _check_transcript(playwright, browser: Browser) -> None:
-    baseline = _empty_text_pixels(browser)
-    server = _start("transcript")
+def _check_transcript(playwright, browser: Browser, port: int) -> None:
+    baseline = _empty_text_pixels(browser, port)
+    server = _start("transcript", port)
     page = browser.new_page(viewport={"width": 900, "height": 1100}, device_scale_factor=1)
     received: list[str] = []
     page.on("websocket", lambda ws: ws.on("framereceived", lambda payload: received.append(payload)))
     try:
-        _wait_ready(page, PORT, server)
+        _wait_ready(page, port, server)
         page.wait_for_timeout(1_200)
         _shot(page, "functional-transcript.png")
         # The seeded user message and the Read/Edit tool cards must render as real
@@ -336,13 +347,9 @@ def _check_transcript(playwright, browser: Browser) -> None:
             f"({pixels} <= {baseline} lit pixels)"
         )
         text = _received_terminal_text(received)
-        assert (
-            # Taui-style footer: "AGENT · model · duration".
-            "0.0s" in text
-            and "Elapsed" not in text
-            and "NO AGENT" in text
-            and "nexus-small" in text
-        ), (
+        # Completed-turn footers show model and duration; the agent is shown
+        # elsewhere in the shell, not repeated in the footer.
+        assert "0.0s" in text and "Elapsed" not in text and "nexus-small" in text, (
             f"completed transcript omitted its turn summary: {text[-500:]!r}"
         )
         print("transcript: screenshot captured (user message + Read/Edit tool cards + completed turn summary)")
@@ -351,9 +358,9 @@ def _check_transcript(playwright, browser: Browser) -> None:
         _stop(server)
 
 
-def _check_reference_terminal(playwright, browser: Browser) -> None:
+def _check_reference_terminal(playwright, browser: Browser, port: int) -> None:
     """Capture the deterministic reference transcript at its source viewport."""
-    server = _start("reference")
+    server = _start("reference", port)
     page = browser.new_page(
         viewport={"width": 2000, "height": 1521},
         device_scale_factor=1,
@@ -364,7 +371,7 @@ def _check_reference_terminal(playwright, browser: Browser) -> None:
     try:
         # textual-serve's supported font-size query configures xterm before its
         # websocket starts, which resizes both the canvas and terminal grid.
-        _wait_ready(page, PORT, server, font_size=24)
+        _wait_ready(page, port, server, font_size=24)
         # Hide xterm's empty-draft block cursor for the still-live visual demo;
         # this is preview-only and does not change Textual's terminal behavior.
         page.add_style_tag(content=".xterm-cursor-layer { visibility: hidden !important; }")
@@ -391,19 +398,19 @@ def _check_reference_terminal(playwright, browser: Browser) -> None:
         _stop(server)
 
 
-def _check_multiline_enter(playwright, browser: Browser, submit_log: Path) -> None:
+def _check_multiline_enter(playwright, browser: Browser, port: int, submit_log: Path) -> None:
     """Real-browser proof of the Enter/Shift+Enter contract.
 
     Shift+Enter must reach the app as Kitty CSI-u ``shift+enter`` (not a bare CR)
     and must not submit; Enter then submits the whole multiline draft. Signals:
     the exact websocket ``stdin`` frames and the fixture's submission log.
     """
-    server = _start("functional", submit_log=submit_log)
+    server = _start("functional", port, submit_log=submit_log)
     page = browser.new_page(viewport={"width": 900, "height": 1100}, device_scale_factor=1)
     sent: list[str] = []
     page.on("websocket", lambda ws: ws.on("framesent", lambda payload: sent.append(payload)))
     try:
-        _wait_ready(page, PORT, server)
+        _wait_ready(page, port, server)
         page.wait_for_timeout(1_200)
         box = page.get_by_role("textbox", name="Terminal input")
         box.click()
@@ -436,11 +443,11 @@ def _check_multiline_enter(playwright, browser: Browser, submit_log: Path) -> No
         _stop(server)
 
 
-def _check_commands_shortcuts(playwright, browser: Browser) -> None:
-    server = _start("empty")
+def _check_commands_shortcuts(playwright, browser: Browser, port: int) -> None:
+    server = _start("empty", port)
     page = browser.new_page(viewport={"width": 900, "height": 900}, device_scale_factor=1)
     try:
-        _wait_ready(page, PORT, server)
+        _wait_ready(page, port, server)
         page.wait_for_timeout(800)
         box = page.get_by_role("textbox", name="Terminal input")
         box.click()
@@ -466,16 +473,16 @@ def _check_commands_shortcuts(playwright, browser: Browser) -> None:
         _stop(server)
 
 
-def _check_slash_suggestions_keyboard(playwright, browser: Browser, command_log: Path) -> None:
+def _check_slash_suggestions_keyboard(playwright, browser: Browser, port: int, command_log: Path) -> None:
     """Scroll the alphabetical slash list and execute a non-first item."""
-    server = _start_acceptance(command_log)
+    server = _start_acceptance(command_log, port)
     page = browser.new_page(viewport={"width": 900, "height": 900}, device_scale_factor=1)
     received: list[str] = []
     sent: list[str] = []
     page.on("websocket", lambda ws: ws.on("framereceived", lambda payload: received.append(payload)))
     page.on("websocket", lambda ws: ws.on("framesent", lambda payload: sent.append(payload)))
     try:
-        _wait_ready(page, PORT, server)
+        _wait_ready(page, port, server)
         box = page.get_by_role("textbox", name="Terminal input")
         box.click()
         page.keyboard.type("/")
@@ -507,14 +514,14 @@ def _check_slash_suggestions_keyboard(playwright, browser: Browser, command_log:
         _stop(server)
 
 
-def _check_slash_new_visible(playwright, browser: Browser, command_log: Path) -> None:
+def _check_slash_new_visible(playwright, browser: Browser, port: int, command_log: Path) -> None:
     """Show /new immediately for /n and execute it with Enter, without Down."""
-    server = _start_acceptance(command_log)
+    server = _start_acceptance(command_log, port)
     page = browser.new_page(viewport={"width": 900, "height": 900}, device_scale_factor=1)
     received: list[str] = []
     page.on("websocket", lambda ws: ws.on("framereceived", lambda payload: received.append(payload)))
     try:
-        _wait_ready(page, PORT, server)
+        _wait_ready(page, port, server)
         page.wait_for_timeout(500)
         text_layer = page.locator("canvas.xterm-text-layer").first
         baseline_lit = text_layer.evaluate(
@@ -573,14 +580,14 @@ def _check_slash_new_visible(playwright, browser: Browser, command_log: Path) ->
         _stop(server)
 
 
-def _check_model_picker_keyboard(playwright, browser: Browser, command_log: Path) -> None:
+def _check_model_picker_keyboard(playwright, browser: Browser, port: int, command_log: Path) -> None:
     """Submit /model once, then select through actual browser keyboard input."""
-    server = _start_acceptance(command_log)
+    server = _start_acceptance(command_log, port)
     page = browser.new_page(viewport={"width": 900, "height": 900}, device_scale_factor=1)
     sent: list[str] = []
     page.on("websocket", lambda ws: ws.on("framesent", lambda payload: sent.append(payload)))
     try:
-        _wait_ready(page, PORT, server)
+        _wait_ready(page, port, server)
         box = page.get_by_role("textbox", name="Terminal input")
         box.click()
         page.keyboard.type("/model")
@@ -620,14 +627,14 @@ def _check_model_picker_keyboard(playwright, browser: Browser, command_log: Path
         _stop(server)
 
 
-def _check_model_picker_mouse(playwright, browser: Browser, command_log: Path) -> None:
+def _check_model_picker_mouse(playwright, browser: Browser, port: int, command_log: Path) -> None:
     """Select the first offered model with a real pointer click on xterm."""
-    server = _start_acceptance(command_log)
+    server = _start_acceptance(command_log, port)
     page = browser.new_page(viewport={"width": 900, "height": 900}, device_scale_factor=1)
     sent: list[str] = []
     page.on("websocket", lambda ws: ws.on("framesent", lambda payload: sent.append(payload)))
     try:
-        _wait_ready(page, PORT, server)
+        _wait_ready(page, port, server)
         box = page.get_by_role("textbox", name="Terminal input")
         box.click()
         page.keyboard.type("/model")
@@ -640,10 +647,12 @@ def _check_model_picker_mouse(playwright, browser: Browser, command_log: Path) -
         page.wait_for_timeout(500)
         _shot(page, "functional-model-picker-mouse-open.png")
         geometry = _terminal_grid(page)
-        # Centered 80%-height dialog: title/search occupy six rows and the
-        # first selectable model follows its provider heading.
-        row = round(geometry["rows"] * .1) + 9
-        x, y = _terminal_cell_point(page, 10, row)
+        # The modal is centered in the terminal. Its title, search field and
+        # provider heading precede the first model row; click that row around
+        # the horizontal center rather than near the terminal's left edge.
+        row = round(geometry["rows"] * .1) + 8
+        column = geometry["cols"] // 2
+        x, y = _terminal_cell_point(page, column, row)
         page.mouse.click(x, y)
         rows = _wait_acceptance_rows(
             command_log,
@@ -661,14 +670,14 @@ def _check_model_picker_mouse(playwright, browser: Browser, command_log: Path) -
         _stop(server)
 
 
-def _check_agent_picker_command(playwright, browser: Browser, command_log: Path) -> None:
+def _check_agent_picker_command(playwright, browser: Browser, port: int, command_log: Path) -> None:
     """One Enter opens /agent; keyboard and pointer selections reach the host."""
-    server = _start_acceptance(command_log)
+    server = _start_acceptance(command_log, port)
     page = browser.new_page(viewport={"width": 900, "height": 900}, device_scale_factor=1)
     sent: list[str] = []
     page.on("websocket", lambda ws: ws.on("framesent", lambda payload: sent.append(payload)))
     try:
-        _wait_ready(page, PORT, server)
+        _wait_ready(page, port, server)
         initial_rows = _wait_acceptance_rows(
             command_log,
             lambda current: any(row["command"] == "AgentsList" for row in current),
@@ -749,14 +758,14 @@ def _check_agent_picker_command(playwright, browser: Browser, command_log: Path)
         _stop(server)
 
 
-def _check_model_picker_rejection(playwright, browser: Browser, command_log: Path) -> None:
+def _check_model_picker_rejection(playwright, browser: Browser, port: int, command_log: Path) -> None:
     """A host-rejected model selection leaves the prior model and shows feedback."""
-    server = _start_acceptance(command_log)
+    server = _start_acceptance(command_log, port)
     page = browser.new_page(viewport={"width": 900, "height": 900}, device_scale_factor=1)
     received: list[str] = []
     page.on("websocket", lambda ws: ws.on("framereceived", lambda payload: received.append(payload)))
     try:
-        _wait_ready(page, PORT, server)
+        _wait_ready(page, port, server)
         box = page.get_by_role("textbox", name="Terminal input")
         box.click()
         page.keyboard.type("/model")
@@ -767,6 +776,10 @@ def _check_model_picker_rejection(playwright, browser: Browser, command_log: Pat
         )
         assert sum(row["command"] == "ModelsList" for row in rows) == 1
         picker = _shot(page, "functional-model-picker-rejection-open.png")
+        # The picker starts focused on Search: Down transfers focus to the
+        # option list, and the next Down advances from the current alpha model
+        # to beta.
+        page.keyboard.press("ArrowDown")
         page.keyboard.press("ArrowDown")
         page.keyboard.press("Enter")
         rows = _wait_acceptance_rows(
@@ -810,15 +823,15 @@ def _check_model_picker_rejection(playwright, browser: Browser, command_log: Pat
         _stop(server)
 
 
-def _check_running_turn_draft(playwright, browser: Browser, command_log: Path) -> None:
+def _check_running_turn_draft(playwright, browser: Browser, port: int, command_log: Path) -> None:
     """Hold the first turn open and verify Enter preserves, but does not send, a draft."""
     gate = ARTIFACTS / "acceptance-turn-complete.gate"
-    server = _start_acceptance(command_log, turn_gate=gate)
+    server = _start_acceptance(command_log, port, turn_gate=gate)
     page = browser.new_page(viewport={"width": 900, "height": 900}, device_scale_factor=1)
     received: list[str] = []
     page.on("websocket", lambda ws: ws.on("framereceived", lambda payload: received.append(payload)))
     try:
-        _wait_ready(page, PORT, server)
+        _wait_ready(page, port, server)
         box = page.get_by_role("textbox", name="Terminal input")
         box.click()
         page.keyboard.type("first turn")
@@ -870,11 +883,11 @@ def _check_running_turn_draft(playwright, browser: Browser, command_log: Path) -
         _stop(server)
 
 
-def _check_logs_reasoning_and_sessions(playwright, browser: Browser, command_log: Path) -> None:
-    server = _start_acceptance(command_log)
+def _check_logs_reasoning_and_sessions(playwright, browser: Browser, port: int, command_log: Path) -> None:
+    server = _start_acceptance(command_log, port)
     page = browser.new_page(viewport={"width": 900, "height": 900}, device_scale_factor=1)
     try:
-        _wait_ready(page, PORT, server)
+        _wait_ready(page, port, server)
         box = page.get_by_role("textbox", name="Terminal input")
         box.click()
 
@@ -941,7 +954,22 @@ def _check_logs_reasoning_and_sessions(playwright, browser: Browser, command_log
         assert any(row["command"] == "SessionList" for row in rows), (
             f"Ctrl+O did not request host session navigation list: {rows!r}"
         )
+        page.keyboard.press("Escape")
+        box = page.get_by_role("textbox", name="Terminal input")
+        box.click()
+        agent_list_count = sum(
+            row["command"] == "AgentsList" for row in _read_acceptance_log(command_log)
+        )
         page.keyboard.press("Control+n")
+        rows = _wait_acceptance_rows(
+            command_log,
+            lambda current: sum(row["command"] == "AgentsList" for row in current)
+            > agent_list_count,
+        )
+        assert sum(row["command"] == "AgentsList" for row in rows) == agent_list_count + 1, (
+            f"Ctrl+N did not open the new-session agent picker: {rows!r}"
+        )
+        page.keyboard.press("Enter")  # confirm the preselected current agent
         rows = _wait_acceptance_rows(
             command_log,
             lambda current: any(
@@ -961,11 +989,11 @@ def _check_logs_reasoning_and_sessions(playwright, browser: Browser, command_log
         _stop(server)
 
 
-def _check_narrow_resize(playwright, browser: Browser, command_log: Path) -> None:
-    server = _start_acceptance(command_log)
+def _check_narrow_resize(playwright, browser: Browser, port: int, command_log: Path) -> None:
+    server = _start_acceptance(command_log, port)
     page = browser.new_page(viewport={"width": 900, "height": 900}, device_scale_factor=1)
     try:
-        _wait_ready(page, PORT, server)
+        _wait_ready(page, port, server)
         page.get_by_role("textbox", name="Terminal input").click()
         page.keyboard.press("Control+e")
         rows = _wait_acceptance_rows(
@@ -1005,42 +1033,43 @@ def _check_narrow_resize(playwright, browser: Browser, command_log: Path) -> Non
 
 def main() -> None:
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
+    port = _free_port()
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         try:
             checks = (
-                ("transcript", lambda: _check_transcript(playwright, browser)),
-                ("reference terminal", lambda: _check_reference_terminal(playwright, browser)),
+                ("transcript", lambda: _check_transcript(playwright, browser, port)),
+                ("reference terminal", lambda: _check_reference_terminal(playwright, browser, port)),
                 ("multiline Enter", lambda: _check_multiline_enter(
-                    playwright, browser, ARTIFACTS / "submitted.jsonl"
+                    playwright, browser, port, ARTIFACTS / "submitted.jsonl"
                 )),
-                ("command palette", lambda: _check_commands_shortcuts(playwright, browser)),
+                ("command palette", lambda: _check_commands_shortcuts(playwright, browser, port)),
                 ("slash suggestions keyboard", lambda: _check_slash_suggestions_keyboard(
-                    playwright, browser, ARTIFACTS / "acceptance-slash-suggestions.jsonl"
+                    playwright, browser, port, ARTIFACTS / "acceptance-slash-suggestions.jsonl"
                 )),
                 ("slash /n immediate completion", lambda: _check_slash_new_visible(
-                    playwright, browser, ARTIFACTS / "acceptance-slash-new.jsonl"
+                    playwright, browser, port, ARTIFACTS / "acceptance-slash-new.jsonl"
                 )),
                 ("model picker keyboard", lambda: _check_model_picker_keyboard(
-                    playwright, browser, ARTIFACTS / "acceptance-model-keyboard.jsonl"
+                    playwright, browser, port, ARTIFACTS / "acceptance-model-keyboard.jsonl"
                 )),
                 ("model picker mouse", lambda: _check_model_picker_mouse(
-                    playwright, browser, ARTIFACTS / "acceptance-model-mouse.jsonl"
+                    playwright, browser, port, ARTIFACTS / "acceptance-model-mouse.jsonl"
                 )),
                 ("agent picker command", lambda: _check_agent_picker_command(
-                    playwright, browser, ARTIFACTS / "acceptance-agent-picker.jsonl"
+                    playwright, browser, port, ARTIFACTS / "acceptance-agent-picker.jsonl"
                 )),
                 ("model picker rejection", lambda: _check_model_picker_rejection(
-                    playwright, browser, ARTIFACTS / "acceptance-model-rejection.jsonl"
+                    playwright, browser, port, ARTIFACTS / "acceptance-model-rejection.jsonl"
                 )),
                 ("running turn draft", lambda: _check_running_turn_draft(
-                    playwright, browser, ARTIFACTS / "acceptance-running-turn.jsonl"
+                    playwright, browser, port, ARTIFACTS / "acceptance-running-turn.jsonl"
                 )),
                 ("logs, reasoning, session navigation", lambda: _check_logs_reasoning_and_sessions(
-                    playwright, browser, ARTIFACTS / "acceptance-commands.jsonl"
+                    playwright, browser, port, ARTIFACTS / "acceptance-commands.jsonl"
                 )),
                 ("narrow resize", lambda: _check_narrow_resize(
-                    playwright, browser, ARTIFACTS / "acceptance-resize.jsonl"
+                    playwright, browser, port, ARTIFACTS / "acceptance-resize.jsonl"
                 )),
             )
             failures: list[tuple[str, Exception]] = []

@@ -6,9 +6,10 @@ import json
 
 from ...ui_support.tui_context_header import ContextModal
 from .messages import InputSubmitted
+from .mock import MockCommandsMixin
 
 
-class ExtraCommandsMixin:
+class ExtraCommandsMixin(MockCommandsMixin):
     """Dispatch informational and Git workflow commands through the host client."""
 
     async def _dispatch_extra_command(self, name: str, args: tuple[str, ...]) -> None:
@@ -33,6 +34,8 @@ class ExtraCommandsMixin:
             )
             body = diff.patch or "No changes"
             self.push_screen(ContextModal("Git diff", body + ("\n\n[diff truncated]" if diff.truncated else "")))
+        elif name == "/mock":
+            await self._mock_command(args)
         elif name == "/tasks":
             rows = [f"{agent.id} · {agent.status} · {agent.task or agent.description}"
                     for agent in self.controller.view.agents.values()]

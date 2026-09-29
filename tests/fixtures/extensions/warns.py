@@ -5,7 +5,7 @@ time. It is still importable (the warning is not a refusal), but the diagnosis
 must surface both warnings.
 """
 
-import subprocess  # noqa: F401 - the point is the import-time side effect
+import subprocess
 
 SPEC = {
     "name": "WarnyFixture",
@@ -15,7 +15,7 @@ SPEC = {
 }
 
 
-async def run(args, ctx):  # noqa: ANN001, ANN201
+async def run(args, ctx):
     return None
 
 

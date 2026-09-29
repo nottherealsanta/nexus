@@ -12,10 +12,12 @@ so the reader stays a dumb line source.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 __all__ = [
     "BY_NAME",
+    "DEV_SPECS",
     "SPECS",
     "CommandSpec",
     "ParsedCommand",
@@ -75,6 +77,11 @@ SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("/commit", "Ask the agent to commit changes"),
     CommandSpec("/archived", "Browse archived sessions", aliases=("/resume",)),
 )
+
+#: ``/mock`` exists only in dev mode (``NEXUS_DEV=1``; MOCK_PLAN §3.2).
+DEV_SPECS = (CommandSpec("/mock", "Run a scripted mock scenario", "[list|NAME|clean] [--speed N] [--seed N]"),)
+if os.environ.get("NEXUS_DEV", "").strip().lower() in {"1", "true", "yes", "on"}:
+    SPECS += DEV_SPECS
 
 #: Common typos accepted silently; unlike ``aliases`` they are never listed.
 _TYPOS: dict[str, str] = {"/sesssion": "/sessions"}

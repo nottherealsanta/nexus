@@ -34,7 +34,7 @@ class _Transport:
 
 
 def _archived_client(tmp_path) -> tuple[Client, SessionManager]:
-    manager = SessionManager(tmp_path / "sessions")
+    manager = SessionManager(tmp_path)
     session = manager.open("archive-me")
     session.append_event(Event(type="turn.started", turn="t"))
     session.append_event(
@@ -132,14 +132,15 @@ def test_archive_reaper_sweeps_at_startup_before_idle_shutdown():
 
 
 def test_archive_search_finds_content_in_the_state_database(tmp_path):
-    # Legacy on-disk ``.json``/``.jsonl`` sessions are handled once, up front,
-    # by ``nexus.session.import_legacy`` (STATE_PLAN §5.1) -- by the time a
-    # session is searchable here it is already a database row.
+    # Search reads database records; any legacy ``.json``/``.jsonl`` sessions
+    # are imported once up front by ``nexus.session.import_legacy`` (STATE_PLAN
+    # §5.1).
     from nexus.model.message import Message, Text
 
-    manager = SessionManager(tmp_path / "sessions")
+    manager = SessionManager(tmp_path)
     session = manager.open("findme")
     session.append_message(Message(role="user", content=[Text(text="needlecontent")]))
     manager.archive("findme", "auto")
+    assert manager.store.db.path == tmp_path / "nexus.db"
     assert search_sessions(manager, query="needlecontent") == ["findme"]
     assert "\x9b" not in _safe_transcript_text("safe\x9b[31m")

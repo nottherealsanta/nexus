@@ -220,7 +220,6 @@ body { font-size: 13px; line-height: var(--row); }
 .diff-title { margin: 0 0 0; }
 .diff-title .add { color: var(--success); font-weight: 700; }
 .diff-title .del { color: var(--danger); font-weight: 700; }
-.diff-file-icon { color: var(--muted); }
 .split-diff { display: grid; border-radius: var(--radius-sm); grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 16px; padding-top: 16px; background: linear-gradient(90deg, var(--border-strong) 50%, transparent 0) top / 8px 2px repeat-x; background-position: 0 6px; }
 .split-cell { display: grid; grid-template-columns: 24px 16px minmax(0, 1fr); min-width: 0; background: var(--elevated); white-space: pre; }
 .split-num { padding-left: 4px; background: var(--raised); color: var(--quiet); }
@@ -748,3 +747,4 @@ body { font-size: 13px; line-height: var(--row); }
   .setup-actions { flex-wrap: wrap; }
   .setup-action-status { flex-basis: 100%; order: 1; }
 }
+.dev-badge { color: var(--accent); letter-spacing: 0.08em; font-weight: 600; cursor: default; }

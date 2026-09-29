@@ -635,9 +635,11 @@ async def test_jsonc_mcp_json_with_comments_and_trailing_comma(tmp_path: Path) -
         "  },\n"
         "}\n"
     )
-    nexus = tmp_path / ".nexus"
-    nexus.mkdir(parents=True, exist_ok=True)
-    (nexus / "mcp.json").write_text(document, encoding="utf-8")
+    # Also exercises the legacy ``.nexus/mcp.json`` read-only fallback
+    # (STATE_PLAN §5.4): no ``.agents/mcp.json`` exists here.
+    legacy = tmp_path / ".nexus"
+    legacy.mkdir(parents=True, exist_ok=True)
+    (legacy / "mcp.json").write_text(document, encoding="utf-8")
 
     provider = ScriptedProvider(text_response("ok"))
     runtime = make_runtime(tmp_path, provider)
@@ -653,11 +655,12 @@ async def test_malformed_mcp_json_is_rejected_not_guessed(tmp_path: Path) -> Non
     control = control_path(tmp_path)
     write_control(control)
     definition = fs_definition(root, control)
-    nexus = tmp_path / ".nexus"
-    nexus.mkdir(parents=True, exist_ok=True)
+    # Legacy read-only fallback location (STATE_PLAN §5.4).
+    legacy = tmp_path / ".nexus"
+    legacy.mkdir(parents=True, exist_ok=True)
     # Duplicate keys are not valid JSON and must not be silently last-wins.
     payload = json.dumps(definition)
-    (nexus / "mcp.json").write_text(
+    (legacy / "mcp.json").write_text(
         f'{{"servers": {{"fs": {payload}, "fs": {payload}}}}}',
         encoding="utf-8",
     )
@@ -670,6 +673,34 @@ async def test_malformed_mcp_json_is_rejected_not_guessed(tmp_path: Path) -> Non
             row.get("kind") == "mcp" and "duplicate key" in row.get("error", "")
             for row in rows
         )
+    finally:
+        await runtime.aclose()
+
+
+async def test_agents_mcp_json_shadows_legacy_nexus_mcp_json(tmp_path: Path) -> None:
+    """STATE_PLAN §5.4: ``.agents/mcp.json`` is read; the legacy file is not."""
+    root_agents = make_server_root(tmp_path, "agents")
+    root_legacy = make_server_root(tmp_path, "legacy")
+    control = control_path(tmp_path)
+    write_control(control)
+    # A legacy ``.nexus/mcp.json`` naming a server that would connect if read.
+    legacy = tmp_path / ".nexus"
+    legacy.mkdir(parents=True, exist_ok=True)
+    (legacy / "mcp.json").write_text(
+        json.dumps({"servers": {"fs": fs_definition(root_legacy, control)}}),
+        encoding="utf-8",
+    )
+    # The current, writable location -- a same-named server, different root.
+    write_mcp_config(tmp_path, {"fs": fs_definition(root_agents, control)})
+
+    provider = ScriptedProvider(text_response("ok"))
+    runtime = make_runtime(tmp_path, provider)
+    try:
+        await runtime.ensure_started()
+        assert "mcp__fs__read_file" in runtime.manifest.tools
+        config = runtime.extensions.mcp.definition("fs").config
+        assert str(root_agents) in " ".join(config.args)
+        assert str(root_legacy) not in " ".join(config.args)
     finally:
         await runtime.aclose()
 

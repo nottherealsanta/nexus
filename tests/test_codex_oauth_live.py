@@ -18,9 +18,15 @@ from nexus.errors import ProviderError
 from nexus.model.message import Message, Text
 from nexus.model.providers.openai import OpenAIProvider
 from nexus.model.request import ModelRequest
-from nexus.model.stream import MessageStart, MessageStop, TextDelta, ToolCallDelta, ToolCallEnd, ToolCallStart
+from nexus.model.stream import (
+    MessageStart,
+    MessageStop,
+    TextDelta,
+    ToolCallDelta,
+    ToolCallEnd,
+    ToolCallStart,
+)
 from nexus.runtime import Runtime
-
 
 MARKER = "NEXUS_CODEX_OAUTH_OK"
 WORKSPACE = Path(__file__).resolve().parents[1]

@@ -76,7 +76,7 @@ def make_config(
     ext = ExtSection(
         enabled=enabled,
         watch_interval_ms=interval_ms,
-        dirs=dirs or [".nexus/tools", "~/.nexus/tools"],
+        dirs=dirs or [".agents/tools", ".nexus/tools", "~/.nexus/tools"],
         quarantine=quarantine,
         max_file_bytes=100_000,
     )
@@ -189,6 +189,10 @@ def manager_for(
 
 def tool_dir(root: Path) -> Path:
     return root / ".nexus" / "tools"
+
+
+def agents_tool_dir(root: Path) -> Path:
+    return root / ".agents" / "tools"
 
 
 async def wait_until(predicate, *, timeout: float = 3.0) -> bool:
@@ -316,6 +320,30 @@ async def test_workspace_precedence_shadows_user(tmp_path: Path):
     assert manager.manifest.tools["Shared"].spec.description == "from-workspace"
     assert len(manager.manifest.modules) == 1
     assert len(manager.loader.owned_modules) == 1
+
+
+async def test_agents_tools_shadow_legacy_workspace_tools(tmp_path: Path):
+    """STATE_PLAN §5.4: .agents/tools takes precedence over legacy .nexus/tools."""
+    manager, _box, ws, _home = manager_for(tmp_path, make_config())
+    write_tool(agents_tool_dir(ws), "agents_shared", "Shared", description="from-agents")
+    write_tool(tool_dir(ws), "legacy_shared", "Shared", description="from-legacy")
+
+    report = await manager.reload()
+
+    assert report.changed is True
+    assert manager.manifest.tools["Shared"].spec.description == "from-agents"
+    assert len(manager.manifest.modules) == 1
+
+
+async def test_legacy_workspace_tools_remain_a_fallback(tmp_path: Path):
+    """STATE_PLAN §5.4: legacy .nexus/tools remains readable without .agents/tools."""
+    manager, _box, ws, _home = manager_for(tmp_path, make_config())
+    write_tool(tool_dir(ws), "legacy_only", "LegacyOnly", description="from-legacy")
+
+    report = await manager.reload()
+
+    assert report.changed is True
+    assert manager.manifest.tools["LegacyOnly"].spec.description == "from-legacy"
 
 
 async def test_deleting_workspace_tool_reveals_user_shadow(tmp_path: Path):

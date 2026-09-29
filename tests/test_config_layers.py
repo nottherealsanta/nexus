@@ -230,7 +230,7 @@ def test_checked_in_workspace_config_uses_codex_responses_api(tmp_path):
     assert config.v2.agent.sandbox == "workspace-write"
     assert config.v2.agent.instructions_file == "SOUL.md"
     assert config.v2.agent.memory_file == "MEMORY.md"
-    assert config.v2.context.max_tokens == 16_000
+    assert config.v2.context.max_tokens is None  # use the selected model's context window
     provider = config.v2.providers["codex"]
     assert provider.api_key is None
     assert provider.api == "responses"
@@ -621,6 +621,7 @@ def test_tool_section_defaults_unchanged_for_legacy(tmp_path):
 
 def test_web_tool_config_defaults_and_availability_reason():
     web = build_v2({"config_version": 2}).tools.web
+    assert web.local_search_enabled is True
     assert web.searxng_instances == []
     assert web.allowed_origins == []
     assert web.fetch_enabled is True
@@ -629,8 +630,27 @@ def test_web_tool_config_defaults_and_availability_reason():
     assert web.max_results == 5
     assert web.max_query_length == 512
     assert web.max_output_bytes == 512_000
-    assert web.search_available is False
-    assert "No HTTPS SearXNG instance" in web.search_unavailable_reason
+    assert web.search_available is True
+    assert web.search_unavailable_reason is None
+
+
+def test_remote_search_instance_is_opt_in_and_preserves_explicit_origins():
+    web = build_v2(
+        {
+            "config_version": 2,
+            "tools": {
+                "web": {
+                    "searxng_instances": ["https://custom-search.example/search"],
+                    "allowed_origins": ["https://custom-search.example"],
+                }
+            },
+        }
+    ).tools.web
+
+    assert web.local_search_enabled is True
+    assert web.searxng_instances == ["https://custom-search.example/search"]
+    assert web.allowed_origins == ["https://custom-search.example"]
+    assert web.search_available is True
 
 
 def test_web_tool_config_toml_and_env_overrides(tmp_path):
@@ -640,6 +660,7 @@ def test_web_tool_config_toml_and_env_overrides(tmp_path):
 [tools.web]
 searxng_instances = ["https://search.example/search"]
 allowed_origins = ["https://docs.example", "https://docs.example:8443"]
+local_search_enabled = false
 search_timeout_s = 8.5
 fetch_timeout_s = 12
 max_results = 8
@@ -662,6 +683,7 @@ max_output_bytes = 64000
     web = config.v2.tools.web
     assert web.searxng_instances == ["https://search.example/search"]
     assert web.allowed_origins == ["https://docs.example", "https://docs.example:8443"]
+    assert web.local_search_enabled is False
     assert web.fetch_enabled is False
     assert web.search_timeout_s == 6.5
     assert web.fetch_timeout_s == 20
@@ -670,6 +692,32 @@ max_output_bytes = 64000
     assert web.max_output_bytes == 80000
     assert web.search_available is True
     assert web.search_unavailable_reason is None
+
+
+def test_web_tool_config_local_search_can_be_disabled(tmp_path):
+    home = _home(tmp_path)
+    (tmp_path / "nexus.toml").write_text(
+        """config_version = 2
+[tools.web]
+local_search_enabled = false
+"""
+    )
+    web = Config.load(tmp_path, home=home, environ={}).v2.tools.web
+
+    assert web.searxng_instances == []
+    assert web.allowed_origins == []
+    assert web.search_available is False
+    assert "Local search is disabled" in web.search_unavailable_reason
+
+
+def test_web_tool_config_rejects_unknown_directory_discovery_option():
+    with pytest.raises(ConfigError, match="Invalid v2"):
+        build_v2(
+            {
+                "config_version": 2,
+                "tools": {"web": {"discover_public_instances": True}},
+            }
+        )
 
 
 @pytest.mark.parametrize(

@@ -69,7 +69,7 @@ def write_skill(
     scripts: dict[str, str] | None = None,
     references: dict[str, str] | None = None,
 ) -> Path:
-    directory = root / ".nexus" / "skills" / name
+    directory = root / ".agents" / "skills" / name
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "SKILL.md").write_text(
         f"---\nname: {name}\ndescription: {description}\n{frontmatter}---\n{body}\n",

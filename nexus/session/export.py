@@ -1,22 +1,21 @@
-"""Structured, transport-neutral session export (Phase 8a0).
+"""Structured, transport-neutral SQLite session export (Phase 8a0).
 
-An export is a **pure rendering** of a consistent log prefix: it never mutates a
-session, never takes an exclusive lock, and never reaches outside the session
-content contract. Three formats are supported, each aimed at a different
-consumer:
+An export is a **pure rendering** of a consistent SQLite record prefix: it
+never mutates a session, never takes an exclusive lock, and never reaches
+outside the session content contract. Three formats are supported, each aimed
+at a different consumer:
 
 * ``json`` — a single versioned document (``version``, ``session`` metadata,
   ``messages``, ``events``, ``summaries``) that round-trips losslessly through
-  ``msgspec``; ``Image``/``Document`` bytes ride as base64 exactly as the log
+  ``msgspec``; ``Image``/``Document`` bytes ride as base64 exactly as SQLite
   stores them.
 * ``markdown`` — a human-readable transcript. Binary blocks are summarized
   (``[image image/png]``) rather than inlined, so a large attachment cannot turn
   a document into an unreadable blob.
-* ``jsonl`` — the authoritative log re-encoded one record per line. It is
-  produced from the *consistent* read, so a crash tail is dropped and every line
-  is valid JSON.
+* ``jsonl`` — the selected SQLite record prefix re-encoded one record per line
+  as an export format.
 
-The module imports only the store/model/events contracts, so it stays at L3 and
+The module imports only the record/model/events contracts, so it stays at L3 and
 is safe for the manager to call while holding a shared read lock.
 """
 from __future__ import annotations
@@ -38,7 +37,7 @@ from ..model.message import (
     ToolResult,
     ToolUse,
 )
-from .store import ReadResult, SessionRecord
+from .records import ReadResult, SessionRecord
 
 #: Export document version. Bumped when the JSON shape changes so a consumer can
 #: refuse an unknown document instead of misreading it.
@@ -75,9 +74,8 @@ def last_activity(
 ) -> float:
     """The newest record timestamp, or ``fallback``'s mtime, or ``0.0``.
 
-    Record timestamps are the durable signal; a legacy log written before
-    timestamps were recorded falls back to the file's mtime so ordering in
-    ``list`` stays useful.
+    Record timestamps are the durable signal; older records without timestamps
+    can fall back to the file's mtime so ordering in ``list`` stays useful.
     """
     latest = 0.0
     for record in records:
@@ -116,10 +114,10 @@ def to_json(
 
 
 def to_jsonl(read: ReadResult) -> str:
-    """Render the consistent log prefix as JSONL, one record per line.
+    """Render the selected SQLite record prefix as JSONL, one record per line.
 
-    The read is already crash-tail tolerant, so the output contains only valid
-    records; a malformed tail is dropped rather than copied.
+    The output is an export representation; SQLite remains the authoritative
+    session store.
     """
     lines = [msgspec.json.encode(record).decode("utf-8") for record in read.records]
     return "".join(line + "\n" for line in lines)

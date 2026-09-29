@@ -1,8 +1,8 @@
-"""The public session handle (plan sections 5.1 and 14.2).
+"""The public session handle over SQLite records (plan sections 5.1 and 14.2).
 
 ``Session`` is the substrate the loop and UI adapters build on. It provides:
 
-* validated identity and append-only history/event APIs over the JSONL store;
+* validated identity and append-only history/event APIs over the SQLite store;
 * exclusive active-turn ownership via the session lock, so two turns cannot run
   against one session in-process or across processes;
 * cancellation-token plumbing (a fresh token per turn);
@@ -36,7 +36,7 @@ import contextlib
 from collections import deque
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Self
+from typing import TYPE_CHECKING, Any, Self
 
 import msgspec
 
@@ -61,8 +61,11 @@ from . import snapshot as snapshot_mod
 from .agent_selection import AgentSelection
 from .ids import validate_session_id
 from .lock import SessionLock
+from .records import EventRecord, MessageRecord, ReadResult, SummaryRecord
 from .snapshot import Snapshot, SnapshotSummary
-from .store import EventRecord, MessageRecord, ReadResult, SessionStore, SummaryRecord
+
+if TYPE_CHECKING:
+    from .db import SqliteSessionStore
 
 _INTERRUPTED_TEMPLATE = (
     "Tool call {tool_use_id!r} ({name}) was interrupted before it ran because the "
@@ -322,7 +325,7 @@ class TurnLease:
 
 
 class Session:
-    """A handle over one append-only session log.
+    """A handle over one append-only SQLite session.
 
     A handle is bound to the single asyncio event loop that runs its turns: its
     event bus, idle event, input queue, and turn task are loop-bound. Drive one
@@ -334,7 +337,7 @@ class Session:
         self,
         session_id: str,
         *,
-        store: SessionStore,
+        store: SqliteSessionStore,
         lock: SessionLock | None = None,
         assemble: Callable[[object], Any] | None = None,
         provider_for: Callable[..., Any] | None = None,
@@ -1888,7 +1891,7 @@ class Session:
         waiting for a terminal event. This makes the failure durable and
         session-scoped — carrying the pre-assigned ``turn_id`` — so ``run``,
         ``chat``, and JSONL terminate, and a late subscriber reconstructs the
-        same failed turn from the log.
+        same failed turn from SQLite records.
 
         Idempotence is the caller's concern: it is called exactly once by the
         supervisor for a submission whose start raised.

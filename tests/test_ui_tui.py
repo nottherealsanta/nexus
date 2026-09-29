@@ -966,6 +966,8 @@ async def test_subagent_page_mirrors_the_root_with_its_sent_context():
 
 @pytest.mark.asyncio
 async def test_inspector_tail_follow_obeys_user_scroll_state():
+    from textual.worker import WorkerCancelled
+
     from nexus.ui.tui.timeline import ConversationTimeline
     from nexus.view import AgentView, BlockView, ConversationView, MessageView, TurnView
 
@@ -981,11 +983,71 @@ async def test_inspector_tail_follow_obeys_user_scroll_state():
         await pilot.pause(0.2)
         timeline = screen.query_one("#agent-timeline", ConversationTimeline)
         assert screen.scroll_at_bottom
+        # Repeated inspector refreshes replace exclusive workers. Grow the
+        # transcript during that churn so newly mounted turns exercise the
+        # same reconciliation path as live child-agent updates.
+        workers = []
+        for count in range(41, 48):
+            refreshed = ConversationView(
+                session_id="agent",
+                turns=[
+                    TurnView(
+                        id=f"t{i}",
+                        messages=[
+                            MessageView(
+                                role="assistant",
+                                blocks=[BlockView(text=f"line {i}")],
+                            )
+                        ],
+                    )
+                    for i in range(count)
+                ],
+            )
+            screen.refresh_agent(AgentView(id="agent", body=refreshed))
+            workers.append(screen._timeline_worker)
+            await pilot.pause(0.01)
+        for worker in workers:
+            if worker is None:
+                continue
+            try:
+                await worker.wait()
+            except WorkerCancelled:
+                pass
         timeline.scroll_home(animate=False)
         await pilot.pause(0.1)
         screen.refresh_agent(AgentView(id="agent", body=body))
-        await pilot.pause(0.2)
+        assert screen._timeline_worker is not None
+        await screen._timeline_worker.wait()
         assert timeline.scroll_y == 0 and not screen.scroll_at_bottom
+
+        screen.refresh_agent(
+            AgentView(
+                id="agent",
+                body=ConversationView(
+                    session_id="agent",
+                    turns=[
+                        TurnView(
+                            id=f"unmount-{i}",
+                            messages=[
+                                MessageView(
+                                    role="assistant",
+                                    blocks=[BlockView(text=f"line {i}")],
+                                )
+                            ],
+                        )
+                        for i in range(200)
+                    ],
+                ),
+            )
+        )
+        unmount_worker = screen._timeline_worker
+        await pilot.pause(0)
+        app.pop_screen()
+        if unmount_worker is not None:
+            try:
+                await unmount_worker.wait()
+            except WorkerCancelled:
+                pass
 
 
 @pytest.mark.asyncio

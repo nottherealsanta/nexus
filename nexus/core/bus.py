@@ -46,7 +46,7 @@ class Subscription(AsyncIterator[Any]):
         self._closed = True
         self._signal.set()
 
-    def __aiter__(self) -> "Subscription":
+    def __aiter__(self) -> Subscription:
         return self
 
     async def __anext__(self) -> Any:
@@ -116,4 +116,4 @@ class Bus:
         self._subs.clear()
 
 
-__all__ = ["Bus", "Subscription", "DROP_NEWEST", "DROP_OLDEST"]
+__all__ = ["DROP_NEWEST", "DROP_OLDEST", "Bus", "Subscription"]

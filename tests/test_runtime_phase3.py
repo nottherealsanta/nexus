@@ -86,9 +86,10 @@ def test_runtime_supplies_snapshot_cadence_from_config(tmp_path):
     )
     session = runtime.session("s")
     asyncio.run(_drain(session.send("one")))
-    assert not session.snapshot_path.exists()
+    store = runtime.sessions.store
+    assert store.load_snapshot("s", store.read("s")) is None
     events = asyncio.run(_drain(session.send("two")))
-    assert session.snapshot_path.exists()
+    assert store.load_snapshot("s", store.read("s")) is not None
     assembled = next(e for e in events if e.type == "context.assembled")
     assert "context" in assembled.data
     assert assembled.data["context"]["input_budget"] > 0

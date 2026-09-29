@@ -12,6 +12,7 @@ from nexus.config.schema import ConfigV2, ToolsSection, WebSection
 from nexus.net import (
     OutboundHTTPResponse,
     OutboundHTTPStatusError,
+    OutboundNetworkError,
     OutboundPolicyError,
     OutboundRateLimitError,
 )
@@ -60,7 +61,15 @@ def _response(payload, content_type="application/json"):
     )
 
 
-def _context(service=None, *, instances=None, origins=None, cancel_token=None, **web_options):
+def _context(
+    service=None,
+    *,
+    instances=None,
+    origins=None,
+    cancel_token=None,
+    local_service=None,
+    **web_options,
+):
     web = WebSection(
         searxng_instances=instances if instances is not None else ["https://search.example/"],
         allowed_origins=origins if origins is not None else ["https://search.example"],
@@ -74,6 +83,7 @@ def _context(service=None, *, instances=None, origins=None, cancel_token=None, *
         config=config,
         cancel_token=cancel_token,
         outbound_http=service,
+        local_search_http=local_service,
     )
 
 
@@ -90,6 +100,19 @@ def _item(url="https://result.example/path", **kwargs):
         "publishedDate": "2026-09-25",
         **kwargs,
     }
+
+
+def _local_context(local_service, *, remote_service=None, cancel_token=None, **web_options):
+    config = Config(version=2, v2=ConfigV2(tools=ToolsSection(web=WebSection(**web_options))))
+    return ToolContext(
+        workspace=Path("."),
+        session_id="s",
+        turn_id="t",
+        config=config,
+        cancel_token=cancel_token,
+        outbound_http=remote_service,
+        local_search_http=local_service,
+    )
 
 
 def test_spec_is_strict_bounded_and_permission_key_never_contains_provider_url():
@@ -113,7 +136,7 @@ async def test_json_request_encodes_query_and_returns_provenanced_untrusted_resu
 
     assert not result.is_error
     url, cancel, origins = service.calls[0]
-    assert url == "https://search.example/search?q=caf%C3%A9+%2B+%22quoted%22&pageno=2&format=json"
+    assert url == "https://search.example/search?q=caf%C3%A9+%2B+%22quoted%22&pageno=2&format=json&categories=general&language=en"
     assert cancel.is_set() is False
     assert origins == ["https://search.example"]
     body = _text(result)
@@ -121,6 +144,114 @@ async def test_json_request_encodes_query_and_returns_provenanced_untrusted_resu
     assert "A useful snippet" in body and "engine-a" in body and "2026-09-25" in body
     assert "BEGIN UNTRUSTED SEARCH RESULTS" in body and "END UNTRUSTED SEARCH RESULTS" in body
     assert "result links were not fetched" in result.context_note
+
+
+@pytest.mark.asyncio
+async def test_default_config_uses_fixed_local_service_and_encoded_query():
+    local_service = FakeService(_response({"results": [_item()]}))
+    remote_service = FakeService()
+
+    result = await websearch.run(
+        {"query": 'café + "quoted"', "limit": 2, "page": 2},
+        _local_context(local_service, remote_service=remote_service),
+    )
+
+    assert not result.is_error
+    assert len(local_service.calls) == 1
+    url, cancel, origins = local_service.calls[0]
+    assert url == (
+        "http://127.0.0.1:18765/search?q=caf%C3%A9+%2B+%22quoted%22&pageno=2"
+        "&format=json&categories=general&language=en"
+    )
+    assert cancel.is_set() is False
+    assert origins == ["http://127.0.0.1:18765"]
+    assert "Provider: http://127.0.0.1:18765" in _text(result)
+    assert "A useful snippet" in _text(result)
+    assert remote_service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_unreachable_default_local_search_gives_compose_start_hint():
+    local_service = FakeService(OutboundNetworkError())
+    result = await websearch.run({"query": "headphones"}, _local_context(local_service))
+    assert result.is_error
+    assert "docker compose -f websearch/compose.yaml up -d" in _text(result)
+
+
+@pytest.mark.asyncio
+async def test_default_local_http_403_uses_local_html_fallback():
+    local_service = FakeService(
+        OutboundHTTPStatusError(403),
+        _response(
+            b'<div id="results"><article class="result"><h3 class="result_header"><a href="https://result.example/">Local HTML result</a></h3>'
+            b'<p class="content">Local HTML snippet</p><span class="engine">wiki</span></article></div>',
+            "text/html; charset=utf-8",
+        ),
+    )
+    remote_service = FakeService()
+
+    result = await websearch.run(
+        {"query": "local html"},
+        _local_context(local_service, remote_service=remote_service),
+    )
+
+    assert not result.is_error
+    assert len(local_service.calls) == 2
+    assert local_service.calls[0][0] == (
+        "http://127.0.0.1:18765/search?q=local+html&pageno=1&format=json"
+        "&categories=general&language=en"
+    )
+    assert local_service.calls[1][0] == (
+        "http://127.0.0.1:18765/search?q=local+html&pageno=1&format=html"
+        "&categories=general&language=en"
+    )
+    assert [call[2] for call in local_service.calls] == [
+        ["http://127.0.0.1:18765"],
+        ["http://127.0.0.1:18765"],
+    ]
+    assert "Local HTML result" in _text(result)
+    assert "Local HTML snippet" in _text(result)
+    assert remote_service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_default_local_http_429_is_actionable_and_never_uses_remote_service():
+    local_service = FakeService(OutboundRateLimitError())
+    remote_service = FakeService(_response({"results": []}))
+
+    result = await websearch.run(
+        {"query": "limited"},
+        _local_context(local_service, remote_service=remote_service),
+    )
+
+    assert result.is_error
+    assert "rate-limit error" in _text(result)
+    assert "check its limiter and upstream engines" in _text(result)
+    assert len(local_service.calls) == 1
+    assert local_service.calls[0][2] == ["http://127.0.0.1:18765"]
+    assert remote_service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_explicit_remote_configuration_uses_only_remote_service():
+    remote_service = FakeService(_response({"results": [_item()]}))
+    local_service = FakeService()
+
+    result = await websearch.run(
+        {"query": "remote only"},
+        _context(
+            remote_service,
+            instances=["https://search.example/search"],
+            origins=["https://search.example"],
+            local_service=local_service,
+        ),
+    )
+
+    assert not result.is_error
+    assert len(remote_service.calls) == 1
+    assert remote_service.calls[0][0].startswith("https://search.example/search?")
+    assert remote_service.calls[0][2] == ["https://search.example"]
+    assert local_service.calls == []
 
 
 @pytest.mark.asyncio
@@ -140,6 +271,95 @@ async def test_json_403_uses_searxng_html_adapter_and_second_configured_instance
     assert "format=json" in service.calls[0][0]
     assert "format=html" in service.calls[1][0]
     assert "HTML result" in _text(result) and "HTML snippet" in _text(result)
+
+
+@pytest.mark.asyncio
+async def test_configured_instance_http_429_falls_back_with_backup_provenance():
+    service = FakeService(
+        OutboundHTTPStatusError(429),
+        _response({"results": [_item()]}),
+    )
+    result = await websearch.run(
+        {"query": "fallback"},
+        _context(service, instances=["https://primary.example/search", "https://backup.example/search"], origins=["https://primary.example", "https://backup.example"]),
+    )
+
+    assert not result.is_error
+    assert len(service.calls) == 2
+    assert service.calls[0][0].startswith("https://primary.example/search?")
+    assert service.calls[0][2] == ["https://primary.example"]
+    assert service.calls[1][0].startswith("https://backup.example/search?")
+    assert service.calls[1][2] == ["https://backup.example"]
+    assert "Provider: https://backup.example" in _text(result)
+    assert result.metrics["provider"] == "https://backup.example"
+
+
+@pytest.mark.asyncio
+async def test_rate_limits_from_all_configured_instances_return_rate_limit_error():
+    service = FakeService(
+        OutboundRateLimitError(),
+        OutboundHTTPStatusError(429),
+    )
+    result = await websearch.run(
+        {"query": "limited"},
+        _context(service, instances=["https://primary.example/search", "https://backup.example/search"], origins=["https://primary.example", "https://backup.example"]),
+    )
+
+    assert result.is_error and "rate-limit error" in _text(result)
+    assert [call[2] for call in service.calls] == [
+        ["https://primary.example"],
+        ["https://backup.example"],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_custom_single_instance_429_returns_rate_limit_error():
+    custom_instance = ["https://custom-search.example/search"]
+    without_explicit_origin = FakeService(_response({"results": []}))
+    rejected = await websearch.run(
+        {"query": "custom"},
+        _context(without_explicit_origin, instances=custom_instance, origins=[]),
+    )
+    assert rejected.is_error and "allowed_origins" in _text(rejected)
+    assert without_explicit_origin.calls == []
+
+    service = FakeService(OutboundRateLimitError())
+    result = await websearch.run(
+        {"query": "limited"},
+        _context(
+            service,
+            instances=custom_instance,
+            origins=["https://custom-search.example"],
+        ),
+    )
+
+    assert result.is_error and "rate-limit error" in _text(result)
+    assert len(service.calls) == 1
+    assert service.calls[0][0].startswith("https://custom-search.example/search?")
+    assert service.calls[0][2] == ["https://custom-search.example"]
+
+
+@pytest.mark.asyncio
+async def test_html_fallback_429_tries_next_configured_instance():
+    service = FakeService(
+        OutboundHTTPStatusError(403),
+        OutboundHTTPStatusError(429),
+        _response({"results": [_item()]}),
+    )
+    result = await websearch.run(
+        {"query": "html fallback"},
+        _context(service, instances=["https://primary.example/search", "https://backup.example/search"], origins=["https://primary.example", "https://backup.example"]),
+    )
+
+    assert not result.is_error
+    assert len(service.calls) == 3
+    assert "format=json" in service.calls[0][0]
+    assert service.calls[0][2] == ["https://primary.example"]
+    assert "format=html" in service.calls[1][0]
+    assert service.calls[1][2] == ["https://primary.example"]
+    assert service.calls[2][0].startswith("https://backup.example/search?")
+    assert service.calls[2][2] == ["https://backup.example"]
+    assert "Provider: https://backup.example" in _text(result)
 
 
 @pytest.mark.asyncio
@@ -283,9 +503,10 @@ async def test_no_non_searxng_fallback_and_no_instance_is_explicitly_unavailable
     service = FakeService(OutboundHTTPStatusError(503))
     result = await websearch.run({"query": "x"}, _context(service))
     no_instance = await websearch.run(
-        {"query": "x"}, _context(FakeService(), instances=[])
+        {"query": "x"},
+        _local_context(FakeService(), local_search_enabled=False),
     )
 
     assert result.is_error and len(service.calls) == 1
     assert service.calls[0][0].startswith("https://search.example/search?")
-    assert no_instance.is_error and "no HTTPS SearXNG instance" in _text(no_instance)
+    assert no_instance.is_error and "local search is disabled" in _text(no_instance)

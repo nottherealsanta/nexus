@@ -1,0 +1,54 @@
+name: install
+on:
+  push:
+    paths: [install.sh, install.ps1, pyproject.toml, nexus/host_support/install.py, .github/workflows/install.yml]
+  pull_request:
+    paths: [install.sh, install.ps1, pyproject.toml, nexus/host_support/install.py, .github/workflows/install.yml]
+  schedule:
+    - cron: "17 3 * * *"   # nightly: catch a broken published script
+jobs:
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install from this commit (clean runner, uv not preinstalled)
+        run: sh install.sh --git-ref "$GITHUB_SHA" --strict
+        env:
+          NEXUS_ALLOW_ROOT: "1"
+      - name: Smoke
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          nexus --version
+          nexus doctor --workspace .  || nexus --workspace . doctor
+      - name: Re-run is an idempotent upgrade
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          sh install.sh --git-ref "$GITHUB_SHA" --no-doctor
+          nexus --version
+      - name: nexus update refuses cleanly or upgrades
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          nexus update
+  docker:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image: [debian:stable-slim, alpine:3.20]
+    steps:
+      - uses: actions/checkout@v4
+      - name: No Python, minimal image
+        run: |
+          docker run --rm -v "$PWD:/src" -e NEXUS_ALLOW_ROOT=1 ${{ matrix.image }} sh -c '
+            (command -v apk >/dev/null && apk add --no-cache curl git bash >/dev/null) ||
+            (apt-get update -qq && apt-get install -y -qq curl git ca-certificates >/dev/null)
+            sh /src/install.sh --source /src --strict
+            /root/.local/bin/nexus --version'
+  published-script:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - run: curl -LsSf https://raw.githubusercontent.com/nottherealsanta/nexus/main/install.sh | NEXUS_ALLOW_ROOT=1 sh

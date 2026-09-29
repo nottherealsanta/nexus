@@ -34,7 +34,7 @@ from nexus.model.providers.scripted import (
 )
 from nexus.model.stream import MessageStart, MessageStop, TextDelta
 from nexus.runtime import Runtime
-from nexus.session.store import EventRecord, MessageRecord
+from nexus.session.records import EventRecord, MessageRecord
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = ROOT / "artifacts" / "web-e2e"

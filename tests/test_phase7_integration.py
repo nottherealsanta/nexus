@@ -43,6 +43,7 @@ from nexus.config.schema import (
     ProviderSection,
 )
 from nexus.errors import ConfigError, ProviderError
+from nexus.model.message import Message, Text
 from nexus.model.providers.anthropic import AnthropicProvider
 from nexus.model.providers.gemini import GeminiProvider
 from nexus.model.providers.ollama import OllamaProvider
@@ -50,7 +51,6 @@ from nexus.model.providers.openai import API_CHAT, API_RESPONSES, OpenAIProvider
 from nexus.model.providers.opencode import OpenCodeProvider
 from nexus.model.providers.scripted import ScriptedProvider, text_response
 from nexus.model.registry import ADAPTER_OPENAI, ModelRegistry, map_provider
-from nexus.model.message import Message, Text
 from nexus.model.request import ModelRequest, ToolSchema
 from nexus.model.stream import MessageStart, MessageStop, TextDelta, ToolCallEnd
 from nexus.runtime import Runtime

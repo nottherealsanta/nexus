@@ -5,8 +5,8 @@ from __future__ import annotations
 from textual.app import App, ComposeResult
 from textual.widgets import Markdown
 
-from nexus.ui_support.timeline import tool_output
 from nexus.ui.tui.timeline import AssistantMessage, ThoughtLine, TurnWidget
+from nexus.ui_support.timeline import tool_output
 from nexus.view import (
     AgentView,
     BlockView,

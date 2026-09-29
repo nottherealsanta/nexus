@@ -2,9 +2,9 @@
 
 :class:`StateDatabase` owns the connection, schema, and durability pragmas for
 ``~/.nexus/nexus.db`` (or a private per-test database). :class:`SqliteSessionStore`
-is the SQL-backed replacement for :class:`~nexus.session.store.JsonlSessionStore`,
-scoped to one ``(project_id, namespace)`` pair and implementing the exact store
-surface :class:`~nexus.session.session.Session` and
+is the SQLite session store, scoped to one ``(project_id, namespace)`` pair and
+implementing the exact store surface that
+:class:`~nexus.session.session.Session` and
 :class:`~nexus.session.manager.SessionManager` depend on:
 ``exists``, ``create``, ``create_from_records``, ``read``, ``records``,
 ``next_seq``, ``append_event``, ``append_message``, ``append_summary``,
@@ -17,8 +17,8 @@ of a directory scan.
 
 Record encoding is unchanged: a ``records.body`` column stores exactly
 ``msgspec.json.encode(EventRecord | MessageRecord | SummaryRecord)`` -- the same
-bytes a JSONL line held, so the reducer, export, snapshot validation, fork and
-replay are untouched (STATE_PLAN §2.2).
+bytes a JSONL export line carries, so the reducer, export, snapshot validation,
+fork and replay are untouched (STATE_PLAN §2.2).
 
 Concurrency (STATE_PLAN §2.3-2.4): WAL journal mode, ``synchronous=FULL``,
 ``busy_timeout=5000``, and every write transaction opened with
@@ -50,7 +50,7 @@ from ..model.message import Message
 from . import export as export_mod
 from . import snapshot as snapshot_mod
 from .ids import validate_session_id
-from .store import (
+from .records import (
     SESSION_LOG_VERSION,
     EventRecord,
     MessageRecord,
@@ -75,8 +75,7 @@ _SCHEMA_STEPS: tuple[tuple[str, ...], ...] = (
           id          TEXT PRIMARY KEY,
           root        TEXT NOT NULL,
           created_at  REAL NOT NULL,
-          last_opened REAL NOT NULL,
-          legacy_imported_at REAL
+          last_opened REAL NOT NULL
         )
         """,
         """
@@ -252,19 +251,6 @@ class StateDatabase:
                 (project_id, root, now, now),
             )
 
-    def project_row(self, project_id: str) -> dict[str, Any] | None:
-        row = self._connection().execute(
-            "SELECT * FROM projects WHERE id=?", (project_id,)
-        ).fetchone()
-        return dict(row) if row is not None else None
-
-    def mark_legacy_imported(self, project_id: str, *, at: float | None = None) -> None:
-        with self.transaction() as conn:
-            conn.execute(
-                "UPDATE projects SET legacy_imported_at=? WHERE id=?",
-                (time.time() if at is None else at, project_id),
-            )
-
     def close(self) -> None:
         conn = getattr(self._local, "conn", None)
         if conn is not None:
@@ -307,7 +293,7 @@ class SqliteSessionStore:
         self.namespace = namespace
         self.db.touch_project(project_id, root if root is not None else project_id)
         self._lock_dir = Path(lock_dir) if lock_dir is not None else None
-        self._fsync = lambda fd: None  # noqa: ARG005 - durability is PRAGMA-provided
+        self._fsync = lambda fd: None  # durability is PRAGMA-provided
 
     @property
     def fsync(self):
@@ -370,8 +356,7 @@ class SqliteSessionStore:
         """Publish a brand-new session from an exact record prefix, one txn.
 
         Raises :class:`SessionError` ("Session log already exists") if a row
-        (live or trashed) already occupies this id -- the SQL analogue of the
-        JSONL store's atomic hard-link publish. The ``archived_*``/``trash_*``
+        (live or trashed) already occupies this id. The ``archived_*``/``trash_*``
         keywords are for the legacy importer, which restores exact historical
         metadata instead of re-deriving it.
         """
@@ -453,27 +438,37 @@ class SqliteSessionStore:
     def tail_bytes(self, session: str, *, max_bytes: int) -> bytes:
         """Raw encoded bodies of the newest records, newline-joined, capped.
 
-        Mirrors reading a bounded byte tail of a JSONL log: used where a caller
-        wants to substring-search the raw serialized record text rather than
-        decode it (``host_support/session_archive.py``).
+        Reads a bounded byte tail of serialized records for callers that want to
+        substring-search the exported record text rather than
+        decode it (``host_support/session_archive.py``). The descending scan
+        stops once the requested byte window is covered and is hard-limited to
+        ``_MAX_LIMIT`` records; SQLite truncates each fetched BLOB to the
+        requested window so a single enormous record cannot defeat the cap.
         """
         session = validate_session_id(session)
         if type(max_bytes) is not int or max_bytes < 1:
             raise ValueError("max_bytes must be a positive integer")
-        rows = self.db._connection().execute(
-            "SELECT body FROM records WHERE project_id=? AND namespace=? AND session_id=? "
-            "ORDER BY seq DESC",
-            (self.project_id, self.namespace, session),
-        ).fetchall()
+        cursor = self.db._connection().execute(
+            "SELECT substr(body, -?) FROM records "
+            "WHERE project_id=? AND namespace=? AND session_id=? "
+            "ORDER BY seq DESC LIMIT ?",
+            (
+                max_bytes,
+                self.project_id,
+                self.namespace,
+                session,
+                min(max_bytes, _MAX_LIMIT),
+            ),
+        )
         collected: list[bytes] = []
         total = 0
-        for (body,) in rows:
+        for (body,) in cursor:
             total += len(body) + 1
             collected.append(body)
             if total >= max_bytes:
                 break
         collected.reverse()
-        return b"\n".join(collected) + (b"\n" if collected else b"")
+        return (b"\n".join(collected) + (b"\n" if collected else b""))[-max_bytes:]
 
     def records(self, session: str) -> Iterator[SessionRecord]:
         yield from self.read(session).records
@@ -563,9 +558,8 @@ class SqliteSessionStore:
         return self._commit_append(session, seq, "summary", stamp, build)
 
     def _commit_append(self, session, requested_seq, kind, ts, build):
-        if requested_seq is not None:
-            if type(requested_seq) is not int or requested_seq < 1:
-                raise ValueError("seq must be a positive integer")
+        if requested_seq is not None and (type(requested_seq) is not int or requested_seq < 1):
+            raise ValueError("seq must be a positive integer")
         with self.db.transaction() as conn:
             row = conn.execute(
                 "SELECT last_seq, title, message_count, created_at, last_activity FROM sessions "
@@ -670,7 +664,8 @@ class SqliteSessionStore:
         with self.db.transaction() as conn:
             cur = conn.execute(
                 "UPDATE sessions SET archived_at=NULL, archive_reason=NULL "
-                "WHERE project_id=? AND namespace=? AND id=? AND archived_at IS NOT NULL",
+                "WHERE project_id=? AND namespace=? AND id=? AND archived_at IS NOT NULL "
+                "AND trash_id IS NULL",
                 (self.project_id, self.namespace, session),
             )
             return cur.rowcount > 0
@@ -686,8 +681,7 @@ class SqliteSessionStore:
     def stale_candidates(self, *, threshold: float, limit: int) -> list[str]:
         """Up to ``limit`` idle, unarchived, untrashed session ids, oldest first.
 
-        Replaces the JSONL store's persisted sweep cursor: an indexed
-        ``ORDER BY last_activity ASC LIMIT`` query is already bounded and
+        An indexed ``ORDER BY last_activity ASC LIMIT`` query is bounded and
         deterministic, so no cross-call cursor bookkeeping is needed.
         """
         if type(limit) is not int or limit < 1:
@@ -718,7 +712,7 @@ class SqliteSessionStore:
             title, last_seq = row
             conn.execute(
                 "UPDATE sessions SET trash_id=?, trashed_at=?, trash_expires_at=?, "
-                "trash_reason=?, archived_at=NULL, archive_reason=NULL "
+                "trash_reason=? "
                 "WHERE project_id=? AND namespace=? AND id=?",
                 (
                     trash_id, now, now + retention_seconds, reason,

@@ -18,7 +18,6 @@ Interactive chat is the Textual shell in :mod:`nexus.ui.tui`.
 """
 from __future__ import annotations
 
-from .approve import Approver
 from ...client.protocol import (
     Client,
     ClientError,
@@ -27,6 +26,7 @@ from ...client.protocol import (
     Transport,
     TransportClosed,
 )
+from .approve import Approver
 from .render import TERMINAL_EVENTS, TerminalRenderer, exit_code
 from .run import run_once
 from .uds import DaemonUnavailable, UdsTransport, connect, open_client

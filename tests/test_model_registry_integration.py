@@ -419,7 +419,8 @@ async def test_runtime_without_models_section_has_no_registry(tmp_path):
 
 
 async def test_runtime_owns_registry_and_resolves_a_tier_from_cache(tmp_path):
-    cache_dir = tmp_path / ".nexus" / "cache"
+    test_home = home(tmp_path)
+    cache_dir = test_home / ".nexus" / "cache"
     cache_dir.mkdir(parents=True)
     (cache_dir / "models.dev.json").write_bytes(catalogue_bytes())
     config = _runtime_config(
@@ -430,6 +431,7 @@ async def test_runtime_owns_registry_and_resolves_a_tier_from_cache(tmp_path):
     provider = ScriptedProvider(text_response("ok"), name="anthropic")
     runtime = Runtime(
         tmp_path,
+        home=test_home,
         config=config,
         providers={"anthropic": provider},
         environ=ANTHROPIC_ENV,
@@ -453,7 +455,8 @@ async def test_runtime_owns_registry_and_resolves_a_tier_from_cache(tmp_path):
 
 
 async def test_runtime_stale_cache_emits_registry_stale(tmp_path):
-    cache_dir = tmp_path / ".nexus" / "cache"
+    test_home = home(tmp_path)
+    cache_dir = test_home / ".nexus" / "cache"
     cache_dir.mkdir(parents=True)
     cache = cache_dir / "models.dev.json"
     cache.write_bytes(catalogue_bytes())
@@ -463,6 +466,7 @@ async def test_runtime_stale_cache_emits_registry_stale(tmp_path):
     provider = ScriptedProvider(text_response("ok"), name="anthropic")
     runtime = Runtime(
         tmp_path,
+        home=test_home,
         config=config,
         providers={"anthropic": provider},
         environ=ANTHROPIC_ENV,
@@ -478,13 +482,15 @@ async def test_runtime_stale_cache_emits_registry_stale(tmp_path):
 
 
 async def test_runtime_corrupt_cache_falls_back_to_the_vendored_snapshot(tmp_path):
-    cache_dir = tmp_path / ".nexus" / "cache"
+    test_home = home(tmp_path)
+    cache_dir = test_home / ".nexus" / "cache"
     cache_dir.mkdir(parents=True)
     (cache_dir / "models.dev.json").write_bytes(b"{ not valid json")
     config = _runtime_config(offline=True)
     provider = ScriptedProvider(text_response("ok"), name="anthropic")
     runtime = Runtime(
         tmp_path,
+        home=test_home,
         config=config,
         providers={"anthropic": provider},
         environ=ANTHROPIC_ENV,
@@ -500,13 +506,15 @@ async def test_runtime_corrupt_cache_falls_back_to_the_vendored_snapshot(tmp_pat
 
 
 async def test_refresh_models_forces_a_reload(tmp_path):
-    cache_dir = tmp_path / ".nexus" / "cache"
+    test_home = home(tmp_path)
+    cache_dir = test_home / ".nexus" / "cache"
     cache_dir.mkdir(parents=True)
     (cache_dir / "models.dev.json").write_bytes(catalogue_bytes())
     config = _runtime_config(offline=True)
     provider = ScriptedProvider(text_response("ok"), name="anthropic")
     runtime = Runtime(
         tmp_path,
+        home=test_home,
         config=config,
         providers={"anthropic": provider},
         environ=ANTHROPIC_ENV,

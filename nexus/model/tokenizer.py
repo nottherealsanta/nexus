@@ -29,4 +29,4 @@ class HeuristicTokenizer:
 
 DEFAULT_TOKENIZER = HeuristicTokenizer()
 
-__all__ = ["Tokenizer", "HeuristicTokenizer", "DEFAULT_TOKENIZER"]
+__all__ = ["DEFAULT_TOKENIZER", "HeuristicTokenizer", "Tokenizer"]

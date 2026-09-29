@@ -41,6 +41,7 @@ from ..model.request import ToolSchema
 
 if TYPE_CHECKING:
     from ..net import OutboundHTTPService
+    from ..net.local_search import LocalSearchHTTPService
 
 #: Tool names: one leading letter, then up to 63 letters/digits/underscores.
 NAME_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}\Z")
@@ -654,6 +655,8 @@ class ToolContext:
     extension_service: ExtensionServiceView | None = None
     #: Runtime-shared hardened outbound GET service; tools receive no Runtime.
     outbound_http: OutboundHTTPService | None = None
+    #: Fixed loopback search capability, never used by WebFetch.
+    local_search_http: LocalSearchHTTPService | None = None
     #: Operator question seam; ``None`` means nobody can be asked.
     questions: QuestionServiceView | None = None
     #: Stable identity within a session. Runtime root tools use ``"root"``;

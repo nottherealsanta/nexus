@@ -252,6 +252,13 @@ class Client:
 
     async def select_reasoning_effort(self, session: str, effort: str | None) -> Any: return await self._request(p.ReasoningEffortSelect(session=session, effort=effort))
 
+    async def mock_list(self) -> p.MockListResult: return await self._request(p.MockList())  # type: ignore[return-value]
+
+    async def mock_start(self, scenario: str, *, speed: float = 1.0, seed: int = 0) -> p.MockStartResult:
+        return await self._request(p.MockStart(scenario=scenario, speed=speed, seed=seed))  # type: ignore[return-value]
+
+    async def mock_clean(self) -> p.MockCleanResult: return await self._request(p.MockClean())  # type: ignore[return-value]
+
     async def refresh_models(self) -> Any: return await self._request(p.ModelsRefresh())
 
     async def setup_status(self) -> p.SetupStatusResult:

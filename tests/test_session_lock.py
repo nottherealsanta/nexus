@@ -1,5 +1,4 @@
 import errno
-import json
 import os
 import subprocess
 import sys
@@ -10,7 +9,6 @@ import pytest
 
 from nexus.errors import SessionBusy
 from nexus.model.message import Message, ToolUse
-from nexus.session import migrate as migrate_module
 from nexus.session.lock import SessionLock, TrashLock
 from nexus.session.manager import SessionManager
 
@@ -170,22 +168,6 @@ def test_recovery_propagates_non_contention_error(tmp_path, monkeypatch):
     )
     with pytest.raises(OSError) as excinfo:
         session.recover_dangling_tool_uses()
-    assert excinfo.value.errno == errno.EIO
-
-
-def test_migration_propagates_non_contention_error(tmp_path, monkeypatch):
-    import nexus.session.lock as lock_module
-
-    legacy = migrate_module.legacy_path(tmp_path, "main")
-    legacy.write_text(
-        json.dumps({"version": 1, "exchanges": [{"user": "a", "assistant": "b"}]}),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        lock_module.fcntl, "flock", _flock_raiser(OSError(errno.EIO, "I/O error"))
-    )
-    with pytest.raises(OSError) as excinfo:
-        SessionManager(tmp_path).migrate("main")
     assert excinfo.value.errno == errno.EIO
 
 

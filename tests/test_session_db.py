@@ -12,7 +12,8 @@ from nexus.errors import SessionError
 from nexus.events import Event
 from nexus.model.message import Message, Text
 from nexus.session.db import SCHEMA_VERSION, SqliteSessionStore, StateDatabase
-from nexus.session.store import EventRecord, MessageRecord
+from nexus.session.manager import SessionManager
+from nexus.session.records import MessageRecord
 
 
 def _msg(text: str, role: str = "user") -> Message:
@@ -44,7 +45,7 @@ def test_creates_schema_and_sets_user_version(tmp_path):
 
 def test_file_and_directory_permissions(tmp_path):
     home = tmp_path / "home" / ".nexus"
-    db = _db(home, "nexus.db")
+    _db(home, "nexus.db")
     mode = stat.S_IMODE((home / "nexus.db").stat().st_mode)
     assert mode == 0o600
     dir_mode = stat.S_IMODE(home.stat().st_mode)
@@ -113,6 +114,31 @@ def test_append_event_and_summary_round_trip(tmp_path):
     read = store.read("s1")
     assert [r.seq for r in read.records] == [1, 2]
     assert read.summaries()[0].text == "a summary"
+
+
+def test_tail_bytes_limits_descending_record_scan_and_output(tmp_path):
+    db = _db(tmp_path)
+    store = _store(db)
+    store.create("s1")
+    for index in range(20):
+        store.append_message("s1", _msg(f"record-{index}"))
+
+    body = db._connection().execute(
+        "SELECT body FROM records WHERE project_id=? AND namespace=? AND session_id=? "
+        "ORDER BY seq DESC LIMIT 1",
+        ("proj-a", "main", "s1"),
+    ).fetchone()[0]
+    traced: list[str] = []
+    db._connection().set_trace_callback(traced.append)
+    try:
+        result = store.tail_bytes("s1", max_bytes=12)
+    finally:
+        db._connection().set_trace_callback(None)
+
+    assert result == bytes(body)[-11:] + b"\n"
+    assert len(result) == 12
+    tail_query = next(sql for sql in traced if "substr(body" in sql)
+    assert "ORDER BY seq DESC LIMIT 12" in tail_query
 
 
 def test_seq_monotonic_across_two_connections(tmp_path):
@@ -242,6 +268,89 @@ def test_trash_hides_session_and_restore_brings_it_back(tmp_path):
     assert restored == "s1"
     assert store.exists("s1") is True
     assert [r.seq for r in store.read("s1").records] == [1]
+
+
+def test_trash_trigger_failure_rolls_back_session_columns_and_records(tmp_path):
+    db = _db(tmp_path)
+    store = _store(db)
+    store.create("s1")
+    store.append_message("s1", _msg("keep"))
+    store.archive("s1", "before-trash")
+    row_before = store.session_row("s1")
+    records_before = store.read("s1").records
+    db._connection().execute(
+        "CREATE TRIGGER reject_trash BEFORE UPDATE OF trash_id ON sessions "
+        "WHEN NEW.trash_id IS NOT NULL "
+        "BEGIN SELECT RAISE(ABORT, 'trash rejected'); END"
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="trash rejected"):
+        store.trash("s1", reason="test", retention_seconds=3600)
+
+    assert store.session_row("s1") == row_before
+    assert store.read("s1").records == records_before
+    assert store.exists("s1") is True
+    assert store.trashed_rows() == []
+
+
+def test_restore_trigger_failure_rolls_back_session_columns_and_records(tmp_path):
+    db = _db(tmp_path)
+    store = _store(db)
+    store.create("s1")
+    store.append_message("s1", _msg("keep"))
+    trashed = store.trash("s1", reason="test", retention_seconds=3600)
+    row_before = store.session_row("s1")
+    records_before = store.read("s1").records
+    db._connection().execute(
+        "CREATE TRIGGER reject_restore BEFORE UPDATE OF trash_id ON sessions "
+        "WHEN OLD.trash_id IS NOT NULL AND NEW.trash_id IS NULL "
+        "BEGIN SELECT RAISE(ABORT, 'restore rejected'); END"
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="restore rejected"):
+        store.restore(trashed["trash_id"])
+
+    assert store.session_row("s1") == row_before
+    assert store.read("s1").records == records_before
+    assert store.exists("s1") is False
+    assert store.find_trash(trashed["trash_id"]) == row_before
+
+
+def test_trash_restore_preserves_archive_metadata(tmp_path):
+    store = _store(_db(tmp_path))
+    store.create("s1")
+    archived = store.archive("s1", "auto")
+
+    trashed = store.trash("s1", reason="user-delete", retention_seconds=3600)
+    assert store.archived_rows() == []
+    assert store.find_trash(trashed["trash_id"])["archived_at"] == archived["archived_at"]
+
+    # Manager.open calls unarchive before checking whether a session exists.
+    # A trashed row must keep its original archive marker until restore.
+    assert store.unarchive("s1") is False
+    assert store.find_trash(trashed["trash_id"])["archive_reason"] == "auto"
+
+    assert store.restore(trashed["trash_id"]) == "s1"
+    restored = store.archived_rows()
+    assert restored == [
+        {"session_id": "s1", "archived_at": archived["archived_at"], "reason": "auto"}
+    ]
+
+
+def test_manager_delete_restore_keeps_session_archived(tmp_path):
+    manager = SessionManager(tmp_path)
+    session = manager.open("s1")
+    session.append_message(_msg("archived"))
+    archived = manager.archive("s1", "user")
+
+    trashed = manager.delete("s1", reason="sidebar-check")
+    assert manager.archived() == []
+    assert manager.list_trashed()[0].trash_id == trashed.trash_id
+
+    assert manager.restore(trashed.trash_id) == "s1"
+    assert manager.archived() == [archived]
+    assert manager.list() == []
+    assert [row.id for row in manager.list(include_archived=True)] == ["s1"]
 
 
 def test_purge_expired_removes_only_past_retention(tmp_path):

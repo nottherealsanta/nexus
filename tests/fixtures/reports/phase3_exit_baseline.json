@@ -2,57 +2,45 @@
   "full_suite": {
     "command": "/Users/santa/repos/nexus/.venv/bin/python -m pytest -q -p no:cacheprovider",
     "returncode": 0,
-    "seconds": 540.72,
-    "summary": "textual.css.query.NoMatches: No nodes match 'LogsDrawer' on Screen(id='_default')"
+    "seconds": 388.97,
+    "summary": "4460 passed, 312 skipped, 3 deselected in 387.08s (0:06:27)"
   },
-  "generated_at": "2026-09-28T07:59:57+0530",
-  "head": "9a5401c3ba296624674468b024a32765d8943134",
+  "generated_at": "2026-09-29T17:15:16+0530",
+  "head": "ea2efc7a1fa3dd417841f144f7f1e6edfb04051d",
   "import_cost": {
     "heavy_loaded": [],
-    "import_nexus_ms": 9.44,
+    "import_nexus_ms": 9.38,
     "import_nexus_new_modules": 40,
-    "import_runtime_modules": 508,
-    "import_runtime_ms": 121.84
+    "import_runtime_modules": 514,
+    "import_runtime_ms": 124.92
   },
   "line_budgets": {
     "core_model_spec": {
-      "code_lines": 10913,
+      "code_lines": 11009,
       "files": 29,
-      "overage": 0,
-      "physical_lines": 13177,
-      "plan_cap": 14000,
-      "within_plan_cap": true
+      "physical_lines": 13302
     },
     "host_view_ui": {
       "budgets_by_dir": {
         "host": {
-          "code_lines": 5674,
+          "code_lines": 5845,
           "files": 13,
-          "overage": 0,
-          "physical_lines": 6794,
-          "plan_cap": 7000,
-          "within_plan_cap": true
+          "physical_lines": 7027
         },
         "ui": {
-          "code_lines": 4249,
-          "files": 28,
-          "overage": 0,
-          "physical_lines": 4951,
-          "plan_cap": 5000,
-          "within_plan_cap": true
+          "code_lines": 4335,
+          "files": 31,
+          "physical_lines": 5052
         },
         "view": {
           "code_lines": 1961,
           "files": 4,
-          "overage": 0,
-          "physical_lines": 2199,
-          "plan_cap": 2200,
-          "within_plan_cap": true
+          "physical_lines": 2199
         }
       },
-      "code_lines": 11884,
-      "files": 45,
-      "physical_lines": 13944
+      "code_lines": 12141,
+      "files": 48,
+      "physical_lines": 14278
     }
   },
   "phase3": {
@@ -76,15 +64,15 @@
       "uncached_input_tokens": 69415
     },
     "session_200": {
-      "compacted_assemblies": 42,
+      "compacted_assemblies": 83,
       "contiguous_suffix": true,
       "current_turn_appears_once": true,
-      "final_request_messages": 116,
+      "final_request_messages": 34,
       "input_budget": 5744,
-      "log_message_lines": 200,
       "messages": 200,
       "model_calls": 100,
-      "peak_used_tokens": 4873,
+      "peak_used_tokens": 4878,
+      "persisted_message_records": 200,
       "turns": 100
     }
   },
@@ -94,10 +82,10 @@
       "tests/test_hot_extension_e2e.py::test_walkthrough_read_template_write_reload_call",
       "tests/test_hot_extension_stress.py::test_two_hundred_reloads_do_not_leak"
     ],
-    "output_tail": "..                                                                       [100%]\n2 passed in 2.20s",
+    "output_tail": "..                                                                       [100%]\n2 passed in 0.96s",
     "returncode": 0,
-    "seconds": 2.37,
-    "summary": "2 passed in 2.20s"
+    "seconds": 1.13,
+    "summary": "2 passed in 0.96s"
   },
   "schema": "nexus.phase3_exit_baseline/1"
 }

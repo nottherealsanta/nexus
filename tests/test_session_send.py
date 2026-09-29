@@ -19,6 +19,7 @@ from nexus.model.request import ModelRequest, ToolSchema
 from nexus.model.router import ModelRouter
 from nexus.model.stream import MessageStart, MessageStop, TextDelta, Usage
 from nexus.session.manager import SessionManager
+from nexus.session.records import MessageRecord
 
 
 class RecordingAssembler:
@@ -315,17 +316,17 @@ async def test_recovery_and_turn_grow_the_log_append_only(tmp_path):
             content=[ToolUse(id="call-1", name="Read", input={"path": "a"})],
         )
     )
-    before = session.path.read_bytes()
-    lines_before = len(before.splitlines())
+    before = tuple(session.records)
 
     await drain(session.send("next"))
 
-    after = session.path.read_bytes()
-    assert after.startswith(before)  # raw bytes are only appended
-    assert len(after.splitlines()) > lines_before
-    # One record per line, and exactly recovery(ToolResult) + user + assistant
-    # were appended as messages.
-    assert len(after.splitlines()) == len(session.records)
+    after = tuple(session.records)
+    assert after[: len(before)] == before  # durable records are only appended
+    # Exactly recovery(ToolResult) + user + assistant were appended as messages.
+    appended_messages = [
+        record for record in after[len(before) :] if isinstance(record, MessageRecord)
+    ]
+    assert len(appended_messages) == 3
     assert len(session.messages) == 5
 
 
@@ -437,6 +438,7 @@ async def test_snapshot_failure_releases_without_mutating_log(tmp_path):
     assert session.active is False
     assert session.messages == []
     assert session.events == []
+    assert session.records == []
     assert provider.calls == 0
 
 
@@ -499,8 +501,6 @@ async def test_slow_consumer_yields_every_persisted_event(tmp_path):
 
 
 async def test_completed_turn_persists_snapshot_and_keeps_full_history(tmp_path):
-    from nexus.session import snapshot as snapshot_mod
-
     provider = ScriptedProvider(text_response("hello"), text_response("hello"))
     manager = SessionManager(
         tmp_path,
@@ -512,9 +512,8 @@ async def test_completed_turn_persists_snapshot_and_keeps_full_history(tmp_path)
 
     events = await drain(session.send("hi"))
     assert events[-1].type == "turn.completed"
-    assert session.snapshot_path.exists()
 
-    loaded = snapshot_mod.load(tmp_path, "snap", session.read(force=True))
+    loaded = manager.store.load_snapshot("snap", session.read(force=True))
     assert loaded is not None
     # Snapshot-aware messages equal the authoritative full-log history.
     assert [m.content[0].text for m in loaded.messages] == ["hi", "hello"]
@@ -561,4 +560,3 @@ async def test_early_close_under_backpressure_releases_and_persists_terminal(tmp
     # The lock is free and a fresh turn completes.
     events = await drain(session.send("again"))
     assert events[-1].type == "turn.completed"
-

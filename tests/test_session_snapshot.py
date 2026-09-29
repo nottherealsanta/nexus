@@ -2,8 +2,8 @@
 
 These tests exercise the exact Phase 3 scope:
 
-* versioned ``<id>.snap.json`` derived snapshots with schema/prefix validation;
-* atomic, crash-safe snapshot writes that never touch the authoritative log;
+* versioned SQLite-derived snapshots with schema/prefix validation;
+* atomic snapshot transactions that never touch the authoritative records;
 * snapshot-aware current-state reconstruction (snapshot + tail == full log);
 * dangling ``ToolUse`` recovery across a snapshot boundary;
 * snapshot cadence on completed turns via the ``snapshot_every`` seam;
@@ -16,7 +16,7 @@ full-log assertion so "omission from the snapshot" can never silently mean
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
+import sqlite3
 
 import msgspec
 import pytest
@@ -44,8 +44,6 @@ from nexus.session.snapshot import (
     Snapshot,
     SnapshotSummary,
     current_state,
-    load,
-    write,
 )
 
 
@@ -60,6 +58,31 @@ def _tool_use(call_id, name="Read"):
 
 def _open(tmp_path, name="s"):
     return SessionManager(tmp_path).open(name)
+
+
+def _load_snapshot(session):
+    read = session.read(force=True)
+    return session._store.load_snapshot(session.id, read)
+
+
+def _write_snapshot(session, snapshot):
+    session._store.write_snapshot(session.id, snapshot)
+
+
+def _replace_snapshot_body(session, body):
+    store = session._store
+    store.db._connection().execute(
+        "UPDATE snapshots SET body=? WHERE project_id=? AND namespace=? AND session_id=?",
+        (body, store.project_id, store.namespace, session.id),
+    )
+
+
+def _snapshot_row(session):
+    store = session._store
+    return store.db._connection().execute(
+        "SELECT seq, body FROM snapshots WHERE project_id=? AND namespace=? AND session_id=?",
+        (store.project_id, store.namespace, session.id),
+    ).fetchone()
 
 
 # ---------------------------------------------------------------------------
@@ -78,9 +101,9 @@ def test_snapshot_roundtrip_is_a_valid_log_prefix(tmp_path):
     assert snap.v == SNAPSHOT_VERSION
     assert snap.id == "s"
     assert snap.seq == last.seq
-    assert session.snapshot_path.name == "s.snap.json"
-    assert session.snapshot_path.read_bytes().endswith(b"\n")
-    loaded = load(tmp_path, "s", session.read(force=True))
+    row = _snapshot_row(session)
+    assert row is not None and row[0] == snap.seq
+    loaded = _load_snapshot(session)
     assert loaded is not None
     assert loaded.messages == [m for m in session.messages]
     assert loaded.usage == {"input": 3, "output": 4}
@@ -118,7 +141,7 @@ def test_snapshot_summary_roundtrips_as_metadata(tmp_path):
     session.append_message(_msg("hi"))
     summary = SnapshotSummary(text="condensed", through_seq=1, source="context.compacted")
     session.write_snapshot(summary=summary)
-    loaded = load(tmp_path, "sum", session.read(force=True))
+    loaded = _load_snapshot(session)
     assert loaded is not None
     assert loaded.summary == summary
     # The summary is metadata; messages still come from the authoritative log.
@@ -128,11 +151,10 @@ def test_snapshot_summary_roundtrips_as_metadata(tmp_path):
 def test_snapshot_never_rewrites_or_truncates_the_log(tmp_path):
     session = _open(tmp_path, "keep")
     session.append_message(_msg("hi"))
-    before = session.path.read_bytes()
+    before = tuple(session.read(force=True).records)
     session.write_snapshot()
-    after = session.path.read_bytes()
+    after = tuple(session.read(force=True).records)
     assert after == before
-    assert session.path.read_bytes().startswith(before)
 
 
 # ---------------------------------------------------------------------------
@@ -140,17 +162,17 @@ def test_snapshot_never_rewrites_or_truncates_the_log(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _corrupt_snapshot_to_unknown_field(path: Path) -> None:
-    payload = msgspec.json.decode(path.read_bytes())
+def _corrupt_snapshot_to_unknown_field(session) -> None:
+    payload = msgspec.json.decode(_snapshot_row(session)[1])
     payload["surprise"] = 1
-    path.write_bytes(msgspec.json.encode(payload) + b"\n")
+    _replace_snapshot_body(session, msgspec.json.encode(payload))
 
 
 def test_corrupt_snapshot_is_ignored(tmp_path):
     session = _open(tmp_path, "corrupt")
     session.append_message(_msg("hi"))
     session.write_snapshot()
-    session.snapshot_path.write_bytes(b"{not json at all")
+    _replace_snapshot_body(session, b"{not json at all")
     state = session.current
     assert state.snapshot_seq is None
     assert [m.content[0].text for m in state.messages] == ["hi"]
@@ -160,7 +182,7 @@ def test_unknown_snapshot_field_is_ignored(tmp_path):
     session = _open(tmp_path, "unknown")
     session.append_message(_msg("hi"))
     session.write_snapshot()
-    _corrupt_snapshot_to_unknown_field(session.snapshot_path)
+    _corrupt_snapshot_to_unknown_field(session)
     assert session.current.snapshot_seq is None
     assert len(session.messages) == 1
 
@@ -169,12 +191,11 @@ def test_future_version_snapshot_is_ignored(tmp_path):
     session = _open(tmp_path, "future")
     session.append_message(_msg("hi"))
     read = session.read(force=True)
-    write(
-        tmp_path,
-        "future",
+    _write_snapshot(
+        session,
         Snapshot(v=SNAPSHOT_VERSION + 1, id="future", seq=1, messages=read.messages()),
     )
-    assert load(tmp_path, "future", read) is None
+    assert _load_snapshot(session) is None
     assert session.current.snapshot_seq is None
 
 
@@ -182,7 +203,7 @@ def test_wrong_id_snapshot_is_ignored(tmp_path):
     session = _open(tmp_path, "idcheck")
     session.append_message(_msg("hi"))
     read = session.read(force=True)
-    write(tmp_path, "idcheck", Snapshot(id="someone-else", seq=1, messages=read.messages()))
+    _write_snapshot(session, Snapshot(id="someone-else", seq=1, messages=read.messages()))
     assert session.current.snapshot_seq is None
 
 
@@ -190,7 +211,7 @@ def test_future_boundary_snapshot_is_ignored(tmp_path):
     session = _open(tmp_path, "ahead")
     session.append_message(_msg("hi"))
     read = session.read(force=True)
-    write(tmp_path, "ahead", Snapshot(id="ahead", seq=99, messages=read.messages()))
+    _write_snapshot(session, Snapshot(id="ahead", seq=99, messages=read.messages()))
     assert session.current.snapshot_seq is None
     assert len(session.messages) == 1
 
@@ -199,7 +220,7 @@ def test_stale_prefix_mismatch_snapshot_is_ignored(tmp_path):
     session = _open(tmp_path, "stale")
     session.append_message(_msg("hi"))
     wrong = Message(role="user", content=[Text(text="different")])
-    write(tmp_path, "stale", Snapshot(id="stale", seq=1, messages=[wrong]))
+    _write_snapshot(session, Snapshot(id="stale", seq=1, messages=[wrong]))
     assert session.current.snapshot_seq is None
     assert [m.content[0].text for m in session.messages] == ["hi"]
 
@@ -208,9 +229,8 @@ def test_usage_mismatch_snapshot_is_ignored(tmp_path):
     session = _open(tmp_path, "usage")
     session.append_message(_msg("hi", usage={"input": 1}))
     read = session.read(force=True)
-    write(
-        tmp_path,
-        "usage",
+    _write_snapshot(
+        session,
         Snapshot(id="usage", seq=1, messages=read.messages(), usage={"input": 999}),
     )
     assert session.current.snapshot_seq is None
@@ -234,7 +254,7 @@ def test_snapshot_plus_tail_equals_full_log_messages_events_usage(tmp_path):
     session.append_message(_msg("more", role="assistant", usage={"input": 5, "output": 7}))
 
     read = session.read(force=True)
-    loaded = load(tmp_path, "tail", read)
+    loaded = _load_snapshot(session)
     assert loaded is not None and loaded.seq == 2
     state = current_state(read, loaded)
 
@@ -265,23 +285,16 @@ def test_public_records_and_events_never_omit_history(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _snapshot_for(session, seq):
-    read = session.read(force=True)
-    return snapshot_mod.build_from_records(session.id, read.records, seq)
-
-
 def test_interrupted_write_leaves_no_snapshot(tmp_path):
-
-    def boom(fd):
-        raise OSError("disk full")
-
     session = _open(tmp_path, "crash")
     session.append_message(_msg("hi"))
-    snap = _snapshot_for(session, 1)
-    with pytest.raises(OSError):
-        write(tmp_path, "crash", snap, fsync=boom)
-    assert not session.snapshot_path.exists()
-    assert list(tmp_path.glob(".crash-*")) == []
+    session._store.db._connection().execute(
+        "CREATE TRIGGER fail_snapshot_insert BEFORE INSERT ON snapshots "
+        "BEGIN SELECT RAISE(ABORT, 'disk full'); END"
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="disk full"):
+        session.write_snapshot()
+    assert _snapshot_row(session) is None
 
 
 def test_interrupted_write_keeps_prior_valid_snapshot(tmp_path):
@@ -289,19 +302,19 @@ def test_interrupted_write_keeps_prior_valid_snapshot(tmp_path):
     session.append_message(_msg("hi"))
     session.append_message(_msg("yo", role="assistant", usage={"input": 1, "output": 1}))
     session.write_snapshot(through_seq=1)
-    before = session.snapshot_path.read_bytes()
-    assert load(tmp_path, "prior", session.read(force=True)) is not None
+    before = _load_snapshot(session)
+    assert before is not None
+    session._store.db._connection().execute(
+        "CREATE TRIGGER fail_snapshot_update BEFORE UPDATE ON snapshots "
+        "BEGIN SELECT RAISE(ABORT, 'disk full'); END"
+    )
 
-    def boom(fd):
-        raise OSError("disk full")
+    with pytest.raises(sqlite3.IntegrityError, match="disk full"):
+        session.write_snapshot(through_seq=2)
 
-    with pytest.raises(OSError):
-        write(tmp_path, "prior", _snapshot_for(session, 2), fsync=boom)
-
-    assert session.snapshot_path.read_bytes() == before
-    assert list(tmp_path.glob(".prior-*")) == []
-    loaded = load(tmp_path, "prior", session.read(force=True))
+    loaded = _load_snapshot(session)
     assert loaded is not None and loaded.seq == 1
+    assert loaded == before
 
 
 # ---------------------------------------------------------------------------
@@ -324,9 +337,9 @@ def test_dangling_recovery_across_snapshot_and_tail_never_executes(tmp_path):
     assert "c1" in blocks[0].content[0].text
     assert "Write" in blocks[1].content[0].text
 
-    before = session.path.read_bytes()
+    before = tuple(session.records)
     assert session.recover_dangling_tool_uses() == []
-    assert session.path.read_bytes() == before
+    assert tuple(session.records) == before
     # A reopen sees the snapshot plus the recovery record and stays idempotent.
     reopened = SessionManager(tmp_path).open("dangle")
     assert reopened.recover_dangling_tool_uses() == []
@@ -381,7 +394,7 @@ async def test_no_snapshot_without_cadence(tmp_path):
     provider = ScriptedProvider(text_response("a"))
     session = _sendable(tmp_path, provider, name="noca", snapshot_every=None)
     await _drain(session.send("one"))
-    assert not session.snapshot_path.exists()
+    assert _snapshot_row(session) is None
 
 
 async def test_completed_turn_writes_snapshot_at_cadence(tmp_path):
@@ -389,11 +402,11 @@ async def test_completed_turn_writes_snapshot_at_cadence(tmp_path):
     session = _sendable(tmp_path, provider, name="cad", snapshot_every=2)
 
     await _drain(session.send("one"))
-    assert not session.snapshot_path.exists()
+    assert _snapshot_row(session) is None
 
     await _drain(session.send("two"))
-    assert session.snapshot_path.exists()
-    loaded = load(tmp_path, "cad", session.read(force=True))
+    assert _snapshot_row(session) is not None
+    loaded = _load_snapshot(session)
     assert loaded is not None
     assert loaded.seq == session.read(force=True).next_seq
     assert [m.role for m in loaded.messages] == [m.role for m in session.messages]
@@ -409,7 +422,7 @@ async def test_snapshot_cadence_callable_seam(tmp_path):
     provider = ScriptedProvider(text_response("a"))
     session = _sendable(tmp_path, provider, name="call", snapshot_every=every)
     await _drain(session.send("one"))
-    assert session.snapshot_path.exists()
+    assert _snapshot_row(session) is not None
     assert seen["calls"] >= 1
 
 
@@ -418,7 +431,7 @@ async def test_failed_turn_does_not_snapshot(tmp_path):
     session = _sendable(tmp_path, provider, name="fail", snapshot_every=1)
     events = await _drain(session.send("x"))
     assert events[-1].type == "turn.failed"
-    assert not session.snapshot_path.exists()
+    assert _snapshot_row(session) is None
 
 
 def test_invalid_cadence_is_rejected(tmp_path):
@@ -457,16 +470,6 @@ async def test_replay_while_writer_holds_lock(tmp_path):
     finally:
         lock.release()
     assert [event.type for event in events] == ["custom.unknown"]
-
-
-def test_fork_ignores_partial_crash_tail(tmp_path):
-    manager = SessionManager(tmp_path)
-    session = manager.open("src")
-    session.append_message(_msg("complete"))
-    with open(session.path, "ab") as handle:
-        handle.write(b'{"type":"message","seq":2,"message":')
-    child = manager.fork("src")
-    assert [m.content[0].text for m in child.messages] == ["complete"]
 
 
 def test_concurrent_replays_do_not_conflict(tmp_path):
