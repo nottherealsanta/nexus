@@ -8,6 +8,7 @@ import importlib.util
 import io
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -2560,7 +2561,9 @@ async def test_logs_pages_render_separately_and_bound_rows_and_statuses():
         drawer.set_error("temporarily unavailable")
         rendered = app.query_one("#logs-content").render().plain
         assert "Read error" in rendered
-        assert "2023-11-15" in rendered
+        # The drawer renders local time, so derive the date the same way (a
+        # hard-coded date only holds in timezones ahead of UTC).
+        assert datetime.fromtimestamp(1_700_000_002.0).strftime("%Y-%m-%d") in rendered
 
 
 @pytest.mark.asyncio
