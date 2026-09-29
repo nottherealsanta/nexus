@@ -1,0 +1,32 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "537180e01a8bb163a53c72a1b071e714fc68adbf",
+  "packages": {
+    ".": {
+      "release-type": "python",
+      "package-name": "nexus-harness",
+      "include-component-in-tag": false,
+      "bump-minor-pre-major": true,
+      "changelog-path": "CHANGELOG.md",
+      "changelog-sections": [
+        {"type": "feat", "section": "Features"},
+        {"type": "fix", "section": "Bug fixes"},
+        {"type": "perf", "section": "Performance"},
+        {"type": "deps", "section": "Dependencies"},
+        {"type": "revert", "section": "Reverts"},
+        {"type": "docs", "section": "Documentation", "hidden": true},
+        {"type": "chore", "hidden": true},
+        {"type": "refactor", "hidden": true},
+        {"type": "test", "hidden": true},
+        {"type": "ci", "hidden": true}
+      ],
+      "extra-files": [
+        {
+          "type": "toml",
+          "path": "uv.lock",
+          "jsonpath": "$.package[?(@.name.value=='nexus-harness')].version"
+        }
+      ]
+    }
+  }
+}
