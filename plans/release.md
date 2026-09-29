@@ -1,6 +1,87 @@
 # Release automation plan
 
-Status: planned · 2026-09-29 · follows [install.md](install.md) (its Phase 3, "PyPI release")
+Status: **in progress** · updated 2026-09-29 · follows [install.md](install.md) (its Phase 3, "PyPI release")
+
+Phases 1–3 are on `main`. The first release-please run, the first release PR and the
+`v0.1.0` publish are still to verify (Phase 4). Read "Progress" and "What we learned"
+below before the phase text: several details in the phases changed while landing them.
+
+## Progress (2026-09-29)
+
+| Phase | State | Landed as |
+| --- | --- | --- |
+| 1. Test CI, Actions budget | **Done.** `ci-ok` is green on `main` (test job ~6 min). | `c23cef4` ruff config; `ea92ce2` `ci.yml` + `install.yml` trim; `8d2a226` pytest-asyncio in the build job; `d6eb32c` Linux 3.13 only; `537180e` skip Textual pilot tests |
+| Python floor | **Done.** `requires-python = ">=3.13"` (see "What we learned"). | `89abf1a` |
+| 2. Convention, repo settings | Code **done**; merge settings **done** by the maintainer; `main` **ruleset still to create**. | `1a3e535` `pr-title.yml` + `scripts/hooks/commit-msg` (hook enabled locally with `git config core.hooksPath scripts/hooks`) |
+| 3. release-please + publishing | Files **pushed**; first run not yet verified. | `fdbf33f` config, manifest, `release.yml` (with `Release-As: 0.1.0`); `8c694a9` diagnostics removed; `3cdb3ff` docs |
+| 4. First release `v0.1.0` | Not started. Merging the release PR is the maintainer's step. | |
+| 5–7. Installer default, `nexus update`, update notice | Not started; they wait on Phase 4. | |
+| 8. Docs | Partly done: `AGENTS.md` convention bullet and the "Releasing" section in `docs/core.md`. `plans/install.md` and the README still to do. | `3cdb3ff` |
+
+Maintainer setup, all done: GitHub App `nexus-release` with `RELEASE_APP_ID` (variable)
+and `RELEASE_APP_PRIVATE_KEY` (secret), the PyPI pending publisher for `nexus-harness`
+(owner `nottherealsanta`, repo `nexus`, workflow `release.yml`, environment `pypi`), and
+the `pypi` environment. Skipped on purpose: the TestPyPI rehearsal.
+
+### Decisions on the open questions
+
+1. **Direct pushes to `main` stay.** The local `commit-msg` hook enforces the convention;
+   `pr-title` is only a safety net for PRs. The `main` ruleset must list the maintainer as
+   a bypass actor, and must not require a pull request.
+2. **No manual approval on the `pypi` environment.** Merging the release PR publishes.
+3. **The Phase 7 update notice is on by default**, with the 24 h cache and the opt-outs.
+
+## What we learned (2026-09-29)
+
+- **Python 3.13 is the real floor.** `object.__setattr__(self, ...)` on a msgspec
+  `Struct` raises `TypeError: can't apply this __setattr__` on Python 3.11 and 3.12 and
+  works on 3.13 and 3.14. It is used in 33 places in 6 files (`nexus/ext/manifest.py` 18,
+  `nexus/hooks/model.py` 11, and one each in `skills/activation.py`, `context/parts.py`,
+  `agents/runner.py`, `agents/model.py`). The suite only ever passed because the dev venv
+  is 3.14. On 3.12 the daemon crashes at startup, which is what broke the installer check
+  and ~600 tests on the first CI run. `install.sh` used to default to Python 3.12, so a
+  fresh install was broken too. Fixed by raising `requires-python`, `MIN_PYTHON`, the
+  installer default and the docs to 3.13. Supporting 3.11/3.12 later means reworking those
+  33 sites.
+- **msgspec 0.22 was ruled out.** It was the first suspicion (the runner resolved 0.22.0),
+  but `uv.lock` pins 0.21.1, the tests fail the same way on 0.21.1 under Python 3.12, and
+  they pass on 0.21.1 under 3.13.
+- **Ruff.** Ruff 0.16 has a much wider default rule set than the code was written for.
+  `pyproject.toml` now pins `[tool.ruff.lint] select = ["E4", "E9", "F", "E713"]` and
+  excludes `tests/fixtures` (a deliberately broken file) and `artifacts`. One real
+  finding fixed: a duplicate `redact_secrets` import in `nexus/core/loop.py`.
+- **Tests that only passed on the maintainer's Mac**, now fixed: the logs-drawer test
+  hard-coded `2023-11-15`, which only holds in timezones ahead of UTC;
+  `test_session_summary` depended on the temp-dir length (the environment part embeds the
+  workspace path and the budget is tiny).
+- **Textual pilot tests are skipped in CI.** `test_ui_tui.py`, `test_mock_tui.py`,
+  `test_tui_integration_render.py` and `test_tui_model_selection_integration.py` fail or
+  flake on the shared Linux runners (timing, terminal size). They run locally before each
+  commit (4388 passed with those four ignored). To bring them back, reproduce them in a
+  Linux container first.
+- **CI shape.** One Linux job on Python 3.13, no macOS job (all dev machines are macOS and
+  run the suite before committing), no 3.14 job. The `build` job needs `pytest-asyncio`
+  because `tests/test_install_script.py` has an async test. `install.yml` still tests the
+  installer on macOS and Linux, but only when an installer file changes; nightly it runs
+  only `published-script`.
+- **`uv.lock` version updater verified offline.** Running release-please's own
+  `GenericToml` updater with the configured jsonpath on a copy of `uv.lock` changes
+  exactly one line (`nexus-harness` `0.1.0` to the new version). Still confirm on the
+  first release PR.
+- **Action versions.** Latest at the time: `actions/checkout` v7, `astral-sh/setup-uv`
+  v10, `actions/create-github-app-token` v3, `googleapis/release-please-action` v5,
+  `amannn/action-semantic-pull-request` v6. `release.yml` uses `create-github-app-token@v3`
+  and `release-please-action@v5` (their inputs were checked). The other workflows still use
+  `checkout@v4` and `setup-uv@v5`, which only warn about Node 20; bump them in one change.
+- **Daemon start-up errors are invisible.** `_default_spawn` in `nexus/host/daemon.py`
+  sends the daemon's stdout and stderr to `/dev/null`, so a crash before the log file
+  opens leaves nothing behind ("daemon exited with code 1 before readiness"). Worth
+  routing early stderr to the daemon log.
+- **Runner behaviour.** Push runs of `ci` queue behind each other (cancel-in-progress is
+  only on for PRs), so a slow or doomed run delays the next one. The suite takes about 6
+  minutes on a runner.
+- **`bootstrap-sha`** in `release-please-config.json` is `537180e01a8bb163a53c72a1b071e714fc68adbf`,
+  the `main` HEAD just before the release files landed.
 
 ## Goal
 
@@ -24,7 +105,9 @@ Status: planned · 2026-09-29 · follows [install.md](install.md) (its Phase 3, 
   `pyproject.toml`, and release-please edits it inside the release PR.
 - No Homebrew, apt, or Scoop packages.
 
-## Current state (2026-09-29)
+## Starting state (when this plan was written, 2026-09-29)
+
+This table is historical. See "Progress" above for where things are now.
 
 | Piece | State |
 | --- | --- |
@@ -174,6 +257,15 @@ disabled after 60 days without repo activity; re-enable them from the Actions ta
 
 **Done when:** `ci-ok` is green on `main`, and a PR with a failing test is red.
 
+**As landed (differs from the snippet above):** the `test` job is one Linux job on Python
+3.13 (no matrix, no `test-macos`); it ignores four Textual pilot test files
+(`tests/test_ui_tui.py`, `test_mock_tui.py`, `test_tui_integration_render.py`,
+`test_tui_model_selection_integration.py`); `build` runs
+`uv run --with pytest --with pytest-asyncio --with setuptools pytest …`; `ci-ok` needs
+`[test, build]`. `pyproject.toml` pins the ruff rules. `ci-ok` was green on `537180e`
+(4385 passed, 315 skipped). The budget table's macOS line no longer applies. The "red PR"
+half of the check has not been exercised yet (no PR so far).
+
 ## Phase 2: Commit convention and repo settings
 
 1. Merge settings (GitHub → Settings → General → Pull Requests):
@@ -198,6 +290,15 @@ disabled after 60 days without repo activity; re-enable them from the Actions ta
    `AGENTS.md`. Agents that write commits follow the same convention.
 
 **Done when:** a PR titled `Update stuff` fails `pr-title`, and `fix: update stuff` passes.
+
+**Status:** `pr-title.yml` and `scripts/hooks/commit-msg` are on `main` (the hook was
+checked on four sample subjects: `fix: a thing` and `feat(web)!: x` pass, `Update stuff`
+and `docs:nospace` fail). The merge settings are done. Still to do by the maintainer:
+create the `main` ruleset (Settings → Rules → Rulesets): Active, bypass list with the
+maintainer set to "Always", target the default branch, restrict deletions, block force
+pushes, require status checks `ci-ok` and `pr-title`, and **do not** require a pull
+request. `pr-title` has never run (it only runs on PRs), so it may not appear in the
+check picker until a PR exists; add `ci-ok` first and `pr-title` after the first PR.
 
 ## Phase 3: release-please and publishing
 
@@ -374,6 +475,17 @@ jobs:
 **Done when:** a `fix:` push to `main` opens a release PR, CI runs on it, and its
 diff changes `pyproject.toml`, `uv.lock`, `CHANGELOG.md`, and the manifest.
 
+**Status:** all the files are on `main` (`fdbf33f`). Differences from the text above:
+`release.yml` uses `create-github-app-token@v3` and `release-please-action@v5`, and its
+wheel-test step includes `--with pytest-asyncio`; `bootstrap-sha` is
+`537180e01a8bb163a53c72a1b071e714fc68adbf`; the commit body carries `Release-As: 0.1.0`.
+The `uv.lock` jsonpath was checked offline (see "What we learned"). **To verify on the
+first run:** the `release` workflow succeeds (needs the App variable and secret), one PR
+titled about "release 0.1.0" appears, `ci-ok` runs on it (proves the App token starts
+other workflows), and its diff touches exactly `pyproject.toml` (no change, already
+0.1.0), `uv.lock`, `CHANGELOG.md` and `.release-please-manifest.json`. If `ci-ok` does
+not run on the PR, the token is the default `GITHUB_TOKEN` and the App wiring is wrong.
+
 ## Phase 4: First release (v0.1.0)
 
 1. Optional rehearsal: point the publish job at the `testpypi` environment
@@ -388,6 +500,8 @@ diff changes `pyproject.toml`, `uv.lock`, `CHANGELOG.md`, and the manifest.
    - the GitHub release `v0.1.0` has `install.sh`, `install.ps1`, `SHA256SUMS`, and dists
    - `uv tool install nexus-harness && nexus --version` on a clean machine prints
      `nexus 0.1.0`
+   - `pip`/`uv` on Python 3.12 or older refuses it with a clear "requires Python >=3.13"
+     message (the wheel declares `Requires-Python: >=3.13`)
 4. Only now go on to Phase 5. Flipping the installer default before a release is on
    PyPI would break the one-liner for everyone.
 
@@ -585,6 +699,10 @@ Phase 5's default flip must not merge before step 5 is verified.
   area, `tests/test_host_*`
 
 ## Open questions
+
+**Answered 2026-09-29:** (1) keep direct pushes to `main`, enforced by the local hook;
+(2) no manual approval on the `pypi` environment; (3) yes, the update notice is on by
+default. The questions are kept below for the record.
 
 1. Keep direct pushes to `main`, or require PRs? This decides whether the PR title
    check or the local `commit-msg` hook enforces the convention. The plan supports
