@@ -26,7 +26,14 @@ jobs:
       - name: Daemon logs (only when the install step failed)
         if: failure()
         run: |
+          export PATH="$HOME/.local/bin:$PATH"
           for f in "$HOME"/.nexus/daemon/*.log; do echo "== $f"; tail -n 80 "$f"; done || true
+          # The auto-started daemon's stderr goes to /dev/null, so run it in the foreground.
+          py="$(uv tool dir)/nexus-harness/bin/python"
+          echo "== python: $py"; "$py" --version || true
+          ws=$(mktemp -d)
+          "$py" -m nexus.host.daemon --workspace "$ws" --socket "$ws/d.sock" --idle-timeout 3 2>&1 | tail -n 60 || true
+          echo "== nexus doctor"; nexus --workspace "$ws" doctor 2>&1 | tail -n 30 || true
       - name: Smoke
         run: |
           export PATH="$HOME/.local/bin:$PATH"
