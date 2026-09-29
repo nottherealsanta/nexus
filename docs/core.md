@@ -154,3 +154,27 @@ tools run for real inside the sandbox and never touch the network.
 Host contract: `MockList`, `MockStart`, `MockClean` (errors outside dev mode),
 `HealthResult.dev`. Headless: `nexus mock list|run NAME|all|clean`. Tests:
 `tests/test_mock_scenarios.py`, `test_mock_host.py`, `test_mock_tui.py`.
+
+## Releasing
+
+Releases are automatic but never ship on their own (`plans/release.md`). Every change
+lands on `main`. On each push, the `release` workflow (release-please) opens or
+updates one release PR that bumps `pyproject.toml` and the `nexus-harness` entry in
+`uv.lock`, and writes `CHANGELOG.md`. Merging that PR tags `vX.Y.Z`, creates the GitHub
+release and publishes to PyPI (trusted publishing, the `pypi` environment).
+
+- **What bumps the version** (from Conventional Commit subjects): `fix:`, `perf:`,
+  `deps:` patch; `feat:` minor; a `!` or `BREAKING CHANGE:` footer is a minor bump
+  while the version is below 1.0. `docs:`, `chore:`, `test:`, `refactor:`, `ci:`,
+  `style:`, `build:` and non-conventional subjects do not release.
+- **Force a version:** put `Release-As: 1.0.0` on its own line in a commit body.
+- **Hotfix:** push the `fix:` commit, then merge the release PR straight away.
+- **Publish failed after the tag exists:** run the `release` workflow by hand
+  (`workflow_dispatch`) with the tag; only the publish job runs, and `uv publish`
+  refuses a version PyPI already has.
+- **Bad release:** PyPI versions are immutable. Yank it on pypi.org, then ship a `fix:`
+  release. `install.sh --version X` pins an exact version.
+- The workflow file name `release.yml` is bound to the PyPI trusted publisher; don't
+  rename it.
+- Python 3.13 or newer is required (`object.__setattr__` on msgspec Structs, used
+  across the codebase, fails on 3.12 and older).

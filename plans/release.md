@@ -104,7 +104,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.11", "3.12"]
+        python: ["3.13"]   # only the minimum supported version; dev machines cover 3.14 and macOS
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -420,7 +420,7 @@ curl -LsSf https://raw.githubusercontent.com/nottherealsanta/nexus/main/install.
 
 Then `cd` into a project and run `nexus chat` (or `nexus web`). Update with
 `nexus update`. macOS, Linux and WSL; installs [uv](https://docs.astral.sh/uv/) and
-Python 3.11+ for you if they are missing. Already have uv? `uv tool install nexus-harness`.
+Python 3.13+ for you if they are missing. Already have uv? `uv tool install nexus-harness`.
 Options: `sh install.sh --help`. Changes: [CHANGELOG.md](CHANGELOG.md).
 ````
 
