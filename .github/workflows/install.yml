@@ -6,8 +6,12 @@ on:
     paths: [install.sh, install.ps1, pyproject.toml, nexus/host_support/install.py, .github/workflows/install.yml]
   schedule:
     - cron: "17 3 * * *"   # nightly: catch a broken published script
+concurrency:
+  group: install-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   install:
+    if: github.event_name != 'schedule'
     strategy:
       fail-fast: false
       matrix:
@@ -34,6 +38,7 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           nexus update
   docker:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     strategy:
       matrix:

@@ -1,0 +1,52 @@
+name: ci
+on:
+  pull_request:
+    paths-ignore: ["**.md", "docs/**", "plans/**", "artifacts/**"]
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", "docs/**", "plans/**", "artifacts/**"]
+  workflow_dispatch:
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with: {enable-cache: true, python-version: "${{ matrix.python }}"}
+      - run: uv sync --locked --extra dev
+      - run: uvx ruff check nexus tests
+      - run: uv run pytest -q
+  test-macos:       # macOS minutes count 10x on a private repo: main only, not PRs
+    if: github.event_name != 'pull_request'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with: {enable-cache: true, python-version: "3.12"}
+      - run: uv sync --locked --extra dev
+      - run: uv run pytest -q
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv build
+      - run: uv run --with pytest --with setuptools pytest -q tests/test_model_data_package.py tests/test_install_script.py
+  ci-ok:            # the one required status check; its name never changes with the matrix
+    if: always()
+    needs: [test, test-macos, build]
+    runs-on: ubuntu-latest
+    steps:   # a skipped test-macos (on PRs) counts as passing
+      - run: '[ "${{ contains(needs.*.result, ''failure'') || contains(needs.*.result, ''cancelled'') }}" = false ]'
