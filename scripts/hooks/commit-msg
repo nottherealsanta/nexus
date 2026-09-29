@@ -1,0 +1,14 @@
+#!/bin/sh
+# Conventional Commits check for the subject line. release-please reads these
+# subjects to pick the version bump and write the changelog (plans/release.md).
+# Install once per clone:  git config core.hooksPath scripts/hooks
+subject=$(head -n 1 "$1")
+case "$subject" in
+  Merge\ *|Revert\ *|fixup!\ *|squash!\ *) exit 0 ;;
+esac
+pattern='^(feat|fix|perf|deps|revert|docs|chore|refactor|test|ci|style|build)(\([a-z0-9._/-]+\))?!?: .+'
+if ! printf '%s\n' "$subject" | grep -Eq "$pattern"; then
+  echo "commit-msg: subject must look like 'fix: short summary' (or feat, perf, deps, docs, chore, refactor, test, ci, style, build, revert)." >&2
+  echo "  got: $subject" >&2
+  exit 1
+fi
