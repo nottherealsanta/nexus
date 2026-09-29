@@ -23,6 +23,10 @@ jobs:
         run: sh install.sh --git-ref "$GITHUB_SHA" --strict
         env:
           NEXUS_ALLOW_ROOT: "1"
+      - name: Daemon logs (only when the install step failed)
+        if: failure()
+        run: |
+          for f in "$HOME"/.nexus/daemon/*.log; do echo "== $f"; tail -n 80 "$f"; done || true
       - name: Smoke
         run: |
           export PATH="$HOME/.local/bin:$PATH"
