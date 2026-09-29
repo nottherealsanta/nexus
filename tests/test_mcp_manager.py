@@ -1224,13 +1224,18 @@ async def test_disconnect_during_connect_closes_the_new_client():
 
 
 def test_default_factory_wires_a_bounded_file_stderr_sink(tmp_path: Path):
+    from nexus.config.paths import project_state_dir
     from nexus.mcp.client import FileStderrSink
 
+    home = tmp_path / "home"
+    workspace = tmp_path / "ws"
     manager = MCPManager(
-        {"s": raw_definition("s")}, workspace=tmp_path, client_factory=None
+        {"s": raw_definition("s")}, workspace=workspace, home=home, client_factory=None
     )
     client = manager._default_client_factory(manager.definition("s").config)
     assert isinstance(client._stderr_sink, FileStderrSink)
-    path = str(client._stderr_sink.path)
-    assert ".nexus" in path and "logs" in path and path.endswith("s.log")
+    # STATE_PLAN §5.4: server stderr logs are per-project machine state under
+    # ``project_state_dir()``, never inside the workspace.
+    expected = project_state_dir(workspace, home) / "logs" / "mcp" / "s.log"
+    assert client._stderr_sink.path == expected
     assert client._stderr_sink.max_bytes > 0

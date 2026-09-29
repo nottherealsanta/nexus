@@ -178,7 +178,7 @@ def test_write_tool_spec_shape():
     assert WRITE_TOOL_SPEC.input_schema["required"] == ["filename", "content"]
     assert WRITE_TOOL_SPEC.resolve_permission_key(
         {"filename": "x.py"}
-    ) == ".nexus/tools/x.py"
+    ) == ".agents/tools/x.py"
 
 
 async def test_reload_requires_extension_service(workspace: Path):
@@ -396,7 +396,7 @@ async def test_write_tool_creates_atomically_and_does_not_reload(workspace: Path
         {"filename": "metrics_query.py", "content": TOOL_SOURCE}, ctx
     )
     assert result.is_error is False
-    target = workspace / ".nexus" / "tools" / "metrics_query.py"
+    target = workspace / ".agents" / "tools" / "metrics_query.py"
     assert target.read_text(encoding="utf-8") == TOOL_SOURCE
     assert result.metrics["created"] is True
     assert result.metrics["reload_required"] is True
@@ -420,7 +420,7 @@ async def test_write_tool_requires_overwrite_opt_in(workspace: Path):
         {"filename": "foo.py", "content": "z", "overwrite": True}, ctx
     )
     assert replaced.is_error is False
-    assert (workspace / ".nexus" / "tools" / "foo.py").read_text() == "z"
+    assert (workspace / ".agents" / "tools" / "foo.py").read_text() == "z"
 
 
 async def test_write_tool_rejects_oversize_and_nul(workspace: Path):
@@ -445,7 +445,7 @@ async def test_write_tool_rejects_oversize_and_nul(workspace: Path):
 
 
 async def test_write_tool_refuses_symlink_target(workspace: Path):
-    directory = workspace / ".nexus" / "tools"
+    directory = workspace / ".agents" / "tools"
     directory.mkdir(parents=True)
     real = directory / "real.py"
     real.write_text("x", encoding="utf-8")
@@ -462,8 +462,8 @@ async def test_write_tool_refuses_symlink_target(workspace: Path):
 async def test_write_tool_refuses_symlinked_tools_dir(workspace: Path):
     real_dir = workspace / "real_tools"
     real_dir.mkdir()
-    (workspace / ".nexus").mkdir()
-    (workspace / ".nexus" / "tools").symlink_to(real_dir)
+    (workspace / ".agents").mkdir()
+    (workspace / ".agents" / "tools").symlink_to(real_dir)
     ctx = ctx_for(workspace)
     result = await meta.write_tool({"filename": "foo.py", "content": "x"}, ctx)
     assert result.is_error is True
@@ -492,9 +492,9 @@ async def test_write_tool_permission_key_is_canonical_absolute(workspace: Path):
     # The declared key is workspace-relative; the manager canonicalizes it to an
     # absolute path so rules and grants match the same form ``Write`` uses.
     assert WRITE_TOOL_SPEC.resolve_permission_key({"filename": "x.py"}) == (
-        ".nexus/tools/x.py"
+        ".agents/tools/x.py"
     )
-    assert entry.key == str(workspace / ".nexus" / "tools" / "x.py")
+    assert entry.key == str(workspace / ".agents" / "tools" / "x.py")
     assert os.path.isabs(entry.key)
 
 
@@ -526,7 +526,7 @@ async def test_write_tool_is_subject_to_fs_write_roots(workspace: Path):
     )
     assert result.is_error is True
     assert "write roots" in result.content[0].text
-    assert not (workspace / ".nexus" / "tools" / "foo.py").exists()
+    assert not (workspace / ".agents" / "tools" / "foo.py").exists()
 
 
 async def test_write_tool_validates_arguments(workspace: Path):

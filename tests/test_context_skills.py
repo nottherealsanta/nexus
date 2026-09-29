@@ -109,7 +109,9 @@ def test_empty_snapshot_renders_nothing(tmp_path):
     request = manager.assemble(FakeSession(user_message()))
 
     assert request.system is not None
-    assert request.system.startswith("You are Nexus")
+    assert IDENTITY_PREAMBLE == ""
+    assert request.system.startswith("<environment>")
+    assert "You are Nexus" not in request.system
     assert manager.skills_index == ()
     assert all(p["name"] != "skills_index" for p in manager.last_budget["parts"])
 

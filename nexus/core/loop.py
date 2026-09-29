@@ -126,6 +126,28 @@ __all__ = [
 #: gives up. A model that cannot emit valid JSON repeatedly is a harness-level
 #: failure, not a tool-level one.
 DEFAULT_MALFORMED_BUDGET = 4
+#: Bounds on the child request snapshot recorded in ``context.assembled``.
+MAX_SNAPSHOT_SYSTEM_CHARS = 200_000
+MAX_SNAPSHOT_TOOLS = 256
+MAX_SNAPSHOT_SCHEMA_BYTES = 32_768
+
+
+def _request_snapshot(request: ModelRequest) -> dict[str, Any]:
+    """The redacted, bounded system text and tool schemas of one request."""
+    tools: list[dict[str, Any]] = []
+    for tool in request.tools[:MAX_SNAPSHOT_TOOLS]:
+        schema = tool.input_schema if isinstance(tool.input_schema, dict) else {}
+        if len(msgspec.json.encode(schema)) > MAX_SNAPSHOT_SCHEMA_BYTES:
+            schema = {"type": "object", "description": "(schema too large to record)"}
+        tools.append({
+            "name": tool.name,
+            "description": redact_secrets(tool.description or "")[:4_000],
+            "input_schema": schema,
+        })
+    return {
+        "system": redact_secrets((request.system or "")[:MAX_SNAPSHOT_SYSTEM_CHARS]),
+        "tools": tools,
+    }
 
 #: Provider stop reasons that may terminate a turn without tool handling.
 _COMPLETION_REASONS = frozenset({"end_turn", "max_tokens", "stop_sequence", "refusal"})
@@ -1835,7 +1857,15 @@ async def run_turn(
                 assembled_data["context"] = dict(context_meta)
             if isinstance(cache_meta, dict):
                 assembled_data["cache"] = dict(cache_meta)
-            await emitter.emit("context.assembled", assembled_data)
+            # A child turn's log also records what was actually sent, so the
+            # subagent page can show its real system prompt and tool schemas.
+            # Context events are never relayed upward and hooks get no snapshot.
+            snapshot = (
+                {**assembled_data, "request": _request_snapshot(request)}
+                if relay_transcript and state.iteration == 0
+                else assembled_data
+            )
+            await emitter.emit("context.assembled", snapshot)
             await _run_lifecycle_hook(
                 iteration_hooks,
                 emitter,

@@ -923,6 +923,48 @@ async def test_switch_session_detaches_an_active_prior_stream():
 
 
 @pytest.mark.asyncio
+async def test_subagent_page_mirrors_the_root_with_its_sent_context():
+    from nexus.ui_support.tui_context_header import ContextBlock
+    from nexus.ui_support.tui_panels import DetailsSidebar, TopBar
+    from nexus.view import AgentView
+
+    context = {
+        "mode": "sent_request",
+        "agent": {"name": "quick", "color": "#14B8A6", "source": "subagent"},
+        "system_text": "You are Quick, a fast worker.",
+        "tools": [{"name": "read", "description": "Read a file", "input_schema": {
+            "type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}],
+        "tools_supported": True,
+        "messages": [{"role": "user", "blocks": [{"type": "text", "text": "Read README.md and summarize it."}]}],
+        "unknown_future_field": 1,
+    }
+    app = NexusTextualApp(_client(FakeTransport()))
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.pause()
+        agent = AgentView(id="child", type="quick", task="read a file", model="codex/gpt-6-luna")
+        screen = AgentTranscriptScreen(agent, context)
+        app.push_screen(screen)
+        await pilot.pause(0.2)
+        # A full page with the root's chrome, not a dialog.
+        assert screen.query_one(TopBar) and screen.query_one(DetailsSidebar).display
+        assert "quick" in str(screen.query_one("#topbar-crumb").render())
+        prompt = screen.query_one("#context-prompt", ContextBlock)
+        tools = screen.query_one("#context-tools", ContextBlock)
+        assert "You are Quick" in prompt.detail
+        assert "read — Read a file" in tools.detail and "path" in tools.detail
+        assert tools.result is not None and tools.result.tools[0]["input_schema"]["required"] == ["path"]
+        assert "gpt-6-luna" in str(screen.query_one("#details-session").render())
+        # System prompt, then the Task the root agent wrote, then Tools.
+        task = screen.query_one("#context-task", ContextBlock)
+        assert task.display and task.has_class("-task")
+        assert "Read README.md and summarize it." in task.body
+        order = [block.id for block in screen.query(ContextBlock)]
+        assert order[:3] == ["context-prompt", "context-task", "context-tools"]
+        # The root conversation has no Task block.
+        assert not app.screen_stack[0].query_one("#context-task", ContextBlock).display
+
+
+@pytest.mark.asyncio
 async def test_inspector_tail_follow_obeys_user_scroll_state():
     from nexus.ui.tui.timeline import ConversationTimeline
     from nexus.view import AgentView, BlockView, ConversationView, MessageView, TurnView
@@ -1113,9 +1155,7 @@ async def test_task_details_include_child_agents_and_modal_can_open_child():
         card = app.query_one(TaskActivityWidget)
         details = card._details_text()
         assert "explore" in details and "build" in details
-        await card.open_details()
-        await pilot.pause()
-        await pilot.click("#tool-details-agent")
+        await card.open_details()  # a spawned Task opens its sub agent page directly
         await pilot.pause()
         assert app.screen.__class__.__name__ == "AgentTranscriptScreen"
 
@@ -1212,7 +1252,7 @@ async def test_tool_card_lifecycle_updates_in_place_and_diff_falls_back_narrow()
 
 
 @pytest.mark.asyncio
-async def test_tool_diff_is_never_mounted_inline_and_stays_available_in_modal():
+async def test_tool_diff_is_mounted_inline_and_stays_available_in_modal():
     from textual.widgets import Static
 
     from nexus.view import ToolCallView
@@ -1228,8 +1268,10 @@ async def test_tool_diff_is_never_mounted_inline_and_stays_available_in_modal():
         await app.query_one("#conversation", ConversationTimeline).mount(card)
         await pilot.pause()
         await card.set_tool(tool)
-        assert not card.query(".tool-diff-view")
-        assert len(card.children) == 1
+        from textual_diff_view import DiffView
+
+        (view,) = card.query(DiffView)
+        assert (view.path_modified, view.code_original, view.code_modified) == ("f.py", "old", "new")
         await card.open_details()
         await pilot.pause()
         details = str(app.screen.query_one("#tool-details-body", Static).render())
@@ -1281,7 +1323,7 @@ def test_cli_chat_textual_only_tty_guard_and_noninteractive_run():
     from nexus.cli import build_parser, main
 
     parser = build_parser()
-    assert parser.parse_args(["chat"]).session == "default"
+    assert parser.parse_args(["chat"]).session is None  # a new session per launch
 
     class NonTTY(io.StringIO):
         def isatty(self):
@@ -2437,7 +2479,7 @@ async def test_logs_pages_render_separately_and_bound_rows_and_statuses():
             session_more=True,
         ))
         rendered = app.query_one("#logs-content").render().plain
-        assert "DAEMON" in rendered and "SESSION · s" in rendered
+        assert "DAEMON" in rendered and "SESSION ID · s" in rendered
         assert "WARNING" in rendered and "ERROR" in rendered
         assert "daemon note" in rendered and "session note" in rendered
         assert "Earlier entries unavailable" in rendered

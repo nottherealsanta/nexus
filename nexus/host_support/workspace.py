@@ -3,11 +3,18 @@ from __future__ import annotations
 
 import itertools
 import os
+import shutil
+import subprocess
+import time
 from pathlib import Path, PurePosixPath
 
 _MAX_FILE_SEARCH_QUERY = 256
 _MAX_FILE_SEARCH_LIMIT = 100
 _MAX_FILE_SEARCH_ENTRIES = 50_000
+_GIT_LIST_TIMEOUT = 2.0
+_GIT_LIST_MAX_BYTES = 16 * 1024 * 1024
+_GIT_LIST_TTL = 3.0
+_git_cache: dict[str, tuple[float, tuple[frozenset[str], frozenset[str]] | None]] = {}
 
 
 def search_files(
@@ -19,8 +26,10 @@ def search_files(
 ) -> list[str]:
     """Return bounded, visible workspace-relative file path matches.
 
-    The scan never opens files. It skips hidden entries and all symlinks,
-    enforces configured read-deny roots, and returns stable POSIX paths.
+    The scan never opens files. It skips hidden entries, all symlinks and,
+    in a Git work tree, anything Git ignores; it enforces configured read-deny
+    roots. Results rank basename-prefix matches, then basename matches, then
+    path matches, shallower paths first, as stable POSIX paths.
     """
     if not isinstance(query, str) or len(query) > _MAX_FILE_SEARCH_QUERY:
         raise ValueError("file search query must be a string of at most 256 characters")
@@ -39,6 +48,7 @@ def search_files(
 
     workspace = Path(runtime.workspace).resolve()
     denied_roots = _file_search_denied_roots(runtime)
+    visible = _git_visible(workspace)
     needle = query.casefold()
     found: list[str] = []
     visited = 0
@@ -90,12 +100,68 @@ def search_files(
                 is_file = entry.is_file(follow_symlinks=False)
             except (OSError, RuntimeError, ValueError):
                 continue
+            if visible is not None and relative not in (
+                visible[1] if is_directory else visible[0]
+            ):
+                continue
             if is_directory:
                 directories.append(path)
             elif is_file and needle in relative.casefold():
                 found.append(relative)
         stack.extend(reversed(directories))
-    return sorted(found)[:limit]
+    return sorted(found, key=lambda path: _rank(path, needle))[:limit]
+
+
+def _rank(path: str, needle: str) -> tuple[int, int, str]:
+    name = path.rsplit("/", 1)[-1].casefold()
+    tier = 0 if name.startswith(needle) else 1 if needle in name else 2
+    return tier, path.count("/"), path
+
+
+def _git_visible(workspace: Path) -> tuple[frozenset[str], frozenset[str]] | None:
+    """Files Git would not ignore, plus their parent directories.
+
+    Paths are relative to the workspace even when it is a subdirectory of a
+    repository. ``None`` means "not a Git work tree or Git unavailable": the
+    search falls back to the plain walk. The list is cached briefly so
+    per-keystroke searches do not spawn Git each time.
+    """
+    key = str(workspace)
+    now = time.monotonic()
+    cached = _git_cache.get(key)
+    if cached is not None and now - cached[0] < _GIT_LIST_TTL:
+        return cached[1]
+    result: tuple[frozenset[str], frozenset[str]] | None = None
+    if shutil.which("git") is not None:
+        try:
+            completed = subprocess.run(
+                ["git", "-C", key, "ls-files", "-z", "--cached", "--others",
+                 "--exclude-standard", "--", "."],
+                capture_output=True,
+                timeout=_GIT_LIST_TIMEOUT,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            completed = None
+        if (
+            completed is not None
+            and completed.returncode == 0
+            and len(completed.stdout) <= _GIT_LIST_MAX_BYTES
+        ):
+            files = frozenset(
+                name for name in completed.stdout.decode("utf-8", "replace").split("\0")
+                if name
+            )
+            directories = frozenset(
+                "/".join(parts[:index])
+                for parts in (name.split("/") for name in files)
+                for index in range(1, len(parts))
+            )
+            result = (files, directories)
+    if len(_git_cache) > 16:
+        _git_cache.clear()
+    _git_cache[key] = (now, result)
+    return result
 
 
 def _file_search_denied_roots(runtime: object) -> tuple[Path, ...]:

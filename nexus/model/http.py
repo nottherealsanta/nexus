@@ -38,6 +38,7 @@ from ..errors import ProviderError
 from ..util import redact_secrets, redact_url_userinfo
 
 __all__ = [
+    "DEFAULT_TIMEOUT",
     "DONE_SENTINEL",
     "HTTPTransport",
     "RetryPolicy",
@@ -50,7 +51,10 @@ _logger = logging.getLogger(__name__)
 
 DONE_SENTINEL = "[DONE]"
 
-_DEFAULT_TIMEOUT = httpx.Timeout(120.0, connect=10.0)
+# Reasoning models can stream ``response.created`` and then stay silent for
+# minutes; the read timeout is an idle bound between chunks, not a turn bound.
+# Mirrors the Codex CLI's 300 s stream idle timeout.
+DEFAULT_TIMEOUT = httpx.Timeout(300.0, connect=10.0)
 
 
 class SSEEvent(msgspec.Struct, frozen=True):
@@ -313,7 +317,7 @@ class HTTPTransport:
                 base_url=base_url,
                 transport=http_transport,
                 headers=self._default_headers or None,
-                timeout=timeout if timeout is not None else _DEFAULT_TIMEOUT,
+                timeout=timeout if timeout is not None else DEFAULT_TIMEOUT,
             )
             self._owns_client = True if owns_client is None else owns_client
         else:

@@ -112,6 +112,8 @@ async def test_focused_editor_keeps_session_shortcuts_and_reconnect_refreshes_me
 
         await pilot.press("ctrl+n")
         await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
         assert app.controller.session != "s"
 
         await pilot.press("ctrl+o")

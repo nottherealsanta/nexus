@@ -36,7 +36,6 @@ import contextlib
 from collections import deque
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Self
 
 import msgspec
@@ -352,7 +351,7 @@ class Session:
     ):
         self._id = validate_session_id(session_id)
         self._store = store
-        self._lock = lock if lock is not None else SessionLock.for_session(store.directory, self._id)
+        self._lock = lock if lock is not None else SessionLock(store.lock_path(self._id))
         self._read: ReadResult | None = None
         self._active: TurnLease | None = None
         self._cancel = CancelToken()
@@ -773,18 +772,6 @@ class Session:
         return self._id
 
     @property
-    def path(self) -> Path:
-        return self._store.log_path(self._id)
-
-    @property
-    def directory(self) -> Path:
-        return self._store.directory
-
-    @property
-    def snapshot_path(self) -> Path:
-        return snapshot_mod.snapshot_path(self.directory, self._id)
-
-    @property
     def active(self) -> bool:
         return self._active is not None
 
@@ -854,7 +841,7 @@ class Session:
         stale, or future snapshot degrades cleanly to a full-log projection.
         """
         read = self.read()
-        loaded = snapshot_mod.load(self.directory, self._id, read)
+        loaded = self._store.load_snapshot(self._id, read)
         return snapshot_mod.current_state(read, loaded)
 
     @property
@@ -974,8 +961,8 @@ class Session:
         opaque metadata for a later context packet: it is cached here but its
         authority must live in the log.
         """
-        # A snapshot is a session artifact too: never recreate one for a deleted
-        # session (``_artifacts_exist`` treats a stray ``.snap.json`` as one).
+        # A snapshot is derived state, not a durable artifact of its own: never
+        # recreate one for a deleted session.
         self._ensure_writable()
         read = self.read(force=True)
         seq = read.next_seq if through_seq is None else through_seq
@@ -988,9 +975,7 @@ class Session:
         snapshot = snapshot_mod.build_from_records(
             self._id, read.records, seq, summary=summary
         )
-        snapshot_mod.write(
-            self.directory, self._id, snapshot, fsync=self._store.fsync
-        )
+        self._store.write_snapshot(self._id, snapshot)
         return snapshot
 
     def maybe_snapshot(self) -> Snapshot | None:
@@ -1009,7 +994,7 @@ class Session:
         if type(every) is not int or every < 1:
             raise ValueError("snapshot_every must be a positive integer or callable")
         read = self.read(force=True)
-        prior = snapshot_mod.load(self.directory, self._id, read)
+        prior = self._store.load_snapshot(self._id, read)
         boundary = prior.seq if prior is not None else 0
         completed = sum(
             1

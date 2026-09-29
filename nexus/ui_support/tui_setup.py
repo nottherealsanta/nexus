@@ -1,16 +1,29 @@
-"""First-run provider and global-model setup screen (plan section 7)."""
+"""First-run setup: connect a provider, then chat (plan section 7).
+
+The screen only asks the user to connect a provider. It reuses the Settings →
+Providers pane for sign-in and lists the environment-key providers. As soon as
+the host reports one connected (already connected ones count, in list order),
+``SetupSave`` without a model saves that provider's newest model as the global
+default and reloads the daemon's routes, and the screen closes into the chat.
+``/model`` changes the model afterwards.
+"""
 
 from __future__ import annotations
 
-from textual import on
+from typing import ClassVar
+
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, OptionList, Static, TextArea
+from textual.widgets import Button, Static, TextArea
 
 from ..client.protocol import Client, ClientError
 from ..host import protocol as p
 from .text import sanitize
+from .tui_providers import PROVIDERS, ProvidersPane
+
+_POLL_SECONDS = 2.0
+_SIGNED_IN = {provider for provider, _, _ in PROVIDERS}
 
 
 async def open_first_run_setup(app, client: Client) -> bool:
@@ -25,164 +38,147 @@ async def open_first_run_setup(app, client: Client) -> bool:
 
 
 def block_unconfigured_turn(app, content: str) -> bool:
-    """Keep the draft until a global provider route is available after restart."""
+    """Keep the draft and reopen setup until a provider is connected."""
     if not getattr(app, "_setup_required", False):
         return False
     app.query_one("#chat-editor", TextArea).text = content
-    app._sync_status("Connect a provider and restart the daemon", error=True)
+    app._sync_status("Connect a provider to start chatting", error=True)
+    if not isinstance(app.screen, SetupScreen):
+        app.push_screen(SetupScreen(app.controller.client))
     return True
 
 
 class SetupScreen(ModalScreen[None]):
-    """Choose a connected provider and save its model as the global default."""
+    """Connect a provider; the first connected one becomes the global default."""
+
+    BINDINGS: ClassVar[list[tuple[str, str, str]]] = [("escape", "close", "Not now")]
 
     def __init__(self, client: Client, status: p.SetupStatusResult | None = None) -> None:
         super().__init__()
         self.client = client
         self.status = status
-        self.providers: list[dict] = []
-        self.models: list[dict] = []
-        self.provider_id = ""
-        self.model_id = ""
-        self._saved = False
+        self._saving = False
+        self._dismissed = False
+        #: Saved but the daemon must restart: keep the message, stop polling.
+        self._restart = False
+        #: A provider whose save failed is not retried until "Try again".
+        self._failed: set[str] = set()
 
     def compose(self) -> ComposeResult:
         with Vertical(id="setup-dialog"):
-            yield Static("First-run setup", id="setup-title")
-            yield Static("Choose a provider, then select a model for the global default.", id="setup-intro")
-            yield Static("Providers", classes="setup-label")
-            yield OptionList(id="setup-providers")
-            yield Static("", id="setup-instruction")
-            yield Input(placeholder="Filter models…", id="setup-search")
-            yield OptionList(id="setup-models")
+            yield Static("Connect a provider", id="setup-title")
+            yield Static(
+                "Nexus starts with the newest model of the first provider you connect. "
+                "Change it any time with /model.",
+                id="setup-intro",
+            )
+            yield ProvidersPane(self.client, heading=False)
+            yield Static("", id="setup-env")
             yield Static("", id="setup-message")
             with Horizontal(id="setup-buttons"):
-                yield Button("Retry status", id="setup-retry")
-                yield Button("Save global default", id="setup-save", variant="primary", disabled=True)
-                yield Button("Close", id="setup-close")
+                yield Button("Try again", id="setup-retry")
+                yield Button("Not now", id="setup-close")
 
-    async def on_mount(self) -> None:
-        if self.status is None:
-            await self.refresh_status()
-        else:
+    def on_mount(self) -> None:
+        self.query_one("#setup-retry", Button).display = False
+        if self.status is not None:
             self._apply_status(self.status)
+        self.run_worker(self._poll(), group="setup-poll", exclusive=True)
+        self.set_interval(_POLL_SECONDS, lambda: self.run_worker(self._poll(), group="setup-poll", exclusive=True))
 
-    async def refresh_status(self) -> None:
-        message = self.query_one("#setup-message", Static)
-        message.update("Checking provider status…")
+    def action_close(self) -> None:
+        self._close()
+
+    def _close(self) -> None:
+        # A status poll and a finished save can both close the screen.
+        if not self._dismissed:
+            self._dismissed = True
+            self.dismiss(None)
+
+    async def _poll(self) -> None:
+        if self._saving or self._dismissed or self._restart:
+            return
         try:
             status = await self.client.setup_status()
         except (ClientError, AssertionError):
-            message.update("Setup status unavailable. Check daemon compatibility, then retry.")
+            self._message("Setup status unavailable. Check that the daemon is running.")
             return
-        self._apply_status(status)
+        if self.is_mounted:
+            self._apply_status(status)
 
     def _apply_status(self, status: p.SetupStatusResult) -> None:
-        message = self.query_one("#setup-message", Static)
         self.status = status
-        self.providers = [row for row in status.providers if isinstance(row, dict)][:32]
-        self.models = [row for row in status.models if isinstance(row, dict)][:512]
-        connected = {str(row.get("id")) for row in self.providers if row.get("connected") is True}
-        available = {str(row.get("provider")) for row in self.models}
-        preferred = status.global_model.partition("/")[0]
-        self.provider_id = (preferred if preferred in {str(row.get("id")) for row in self.providers} else
-                            next((str(row.get("id")) for row in self.providers
-                                  if str(row.get("id")) in connected and str(row.get("id")) in available),
-                                 str(self.providers[0].get("id", "")) if self.providers else ""))
-        self.model_id = ""
-        self._show_providers()
-        self._show_models()
-        if status.global_model:
-            message.update(f"Global default: {sanitize(status.global_model, 120)}")
-        else:
-            message.update("Select a connected provider and model to continue.")
-
-    def _show_providers(self) -> None:
-        options = self.query_one("#setup-providers", OptionList)
-        options.clear_options()
-        for row in self.providers:
+        rows = [row for row in status.providers if isinstance(row, dict)][:32]
+        lines = []
+        for row in rows:
             provider = str(row.get("id", ""))
-            label = sanitize(row.get("label", provider), 80)
-            state = "connected" if row.get("connected") is True else "not connected"
-            options.add_option(f"{label} · {state}")
-        selected = next((i for i, row in enumerate(self.providers)
-                         if str(row.get("id", "")) == self.provider_id), None)
-        options.highlighted = selected
-        self._show_instruction()
-
-    def _show_instruction(self) -> None:
-        row = next((item for item in self.providers if str(item.get("id", "")) == self.provider_id), {})
-        instruction = sanitize(row.get("instruction", ""), 300)
-        self.query_one("#setup-instruction", Static).update(instruction or "")
-
-    def _show_models(self) -> None:
-        search = self.query_one("#setup-search", Input).value.casefold().strip()
-        matches = [row for row in self.models
-                   if str(row.get("provider", "")) == self.provider_id
-                   and (not search or search in str(row.get("id", "")).casefold()
-                        or search in str(row.get("name", "")).casefold())]
-        options = self.query_one("#setup-models", OptionList)
-        options.clear_options()
-        for row in matches:
-            name = sanitize(row.get("name") or row.get("id", "?"), 100)
-            model_id = sanitize(row.get("id", ""), 120)
-            date = sanitize(row.get("date", ""), 24)
-            options.add_option(f"{name} · {model_id}" + (f" · {date}" if date else ""))
-        options.highlighted = 0 if matches else None
-        self.model_id = ""
-        self.query_one("#setup-save", Button).disabled = True
-
-    @on(OptionList.OptionSelected, "#setup-providers")
-    def provider_selected(self, event: OptionList.OptionSelected) -> None:
-        if event.option_index >= len(self.providers):
+            if provider in _SIGNED_IN:
+                continue
+            state = "● connected" if row.get("connected") is True else "○"
+            lines.append(f"{state}  {sanitize(row.get('label', provider), 40)} · "
+                         f"{sanitize(row.get('instruction', ''), 160)}")
+        self.query_one("#setup-env", Static).update("\n".join(lines))
+        if not status.required:
+            self._close()
             return
-        self.provider_id = str(self.providers[event.option_index].get("id", ""))
-        self._show_instruction()
-        self._show_models()
+        chosen = next((str(row.get("id", "")) for row in rows
+                       if row.get("connected") is True and row.get("auto") is True
+                       and str(row.get("id", "")) not in self._failed), "")
+        if chosen and not self._saving:
+            # Set before the worker starts, so the startup status and a poll save once.
+            self._saving = True
+            self.run_worker(self._complete(chosen), group="setup-save", exclusive=True)
 
-    @on(OptionList.OptionSelected, "#setup-models")
-    def model_selected(self, event: OptionList.OptionSelected) -> None:
-        rows = [row for row in self.models if str(row.get("provider", "")) == self.provider_id]
-        search = self.query_one("#setup-search", Input).value.casefold().strip()
-        rows = [row for row in rows if not search or search in str(row.get("id", "")).casefold()
-                or search in str(row.get("name", "")).casefold()]
-        if event.option_index >= len(rows):
-            return
-        self.model_id = str(rows[event.option_index].get("id", ""))
-        connected = any(str(row.get("id", "")) == self.provider_id and row.get("connected") is True
-                        for row in self.providers)
-        self.query_one("#setup-save", Button).disabled = not (connected and bool(self.model_id))
-
-    @on(Input.Changed, "#setup-search")
-    def search_changed(self, event: Input.Changed) -> None:
-        if event.input.id != "setup-search":
-            return
-        self._show_models()
-
-    @on(Button.Pressed, "#setup-retry")
-    async def retry_pressed(self, _: Button.Pressed) -> None:
-        await self.refresh_status()
-
-    @on(Button.Pressed, "#setup-save")
-    async def save_pressed(self, _: Button.Pressed) -> None:
-        if not self.model_id or not any(str(row.get("id", "")) == self.provider_id
-                                        and row.get("connected") is True for row in self.providers):
-            self.query_one("#setup-message", Static).update("Connect the selected provider before saving.")
-            return
+    async def _complete(self, provider: str) -> None:
+        self._message(f"Connected {sanitize(provider, 40)} · choosing its newest model…")
         try:
-            result = await self.client.setup_save(self.provider_id, self.model_id)
+            result = await self.client.setup_save(provider)
         except ClientError as exc:
-            self.query_one("#setup-message", Static).update(f"Could not save setup: {sanitize(str(exc), 240)}")
+            self._failed.add(provider)
+            self._message(f"Could not finish setup with {sanitize(provider, 40)}: {sanitize(str(exc), 200)}")
+            self.query_one("#setup-retry", Button).display = True
             return
-        self.query_one("#setup-message", Static).update(
-            f"Saved {sanitize(result.global_model, 120)} as the global default.\n"
-            "Please restart the daemon after turns finish to apply the new runtime configuration."
-        )
-        self.query_one("#setup-save", Button).disabled = True
+        finally:
+            self._saving = False
+        model = sanitize(result.global_model, 120)
+        if result.restart_required:
+            self._restart = True
+            self._message(f"Saved {model} as the default. Restart the daemon (nexus daemon stop) to use it.")
+            return
+        await self._refresh_app(model)
+        self._close()
 
-    @on(Button.Pressed, "#setup-close")
-    def close_pressed(self, _: Button.Pressed) -> None:
-        self.dismiss(None)
+    async def _refresh_app(self, model: str) -> None:
+        """The reloaded routes serve the next turn; show the new model now."""
+        app = self.app
+        app._setup_required = False
+        controller = getattr(app, "controller", None)
+        if controller is not None:
+            try:
+                await controller.refresh_agent_metadata()
+            except ClientError:
+                pass
+        for hook in ("_sync_agent", "_start_context_preview"):
+            method = getattr(app, hook, None)
+            if callable(method):
+                method()
+        status = getattr(app, "_sync_status", None)
+        if callable(status):
+            status(f"Using {model} · /model to change")
+
+    def _message(self, text: str) -> None:
+        if self.is_mounted:
+            self.query_one("#setup-message", Static).update(text)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "setup-retry":
+            event.stop()
+            self._failed.clear()
+            event.button.display = False
+            self.run_worker(self._poll(), group="setup-poll", exclusive=True)
+        elif event.button.id == "setup-close":
+            event.stop()
+            self._close()
 
 
 __all__ = ["SetupScreen", "block_unconfigured_turn", "open_first_run_setup"]

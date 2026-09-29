@@ -43,6 +43,7 @@ import msgspec
 from ..errors import ExtensionTrashError, SessionBusy
 from ..events import Event
 from ..ext.quarantine import sanitize_text
+from ..host_support.agent_context import project_agent_context
 from ..host_support.browser_view import json_patch as _json_patch
 from ..host_support.browser_view import web_view as _web_view
 from ..host_support.context_preview import (
@@ -52,6 +53,7 @@ from ..host_support.context_preview import (
     safe_text as _worktree_text,
 )
 from ..host_support.git_diff import git_diff
+from ..host_support.provider_auth import dispatch_providers
 from ..host_support.session_archive import (
     archive_summary_count,
     dispatch_archive_command,
@@ -771,7 +773,8 @@ class HostFacade:
             return {"found": False, "status": "not_found", "view": {}}
         payload = agent.to_dict()
         payload["body"] = agent.body.to_dict()
-        return {"found": True, "status": agent.status, "view": payload}
+        context = project_agent_context(agent, self.runtime, self.list_agents())
+        return {"found": True, "status": agent.status, "view": payload, "context": context}
 
     def resolve_permission(
         self,
@@ -1271,6 +1274,8 @@ class HostFacade:
     async def _dispatch(self, command: p.Command) -> p.Result:
         if result := await dispatch_settings(command, self.runtime):
             return result
+        if result := await dispatch_providers(command, self.runtime):
+            return result
         if isinstance(command, (
             p.SessionArchive, p.SessionUnarchive, p.SessionListArchived,
             p.SessionPreview, p.SessionSearch,
@@ -1404,6 +1409,7 @@ class HostFacade:
                 found=result["found"],
                 status=result["status"],
                 view=result["view"],
+                context=result.get("context", {}),
             )
         if isinstance(command, p.SessionFork):
             return p.SessionForkResult(
@@ -1478,7 +1484,7 @@ class HostFacade:
         if isinstance(command, p.SetupStatus):
             return p.SetupStatusResult(**await setup_status(self.runtime))
         if isinstance(command, p.SetupSave):
-            return p.SetupSaveResult(**await setup_save(self.runtime, command.provider, command.model))
+            return p.SetupSaveResult(**await setup_save(self.runtime, command.provider, command.model, reload=not self.supervisor.running))
         if isinstance(command, p.ModelsList):
             models = self.list_models(
                 provider=command.provider,

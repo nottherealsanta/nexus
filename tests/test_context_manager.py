@@ -52,23 +52,53 @@ def write_workspace(tmp_path: Path, soul="SOUL-BODY", memory="MEMORY-BODY") -> P
 # ---------------------------------------------------------------------------
 
 
-def test_system_text_is_identity_then_soul_then_memory(tmp_path):
+def test_system_text_is_soul_then_memory_when_identity_is_empty(tmp_path):
     write_workspace(tmp_path)
     manager = ContextManager(tmp_path, config=v2_config())
 
     request = manager.assemble(FakeSession())
 
     system = request.system
-    assert system.startswith("You are Nexus")
+    assert IDENTITY_PREAMBLE == ""
+    assert system.startswith("SOUL-BODY")
     assert system.index("SOUL-BODY") < system.index("MEMORY-BODY")
 
 
 def test_missing_system_files_contribute_nothing(tmp_path):
     manager = ContextManager(tmp_path, config=v2_config())
     request = manager.assemble(FakeSession())
-    assert request.system.startswith("You are Nexus")
+    assert IDENTITY_PREAMBLE == ""
+    assert request.system is not None
+    assert "You are Nexus" not in request.system
     assert "SOUL" not in request.system
     assert "MEMORY" not in request.system
+
+
+def test_selected_agent_body_replaces_empty_soul_or_follows_custom_soul(tmp_path):
+    class AgentPrompt:
+        def load_body(self):
+            return "ROLE-BODY"
+
+    for name, soul, expected in (
+        ("without-soul", None, "ROLE-BODY"),
+        ("with-soul", "CUSTOM-SOUL", "CUSTOM-SOUL\n\nROLE-BODY"),
+    ):
+        workspace = tmp_path / name
+        workspace.mkdir()
+        if soul is not None:
+            (workspace / "SOUL.md").write_text(soul, encoding="utf-8")
+        turn = ContextManager(workspace, config=v2_config()).for_turn()
+        iteration = turn.for_iteration(agent_definition=AgentPrompt())
+
+        request = iteration.assemble(FakeSession())
+
+        assert iteration.last_included_parts["soul"] == expected
+        assert "--- Selected agent instructions ---" not in request.system
+        if soul is None:
+            assert "CUSTOM-SOUL" not in request.system
+        else:
+            # Appending a role prompt to the iteration does not mutate the frozen turn.
+            assert turn.assemble(FakeSession()).system.startswith("CUSTOM-SOUL")
 
 
 def test_configured_filenames_are_used(tmp_path):
@@ -355,8 +385,8 @@ def test_sync_token_callback_is_used(tmp_path):
     manager.assemble(FakeSession(Message(role="user", content=[Text("hi")])))
 
     assert calls["n"] > 0
-    identity = next(p for p in manager.last_budget["parts"] if p["name"] == "identity")
-    assert identity["requested"] == len(IDENTITY_PREAMBLE)
+    assert IDENTITY_PREAMBLE == ""
+    assert all(p["name"] != "identity" for p in manager.last_budget["parts"])
 
 
 def test_async_token_callback_returns_an_awaitable(tmp_path):

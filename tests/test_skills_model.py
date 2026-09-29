@@ -311,8 +311,20 @@ def test_provenance_and_metadata_are_frozen():
 
 def test_skill_source_precedence_and_values():
     assert SOURCE_PRECEDENCE[SkillSource.BUILTIN] < SOURCE_PRECEDENCE[SkillSource.USER]
-    assert SOURCE_PRECEDENCE[SkillSource.USER] < SOURCE_PRECEDENCE[SkillSource.WORKSPACE]
-    assert [tier.value for tier in SkillSource] == ["builtin", "user", "workspace"]
+    assert (
+        SOURCE_PRECEDENCE[SkillSource.USER]
+        < SOURCE_PRECEDENCE[SkillSource.WORKSPACE_LEGACY]
+    )
+    assert (
+        SOURCE_PRECEDENCE[SkillSource.WORKSPACE_LEGACY]
+        < SOURCE_PRECEDENCE[SkillSource.WORKSPACE]
+    )
+    assert [tier.value for tier in SkillSource] == [
+        "builtin",
+        "user",
+        "workspace_legacy",
+        "workspace",
+    ]
     assert SkillDiagnosticCode.PARSE_ERROR.value == "parse_error"
 
 

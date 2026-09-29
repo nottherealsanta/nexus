@@ -6,12 +6,13 @@ import time
 
 import pytest
 from test_ui_tui import FakeTransport, _client
-from textual.widgets import Input, OptionList, RadioSet, Static
+from textual.widgets import Button, Input, OptionList, RadioSet, Static
 
 from nexus.host import protocol as p
 from nexus.session.manager import SessionSummary
 from nexus.ui.tui.app import NexusTextualApp
 from nexus.ui_support.tui_archived import ArchivedSessionsScreen
+from nexus.ui_support.tui_model_picker import ModelPickerScreen
 from nexus.ui_support.tui_panels import (
     DetailsSidebar,
     SessionRow,
@@ -26,6 +27,7 @@ from nexus.ui_support.tui_panels import (
     session_status,
 )
 from nexus.ui_support.tui_settings import SettingsConsole
+from nexus.ui_support.tui_widgets import LogsDrawer
 from nexus.view import AgentView, ConversationView, ToolCallView, TurnView
 
 _HUNK = "--- a/src/app.py\n+++ b/src/app.py\n@@ -1,2 +1,3 @@\n def main():\n-    print('hi')\n+    print('hello')\n+    return 0\n"
@@ -315,8 +317,27 @@ async def test_top_bar_shows_session_and_toggles_panels():
         assert bar.query_one("#topbar-crumb").render().plain == "Yesterday"
         await pilot.click("#topbar-new")
         await pilot.pause(0.3)
+        await pilot.press("enter")
+        await pilot.pause(0.3)
         assert app.controller.session not in {"s", "old"}
         assert bar.query_one("#topbar-crumb").render().plain == "New Session"
+
+
+@pytest.mark.asyncio
+async def test_logs_drawer_shows_full_session_id_and_refreshes_on_switch():
+    app = NexusTextualApp(_client(PanelTransport()), session="s")
+    async with app.run_test(size=(160, 45)) as pilot:
+        await pilot.pause(0.3)
+        drawer = app.query_one(LogsDrawer)
+        long_session_id = "s" * 80
+        drawer.set_session(long_session_id)
+        rendered = drawer.query_one("#logs-content", Static).render().plain
+        assert f"SESSION ID · {long_session_id} · 0 shown" in rendered
+
+        await app._switch_session("old")
+        rendered = drawer.query_one("#logs-content", Static).render().plain
+        assert "SESSION ID · old · 0 shown" in rendered
+        assert long_session_id not in rendered
 
 
 @pytest.mark.asyncio
@@ -484,16 +505,52 @@ async def test_settings_agent_form_edits_frontmatter_and_saves_override():
         await screen._open_item(0)
         await pilot.pause()
         assert screen.query_one("#agent-form").display
-        screen.query_one("#agent-model", Input).value = "anthropic/claude-sonnet-5"
-        screen.query_one("#agent-reasoning_effort", Input).value = "high"
-        screen.query_one("#agent-fallback", Input).value = "openai/gpt-5, low"
+        assert str(screen.query_one("#agent-model", Button).label) == "inherit session model"
+        assert not screen.query_one("#agent-model-clear").display
+
+        async def models():
+            return [
+                {"provider": "anthropic", "id": "claude-sonnet-5", "supported_efforts": ["low", "high"]},
+                {"provider": "openai", "id": "gpt-5"},
+                {"provider": "openai", "id": "gpt-5-mini"},
+            ]
+        screen._list_models = models
+
+        async def pick(button_id: str, ref: str, effort_steps: int = 0) -> None:
+            await pilot.click(f"#{button_id}")
+            await pilot.pause()
+            picker = app.screen
+            assert isinstance(picker, ModelPickerScreen)
+            picker.query_one("#model-picker-search", Input).value = ref
+            await pilot.pause()
+            picker.query_one("#model-picker-options", OptionList).focus()
+            for _ in range(effort_steps):
+                await pilot.press("right")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.screen is screen
+
+        # Provider, model and effort come from one picker.
+        await pick("agent-model", "claude-sonnet-5", effort_steps=2)
+        assert str(screen.query_one("#agent-model", Button).label) == "anthropic/claude-sonnet-5 · high"
+        # Several fallbacks, each from the same picker; one can be replaced or removed.
+        await pick("agent-fallback-add", "gpt-5-mini")
+        await pick("agent-fallback-add", "claude-sonnet-5")
+        await pick("agent-fallback-add", "anthropic")
+        assert screen._fallbacks() == ["openai/gpt-5-mini", "anthropic/claude-sonnet-5"]
+        await pick("agent-fallback-0", "openai gpt-5")
+        assert screen._fallbacks() == ["openai/gpt-5", "anthropic/claude-sonnet-5"]
+        await pilot.click("#agent-fallback-remove-1")
         await pilot.pause()
+        assert screen._fallbacks() == ["openai/gpt-5"]
+        assert not screen.query(".agent-fallback-row")[1].display
         await screen.action_save()
         await pilot.pause()
         body = transport.settings_body
         assert "model: anthropic/claude-sonnet-5\n" in body
         assert "reasoning_effort: high\n" in body
-        assert "fallback: [openai/gpt-5, low]\n" in body
+        assert "fallback: [openai/gpt-5]\n" in body
+        assert "provider:" not in body
         assert body.endswith("---\nBody.\n")
         assert ("SettingsWrite", "global", "agents", "task", "old") in transport.trace
 

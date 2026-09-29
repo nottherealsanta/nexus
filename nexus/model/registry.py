@@ -338,21 +338,17 @@ def _opt_str(
 
 
 def _opt_date(entry: Mapping[str, object], key: str) -> str | None:
-    """Read one optional, bounded ISO calendar date from catalogue metadata."""
+    """Read one optional ISO date; ``YYYY-MM`` (used by models.dev) reads as the 1st.
+
+    Anything else is treated as unknown: optional metadata never rejects the catalogue.
+    """
     value = entry.get(key)
-    if value is None:
+    if not isinstance(value, str) or len(value) not in (7, 10):
         return None
-    if not isinstance(value, str):
-        raise CatalogueError(f"{key!r} must be an ISO date string")
-    if len(value) != 10:
-        raise CatalogueError(f"{key!r} must be a 10-character ISO date")
     try:
-        parsed = date.fromisoformat(value)
-    except ValueError as exc:
-        raise CatalogueError(f"{key!r} must be a valid ISO date") from exc
-    if parsed.isoformat() != value:
-        raise CatalogueError(f"{key!r} must be a valid ISO date")
-    return value
+        return date.fromisoformat(value if len(value) == 10 else f"{value}-01").isoformat()
+    except ValueError:
+        return None
 
 
 def _opt_bool(entry: Mapping[str, object], key: str) -> bool:

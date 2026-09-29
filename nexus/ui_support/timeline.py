@@ -5,13 +5,13 @@ import json
 import math
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 
 from ..ui_support.text import escape_controls, redact, sanitize
 from ..view import AgentView, MessageView, ToolCallView, TurnView
 
 _DETAIL_LIMIT = 1_600
 _ARG_LIMIT = 180
-_HUNK_HEADER = re.compile(r"^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@")
 _STALE_GREETINGS = (
     "hi! how can i help?",
     "i’m nexus, your assistant.",
@@ -139,6 +139,8 @@ def format_arguments(tool: ToolCallView) -> str:
         return _first_line(f"{_text(path, 120)} ({lines} lines)" if lines else _text(path, 180))
     if name in {"edit", "multiedit"}:
         return _first_line(_text(path, 180))
+    if name == "apply_patch":
+        return _first_line(_text(", ".join(_patch_paths(args.get("patch"))), 180))
     if name in {"bash", "bashoutput", "killshell"}:
         return _first_line(_text(args.get("command") or args.get("id") or ""))
     if name == "task":
@@ -149,6 +151,17 @@ def format_arguments(tool: ToolCallView) -> str:
         if key not in {"content", "old_string", "new_string"}
     ]
     return _first_line(", ".join(pairs))
+
+
+_PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update|Delete|Move) File: (.+?)(?: -> .+)?$", re.MULTILINE)
+
+
+def _patch_paths(patch: object) -> list[str]:
+    """The files an ``apply_patch`` body touches, never its content."""
+    if not isinstance(patch, str):
+        return []
+    paths = list(dict.fromkeys(_PATCH_FILE.findall(patch[:200_000])))
+    return paths[:3] + [f"+{len(paths) - 3} more"] if len(paths) > 3 else paths
 
 
 def tool_status(tool: ToolCallView) -> str:
@@ -172,28 +185,97 @@ def tool_summary(tool: ToolCallView) -> str:
     return _first_line(output) if output else tool.status
 
 
-def _diff_text(diff: Mapping[str, object]) -> tuple[str, str] | None:
-    """Reconstruct bounded before/after text from Nexus's durable unified hunk."""
+#: Tools whose ``diff`` artifact is shown inline under their activity row.
+DIFF_TOOLS = frozenset({"edit", "multiedit", "apply_patch"})
+#: Beyond this line number a hunk is drawn with relative numbers, unpadded.
+_MAX_DIFF_PAD = 50_000
+_HUNK_START = re.compile(r"^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@")
+
+
+@dataclass(frozen=True, slots=True)
+class DiffSection:
+    """One file of a durable diff artifact, as before/after text for a viewer.
+
+    Both texts are padded with blank lines up to each hunk's start so a viewer
+    that numbers lines from 1 shows real file line numbers; the padding sits
+    beyond the hunk's own context, so a context-collapsing viewer hides it.
+    """
+
+    path: str
+    before: str
+    after: str
+    added: int
+    removed: int
+
+
+def _diff_path(old: str, new: str) -> str:
+    if new != "/dev/null":
+        return new.removeprefix("b/")
+    return old.removeprefix("a/")
+
+
+def split_diff_files(diff: Mapping[str, object]) -> list[tuple[str, str]]:
+    """``(path, hunk)`` per file of a (possibly multi-file) ``diff`` artifact.
+
+    Files are delimited by their ``---``/``+++`` headers; a hunk without any
+    header belongs to the artifact's own ``path``.
+    """
     hunk = diff.get("hunk")
     if not isinstance(hunk, str) or not hunk:
-        return None
-    before: list[str] = []
-    after: list[str] = []
-    seen_hunk = False
-    for line in hunk.splitlines():
-        if _HUNK_HEADER.match(line):
-            seen_hunk = True
+        return []
+    default = diff.get("path")
+    path = _text(default, 400) if isinstance(default, str) else "file"
+    files: list[tuple[str, str]] = []
+    body: list[str] = []
+    lines = hunk.splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        following = lines[index + 1] if index + 1 < len(lines) else ""
+        if line.startswith("--- ") and following.startswith("+++ "):
+            if body:
+                files.append((path, "\n".join(body)))
+            path, body = _text(_diff_path(line[4:], following[4:]), 400), []
+            index += 2
             continue
-        if not seen_hunk:
-            continue
-        if line.startswith("+") and not line.startswith("+++"):
-            after.append(line[1:])
-        elif line.startswith("-") and not line.startswith("---"):
-            before.append(line[1:])
-        elif line.startswith(" "):
-            before.append(line[1:])
-            after.append(line[1:])
-    return ("\n".join(before), "\n".join(after)) if before or after else None
+        body.append(line)
+        index += 1
+    if body:
+        files.append((path, "\n".join(body)))
+    return files
+
+
+def diff_sections(diff: Mapping[str, object]) -> list[DiffSection]:
+    """Per-file before/after text for a (possibly multi-file) ``diff`` artifact."""
+    sections: list[DiffSection] = []
+    for path, hunk in split_diff_files(diff):
+        before: list[str] = []
+        after: list[str] = []
+        added = removed = 0
+        seen_hunk = False
+        for line in hunk.splitlines():
+            header = _HUNK_START.match(line)
+            if header:
+                seen_hunk = True
+                gap = int(header.group(1)) - 1 - len(before)
+                if 0 < gap and len(before) + gap <= _MAX_DIFF_PAD:
+                    before.extend([""] * gap)
+                    after.extend([""] * gap)
+                continue
+            if not seen_hunk or line.startswith("\\"):
+                continue
+            if line.startswith("+"):
+                after.append(line[1:])
+                added += 1
+            elif line.startswith("-"):
+                before.append(line[1:])
+                removed += 1
+            else:
+                before.append(line[1:])
+                after.append(line[1:])
+        if before or after:
+            sections.append(DiffSection(path, "\n".join(before), "\n".join(after), added, removed))
+    return sections
 
 
 def _latest_activity(agent: AgentView) -> str:
@@ -277,9 +359,10 @@ def _turn_summary(turn: TurnView) -> str:
 
 
 __all__ = [
+    "DIFF_TOOLS",
     "_DETAIL_LIMIT",
+    "DiffSection",
     "_agent_metrics",
-    "_diff_text",
     "_has_message_content",
     "_latest_activity",
     "_literal",
@@ -290,7 +373,9 @@ __all__ = [
     "_text",
     "_turn_setup_failure",
     "_turn_summary",
+    "diff_sections",
     "format_arguments",
+    "split_diff_files",
     "thought_title",
     "tool_heading",
     "tool_output",

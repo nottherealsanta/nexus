@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import tomllib
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,7 +14,45 @@ from nexus.errors import ConfigError
 from nexus.host import HostFacade
 from nexus.host import protocol as p
 from nexus.host_support import setup
+from nexus.model.registry import ModelRegistry
 from nexus.runtime import Runtime
+
+
+def _model(release, *, tools=True, output_cost=1.0, modalities=("text",)):
+    return {"tool_call": tools, "release_date": release, "cost": {"input": 1.0, "output": output_cost},
+            "modalities": {"input": list(modalities), "output": ["text"]}}
+
+
+#: A models.dev-shaped catalogue; setup must pick from it, never from the network.
+CATALOGUE = {
+    "openai": {"npm": "@ai-sdk/openai", "env": ["OPENAI_API_KEY"], "models": {
+        "gpt-5.6": _model("2026-07-09"),
+        "gpt-6-luna": _model("2026-09-22", output_cost=5.0),
+        "gpt-6-sol": _model("2026-09-22", output_cost=20.0),
+        "gpt-image-3": _model("2026-09-25", tools=False),
+    }},
+    "github-copilot": {"npm": "@ai-sdk/openai-compatible", "models": {
+        "claude-opus-5.5": _model("2026-09-22"),
+        "gpt-6-sol": _model("2026-09-23"),
+        "gpt-5-mini": _model("2025-08-07"),
+    }},
+    "opencode-go": {"npm": "@ai-sdk/openai-compatible", "models": {
+        "kimi-k3": _model("2026-07-16"),
+        "glm-5.3": _model("2026-08-14"),
+    }},
+}
+
+
+@pytest.fixture(autouse=True)
+def _offline_catalogue(monkeypatch):
+    def registry(runtime):
+        registry = ModelRegistry(
+            providers={provider: {} for provider in setup._PROVIDERS}, env={}, offline=True,
+            use_snapshot=False, provider_aliases=setup._CATALOGUE_IDS,
+        )
+        registry.install_raw(json.dumps(CATALOGUE))
+        return registry
+    monkeypatch.setattr(setup, "_registry", registry)
 
 
 class _OAuth:
@@ -24,12 +63,27 @@ class _OAuth:
         return self.connected
 
 
-def _runtime(home: Path, *, environ=None, connected=False, model="workspace/model"):
+class _Keychain:
+    """Signed-in providers without touching the real keychain."""
+
+    def __init__(self, connected: bool, domain: str | None = None):
+        self.connected, self._domain = connected, domain
+
+    async def status(self):
+        return self.connected
+
+    async def domain(self):
+        return self._domain if self.connected else None
+
+
+def _runtime(home: Path, *, environ=None, connected=False, model="workspace/model", signed_in=()):
     return SimpleNamespace(
         workspace=home / "workspace",
         _home=home,
         _environ=environ or {},
         _codex_auth_factory=lambda **kwargs: _OAuth(connected),
+        _copilot_auth_factory=lambda **kwargs: _Keychain("github-copilot" in signed_in, "company.ghe.com"),
+        _api_key_auth_factory=lambda provider, **kwargs: _Keychain(provider in signed_in),
         _load_config=lambda: SimpleNamespace(model=model),
     )
 
@@ -50,20 +104,73 @@ def test_setup_status_exposes_bounded_choices_without_environment_values(tmp_pat
 
     result = asyncio.run(setup.setup_status(runtime))
 
-    assert set(result) == {"required", "global_model", "effective_model", "providers", "models"}
+    assert set(result) == {"required", "global_model", "effective_model", "providers"}
     assert result["required"] is True
     assert result["global_model"] == ""
     assert result["effective_model"] == "workspace/model"
     assert [row["id"] for row in result["providers"]] == [
-        "codex", "openai", "anthropic", "google", "ollama"
+        "codex", "github-copilot", "opencode-go", "openai", "anthropic", "google", "ollama"
     ]
-    assert all(set(row) == {"id", "label", "connected", "instruction"} for row in result["providers"])
+    assert not next(row for row in result["providers"] if row["id"] == "github-copilot")["connected"]
+    assert all(set(row) == {"id", "label", "connected", "instruction", "auto"} for row in result["providers"])
+    # Connecting any provider but Ollama (whatever is pulled locally) completes setup.
+    assert [row["id"] for row in result["providers"] if not row["auto"]] == ["ollama"]
     assert next(row for row in result["providers"] if row["id"] == "openai")["connected"]
     assert next(row for row in result["providers"] if row["id"] == "ollama")["connected"]
-    assert all(set(row) == {"provider", "id", "name", "date"} for row in result["models"])
-    assert any(row["provider"] == "codex" and row["id"] == "gpt-5.6" for row in result["models"])
-    assert len(result["models"]) <= 512
     assert secret not in repr(result)
+
+
+@pytest.mark.parametrize(
+    ("provider", "newest"),
+    [
+        # Same-day releases: the pricier model is the flagship; no image models.
+        ("openai", "gpt-6-sol"),
+        ("codex", "gpt-6-sol"),
+        # Copilot routes over chat completions, so its GPT-5+ models are skipped.
+        ("github-copilot", "claude-opus-5.5"),
+        ("opencode-go", "glm-5.3"),
+    ],
+)
+def test_setup_save_without_model_picks_newest_tool_model(tmp_path, monkeypatch, provider, newest):
+    home = tmp_path / "home"
+    home.mkdir()
+    _home(monkeypatch, home)
+    runtime = _runtime(home, environ={"OPENAI_API_KEY": "secret"}, connected=True, signed_in=(provider,))
+
+    result = asyncio.run(setup.setup_save(runtime, provider))
+
+    assert result == {"global_model": f"{provider}/{newest}", "restart_required": True}
+
+
+def test_setup_save_reloads_routes_only_when_asked(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    _home(monkeypatch, home)
+    runtime = _runtime(home, environ={"OPENAI_API_KEY": "secret"})
+    calls = []
+    async def reload():
+        calls.append(tomllib.loads((home / ".nexus" / "config.toml").read_text())["models"]["default"])
+        return True
+    runtime.reload_model_routes = reload
+
+    busy = asyncio.run(setup.setup_save(runtime, "openai"))
+    idle = asyncio.run(setup.setup_save(runtime, "openai", reload=True))
+
+    assert busy["restart_required"] is True and idle["restart_required"] is False
+    # Routes reload after the config is written.
+    assert calls == ["openai/gpt-6-sol"]
+
+
+def test_setup_save_never_picks_an_ollama_model(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    _home(monkeypatch, home)
+    async def local_ollama():
+        return True
+    monkeypatch.setattr(setup, "_ollama_connected", local_ollama)
+
+    with pytest.raises(ConfigError, match="Ollama"):
+        asyncio.run(setup.setup_save(_runtime(home), "ollama"))
 
 
 @pytest.mark.parametrize(
@@ -129,6 +236,29 @@ def test_setup_save_preserves_unrelated_toml_and_writes_env_reference(tmp_path, 
     assert asyncio.run(setup.setup_status(disconnected))["required"] is True
 
 
+@pytest.mark.parametrize(
+    ("provider", "model", "route"),
+    [
+        ("github-copilot", "claude-opus-5.5",
+         {"auth": "github_copilot", "base_url": "https://copilot-api.company.ghe.com", "api": "chat"}),
+        ("opencode-go", "kimi-k3",
+         {"auth": "keychain", "base_url": "https://opencode.ai/zen/go/v1", "api": "chat"}),
+    ],
+)
+def test_setup_save_routes_signed_in_providers_without_credentials(tmp_path, monkeypatch, provider, model, route):
+    home = tmp_path / "home"
+    home.mkdir()
+    _home(monkeypatch, home)
+    runtime = _runtime(home, signed_in=(provider,))
+
+    result = asyncio.run(setup.setup_save(runtime, provider, model))
+
+    saved = tomllib.loads((home / ".nexus" / "config.toml").read_text(encoding="utf-8"))
+    assert result["global_model"] == f"{provider}/{model}"
+    assert saved["providers"][provider] == route
+    assert "api_key" not in saved["providers"][provider]
+
+
 def test_setup_save_rejects_nonempty_v1_config(tmp_path, monkeypatch):
     home = tmp_path / "home"
     config_dir = home / ".nexus"
@@ -176,14 +306,15 @@ async def test_host_setup_persists_global_default_across_unrelated_workspaces(tm
         facade = HostFacade(runtime)
         initial = await facade.handle(p.SetupStatus())
         assert isinstance(initial, p.SetupStatusResult) and initial.required
-        assert any(row["provider"] == "openai" for row in initial.models)
-        saved = await facade.handle(p.SetupSave(provider="openai", model="gpt-5.6"))
+        saved = await facade.handle(p.SetupSave(provider="openai"))
         assert isinstance(saved, p.SetupSaveResult)
-        assert saved.global_model == "openai/gpt-5.6" and saved.restart_required
+        # No turn is running, so the daemon reloads its routes instead of restarting.
+        assert saved.global_model == "openai/gpt-6-sol" and not saved.restart_required
+        assert runtime.router.default == "openai/gpt-6-sol"
         ready = await facade.handle(p.SetupStatus())
         assert isinstance(ready, p.SetupStatusResult) and not ready.required
     finally:
         await runtime.aclose()
 
     from nexus.config import Config
-    assert Config.load(second, home=home, environ={}).model == "openai/gpt-5.6"
+    assert Config.load(second, home=home, environ={}).model == "openai/gpt-6-sol"

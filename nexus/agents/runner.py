@@ -58,6 +58,7 @@ from .manager import AgentManager, AgentToolSelection
 from .model import (
     MODEL_INHERIT,
     MUTATING_FS_TOOLS,
+    AgentIndex,
     AgentNotFoundError,
 )
 
@@ -72,6 +73,7 @@ __all__ = [
     "DEFAULT_MAX_FANOUT",
     "DEFAULT_MAX_TIER",
     "MAX_REPORTED_FILES",
+    "MAX_ROLE_INDEX_CHARS",
     "WORKTREE_CHILD_TOOLS",
     "ChildRuntime",
     "ChildSpec",
@@ -103,6 +105,10 @@ DEFAULT_MAX_DEPTH = 3
 DEFAULT_MAX_FANOUT = 16
 #: The role an ad-hoc ``Task`` request uses when none is named.
 DEFAULT_CHILD_TYPE = "task"
+#: Namespace a model may prefix onto requested tool names (OpenAI Responses).
+_TOOL_NAMESPACE = "functions."
+#: Budget for the roster the ``subagent`` tool advertises (whole lines only).
+MAX_ROLE_INDEX_CHARS = 4_000
 # First-release worktree profile: only reviewed, shipped tools are exposed.
 WORKTREE_CHILD_TOOLS = frozenset(
     {
@@ -168,7 +174,12 @@ class TaskRequest:
             for item in self.tools:
                 if not isinstance(item, str) or not item.strip():
                     raise SubagentError("tools entries must be non-empty strings")
-                cleaned.append(canonical_tool_name(item.strip()))
+                name = item.strip()
+                # Some providers show tools to the model as ``functions.<name>``
+                # and it echoes that namespace back; the registry name is bare.
+                if name.startswith(_TOOL_NAMESPACE) and len(name) > len(_TOOL_NAMESPACE):
+                    name = name[len(_TOOL_NAMESPACE):]
+                cleaned.append(canonical_tool_name(name))
             object.__setattr__(self, "tools", tuple(cleaned))
         if self.description is not None and (
             not isinstance(self.description, str) or not self.description.strip()
@@ -992,6 +1003,19 @@ class SubagentRunner:
     def agents(self) -> AgentManager:
         return self._agents
 
+    def role_index(self, *, max_chars: int = MAX_ROLE_INDEX_CHARS) -> str:
+        """Sanitized ``name: description`` lines for every spawnable role.
+
+        Progressive disclosure, like the skills index: only the names and
+        descriptions of definitions eligible in the ``subagent`` context, never
+        a body, path, or tool list, bounded to whole lines.
+        """
+        eligible = {
+            agent.name for agent in self._agents.agents if agent.eligible_in("subagent")
+        }
+        entries = tuple(entry for entry in self._agents.index if entry.name in eligible)
+        return AgentIndex(entries=entries).render(max_chars=max_chars)
+
     @property
     def budget(self) -> SubagentBudget:
         return self._budget
@@ -1207,9 +1231,17 @@ class SubagentRunner:
         tier = resolution.tier
         reference = self.role_model_reference(req)
         child_model = self._child_model(reference, resolution)
+        # With no concrete model pinned by the request or the role, the child
+        # runs the root's model. A bare tier hint still gates and labels the
+        # spawn, but it never swaps the model: routing a tier picks the first
+        # catalogue entry, which may not be usable with the parent's account.
         if (
             self._parent_model
-            and (req.model is None or req.model == MODEL_INHERIT)
+            and (
+                req.model is None
+                or req.model == MODEL_INHERIT
+                or req.model in self._tiers.order
+            )
             and (not role.model or role.model == MODEL_INHERIT)
         ):
             child_model = (

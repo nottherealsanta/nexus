@@ -17,7 +17,8 @@ from ._patch_parse import (
     operation_path_refs,
     parse_patch,
 )
-from ._patch_stage import PatchStageError, stage_patch
+from ._patch_stage import PatchStageError, StagedChanges, stage_patch
+from .edit import diff_preview
 from .read import _permissions
 
 MAX_FILE_BYTES = 16 * 1024 * 1024
@@ -51,12 +52,29 @@ def _permission_key(_data: dict[str, Any]) -> str:
 SPEC = ToolSpec(
     name="apply_patch",
     description=(
-        "Apply a strict multi-file patch containing add, update, delete, and "
-        "move operations. Hunk context must match exactly."
+        "Apply a multi-file patch containing add, update, delete, and move "
+        "operations. Prefer it for coordinated edits across several files or "
+        "hunks. Format:\n"
+        "*** Begin Patch\n"
+        "*** Add File: path\n+line\n"
+        "*** Update File: path\n"
+        "[*** Move to: new/path]\n"
+        "@@ [optional line to anchor after, e.g. a def or class]\n"
+        " context line\n-removed line\n+added line\n"
+        "*** Delete File: path\n"
+        "*** End Patch\n"
+        "Hunks are located by their context and removed lines, which must "
+        "match the file; include about three unchanged lines around each "
+        "change. Paths are workspace-relative."
     ),
     input_schema={
         "type": "object",
-        "properties": {"patch": {"type": "string"}},
+        "properties": {
+            "patch": {
+                "type": "string",
+                "description": "The full patch text, from *** Begin Patch to *** End Patch.",
+            }
+        },
         "required": ["patch"],
         "additionalProperties": False,
     },
@@ -167,6 +185,39 @@ def _bounded_result(status_text: str, diff: str) -> tuple[str, bool]:
     return prefix + diff[: available - len(marker)] + marker, True
 
 
+def _diff_artifact(staged: StagedChanges) -> dict[str, Any]:
+    """The Edit-shaped transcript preview, one ``---``/``+++`` section per file.
+
+    A move is one section from its source to its destination; binary content is
+    left out of the preview.
+    """
+    files: list[tuple[str | None, str | None, str, str]] = []
+    changes = list(staged.changes)
+    index = 0
+    while index < len(changes):
+        change = changes[index]
+        old_path, new_path = change.path, change.path
+        old_bytes, new_bytes = change.old_bytes, change.new_bytes
+        if change.operation_status == "move" and index + 1 < len(changes):
+            new_path, new_bytes = changes[index + 1].path, changes[index + 1].new_bytes
+            index += 1
+        index += 1
+        try:
+            before = old_bytes.decode("utf-8") if old_bytes is not None else ""
+            after = new_bytes.decode("utf-8") if new_bytes is not None else ""
+        except UnicodeDecodeError:
+            continue
+        files.append((
+            old_path if old_bytes is not None else None,
+            new_path if new_bytes is not None else None,
+            before,
+            after,
+        ))
+    paths = {path for file in files for path in file[:2] if path}
+    display = next(iter(paths)) if len(paths) == 1 else f"{len(files)} files"
+    return diff_preview(display, files)
+
+
 def _is_cancellation(exc: BaseException) -> BaseException | None:
     seen: set[int] = set()
     current: BaseException | None = exc
@@ -218,7 +269,15 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
         partial = ", ".join(f"{path}={state}" for path, state in status_by_path.items())
         message = f"apply_patch commit failed; exact partial state: {partial}; {exc}"
         return ToolExecutionResult.text(message, is_error=True)
-    except (PatchParseError, PatchStageError, PathSecurityError, ValueError, OSError) as exc:
+    except PatchStageError as exc:
+        where = f" in {exc.path}" if exc.path else ""
+        hint = (
+            "; re-read the file and copy the context lines exactly"
+            if exc.code == "context_mismatch"
+            else ""
+        )
+        return ToolExecutionResult.text(f"apply_patch failed{where}: {exc}{hint}", is_error=True)
+    except (PatchParseError, PathSecurityError, ValueError, OSError) as exc:
         return ToolExecutionResult.text(f"apply_patch failed: {exc}", is_error=True)
 
     status_text = "\n".join(f"{item.path}: {item.status}" for item in statuses)
@@ -227,6 +286,7 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
         bounded,
         display=f"apply_patch: {len(statuses)} file change(s)" + (" (diff truncated)" if truncated else ""),
         metrics={"files": len(statuses), "diff_truncated": truncated},
+        diff=_diff_artifact(staged),
     )
 
 

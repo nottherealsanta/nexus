@@ -7,8 +7,10 @@ a command is JSON-encoded, decoded by kind, dispatched through
 :class:`~nexus.host.facade.HostFacade`, and the result is encoded the same way.
 
 The protocol deliberately carries no credential, environment, or configuration
-value: the verb list is exactly the PLAN §14.4 surface plus host queries and
-owned-worktree review/mutation commands. Streaming is the one verb a
+value back to a client: the verb list is exactly the PLAN §14.4 surface plus
+host queries, owned-worktree review/mutation commands, and provider sign-in.
+``ProviderKeySet`` is the single inward-only exception (a pasted API key goes to
+the daemon's keychain and is never returned). Streaming is the one verb a
 request/response pair cannot model, so ``SessionSubscribe`` names the stream and
 the transport attaches through :meth:`HostFacade.subscribe`.
 """
@@ -73,14 +75,60 @@ class SettingsDelete(msgspec.Struct, tag=True, frozen=True):
 
 
 class SetupStatus(msgspec.Struct, tag=True, frozen=True):
-    """Read-only first-run provider/model choices; no credentials cross the wire."""
+    """Read-only first-run provider connection state; no credentials cross the wire."""
 
 
 class SetupSave(msgspec.Struct, tag=True, frozen=True):
-    """Save one authenticated provider and explicit model as user-global defaults."""
+    """Save a connected provider as the user-global default and reload routes.
+
+    A blank ``model`` picks the provider's newest tool-calling model.
+    """
 
     provider: str
-    model: str
+    model: str = ""
+
+
+class ProvidersStatus(msgspec.Struct, tag=True, frozen=True):
+    """Settings → Providers: sign-in state per provider; never a credential."""
+
+
+class ProviderLogin(msgspec.Struct, tag=True, frozen=True):
+    """Start a browser or device-code sign-in; poll it with ``ProviderLoginPoll``.
+
+    ``domain`` names a GitHub Enterprise host for ``github-copilot``.
+    """
+
+    provider: str
+    method: str = ""
+    domain: str = ""
+
+
+class ProviderLoginPoll(msgspec.Struct, tag=True, frozen=True):
+    login_id: str
+
+
+class ProviderLoginCancel(msgspec.Struct, tag=True, frozen=True):
+    login_id: str
+
+
+class ProviderKeySet(msgspec.Struct, tag=True, frozen=True, repr_omit_defaults=True):
+    """Store a pasted API key in the daemon's keychain.
+
+    The one command that carries a credential, and only inward: the key is
+    never echoed in a result, an error, a log, or config.
+    """
+
+    provider: str
+    key: str
+
+    def __repr__(self) -> str:
+        return f"ProviderKeySet(provider={self.provider!r}, key='***')"
+
+
+class ProviderLogout(msgspec.Struct, tag=True, frozen=True):
+    """Remove one provider's credential from the keychain."""
+
+    provider: str
 
 
 class SessionOpen(msgspec.Struct, tag=True, frozen=True):
@@ -393,6 +441,12 @@ Command = (
     | SettingsDelete
     | SetupStatus
     | SetupSave
+    | ProvidersStatus
+    | ProviderLogin
+    | ProviderLoginPoll
+    | ProviderLoginCancel
+    | ProviderKeySet
+    | ProviderLogout
     | SessionArchive
     | SessionUnarchive
     | SessionListArchived
@@ -451,6 +505,12 @@ COMMANDS: tuple[type, ...] = (
     SettingsDelete,
     SetupStatus,
     SetupSave,
+    ProvidersStatus,
+    ProviderLogin,
+    ProviderLoginPoll,
+    ProviderLoginCancel,
+    ProviderKeySet,
+    ProviderLogout,
     SessionArchive,
     SessionUnarchive,
     SessionListArchived,
@@ -558,12 +618,35 @@ class SetupStatusResult(msgspec.Struct, tag=True, frozen=True):
     global_model: str = ""
     effective_model: str = ""
     providers: list[dict[str, Any]] = msgspec.field(default_factory=list)
-    models: list[dict[str, Any]] = msgspec.field(default_factory=list)
 
 
 class SetupSaveResult(msgspec.Struct, tag=True, frozen=True):
     global_model: str
     restart_required: bool = True
+
+
+class ProvidersStatusResult(msgspec.Struct, tag=True, frozen=True):
+    """Rows: ``id``, ``label``, ``methods``, ``help``, ``connected``, ``detail``, ``login``."""
+
+    providers: list[dict[str, Any]] = msgspec.field(default_factory=list)
+
+
+class ProviderLoginResult(msgspec.Struct, tag=True, frozen=True):
+    """One sign-in: ``status`` is pending, connected, failed or cancelled."""
+
+    login_id: str
+    provider: str
+    method: str = ""
+    status: str = "pending"
+    url: str = ""
+    user_code: str = ""
+    message: str = ""
+
+
+class ProviderAuthResult(msgspec.Struct, tag=True, frozen=True):
+    provider: str
+    connected: bool
+    message: str = ""
 
 
 class SessionOpenResult(msgspec.Struct, tag=True, frozen=True):
@@ -639,6 +722,7 @@ class AgentTranscriptResult(msgspec.Struct, tag=True, frozen=True):
     found: bool = True
     status: str = "running"
     view: dict[str, Any] = msgspec.field(default_factory=dict)
+    context: dict[str, Any] = msgspec.field(default_factory=dict)  # sent request, header-shaped
 
 
 class SessionForkResult(msgspec.Struct, tag=True, frozen=True):
@@ -828,7 +912,7 @@ class ContextInspectResult(msgspec.Struct, tag=True, frozen=True):
     """A redacted, read-only inspection of the assembled next-turn request."""
 
     session: str
-    mode: Literal["next_turn_preview"] = "next_turn_preview"
+    mode: Literal["next_turn_preview", "sent_request"] = "next_turn_preview"
     actually_sent: bool = False
     draft_provided: bool = False
     manifest_generation: int | None = None
@@ -955,6 +1039,9 @@ Result = (
     | SettingsDeleteResult
     | SetupStatusResult
     | SetupSaveResult
+    | ProvidersStatusResult
+    | ProviderLoginResult
+    | ProviderAuthResult
     | SessionListResult
     | SessionArchiveResult
     | SessionUnarchiveResult
@@ -1012,6 +1099,9 @@ RESULTS: tuple[type, ...] = (
     SettingsDeleteResult,
     SetupStatusResult,
     SetupSaveResult,
+    ProvidersStatusResult,
+    ProviderLoginResult,
+    ProviderAuthResult,
     SessionListResult,
     SessionArchiveResult,
     SessionUnarchiveResult,
@@ -1145,6 +1235,15 @@ __all__ = [
     "ModelsRefreshResult",
     "PermissionResolve",
     "PermissionResolveResult",
+    "ProviderAuthResult",
+    "ProviderKeySet",
+    "ProviderLogin",
+    "ProviderLoginCancel",
+    "ProviderLoginPoll",
+    "ProviderLoginResult",
+    "ProviderLogout",
+    "ProvidersStatus",
+    "ProvidersStatusResult",
     "QuestionAnswer",
     "QuestionAnswerResult",
     "ReasoningEffortSelect",

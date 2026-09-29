@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -34,6 +35,7 @@ from ...ui_support.timeline import (
     tool_summary,
 )
 from ...ui_support.tui_context_header import ContextHeader
+from ...ui_support.tui_diff import ToolDiff, tool_diff_signature
 from ...view import AgentView, ConversationView, MessageView, ToolCallView, TurnView
 from ..cli.render import escape_controls
 from .messages import AgentOpenRequested
@@ -188,12 +190,24 @@ class ToolActivityWidget(Widget):
         self.tool = tool
         active = tool_status(tool) == "running"
         if active and self._spinner is None:
-            self._spinner = self.set_interval(0.4, self._spin)
+            self._spinner = self.set_interval(0.12, self._spin)
         elif not active and self._spinner is not None:
             self._spinner.stop()
             self._spinner = None
         self._render_header()
         self.set_class(tool_status(tool) == "failed", "-failed")
+        await self._sync_diff()
+
+    async def _sync_diff(self) -> None:
+        """Show the Edit/Patch diff inline once the call has completed."""
+        current = next(iter(self.query(ToolDiff)), None)
+        signature = tool_diff_signature(self.tool)
+        if current is not None and current.signature == signature:
+            return
+        if current is not None:
+            await current.remove()
+        if signature is not None:
+            await self.mount(ToolDiff(self.tool))
 
     def _render_header(self) -> None:
         tool = self.tool
@@ -288,6 +302,10 @@ class TaskActivityWidget(ToolActivityWidget):
         super().__init__(tool, **kwargs)
         self.agents = agents
 
+    def compose(self) -> ComposeResult:
+        yield Static("", id="tool-header", markup=False)
+        yield Static("", id="task-metrics", markup=False)
+
     async def set_task(
         self, tool: ToolCallView, agents: Mapping[str, AgentView]
     ) -> None:
@@ -297,12 +315,96 @@ class TaskActivityWidget(ToolActivityWidget):
     def _render_header(self) -> None:
         tool = self.tool
         marker = tool_status(tool)
-        mark = {"completed": "✓", "failed": "✗"}.get(marker, _SPINNER[self._spinner_index])
         child = next(iter(self._children()), None)
-        kind = (child.type if child and child.type else tool.input.get("subagent_type") if isinstance(tool.input, Mapping) else None) or "General"
-        description = format_arguments(tool) or "Task"
-        self.query_one("#tool-header", Static).update(f"{mark} {_text(str(kind), 32).title()} Task — {description}")
+        kind = (
+            child.type
+            if child and child.type
+            else tool.input.get("subagent_type")
+            if isinstance(tool.input, Mapping)
+            else None
+        ) or "General"
+        kind = redact(_text(str(kind), 32)).title()
+        running = marker == "running" and (child is None or child.status == "spawned")
+        phrase = self._task_phrase(child) or ("failed" if marker == "failed" else "completed")
+        mark = _SPINNER[self._spinner_index] if running else "✗" if marker == "failed" else "✓"
+        line = f"{mark} {kind} · {phrase}"
+        self.query_one("#tool-header", Static).update(line)
+        self._sync_metrics(child, running)
         self._style_header()
+
+    def _child_activity(self, agent: AgentView) -> str:
+        tools = sorted(
+            (tool for turn in agent.body.turns for tool in turn.tools),
+            key=lambda item: item.event_seq,
+        )
+        if not tools:
+            return "Starting…"
+        calls = []
+        for tool in tools[-2:]:
+            name = redact(_text(tool.name or "tool", 32))
+            target = "" if tool.name.casefold() in {"task", "subagent"} else format_arguments(tool)
+            progress = tool.progress[-1] if tool.progress else ""
+            detail = redact(_text(" · ".join(part for part in (target, progress) if part), 90))
+            calls.append(f"{name}: {detail}" if detail else name)
+        return "  →  ".join(calls)
+
+    def _task_phrase(self, agent: AgentView | None) -> str:
+        description = (
+            self.tool.input.get("description")
+            if isinstance(self.tool.input, Mapping)
+            else None
+        )
+        for candidate in (
+            description,
+            agent.description if agent is not None else None,
+            self.tool.input.get("prompt") if isinstance(self.tool.input, Mapping) else None,
+            self._task_result(),
+            agent.error if agent is not None else None,
+        ):
+            phrase = self._short_phrase(candidate)
+            if phrase:
+                return phrase
+        return ""
+
+    def _task_result(self) -> str:
+        tool = self.tool
+        result = tool.display or ""
+        if not result:
+            result = "\n".join(
+                str(block.get("text") or block.get("content") or "")
+                for block in tool.result[:4]
+                if isinstance(block, Mapping)
+            )
+        if result:
+            result = re.sub(r"^\s*task\s*:\s*", "", result, flags=re.IGNORECASE)
+        return self._short_phrase(result or tool.error or "")
+
+    @staticmethod
+    def _short_phrase(value: object) -> str:
+        if value is None:
+            return ""
+        phrase = redact(_text(value, 240))
+        phrase = " ".join(phrase.split())
+        phrase = re.split(r"(?<=[.!?])\s+", phrase, maxsplit=1)[0]
+        return _text(phrase, 100)
+
+    def _sync_metrics(self, child: AgentView | None, running: bool) -> None:
+        metrics = self.query_one("#task-metrics", Static)
+        if running:
+            summary = self._child_activity(child) if child is not None else "Starting…"
+        elif child is not None:
+            summary = _agent_metrics(child)
+        else:
+            elapsed = self.tool.duration_ms
+            summary = f"0 tool calls · {elapsed / 1000:.1f}s" if elapsed is not None else "0 tool calls"
+        summary = re.sub(
+            r"\b(\d+) tools?\b(?! calls?\b)",
+            lambda match: f"{match.group(1)} tool call"
+            + ("s" if match.group(1) != "1" else ""),
+            summary,
+        )
+        metrics.update(summary)
+        metrics.styles.display = "block"
 
     async def set_tool(self, tool: ToolCallView) -> None:
         await super().set_tool(tool)
@@ -326,13 +428,14 @@ class TaskActivityWidget(ToolActivityWidget):
         return details + ("\n\nChild agents:\n" + "\n".join(rows) if rows else "")
 
     async def open_details(self) -> None:
-        title = f"{tool_heading(self.tool)} · {tool_status(self.tool)}"
+        # A spawned child opens straight on its sub agent page; a call that
+        # never spawned one (refused, still starting) shows its details.
         child = next(iter(self._children()), None)
-        await self.app.push_screen(
-            ToolDetailsScreen(
-                title, self._details_text(), agent_id=child.id if child else None
-            )
-        )
+        if child is not None:
+            self.post_message(AgentOpenRequested(child.id))
+            return
+        title = f"{tool_heading(self.tool)} · {tool_status(self.tool)}"
+        await self.app.push_screen(ToolDetailsScreen(title, self._details_text()))
 
 class AgentActivityLink(Button):
     """Focusable child projection; it holds no activity state of its own."""
@@ -472,7 +575,7 @@ class TurnWidget(Widget):
                 if widget is None:
                     widget = (
                         TaskActivityWidget(value, agents, classes="tool-card")
-                        if value.name.casefold() == "task"
+                        if value.name.casefold() in {"task", "subagent"}
                         else ToolActivityWidget(value, classes="tool-card")
                     )
                     self._items[key] = widget
@@ -492,6 +595,24 @@ class TurnWidget(Widget):
                     await self.mount(widget)
                 elif isinstance(widget, Static):
                     widget.update(f"Error: {_text(value)}")
+
+        # The first visible activity, whether thought, tool or reply, gets a
+        # single line after the prompt. Subsequent tool rows stay compact.
+        for index, (_, key, _) in enumerate(entries):
+            previous = entries[index - 1][2] if index else None
+            item = self._items[key]
+            item.set_class(
+                not self.collapsed
+                and isinstance(previous, MessageView)
+                and previous.role == "user",
+                "timeline-after-user",
+            )
+            after_tool = not self.collapsed and isinstance(previous, ToolCallView)
+            item.set_class(after_tool, "timeline-after-tool")
+            item.set_class(
+                after_tool and tool_diff_signature(previous) is not None,
+                "timeline-after-tool-diff",
+            )
 
         for item in self._items.values():
             if isinstance(item, UserMessage):
@@ -515,6 +636,16 @@ class TurnWidget(Widget):
                 await self.mount(self._summary_widget)
             else:
                 self._summary_widget.update(summary)
+            self._summary_widget.set_class(
+                bool(entries and isinstance(entries[-1][2], MessageView) and entries[-1][2].role == "assistant"),
+                "timeline-summary-after-assistant",
+            )
+            last_value = entries[-1][2] if entries else None
+            self._summary_widget.set_class(
+                isinstance(last_value, ToolCallView)
+                and tool_diff_signature(last_value) is not None,
+                "timeline-summary-after-tool-diff",
+            )
         elif self._summary_widget is not None:
             await self._summary_widget.remove()
             self._summary_widget = None

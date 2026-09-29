@@ -101,6 +101,8 @@ async def test_typing_slash_n_then_enter_selects_new_session_command():
 
         await pilot.press("enter")
         await pilot.pause(0.1)
+        await pilot.press("enter")  # confirm the new-session agent picker
+        await pilot.pause(0.1)
 
         assert app.controller.session != "s"
         assert app.controller.session.startswith("session-")
@@ -422,6 +424,43 @@ async def test_empty_file_token_queries_workspace_and_shift_enter_still_newlines
         await pilot.press("shift+enter")
         await pilot.pause()
         assert editor.text == "@\n"
+
+
+@pytest.mark.asyncio
+async def test_file_completion_narrows_in_place_while_typing():
+    client = _client(FakeTransport())
+    release = asyncio.Event()
+
+    async def search_files(query: str, limit: int = 30) -> list[str]:
+        if query:
+            await release.wait()
+        return ["src/app.py", "src/main.py", "readme.md"]
+
+    client.search_files = search_files
+    app = NexusTextualApp(client, session="s")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        editor = app.query_one(ChatEditor)
+        chat_input = app.query_one("#chat-input")
+        editor.text = "@"
+        editor.move_cursor((0, 1))
+        chat_input.refresh_completion()
+        await pilot.pause(0.2)
+        await pilot.press("down")
+        assert chat_input._completion_items[chat_input._completion_selected] == "@src/main.py"
+
+        editor.text = "@src"
+        editor.move_cursor((0, len(editor.text)))
+        chat_input.refresh_completion()
+        await pilot.pause()
+
+        # The search for "src" is still pending: the list stays up, narrowed,
+        # and the highlighted path is kept.
+        popup = app.query_one(CompletionPopup)
+        assert popup.display
+        assert chat_input._completion_items == ["@src/app.py", "@src/main.py"]
+        assert chat_input._completion_items[chat_input._completion_selected] == "@src/main.py"
+        release.set()
 
 
 @pytest.mark.asyncio

@@ -258,6 +258,11 @@ async def test_static_app_and_deep_link_are_same_origin_hardened():
         assert "default-src 'self'" in headers["content-security-policy"]
         assert headers["x-content-type-options"] == "nosniff"
         assert "frame-ancestors 'none'" in headers["content-security-policy"]
+        # A subagent page deep link (the agent id is percent-encoded) serves the same app.
+        status, _, body = await _request(server.port, "GET", "/s/session-1/a/session-1%2Fsub%2F1")
+        assert status == 200 and b"Nexus" in body
+        status, _, _ = await _request(server.port, "GET", "/s/session-1/a/../../etc/passwd")
+        assert status != 200  # not an app route: falls through to the authenticated API
         status, headers, body = await _request(server.port, "GET", "/styles/tokens.css")
         assert status == 200 and b"--" in body
         assert headers["cache-control"] == "no-cache"

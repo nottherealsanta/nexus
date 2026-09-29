@@ -33,7 +33,7 @@ python -m playwright install chromium                            # once, for bro
 ```
 
 Run the product: `nexus chat` (TUI, needs a TTY), `nexus run "prompt"` (one
-turn), `nexus web` (browser), `nexus doctor`, `nexus daemon status|stop|logs`.
+turn), `nexus web` (browser), `nexus doctor`, `nexus daemon status|stop|restart|logs`.
 `--workspace PATH` selects the workspace. The daemon auto-starts.
 
 Tests need no network or credentials. They use temporary workspaces,
@@ -52,7 +52,9 @@ Tests need no network or credentials. They use temporary workspaces,
    imports stay inside `nexus/ui/tui/` (and `nexus/ui_support/tui_widgets.py`,
    `nexus/ui_support/tui_panels.py`, `nexus/ui_support/tui_list.py`,
    `nexus/ui_support/tui_context_header.py`, `nexus/ui_support/tui_archived.py`,
-   `nexus/ui_support/tui_settings.py`).
+  `nexus/ui_support/tui_diff.py`,
+  `nexus/ui_support/tui_settings.py`, `nexus/ui_support/tui_setup.py`,
+  `nexus/ui_support/tui_providers.py`).
    Checked by `tests/test_ui_layering.py`.
 3. **Physical-line budgets** over `.py` files: `core/`+`model/`+`tools/spec.py` < 14,000,
    `host/` < 7,000, `view/` < 2,200, `ui/` < 5,000 (`tests/test_phase3_exit.py`),

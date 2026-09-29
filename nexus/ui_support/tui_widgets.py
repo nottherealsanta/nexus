@@ -307,6 +307,10 @@ class PastedContentScreen(ModalScreen[tuple[str, str] | None]):
     #pasted-content-actions { height: 3; align-horizontal: right; }
     #pasted-content-actions Button { margin-left: 1; }
     """
+    BINDINGS: ClassVar[list[tuple[str, str, str]]] = [("escape", "cancel", "Cancel")]
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
     def __init__(self, number: int, content: str) -> None:
         super().__init__()
@@ -662,10 +666,16 @@ class ChatInput(Vertical):
             and not self._completion_task.done()
         ):
             return
+        previous = self._completion_items if self._completion_token is not None else []
         self._completion_token = (marker, row, start, end)
         self._completion_query = token
-        self._completion_items = []
-        self.query_one(CompletionPopup).display = False
+        # Narrow the visible file list in place while the search runs, so the
+        # popup does not blank and reload on every keystroke.
+        needle = token.casefold()
+        self._show_completion_items(
+            keep=previous,
+            items=[item for item in previous if marker == "@" and needle in item.casefold()],
+        )
         self._completion_generation += 1
         generation = self._completion_generation
         if self._completion_task is not None:
@@ -719,10 +729,20 @@ class ChatInput(Vertical):
         active = self._active_token(self.query_one(ChatEditor))
         if active is None or active != key:
             return
-        self._completion_items = [f"@{path}" for path in results[:30]]
-        self._completion_selected = 0
+        items = [f"@{path}" for path in results[:30]]
+        if items == self._completion_items:
+            return
+        self._show_completion_items(keep=self._completion_items, items=items)
+
+    def _show_completion_items(self, *, keep: list[str], items: list[str]) -> None:
+        """Render file suggestions, keeping the highlighted path when it survives."""
+        current = keep[self._completion_selected] if 0 <= self._completion_selected < len(keep) else None
+        self._completion_items = items
+        self._completion_selected = (
+            self._completion_items.index(current) if current in self._completion_items else 0
+        )
         popup = self.query_one(CompletionPopup)
-        popup.show_items(self._completion_items, 0)
+        popup.show_items(self._completion_items, self._completion_selected)
         popup.display = bool(self._completion_items)
         self._sync_completion_layout()
 
@@ -1283,7 +1303,7 @@ class LogsDrawer(Vertical):
         content.append("\n\n")
         self._append_section(
             content,
-            f"SESSION · {sanitize(self.session_name or 'none', 48)} · {len(self.session_entries)} shown",
+            f"SESSION ID · {sanitize(self.session_name or 'none', 80)} · {len(self.session_entries)} shown",
             self.session_entries, self.session_truncated, self.session_has_more,
         )
         self.query_one("#logs-content", Static).update(content)
@@ -1406,7 +1426,6 @@ class WorktreesScreen(Screen[None]):
                     with Horizontal(id="worktrees-pages"):
                         yield Button("Previous diff", id="worktrees-prev", disabled=True)
                         yield Button("Next diff", id="worktrees-next", disabled=True)
-                        yield Button("Close", id="worktrees-close")
 
     async def on_mount(self) -> None:
         await self.refresh_worktrees()
@@ -1841,8 +1860,6 @@ class WorktreesScreen(Screen[None]):
             page = self.review_pages.get(self.review_cursor)
             if page is not None and page.has_more:
                 await self._load_review_page(self.review_cursor + len(page.diff))
-        elif button_id == "worktrees-close":
-            self.dismiss(None)
 
 
 def _worktree_plain(value: object) -> str:

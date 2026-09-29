@@ -66,12 +66,14 @@ def _web_fixture(session: str) -> dict[str, object]:
         tool("grep-1", 5, "Grep", display="3 matches"),
         tool("bash-1", 6, "Bash", display="tests passed", input={"command": "pytest -q"}),
         tool("edit-1", 7, "Edit", display="1 replacement", input={"path": "src/a.py", "old_string": "old", "new_string": "new"}, diff={"path": "src/a.py", "added_lines": 1, "removed_lines": 1, "hunk": "@@ -1 +1 @@\n-old\n+new", "truncated": False}),
-        tool("task-1", 8, "Task", display="Child agent completed", child_agent_ids=["child-1"]),
+        tool("task-1", 8, "Task", display="Child agent completed", child_agent_ids=["child-1"], input={"description": "Summarize the related implementation briefly"}),
         tool("read-3", 9, "Read", display="5 lines"),
         tool("read-4", 10, "Read", display="6 lines"),
         tool("running-1", 13, "Read", "running", display="Still working"),
         tool("failed-1", 14, "Bash", "failed", error="Command failed safely", input={"command": "false"}),
     ]
+    if session.endswith("task-done"):
+        tools = tools[:6]
     if session.endswith("question"):
         tools.append(tool("question-1", 15, "question", "running", input={"question": "Which database should the new service use?", "options": ["Postgres", "SQLite", "Keep the current one"]}))
     approval_call = session.endswith(("approval", "targets-unavailable", "targets-incomplete", "targets-over-limit", "scalar-approval"))
@@ -97,19 +99,38 @@ def _web_fixture(session: str) -> dict[str, object]:
         **({"targets_unavailable": True} if targets_unavailable else {}),
     }] if approval_call or boundary_call else [])
     disconnected=session.endswith("disconnect") or session.startswith(("ui-effort-", "ui-context-select"))
+    task_fixture = session.endswith(("task-done", "task-live"))
+    live_task = session.endswith("task-live")
+    child_body = {"session_id": session, "phase": "running" if live_task else "completed", "turns": [
+        {"id": "child-turn-old", "phase": "completed", "messages": [message("child-old-message", 5, "assistant", "Assistant prose must not replace live tool activity.")],
+         "tools": [tool("child-newest-tool", 31, "Grep", "completed", input={"pattern": "needle", "path": "src/newest.py"}, display="2 matches")]},
+        {"id": "child-turn", "phase": "active" if live_task else "completed", "started_ts": 101,
+         "messages": [message("child-message", 22, "assistant", "Child agent found the concise answer. More details follow.")],
+         "tools": [tool("child-read", 18, "Read", "running" if live_task else "completed", input={"path": "src/current.py"}, display="Reading current file"),
+                   tool("nested-task", 19, "Task", "completed", child_agent_ids=["grandchild-1"], input={"prompt": "Nested child prompt must stay hidden"})]},
+    ], "agents": [{"id": "grandchild-1", "type": "build", "task": "grandchild prompt hidden in rows",
+                   "description": "Use the linked child description as the fallback phrase.",
+                   "status": "completed", "spawned_ts": 102, "completed_ts": 103.5,
+                   "body": {"turns": [{"id": "grandchild-turn", "phase": "completed",
+                       "messages": [message("grandchild-message", 2, "assistant", "Nested child complete.")],
+                       "tools": [tool("grandchild-read", 3, "Read", display="Read nested file")]}]}}],
+        "permissions": [], "input_queue": []} if task_fixture else {"session_id": session, "phase": "completed", "turns": [{"id": "child-turn", "phase": "completed",
+            "messages": [message("child-message", 2, "assistant", "Child agent transcript is available.")],
+            "tools": [tool("child-read", 3, "Read", display="Child result")]}], "agents": [], "permissions": [], "input_queue": []}
     return {"schema_version": 1, "session": session, "seq": 20, "view": {
         "session_id": session, "phase": "idle" if disconnected else "running", "model": {"provider": "scripted", "model": "m"},
         "turns": ([] if session.startswith("ui-context-select") else [
             {"id": "turn-fixture", "phase": "completed" if disconnected else "active", "started_ts": 100,
-             "messages": [message("progress-1", 2, "assistant", "Inspecting the project and preparing a careful change. " * 8 + "\n\n# Heading\n\n- One\n- Two\n\n`a*b` and **bold** with *emphasis*.\n\n```\n*x* and **y**\n```\n\n<script>alert(1)</script>"),
-                           message("streaming-1", 20, "assistant", "Current live response remains fully visible.", done=False)],
+              "messages": [message("progress-1", 2, "assistant", "Inspecting the project and preparing a careful change. " * 8 + "\n\n# Heading\n\n- One\n- Two\n\n`a*b` and **bold** with *emphasis*.\n\n```\n*x* and **y**\n```\n\n<script>alert(1)</script>"),
+                            *([message("task-reply", 9, "assistant", "The compact child summary is complete.")] if session.endswith("task-done") else []),
+                            message("streaming-1", 20, "assistant", "Current live response remains fully visible.", done=False)],
              "tools": tools, "permission_ids": (["fixture-approval"] if permissions else [])},
             {"id": "turn-done", "phase": "completed", "messages": [message("final-1", 12, "assistant", "The final answer remains fully visible.")], "tools": []},
         ]), "permissions": permissions, "pending_permissions": permissions, "input_queue": [], "agents": [{
-            "id": "child-1", "type": "explore", "task": "Inspect a related module", "status": "completed",
-            "body": {"session_id": session, "phase": "completed", "turns": [{"id": "child-turn", "phase": "completed",
-                "messages": [message("child-message", 2, "assistant", "Child agent transcript is available.")],
-                "tools": [tool("child-read", 3, "Read", display="Child result")]}], "agents": [], "permissions": [], "input_queue": []},
+            "id": "child-1", "type": "explore", "task": "Inspect a related module",
+            "description": "Child description fallback must lose to the Task input description.", "status": "running" if live_task else "completed",
+            "spawned_ts": 100, "completed_ts": None if live_task else 103.25,
+            "body": child_body,
         }],
         "usage": {"input_tokens": 123, "output_tokens": 45},
     }}
@@ -303,6 +324,7 @@ async def main() -> None:
                 context_commands: list[dict[str, object]] = []
                 delayed_context = {"session": None, "entered": asyncio.Event(), "release": asyncio.Event()}
                 context_failure = {"message": ""}
+                setup_state = {"openai": False, "saved": False}
                 context_fixture = {
                     "type": "ContextInspectResult", "mode": "next_turn_preview", "actually_sent": False,
                     "draft_provided": False, "manifest_generation": 17,
@@ -334,30 +356,27 @@ async def main() -> None:
                     command = json.loads(request.post_data or "{}")
                     if command.get("type") == "SetupStatus":
                         result = {
-                            "type": "SetupStatusResult", "required": True, "global_model": "",
+                            "type": "SetupStatusResult", "required": not setup_state["saved"],
+                            "global_model": "openai/gpt-6-sol" if setup_state["saved"] else "",
                             "effective_model": "scripted/m", "providers": [
-                                {"id": "codex", "label": "ChatGPT (Codex)", "connected": False,
-                                 "instruction": "Sign in with `nexus auth codex login` to use your ChatGPT account."},
-                                {"id": "openai", "label": "OpenAI", "connected": True,
+                                {"id": "codex", "label": "ChatGPT (Codex)", "connected": False, "auto": True,
+                                 "instruction": "Sign in with your ChatGPT account in Settings → Providers."},
+                                {"id": "openai", "label": "OpenAI", "connected": setup_state["openai"], "auto": True,
                                  "instruction": "Set OPENAI_API_KEY in the daemon environment."},
-                                {"id": "anthropic", "label": "Anthropic", "connected": False,
+                                {"id": "anthropic", "label": "Anthropic", "connected": False, "auto": True,
                                  "instruction": "Set ANTHROPIC_API_KEY in the daemon environment."},
-                                {"id": "google", "label": "Google Gemini", "connected": False,
-                                 "instruction": "Set GEMINI_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY in the daemon environment."},
-                                {"id": "ollama", "label": "Ollama", "connected": True,
+                                {"id": "ollama", "label": "Ollama", "connected": True, "auto": False,
                                  "instruction": "Local provider; availability is not checked. Install and run Ollama locally."},
-                            ], "models": [
-                                {"provider": "codex", "id": "gpt-5-codex", "name": "GPT-5 Codex", "date": "2025-09-01"},
-                                {"provider": "openai", "id": "gpt-4.1", "name": "GPT-4.1", "date": "2025-04-14"},
-                                {"provider": "openai", "id": "gpt-4.1-mini", "name": "GPT-4.1 mini", "date": "2025-04-14"},
                             ],
                         }
                         await route.fulfill(status=200, content_type="application/json", body=json.dumps(result))
                         return
                     if command.get("type") == "SetupSave":
-                        assert command.get("provider") == "openai" and command.get("model") == "gpt-4.1-mini", command
+                        # No model: the host picks the provider's newest one.
+                        assert command.get("provider") == "openai" and not command.get("model"), command
+                        setup_state["saved"] = True
                         await route.fulfill(status=200, content_type="application/json", body=json.dumps({
-                            "type": "SetupSaveResult", "global_model": "openai/gpt-4.1-mini", "restart_required": True,
+                            "type": "SetupSaveResult", "global_model": "openai/gpt-6-sol", "restart_required": False,
                         }))
                         return
                     if command.get("type") != "ContextInspect":
@@ -383,35 +402,30 @@ async def main() -> None:
 
                 await page.route("**/v1/web/command", route_context_command)
                 await page.goto(launch_url, wait_until="domcontentloaded")
-                setup_dialog = page.get_by_role("dialog", name="Choose your default model")
+                setup_dialog = page.get_by_role("dialog", name="Connect a provider")
                 await setup_dialog.wait_for(state="visible", timeout=5_000)
                 assert await page.locator("#app").evaluate("node => node.inert")
-                assert await setup_dialog.get_by_role("radio", name="OpenAI · connected").get_attribute("aria-checked") == "true"
-                await setup_dialog.get_by_role("radio", name="ChatGPT (Codex) · not connected").click()
-                assert "nexus auth codex login" in await setup_dialog.locator("#setup-instruction").inner_text()
-                assert await setup_dialog.locator("#setup-save").is_disabled()
-                await setup_dialog.get_by_role("radio", name="OpenAI · connected").click()
-                assert "OPENAI_API_KEY" in await setup_dialog.locator("#setup-instruction").inner_text()
-                await setup_dialog.get_by_role("searchbox", name="Search candidate models").fill("mini")
-                await setup_dialog.get_by_role("option", name="GPT-4.1 mini gpt-4.1-mini 2025-04-14").click()
-                assert await setup_dialog.locator("#setup-save").is_enabled()
+                # Sign-in cards are the Settings → Providers cards; env-key providers are listed below.
+                await setup_dialog.locator("#setup-provider-list .provider-card").first.wait_for(timeout=5_000)
+                assert "OPENAI_API_KEY" in await setup_dialog.locator("#setup-env").inner_text()
+                # Ollama is reachable but never picked, so nothing is saved yet.
+                await page.wait_for_timeout(2_500)
+                assert not setup_state["saved"]
                 await page.keyboard.press("Tab")
                 assert await setup_dialog.evaluate("node => node.contains(document.activeElement)")
                 await page.keyboard.press("Escape")
                 await setup_dialog.wait_for(state="hidden")
                 assert not await page.locator("#app").evaluate("node => node.inert")
-                # Re-open by refresh to test save/restart messaging in the same first-run state.
+                # Connecting a provider completes setup with its newest model; no restart.
+                setup_state["openai"] = True
                 await page.reload(wait_until="domcontentloaded")
-                setup_dialog = page.get_by_role("dialog", name="Choose your default model")
-                await setup_dialog.wait_for(state="visible", timeout=5_000)
-                await setup_dialog.get_by_role("radio", name="OpenAI · connected").click()
-                await setup_dialog.get_by_role("searchbox", name="Search candidate models").fill("mini")
-                await setup_dialog.get_by_role("option", name="GPT-4.1 mini gpt-4.1-mini 2025-04-14").click()
-                await setup_dialog.get_by_role("button", name="Save global default").click()
-                await setup_dialog.get_by_text("The running daemon does not hot-reload this setting.").wait_for()
-                assert "nexus daemon stop" in await setup_dialog.inner_text()
-                await setup_dialog.get_by_role("button", name="Close").click()
+                await page.get_by_text("Using openai/gpt-6-sol").wait_for(timeout=5_000)
+                assert setup_state["saved"]
+                assert await page.locator("#setup-overlay").is_hidden()
                 await page.locator("#new-session").click()
+                new_picker = page.get_by_role("dialog", name="New session · choose an agent")
+                await new_picker.wait_for(timeout=5_000)
+                await page.keyboard.press("Enter")  # keep the preselected agent
                 try:
                     await page.wait_for_url("**/s/*", timeout=10_000)
                 except Exception as exc:
@@ -1221,12 +1235,17 @@ async def main() -> None:
                 await page.get_by_text("Current live response remains fully visible.").wait_for(timeout=5_000)
                 await page.locator("#timeline").evaluate("e=>e.scrollTop=0")
                 assert await page.locator("html").get_attribute("data-detail") == "balanced"
-                await page.locator(".timeline").evaluate("e=>e.scrollTop=0")
                 assert await page.locator(".tool-card").count() == 10
                 tool_rows = page.locator("#timeline .tool-card")
                 assert await tool_rows.nth(0).evaluate("e=>e.getBoundingClientRect().height") <= 24
                 assert await tool_rows.nth(0).locator(".tool-preview,.tool-details,.tool-inline-diff").count() == 0
                 assert await page.get_by_text("Result for read-1", exact=True).count() == 0
+                # Edit and Patch rows carry their diff inline, like textual-diff-view in the TUI.
+                edit_diff = page.locator('#timeline .tool-card[data-call-id="edit-1"] .tool-inline-diff')
+                assert await edit_diff.count() == 1
+                assert "src/a.py (+1, -1)" in await edit_diff.locator(".diff-title").inner_text()
+                assert await edit_diff.locator(".split-cell.removed .split-text").inner_text() == "old"
+                assert await edit_diff.locator(".split-cell.added .split-text").inner_text() == "new"
                 await tool_rows.nth(0).locator(".card-head").click()
                 tool_dialog = page.locator("#text-overlay .text-dialog")
                 await tool_dialog.wait_for()
@@ -1248,6 +1267,33 @@ async def main() -> None:
 
                 command_requests: list[str] = []
                 page.on("request", lambda request: command_requests.append(request.url) if request.url.endswith("/v1/web/command") else None)
+                provider_state = {"codex": True, "github-copilot": False, "opencode-go": False}
+                provider_keys: list[int] = []
+
+                async def route_provider_command(route) -> None:
+                    command = json.loads(route.request.post_data or "{}")
+                    kind = command.get("type", "")
+                    if kind == "ProvidersStatus":
+                        result = {"type": "ProvidersStatusResult", "providers": [
+                            {"id": key, "label": key, "methods": [], "help": f"Help for {key}.",
+                             "connected": value, "detail": "company.ghe.com" if key == "github-copilot" and value else "",
+                             "login": None} for key, value in provider_state.items()]}
+                    elif kind == "ProviderLogin":
+                        assert command.get("provider") == "codex", command
+                        result = {"type": "ProviderLoginResult", "login_id": "L1", "provider": "codex",
+                                  "method": command.get("method", "browser"), "status": "pending",
+                                  "url": "https://auth.openai.com/oauth/authorize", "user_code": "", "message": ""}
+                    elif kind == "ProviderKeySet":
+                        provider_keys.append(len(command.get("key", "")))
+                        provider_state["opencode-go"] = True
+                        result = {"type": "ProviderAuthResult", "provider": "opencode-go", "connected": True,
+                                  "message": "Connected. Restart the daemon to use it (nexus daemon stop)."}
+                    else:
+                        await route.fallback()
+                        return
+                    await route.fulfill(status=200, content_type="application/json", body=json.dumps(result))
+
+                await page.route("**/v1/web/command", route_provider_command)
                 await page.get_by_role("button", name="Settings").click()
                 settings = page.get_by_role("dialog", name="Settings")
                 await page.wait_for_timeout(300)
@@ -1257,13 +1303,31 @@ async def main() -> None:
                 assert await settings.locator('input[name="session-detail"]').count() == 3
                 assert await settings.locator('input[name="session-detail"]:checked').count() == 0
                 await page.screenshot(path=str(ARTIFACTS / "settings-dark.png"), full_page=True)
+                await settings.get_by_role("link", name="Providers").click()
+                providers = settings.locator("#settings-providers")
+                await providers.locator(".provider-card").first.wait_for()
+                codex_card = providers.locator('[data-provider="codex"]')
+                assert await codex_card.locator(".provider-state").inner_text() == "Connected"
+                assert await codex_card.get_by_role("button", name="Disconnect").is_visible()
+                copilot = providers.locator('[data-provider="github-copilot"]')
+                assert await copilot.get_by_role("button", name="Sign in with GitHub").count() == 0
+                assert await copilot.get_by_role("textbox", name="GitHub Enterprise domain").count() == 0
+                go = providers.locator('[data-provider="opencode-go"]')
+                key_field = go.get_by_label("OpenCode Go API key")
+                assert await key_field.get_attribute("type") == "password"
+                await key_field.fill("sk-go-0123456789")
+                await key_field.press("Enter")
+                await go.get_by_text("Restart the daemon").wait_for()
+                assert provider_keys == [16] and await key_field.input_value() == ""
+                await page.screenshot(path=str(ARTIFACTS / "settings-providers-dark.png"))
+                await settings.get_by_role("link", name="Appearance").click()
                 balanced_option = settings.locator('input[name="session-detail"][value="balanced"]')
                 assert await balanced_option.get_attribute("aria-label") == "Balanced"
                 assert "Recommended" not in await balanced_option.get_attribute("aria-label")
                 preference_command_baseline = len(command_requests)
                 await settings.locator('input[name="session-detail"][value="focused"]').check()
                 assert await page.locator("html").get_attribute("data-detail") == "focused"
-                await settings.get_by_role("button", name="Close settings").click()
+                await page.keyboard.press("Escape")
                 assert len(command_requests) == preference_command_baseline, command_requests
                 assert await page.locator(".message-disclosure").count() == 1
                 expanded_preview = page.locator(".message-disclosure")
@@ -1290,12 +1354,54 @@ async def main() -> None:
                 await page.get_by_role("button",name="Settings").click()
                 boundary_settings=page.get_by_role("dialog",name="Settings")
                 await boundary_settings.locator('input[name="session-detail"][value="focused"]').check()
-                await boundary_settings.get_by_role("button",name="Close settings").click()
+                await page.keyboard.press("Escape")
                 assert await page.locator(".tool-group").count()==0
                 assert await page.locator('.tool-card[data-call-id="task-1"]').count()==1
                 boundary_order=await page.evaluate("""()=>[...document.querySelector('#timeline').children].map(e=>e.dataset.key||e.className)""")
                 assert boundary_order.index("tool:read-1")<boundary_order.index("tool:task-1")<boundary_order.index("tool:read-3"),boundary_order
-                assert await page.locator('.tool-card[data-call-id="task-1"] .tool-status-text').inner_text() == "Completed"
+                assert await page.locator('.tool-card[data-call-id="task-1"] .task-summary-metrics').count() == 1
+                fixture_done = "ui-fixture-task-done"
+                daemon.facade.open_session(fixture_done, create=True, recover=True)
+                await page.goto(f"{page.url.rsplit('/s/',1)[0]}/s/{fixture_done}", wait_until="domcontentloaded")
+                task_row = page.locator('#timeline .tool-card[data-call-id="task-1"]')
+                await task_row.wait_for()
+                task_text = await task_row.inner_text()
+                assert "Inspect a related module" not in task_text and "Child agent completed" not in task_text
+                assert "Explore" in task_text and "Summarize the related implementation briefly" in task_text, task_text
+                assert "Child description fallback" not in task_text and "Child agent found the concise answer." not in task_text
+                assert await task_row.locator(".task-summary-metrics").inner_text() == "3 tool calls · 3.3s"
+                reply_gap = await page.evaluate("""() => {
+                  const tool = document.querySelector('#timeline .tool-card[data-call-id="task-1"]');
+                  const reply = tool?.nextElementSibling;
+                  return reply?.classList.contains('message') && reply.classList.contains('assistant')
+                    ? reply.getBoundingClientRect().top - tool.getBoundingClientRect().bottom : null;
+                }""")
+                assert reply_gap == 20, reply_gap
+                live_fixture = "ui-fixture-task-live"
+                daemon.facade.open_session(live_fixture, create=True, recover=True)
+                await page.goto(f"{page.url.rsplit('/s/',1)[0]}/s/{live_fixture}", wait_until="domcontentloaded")
+                live_task = page.locator('#timeline .tool-card[data-call-id="task-1"]')
+                await live_task.wait_for()
+                live_text = await live_task.inner_text()
+                assert "Explore" in live_text and "Grep" in live_text and "src/newest.py" in live_text
+                assert "Assistant prose must not replace live tool activity." not in live_text
+                assert "Summarize the related implementation briefly" in live_text
+                assert "Inspect a related module" not in await live_task.locator('.task-summary-metrics').inner_text() and "Child agent completed" not in live_text
+                assert "Grep" in await live_task.locator(".task-summary-metrics").inner_text()
+                task_button = live_task.get_by_role("button")
+                assert "Grep" in await task_button.get_attribute("aria-label")
+                # A Task call opens its sub agent page directly, with no details modal.
+                await task_button.click()
+                assert await page.locator("#text-overlay").is_hidden()
+                child_modal = page.locator("#agent-overlay")
+                await child_modal.wait_for(state="visible")
+                nested_task = child_modal.locator('.tool-card[data-call-id="nested-task"]')
+                await nested_task.wait_for()
+                assert "Use the linked child description as the fallback phrase." in await nested_task.inner_text()
+                assert "Nested child complete." not in await nested_task.inner_text()
+                assert "Nested child prompt must stay hidden" not in await nested_task.inner_text()
+                await page.keyboard.press("Escape")
+                await child_modal.wait_for(state="hidden")
                 assert await page.get_by_text("Approval boundary").count()==0
                 await page.screenshot(path=str(ARTIFACTS/"focused-approval-boundaries.png"),full_page=True)
                 await page.goto(f"{page.url.rsplit('/s/',1)[0]}/s/{fixture_a}",wait_until="domcontentloaded")
@@ -1303,7 +1409,7 @@ async def main() -> None:
                 await page.locator("#settings-open").click()
                 settings = page.get_by_role("dialog", name="Settings")
                 await settings.locator('input[name="session-detail"][value="complete"]').check()
-                await settings.get_by_role("button", name="Close settings").click()
+                await page.keyboard.press("Escape")
                 assert await page.locator(".tool-card").count() == 10
                 assert await page.locator(".tool-details[open]").count() == 0
                 assert await page.get_by_text("@@ -1 +1 @@", exact=False).count() == 0
@@ -1331,10 +1437,14 @@ async def main() -> None:
                 await page.evaluate("if(!document.querySelector('#app').classList.contains('inspector-open'))document.querySelector('#inspector-toggle').click()")
                 assert await page.locator("#inspector").is_visible()
                 await page.locator("#tab-agents").click()
-                await page.get_by_role("button", name="explore · completed").click()
-                # A subagent opens in a large modal rendered like the root timeline, and stays live.
+                await page.get_by_role("button", name="explore Inspect a related module completed").click()
+                # A subagent opens as its own page laid out like the root, and stays live.
                 agent_modal = page.locator("#agent-overlay")
                 await agent_modal.wait_for(state="visible", timeout=5_000)
+                assert "/a/" in page.url
+                assert await agent_modal.locator(".topbar").is_visible()
+                assert await agent_modal.locator(".context-header .context-block").count() == 4
+                assert await agent_modal.locator(".agent-readonly").is_visible()
                 assert await agent_modal.get_by_text("Child agent transcript is available.").count() == 1
                 assert await agent_modal.locator(".tool-card").count() == 1
                 assert await agent_modal.locator(".tool-hint").count() == 0
@@ -1344,12 +1454,20 @@ async def main() -> None:
                 await page.screenshot(path=str(ARTIFACTS / "agent-modal.png"))
                 await page.keyboard.press("Escape")
                 await agent_modal.wait_for(state="hidden", timeout=5_000)
-                await page.locator('#timeline .tool-card[data-child-agent="child-1"] .card-head').click()
-                task_dialog = page.locator("#text-overlay .text-dialog")
-                await task_dialog.wait_for()
-                await task_dialog.get_by_role("button", name="Open child agent").click()
+                assert "/a/" not in page.url
+                # The ← button and browser Back return to the conversation just as Escape does.
+                await page.locator("#inspector-content .agent-row").filter(has_text="explore · completed").click()
                 await agent_modal.wait_for(state="visible", timeout=5_000)
-                await page.locator("#agent-close").click()
+                await page.locator("#agent-back").click()
+                await agent_modal.wait_for(state="hidden", timeout=5_000)
+                await page.locator("#inspector-content .agent-row").filter(has_text="explore · completed").click()
+                await agent_modal.wait_for(state="visible", timeout=5_000)
+                await page.go_back()
+                await agent_modal.wait_for(state="hidden", timeout=5_000)
+                await page.locator('#timeline .tool-card[data-child-agent="child-1"] .card-head').click()
+                await agent_modal.wait_for(state="visible", timeout=5_000)
+                assert await page.locator("#text-overlay").is_hidden()
+                await page.locator("#agent-back").click()
                 await agent_modal.wait_for(state="hidden", timeout=5_000)
                 await page.locator("#tab-tools").click()
                 await page.locator("#inspector-content .tool-row").filter(has_text="Edit · completed").click()
@@ -1382,7 +1500,7 @@ async def main() -> None:
                 await settings.get_by_role("button", name="Reset browser default").click()
                 assert "Balanced · Browser default" in await settings.locator("#settings-effective").inner_text()
                 await settings.locator('input[name="theme"][value="light"]').check()
-                await settings.get_by_role("button", name="Close settings").click()
+                await page.keyboard.press("Escape")
                 await page.screenshot(path=str(ARTIFACTS / "balanced-light-large.png"), full_page=True)
                 assert len(command_requests) == preference_command_baseline, command_requests
                 await page.reload(wait_until="domcontentloaded")
@@ -1390,7 +1508,7 @@ async def main() -> None:
                 assert await page.locator("html").get_attribute("data-theme") == "light"
                 await page.get_by_role("button", name="Settings").click()
                 assert await page.get_by_role("dialog", name="Settings").locator('input[name="theme"]:checked').get_attribute("value") == "light"
-                await page.get_by_role("button", name="Close settings").click()
+                await page.keyboard.press("Escape")
 
                 # Inspector tabs and Escape restore the invoking control.
                 await page.locator("#inspector-toggle").evaluate("e=>e.click()")
@@ -1407,7 +1525,7 @@ async def main() -> None:
                 await page.get_by_text("Current live response remains fully visible.").wait_for(timeout=5_000)
                 await page.locator("#settings-open").click()
                 await page.locator('input[name="theme"][value="dark"]').check()
-                await page.locator("#settings-close").click()
+                await page.keyboard.press("Escape")
                 logs_draft = "draft remains while opening logs"
                 await page.locator("#composer-input").fill(logs_draft)
                 await page.locator("#timeline").evaluate("e=>e.scrollTop=0")
@@ -1417,6 +1535,7 @@ async def main() -> None:
                 await page.get_by_role("tab", name="Logs").wait_for(state="visible")
                 await page.get_by_text("Daemon ready <script>window.logsPwned=true</script>�[31m", exact=True).wait_for()
                 await page.locator(".logs-source").nth(1).get_by_text(f"Session {fixture_disconnect} ready", exact=False).wait_for()
+                await page.locator(".logs-source").nth(1).get_by_text(f"Session ID · {fixture_disconnect}", exact=True).wait_for()
                 assert await page.locator("#inspector").is_visible()
                 assert await page.locator("#tab-logs").get_attribute("aria-selected") == "true"
                 assert await page.locator(".logs-source").count() == 2
@@ -1449,7 +1568,7 @@ async def main() -> None:
                 await page.screenshot(path=str(ARTIFACTS / "logs-dark.png"), full_page=True)
                 await page.locator("#settings-open").click()
                 await page.locator('input[name="theme"][value="light"]').check()
-                await page.locator("#settings-close").click()
+                await page.keyboard.press("Escape")
 
                 # Authentication/network failures are visible and do not clear
                 # already displayed rows; recovery resumes with current cursors.
@@ -1490,6 +1609,7 @@ async def main() -> None:
                 await page.locator("#tab-logs").click()
                 delayed_logs["release"].set()
                 await page.locator(".logs-source").nth(1).get_by_text(f"Session {fixture_b} ready", exact=False).wait_for(timeout=6_000)
+                await page.locator(".logs-source").nth(1).get_by_text(f"Session ID · {fixture_b}", exact=True).wait_for()
                 await page.wait_for_timeout(80)
                 assert await page.get_by_text(f"Session {fixture_a} ready", exact=False).count() == 0
                 assert logs_reads[-1]["session"] == fixture_b
@@ -1533,17 +1653,17 @@ async def main() -> None:
                 await logs_button.focus()
                 await page.keyboard.press("Enter")
                 assert await page.locator("#inspector").is_visible()
-                assert not await page.locator(".topbar").evaluate("e=>e.inert")
+                assert not await page.locator("#app > .topbar").evaluate("e=>e.inert")
                 await page.set_viewport_size({"width": 390, "height": 850})
                 await page.evaluate("() => new Promise(resolve => requestAnimationFrame(resolve))")
                 await page.locator("#close-inspector").wait_for(state="visible")
-                assert await page.locator(".topbar").evaluate("e=>e.inert")
+                assert await page.locator("#app > .topbar").evaluate("e=>e.inert")
                 for _ in range(12):
                     await page.keyboard.press("Tab")
                     assert await page.locator("#inspector").evaluate("e=>e.contains(document.activeElement)")
                 await page.set_viewport_size({"width": 1440, "height": 850})
                 await page.evaluate("() => new Promise(resolve => requestAnimationFrame(resolve))")
-                assert not await page.locator(".topbar").evaluate("e=>e.inert")
+                assert not await page.locator("#app > .topbar").evaluate("e=>e.inert")
                 assert await page.locator(".logs-backdrop").count() == 0
                 if not await logs_button.evaluate("e=>e===document.activeElement"):
                     await logs_button.focus()
@@ -1563,13 +1683,13 @@ async def main() -> None:
                 await logs_button.focus()
                 await page.keyboard.press("Enter")
                 assert await page.locator("#close-inspector").evaluate("e=>e===document.activeElement")
-                assert await page.locator(".topbar").evaluate("e=>e.inert")
+                assert await page.locator("#app > .topbar").evaluate("e=>e.inert")
                 await page.keyboard.press("Tab")
                 assert await page.locator("#inspector").evaluate("e=>e.contains(document.activeElement)")
                 await page.keyboard.press("Escape")
                 assert await page.locator("#inspector").is_hidden()
                 assert await logs_button.evaluate("e=>e===document.activeElement")
-                assert not await page.locator(".topbar").evaluate("e=>e.inert")
+                assert not await page.locator("#app > .topbar").evaluate("e=>e.inert")
                 await logs_button.focus()
                 await page.keyboard.press("Enter")
                 assert await page.locator("#inspector").is_visible()
@@ -1602,7 +1722,7 @@ async def main() -> None:
                     assert (dims["position"] != "fixed") == docked, (width, dims)
                     if width == 1440:
                         assert await page.locator("#inspector").is_visible()
-                        main_box = await page.locator(".main-pane").bounding_box()
+                        main_box = await page.locator("#app > .main-pane").bounding_box()
                         inspector_box = await page.locator("#inspector").bounding_box()
                         assert main_box and main_box["width"] >= 520
                         assert inspector_box and 320 <= inspector_box["width"] <= 400
@@ -1706,7 +1826,7 @@ async def main() -> None:
                 await page.locator("#settings-overlay [data-detail-scope='session'] input[value='focused']").check()
                 after_export = await terminal.call(p.SessionExport(session=session, format="json"))
                 assert before_export.content == after_export.content
-                await page.locator("#settings-close").click()
+                await page.keyboard.press("Escape")
                 other_context=await browser.new_context(viewport={"width":800,"height":900})
                 other_page=await other_context.new_page()
                 isolated_launch=await daemon.web_launch()

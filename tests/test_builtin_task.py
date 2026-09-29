@@ -393,3 +393,34 @@ def test_task_builtin_never_imports_upward():
         module for module in _imports(path) if module.startswith(_FORBIDDEN)
     )
     assert not violations, violations
+
+
+# ---------------------------------------------------------------------------
+# Role roster (roles load like skills)
+# ---------------------------------------------------------------------------
+
+
+def test_static_spec_lists_no_hardcoded_roles() -> None:
+    assert "Available agents" not in task.TASK_SPEC.description
+    assert "advisor" not in task.TASK_SPEC.description
+
+
+def test_bound_spec_lists_the_service_role_index() -> None:
+    service = FakeService(object())
+    service.role_index = lambda: "advisor: read-only\nreviewer: checks diffs"
+    description = task.make_task_spec(service).description
+    assert description.startswith(task.TASK_SPEC.description)
+    assert "default 'general'" in description
+    assert description.endswith("advisor: read-only\nreviewer: checks diffs")
+
+
+def test_broken_or_empty_role_index_keeps_the_base_description() -> None:
+    service = FakeService(object())
+    service.role_index = lambda: ""
+    assert task.make_task_spec(service).description == task.TASK_SPEC.description
+
+    def boom() -> str:
+        raise RuntimeError("discovery failed")
+
+    service.role_index = boom
+    assert task.make_task_spec(service).description == task.TASK_SPEC.description

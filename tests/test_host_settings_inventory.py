@@ -27,7 +27,7 @@ class _Transport:
             yield None
 
 
-BUILTINS = {"advisor", "build", "quick", "task"}
+BUILTINS = {"advisor", "build", "orchestrator", "quick", "task"}
 
 
 def _client(workspace: Path) -> Client:
@@ -38,12 +38,12 @@ def _client(workspace: Path) -> Client:
 def test_settings_inventory_read_write_delete_and_sha_conflict(tmp_path):
     async def scenario():
         client = _client(tmp_path)
-        root = tmp_path / ".nexus"
+        root = tmp_path / ".agents"
         (root / "agents").mkdir(parents=True)
         agent = "---\nname: helper\ndescription: test\n---\nHello.\n"
         (root / "agents" / "helper.md").write_text(agent)
         result = await client.settings_inventory("project")
-        assert result.root_display == "<project>/.nexus"
+        assert result.root_display == "<project>/.agents"
         # Built-in agents are listed alongside custom ones.
         assert next(row for row in result.categories if row.key == "agents").count == 1 + len(BUILTINS)
         assert {row.id for row in result.items if row.builtin} == BUILTINS
@@ -71,7 +71,7 @@ def test_settings_refuses_invalid_frontmatter_symlinks_and_blocked_paths(tmp_pat
         client = _client(tmp_path)
         with pytest.raises(FacadeError):
             await client.settings_write("project", "agents", "bad", "not frontmatter")
-        root = tmp_path / ".nexus"
+        root = tmp_path / ".agents"
         root.mkdir()
         elsewhere = tmp_path / "outside"
         elsewhere.mkdir()
@@ -93,7 +93,7 @@ def test_settings_rejects_symlinked_scope_root_for_every_operation(tmp_path):
         (outside / "agents" / "helper.md").write_text(
             "---\nname: helper\ndescription: test\n---\n"
         )
-        (workspace / ".nexus").symlink_to(outside, target_is_directory=True)
+        (workspace / ".agents").symlink_to(outside, target_is_directory=True)
         client = _client(workspace)
         with pytest.raises(FacadeError):
             await client.settings_read("project", "agents", "helper")
@@ -135,7 +135,7 @@ def test_every_settings_category_round_trips_in_both_scopes(tmp_path, monkeypatc
             "soul": ("SOUL.md", "Be helpful.\n"),
         }
         for scope in ("global", "project"):
-            root = home / ".nexus" if scope == "global" else workspace / ".nexus"
+            root = home / ".nexus" if scope == "global" else workspace / ".agents"
             for category, (item_id, body) in contents.items():
                 if category == "agents":
                     path = root / "agents" / f"{item_id}.md"
@@ -151,7 +151,7 @@ def test_every_settings_category_round_trips_in_both_scopes(tmp_path, monkeypatc
             config_path = root / config_id
             config_path.write_text("config_version = 2\n[agent]\nname = 'general'\n")
             result = await client.settings_inventory(scope)
-            assert result.root_display == ("~/.nexus" if scope == "global" else "<project>/.nexus")
+            assert result.root_display == ("~/.nexus" if scope == "global" else "<project>/.agents")
             assert len([item for item in result.items if not item.builtin]) == 7
             for item in result.items:
                 if item.builtin:
@@ -167,7 +167,7 @@ def test_every_settings_category_round_trips_in_both_scopes(tmp_path, monkeypatc
 def test_settings_save_preserves_redacted_secret_values(tmp_path):
     async def scenario():
         client = _client(tmp_path)
-        root = tmp_path / ".nexus"
+        root = tmp_path / ".agents"
         root.mkdir()
         source = 'enabled = true\napi_token = "secret-value"\n'
         path = root / "hooks.toml"
@@ -250,7 +250,7 @@ def test_default_agent_setting_applies_to_new_sessions(tmp_path, monkeypatch):
         result = await facade.handle(p.AgentDefaultSet(name="reviewer", scope="project"))
         assert isinstance(result, p.AgentDefaultSetResult), result
         assert (result.name, result.effective, result.rel_path) == ("reviewer", "reviewer", "nexus.toml")
-        saved = (workspace / ".nexus" / "nexus.toml").read_text()
+        saved = (workspace / ".agents" / "nexus.toml").read_text()
         assert saved.startswith("config_version = 2\n") and 'name = "reviewer"' in saved
         assert (await facade.handle(p.AgentsList())).default == "reviewer"
         facade.open_session("after", create=True, recover=True)
@@ -258,6 +258,6 @@ def test_default_agent_setting_applies_to_new_sessions(tmp_path, monkeypatch):
 
         refused = await facade.handle(p.AgentDefaultSet(name="missing", scope="project"))
         assert isinstance(refused, p.ErrorResult)
-        assert 'name = "reviewer"' in (workspace / ".nexus" / "nexus.toml").read_text()
+        assert 'name = "reviewer"' in (workspace / ".agents" / "nexus.toml").read_text()
 
     asyncio.run(scenario())

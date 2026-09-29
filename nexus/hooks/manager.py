@@ -3,13 +3,15 @@
 :class:`HookManager` discovers two kinds of hook and runs them for a lifecycle
 event:
 
-* **command hooks** declared in ``.nexus/hooks.toml`` (workspace, falling back
-  to ``~/.nexus/hooks.toml``). The file is *restricted*: only ``[[hooks.Event]]``
-  tables with a known, small key set are accepted, commands are argv with no
-  shell unless ``shell = true`` is opted into, and the environment, stdin, and
-  captured output are all bounded;
-* **in-process Python hooks** from ``.nexus/hooks/*.py`` (workspace shadows
-  user, by file stem). A module declares ``HOOKS`` or a synchronous
+* **command hooks** declared in ``.agents/hooks.toml`` (project, falling back to
+  the legacy read-only ``.nexus/hooks.toml``, and then to ``~/.nexus/hooks.toml``).
+  The file is *restricted*: only ``[[hooks.Event]]`` tables with a known, small
+  key set are accepted, commands are argv with no shell unless ``shell = true``
+  is opted into, and the environment, stdin, and captured output are all
+  bounded;
+* **in-process Python hooks** from ``.agents/hooks/*.py`` (project shadows the
+  legacy ``.nexus/hooks/*.py`` shadows user, by file stem; STATE_PLAN §5.4). A
+  module declares ``HOOKS`` or a synchronous
   ``register()`` returning hook declarations. The file is read, hashed, and
   staged through the **existing** :class:`~nexus.ext.quarantine.Quarantine` and
   imported under the same version-stamped module name the tool loader uses
@@ -59,6 +61,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import Config
+from ..config.paths import legacy_project_dir, project_agents_dir, project_state_dir
 from ..errors import ExtensionError, ManagerClosed, OperationCancelled
 from ..events import Event
 from ..ext.manifest import ModuleHandle
@@ -670,16 +673,21 @@ class HookManager:
     ) -> None:
         self._workspace = _absolute(workspace)
         self._home = _absolute(home) if home is not None else Path.home()
+        #: The current, writable project location (STATE_PLAN §5.4).
         self._hooks_path = (
             _absolute(hooks_path)
             if hooks_path is not None
-            else self._workspace / ".nexus" / "hooks.toml"
+            else project_agents_dir(self._workspace) / "hooks.toml"
         )
         self._hooks_dir = (
             _absolute(hooks_dir)
             if hooks_dir is not None
-            else self._workspace / ".nexus" / "hooks"
+            else project_agents_dir(self._workspace) / "hooks"
         )
+        #: The legacy project location: read-only, lower precedence than
+        #: ``.agents`` and higher than ``~/.nexus``.
+        self._legacy_hooks_path = legacy_project_dir(self._workspace) / "hooks.toml"
+        self._legacy_hooks_dir = legacy_project_dir(self._workspace) / "hooks"
         self._user_hooks_path = (
             _absolute(user_hooks_path)
             if user_hooks_path is not None
@@ -693,7 +701,7 @@ class HookManager:
         self._quarantine = quarantine or build_default_quarantine(
             config,
             root=self._workspace,
-            stage_root=self._workspace / ".nexus" / "stage",
+            stage_root=project_state_dir(self._workspace, home) / "stage",
         )
         self._loader = loader or HookModuleLoader()
         self._sink = sink
@@ -818,6 +826,8 @@ class HookManager:
         self,
     ) -> tuple[list[HookSpec], list[HookFailure]]:
         path = self._hooks_path if self._hooks_path.is_file() else None
+        if path is None and self._legacy_hooks_path.is_file():
+            path = self._legacy_hooks_path
         if path is None and self._user_hooks_path.is_file():
             path = self._user_hooks_path
         if path is None:
@@ -910,7 +920,7 @@ class HookManager:
                 _message_failure(
                     "hook",
                     label,
-                    "type must be 'command'; in-process hooks live in .nexus/hooks/*.py",
+                    "type must be 'command'; in-process hooks live in .agents/hooks/*.py",
                     path=path,
                 )
             )
@@ -990,9 +1000,13 @@ class HookManager:
     # -- python hooks ------------------------------------------------------
 
     def _python_candidates(self) -> list[tuple[Path, int]]:
-        """Discover ``.py`` hooks with workspace-over-user precedence by stem."""
+        """Discover ``.py`` hooks, ``.agents`` over legacy ``.nexus`` over user, by stem."""
         found: dict[str, tuple[Path, int]] = {}
-        tiers = ((self._hooks_dir, 2), (self._user_hooks_dir, 1))
+        tiers = (
+            (self._hooks_dir, 3),
+            (self._legacy_hooks_dir, 2),
+            (self._user_hooks_dir, 1),
+        )
         for directory, tier in tiers:
             if not directory.is_dir():
                 continue

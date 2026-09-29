@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-from nexus.tools.builtin._patch_parse import PatchOperation
+from nexus.tools.builtin._patch_parse import PatchHunk, PatchOperation
 
 __all__ = [
     "MAX_DIFF_CHARS",
@@ -35,8 +35,10 @@ _ERRORS = {
 class PatchStageError(ValueError):
     """A bounded, content-free error raised while planning staged changes."""
 
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, path: str | None = None) -> None:
         self.code = code if code in _ERRORS else "invalid_operation"
+        #: The workspace-relative patch path, set once the failing operation is known.
+        self.path = path
         super().__init__(_ERRORS[self.code])
 
 
@@ -93,43 +95,109 @@ def _text_lines(data: bytes) -> tuple[list[str], bool]:
     return (text[:-1].split("\n") if terminated else text.split("\n")), terminated
 
 
+def _seek(
+    lines: Sequence[str], pattern: Sequence[str], start: int, end_of_file: bool
+) -> int | None:
+    """Find ``pattern`` in ``lines`` at or after ``start``.
+
+    Matching follows the Codex ``apply_patch`` ladder: exact, then ignoring
+    trailing whitespace, then ignoring surrounding whitespace. The first
+    match wins; an ``end_of_file`` hunk tries the final position first.
+    """
+
+    if not pattern:
+        return len(lines) if end_of_file or start >= len(lines) else None
+    last = len(lines) - len(pattern)
+    if last < start:
+        return None
+    for normalize in (lambda text: text, str.rstrip, str.strip):
+        wanted = [normalize(text) for text in pattern]
+        if end_of_file and [normalize(text) for text in lines[last:]] == wanted:
+            return last
+        for index in range(start, last + 1):
+            if all(normalize(lines[index + k]) == wanted[k] for k in range(len(pattern))):
+                return index
+    return None
+
+
+def _locate(lines: Sequence[str], hunk: PatchHunk, cursor: int) -> int:
+    """Return the source offset of a hunk that is located by content."""
+
+    start = cursor
+    if hunk.anchor is not None:
+        found = _seek(lines, (hunk.anchor,), start, False)
+        if found is None:
+            _fail("context_mismatch")
+        start = found + 1
+    old = [line.text for line in hunk.lines if line.kind != "add"]
+    if not old:
+        # A pure insertion goes right after its anchor, else at end of file.
+        return start if hunk.anchor is not None else len(lines)
+    found = _seek(lines, old, start, hunk.end_of_file)
+    if found is None:
+        _fail("context_mismatch")
+    return found
+
+
+def _matches_at(lines: Sequence[str], hunk: PatchHunk, offset: int) -> bool:
+    old = [line.text for line in hunk.lines if line.kind != "add"]
+    return lines[offset : offset + len(old)] == old
+
+
 def _updated_bytes(original: bytes, operation: PatchOperation) -> bytes:
     old_lines, terminated = _text_lines(original)
     output: list[str] = []
     old_cursor = 0
     new_cursor = 0
+    # Once one hunk is located by content, later destination positions no
+    # longer line up with their headers, so only source context is enforced.
+    relaxed = False
 
     for hunk in operation.hunks:
-        old_offset = hunk.old_start - 1 if hunk.old_count else hunk.old_start
-        new_offset = hunk.new_start - 1 if hunk.new_count else hunk.new_start
-        if old_offset < old_cursor or old_offset > len(old_lines):
-            _fail("invalid_ranges")
-        unchanged = old_offset - old_cursor
-        if new_offset != new_cursor + unchanged:
-            _fail("invalid_ranges")
+        if hunk.numbered:
+            old_offset = hunk.old_start - 1 if hunk.old_count else hunk.old_start
+            new_offset = hunk.new_start - 1 if hunk.new_count else hunk.new_start
+            if old_offset < old_cursor or old_offset > len(old_lines):
+                if not relaxed:
+                    _fail("invalid_ranges")
+                old_offset = _locate(old_lines, hunk, old_cursor)
+            unchanged = old_offset - old_cursor
+            if not relaxed and new_offset != new_cursor + unchanged:
+                _fail("invalid_ranges")
+            if not _matches_at(old_lines, hunk, old_offset):
+                # Models miscount line numbers; trust the context instead.
+                old_offset = _locate(old_lines, hunk, old_cursor)
+                relaxed = True
+        else:
+            old_offset = _locate(old_lines, hunk, old_cursor)
+            relaxed = True
         output.extend(old_lines[old_cursor:old_offset])
+        new_cursor += old_offset - old_cursor
         old_cursor = old_offset
-        new_cursor += unchanged
 
         consumed_old = 0
         produced_new = 0
         for line in hunk.lines:
             if line.kind in ("context", "remove"):
                 source_index = old_cursor + consumed_old
-                if source_index >= len(old_lines) or old_lines[source_index] != line.text:
+                if source_index >= len(old_lines):
                     _fail("context_mismatch")
+                if line.kind == "context":
+                    # Keep the file's own text when matched loosely.
+                    output.append(old_lines[source_index])
+                    produced_new += 1
                 consumed_old += 1
-            if line.kind in ("context", "add"):
+            else:
                 output.append(line.text)
                 produced_new += 1
-        if consumed_old != hunk.old_count or produced_new != hunk.new_count:
+        if hunk.numbered and (consumed_old != hunk.old_count or produced_new != hunk.new_count):
             _fail("invalid_ranges")
         old_cursor += consumed_old
         new_cursor += produced_new
 
     output.extend(old_lines[old_cursor:])
     text = "\n".join(output)
-    if terminated and output:
+    if (terminated or not old_lines) and output:
         text += "\n"
     return _encode_text(text)
 
@@ -188,48 +256,51 @@ def stage_patch(
 
     staged: list[StagedChange] = []
     for operation in operations:
-        kind = operation.kind
-        if kind == "add":
-            destination = operation.source
-            if _snapshot(snapshots, destination) is not None:
-                _fail("destination_exists")
-            lines = operation.hunks[0].lines
-            new_bytes = _encode_text(
-                "\n".join(line.text for line in lines) + ("\n" if lines else "")
-            )
-            staged.append(StagedChange(destination, None, new_bytes, "add"))
-        elif kind == "update":
-            old_bytes = _snapshot(snapshots, operation.source)
-            if old_bytes is None:
-                _fail("source_missing")
-            staged.append(
-                StagedChange(
-                    operation.source,
-                    old_bytes,
-                    _updated_bytes(old_bytes, operation),
-                    "update",
-                )
-            )
-        elif kind == "delete":
-            old_bytes = _snapshot(snapshots, operation.source)
-            if old_bytes is None:
-                _fail("source_missing")
-            staged.append(StagedChange(operation.source, old_bytes, None, "delete"))
-        elif kind == "move" and operation.destination is not None:
-            old_bytes = _snapshot(snapshots, operation.source)
-            if old_bytes is None:
-                _fail("source_missing")
-            if _snapshot(snapshots, operation.destination) is not None:
-                _fail("destination_exists")
-            staged.extend(
-                (
-                    StagedChange(operation.source, old_bytes, None, "move"),
-                    StagedChange(operation.destination, None, old_bytes, "move"),
-                )
-            )
-        else:
-            _fail("invalid_operation")
+        try:
+            staged.extend(_stage_operation(operation, snapshots))
+        except PatchStageError as exc:
+            exc.path = exc.path or operation.source
+            raise
+    return _with_diff(staged)
 
+
+def _stage_operation(
+    operation: PatchOperation, snapshots: Mapping[str, bytes | None]
+) -> tuple[StagedChange, ...]:
+    kind = operation.kind
+    if kind == "add":
+        destination = operation.source
+        if _snapshot(snapshots, destination) is not None:
+            _fail("destination_exists")
+        lines = operation.hunks[0].lines
+        new_bytes = _encode_text(
+            "\n".join(line.text for line in lines) + ("\n" if lines else "")
+        )
+        return (StagedChange(destination, None, new_bytes, "add"),)
+    old_bytes = _snapshot(snapshots, operation.source)
+    if old_bytes is None:
+        _fail("source_missing")
+    if kind == "update":
+        return (
+            StagedChange(
+                operation.source, old_bytes, _updated_bytes(old_bytes, operation), "update"
+            ),
+        )
+    if kind == "delete":
+        return (StagedChange(operation.source, old_bytes, None, "delete"),)
+    if kind == "move" and operation.destination is not None:
+        if _snapshot(snapshots, operation.destination) is not None:
+            _fail("destination_exists")
+        moved = _updated_bytes(old_bytes, operation) if operation.hunks else old_bytes
+        return (
+            StagedChange(operation.source, old_bytes, None, "move"),
+            StagedChange(operation.destination, None, moved, "move"),
+        )
+    _fail("invalid_operation")
+    raise AssertionError("unreachable")
+
+
+def _with_diff(staged: Sequence[StagedChange]) -> StagedChanges:
     diff_parts: list[str] = []
     diff_size = 0
     for change in staged:

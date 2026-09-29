@@ -1,4 +1,9 @@
-"""Single path policy for Settings console reads and mutations (TAUI §4.2)."""
+"""Single path policy for Settings console reads and mutations (TAUI §4.2).
+
+Project-scope reads and writes target ``<project>/.agents`` (STATE_PLAN §5.4):
+the legacy ``<project>/.nexus`` is a read-only fallback the extension managers
+still discover, but Settings console mutations always land in ``.agents``.
+"""
 
 from __future__ import annotations
 
@@ -6,10 +11,24 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..config.paths import project_agents_dir
 from ..errors import ConfigError
 
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
-BLOCKED = frozenset({"credentials.json", "sessions", "cache", "daemon", "daemon.sock", "daemon.pid", "daemon.lock"})
+BLOCKED = frozenset(
+    {
+        "credentials.json",
+        "sessions",
+        "cache",
+        "daemon",
+        "daemon.sock",
+        "daemon.pid",
+        "daemon.lock",
+        # The shared session state database (STATE_PLAN §5.4) is machine
+        # state, never reachable through the Settings console.
+        "nexus.db",
+    }
+)
 CATEGORIES = ("agents", "skills", "tools", "hooks", "mcp", "config", "soul")
 
 
@@ -30,7 +49,7 @@ def settings_root(runtime: object, scope: str) -> tuple[Path, str]:
         workspace = getattr(runtime, "workspace", None)
         if not isinstance(workspace, (str, Path)):
             raise ConfigError("project settings are unavailable")
-        return Path(workspace).resolve() / ".nexus", "<project>/.nexus"
+        return project_agents_dir(Path(workspace).resolve()), "<project>/.agents"
     raise ConfigError("scope must be 'global' or 'project'")
 
 

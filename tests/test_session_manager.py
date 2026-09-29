@@ -1,6 +1,3 @@
-import os
-from pathlib import Path
-
 import pytest
 
 from nexus.errors import SessionBusy, SessionError
@@ -129,12 +126,12 @@ def test_recovery_is_idempotent_across_reopen(tmp_path):
     session.append_message(_tool_use("call-1"))
     first = session.recover_dangling_tool_uses()
     assert len(first) == 1
-    before = session.path.read_bytes()
+    before = session.records
 
     assert session.recover_dangling_tool_uses() == []
     reopened = SessionManager(tmp_path).open("main")
     assert reopened.recover_dangling_tool_uses() == []
-    assert reopened.path.read_bytes() == before
+    assert reopened.records == before
     assert len([m for m in reopened.messages if m.role == "user"]) == 1
 
 
@@ -224,14 +221,14 @@ def test_fork_future_append_is_monotonic_and_diverges(tmp_path):
     session = manager.open("src")
     session.append_message(_msg("one"))
     session.append_message(_msg("two"))
-    parent_before = session.path.read_bytes()
+    parent_before = session.records
 
     child = manager.fork("src")
     appended = child.append_message(_msg("child-only"))
     assert appended.seq == 4
     assert child.next_seq() == 5
 
-    assert session.path.read_bytes() == parent_before
+    assert session.records == parent_before
     assert session.next_seq() == 3
     assert [m.content[0].text for m in child.messages][-1] == "child-only"
 
@@ -298,7 +295,7 @@ def test_fork_generates_safe_collision_resistant_child_id(tmp_path):
     child = manager.fork("src")
     assert is_valid_session_id(child.id)
     assert child.id.startswith("src-")
-    assert (tmp_path / f"{child.id}.jsonl").exists()
+    assert manager.store.exists(child.id)
     assert manager.fork("src").id != child.id
 
 
@@ -350,7 +347,7 @@ def test_fork_inherits_valid_snapshot_only(tmp_path):
     session.write_snapshot()
 
     child = manager.fork("src")
-    loaded = snapshot_mod.load(tmp_path, child.id, child.read(force=True))
+    loaded = manager.store.load_snapshot(child.id, child.read(force=True))
     assert loaded is not None
     assert loaded.seq == session.read(force=True).next_seq
 
@@ -360,9 +357,13 @@ def test_fork_ignores_invalid_source_snapshot(tmp_path):
     session = manager.open("src")
     session.append_message(_msg("a"))
     session.write_snapshot()
-    session.snapshot_path.write_bytes(b"{broken")
+    # Write a snapshot the log no longer agrees with (stale/corrupt).
+    manager.store.write_snapshot(
+        "src",
+        snapshot_mod.Snapshot(id="src", seq=1, messages=[_msg("not what happened")]),
+    )
     child = manager.fork("src")
-    assert not child.snapshot_path.exists()
+    assert manager.store.load_snapshot(child.id, child.read(force=True)) is None
     assert [m.content[0].text for m in child.messages] == ["a"]
 
 
@@ -373,7 +374,7 @@ def test_fork_does_not_apply_snapshot_past_boundary(tmp_path):
     session.append_message(_msg("b"))
     session.write_snapshot()  # seq == 2, after the requested boundary
     child = manager.fork("src", at_seq=1)
-    assert not child.snapshot_path.exists()
+    assert manager.store.load_snapshot(child.id, child.read(force=True)) is None
     assert [m.content[0].text for m in child.messages] == ["a"]
 
 
@@ -381,22 +382,22 @@ def test_fork_does_not_recover_dangling_tool_use(tmp_path):
     manager = SessionManager(tmp_path)
     session = manager.open("src")
     session.append_message(_tool_use("call-1"))
-    before = session.path.read_bytes()
+    before = session.records
     child = manager.fork("src")
     # The source prefix stays exact; a durable provenance event follows it.
     assert child.records[: len(session.records)] == session.records
     assert child.events[-1].type == "session.forked"
     assert child.events[-1].data == {"parent": "src", "at_seq": session.next_seq() - 1}
-    assert session.path.read_bytes() == before
+    assert session.records == before
 
 
-def test_archive_sidecar_hides_and_open_unarchives(tmp_path):
+def test_archive_hides_from_list_and_open_unarchives(tmp_path):
     manager = SessionManager(tmp_path)
     session = manager.open("archived")
     session.append_message(_msg("hello"))
     record = manager.archive("archived", "user")
     assert record.reason == "user"
-    assert manager.archive_path.exists()
+    assert any(row.session_id == "archived" for row in manager.archived())
     assert "archived" not in [row.id for row in manager.list()]
     assert "archived" in [row.id for row in manager.list(include_archived=True)]
 
@@ -406,34 +407,14 @@ def test_archive_sidecar_hides_and_open_unarchives(tmp_path):
     assert manager.summary("archived").message_count == 1
 
 
-def test_archive_index_corruption_recovers_without_losing_session(tmp_path, caplog):
-    manager = SessionManager(tmp_path)
-    session = manager.open("safe")
-    session.append_message(_msg("still here"))
-    manager.archive_path.write_text("{broken", encoding="utf-8")
-    assert manager.archived() == []
-    assert "corrupt session archive index" in caplog.text
-    manager.archive("safe")
-    assert manager.summary("safe").message_count == 1
-    assert manager.archived()[0].session_id == "safe"
-
-
-def test_archive_index_replacement_is_atomic_and_restart_durable(tmp_path, monkeypatch):
+def test_archive_is_durable_across_a_restarted_manager(tmp_path):
+    # Archive state is a plain SQL column update in the same shared database,
+    # so there is no file-based sidecar left to corrupt or replace
+    # non-atomically (the pre-STATE_PLAN JSON sidecar's failure modes).
     manager = SessionManager(tmp_path)
     session = manager.open("durable")
     session.append_message(_msg("kept"))
-    original_replace = os.replace
-    replacements = []
-
-    def checked_replace(source, destination):
-        source, destination = Path(source), Path(destination)
-        replacements.append((source.parent, destination))
-        return original_replace(source, destination)
-
-    monkeypatch.setattr("nexus.session.manager.os.replace", checked_replace)
     manager.archive("durable")
-    assert replacements == [(tmp_path, manager.archive_path)]
-    assert list(tmp_path.glob(".archive-*.tmp")) == []
     restarted = SessionManager(tmp_path)
     assert [row.session_id for row in restarted.archived()] == ["durable"]
 
@@ -453,32 +434,22 @@ def test_archive_stale_skips_live_handles_and_archives_only_old_idle_sessions(tm
     assert [row.session_id for row in rows] == ["live", "old"]
 
 
-def test_archive_stale_rotates_bounded_cursor_past_recent_sessions(tmp_path, monkeypatch):
-    from nexus.session.manager import ArchiveRecord, SessionSummary
+def test_archive_stale_is_bounded_per_call_oldest_first(tmp_path, monkeypatch):
+    # The bounded, ordered ``ORDER BY last_activity ASC LIMIT`` query replaces
+    # the old file-store's persisted sweep cursor (STATE_PLAN §5.1): each call
+    # still only ever archives up to the cap, oldest activity first.
+    monkeypatch.setattr("nexus.session.manager._ARCHIVE_MAX_SWEEP", 2)
+    manager = SessionManager(tmp_path)
+    for index in range(5):
+        session = manager.open(f"session-{index}")
+        session.append_event(Event(type="turn.completed", data={}, ts=float(index)))
+        manager.evict(f"session-{index}")  # a live handle would exclude it from the sweep
 
-    manager = SessionManager(tmp_path / "sessions")
-    manager.open("seed")
-    ids = [f"session-{index:04d}" for index in range(501)]
-    monkeypatch.setattr(manager, "_session_ids", lambda: ids)
-    monkeypatch.setattr(
-        manager,
-        "summary",
-        lambda session_id: SessionSummary(
-            id=session_id, last_activity=950 if session_id != ids[-1] else 1
-        ),
-    )
-    monkeypatch.setattr(manager, "_has_pending_work", lambda _session_id: False)
-    monkeypatch.setattr(
-        manager,
-        "archive",
-        lambda session_id, reason: ArchiveRecord(
-            session_id=session_id, archived_at=1000, reason=reason
-        ),
-    )
-
-    assert manager.archive_stale(now=1000, older_than=100) == []
     archived = manager.archive_stale(now=1000, older_than=100)
-    assert [row.session_id for row in archived] == [ids[-1]]
+    assert [row.session_id for row in archived] == ["session-0", "session-1"]
+
+    archived_again = manager.archive_stale(now=1000, older_than=100)
+    assert [row.session_id for row in archived_again] == ["session-2", "session-3"]
 
 
 @pytest.mark.parametrize(
@@ -537,13 +508,13 @@ async def test_replay_is_read_only_without_side_effects(tmp_path):
     manager = SessionManager(tmp_path)
     session = manager.open("r")
     session.append_message(_msg("a"))
-    before = session.path.read_bytes()
+    before = session.records
 
     events = [event async for event in manager.replay("r")]
 
     assert events == []
-    assert session.path.read_bytes() == before
-    assert not session.snapshot_path.exists()
+    assert session.records == before
+    assert manager.store.load_snapshot("r", session.read(force=True)) is None
     assert session.next_seq() == 2
 
 
@@ -551,10 +522,10 @@ async def test_replay_does_not_recover_dangling_tool_use(tmp_path):
     manager = SessionManager(tmp_path)
     session = manager.open("r")
     session.append_message(_tool_use("call-1"))
-    before = session.path.read_bytes()
+    before = session.records
     async for _ in manager.replay("r"):
         pass
-    assert session.path.read_bytes() == before
+    assert session.records == before
 
 
 async def test_replay_missing_session_is_rejected(tmp_path):

@@ -102,7 +102,9 @@ SPEC = ToolSpec(
         "Run a non-interactive shell command, or inspect, wait for, or stop a "
         "background job started in this session. Commands default to /bin/sh "
         "and the workspace directory; run actions may select an allowlisted "
-        "shell executable and a checked in-workspace directory."
+        "shell executable and a checked in-workspace directory. Use it to run "
+        "tests, builds, and programs; prefer the dedicated read, search, and "
+        "edit tools for file work when they are available."
     ),
     input_schema={
         "type": "object",

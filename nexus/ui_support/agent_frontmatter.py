@@ -15,7 +15,7 @@ from collections.abc import Mapping
 
 #: The fields the Settings form edits, in the order they are inserted.
 FORM_FIELDS = ("model", "provider", "reasoning_effort", "fallback")
-_MAX_FALLBACKS = 8
+MAX_FALLBACKS = 8
 
 
 def _bounds(lines: list[str]) -> tuple[int, int] | None:
@@ -47,7 +47,7 @@ def fallback_items(value: str) -> list[str]:
     if inner.startswith("[") and inner.endswith("]"):
         inner = inner[1:-1]
     items = [item.strip() for item in inner.replace("\n", ",").split(",")]
-    return [item for item in items if item][:_MAX_FALLBACKS]
+    return [item for item in items if item][:MAX_FALLBACKS]
 
 
 def set_agent_fields(body: str, updates: Mapping[str, str]) -> str:
@@ -87,4 +87,4 @@ def set_agent_fields(body: str, updates: Mapping[str, str]) -> str:
     return "".join([*lines[:start], *head, *lines[end:]])
 
 
-__all__ = ["FORM_FIELDS", "agent_fields", "fallback_items", "set_agent_fields"]
+__all__ = ["FORM_FIELDS", "MAX_FALLBACKS", "agent_fields", "fallback_items", "set_agent_fields"]

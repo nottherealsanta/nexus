@@ -127,6 +127,7 @@ flight.
 nexus daemon status      # running? pid, socket, live counters
 nexus daemon logs        # tail the daemon log
 nexus daemon stop        # graceful shutdown
+nexus daemon restart     # stop, then start a fresh daemon (picks up code/config changes)
 ```
 
 ## What it does
@@ -227,8 +228,13 @@ missed tail, and resumes an active turn without polling.
 
 Tool calls stream as blocks headed `$ command`, `→ Read path`, or
 `← Edit path`, showing the first lines of output; click a tool to expand it (edits
-show their diff). Clicking a subagent's task opens a large modal with that
-agent's whole conversation, rendered like the root and updated live while it runs, and a bounded preview where the event carries one (a permission request's key/preview, a tool's
+show their diff). Clicking a subagent's Task call opens its sub agent page, laid
+out like the root: its context header (its own system prompt, then the Task the
+root agent wrote on a grey background, then every tool definition it was
+actually sent), its whole conversation updated live while it runs, and its
+details. A sub agent's system prompt is its role alone: it carries no "You are
+Nexus" identity. In the browser the page has its own URL
+(`/s/<session>/a/<agent>`), and Back or Esc returns to the parent. Tool blocks show a bounded preview where the event carries one (a permission request's key/preview, a tool's
 progress line, or a result/summary field); control characters and obvious
 credentials are escaped or redacted, and byte payloads are shown by size rather
 than dumped. Assistant prose is rendered as Markdown with terminal controls
@@ -875,7 +881,8 @@ hook, and MCP config samples.
 ## Project decisions
 
 - **Raw GitHub Copilot is omitted**; the token-exchange endpoint and licence
-  terms for non-editor clients are unresolved.
+  terms for non-editor clients are unresolved. Nexus does not sign in through
+  OpenCode's GitHub OAuth app.
 - **OpenCode is integrated over ACP only** (`opencode acp`). Nexus never reads
   OpenCode's credential store, and ACP tool calls stay inside the agent.
 - **Codex models are reached through the OpenAI adapter** (Responses API with a

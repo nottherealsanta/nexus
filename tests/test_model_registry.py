@@ -213,12 +213,22 @@ def test_model_dates_parse_optional_iso_values_and_reach_model_info():
         ("release_date", 20260928),
     ],
 )
-def test_parse_rejects_invalid_model_dates(field, value):
+def test_parse_drops_invalid_model_dates(field, value):
+    # Optional metadata never rejects the whole catalogue.
     raw = json.dumps(
         {"openai": {"models": {"m": {field: value}}}}
     ).encode()
-    with pytest.raises(CatalogueError, match=field):
-        parse_catalogue(raw)
+    model = parse_catalogue(raw).providers[0].models[0]
+    assert getattr(model, field) is None
+
+
+def test_parse_reads_month_only_dates_as_the_first():
+    # models.dev writes some dates as YYYY-MM.
+    raw = json.dumps(
+        {"openai": {"models": {"m": {"release_date": "2025-09", "last_updated": "2025-10"}}}}
+    ).encode()
+    model = parse_catalogue(raw).providers[0].models[0]
+    assert (model.release_date, model.last_updated) == ("2025-09-01", "2025-10-01")
 
 
 def test_model_dates_survive_canonical_alias_projection():

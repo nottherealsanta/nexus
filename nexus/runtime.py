@@ -35,6 +35,7 @@ import contextlib
 import copy
 import hashlib
 import inspect
+import logging
 import re
 import subprocess
 import threading
@@ -51,6 +52,14 @@ from .agents import SubagentOutcome, SubagentRunner, SubagentUsage
 from .agents.model import AgentError, AgentNotFoundError
 from .agents.runner import WORKTREE_CHILD_TOOLS, files_changed
 from .config import Config
+from .config.paths import (
+    legacy_project_dir,
+    nexus_home,
+    project_agents_dir,
+    project_key,
+    project_state_dir,
+    state_db_path,
+)
 from .context import ContextManager
 from .context.cache import TokenCountCache
 from .context.counting import RequestTokenCounter
@@ -61,6 +70,7 @@ from .core.turn import TurnLimits
 from .errors import ConfigError, OperationCancelled
 from .events import Event
 from .hooks import HookEvent, HookInvocation, HookManager, HookOutcome
+from .model.http import DEFAULT_TIMEOUT
 from .model.message import Document, Image, Text, Thinking, ToolResult, ToolUse
 from .model.provider import Provider
 from .model.providers.anthropic import AnthropicProvider
@@ -83,6 +93,8 @@ from .model.selection import ModelSelection
 from .model.tiers import DEFAULT_TIER, TierTable
 from .net import OutboundHTTPService, SafeOutboundHTTPService
 from .session import Session, SessionManager
+from .session.db import StateDatabase
+from .session.import_legacy import import_workspace_sessions
 from .session.agent_selection import AgentSelection
 from .tools.builtin._jobs import JobRegistry
 from .tools.builtin.question import ANSWER_WINDOW_S
@@ -1739,9 +1751,8 @@ class _ChildSessionFacade:
     child is a real, replayable session rather than an in-memory fake.
     """
 
-    def __init__(self, directory: Path) -> None:
-        self._directory = Path(directory)
-        self._manager = SessionManager(self._directory)
+    def __init__(self, manager: SessionManager) -> None:
+        self._manager = manager
         self._allocation_lock = threading.Lock()
         self._allocated: dict[str, int] = {}
 
@@ -1983,6 +1994,8 @@ class Runtime:
         hooks: Any | None = None,
         owns_hooks: bool | None = None,
         codex_auth_factory: Callable[..., Any] | None = None,
+        copilot_auth_factory: Callable[..., Any] | None = None,
+        api_key_auth_factory: Callable[..., Any] | None = None,
     ) -> None:
         self.workspace = Path(workspace).resolve()
         self._home = Path(home) if home is not None else None
@@ -1998,6 +2011,9 @@ class Runtime:
         self._mcp_client_factory = mcp_client_factory
         self._closed = False
         self._codex_auth_factory = codex_auth_factory
+        #: Keychain-backed sign-in seams (tests inject in-memory stores).
+        self._copilot_auth_factory = copilot_auth_factory
+        self._api_key_auth_factory = api_key_auth_factory
 
         # Tool infrastructure. A caller may inject a ready ToolManager, a
         # PermissionEngine, or a full per-turn factory; otherwise the runtime
@@ -2082,6 +2098,8 @@ class Runtime:
             self._router = router
         else:
             self._router = self._build_router(initial)
+        #: Only routes built here from config can be rebuilt by ``reload_model_routes``.
+        self._owns_routes = providers is None and router is None and registry is None and tiers is None
         self._context = (
             context
             if context is not None
@@ -2090,7 +2108,7 @@ class Runtime:
         #: Request-aware token-count cache rooted in the workspace (best-effort;
         #: a missing/unwritable cache is a silent miss, never a turn failure).
         self._token_cache = TokenCountCache(
-            self.workspace / ".nexus" / "cache" / "tokens"
+            project_state_dir(self.workspace, self._home) / "cache" / "tokens"
         )
         self._assembler = _ContextCoordinator(
             self._context,
@@ -2192,17 +2210,20 @@ class Runtime:
         self._extensions_started = False
         self._extensions_lock: asyncio.Lock | None = None
 
+        #: The shared state database (STATE_PLAN §4), or ``None`` in the
+        #: ``session_dir=``/``sessions=`` test-compatibility paths that never
+        #: touch it. Reused by :meth:`_ensure_child_sessions` so the parent and
+        #: its child (``namespace="agents"``) sessions share one connection pool.
+        self._state_db: StateDatabase | None = None
+        self._legacy_import_task: asyncio.Task | None = None
         if sessions is not None:
             self._sessions = sessions
             self._owns_sessions = False
-        else:
-            directory = (
-                Path(session_dir)
-                if session_dir is not None
-                else self.workspace / ".nexus" / "sessions"
-            )
+        elif session_dir is not None:
+            # Test-compatibility path: an explicit directory keeps opening a
+            # private, per-directory database (SessionManager's own fallback).
             self._sessions = SessionManager(
-                directory,
+                Path(session_dir),
                 assemble=self._assembler,
                 provider_for=self._router,
                 limits=limits if limits is not None else self._limits_from_config,
@@ -2214,6 +2235,25 @@ class Runtime:
                 hooks=self._session_hooks,
             )
             self._owns_sessions = True
+        else:
+            self._state_db = StateDatabase(state_db_path(self._home))
+            self._sessions = SessionManager(
+                db=self._state_db,
+                project=self.workspace,
+                namespace="main",
+                lock_dir=nexus_home(self._home) / "locks" / "sessions" / project_key(self.workspace),
+                assemble=self._assembler,
+                provider_for=self._router,
+                limits=limits if limits is not None else self._limits_from_config,
+                tools=self._make_tool_turn,
+                snapshot_every=self._snapshot_every,
+                unattended_decision=self._unattended_decision,
+                ensure_ready=self.ensure_started,
+                turn_cleanup=self._clear_activation,
+                hooks=self._session_hooks,
+            )
+            self._owns_sessions = True
+            self._schedule_legacy_session_import()
 
     # -- construction ------------------------------------------------------
 
@@ -2329,6 +2369,45 @@ class Runtime:
     @property
     def closed(self) -> bool:
         return self._closed
+
+    # -- session import (STATE_PLAN §5.1) -----------------------------------
+
+    def _schedule_legacy_session_import(self) -> None:
+        """Fire-and-forget the one-time legacy ``.nexus/sessions`` import.
+
+        Runs at runtime construction, but the scan/flock/SQL work happens in a
+        worker thread (``asyncio.to_thread``) so it never blocks the daemon's
+        event loop; a second call for an already-imported project is a fast
+        no-op (one row read). Every failure is caught and logged -- an import
+        problem must never break startup or a turn. Outside a running event
+        loop (most synchronous test construction) this is simply skipped; the
+        import still runs lazily and safely the next time a runtime with a
+        loop starts, and is otherwise unnecessary for tests that inject
+        ``sessions=``/``session_dir=``.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        state_db = self._state_db
+        if state_db is None:
+            return
+        workspace = self.workspace
+        home = self._home
+        project_id = project_key(workspace)
+        legacy_dir = legacy_project_dir(workspace)
+
+        async def _run() -> None:
+            try:
+                await asyncio.to_thread(
+                    import_workspace_sessions, state_db, project_id, legacy_dir, home=home
+                )
+            except Exception:  # noqa: BLE001 - never breaks startup
+                logging.getLogger(__name__).warning(
+                    "legacy session import failed for %s", workspace, exc_info=True
+                )
+
+        self._legacy_import_task = loop.create_task(_run())
 
     # -- extensions --------------------------------------------------------
 
@@ -2623,7 +2702,6 @@ class Runtime:
                 "instructions_included": bool(
                     agent is not None
                     and "soul" in parts
-                    and "Selected agent instructions" in parts["soul"]
                 ),
             }
             skills_snapshot = (
@@ -3366,7 +3444,7 @@ class Runtime:
         home = self._home or Path.home()
         roots = {
             "global": (home / ".nexus").resolve(),
-            "project": (self.workspace / ".nexus").resolve(),
+            "project": project_agents_dir(self.workspace).resolve(),
         }
         requested = [roots[name] for name in allowed_scopes if name in roots]
         intersections: list[Path] = []
@@ -3562,7 +3640,9 @@ class Runtime:
         sections = getattr(v2, "providers", None) or {}
         providers_cfg = {name: section for name, section in sections.items()}
         provider_aliases = {"codex": "openai"} if (codex := sections.get("codex")) and not self._is_legacy_codex_section(codex) else {}
-        cache_path = self.workspace / ".nexus" / "cache" / "models.dev.json"
+        # Not project-specific: one shared catalogue cache under the home root
+        # (STATE_PLAN §5.4).
+        cache_path = nexus_home(self._home) / "cache" / "models.dev.json"
         return ModelRegistry(
             providers=providers_cfg,
             env=self._environ,
@@ -3590,7 +3670,9 @@ class Runtime:
         if self._client is not None:
             return {"client": self._client, "owns_transport": False}
         if self._shared_client is None:
-            self._shared_client = httpx.AsyncClient()
+            # httpx's own default is a 5 s read timeout, which aborts a
+            # reasoning model mid-stream; use the provider transport default.
+            self._shared_client = httpx.AsyncClient(timeout=DEFAULT_TIMEOUT)
             self._owns_shared_client = True
         return {"client": self._shared_client, "owns_transport": False}
 
@@ -3632,7 +3714,7 @@ class Runtime:
         mapped = _CORE_ADAPTERS.get(name)
         if mapped is not None:
             return mapped
-        if getattr(section, "base_url", None):
+        if getattr(section, "base_url", None) or getattr(section, "auth", None) == "github_copilot":
             return OPENAI_COMPATIBLE
         return None
 
@@ -3654,6 +3736,10 @@ class Runtime:
         base_url = getattr(section, "base_url", None) or None
         api = getattr(section, "api", None)
         auth = getattr(section, "auth", None)
+        if auth == "github_copilot" and not base_url:
+            from .auth.copilot import DEFAULT_BASE_URL
+
+            base_url = DEFAULT_BASE_URL
         if kind == OPENAI_COMPATIBLE and not base_url:
             raise ConfigError(
                 f"providers.{name}: kind 'openai_compatible' requires a base_url "
@@ -3687,6 +3773,15 @@ class Runtime:
                 manager = factory(profile=getattr(section, "profile", None) or "default")
                 # The private endpoint requires transient Responses without an output limit.
                 kwargs.update(base_url=CODEX_BASE_URL, api_key=None, auth_headers=ChatGPTOAuthHeaders(manager), default_max_tokens=None)
+            elif auth == "github_copilot":
+                from .auth.copilot import CopilotAuthManager, CopilotHeaders
+                factory = self._copilot_auth_factory or CopilotAuthManager
+                manager = factory(profile=getattr(section, "profile", None) or "default")
+                kwargs.update(api_key=None, auth_headers=CopilotHeaders(manager))
+            elif auth == "keychain":
+                from .auth.api_key import StoredKeyAuth
+                factory = self._api_key_auth_factory or StoredKeyAuth
+                kwargs.update(api_key=None, auth_headers=factory(name, profile=getattr(section, "profile", None) or "default"))
             provider = OpenAIProvider(api=api, **kwargs)
             # The adapter class is ``openai`` for every OpenAI-compatible wire,
             # but the router key is the configured vendor id. Relabel so the
@@ -4076,11 +4171,55 @@ class Runtime:
 
     def _ensure_child_sessions(self) -> _ChildSessionFacade:
         if self._child_sessions is None:
-            directory = getattr(self._sessions, "directory", None) or (
-                self.workspace / ".nexus" / "sessions"
-            )
-            self._child_sessions = _ChildSessionFacade(Path(directory) / "agents")
+            if self._state_db is not None:
+                manager = SessionManager(
+                    db=self._state_db,
+                    project=self.workspace,
+                    namespace="agents",
+                    lock_dir=nexus_home(self._home) / "locks" / "sessions" / project_key(self.workspace),
+                )
+            else:
+                # Test-compatibility path (an injected ``sessions=``/``session_dir=``
+                # runtime): a private, per-directory database beside the parent's.
+                directory = getattr(self._sessions, "directory", None) or (
+                    self.workspace / ".nexus" / "sessions"
+                )
+                manager = SessionManager(Path(directory) / "agents")
+            self._child_sessions = _ChildSessionFacade(manager)
         return self._child_sessions
+
+    def agent_request(self, child_session: str) -> dict[str, Any] | None:
+        """The latest request snapshot a child recorded in its own log.
+
+        The child loop attaches it to its first ``context.assembled`` of each
+        turn (already redacted and bounded), plus the task prompt the child was
+        given (its first user message); ``None`` until the child has sent.
+        """
+        store = self._ensure_child_sessions().manager.store
+        real_id = _child_session_id(child_session)
+        if not child_session or not store.exists(real_id):
+            return None
+        latest: dict[str, Any] | None = None
+        prompt: str | None = None
+        for record in store.records(real_id):
+            message = getattr(record, "message", None)
+            if prompt is None and getattr(message, "role", None) == "user":
+                prompt = "".join(
+                    block.text for block in message.content if isinstance(block, Text)
+                )[:20_000]
+            event = getattr(record, "event", None)
+            if getattr(event, "type", None) != "context.assembled":
+                continue
+            request = event.data.get("request") if isinstance(event.data, Mapping) else None
+            if isinstance(request, Mapping):
+                latest = {
+                    **dict(request),
+                    "provider": event.data.get("provider"),
+                    "model": event.data.get("model"),
+                }
+        if latest is not None and prompt:
+            latest["prompt"] = prompt
+        return latest
 
     def _bundle_map(self, catalog: Sequence[Any] | None = None) -> dict[str, list[str]]:
         from .tools.bundles import BUNDLES
@@ -4663,6 +4802,13 @@ class Runtime:
                 child_context._env = replace(
                     child_context._env, workspace=child_context.workspace
                 )
+        # A subagent is not the harness's root identity: no "You are Nexus"
+        # preamble; its role body alone opens the system prompt.
+        if child_context is context_manager:
+            child_context = copy.copy(context_manager)
+        child_context._identity = ""
+        if child_context._env is not None:
+            child_context._env = replace(child_context._env, identity="")
         child_coordinator = copy.copy(manager)
         child_coordinator._context = child_context
         # The agent body is the child's SOUL; MEMORY is deliberately empty.
@@ -4914,8 +5060,9 @@ class Runtime:
         return MCPManager(
             None,
             enabled=enabled,
-            cache_dir=self.workspace / ".nexus" / "cache" / "mcp",
+            cache_dir=project_state_dir(self.workspace, self._home) / "cache" / "mcp",
             workspace=self.workspace,
+            home=self._home,
             environ=self._environ,
             client_factory=self._mcp_client_factory,
             sink=_MCPEventSink(self),
@@ -4986,6 +5133,46 @@ class Runtime:
             aclose = getattr(self._mcp, "aclose", None)
             if aclose is not None:
                 await aclose()
+
+    async def reload_model_routes(self) -> bool:
+        """Rebuild providers, tiers, registry and router from the current config.
+
+        First-run setup connects a provider and picks the global model without a
+        daemon restart. The caller must ensure no turn is running. Returns
+        ``False`` (restart needed) when routes were injected. The router is
+        re-initialised in place because the session manager and the context
+        coordinator hold that object.
+        """
+        if not self._owns_routes or self._closed:
+            return False
+        config = self._load_config()
+        previous = self._owned_providers
+        saved = (self._providers, self._tiers, self._registry, self._registry_loaded)
+        try:
+            # The builders read these attributes, so set each before the next.
+            self._providers = self._build_providers(config)
+            self._tiers = self._build_tiers(config)
+            self._registry = self._build_registry(config)
+            fresh = self._build_router(config)
+        except Exception:
+            self._providers, self._tiers, self._registry, self._registry_loaded = saved
+            raise
+        self._registry_loaded = False
+        self._owned_providers = []
+        for provider in self._providers.values():
+            if not any(provider is owned for owned in self._owned_providers):
+                self._owned_providers.append(provider)
+        ModelRouter.__init__(
+            self._router, fresh.providers, aliases=fresh.aliases, default=fresh.default,
+            fallback=fresh.fallback, registry=fresh.registry, tiers=fresh.tiers,
+        )
+        self._assembler._tiers, self._assembler._registry = self._tiers, self._registry
+        for provider in previous:
+            aclose = getattr(provider, "aclose", None)
+            if aclose is not None:
+                with contextlib.suppress(Exception):
+                    await aclose()
+        return True
 
     # -- lifecycle ---------------------------------------------------------
 

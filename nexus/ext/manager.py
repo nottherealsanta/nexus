@@ -64,6 +64,11 @@ from typing import Any
 import msgspec
 
 from ..config import Config, resolve_within
+from ..config.paths import (
+    legacy_project_dir,
+    project_agents_dir,
+    project_state_dir,
+)
 from ..config.schema import ExtSection
 from ..core.watch import DirectoryWatcher
 from ..errors import (
@@ -100,14 +105,21 @@ __all__ = [
     "ValidateReport",
 ]
 
-#: Discovery precedence: workspace shadows user shadows anything else.
-_TIER_WORKSPACE = 2
+#: Discovery precedence: workspace shadows the legacy workspace location
+#: shadows user shadows anything else (STATE_PLAN §5.4: ``.agents`` writes
+#: outrank the read-only legacy ``.nexus`` fallback).
+_TIER_WORKSPACE = 3
+_TIER_WORKSPACE_LEGACY = 2
 _TIER_USER = 1
 _TIER_OTHER = 0
 
 #: The MCP server definition file, relative to the workspace. Its set of servers
-#: is reconciled hot on every rebuild; editing it takes effect live.
-_MCP_CONFIG_RELATIVE = ".nexus/mcp.json"
+#: is reconciled hot on every rebuild; editing it takes effect live. Writes
+#: (from Settings) always target ``.agents/mcp.json``; the legacy
+#: ``.nexus/mcp.json`` is a read-only fallback used only when no ``.agents``
+#: file exists (STATE_PLAN §5.4).
+_MCP_CONFIG_RELATIVE = ".agents/mcp.json"
+_MCP_CONFIG_LEGACY_RELATIVE = ".nexus/mcp.json"
 #: A definition file larger than this is refused rather than read (it carries
 #: command/env/url strings, never a payload).
 _MCP_MAX_BYTES = 262_144
@@ -116,9 +128,9 @@ _MCP_MAX_BYTES = 262_144
 # Extension trash (PLAN sections 2.3 and 11)
 # ---------------------------------------------------------------------------
 
-#: Trash root, a sibling of the sessions directory under ``.nexus/``. Extensions
-#: live in a dedicated subdirectory so the session trash sweeper (which scans
-#: ``.nexus/trash`` for ``meta.json`` entries) never confuses the two formats.
+#: Trash root under ``project_state_dir()`` (STATE_PLAN §5.4: machine state,
+#: not project content). Extensions live in a dedicated subdirectory so the
+#: session trash sweeper never confuses the two formats.
 _TRASH_DIRNAME = "trash"
 _EXTENSION_TRASH_SUBDIR = "extensions"
 
@@ -144,7 +156,7 @@ _TRASH_ID_SAFE = frozenset("-_.")
 def _strip_jsonc(text: str) -> str:
     """Remove ``//`` and ``/* */`` comments and trailing commas from JSONC.
 
-    ``.nexus/mcp.json`` is shown as JSONC in the plan, so a human may add a
+    ``.agents/mcp.json`` is shown as JSONC in the plan, so a human may add a
     comment. Only comments and trailing commas are relaxed; the decoded value is
     then parsed as strict JSON (duplicate keys and ``NaN``/``Infinity`` are
     refused). A ``//`` or ``/*`` inside a string literal is left alone.
@@ -298,6 +310,9 @@ def _tier_for(path: Path, workspace: Path, home: Path) -> int:
     home = _absolute(home)
     try:
         if path.is_relative_to(workspace):
+            legacy = _absolute(legacy_project_dir(workspace))
+            if path.is_relative_to(legacy):
+                return _TIER_WORKSPACE_LEGACY
             return _TIER_WORKSPACE
         if path.is_relative_to(home):
             return _TIER_USER
@@ -587,14 +602,22 @@ class ExtensionManager:
     ) -> None:
         self._workspace = _absolute(Path(workspace))
         self._home = _absolute(Path(home)) if home is not None else Path.home()
-        #: Trash is a sibling of the sessions directory in production, under a
-        #: dedicated ``extensions`` subdirectory so the session sweeper and the
-        #: extension sweeper never read each other's metadata. An explicit
-        #: override keeps tests hermetic (and lets a host relocate it).
+        #: The raw (possibly ``None``) constructor argument, kept alongside the
+        #: always-concrete :attr:`_home` so ``project_state_dir`` calls made
+        #: later (outside ``__init__``) still fall back through ``$NEXUS_HOME``
+        #: instead of the coerced literal ``Path.home()``.
+        self._home_arg = home
+        #: Trash is per-project machine state, not project content (STATE_PLAN
+        #: §5.4): it lives under ``project_state_dir()``, in a dedicated
+        #: ``extensions`` subdirectory so the session trash sweeper never reads
+        #: its metadata. An explicit override keeps tests hermetic (and lets a
+        #: host relocate it).
         self._trash_dir = (
             _absolute(Path(trash_dir))
             if trash_dir is not None
-            else self._workspace / ".nexus" / _TRASH_DIRNAME / _EXTENSION_TRASH_SUBDIR
+            else project_state_dir(self._workspace, home)
+            / _TRASH_DIRNAME
+            / _EXTENSION_TRASH_SUBDIR
         )
         if (
             isinstance(retention_seconds, bool)
@@ -830,7 +853,7 @@ class ExtensionManager:
         quarantine = self._quarantine or build_default_quarantine(
             config,
             root=self._workspace,
-            stage_root=self._workspace / ".nexus" / "stage",
+            stage_root=project_state_dir(self._workspace, self._home_arg) / "stage",
         )
         candidates = self._validate_candidates(ext, target)
         results: list[dict[str, Any]] = []
@@ -1493,8 +1516,20 @@ class ExtensionManager:
         return self._mcp
 
     def mcp_config_path(self) -> Path:
-        """The watched MCP definition file (``<workspace>/.nexus/mcp.json``)."""
-        return self._workspace / _MCP_CONFIG_RELATIVE
+        """The watched MCP definition file.
+
+        ``<workspace>/.agents/mcp.json`` (STATE_PLAN §5.4). When that file does
+        not exist but the legacy ``<workspace>/.nexus/mcp.json`` does, the
+        legacy file is read instead -- a read-only fallback; a new write always
+        goes through Settings to ``.agents/mcp.json``.
+        """
+        current = self._workspace / _MCP_CONFIG_RELATIVE
+        if current.is_file():
+            return current
+        legacy = self._workspace / _MCP_CONFIG_LEGACY_RELATIVE
+        if legacy.is_file():
+            return legacy
+        return current
 
     def _load_mcp_definitions(
         self,
@@ -2056,13 +2091,14 @@ class ExtensionManager:
             # can Read it to learn the extension contract. Best-effort: a
             # read-only workspace must not fail a rebuild.
             with contextlib.suppress(OSError):
-                ensure_tool_template(self._workspace / ".nexus" / "tools")
+                ensure_tool_template(project_agents_dir(self._workspace) / "tools")
             skills_map, skill_failures = self._discover_skills()
             all_failures.extend(skill_failures)
             quarantine = self._quarantine or build_default_quarantine(
                 config,
                 root=self._workspace,
-                stage_root=self._workspace / ".nexus" / "stage",
+                stage_root=project_state_dir(self._workspace, self._home_arg)
+                / "stage",
             )
             external, loaded, newly, tool_failures, shadows = self._discover_tools(
                 ext,

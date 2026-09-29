@@ -14,7 +14,7 @@ network, no mocks of the transport:
 * a server that dies mid-call degrades that tool result but **never** fails the
   turn, and its tools leave the manifest;
 * a hung listing is isolated and recovers;
-* editing ``.nexus/mcp.json`` adds, reconfigures, and removes servers live;
+* editing ``.agents/mcp.json`` adds, reconfigures, and removes servers live;
 * a ``tools/list_changed`` notification refreshes the manifest without a restart;
 * strict ``${env:VAR}`` interpolation never leaks a resolved secret into the
   manifest, events, diagnostics, or a ``repr``;
@@ -138,9 +138,12 @@ def fs_definition(
 
 
 def write_mcp_config(tmp_path: Path, servers: dict[str, dict]) -> Path:
-    nexus = tmp_path / ".nexus"
-    nexus.mkdir(parents=True, exist_ok=True)
-    path = nexus / "mcp.json"
+    # STATE_PLAN §5.4: ``mcp.json`` is read from (and written to) ``.agents``;
+    # the legacy ``.nexus/mcp.json`` is covered separately, as a read-only
+    # fallback, below.
+    agents = tmp_path / ".agents"
+    agents.mkdir(parents=True, exist_ok=True)
+    path = agents / "mcp.json"
     path.write_text(json.dumps({"servers": servers}), encoding="utf-8")
     return path
 
@@ -625,7 +628,7 @@ async def test_jsonc_mcp_json_with_comments_and_trailing_comma(tmp_path: Path) -
     write_control(control)
     definition = fs_definition(root, control)
     document = (
-        "// .nexus/mcp.json -- JSONC is accepted for human edits\n"
+        "// .agents/mcp.json -- JSONC is accepted for human edits\n"
         "{\n"
         '  "servers": {\n'
         f'    "fs": {json.dumps(definition)},\n'

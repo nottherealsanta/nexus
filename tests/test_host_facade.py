@@ -301,6 +301,12 @@ def test_protocol_round_trips_every_command_and_result():
         p.SettingsDelete(scope="project", category="agents", id="helper"),
         p.SetupStatus(),
         p.SetupSave(provider="openai", model="gpt-5.6"),
+        p.ProvidersStatus(),
+        p.ProviderLogin(provider="github-copilot", method="device", domain="company.ghe.com"),
+        p.ProviderLoginPoll(login_id="l"),
+        p.ProviderLoginCancel(login_id="l"),
+        p.ProviderKeySet(provider="opencode-go", key="sk-test-key"),
+        p.ProviderLogout(provider="codex"),
         p.SessionArchive(session="s"),
         p.SessionUnarchive(session="s"),
         p.SessionListArchived(),
@@ -362,6 +368,9 @@ def test_protocol_round_trips_every_command_and_result():
         p.SettingsDeleteResult(status="trashed", trash_id="t"),
         p.SetupStatusResult(required=True),
         p.SetupSaveResult(global_model="openai/gpt-5.6"),
+        p.ProvidersStatusResult(providers=[{"id": "codex", "connected": False}]),
+        p.ProviderLoginResult(login_id="l", provider="codex", url="https://auth.openai.com/x", user_code="AB-12"),
+        p.ProviderAuthResult(provider="opencode-go", connected=True),
         p.SessionListResult(sessions=[summary]),
         p.SessionArchiveResult(session=summary),
         p.SessionUnarchiveResult(session=summary),
@@ -551,7 +560,9 @@ async def test_context_inspect_is_a_read_only_current_request_projection(tmp_pat
         assert result.mode == "next_turn_preview"
         assert not result.actually_sent and not result.draft_provided
         assert result.manifest_generation is not None
-        assert result.system_text and "You are Nexus" in result.system_text
+        assert result.system_text
+        assert "You are Nexus" not in result.system_text
+        assert "--- Selected agent instructions ---" not in result.system_text
         assert result.tools_supported
         assert result.tools and all(
             isinstance(tool["input_schema"], dict) for tool in result.tools

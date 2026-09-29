@@ -1,4 +1,13 @@
-"""Pure, bounded parser for the strict Nexus multi-file patch format.
+"""Pure, bounded parser for the Nexus multi-file patch format.
+
+Two hunk dialects are accepted inside ``*** Update File:`` sections:
+
+* **Numbered** unified-diff hunks (``@@ -1,2 +1,3 @@``) whose line counts are
+  checked here and whose positions are verified by the stager.
+* **Context** hunks in the Codex ``apply_patch`` dialect that GPT models are
+  trained on: a bare ``@@`` or ``@@ <anchor line>`` header, located by content
+  rather than line number, optionally ended by ``*** End of File``. An update
+  may be renamed with ``*** Move to: <path>``.
 
 This module deliberately does not inspect or modify the filesystem. In
 particular, update hunk context is retained for a later runner to verify.
@@ -73,18 +82,27 @@ class PatchLine:
 
 @dataclass(frozen=True, slots=True)
 class PatchHunk:
-    """A counted unified-diff hunk with its source and destination positions."""
+    """One hunk. ``numbered`` hunks carry verified counts and positions;
+    context hunks (``numbered=False``) are located by content, after
+    ``anchor`` when given, and at the end of the file when ``end_of_file``."""
 
     old_start: int
     old_count: int
     new_start: int
     new_count: int
     lines: tuple[PatchLine, ...]
+    numbered: bool = True
+    anchor: str | None = None
+    end_of_file: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class PatchOperation:
-    """One immutable add, update, delete, or move instruction."""
+    """One immutable add, update, delete, or move instruction.
+
+    A ``move`` may carry hunks (``*** Update File:`` + ``*** Move to:``); they
+    are applied to the source content before it lands at the destination.
+    """
 
     kind: Literal["add", "update", "delete", "move"]
     source: str
@@ -178,26 +196,55 @@ def _parse_hunk_header(line: str) -> tuple[int, int, int, int]:
     return old_start_value, old_count_value, new_start_value, new_count_value
 
 
+_END_OF_FILE = "*** End of File"
+_MOVE_TO = "*** Move to: "
+
+
+def _context_anchor(line: str) -> str | None:
+    """Return the anchor of a Codex ``@@``/``@@ text`` header, or ``None``
+    when the header is a numbered unified-diff header."""
+
+    if line == "@@":
+        return ""
+    if line.startswith("@@ -") and line[4:5].isdigit():
+        return None
+    if line.startswith("@@ "):
+        return line[3:]
+    return None
+
+
 def _parse_update(lines: list[str], index: int) -> tuple[tuple[PatchHunk, ...], int]:
     hunks: list[PatchHunk] = []
     previous_old_end = 0
     previous_new_end = 0
-    while index < len(lines) and lines[index].startswith("@@"):
+    # Codex lets the first hunk of a file omit its ``@@`` header entirely.
+    implicit = bool(lines) and index < len(lines) and lines[index][:1] in (" ", "+", "-")
+    while index < len(lines) and (implicit or lines[index].startswith("@@")):
         if len(hunks) >= MAX_HUNKS:
             _fail("too_many_hunks")
-        old_start, old_count, new_start, new_count = _parse_hunk_header(lines[index])
-        if old_start < previous_old_end or new_start < previous_new_end:
-            _fail("invalid_hunk_position")
-        index += 1
+        anchor = "" if implicit else _context_anchor(lines[index])
+        numbered = anchor is None
+        if numbered:
+            old_start, old_count, new_start, new_count = _parse_hunk_header(lines[index])
+            if old_start < previous_old_end or new_start < previous_new_end:
+                _fail("invalid_hunk_position")
+        else:
+            old_start = old_count = new_start = new_count = 0
+        if not implicit:
+            index += 1
+        implicit = False
         hunk_lines: list[PatchLine] = []
         seen_old = 0
         seen_new = 0
+        end_of_file = False
         while index < len(lines) and not lines[index].startswith(("@@", "*** ")):
             line = lines[index]
             if line == r"\ No newline at end of file":
                 _fail("unsupported_no_newline")
             if not line:
-                _fail("invalid_hunk_line")
+                # A blank line is an empty context line whose leading space
+                # was stripped by the model or an editor.
+                line = " "
             prefix, text = line[0], line[1:]
             if prefix == " ":
                 hunk_lines.append(PatchLine("context", text))
@@ -212,15 +259,30 @@ def _parse_update(lines: list[str], index: int) -> tuple[tuple[PatchHunk, ...], 
             else:
                 _fail("invalid_hunk_line")
             index += 1
-        if seen_old != old_count or seen_new != new_count:
+        if index < len(lines) and lines[index] == _END_OF_FILE:
+            end_of_file = True
+            index += 1
+        if numbered and (seen_old != old_count or seen_new != new_count):
             _fail("hunk_count_mismatch")
         if not hunk_lines:
             _fail("invalid_hunk_line")
+        if not numbered:
+            old_count, new_count = seen_old, seen_new
         hunks.append(
-            PatchHunk(old_start, old_count, new_start, new_count, tuple(hunk_lines))
+            PatchHunk(
+                old_start,
+                old_count,
+                new_start,
+                new_count,
+                tuple(hunk_lines),
+                numbered=numbered,
+                anchor=anchor or None,
+                end_of_file=end_of_file,
+            )
         )
-        previous_old_end = old_start + old_count
-        previous_new_end = new_start + new_count
+        if numbered:
+            previous_old_end = old_start + old_count
+            previous_new_end = new_start + new_count
     if not hunks:
         _fail("empty_update")
     return tuple(hunks), index
@@ -229,8 +291,9 @@ def _parse_update(lines: list[str], index: int) -> tuple[tuple[PatchHunk, ...], 
 def parse_patch(text: str) -> tuple[PatchOperation, ...]:
     """Parse a strict, bounded multi-file patch without performing I/O.
 
-    All patch records, including the terminal marker, must use LF line endings.
-    A missing final LF and unified-diff no-final-newline markers are rejected.
+    All patch records must use LF line endings; a missing LF after the
+    terminal marker is tolerated. Unified-diff no-final-newline markers are
+    rejected.
     """
 
     if not isinstance(text, str):
@@ -241,8 +304,8 @@ def parse_patch(text: str) -> tuple[PatchOperation, ...]:
         _fail("nul_byte")
     if "\r" in text:
         _fail("missing_newline")
-    if not text.endswith("\n"):
-        _fail("missing_newline")
+    # Models often wrap the envelope in stray blank lines or drop the last LF.
+    text = text.strip("\n") + "\n"
 
     records = text[:-1].split("\n")
     for record in records:
@@ -293,16 +356,35 @@ def parse_patch(text: str) -> tuple[PatchOperation, ...]:
             # Add bodies use the same immutable line representation as hunks.
             hunks = (PatchHunk(0, 0, 0, len(contents), tuple(contents)),)
         elif kind == "update":
+            if index < end_index and records[index].startswith(_MOVE_TO):
+                destination = _validate_path(records[index][len(_MOVE_TO) :])
+                destination_key = _path_key(destination)
+                if _conflicts_with_touched(destination_key, touched_paths, touched_prefixes):
+                    _fail("duplicate_path")
+                touched_paths.add(destination_key)
+                touched_prefixes.update(
+                    destination_key[:length] for length in range(1, len(destination_key))
+                )
+                kind = "move"
+                index += 1
             hunk_lines: list[str] = []
-            while index < end_index and not records[index].startswith("*** "):
+            while index < end_index and (
+                not records[index].startswith("*** ") or records[index] == _END_OF_FILE
+            ):
                 hunk_lines.append(records[index])
                 index += 1
+            # Blank separator lines between file sections are not context.
+            while hunk_lines and not hunk_lines[-1]:
+                hunk_lines.pop()
             for line in hunk_lines:
                 if line and line[0] in " +-":
                     _validate_content(line[1:])
-            hunks, consumed = _parse_update(hunk_lines, 0)
-            if consumed != len(hunk_lines):
-                _fail("unexpected_entry")
+            if kind == "move" and not hunk_lines:
+                hunks = ()
+            else:
+                hunks, consumed = _parse_update(hunk_lines, 0)
+                if consumed != len(hunk_lines):
+                    _fail("unexpected_entry")
         else:
             hunks = ()
             if index < end_index and not records[index].startswith("*** "):

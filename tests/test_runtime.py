@@ -85,15 +85,16 @@ async def test_two_turn_scripted_conversation_sees_exact_ir(tmp_path):
     assert second_events[-1].type == "turn.completed"
 
 
-async def test_runtime_open_and_default_session_directory(tmp_path):
+async def test_runtime_open_and_default_session_stored_in_state_db(tmp_path):
+    """Sessions land in the shared state database, not ``<workspace>/.nexus`` (STATE_PLAN §2)."""
     provider = ScriptedProvider(text_response("ok"))
     runtime = Runtime.open(tmp_path, config=scripted_config(), providers={"scripted": provider})
     session = runtime.session("main")
 
     await _drain(session.send("hi"))
 
-    assert session.path == tmp_path / ".nexus" / "sessions" / "main.jsonl"
-    assert session.path.exists()
+    assert runtime.sessions.exists("main")
+    assert not (tmp_path / ".nexus").exists()
 
 
 # ---------------------------------------------------------------------------

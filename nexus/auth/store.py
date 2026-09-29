@@ -1,7 +1,9 @@
-"""Secure, bounded credential persistence for ChatGPT OAuth.
+"""Secure, bounded credential persistence for provider sign-in.
 
-Only a rotating refresh token and routing metadata are persisted. Access and ID
-tokens deliberately never cross this boundary.
+For ChatGPT OAuth only a rotating refresh token and routing metadata are
+persisted; access and ID tokens deliberately never cross this boundary. Other
+providers (GitHub Copilot, OpenCode Go) keep one opaque secret per
+``<provider>:<profile>`` account in the same secure native keychain.
 """
 from __future__ import annotations
 
@@ -161,3 +163,52 @@ class KeyringCredentialStore:
                 await asyncio.to_thread(fcntl.flock, fd, fcntl.LOCK_UN)
             finally:
                 await asyncio.to_thread(os.close, fd)
+
+
+SECRET_SERVICE = "nexus.provider-credentials"
+_ACCOUNT = re.compile(r"[a-z0-9][a-z0-9-]{0,31}:[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
+_MAX_SECRET_BYTES = 8_192
+
+
+class SecretStore(Protocol):
+    """Opaque per-account secrets (a Copilot token, a pasted API key)."""
+
+    async def read_secret(self, account: str) -> str | None: ...
+    async def write_secret(self, account: str, value: str) -> None: ...
+    async def delete_secret(self, account: str) -> None: ...
+
+
+def validate_account(account: str) -> str:
+    """``<provider>:<profile>``; the account name never carries a secret."""
+    if not isinstance(account, str) or not _ACCOUNT.fullmatch(account):
+        raise ValueError("credential account must be '<provider>:<profile>'")
+    return account
+
+
+class KeyringSecretStore(KeyringCredentialStore):
+    """Provider secrets in the same secure native keychain as ChatGPT OAuth.
+
+    Values are opaque strings bounded to 8 KiB; insecure keyring backends are
+    refused exactly as for the Codex record.
+    """
+
+    async def read_secret(self, account: str) -> str | None:
+        validate_account(account)
+        value = await asyncio.to_thread(self._backend().get_password, SECRET_SERVICE, account)
+        if value is not None and (not isinstance(value, str) or len(value.encode()) > _MAX_SECRET_BYTES):
+            raise ProviderError("stored provider credential is invalid; sign in again")
+        return value or None
+
+    async def write_secret(self, account: str, value: str) -> None:
+        validate_account(account)
+        if not isinstance(value, str) or not value or len(value.encode()) > _MAX_SECRET_BYTES:
+            raise ValueError("provider credential must be a nonempty string under 8 KiB")
+        await asyncio.to_thread(self._backend().set_password, SECRET_SERVICE, account, value)
+
+    async def delete_secret(self, account: str) -> None:
+        validate_account(account)
+        keyring = self._backend()
+        try:
+            await asyncio.to_thread(keyring.delete_password, SECRET_SERVICE, account)
+        except keyring.errors.PasswordDeleteError:
+            pass

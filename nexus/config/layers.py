@@ -23,6 +23,7 @@ import msgspec
 
 from ..errors import ConfigError
 from .paths import (
+    legacy_workspace_settings_config_path,
     user_config_path,
     workspace_config_path,
     workspace_settings_config_path,
@@ -339,6 +340,12 @@ def _read_docs(
     workspace_file = workspace_config_path(workspace)
     if workspace_file.exists():
         docs.append((str(workspace_file), read_toml(workspace_file)))
+    # STATE_PLAN §5.4: the legacy ``.nexus/nexus.toml`` is a read-only
+    # fallback, applied before (so it is outranked by) the current
+    # ``.agents/nexus.toml``; Settings console writes only ever go there.
+    legacy_settings_file = legacy_workspace_settings_config_path(workspace)
+    if legacy_settings_file.exists():
+        docs.append((str(legacy_settings_file), read_toml(legacy_settings_file)))
     settings_file = workspace_settings_config_path(workspace)
     if settings_file.exists():
         docs.append((str(settings_file), read_toml(settings_file)))

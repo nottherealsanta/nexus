@@ -306,7 +306,12 @@ def test_apply_patch_spec_and_coding_catalog_registration() -> None:
     assert apply_patch.SPEC.name == "apply_patch"
     assert apply_patch.SPEC.input_schema == {
         "type": "object",
-        "properties": {"patch": {"type": "string"}},
+        "properties": {
+            "patch": {
+                "type": "string",
+                "description": "The full patch text, from *** Begin Patch to *** End Patch.",
+            }
+        },
         "required": ["patch"],
         "additionalProperties": False,
     }
@@ -318,3 +323,42 @@ def test_apply_patch_spec_and_coding_catalog_registration() -> None:
     research = ToolManager(cfg, workspace=Path.cwd(), profile="research")
     assert "apply_patch" in coding.names
     assert "apply_patch" not in research.names
+
+
+@pytest.mark.asyncio
+async def test_applies_codex_context_patch_and_reports_a_per_file_diff(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_bytes(b"one\ntwo\nthree")
+    (tmp_path / "b.txt").write_bytes(b"keep\nold\n")
+    patch = (
+        "*** Begin Patch\n"
+        "*** Update File: a.txt\n@@\n three\n+four\n"
+        "*** Update File: b.txt\n*** Move to: c.txt\n@@ keep\n-old\n+new\n"
+        "*** End Patch"
+    )
+
+    result = await apply_patch.run({"patch": patch}, _context(tmp_path))
+
+    assert not result.is_error, result.display
+    assert (tmp_path / "a.txt").read_bytes() == b"one\ntwo\nthree\nfour"
+    assert not (tmp_path / "b.txt").exists()
+    assert (tmp_path / "c.txt").read_bytes() == b"keep\nnew\n"
+    diff = result.diff
+    assert diff is not None
+    assert (diff["path"], diff["added_lines"], diff["removed_lines"]) == ("2 files", 2, 1)
+    assert "--- a/a.txt\n+++ b/a.txt\n@@ -1,3 +1,4 @@" in diff["hunk"]
+    assert "--- a/b.txt\n+++ b/c.txt\n" in diff["hunk"]
+
+
+@pytest.mark.asyncio
+async def test_context_mismatch_names_the_file_and_hints_a_reread(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_bytes(b"actual\n")
+
+    result = await apply_patch.run(
+        {"patch": _patch("*** Update File: a.txt\n@@\n-expected\n+new\n")}, _context(tmp_path)
+    )
+
+    assert result.is_error
+    assert result.display == (
+        "apply_patch failed in a.txt: hunk context does not match the source snapshot; "
+        "re-read the file and copy the context lines exactly"
+    )

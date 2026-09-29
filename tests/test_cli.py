@@ -106,7 +106,7 @@ def test_parser_exposes_the_canonical_command_set():
     } == choices
 
     for action, expected in (
-        ("daemon", {"status", "stop", "logs"}),
+        ("daemon", {"status", "stop", "restart", "logs"}),
         ("sessions", {"list", "fork", "replay", "export", "delete", "restore"}),
         ("ext", {"list", "reload", "validate", "trash"}),
         ("models", {"list", "show", "refresh", "tiers"}),
@@ -133,6 +133,7 @@ def test_parser_exposes_the_canonical_command_set():
     [
         ["daemon", "status"],
         ["daemon", "stop"],
+        ["daemon", "restart"],
         ["daemon", "logs"],
         ["sessions", "list"],
         ["sessions", "fork", "s"],
@@ -169,6 +170,25 @@ def test_parser_accepts_every_documented_invocation(argv):
     args = cli.build_parser().parse_args(["--workspace", "/tmp/ws", *argv])
     assert args.workspace == Path("/tmp/ws")
     assert args.command is not None
+
+
+def test_chat_starts_a_new_session_unless_one_is_named(monkeypatch):
+    seen: list[str] = []
+    monkeypatch.setattr(cli, "_chat_entry", lambda workspace, *, session: seen.append(session) or 0)
+    class Tty(io.StringIO):
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr(cli.sys, "stdin", Tty())
+    monkeypatch.setattr(cli.sys, "stdout", Tty())
+    monkeypatch.setattr(cli.importlib.util, "find_spec", lambda name: object())
+    monkeypatch.setenv("TERM", "xterm")
+    assert cli.main(["chat"]) == 0
+    assert cli.main(["chat"]) == 0
+    assert cli.main(["chat", "--session", "keep"]) == 0
+    assert seen[0].startswith("session-") and seen[1].startswith("session-")
+    assert seen[0] != seen[1]
+    assert seen[2] == "keep"
 
 
 def test_chat_rejects_mode_flags():
@@ -621,6 +641,16 @@ def test_daemon_status_reports_the_running_daemon(cli_env):
     report = json.loads(result.stdout)
     assert report["running"] is True
     assert report["pid"] > 0
+
+
+def test_daemon_restart_replaces_the_running_daemon(cli_env):
+    before = json.loads(_cli(cli_env, "daemon", "status", "--json").stdout)["pid"]
+    result = _cli(cli_env, "daemon", "restart")
+    assert result.stdout.startswith("restarted pid=")
+    after = json.loads(_cli(cli_env, "daemon", "status", "--json").stdout)
+    assert after["running"] is True
+    assert after["pid"] != before
+    assert f"pid={after['pid']}" in result.stdout
 
 
 def test_replay_reconstructs_the_transcript(cli_env):

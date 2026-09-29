@@ -43,6 +43,7 @@ from .messages import (
     StreamDisconnected,
     TurnFinished,
 )
+from .new_session import apply_agent_choice, open_new_session_picker
 from .panels import MainLayout, PanelsMixin, TopBar
 from .permission import ListPrompt, PermissionScreen, ask_pending_question
 from .theme import NEXUS_THEMES
@@ -508,8 +509,7 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
             elif parsed.name == "/reconnect":
                 await self.action_reconnect()
             elif parsed.name == "/new":
-                session = args[0] if args else f"session-{uuid.uuid4().hex[:8]}"
-                await self._switch_session(session)
+                await open_new_session_picker(self, args[0] if args else f"session-{uuid.uuid4().hex[:8]}")
             elif parsed.name == "/hotkeys":
                 self.push_screen(ShortcutsScreen(KEYBOARD_SHORTCUTS))
             elif parsed.name == "/theme":
@@ -922,8 +922,7 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
             if agent is None or remote is None:
                 self._sync_status("Agent transcript is not available", error=True)
                 return
-            screen = AgentTranscriptScreen(agent)
-            self.push_screen(screen)
+            self.push_screen(AgentTranscriptScreen(agent, remote.get("context")))
         except ClientError as exc:
             self._sync_status(f"Agent transcript failed · {exc}", error=True)
 
@@ -1066,7 +1065,7 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
         kind = self._inline_picker_kind
         self._close_inline_picker()
         if kind == "agent":
-            await self._apply_agent_selection(message.value)
+            await apply_agent_choice(self, message.value)
         elif kind == "model":
             await self._apply_model_selection(
                 message.value, message.effort, commit_effort=message.commit_effort
@@ -1110,6 +1109,7 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
 
     @on(AgentPickerPanel.Cancelled)
     def _inline_picker_cancelled(self, _: AgentPickerPanel.Cancelled) -> None:
+        self._new_session_id = None
         self._close_inline_picker()
 
     async def _apply_agent_selection(self, name: str) -> None:
@@ -1219,7 +1219,7 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
             if parent_id and parent_id != self.controller.session:
                 parent = self.controller.find_agent(parent_id)
                 if parent is not None:
-                    self.push_screen(AgentTranscriptScreen(parent))
+                    self.run_worker(self.action_open_agent(parent.id), group="agent-open")
                     return
             self.screen.dismiss(None)
 
@@ -1284,9 +1284,9 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
                 for row in self._agents
                 if row.get("name") and ("contexts" not in row or "root" in row.get("contexts", ()))
             ]
-            canonical = [name for name in ("build",) if name in eligible]
+            canonical = [name for name in ("build", "orchestrator") if name in eligible]
             custom = sorted(
-                (name for name in eligible if name not in {"build"}),
+                (name for name in eligible if name not in {"build", "orchestrator"}),
                 key=str.casefold,
             )
             ordered = [*canonical, *custom]

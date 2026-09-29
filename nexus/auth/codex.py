@@ -33,6 +33,7 @@ CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 REDIRECT_URI = "http://localhost:1455/auth/callback"
 SCOPES = "openid profile email offline_access"
 CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
+DEVICE_URL = "https://auth.openai.com/deviceauth"
 
 
 def pkce() -> tuple[str, str, str]:
@@ -188,7 +189,8 @@ class CodexOAuthManager:
     async def status(self) -> bool:
         return await self._store.read(self.profile) is not None
 
-    async def device_login(self, *, notify=print, cancel: asyncio.Event | None = None) -> None:
+    async def device_login(self, *, notify=print, cancel: asyncio.Event | None = None, on_code=None) -> None:
+        """Device-code login; ``on_code(url, code)`` replaces the text notice when given."""
         client = self._client or httpx.AsyncClient(timeout=20)
         owned = self._client is None
         try:
@@ -197,7 +199,10 @@ class CodexOAuthManager:
             data = self._response_mapping(start, "codex: device login returned an invalid response")
             code, device_id = data.get("user_code"), data.get("device_auth_id")
             if not isinstance(code, str) or not code or not isinstance(device_id, str) or not device_id: raise ProviderError("codex: device login returned an invalid response")
-            notify(f"Open https://auth.openai.com/deviceauth and enter code {code}\n")
+            if on_code is not None:
+                on_code(DEVICE_URL, code)
+            else:
+                notify(f"Open {DEVICE_URL} and enter code {code}\n")
             interval = self._ttl({"expires_in": data.get("interval")}, message="codex: device login returned an invalid interval")
             deadline = self._now() + 900.0
             while self._now() < deadline:

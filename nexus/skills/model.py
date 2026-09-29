@@ -65,10 +65,17 @@ DEFAULT_MAX_BODY_BYTES = MAX_SKILL_FILE_BYTES
 
 
 class SkillSource(StrEnum):
-    """Where a skill was discovered, lowest to highest precedence."""
+    """Where a skill was discovered, lowest to highest precedence.
+
+    ``WORKSPACE_LEGACY`` is the read-only ``<workspace>/.nexus/skills``
+    fallback (STATE_PLAN §5.4): it outranks ``USER`` so a project's own
+    skills still beat the user's, but ``WORKSPACE`` (``.agents/skills``) wins
+    any collision since writes always go there now.
+    """
 
     BUILTIN = "builtin"
     USER = "user"
+    WORKSPACE_LEGACY = "workspace_legacy"
     WORKSPACE = "workspace"
 
     @property
@@ -76,11 +83,12 @@ class SkillSource(StrEnum):
         return SOURCE_PRECEDENCE[self]
 
 
-#: Higher precedence wins a same-name collision: workspace > user > builtin.
+#: Higher precedence wins a same-name collision: workspace > legacy > user > builtin.
 SOURCE_PRECEDENCE: Mapping[SkillSource, int] = {
     SkillSource.BUILTIN: 0,
     SkillSource.USER: 1,
-    SkillSource.WORKSPACE: 2,
+    SkillSource.WORKSPACE_LEGACY: 2,
+    SkillSource.WORKSPACE: 3,
 }
 
 

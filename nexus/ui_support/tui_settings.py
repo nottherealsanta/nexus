@@ -1,14 +1,17 @@
 """Full-screen Settings page backed entirely by host inventory commands (plan §4).
 
 A left sidebar lists every configurable area: the shell's own preferences
-(Appearance, Layout, Keyboard, Workspace) and the file-backed categories
-(Agents, Tools, MCP, Skills, Hooks, Config, Soul). File-backed areas list items
+(Appearance, Layout, Keyboard, Workspace), provider sign-in (Providers, see
+``tui_providers``), and the file-backed categories (Agents, Tools, MCP,
+Skills, Hooks, Config, Soul). File-backed areas list items
 from ``SettingsInventory`` and edit them through ``SettingsRead``/``Write``/
 ``Delete``, so every write is validated and scoped by the host.
 
 Agents get a "New sessions start with" row that writes ``[agent] name`` to the
-selected scope (``AgentDefaultSet``), and a form for model, provider, reasoning
-effort and fallbacks above the prompt editor. Built-in agents are listed alongside custom ones; saving one
+selected scope (``AgentDefaultSet``), and a form above the prompt editor: one
+model row (provider, model and effort chosen together in the shared
+``ModelPickerScreen``) and an ordered list of fallbacks, each picked the same
+way. Built-in agents are listed alongside custom ones; saving one
 writes an override in the selected scope (``~/.nexus`` by default) and
 "Reset to default" moves that override to trash.
 """
@@ -25,9 +28,16 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, ContentSwitcher, Input, OptionList, Static, TextArea
 from textual.widgets._option_list import Option
 
-from .agent_frontmatter import agent_fields, fallback_items, set_agent_fields
+from .agent_frontmatter import (
+    MAX_FALLBACKS,
+    agent_fields,
+    fallback_items,
+    set_agent_fields,
+)
 from .text import sanitize
+from .tui_model_picker import ModelPickerScreen
 from .tui_panels import SettingsScreen, TuiPreferences
+from .tui_providers import ProvidersPane
 
 
 def _field(value: Any, key: str, default: Any = None) -> Any:
@@ -66,6 +76,7 @@ class SettingsConsole(SettingsScreen):
         ("appearance", "Appearance"), ("layout", "Layout"),
         ("keys", "Keyboard"), ("workspace", "Workspace"),
         (None, "CONFIGURE"),
+        ("providers", "Providers"),
         ("agents", "Agents"), ("tools", "Tools"), ("mcp", "MCP servers"),
         ("skills", "Skills"), ("hooks", "Hooks"), ("config", "Config"),
         ("soul", "Soul"),
@@ -102,6 +113,8 @@ class SettingsConsole(SettingsScreen):
         list_agents: Callable[[], Awaitable[Any]] | None = None,
         default_agent: Callable[[], Awaitable[str]] | None = None,
         set_default_agent: Callable[[str, str], Awaitable[Any]] | None = None,
+        list_models: Callable[[], Awaitable[Any]] | None = None,
+        providers: Any | None = None,
     ) -> None:
         super().__init__(preferences, themes, shortcuts, workspace)
         self._inventory_call = inventory
@@ -111,6 +124,9 @@ class SettingsConsole(SettingsScreen):
         self._list_agents = list_agents
         self._default_agent = default_agent
         self._set_default_agent = set_default_agent
+        #: A host client exposing the ``provider_*`` calls (Settings → Providers).
+        self._providers = providers
+        self._list_models = list_models
         keys = [key for key, _ in self.SECTIONS if key]
         category = "appearance" if category == "general" else category
         self.category = category if category in keys else "appearance"
@@ -123,7 +139,6 @@ class SettingsConsole(SettingsScreen):
         self._saved_body = ""
         self._builtin = False
         self._overrides_builtin = False
-        self._syncing_form = False
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="settings-console"):
@@ -134,6 +149,7 @@ class SettingsConsole(SettingsScreen):
                 ), id="settings-sections")
             with ContentSwitcher(initial="appearance", id="settings-panes"):
                 yield from self.compose_general_panes()
+                yield ProvidersPane(self._providers)
                 with Vertical(id="settings-file-pane"):
                     yield Static("", id="settings-file-heading", classes="settings-heading", markup=False)
                     yield Static("", id="settings-file-help", classes="settings-help", markup=False)
@@ -153,15 +169,18 @@ class SettingsConsole(SettingsScreen):
                         with Vertical(id="settings-file-editor-pane"):
                             yield Static("Select an item", id="settings-file-title", markup=False)
                             with Vertical(id="agent-form"):
-                                for field, label, hint in (
-                                    ("model", "Model", "inherit · tier (low/medium/high) or provider/model"),
-                                    ("provider", "Provider", "unset"),
-                                    ("reasoning_effort", "Effort", "default · none minimal low medium high xhigh max"),
-                                    ("fallback", "Fallbacks", "provider/model, provider/model, …"),
-                                ):
-                                    with Horizontal(classes="agent-form-row"):
-                                        yield Static(label, classes="agent-form-label", markup=False)
-                                        yield Input(placeholder=hint, id=f"agent-{field}", classes="agent-form-input")
+                                with Horizontal(classes="agent-form-row"):
+                                    yield Static("Model", classes="agent-form-label", markup=False)
+                                    yield Button("", id="agent-model", classes="agent-form-pick")
+                                    yield Button("×", id="agent-model-clear", classes="agent-form-remove")
+                                for index in range(MAX_FALLBACKS):
+                                    with Horizontal(classes="agent-form-row agent-fallback-row"):
+                                        yield Static("Fallbacks" if index == 0 else "", classes="agent-form-label", markup=False)
+                                        yield Button("", id=f"agent-fallback-{index}", classes="agent-form-pick")
+                                        yield Button("×", id=f"agent-fallback-remove-{index}", classes="agent-form-remove")
+                                with Horizontal(classes="agent-form-row", id="agent-fallback-add-row"):
+                                    yield Static("", id="agent-fallback-add-label", classes="agent-form-label", markup=False)
+                                    yield Button("+ Add fallback", id="agent-fallback-add", classes="agent-form-pick")
                             yield TextArea(id="settings-file-editor", soft_wrap=True)
                             yield Static("", id="settings-file-status", markup=False)
                             with Horizontal(id="settings-file-actions"):
@@ -201,6 +220,8 @@ class SettingsConsole(SettingsScreen):
             self.query_one("#settings-file-heading", Static).update(label)
             self.query_one("#settings-file-help", Static).update(self._HELP.get(category, ""))
             self._clear_editor()
+        if category == "providers":
+            self.query_one(ProvidersPane).reload()
         row = self.query_one("#settings-default-agent-row")
         row.display = category == "agents" and self._default_agent is not None
         if row.display:
@@ -288,7 +309,7 @@ class SettingsConsole(SettingsScreen):
         listing.clear_options()
         rows = [row for row in self._items if _field(row, "category") == self.category]
         # Agents: build (root) first, then built-in subagents, then custom ones.
-        order = {"build": 0, "advisor": 1, "task": 2, "quick": 3}
+        order = {"build": 0, "orchestrator": 1, "advisor": 2, "task": 3, "quick": 4}
         rows.sort(key=lambda row: (order.get(str(_field(row, "id", "")), 9), str(_field(row, "id", "")).casefold()))
         self._visible_items = rows
         listing.add_options([Option(self._item_label(row)) for row in rows])
@@ -335,27 +356,115 @@ class SettingsConsole(SettingsScreen):
         if not form.display:
             return
         fields = agent_fields(self.query_one("#settings-file-editor", TextArea).text)
-        self._syncing_form = True
+        model = self._model_reference(fields)
+        effort = fields.get("reasoning_effort", "")
+        label = f"{model} · {effort}" if model and effort else model or (
+            f"inherit session model · {effort}" if effort else "inherit session model"
+        )
+        self.query_one("#agent-model", Button).label = sanitize(label, 120)
+        self.query_one("#agent-model-clear", Button).display = bool(model or effort)
+        fallbacks = fallback_items(fields.get("fallback", ""))
+        for index, row in enumerate(self.query(".agent-fallback-row")):
+            row.display = index < len(fallbacks)
+            if row.display:
+                self.query_one(f"#agent-fallback-{index}", Button).label = sanitize(fallbacks[index], 120)
+        self.query_one("#agent-fallback-add-label", Static).update("" if fallbacks else "Fallbacks")
+        self.query_one("#agent-fallback-add-row").display = len(fallbacks) < MAX_FALLBACKS
+
+    @staticmethod
+    def _model_reference(fields: Mapping[str, str]) -> str:
+        """``provider/model`` when both are set separately, else the raw model value."""
+        model, provider = fields.get("model", ""), fields.get("provider", "")
+        if model and provider and "/" not in model:
+            return f"{provider}/{model}"
+        return model or (f"{provider}/…" if provider else "")
+
+    def _set_fields(self, updates: Mapping[str, str]) -> None:
+        editor = self.query_one("#settings-file-editor", TextArea)
+        updated = set_agent_fields(editor.text, updates)
+        if updated != editor.text:
+            editor.text = updated
+        self._sync_agent_form()
+
+    def _fallbacks(self) -> list[str]:
+        text = self.query_one("#settings-file-editor", TextArea).text
+        return fallback_items(agent_fields(text).get("fallback", ""))
+
+    async def _pick_model(self, target: str) -> None:
+        """Open the shared model picker; ``target`` is ``model``, ``add``, or a fallback index."""
+        if self._list_models is None or not self._current_id:
+            return
         try:
-            for key in ("model", "provider", "reasoning_effort"):
-                self.query_one(f"#agent-{key}", Input).value = fields.get(key, "")
-            self.query_one("#agent-fallback", Input).value = ", ".join(fallback_items(fields.get("fallback", "")))
-        finally:
-            self._syncing_form = False
+            rows = [dict(row) for row in await self._list_models()
+                    if isinstance(row, Mapping) and row.get("provider") and row.get("id")]
+        except Exception as exc:  # noqa: BLE001 - host/transport error
+            self._status(f"Models unavailable: {sanitize(str(exc), 120)}")
+            return
+        if not self.is_mounted:
+            return
+        fields = agent_fields(self.query_one("#settings-file-editor", TextArea).text)
+        fallbacks = self._fallbacks()
+        index = int(target) if target.isdigit() else None
+        effort = (fields.get("reasoning_effort") or None) if target == "model" else None
+        current = (self._model_reference(fields) if target == "model"
+                   else fallbacks[index] if index is not None and index < len(fallbacks) else "")
+        prefs = self._prefs
+        choice = await self.app.push_screen_wait(ModelPickerScreen(
+            rows, current=current, current_effort=effort,
+            stored_override=effort, effort_source=None,
+            favorites=prefs["model_favorites"], recent=prefs["model_recent"],
+            on_favorites=lambda refs: prefs.set("model_favorites", refs),
+        ))
+        if choice is None or not self.is_mounted or not self._current_id:
+            return
+        ref, picked_effort, committed = choice
+        if target == "model":
+            supported = next((row.get("supported_efforts") or () for row in rows
+                              if f"{row['provider']}/{row['id']}" == ref), ())
+            # Keep the saved effort unless the picker changed it or the new model lacks it.
+            new_effort = (picked_effort or "") if committed else (effort if effort in supported else "")
+            self._set_fields({"model": ref, "provider": "", "reasoning_effort": new_effort or ""})
+            return
+        fallbacks = self._fallbacks()
+        if index is not None and index < len(fallbacks):
+            fallbacks[index] = ref
+        elif ref not in fallbacks:
+            fallbacks.append(ref)
+        self._set_fields({"fallback": ", ".join(fallbacks[:MAX_FALLBACKS])})
+
+    def _agent_form_pressed(self, button_id: str) -> bool:
+        """Handle an agent form button; ``False`` when ``button_id`` is not one."""
+        if button_id == "agent-model-clear":
+            self._set_fields({"model": "", "provider": "", "reasoning_effort": ""})
+            return True
+        if button_id.startswith("agent-fallback-remove-"):
+            index = int(button_id.rsplit("-", 1)[1])
+            fallbacks = self._fallbacks()
+            if index < len(fallbacks):
+                del fallbacks[index]
+                self._set_fields({"fallback": ", ".join(fallbacks)})
+            return True
+        if button_id == "agent-model":
+            target = "model"
+        elif button_id == "agent-fallback-add":
+            target = "add"
+        elif button_id.startswith("agent-fallback-"):
+            target = button_id.rsplit("-", 1)[1]
+        else:
+            return False
+        self.run_worker(self._pick_model(target), group="settings-model-pick", exclusive=True)
+        return True
 
     def _sync_actions(self) -> None:
         delete = self.query_one("#settings-delete", Button)
         delete.label = "Reset to default" if self._overrides_builtin else "Delete"
         delete.disabled = not self._current_id or self._builtin
 
-    @on(Input.Changed, ".agent-form-input")
-    def _agent_field_changed(self, event: Input.Changed) -> None:
-        if self._syncing_form or not self._current_id or event.input.id is None:
-            return
-        editor = self.query_one("#settings-file-editor", TextArea)
-        updated = set_agent_fields(editor.text, {event.input.id.removeprefix("agent-"): event.value})
-        if updated != editor.text:
-            editor.text = updated
+    @on(TextArea.Changed, "#settings-file-editor")
+    def _editor_changed(self) -> None:
+        # Hand edits to the frontmatter show up in the form.
+        if self.category == "agents" and self._current_id:
+            self._sync_agent_form()
 
     def _status(self, text: str) -> None:
         if self.is_mounted:
@@ -448,7 +557,9 @@ class SettingsConsole(SettingsScreen):
 
     def enter_section(self, index: int) -> None:
         key = self.SECTIONS[index][0]
-        if key in self.GENERAL:
+        if key == "providers":
+            next(iter(self.query_one(ProvidersPane).query("Button, Input"))).focus()
+        elif key in self.GENERAL:
             pane = self.query_one(f"#{key}")
             target = next(iter(pane.query("RadioSet, Switch")), None)
             (target or pane).focus()
@@ -507,6 +618,8 @@ class SettingsConsole(SettingsScreen):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
+        if self._agent_form_pressed(button_id):
+            return
         if event.button.has_class("settings-default-agent") and event.button.name:
             self.run_worker(
                 self._choose_default_agent(event.button.name),

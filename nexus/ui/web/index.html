@@ -115,17 +115,18 @@
     </section>
   </div>
   <div class="overlay settings-overlay" id="settings-overlay" hidden>
-    <section class="settings-dialog dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <section class="settings-dialog dialog" id="settings-dialog" role="dialog" tabindex="-1" aria-modal="true" aria-labelledby="settings-title">
       <nav class="settings-nav" aria-label="Settings sections">
         <h2 id="settings-title">Settings</h2>
         <a href="#settings-appearance" class="selected">Appearance</a>
         <a href="#settings-detail">Conversation detail</a>
         <a href="#settings-keys">Keyboard</a>
         <a href="#settings-workspace">Workspace</a>
+        <a href="#settings-providers">Providers</a>
         <a href="#settings-agents">Agents</a>
       </nav>
       <div class="settings-body" id="settings-body">
-        <header class="settings-header"><span class="settings-crumb" id="settings-crumb">Appearance</span><button class="icon-button" id="settings-close" aria-label="Close settings"><svg><use href="#i-x"/></svg></button></header>
+        <header class="settings-header"><span class="settings-crumb" id="settings-crumb">Appearance</span></header>
         <div class="settings-scroll" id="settings-scroll">
         <section class="settings-section" id="settings-appearance" aria-labelledby="settings-appearance-title">
           <h3 id="settings-appearance-title">Appearance</h3>
@@ -197,6 +198,11 @@
           <h3 id="settings-workspace-title">Workspace</h3>
           <div class="settings-workspace" id="settings-workspace-info"><p class="settings-help">Loading workspace health…</p></div>
         </section>
+        <section class="settings-section" id="settings-providers" aria-labelledby="settings-providers-title">
+          <h3 id="settings-providers-title">Providers</h3>
+          <p class="settings-help">Sign in to model providers. Credentials stay in the keychain of the machine running Nexus; restart the daemon after connecting (<code>nexus daemon stop</code>).</p>
+          <div class="provider-list" id="provider-list"><p class="settings-help">Loading providers…</p></div>
+        </section>
         <section class="settings-section" id="settings-agents" aria-labelledby="settings-agents-title">
           <h3 id="settings-agents-title">Agents</h3>
           <p class="settings-help">The root agent every new session starts with. Written to <code>[agent] name</code>; a project setting overrides the global one.</p>
@@ -224,42 +230,51 @@
     </section>
   </div>
   <div class="overlay text-overlay" id="text-overlay" hidden>
-    <section class="dialog text-dialog" role="dialog" aria-modal="true" aria-labelledby="text-title">
-      <header class="text-dialog-header"><h2 id="text-title">Details</h2><button class="icon-button" id="text-close" type="button" aria-label="Close"><svg><use href="#i-x"/></svg></button></header>
+    <section class="dialog text-dialog" id="text-dialog" role="dialog" tabindex="-1" aria-modal="true" aria-labelledby="text-title">
+      <header class="text-dialog-header"><h2 id="text-title">Details</h2></header>
       <pre class="text-body" id="text-body"></pre>
-      <button class="toolbar-button tool-details-agent" id="tool-details-agent" type="button" hidden>Open child agent</button>
     </section>
   </div>
-  <div class="overlay agent-overlay" id="agent-overlay" hidden>
-    <section class="dialog agent-dialog" role="dialog" aria-modal="true" aria-labelledby="agent-title" aria-describedby="agent-task">
-      <header class="agent-dialog-header">
-        <button class="toolbar-button" id="agent-back" type="button" hidden>← Parent agent</button>
-        <div class="agent-dialog-heading"><h2 id="agent-title">Subagent</h2><span class="status-pill" id="agent-status"></span><span class="agent-meta" id="agent-meta"></span></div>
-        <button class="icon-button" id="agent-close" type="button" aria-label="Close agent"><svg><use href="#i-x"/></svg></button>
-      </header>
-      <p class="agent-task" id="agent-task"></p>
-      <div class="agent-timeline" id="agent-timeline" role="log" aria-live="off"></div>
-    </section>
+  <!-- A sub agent opens as its own page laid out like the root: top bar, context
+       header, timeline, a read-only composer row, and the details panel. -->
+  <div class="app-shell agent-page sidebar-hidden inspector-open" id="agent-overlay" role="region" tabindex="-1" aria-labelledby="agent-title" hidden>
+    <header class="topbar">
+      <button class="topbar-glyph" id="agent-back" type="button" title="Back to the parent (Esc)" aria-label="Back to the parent">←</button>
+      <div class="topbar-title"><h1 id="agent-title">Sub agent</h1></div>
+      <div class="topbar-actions">
+        <span class="live-state" id="agent-status"><i></i> <span>Idle</span></span>
+        <button class="topbar-glyph inspector-toggle on" id="agent-details-toggle" type="button" title="Toggle details panel" aria-label="Toggle details">▐</button>
+      </div>
+    </header>
+    <main class="main-pane">
+      <section class="conversation" aria-label="Sub agent conversation">
+        <p class="agent-task" id="agent-task"></p>
+        <div class="timeline agent-timeline" id="agent-timeline" role="log" aria-live="off"></div>
+      </section>
+      <footer class="composer-wrap"><div class="composer agent-readonly">Sub agent · read-only · Esc returns to the parent</div></footer>
+    </main>
+    <aside class="inspector" id="agent-inspector" aria-label="Sub agent details">
+      <header class="inspector-header"><nav class="inspector-tabs"><button class="selected" type="button" aria-selected="true">Session</button></nav></header>
+      <div class="inspector-content" id="agent-details" tabindex="0"></div>
+    </aside>
   </div>
   <div class="overlay context-overlay" id="context-overlay" hidden>
     <section class="dialog context-dialog" id="context-dialog" role="dialog" aria-modal="true" aria-labelledby="context-title" aria-describedby="context-description" tabindex="-1">
-      <header class="context-dialog-header"><div><p class="eyebrow">Read-only · assembled request</p><h2 id="context-title">Current context</h2></div><button class="icon-button" id="context-close" type="button" aria-label="Close context details"><svg><use href="#i-x"/></svg></button></header>
+      <header class="context-dialog-header"><div><p class="eyebrow">Read-only · assembled request</p><h2 id="context-title">Current context</h2></div></header>
       <p id="context-description" class="context-disclaimer">Request structure in provider order: system prompt, tool definitions, then ordered messages. Drafts and provider-specific wire transformations are excluded; nothing is sent or persisted by this inspection.</p>
       <div class="context-modal-status" id="context-modal-status" role="status" aria-live="polite"></div>
       <div class="context-report" id="context-report"></div>
-      <footer class="context-dialog-footer"><span id="context-refreshed-at"></span><button class="toolbar-button" id="context-refresh" type="button">Refresh context</button><button class="toolbar-button" id="context-done" type="button">Close</button></footer>
+      <footer class="context-dialog-footer"><span id="context-refreshed-at"></span><button class="toolbar-button" id="context-refresh" type="button">Refresh context</button></footer>
     </section>
   </div>
   <div class="overlay setup-overlay" id="setup-overlay" hidden>
     <section class="dialog setup-dialog" id="setup-dialog" role="dialog" aria-modal="true" aria-labelledby="setup-title" aria-describedby="setup-description" tabindex="-1">
-      <header class="setup-header"><p class="eyebrow">First-run setup · global default</p><h2 id="setup-title">Choose your default model</h2><p id="setup-description">Connect a provider and select the model new Nexus sessions should use by default.</p></header>
+      <header class="setup-header"><p class="eyebrow">First-run setup</p><h2 id="setup-title">Connect a provider</h2><p id="setup-description">Nexus starts with the newest model of the first provider you connect. Change it any time with /model.</p></header>
       <div class="setup-content" id="setup-content">
-        <section class="setup-section" aria-labelledby="setup-provider-heading"><h3 id="setup-provider-heading">1 · Provider</h3><div class="setup-providers" id="setup-providers" role="radiogroup" aria-label="Provider"></div></section>
-        <section class="setup-section" aria-labelledby="setup-connection-heading"><h3 id="setup-connection-heading">Connection</h3><div class="setup-instruction" id="setup-instruction"></div><button class="toolbar-button" id="setup-retry" type="button">Retry connection check</button><p class="setup-status" id="setup-status" role="status" aria-live="polite"></p></section>
-        <section class="setup-section" aria-labelledby="setup-model-heading"><h3 id="setup-model-heading">2 · Global default model</h3><label class="setup-search"><span class="sr-only">Search candidate models</span><input id="setup-search" type="search" placeholder="Search models…" autocomplete="off"></label><div class="setup-models" id="setup-models" role="listbox" aria-label="Candidate models" aria-describedby="setup-model-note"></div><p class="setup-model-note" id="setup-model-note"></p></section>
+        <div class="provider-list" id="setup-provider-list"></div>
+        <ul class="setup-env" id="setup-env" aria-label="Providers connected through the daemon environment"></ul>
       </div>
-      <div class="setup-success" id="setup-success" role="status" aria-live="polite" hidden><h3>Default saved</h3><p id="setup-success-model"></p><p><strong>Restart the Nexus daemon to apply this global default.</strong> The running daemon does not hot-reload this setting. Stop it with <code>nexus daemon stop</code>, then start Nexus again.</p></div>
-      <footer class="setup-actions"><button class="toolbar-button" id="setup-dismiss" type="button">Not now</button><span class="setup-action-status" id="setup-action-status" role="status" aria-live="polite"></span><button class="btn-signal setup-save" id="setup-save" type="button" disabled>Save global default</button></footer>
+      <footer class="setup-actions"><span class="setup-action-status" id="setup-action-status" role="status" aria-live="polite"></span><button class="toolbar-button" id="setup-retry" type="button" hidden>Try again</button><button class="toolbar-button" id="setup-dismiss" type="button">Not now</button></footer>
     </section>
   </div>
   <div class="toast-region" id="toast-region" aria-live="polite"></div>

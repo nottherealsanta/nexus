@@ -411,8 +411,9 @@ class ContextManager:
     ) -> None:
         if config is None and config_loader is None:
             raise ConfigError("ContextManager requires a config or config_loader")
-        if not isinstance(identity, str) or not identity.strip():
-            raise ValueError("identity must be a nonempty string")
+        if not isinstance(identity, str):
+            # Empty means no identity part: a subagent speaks only as its role.
+            raise ValueError("identity must be a string")
         if type(max_file_bytes) is not int or max_file_bytes < 1:
             raise ValueError("max_file_bytes must be a positive integer")
         if system is not None and not isinstance(system, str):
@@ -967,8 +968,8 @@ class ContextManager:
         env = self._env
         if env is None:
             raise ConfigError("agent prompt requires a frozen context snapshot")
-        combined = "\n\n--- Selected agent instructions ---\n" + prompt
-        self._env = replace(env, soul_text=env.soul_text + combined)
+        combined = "\n\n".join(part for part in (env.soul_text.strip(), prompt) if part)
+        self._env = replace(env, soul_text=combined)
 
     @staticmethod
     def _profile(config: Config) -> str | None:

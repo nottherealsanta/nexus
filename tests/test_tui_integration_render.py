@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 from textual.widgets import Static
+from textual_diff_view import DiffView
 
 from nexus.config import Config
 from nexus.config.schema import (
@@ -109,10 +110,12 @@ async def test_real_read_edit_events_render_as_timeline_tool_cards(tmp_path):
             edit_card = cards["edit-render"]
             edit_header = edit_card.query_one("#tool-header", Static).render().plain
             assert edit_header == "← Edit note.md · Edit note.md: 1 replacement(s)"
-            assert len(edit_card.children) == 1
             assert edit_card.tool.diff["hunk"].endswith("-world\n+nexus")
+            # The edit's diff renders inline under its row via textual-diff-view.
+            (diff_view,) = edit_card.query(DiffView)
+            assert (diff_view.code_original, diff_view.code_modified) == ("hello\nworld", "hello\nnexus")
 
-            # Full input, result, and unified diff are available in the modal only.
+            # Full input, result, and unified diff are also in the modal.
             edit_card.focus()
             await pilot.press("enter")
             await pilot.pause()

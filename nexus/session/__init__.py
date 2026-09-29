@@ -1,11 +1,19 @@
-"""Session layer: append-only JSONL log, cross-process lock, migration, handle."""
+"""Session layer: shared SQLite state database, cross-process lock, handle.
+
+Production sessions live in :mod:`nexus.session.db` (STATE_PLAN §4-5.1);
+:mod:`nexus.session.store` survives as the legacy JSONL reader used by
+:mod:`nexus.session.import_legacy`.
+"""
 from ..errors import SessionBusy, SessionError
 from . import export
+from .db import SqliteSessionStore, StateDatabase
 from .ids import is_valid_session_id, validate_session_id
+from .import_legacy import ImportResult, import_workspace_sessions
 from .lock import SessionLock
 from .manager import (
     DEFAULT_RETENTION_SECONDS,
     TRASH_VERSION,
+    ArchiveRecord,
     SessionManager,
     SessionState,
     SessionSummary,
@@ -37,6 +45,7 @@ from .snapshot import (
 from .store import (
     SESSION_LOG_VERSION,
     EventRecord,
+    JsonlSessionStore,
     MessageRecord,
     ReadResult,
     SessionRecord,
@@ -53,8 +62,11 @@ __all__ = [
     "SNAPSHOT_VERSION",
     "TERMINAL_EVENTS",
     "TRASH_VERSION",
+    "ArchiveRecord",
     "CurrentState",
     "EventRecord",
+    "ImportResult",
+    "JsonlSessionStore",
     "MessageRecord",
     "MigrationResult",
     "ReadResult",
@@ -69,11 +81,14 @@ __all__ = [
     "SessionSummary",
     "Snapshot",
     "SnapshotSummary",
+    "SqliteSessionStore",
+    "StateDatabase",
     "SummaryRecord",
     "TrashRecord",
     "TurnLease",
     "backup_path",
     "export",
+    "import_workspace_sessions",
     "is_valid_session_id",
     "jsonl_path",
     "legacy_path",

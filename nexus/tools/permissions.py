@@ -916,7 +916,19 @@ class PathGuard:
             except ValueError:
                 continue
             if any(
-                part in {"credentials.json", "sessions", "cache", "daemon", "daemon.sock", "daemon.pid", "daemon.lock"}
+                part
+                in {
+                    "credentials.json",
+                    "sessions",
+                    "cache",
+                    "daemon",
+                    "daemon.sock",
+                    "daemon.pid",
+                    "daemon.lock",
+                    # The shared session state database (STATE_PLAN §5.4) is
+                    # machine state, never editable through a tool call.
+                    "nexus.db",
+                }
                 or part.startswith("trash")
                 for part in relative.parts
             ):

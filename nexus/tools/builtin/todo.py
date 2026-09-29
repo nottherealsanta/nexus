@@ -343,8 +343,11 @@ _TODO_ITEM_SCHEMA: dict[str, Any] = {
 TODO_SPEC = ToolSpec(
     name="todowrite",
     description=(
-        "Create or update this agent's task list. Send the complete list each "
-        "time; omitted items are removed. State is in-memory for this agent."
+        "Create or update this agent's task list. Use it for work with three or "
+        "more distinct steps, keep one item in progress at a time, and mark items "
+        "done as you finish them; skip it for small changes. Send the complete "
+        "list each time; omitted items are removed. State is in-memory for this "
+        "agent."
     ),
     input_schema={
         "type": "object",

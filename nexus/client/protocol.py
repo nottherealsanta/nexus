@@ -214,6 +214,7 @@ class Client:
             "found": result.found,  # type: ignore[union-attr]
             "status": result.status,  # type: ignore[union-attr]
             "view": dict(result.view),  # type: ignore[union-attr]
+            "context": dict(getattr(result, "context", None) or {}),
         }
 
     async def resolve_permission(self, session: str, request_id: str, decision: str) -> bool:
@@ -256,8 +257,26 @@ class Client:
     async def setup_status(self) -> p.SetupStatusResult:
         return await self._request(p.SetupStatus())  # type: ignore[return-value]
 
-    async def setup_save(self, provider: str, model: str) -> p.SetupSaveResult:
+    async def setup_save(self, provider: str, model: str = "") -> p.SetupSaveResult:
         return await self._request(p.SetupSave(provider=provider, model=model))  # type: ignore[return-value]
+
+    async def providers_status(self) -> p.ProvidersStatusResult:
+        return await self._request(p.ProvidersStatus())  # type: ignore[return-value]
+
+    async def provider_login(self, provider: str, method: str = "", domain: str = "") -> p.ProviderLoginResult:
+        return await self._request(p.ProviderLogin(provider=provider, method=method, domain=domain))  # type: ignore[return-value]
+
+    async def provider_login_poll(self, login_id: str) -> p.ProviderLoginResult:
+        return await self._request(p.ProviderLoginPoll(login_id=login_id))  # type: ignore[return-value]
+
+    async def provider_login_cancel(self, login_id: str) -> p.ProviderLoginResult:
+        return await self._request(p.ProviderLoginCancel(login_id=login_id))  # type: ignore[return-value]
+
+    async def provider_key_set(self, provider: str, key: str) -> p.ProviderAuthResult:
+        return await self._request(p.ProviderKeySet(provider=provider, key=key))  # type: ignore[return-value]
+
+    async def provider_logout(self, provider: str) -> p.ProviderAuthResult:
+        return await self._request(p.ProviderLogout(provider=provider))  # type: ignore[return-value]
 
     async def list_agents(self) -> list[dict[str, Any]]: return list((await self._request(p.AgentsList())).agents)  # type: ignore[union-attr]
 

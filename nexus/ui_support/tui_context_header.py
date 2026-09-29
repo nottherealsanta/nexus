@@ -107,12 +107,9 @@ class ContextModal(Screen):
                     yield Static(self.body_text, id="context-modal-body", markup=False)
             if self.category:
                 yield Button(f"Edit {self.category}…", id="context-modal-edit")
-            yield Button("Close", id="context-modal-close")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "context-modal-close":
-            self.dismiss()
-        elif event.button.id == "context-modal-edit":
+        if event.button.id == "context-modal-edit":
             category = self.category
             self.dismiss()
             self.app.call_after_refresh(lambda: self.app.action_open_settings(category=category))
@@ -145,12 +142,9 @@ class ToolsModal(Screen):
                     self.groups, expanded=tuple(group.key for group in self.groups), flatten_single=True)
             with Horizontal(id="context-modal-actions"):
                 yield Button("Edit tools…", id="context-modal-edit")
-                yield Button("Close", id="context-modal-close")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "context-modal-close":
-            self.dismiss()
-        elif event.button.id == "context-modal-edit":
+        if event.button.id == "context-modal-edit":
             self.dismiss()
             self.app.call_after_refresh(lambda: self.app.action_open_settings(category="tools"))
 
@@ -186,17 +180,45 @@ class ContextBlock(Static):
 
 
 class ContextHeader(Vertical):
-    """The four request-context blocks at the start of a conversation."""
+    """The request-context blocks at the start of a conversation.
+
+    A sub agent page also shows its Task (what the root agent asked of it)
+    right after the System prompt; the root conversation has no Task block.
+    """
 
     def compose(self) -> ComposeResult:
-        for label, slug in (("System prompt", "prompt"), ("Tools", "tools"),
+        for label, slug in (("System prompt", "prompt"), ("Task", "task"), ("Tools", "tools"),
                             ("Skills", "skills"), ("MCP", "mcp")):
-            yield ContextBlock(label, id=f"context-{slug}", classes="context-block")
+            classes = "context-block -task" if slug == "task" else "context-block"
+            yield ContextBlock(label, id=f"context-{slug}", classes=classes)
+
+    def set_task(self, task: str) -> None:
+        """Show the root agent's task for this sub agent; empty hides the block."""
+        block = self.query_one("#context-task", ContextBlock)
+        block.display = bool(task)
+        block.set_data(task, task or "(none)")
 
     def set_unavailable(self) -> None:
         for block in self.query(ContextBlock):
             block.result = None
             block.set_data("Context unavailable", "Context unavailable")
+
+    def set_sent_request(self, context: Mapping, *, session: str, note: str) -> None:
+        """Fill from a subagent's recorded request (``AgentTranscript.context``).
+
+        Unknown fields are ignored; with no request yet, ``note`` stands in the
+        System prompt block and the other blocks stay empty.
+        """
+        if not context:
+            for block in self.query(ContextBlock):
+                if block.id != "context-task":
+                    block.result = None
+                    block.set_data(note if block.id == "context-prompt" else "", note)
+            return
+        fields = set(ContextInspectResult.__struct_fields__) - {"session"}
+        result = ContextInspectResult(session=session, **{k: v for k, v in context.items() if k in fields})
+        color = result.agent.get("color")
+        self.set_data(result, color=color if isinstance(color, str) and color else None)
 
     def set_data(self, result: ContextInspectResult, *, color: str | None = None) -> None:
         """Fill the blocks; section chips take the agent's color (host color first)."""

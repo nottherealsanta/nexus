@@ -108,7 +108,7 @@ class BrowserRoutes:
     async def route(self, request, writer, server) -> bool:
         """Serve a browser route; return False for paths owned by peer API."""
         path = request.path
-        is_session_page = bool(re.fullmatch(r"/s/[A-Za-z0-9_.:-]{1,128}", path))
+        is_session_page = bool(re.fullmatch(r"/s/[A-Za-z0-9_.:-]{1,128}(/a/[A-Za-z0-9_.:%-]{1,384})?", path))
         is_web = path == "/" or is_session_page or path.startswith(
             ("/assets/", "/styles/", "/js/", "/v1/web/")
         )

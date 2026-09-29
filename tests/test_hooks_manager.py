@@ -56,7 +56,7 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures" / "hooks"
 
 
 def install_fixture(tmp_path: Path, stem: str, *, name: str | None = None) -> Path:
-    target_dir = tmp_path / ".nexus" / "hooks"
+    target_dir = tmp_path / ".agents" / "hooks"
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / f"{name or stem}.py"
     shutil.copyfile(FIXTURES / f"{stem}.py", target)
@@ -64,7 +64,7 @@ def install_fixture(tmp_path: Path, stem: str, *, name: str | None = None) -> Pa
 
 
 def write_hook_module(tmp_path: Path, stem: str, body: str) -> Path:
-    target_dir = tmp_path / ".nexus" / "hooks"
+    target_dir = tmp_path / ".agents" / "hooks"
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / f"{stem}.py"
     target.write_text(body, encoding="utf-8")
@@ -117,7 +117,7 @@ def toml_command_hook(
 
 
 def write_toml(tmp_path: Path, entries: list[str]) -> Path:
-    path = tmp_path / ".nexus" / "hooks.toml"
+    path = tmp_path / ".agents" / "hooks.toml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_toml(entries), encoding="utf-8")
     return path
@@ -825,6 +825,54 @@ def test_workspace_hook_shadows_user_hook(tmp_path: Path, monkeypatch):
     assert "user_shared" not in names
 
 
+def test_legacy_nexus_hooks_are_a_read_only_fallback(tmp_path: Path):
+    """STATE_PLAN §5.4: ``.nexus/hooks*`` is still read when ``.agents`` is empty."""
+    legacy_dir = tmp_path / ".nexus" / "hooks"
+    legacy_dir.mkdir(parents=True)
+    (legacy_dir / "legacy.py").write_text(
+        "from nexus.hooks.model import HookDecision\n"
+        "def _run(inv, ctx): return HookDecision.warn('legacy')\n"
+        "HOOKS = [{'event': 'PreToolUse', 'name': 'from_legacy', 'run': _run}]\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".nexus" / "hooks.toml").write_text(
+        toml_command_hook(
+            "PreToolUse",
+            name="legacy_command",
+            command=command_script(tmp_path, "ok.py", "raise SystemExit(0)\n"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    manager = make_manager(tmp_path)
+    manager.refresh()
+    names = {spec.name for spec in manager.specs}
+    assert "from_legacy" in names
+    assert "legacy_command" in names
+    assert not (tmp_path / ".agents").exists()
+
+
+def test_agents_hooks_shadow_legacy_nexus_hooks(tmp_path: Path):
+    """STATE_PLAN §5.4: ``.agents`` outranks the legacy ``.nexus`` fallback."""
+    legacy_dir = tmp_path / ".nexus" / "hooks"
+    legacy_dir.mkdir(parents=True)
+    (legacy_dir / "shared.py").write_text(
+        "from nexus.hooks.model import HookDecision\n"
+        "def _run(inv, ctx): return HookDecision.block('legacy')\n"
+        "HOOKS = [{'event': 'PreToolUse', 'name': 'shared', 'run': _run}]\n",
+        encoding="utf-8",
+    )
+    install_fixture(tmp_path, "tool_hooks", name="shared")
+    manager = make_manager(tmp_path)
+    manager.refresh()
+    spec = next(spec for spec in manager.specs if spec.name == "mark_reviewed")
+    assert spec is not None
+    # Only the .agents copy's hook is registered for the shared stem.
+    assert not any(
+        spec.name == "shared" for spec in manager.specs
+    )
+
+
 def test_as_manifest_map_is_event_keyed(tmp_path: Path):
     install_fixture(tmp_path, "tool_hooks", name="tool_hooks")
     write_toml(
@@ -906,7 +954,7 @@ def _single_failure(manager: HookManager) -> dict:
 
 
 def test_unknown_top_level_key_is_refused(tmp_path: Path):
-    path = tmp_path / ".nexus" / "hooks.toml"
+    path = tmp_path / ".agents" / "hooks.toml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("[other]\nx = 1\n", encoding="utf-8")
     manager = make_manager(tmp_path)
@@ -984,7 +1032,7 @@ def test_invalid_matcher_is_refused(tmp_path: Path):
 
 def test_broken_toml_does_not_raise_and_keeps_python_hooks(tmp_path: Path):
     install_fixture(tmp_path, "tool_hooks", name="tool_hooks")
-    path = tmp_path / ".nexus" / "hooks.toml"
+    path = tmp_path / ".agents" / "hooks.toml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("this is not = = toml", encoding="utf-8")
     manager = make_manager(tmp_path)
@@ -1096,7 +1144,9 @@ def test_repeated_refresh_does_not_leak_modules_or_stages(tmp_path: Path):
     assert len(owned) == 1
     live = [name for name in sys.modules if name.startswith("nexus_ext.churn_")]
     assert live == list(owned)
-    stage = tmp_path / ".nexus" / "stage"
+    from nexus.config.paths import project_state_dir
+
+    stage = project_state_dir(tmp_path) / "stage"
     staged = list(stage.glob("*.py")) if stage.is_dir() else []
     assert len(staged) <= 1
 

@@ -47,6 +47,13 @@ class PanelsMixin:
     _health_error: str | None
     _last_archive: tuple[str, str] | None
 
+    def on_click(self, event) -> None:
+        # A click on a dialog's backdrop (the screen itself, not a child)
+        # closes it exactly as Escape does, whatever that screen binds it to.
+        if len(self.screen_stack) > 1 and event.widget is self.screen:
+            event.stop()
+            self.simulate_key("escape")
+
     def _preview_visible(self) -> bool:
         """The scrollable context header now owns the request preview."""
         return False
@@ -197,6 +204,8 @@ class PanelsMixin:
             list_agents=client.list_agents,
             default_agent=client.default_agent,
             set_default_agent=client.set_default_agent,
+            list_models=lambda: client.list_models(selectable_only=True),
+            providers=client,
         ))
         self.call_after_refresh(lambda: isinstance(self.screen, SettingsScreen)
                                 and self.screen.set_health(self._health, error=self._health_error))

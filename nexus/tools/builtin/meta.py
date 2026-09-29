@@ -13,7 +13,7 @@ Bundle ``meta`` (plan sections 5.3, 6.3-6.5):
   names, provenance, hashes, and sanitized messages -- never a source body,
   credential, or raw path beyond the bounded provenance string.
 * :data:`WRITE_TOOL_SPEC` / :func:`write_tool` -- author one extension file at
-  ``.nexus/tools/<name>.py``. It validates a *simple* filename (no traversal,
+  ``.agents/tools/<name>.py``. It validates a *simple* filename (no traversal,
   separators, symlink target, reserved name, or leading underscore), bounds the
   UTF-8 payload, and writes atomically (temp + fsync + replace) under the
   configured filesystem roots. It deliberately does **not** auto-reload: the
@@ -66,8 +66,8 @@ __all__ = [
     "write_tool",
 ]
 
-#: The workspace-relative directory extension tools live in.
-TOOLS_SUBDIR = ".nexus/tools"
+#: The workspace-relative directory extension tools live in (STATE_PLAN §5.4).
+TOOLS_SUBDIR = ".agents/tools"
 #: A filename (not a path) is bounded so it cannot be used to smuggle a path.
 MAX_TOOL_FILENAME_BYTES = 255
 #: A simple Python module filename: one leading letter, then word characters.
@@ -126,7 +126,7 @@ RELOAD_EXTENSIONS_SPEC = ToolSpec(
     group="extensions",
     description=(
         "Rebuild the extension manifest from disk and atomically swap it in. "
-        "Call this after writing or editing a tool in .nexus/tools/ so the new "
+        "Call this after writing or editing a tool in .agents/tools/ so the new "
         "tool becomes callable on the next iteration. Returns the diff."
     ),
     input_schema=_RELOAD_SCHEMA,
@@ -436,7 +436,7 @@ _WRITE_TOOL_SCHEMA: dict[str, Any] = {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Simple .py filename to create under .nexus/tools (for example "
+                "Simple .py filename to create under .agents/tools (for example "
                 "'metrics_query.py'). No directories or path separators."
             ),
         },
@@ -465,7 +465,7 @@ WRITE_TOOL_SPEC = ToolSpec(
     name="WriteTool",
     group="extensions",
     description=(
-        "Write one Python extension tool to .nexus/tools/<filename>. Validates "
+        "Write one Python extension tool to .agents/tools/<filename>. Validates "
         "the filename, bounds the payload, and writes atomically. Does not "
         "reload: call ReloadExtensions afterwards to activate it."
     ),
@@ -474,7 +474,7 @@ WRITE_TOOL_SPEC = ToolSpec(
     mutates=True,
     concurrency="exclusive",
     permission_key=_write_tool_key,
-    # The declared key is workspace-relative (``.nexus/tools/<name>``); the
+    # The declared key is workspace-relative (``.agents/tools/<name>``); the
     # manager canonicalizes it to an absolute path and applies the fs write-root
     # / read-deny boundary, so WriteTool is gated exactly like ``Write``.
     path_mode=True,
@@ -517,7 +517,7 @@ def validate_tool_filename(filename: object) -> str:
     if "/" in filename or "\\" in filename:
         raise _MetaToolError(
             "filename must not contain a path separator; it is written directly "
-            "under .nexus/tools"
+            "under .agents/tools"
         )
     if filename.startswith("_"):
         raise _MetaToolError(
@@ -544,7 +544,7 @@ def validate_tool_filename(filename: object) -> str:
 
 
 def _tools_dir(ctx: ToolContext):
-    return ctx.workspace / ".nexus" / "tools"
+    return ctx.workspace / ".agents" / "tools"
 
 
 async def write_tool(
@@ -572,7 +572,7 @@ async def write_tool(
     tools_dir = _tools_dir(ctx)
     if tools_dir.is_symlink():
         return _error(
-            "WriteTool: .nexus/tools is a symlink; refusing to write through it"
+            "WriteTool: .agents/tools is a symlink; refusing to write through it"
         )
     target = tools_dir / filename
     if target.is_symlink():
@@ -592,7 +592,7 @@ async def write_tool(
         first = guard.resolve(relative, for_write=True)
         if not first.absolute.is_relative_to(tools_dir.resolve()):
             return _error(
-                f"WriteTool: {relative} resolves outside .nexus/tools; refusing"
+                f"WriteTool: {relative} resolves outside .agents/tools; refusing"
             )
         resolved = guard.recheck(relative, for_write=True)  # TOCTOU re-check
         _check_cancel(ctx)

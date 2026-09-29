@@ -38,6 +38,7 @@ from textual.widgets.option_list import Option
 
 from .context import context_usage
 from .text import sanitize
+from .timeline import split_diff_files
 
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _EDIT_TOOLS = frozenset({"edit", "multiedit", "write", "apply_patch", "patch"})
@@ -68,11 +69,23 @@ def modified_files(view: Any) -> list[FileChange]:
                     continue
                 diff = tool.diff if isinstance(tool.diff, Mapping) else {}
                 inputs = tool.input if isinstance(tool.input, Mapping) else {}
+                metrics = tool.metrics if isinstance(tool.metrics, Mapping) else {}
+                parts = split_diff_files(diff)
+                if len(parts) > 1:
+                    # A multi-file patch: attribute each file's own lines.
+                    for path, hunk in parts:
+                        prior = files.get(path, FileChange(path))
+                        added = sum(1 for line in hunk.splitlines() if line.startswith("+"))
+                        removed = sum(1 for line in hunk.splitlines() if line.startswith("-"))
+                        files[path] = FileChange(
+                            path, prior.added + added, prior.removed + removed,
+                            prior.created, prior.hunks + (hunk,),
+                        )
+                    continue
                 path = diff.get("path") or inputs.get("path") or inputs.get("file_path")
                 if not isinstance(path, str) or not path:
                     continue
                 prior = files.get(path, FileChange(path))
-                metrics = tool.metrics if isinstance(tool.metrics, Mapping) else {}
                 hunk = diff.get("hunk")
                 files[path] = FileChange(
                     path,

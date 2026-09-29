@@ -37,7 +37,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
-import hashlib
 import os
 import secrets
 import signal
@@ -51,6 +50,7 @@ from typing import Any
 
 import msgspec
 
+from ..config.paths import project_key
 from ..errors import NexusError
 from ..events import Event
 from ..host_support.session_archive import reap_with_archive_sweep, sweep_stale_sessions
@@ -109,9 +109,12 @@ class DaemonError(NexusError, RuntimeError):
 
 
 def workspace_hash(workspace: str | Path) -> str:
-    """A stable, filesystem-safe digest of the resolved workspace path."""
-    resolved = str(Path(workspace).expanduser().resolve())
-    return hashlib.sha256(resolved.encode("utf-8")).hexdigest()[:16]
+    """A stable, filesystem-safe digest of the resolved workspace path.
+
+    Delegates to :func:`nexus.config.paths.project_key` (STATE_PLAN §3) so the
+    daemon socket name and the state database's project row always agree.
+    """
+    return project_key(workspace)
 
 
 def daemon_dir(home: str | Path | None = None) -> Path:

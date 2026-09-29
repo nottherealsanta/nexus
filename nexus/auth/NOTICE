@@ -8,3 +8,8 @@ Licensed under the MIT License.
 Nexus retains ownership of prompts, tool schemas, permissions, execution,
 hooks, sessions, cancellation, and tool-result replay. This is an experimental
 client for a private endpoint and may stop working without notice.
+
+Nexus does not use OpenCode's GitHub OAuth app. Copilot request headers
+(``x-initiator``, ``copilot-vision-request``, ``openai-intent``) follow the
+public Copilot client convention; they are not an authorization to sign in as
+OpenCode.

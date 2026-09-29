@@ -1,11 +1,12 @@
-"""File-loaded providers: ``.nexus/providers/*.py`` (plan section 8).
+"""File-loaded providers: ``.agents/providers/*.py`` (plan section 8, STATE_PLAN §5.4).
 
 A new *wire protocol* is a new module in ``nexus/model/providers/`` that passes
 the conformance suite. A vendor that already speaks an existing protocol needs
-no core change at all: drop a trusted file in ``.nexus/providers/`` (workspace)
+no core change at all: drop a trusted file in ``.agents/providers/`` (workspace)
 or ``~/.nexus/providers/`` (user) and it is loaded beside the built-in
-adapters. This is the provider half of the self-extension story, deliberately
-the same shape as hot tools.
+adapters. The legacy ``.nexus/providers/`` workspace directory is still read as
+a lower-precedence fallback. This is the provider half of the self-extension
+story, deliberately the same shape as hot tools.
 
 Loading is **quarantined**: a file that is too large, a symlink, a syntax error,
 a forbidden top-level side effect, an import crash, or a missing contract is
@@ -68,7 +69,10 @@ _FORBIDDEN_ATTRS = frozenset(
 )
 
 #: Directories, in precedence order, relative to the workspace and the home.
-_WORKSPACE_DIR = (".nexus", "providers")
+#: ``.agents`` is the current, writable project location; the legacy
+#: ``.nexus`` workspace directory is a read-only fallback (STATE_PLAN §5.4).
+_WORKSPACE_DIR = (".agents", "providers")
+_LEGACY_WORKSPACE_DIR = (".nexus", "providers")
 _USER_DIR = (".nexus", "providers")
 
 
@@ -164,13 +168,19 @@ class FileProviderLoader:
     def directories(
         self, workspace: Path, home: Path | None = None
     ) -> list[Path]:
-        """Provider directories, workspace first (it shadows the user's).
+        """Provider directories, most to least specific.
 
-        ``home`` defaults to the current user's home, so ``~/.nexus/providers/``
-        is discovered without the caller having to pass it explicitly.
+        ``<workspace>/.agents/providers`` shadows the legacy, read-only
+        ``<workspace>/.nexus/providers`` which shadows ``~/.nexus/providers``
+        (STATE_PLAN §5.4). ``home`` defaults to the current user's home, so
+        ``~/.nexus/providers/`` is discovered without the caller having to pass
+        it explicitly.
         """
         found: list[Path] = []
-        candidates = [Path(workspace).joinpath(*_WORKSPACE_DIR)]
+        candidates = [
+            Path(workspace).joinpath(*_WORKSPACE_DIR),
+            Path(workspace).joinpath(*_LEGACY_WORKSPACE_DIR),
+        ]
         user_home = Path.home() if home is None else Path(home)
         candidates.append(user_home.joinpath(*_USER_DIR))
         for directory in candidates:

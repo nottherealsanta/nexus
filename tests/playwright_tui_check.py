@@ -550,6 +550,8 @@ def _check_slash_new_visible(playwright, browser: Browser, command_log: Path) ->
 
         # No navigation key: Enter must choose the visible default suggestion.
         page.keyboard.press("Enter")
+        page.wait_for_timeout(300)
+        page.keyboard.press("Enter")  # confirm the new-session agent picker
         rows = _wait_acceptance_rows(
             command_log,
             lambda current: any(

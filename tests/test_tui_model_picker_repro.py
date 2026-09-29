@@ -706,6 +706,8 @@ async def test_session_switch_refreshes_model_metadata_from_host():
 
         await app._dispatch_chat_command("/new next-session")
         await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
 
         assert p.AgentCurrent(session="next-session") in transport.commands
         assert app.controller.provider == "fresh"

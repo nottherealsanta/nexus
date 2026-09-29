@@ -206,6 +206,16 @@ async def test_named_spawn_intersects_and_reports_drops(tmp_path):
     assert spec.depth == 1
 
 
+async def test_requested_tools_accept_the_functions_namespace(tmp_path):
+    # Codex models echo tool names as ``functions.<name>``; they must still match.
+    factory = Factory()
+    runner = make_runner(tmp_path, factory)
+    await runner.spawn(TaskRequest(prompt="x", tools=("functions.read", "functions.grep")))
+    spec = factory.specs[-1]
+    assert set(spec.tools) == {"read", "grep"}
+    assert spec.dropped_tools == ()
+
+
 async def test_ad_hoc_defaults_to_task_and_inherits_the_ceiling(tmp_path):
     factory = Factory()
     runner = make_runner(tmp_path, factory)
@@ -414,6 +424,22 @@ async def test_cap_is_configurable_and_never_widens(tmp_path):
     )
     assert outcome.tier == "high"
     assert outcome.clamped is False
+
+
+async def test_tier_hint_without_role_model_runs_the_parent_model(tmp_path):
+    # A bare tier routes to the first catalogue model for that tier, which may
+    # not be usable with the parent's account; the child inherits instead.
+    factory = Factory()
+    runner = make_runner(tmp_path, factory, parent_model="codex/gpt-6-luna")
+    await runner.spawn(TaskRequest(prompt="x", subagent_type="quick", model="low"))
+    await runner.spawn(TaskRequest(prompt="x", subagent_type="quick"))
+    await runner.spawn(TaskRequest(prompt="x", model="codex/gpt-5-mini"))
+    assert [spec.model for spec in factory.specs] == [
+        "codex/gpt-6-luna",
+        "codex/gpt-6-luna",
+        "codex/gpt-5-mini",
+    ]
+    assert factory.specs[0].tier == "low"
 
 
 # ---------------------------------------------------------------------------
@@ -1015,3 +1041,21 @@ def test_budget_validates_its_bounds():
     budget = SubagentBudget(max_concurrent=2, token_budget=100)
     assert budget.remaining_tokens == 100
     assert budget.max_concurrent == 2
+
+
+def test_role_index_lists_only_subagent_eligible_roles(tmp_path: Path) -> None:
+    agents_dir = tmp_path / "ws" / ".nexus" / "agents"
+    agents_dir.mkdir(parents=True)
+    (agents_dir / "reviewer.md").write_text(
+        "---\nname: reviewer\ndescription: Reviews a diff for bugs.\n---\nReview.\n"
+    )
+    (agents_dir / "lead.md").write_text(
+        "---\nname: lead\ndescription: Root only.\ncontexts: [root]\n---\nLead.\n"
+    )
+    runner = make_runner(tmp_path, Factory())
+    lines = runner.role_index().splitlines()
+    names = {line.partition(":")[0] for line in lines}
+    assert {"advisor", "task", "quick", "reviewer"} <= names
+    assert "build" not in names and "lead" not in names
+    assert "reviewer: Reviews a diff for bugs." in lines
+    assert len(runner.role_index(max_chars=40)) <= 40

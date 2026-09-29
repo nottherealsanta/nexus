@@ -284,10 +284,17 @@ _TYPED_SCALARS = frozenset(
 
 
 class AgentSource(StrEnum):
-    """Where a definition was discovered, lowest to highest precedence."""
+    """Where a definition was discovered, lowest to highest precedence.
+
+    ``WORKSPACE_LEGACY`` is the read-only ``<workspace>/.nexus/agents``
+    fallback (STATE_PLAN §5.4): it outranks ``USER`` so a project's own
+    definitions still beat the user's, but ``WORKSPACE`` (``.agents/agents``)
+    wins any collision since writes always go there now.
+    """
 
     BUILTIN = "builtin"
     USER = "user"
+    WORKSPACE_LEGACY = "workspace_legacy"
     WORKSPACE = "workspace"
 
     @property
@@ -295,11 +302,12 @@ class AgentSource(StrEnum):
         return SOURCE_PRECEDENCE[self]
 
 
-#: Higher precedence wins a same-name collision: workspace > user > builtin.
+#: Higher precedence wins a same-name collision: workspace > legacy > user > builtin.
 SOURCE_PRECEDENCE: Mapping[AgentSource, int] = {
     AgentSource.BUILTIN: 0,
     AgentSource.USER: 1,
-    AgentSource.WORKSPACE: 2,
+    AgentSource.WORKSPACE_LEGACY: 2,
+    AgentSource.WORKSPACE: 3,
 }
 
 

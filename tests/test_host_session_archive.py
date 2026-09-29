@@ -131,12 +131,15 @@ def test_archive_reaper_sweeps_at_startup_before_idle_shutdown():
     asyncio.run(scenario())
 
 
-def test_archive_search_supports_legacy_logs_and_preview_strips_c1_controls(tmp_path):
+def test_archive_search_finds_content_in_the_state_database(tmp_path):
+    # Legacy on-disk ``.json``/``.jsonl`` sessions are handled once, up front,
+    # by ``nexus.session.import_legacy`` (STATE_PLAN §5.1) -- by the time a
+    # session is searchable here it is already a database row.
+    from nexus.model.message import Message, Text
+
     manager = SessionManager(tmp_path / "sessions")
-    manager.directory.mkdir(parents=True)
-    (manager.directory / "legacy.json").write_text(
-        '{"version": 1, "exchanges": [{"user": "legacyneedle", "assistant": "reply"}]}'
-    )
-    manager.archive("legacy", "auto")
-    assert search_sessions(manager, query="legacyneedle") == ["legacy"]
+    session = manager.open("findme")
+    session.append_message(Message(role="user", content=[Text(text="needlecontent")]))
+    manager.archive("findme", "auto")
+    assert search_sessions(manager, query="needlecontent") == ["findme"]
     assert "\x9b" not in _safe_transcript_text("safe\x9b[31m")

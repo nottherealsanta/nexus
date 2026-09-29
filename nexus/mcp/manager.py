@@ -57,6 +57,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Self
 
+from ..config.paths import project_state_dir
 from ..events import Event
 from .bridge import (
     DEFAULT_CAPS,
@@ -101,8 +102,10 @@ LIST_CHANGED_METHODS = frozenset(
 #: Cache schema version; a mismatch is a miss.
 _CACHE_FORMAT = 1
 
-#: Where a stdio server's bounded, redacted stderr is appended for ``doctor``.
-_MCP_LOG_DIR = Path(".nexus") / "logs" / "mcp"
+#: Where a stdio server's bounded, redacted stderr is appended for ``doctor``,
+#: relative to ``project_state_dir()`` (STATE_PLAN §5.4: machine state, not
+#: project content).
+_MCP_LOG_SUBDIR = Path("logs") / "mcp"
 #: Per-server stderr log budget (bytes); a noisy server cannot fill the disk.
 _MCP_STDERR_MAX_BYTES = 262_144
 
@@ -489,6 +492,7 @@ class MCPManager:
         enabled: bool = True,
         cache_dir: str | os.PathLike[str] | None = None,
         workspace: str | os.PathLike[str] | None = None,
+        home: str | os.PathLike[str] | None = None,
         environ: Mapping[str, str] | None = None,
         client_factory: Callable[[MCPServerConfig], Any] | None = None,
         caps: BridgeCaps = DEFAULT_CAPS,
@@ -524,6 +528,7 @@ class MCPManager:
         self._backoff_max_s = float(backoff_max_s)
         self._circuit_cooldown_s = float(circuit_cooldown_s)
         self._workspace = Path(workspace) if workspace is not None else None
+        self._home = home
 
         self._cache: _DescriptorCache | None = None
         if cache_dir is not None:
@@ -557,7 +562,11 @@ class MCPManager:
         sink: Any | None = None
         if self._workspace is not None:
             safe = _SAFE_NAME_RE.sub("_", config.name)[:48] or "server"
-            log_path = self._workspace / _MCP_LOG_DIR / f"{safe}.log"
+            log_path = (
+                project_state_dir(self._workspace, self._home)
+                / _MCP_LOG_SUBDIR
+                / f"{safe}.log"
+            )
             try:
                 sink = FileStderrSink(log_path, max_bytes=_MCP_STDERR_MAX_BYTES)
             except ValueError:  # pragma: no cover - constant is positive

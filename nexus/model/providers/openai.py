@@ -1078,10 +1078,15 @@ class OpenAIProvider:
             )
         return spec
 
-    async def _headers(self) -> dict[str, str]:
+    async def _headers(self, body: Mapping[str, Any] | None = None) -> dict[str, str]:
         headers = {"content-type": "application/json", "accept": "text/event-stream", **self._extra_headers}
         if self._auth_headers is not None:
             headers.update(await self._auth_headers.headers())
+            # A strategy may add per-request headers derived from the body
+            # (Copilot's ``x-initiator``); it never sees or changes credentials.
+            per_request = getattr(self._auth_headers, "request_headers", None)
+            if body is not None and callable(per_request):
+                headers.update(per_request(body))
         else:
             headers["authorization"] = f"Bearer {self._resolve_api_key()}"
         return headers
@@ -1180,7 +1185,7 @@ class OpenAIProvider:
             default_max_tokens=self._default_max_tokens,
             capabilities=capabilities,
         )
-        headers = await self._headers()
+        headers = await self._headers(body)
         usage = _UsageTotals()
         accumulator = ToolCallAccumulator()
 

@@ -128,7 +128,7 @@ def test_render_parts_keeps_slots_aligned_with_placeholders(tmp_path):
     assert by_name["skills_index"] is None
     assert by_name["mcp_index"] is None
     assert by_name["attachments"] is None
-    assert by_name["identity"] is not None
+    assert by_name["identity"] is None
     assert by_name["user"] is not None
 
 

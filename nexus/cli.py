@@ -21,6 +21,7 @@ import json
 import os
 import re
 import sys
+import uuid
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -151,6 +152,11 @@ async def _web(workspace: Path, *, open_browser: bool) -> int:
             pass
     print(result.url)
     return 0
+
+
+def _new_session_id() -> str:
+    """A fresh id in the same shape the chat ``/new`` command mints."""
+    return f"session-{uuid.uuid4().hex[:8]}"
 
 
 def _chat_entry(workspace: Path, *, session: str) -> int:
@@ -698,6 +704,11 @@ async def _doctor(
 # ---------------------------------------------------------------------------
 
 
+#: ``daemon restart`` waits at most polls x seconds for the old process to exit.
+_RESTART_POLLS = 100
+_RESTART_POLL_SECONDS = 0.1
+
+
 async def _daemon_command(
     workspace: Path, args: argparse.Namespace, stdout: TextIO, stderr: TextIO
 ) -> int:
@@ -720,6 +731,22 @@ async def _daemon_command(
     if action == "stop":
         stopped = await daemon_mod.stop(workspace)
         stdout.write("stopped\n" if stopped else "not running\n")
+        return 0
+    if action == "restart":
+        await daemon_mod.stop(workspace)
+        # Shutdown is acknowledged before the process exits; wait (bounded) so
+        # the new client does not reconnect to the daemon that is going away.
+        for _ in range(_RESTART_POLLS):
+            if not (await daemon_mod.status(workspace)).get("running"):
+                break
+            await asyncio.sleep(_RESTART_POLL_SECONDS)
+        else:
+            stderr.write("Error: the daemon did not stop; try `nexus daemon stop`\n")
+            return 1
+        client = await daemon_mod.ensure_daemon(workspace, client="cli-restart")
+        await client.close()
+        report = await daemon_mod.status(workspace)
+        stdout.write(f"restarted pid={report.get('pid', '?')}\n")
         return 0
     if action == "logs":
         text = daemon_mod.logs(workspace, lines=args.lines)
@@ -951,7 +978,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--json", action="store_true", help="Stream JSONL event envelopes")
 
     chat = sub.add_parser("chat", help="Open the interactive Textual chat")
-    chat.add_argument("--session", default="default")
+    chat.add_argument(
+        "--session",
+        default=None,
+        help="Reopen this session id (default: start a new session)",
+    )
 
     web = sub.add_parser("web", help="Open the workspace in a local browser")
     web.add_argument("--no-browser", action="store_true", help="Print the one-time launch URL")
@@ -965,6 +996,7 @@ def build_parser() -> argparse.ArgumentParser:
     daemon_status = daemon_sub.add_parser("status", help="Report daemon liveness")
     daemon_status.add_argument("--json", action="store_true")
     daemon_sub.add_parser("stop", help="Gracefully stop the daemon")
+    daemon_sub.add_parser("restart", help="Stop the daemon and start a fresh one")
     daemon_logs = daemon_sub.add_parser("logs", help="Tail the daemon log")
     daemon_logs.add_argument("--lines", type=int, default=200)
 
@@ -1142,7 +1174,7 @@ def main(argv: list[str] | None = None) -> int:
                 stderr.write("Error: Textual is required for `nexus chat`; reinstall Nexus with its runtime dependencies.\n")
                 return 1
             try:
-                return _chat_entry(workspace, session=args.session)
+                return _chat_entry(workspace, session=args.session or _new_session_id())
             except ModuleNotFoundError as exc:
                 if exc.name == "textual":
                     stderr.write("Error: Textual is required for chat; reinstall Nexus with its runtime dependencies.\n")

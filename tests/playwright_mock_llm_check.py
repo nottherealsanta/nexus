@@ -380,9 +380,8 @@ def _open_child_transcript(page: Page, state: dict) -> None:
 
     task = next(item for item in details["ui"]["turn_items"] if item["call_id"] == "root-task")
     assert "explore" in task["child_metrics"]
+    # A Task call opens its sub agent page directly, with no details modal.
     _control("/ui/tool-detail/root-task", post=True)
-    _wait_control("/screen", lambda value: value["screen"] == "ToolDetailsScreen", 5)
-    _control("/ui/tool-agent/root-task", post=True)
     _wait_control("/screen", lambda value: value["screen"] == "AgentTranscriptScreen", 8)
     inspector = _wait_control(
         "/inspector",

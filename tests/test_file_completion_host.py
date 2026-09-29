@@ -1,6 +1,8 @@
 """Host workspace-file completion is bounded and path-only."""
 from __future__ import annotations
 
+import shutil
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -30,11 +32,42 @@ def test_file_search_lists_normal_nested_files_in_stable_order(tmp_path):
     facade = _facade(tmp_path)
 
     assert facade.search_files("") == [
+        "zeta.txt",
         "nested/alpha.py",
         "nested/other.txt",
-        "zeta.txt",
     ]
     assert facade.search_files("ALPHA") == ["nested/alpha.py"]
+
+
+def test_file_search_ranks_name_matches_and_shallow_paths_first(tmp_path):
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "main.py").touch()
+    (tmp_path / "deep" / "er").mkdir(parents=True)
+    (tmp_path / "deep" / "er" / "app.py").touch()
+    (tmp_path / "myapp.txt").touch()
+    (tmp_path / "application.md").touch()
+
+    assert _facade(tmp_path).search_files("app") == [
+        "application.md",
+        "deep/er/app.py",
+        "myapp.txt",
+        "app/main.py",
+    ]
+
+
+def test_file_search_skips_git_ignored_paths(tmp_path):
+    if shutil.which("git") is None:
+        pytest.skip("git is not installed")
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / ".gitignore").write_text("build/\n*.log\n", encoding="utf-8")
+    (tmp_path / "build").mkdir()
+    (tmp_path / "build" / "out.py").touch()
+    (tmp_path / "debug.log").touch()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").touch()
+    (tmp_path / "notes.md").touch()
+
+    assert _facade(tmp_path).search_files("") == ["notes.md", "src/main.py"]
 
 
 def test_file_search_skips_hidden_entries(tmp_path):

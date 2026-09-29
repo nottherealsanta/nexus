@@ -6,23 +6,21 @@ from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.events import Key
 from textual.screen import ModalScreen
-from textual.widgets import Button, Static
-
-from .messages import AgentOpenRequested
+from textual.widgets import Static
 
 
 class ToolDetailsScreen(ModalScreen[None]):
     """Show a bounded call/result payload without expanding the transcript row."""
 
     DEFAULT_CSS = """
-    Screen ToolDetailsScreen {
+    ToolDetailsScreen {
         align: center middle;
         background: $background 70%;
     }
     #tool-details-dialog {
-        width: 90%;
-        max-width: 110;
-        height: 80%;
+        width: 80%;
+        max-width: 84;
+        height: 70%;
         padding: 1 2;
         background: $panel;
         border: tall $border;
@@ -40,37 +38,21 @@ class ToolDetailsScreen(ModalScreen[None]):
         background: $background;
         color: $text-muted;
     }
-    #tool-details-close {
-        width: 16;
-        margin-top: 1;
-        dock: right;
-    }
     """
 
-    def __init__(self, title: str, body: str, *, agent_id: str | None = None) -> None:
+    def __init__(self, title: str, body: str) -> None:
         super().__init__()
         self.tool_title = title
         self.body = body
-        self.agent_id = agent_id
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="tool-details-dialog"):
             yield Static(self.tool_title, id="tool-details-title", markup=False)
             yield Static(self.body, id="tool-details-body", markup=False)
-            if self.agent_id:
-                yield Button("Open child agent", id="tool-details-agent")
-            yield Button("Close", id="tool-details-close", variant="primary")
 
     def on_mount(self) -> None:
-        self.call_after_refresh(lambda: self.query_one("#tool-details-close", Button).focus())
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "tool-details-agent" and self.agent_id:
-            self.post_message(AgentOpenRequested(self.agent_id))
-            self.dismiss(None)
-            return
-        if event.button.id == "tool-details-close":
-            self.dismiss(None)
+        # Escape or a click outside closes the dialog; the scroll takes the keys.
+        self.call_after_refresh(lambda: self.query_one("#tool-details-dialog", VerticalScroll).focus())
 
     def on_key(self, event: Key) -> None:
         if event.key == "escape":

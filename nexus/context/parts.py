@@ -84,13 +84,8 @@ __all__ = [
     "render_parts",
 ]
 
-#: Short, stable identity line. Dates are deliberately excluded: they break
-#: prompt-prefix stability, so they are not part of the Phase 3 foundation.
-IDENTITY_PREAMBLE = (
-    "You are Nexus, a provider-agnostic agent harness working inside a local "
-    "workspace. Be direct and accurate. Inspect the workspace when it helps, and "
-    "verify your work before reporting success."
-)
+#: Root roles supply their own identity through the selected agent definition.
+IDENTITY_PREAMBLE = ""
 
 PartKind = Literal["text", "tools", "history", "user", "skills_index", "noop"]
 

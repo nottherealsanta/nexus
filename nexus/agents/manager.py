@@ -1,13 +1,15 @@
 """AgentManager: deterministic subagent discovery, seeding, and tool selection.
 
-Plan sections 5.6, 15.6-15.8. Discovery is a pure scan of ordered roots::
+Plan sections 5.6, 15.6-15.8, STATE_PLAN §5.4. Discovery is a pure scan of
+ordered roots::
 
-    nexus/agents/data/  <  ~/.nexus/agents/  <  <workspace>/.nexus/agents/
+    nexus/agents/data/  <  ~/.nexus/agents/  <  <workspace>/.nexus/agents/ (legacy)  <  <workspace>/.agents/agents/
 
 Each root contains one ``<name>.md`` file per definition. Roots are sorted by
-``(precedence, path)`` and scanned low-to-high, so a workspace definition shadows
-a user definition which shadows a built-in one. Within one root, files are sorted
-by ``(casefold name, name)`` and the **first** winner is deterministic.
+``(precedence, path)`` and scanned low-to-high, so a ``.agents`` definition
+shadows a legacy ``.nexus`` definition which shadows a user definition which
+shadows a built-in one. Within one root, files are sorted by ``(casefold name,
+name)`` and the **first** winner is deterministic.
 
 What the manager guarantees:
 
@@ -36,11 +38,14 @@ What the manager guarantees:
   agent ``build`` and the subagents ``advisor``, ``task`` and ``quick``. They are
   not copied into workspaces; editing one writes an override to
   ``~/.nexus/agents/<name>.md`` (the Settings page does this). Workspace seeding
-  is opt-in (``agents.seed_roles``) and happens at most once per marker.
+  is opt-in (``agents.seed_roles``), writes to ``<workspace>/.agents/agents/``,
+  and happens at most once per marker (a pre-existing legacy marker under
+  ``.nexus/agents`` also counts, so an upgraded workspace is not reseeded).
 * **Retiring old seeds.** Earlier releases copied the built-ins into every
-  workspace. :func:`retire_seeded_roles` moves those copies to
-  ``.nexus/trash/agents/`` once, but only the ones the user never edited, so the
-  current built-ins (and ``~/.nexus`` overrides) are no longer shadowed.
+  workspace. :func:`retire_seeded_roles` moves those copies out of the project
+  entirely, to ``project_state_dir()/trash/agents/`` (STATE_PLAN §5.4), once,
+  but only the ones the user never edited, so the current built-ins (and
+  ``~/.nexus`` overrides) are no longer shadowed.
 * **Legacy names.** ``general`` resolves to ``task`` (``build`` as a root) and
   ``explore``/``plan``/``planner`` to the read-only ``advisor`` when no
   definition with the exact name exists.
@@ -58,6 +63,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..config.paths import legacy_project_dir, project_agents_dir, project_state_dir
 from ..tools.names import canonical_tool_name, canonical_tool_names
 from .model import (
     FORBIDDEN_ROLE_BUNDLES,
@@ -110,7 +116,7 @@ SEED_MARKER_NAME = ".seeded"
 #: record that pre-v2 seeded copies were retired.
 SEED_VERSION = 2
 #: Canonical builtins (seeded into a workspace only when ``agents.seed_roles``).
-SEEDED_ROLES = ("advisor", "build", "quick", "task")
+SEEDED_ROLES = ("advisor", "build", "orchestrator", "quick", "task")
 #: ``(context, legacy name) -> canonical built-in`` used when no definition with
 #: the exact legacy name exists. Read-only legacy roles map to read-only advisor.
 LEGACY_AGENT_ALIASES: Mapping[tuple[str, str], str] = {
@@ -199,21 +205,28 @@ def seed_workspace_roles(
     max_frontmatter_bytes: int = MAX_FRONTMATTER_BYTES,
     overwrite: bool = False,
 ) -> SeedReport:
-    """Seed the built-in roles into ``<workspace>/.nexus/agents`` exactly once.
+    """Seed the built-in roles into ``<workspace>/.agents/agents`` exactly once.
 
     The marker is checked first: if it exists (and ``overwrite`` is false) this is
-    a no-op, so deleting a seeded file does **not** bring it back. Existing files
-    are never clobbered even before the marker exists, so a user definition that
-    predates the first run is preserved. Each seed file is validated against the
-    restricted grammar *and* the declared name must match its filename before it
-    is written; a symlinked target is skipped rather than followed.
+    a no-op, so deleting a seeded file does **not** bring it back. A pre-existing
+    legacy marker at ``<workspace>/.nexus/agents`` (written before STATE_PLAN
+    §5.4 moved seeding to ``.agents``) also counts as already-seeded, so an
+    upgraded workspace does not seed fresh default copies that would shadow a
+    user's edited legacy definitions. Existing files are never clobbered even
+    before the marker exists, so a user definition that predates the first run
+    is preserved. Each seed file is validated against the restricted grammar
+    *and* the declared name must match its filename before it is written; a
+    symlinked target is skipped rather than followed.
     """
     source_dir = Path(source) if source is not None else _default_seed_source()
-    agents_dir = Path(workspace) / ".nexus" / "agents"
+    agents_dir = project_agents_dir(workspace) / "agents"
     marker = agents_dir / marker_name
+    legacy_marker = legacy_project_dir(workspace) / "agents" / marker_name
 
     if marker.exists() and not overwrite:
         return SeedReport(already_seeded=True, source=source_dir, marker=marker)
+    if not overwrite and legacy_marker.is_file():
+        return SeedReport(already_seeded=True, source=source_dir, marker=legacy_marker)
     if not source_dir.is_dir():
         return SeedReport(
             already_seeded=False,
@@ -283,16 +296,20 @@ def retire_seeded_roles(
     *,
     marker_name: str = SEED_MARKER_NAME,
     now: float | None = None,
+    home: str | Path | None = None,
 ) -> tuple[str, ...]:
-    """Move untouched pre-v2 seeded role copies to ``.nexus/trash/agents``.
+    """Move untouched pre-v2 seeded role copies to per-project trash.
 
     Runs once per workspace: it acts only on a marker older than
     :data:`SEED_VERSION` and rewrites the marker afterwards. A seeded file whose
     mtime is later than the marker's was edited by the user and is kept (it
     keeps shadowing the built-in, which discovery reports). Files are moved, not
-    deleted, so a retired copy can be restored by hand. Returns retired names.
+    deleted, so a retired copy can be restored by hand. Pre-v2 seeds lived in
+    the legacy ``<workspace>/.nexus/agents``; the retired copies go to
+    ``project_state_dir()/trash/agents`` (STATE_PLAN §5.4), never back into the
+    project, since trash is machine state, not repo content.
     """
-    agents_dir = Path(workspace) / ".nexus" / "agents"
+    agents_dir = legacy_project_dir(workspace) / "agents"
     marker = agents_dir / marker_name
     if not marker.is_file() or marker.is_symlink():
         return ()
@@ -311,7 +328,7 @@ def retire_seeded_roles(
         seeded = ["explore", "general", "planner"]
     retired: list[str] = []
     trash = (
-        Path(workspace) / ".nexus" / "trash" / "agents"
+        project_state_dir(workspace, home) / "trash" / "agents"
         / time.strftime("%Y%m%dT%H%M%S", time.gmtime(now))
     )
     for name in sorted(set(seeded))[:MAX_SEED_NAMES]:
@@ -480,7 +497,11 @@ class AgentManager:
         marker_name: str = SEED_MARKER_NAME,
         **kwargs: Any,
     ) -> AgentManager:
-        """Convenience roots: ``<builtin>`` < ``~/.nexus/agents`` < ``.nexus/agents``.
+        """Convenience roots.
+
+        ``<builtin>`` < ``~/.nexus/agents`` < ``<workspace>/.nexus/agents``
+        (legacy, read-only fallback) < ``<workspace>/.agents/agents``
+        (STATE_PLAN §5.4; seeding and writes always go to ``.agents``).
 
         Pre-v2 seeded copies are retired first (see :func:`retire_seeded_roles`).
         When ``seed`` is true the built-in roles are then written into the
@@ -498,10 +519,13 @@ class AgentManager:
         if home is not None:
             roots.append((AgentSource.USER, Path(home) / ".nexus" / "agents"))
         roots.append(
-            (AgentSource.WORKSPACE, Path(workspace) / ".nexus" / "agents")
+            (AgentSource.WORKSPACE_LEGACY, legacy_project_dir(workspace) / "agents")
+        )
+        roots.append(
+            (AgentSource.WORKSPACE, project_agents_dir(workspace) / "agents")
         )
         with contextlib.suppress(OSError):
-            retire_seeded_roles(workspace, marker_name=marker_name)
+            retire_seeded_roles(workspace, marker_name=marker_name, home=home)
         report: SeedReport | None = None
         if seed:
             report = seed_workspace_roles(

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import difflib
+from collections.abc import Iterable
 from typing import Any
 
 from ...errors import ToolError
@@ -43,35 +44,48 @@ def _diff_preview(path: str, before: str, after: str) -> dict[str, Any]:
     is clipped.  Redaction happens after comparison so a secret cannot be
     preserved solely because it occurred in a file edit.
     """
+    return diff_preview(path, ((path, path, before, after),))
+
+
+def diff_preview(
+    display_path: str,
+    files: Iterable[tuple[str | None, str | None, str, str]],
+) -> dict[str, Any]:
+    """Bounded transcript artifact for one or more ``(old, new, before, after)``
+    file changes; ``None`` paths render as ``/dev/null``. Every file keeps its
+    own ``---``/``+++`` header so surfaces can split a multi-file hunk."""
     hunk: list[str] = []
     added = 0
     removed = 0
     chars = 0
     truncated = False
-    for line in difflib.unified_diff(
-        before.splitlines(), after.splitlines(),
-        fromfile=f"a/{path}", tofile=f"b/{path}", lineterm="",
-        n=3,
-    ):
-        if line.startswith("+") and not line.startswith("+++"):
-            added += 1
-        elif line.startswith("-") and not line.startswith("---"):
-            removed += 1
-        safe = redact_secrets(line)
-        if len(safe) > _MAX_DIFF_LINE_CHARS:
-            safe = safe[:_MAX_DIFF_LINE_CHARS] + "... [line truncated]"
-            truncated = True
-        separator = 1 if hunk else 0
-        if (
-            len(hunk) >= _MAX_DIFF_LINES
-            or chars + separator + len(safe) > _MAX_DIFF_CHARS
+    for old_path, new_path, before, after in files:
+        for line in difflib.unified_diff(
+            before.splitlines(), after.splitlines(),
+            fromfile=f"a/{old_path}" if old_path else "/dev/null",
+            tofile=f"b/{new_path}" if new_path else "/dev/null",
+            lineterm="",
+            n=3,
         ):
-            truncated = True
-            continue
-        hunk.append(safe)
-        chars += separator + len(safe)
+            if line.startswith("+") and not line.startswith("+++"):
+                added += 1
+            elif line.startswith("-") and not line.startswith("---"):
+                removed += 1
+            safe = redact_secrets(line)
+            if len(safe) > _MAX_DIFF_LINE_CHARS:
+                safe = safe[:_MAX_DIFF_LINE_CHARS] + "... [line truncated]"
+                truncated = True
+            separator = 1 if hunk else 0
+            if (
+                len(hunk) >= _MAX_DIFF_LINES
+                or chars + separator + len(safe) > _MAX_DIFF_CHARS
+            ):
+                truncated = True
+                continue
+            hunk.append(safe)
+            chars += separator + len(safe)
     return {
-        "path": redact_secrets(path),
+        "path": redact_secrets(display_path),
         "hunk": "\n".join(hunk),
         "added_lines": added,
         "removed_lines": removed,
@@ -111,7 +125,8 @@ SPEC = ToolSpec(
     name="edit",
     description=(
         "Replace exact text in a UTF-8 file. By default old_string must occur "
-        "exactly once; use replace_all or occurrence to disambiguate."
+        "exactly once; use replace_all or occurrence to disambiguate. Read the "
+        "file first so old_string matches its current contents."
     ),
     input_schema=_EDIT_SCHEMA,
     bundle="fs",

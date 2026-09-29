@@ -836,6 +836,36 @@ async def test_child_tool_arguments_results_and_errors_replay_and_host_view(tmp_
     await runtime.aclose()
 
 
+async def test_agent_transcript_carries_the_child_request_it_actually_sent(tmp_path):
+    provider = ScriptedProvider(
+        tool_response(("t1", "Task", {"prompt": "inspect", "subagent_type": "general"})),
+        text_response("child report"),
+        text_response("root report"),
+    )
+    runtime = make_runtime(tmp_path, provider)
+    session = runtime.session("root")
+    events = await drain(session)
+    # The snapshot stays in the child's own log: nothing reaches the parent.
+    assert not any("request" in event.data for event in events if event.type == "context.assembled")
+    agent = next(iter(fold(events).agents.values()))
+    child_request = provider.requests[1]
+    # A subagent speaks as its role only; the harness identity stays with the root.
+    assert "Nexus" not in child_request.system and "Nexus" in provider.requests[0].system
+    context = HostFacade(runtime).agent_transcript("root", agent.id)["context"]
+    assert context["mode"] == "sent_request" and context["actually_sent"] is True
+    from nexus.util import redact_secrets
+
+    assert child_request.system and context["system_text"] == redact_secrets(child_request.system)
+    assert [tool["name"] for tool in context["tools"]] == [tool.name for tool in child_request.tools]
+    assert all("input_schema" in tool for tool in context["tools"])
+    assert context["agent"]["name"] == agent.type == "task"
+    from nexus.host.protocol import AgentTranscript, ContextInspectResult
+
+    result = await HostFacade(runtime).handle(AgentTranscript(session="root", agent_id=agent.id))
+    assert ContextInspectResult(session=agent.id, **result.context).tools == context["tools"]
+    await runtime.aclose()
+
+
 async def test_agent_transcript_obeys_fork_boundary(tmp_path):
     provider = ScriptedProvider(
         tool_response(("t1", "Task", {"prompt": "inspect", "subagent_type": "general"})),

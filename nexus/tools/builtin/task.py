@@ -81,9 +81,8 @@ _TASK_SCHEMA: dict[str, Any] = {
             "type": "string",
             "minLength": 1,
             "description": (
-                "advisor (read-only second opinion), task (multi-step work, "
-                "can edit), quick (small fast jobs, can edit), or any discovered "
-                ".nexus/agents/<name>. Defaults to 'task'."
+                "Name of an available agent listed in this tool's description. "
+                "Defaults to the configured default role."
             ),
         },
         "tools": {
@@ -98,8 +97,9 @@ _TASK_SCHEMA: dict[str, Any] = {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Optional tier name ('low'/'medium'/'high'), provider/model, or "
-                "bare id. Clamped to the configured max tier."
+                "Optional provider/model or bare id. Omit it to run on the parent's "
+                "model. A tier name ('low'/'medium'/'high') only sets the permission "
+                "tier and is clamped to the configured max tier."
             ),
         },
         "description": {
@@ -110,7 +110,10 @@ _TASK_SCHEMA: dict[str, Any] = {
         "worktree": {
             "type": "boolean",
             "default": False,
-            "description": "Run the subagent in an isolated Git worktree.",
+            "description": (
+                "Run the subagent in an isolated Git worktree. Use it when "
+                "parallel subagents could edit the same files."
+            ),
         },
     },
     "required": ["prompt"],
@@ -119,10 +122,35 @@ _TASK_SCHEMA: dict[str, Any] = {
 
 _TASK_DESCRIPTION = (
     "Spawn a subagent to carry out a self-contained task and return its report. "
-    "Roles: advisor (read-only advice), task (multi-step work), quick (small, "
-    "fast jobs). Subagents that edit files list them in their report. "
-    "A subagent inherits only the parent's authority and cannot exceed it."
+    "The subagent does not see this conversation, so the prompt must carry the "
+    "goal, relevant paths, constraints, and what to report. Subagents that edit "
+    "files list them in their report. A subagent inherits only the parent's "
+    "authority and cannot exceed it."
 )
+
+
+def _describe(service: SubagentServiceView | None) -> str:
+    """The tool description, with the live role roster when one is bound.
+
+    Roles load like skills: the bound service's ``role_index`` supplies sanitized
+    ``name: description`` lines for every agent eligible as a subagent, so new
+    ``.agents/agents/<name>.md`` files appear without editing any prompt. Test
+    doubles and the static spec may lack it; the base description stands alone.
+    """
+    role_index = getattr(service, "role_index", None)
+    if not callable(role_index):
+        return _TASK_DESCRIPTION
+    try:
+        roster = str(role_index() or "").strip()
+    except Exception:  # noqa: BLE001 - a broken roster must not drop the tool
+        roster = ""
+    if not roster:
+        return _TASK_DESCRIPTION
+    default = getattr(service, "default_type", DEFAULT_SUBAGENT_TYPE)
+    return (
+        f"{_TASK_DESCRIPTION}\n\nAvailable agents (subagent_type), default "
+        f"{default!r}:\n{roster}"
+    )
 
 
 def _static_permission_key(data: Mapping[str, Any]) -> str:
@@ -165,7 +193,7 @@ def make_task_spec(service: SubagentServiceView | None = None) -> ToolSpec:
             return f"{resolved}:worktree" if request.get("worktree") is True else resolved
     return ToolSpec(
         name="subagent",
-        description=_TASK_DESCRIPTION,
+        description=_describe(service),
         input_schema=_TASK_SCHEMA,
         bundle="task",
         mutates=False,

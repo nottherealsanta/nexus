@@ -2,13 +2,14 @@
 
 Discovery is a pure scan of ordered roots::
 
-    builtin/  <  user/  <  workspace/
+    builtin/  <  ~/.nexus/skills/  <  <workspace>/.nexus/skills/ (legacy)  <  <workspace>/.agents/skills/
 
 Each root contains one directory per skill with a ``SKILL.md``. Roots are sorted
-by ``(precedence, path)`` and scanned low-to-high, so a workspace skill shadows a
-user skill which shadows a builtin skill. Within one root, directories are sorted
-by ``(casefold name, name)`` and the **first** wins, so two roots of the same
-tier resolve deterministically.
+by ``(precedence, path)`` and scanned low-to-high, so a ``.agents`` skill
+shadows a legacy ``.nexus`` skill which shadows a user skill which shadows a
+builtin skill (STATE_PLAN §5.4: writes always go to ``.agents``, ``.nexus`` is
+read-only). Within one root, directories are sorted by ``(casefold name, name)``
+and the **first** wins, so two roots of the same tier resolve deterministically.
 
 What the manager guarantees:
 
@@ -38,6 +39,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
+from ..config.paths import legacy_project_dir, project_agents_dir
 from .errors import (
     SkillError,
     SkillNotFoundError,
@@ -167,7 +169,12 @@ class SkillManager:
         builtin: str | Path | Iterable[str | Path] | None = None,
         **kwargs: Any,
     ) -> SkillManager:
-        """Convenience roots: ``<builtin>`` < ``~/.nexus/skills`` < ``.nexus/skills``."""
+        """Convenience roots.
+
+        ``<builtin>`` < ``~/.nexus/skills`` < ``<workspace>/.nexus/skills``
+        (legacy, read-only fallback) < ``<workspace>/.agents/skills``
+        (STATE_PLAN §5.4; writes always go to ``.agents``).
+        """
         roots: list[RootSpec] = []
         if builtin is None:
             builtin = Path(__file__).with_name("builtin")
@@ -179,7 +186,12 @@ class SkillManager:
             roots.append((SkillSource.BUILTIN, Path(path)))
         if home is not None:
             roots.append((SkillSource.USER, Path(home) / ".nexus" / "skills"))
-        roots.append((SkillSource.WORKSPACE, Path(workspace) / ".nexus" / "skills"))
+        roots.append(
+            (SkillSource.WORKSPACE_LEGACY, legacy_project_dir(workspace) / "skills")
+        )
+        roots.append(
+            (SkillSource.WORKSPACE, project_agents_dir(workspace) / "skills")
+        )
         return cls(roots=roots, **kwargs)
 
     # -- introspection -----------------------------------------------------

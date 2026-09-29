@@ -74,6 +74,8 @@ async def test_session_lifecycle_shortcuts_render_the_selected_session(journey_t
         await pilot.pause()
         await pilot.press("ctrl+n")
         await pilot.pause()
+        await pilot.press("enter")  # keep the preselected agent
+        await pilot.pause()
         created = app.controller.session
         assert created != "s"
         assert p.SessionOpen(session=created) in journey_transport.commands
@@ -245,11 +247,7 @@ async def test_task_child_transcript_opens_from_rendered_link_and_escape_returns
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
-        from nexus.ui.tui.tool_details import ToolDetailsScreen
-
-        assert isinstance(app.screen, ToolDetailsScreen)
-        await pilot.click("#tool-details-agent")
-        await pilot.pause()
+        # A Task card opens its sub agent page directly, with no details modal.
         assert isinstance(app.screen, AgentTranscriptScreen)
         assert any(isinstance(row, p.AgentTranscript) and row.agent_id == "child"
                    for row in transport.commands)
@@ -273,3 +271,25 @@ async def test_narrow_resize_keeps_composer_bounded_and_focused(journey_transpor
         assert editor.region.height >= 3
         assert editor.text == "draft survives resize"
         assert app.focused is editor
+
+
+@pytest.mark.asyncio
+async def test_new_session_picker_defaults_to_current_agent_and_applies_choice(journey_transport):
+    app = NexusTextualApp(_client(journey_transport), session="s")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app._dispatch_chat_command("/new made-a")
+        await pilot.pause()
+        panel = app.query_one("#inline-picker", AgentPickerPanel)
+        assert panel.display and panel.current == app.controller.agent_name
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.controller.session == "s"  # cancel opens nothing
+
+        await app._dispatch_chat_command("/new made-b")
+        await pilot.pause()
+        await pilot.press("down", "enter")
+        await pilot.pause(0.1)
+        assert app.controller.session == "made-b"
+        assert p.SessionOpen(session="made-b") in journey_transport.commands
+        assert p.AgentSelect(session="made-b", name="plan") in journey_transport.commands

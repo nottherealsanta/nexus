@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
-import stat
 from collections.abc import Callable, Iterable
 from typing import Any
 
-from ..errors import SessionBusy
+from ..errors import SessionBusy, SessionError
 from ..host.protocol import (
     ArchivedSummary,
     SessionArchive,
@@ -175,7 +173,13 @@ def preview(manager: SessionManager, session_id: str, *, max_chars: int = 6000) 
 def search_sessions(
     manager: SessionManager, *, query: str, archived_only: bool = True, limit: int = 50
 ) -> list[str]:
-    """Search bounded log tails for content, returning session ids only."""
+    """Search a bounded byte tail of each candidate's raw record encoding.
+
+    The tail comes from the state database (STATE_PLAN §4): the newest
+    records' exact ``msgspec``-encoded bodies, newline-joined, capped at
+    ``MAX_SEARCH_TAIL_BYTES`` -- the same substring-over-raw-JSON search the
+    old JSONL tail read did, just sourced from SQL instead of a file.
+    """
     if not isinstance(query, str) or not query.strip() or len(query) > MAX_QUERY_CHARS:
         raise ValueError("query must be non-empty and at most 256 characters")
     if type(limit) is not int or not 1 <= limit <= MAX_SEARCH_SESSIONS:
@@ -188,29 +192,9 @@ def search_sessions(
     )[:MAX_SEARCH_SESSIONS]
     found = []
     for session_id in candidates:
-        artifacts = manager._artifact_paths(session_id)
-        path = next(
-            (item for item in artifacts if item.name == f"{session_id}.jsonl"),
-            None,
-        )
-        if path is None:
-            path = next(
-                (item for item in artifacts if item.name == f"{session_id}.json"),
-                None,
-            )
-        if path is None:
-            continue
         try:
-            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
-            try:
-                if not stat.S_ISREG(os.fstat(fd).st_mode):
-                    continue
-                size = os.fstat(fd).st_size
-                os.lseek(fd, max(0, size - MAX_SEARCH_TAIL_BYTES), os.SEEK_SET)
-                data = os.read(fd, MAX_SEARCH_TAIL_BYTES)
-            finally:
-                os.close(fd)
-        except OSError:
+            data = manager.store.tail_bytes(session_id, max_bytes=MAX_SEARCH_TAIL_BYTES)
+        except (SessionError, ValueError, OSError):
             continue
         if needle in data.decode("utf-8", errors="ignore").casefold():
             found.append(session_id)

@@ -349,7 +349,7 @@ def test_for_workspace_builds_builtin_user_workspace_roots(tmp_path):
     home = tmp_path / "home"
     workspace = tmp_path / "ws"
     write_skill(home / ".nexus" / "skills", "user-skill")
-    write_skill(workspace / ".nexus" / "skills", "ws-skill")
+    write_skill(workspace / ".agents" / "skills", "ws-skill")
     builtin = tmp_path / "builtin"
     write_skill(builtin, "builtin-skill")
     mgr = SkillManager.for_workspace(workspace, home=home, builtin=builtin)
@@ -357,8 +357,21 @@ def test_for_workspace_builds_builtin_user_workspace_roots(tmp_path):
     assert [tier for tier, _path in mgr.roots] == [
         SkillSource.BUILTIN,
         SkillSource.USER,
+        SkillSource.WORKSPACE_LEGACY,
         SkillSource.WORKSPACE,
     ]
+
+
+def test_for_workspace_legacy_nexus_skills_are_a_read_only_fallback(tmp_path):
+    """STATE_PLAN §5.4: ``.nexus/skills`` is still read, but ``.agents`` wins."""
+    workspace = tmp_path / "ws"
+    write_skill(workspace / ".nexus" / "skills", "legacy-only", description="legacy")
+    write_skill(workspace / ".nexus" / "skills", "shared", description="legacy")
+    write_skill(workspace / ".agents" / "skills", "shared", description="agents")
+    mgr = SkillManager.for_workspace(workspace, builtin=tmp_path / "no-builtin")
+    assert mgr.require("legacy-only").source is SkillSource.WORKSPACE_LEGACY
+    assert mgr.require("shared").source is SkillSource.WORKSPACE
+    assert mgr.require("shared").description == "agents"
 
 
 # ---------------------------------------------------------------------------

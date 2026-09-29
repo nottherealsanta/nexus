@@ -1,6 +1,6 @@
 """The packaged workspace tool template (plan section 6.5).
 
-The harness seeds ``.nexus/tools/_template.py`` so the model can ``Read`` it to
+The harness seeds ``.agents/tools/_template.py`` so the model can ``Read`` it to
 learn the extension contract before authoring a tool. Two properties matter:
 
 * the file name begins with an underscore, so the loader treats it as a support
@@ -28,10 +28,10 @@ __all__ = [
 #: The reserved template filename; the loader ignores leading-underscore files.
 TOOL_TEMPLATE_FILENAME = "_template.py"
 
-#: The exact example seeded into ``.nexus/tools/_template.py``.
+#: The exact example seeded into ``.agents/tools/_template.py``.
 TOOL_TEMPLATE_SOURCE = '''"""Example Nexus extension tool. Copy this file, rename it, and edit.
 
-A workspace extension is a ``.py`` file under ``.nexus/tools/`` that declares a
+A workspace extension is a ``.py`` file under ``.agents/tools/`` that declares a
 tool with a module-level ``SPEC`` and an async ``run(args, ctx)``. Call
 ReloadExtensions after writing it so it becomes callable on the next iteration.
 Files whose name starts with an underscore (like this one) are never loaded.

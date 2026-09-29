@@ -1,4 +1,10 @@
-"""Append-only, versioned JSONL session log (plan section 5.1).
+"""Append-only, versioned JSONL session log -- legacy store (STATE_PLAN §5.1).
+
+Production sessions now live in the shared SQLite database
+(:mod:`nexus.session.db`); this module survives as the **legacy reader** used
+only by :mod:`nexus.session.import_legacy` (and directly by tests that pin its
+crash-tail behavior). ``SessionStore`` is kept as an alias of
+:class:`JsonlSessionStore` for any caller still spelling the old name.
 
 One JSON object per line, terminated by ``\\n``, flushed and ``fsync``'d on every
 append. History is otherwise only ever added.
@@ -133,8 +139,8 @@ class ReadResult:
         return [r for r in self.records if isinstance(r, SummaryRecord)]
 
 
-class SessionStore:
-    """Reads and appends session logs inside a single directory."""
+class JsonlSessionStore:
+    """Reads and appends session logs inside a single directory (legacy)."""
 
     def __init__(
         self,
@@ -457,9 +463,14 @@ class SessionStore:
         yield from self.read(session).records
 
 
+#: Compatibility alias for callers still spelling the pre-STATE_PLAN name.
+SessionStore = JsonlSessionStore
+
+
 __all__ = [
     "SESSION_LOG_VERSION",
     "EventRecord",
+    "JsonlSessionStore",
     "MessageRecord",
     "ReadResult",
     "SessionRecord",

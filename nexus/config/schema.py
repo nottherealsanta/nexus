@@ -336,6 +336,12 @@ class HooksSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     enabled: bool = True
 
 
+#: ``[providers.*] auth`` values: ChatGPT OAuth (codex only), GitHub Copilot
+#: device-flow sign-in, or an API key pasted into Settings and kept in the
+#: system keychain.
+PROVIDER_AUTH_MODES = ("chatgpt_oauth", "github_copilot", "keychain")
+
+
 class ProviderSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     kind: str | None = None
     api_key: str | None = None
@@ -359,8 +365,8 @@ class ProviderSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     env: dict[str, str] | None = None
 
     def __post_init__(self) -> None:
-        if self.auth is not None and self.auth != "chatgpt_oauth":
-            raise ValueError("providers.*.auth must be 'chatgpt_oauth'")
+        if self.auth is not None and self.auth not in PROVIDER_AUTH_MODES:
+            raise ValueError("providers.*.auth must be 'chatgpt_oauth', 'github_copilot' or 'keychain'")
         if self.profile is not None and (
             not isinstance(self.profile, str)
             or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", self.profile)
@@ -373,6 +379,18 @@ class ProviderSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
                 raise ValueError("chatgpt_oauth cannot be combined with executable or agent fields")
             if self.kind not in (None, "openai", "codex"):
                 raise ValueError("chatgpt_oauth is supported only by the codex/OpenAI provider")
+        if self.auth in ("github_copilot", "keychain"):
+            # Credentials come from the keychain (plan section 7), never config.
+            if self.api_key is not None:
+                raise ValueError(f"{self.auth} providers read their credential from the keychain; remove api_key")
+            if any(value is not None for value in (self.executable, self.command, self.args, self.env, self.inherit_env, self.permission_policy)):
+                raise ValueError(f"{self.auth} cannot be combined with executable or agent fields")
+            if self.kind not in (None, "openai_compatible", "openai-compatible", "compatible"):
+                raise ValueError(f"{self.auth} is supported only by OpenAI-compatible providers")
+            if self.api not in (None, "chat", "responses"):
+                raise ValueError(f"{self.auth} requires api='chat' or api='responses'")
+            if self.auth == "keychain" and not self.base_url:
+                raise ValueError("keychain providers require a base_url")
         if self.timeout_seconds is not None and (
             isinstance(self.timeout_seconds, bool)
             or not isinstance(self.timeout_seconds, (int, float))
@@ -652,8 +670,11 @@ class WebSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 class ExtSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     enabled: bool = True
     watch_interval_ms: int = 500
+    #: Search order, highest precedence first (STATE_PLAN §5.4): the current
+    #: project location, then the legacy read-only project location, then the
+    #: user's.
     dirs: list[str] = msgspec.field(
-        default_factory=lambda: [".nexus/tools", "~/.nexus/tools"]
+        default_factory=lambda: [".agents/tools", ".nexus/tools", "~/.nexus/tools"]
     )
     quarantine: bool = True
     max_file_bytes: int = 262144
@@ -684,7 +705,10 @@ class SettingsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
 class TelemetrySection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     log_level: str = "info"
-    log_file: str = ".nexus/logs/nexus.log"
+    #: A relative path resolves under ``project_state_dir()/logs``
+    #: (STATE_PLAN §5.4: logs are machine state, not project content); an
+    #: absolute path is used as-is.
+    log_file: str = "logs/nexus.log"
     redact: list[str] = msgspec.field(
         default_factory=lambda: ["api_key", "token", "authorization", "password", "secret"]
     )

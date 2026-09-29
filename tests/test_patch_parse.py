@@ -71,7 +71,7 @@ def test_parses_multiple_counted_hunks_and_default_single_line_counts() -> None:
     [
         ("*** Begin Patch\n*** Add File: a\n+x\n", "invalid_boundary"),
         (
-            "*** Begin Patch\n*** Add File: a\n+x",
+            "*** Begin Patch\n*** Add File: a\n+x\r\n*** End Patch\n",
             "missing_newline",
         ),
         (
@@ -224,3 +224,33 @@ def test_normalizes_path_components_to_nfc() -> None:
     )[0]
 
     assert operation.source == "caf\u00e9/file.txt"
+
+
+def test_parses_codex_context_hunks_without_final_newline() -> None:
+    patch = (
+        "*** Begin Patch\n"
+        "*** Update File: a.py\n"
+        "@@ def f():\n"
+        "     x = 1\n"
+        "\n"
+        "-    y = 2\n"
+        "+    y = 3\n"
+        "@@\n"
+        "+tail\n"
+        "*** End of File\n"
+        "\n"
+        "*** Update File: b.py\n"
+        "*** Move to: c.py\n"
+        " keep\n"
+        "*** End Patch"
+    )
+
+    update, move = patch_parse.parse_patch(patch)
+
+    first, second = update.hunks
+    assert (first.numbered, first.anchor, first.end_of_file) == (False, "def f():", False)
+    assert first.lines[1] == patch_parse.PatchLine("context", "")
+    assert (first.old_count, first.new_count) == (3, 3)
+    assert (second.anchor, second.end_of_file) == (None, True)
+    assert (move.kind, move.source, move.destination) == ("move", "b.py", "c.py")
+    assert move.hunks[0].lines == (patch_parse.PatchLine("context", "keep"),)

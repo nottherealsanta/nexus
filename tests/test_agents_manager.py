@@ -501,7 +501,7 @@ def test_marker_and_non_markdown_files_are_ignored(tmp_path):
 def test_for_workspace_serves_builtins_without_touching_the_workspace(tmp_path):
     workspace = tmp_path / "ws"
     mgr = AgentManager.for_workspace(workspace)
-    assert set(mgr.names) == {"advisor", "build", "quick", "task"}
+    assert set(mgr.names) == {"advisor", "build", "orchestrator", "quick", "task"}
     assert all(agent.source is AgentSource.BUILTIN for agent in mgr.agents)
     assert not (workspace / ".nexus").exists()
 
@@ -518,8 +518,9 @@ def test_for_workspace_seeds_the_canonical_roles_once_when_opted_in(tmp_path):
     workspace = tmp_path / "ws"
     mgr = AgentManager.for_workspace(workspace, seed=True)
     assert set(mgr.names) == set(SEEDED_ROLES)
-    agents_dir = workspace / ".nexus" / "agents"
+    agents_dir = workspace / ".agents" / "agents"
     assert (agents_dir / SEED_MARKER_NAME).is_file()
+    assert not (workspace / ".nexus").exists()
     for role in SEEDED_ROLES:
         assert (agents_dir / f"{role}.md").is_file()
         assert mgr.require(role).source is AgentSource.WORKSPACE
@@ -532,7 +533,7 @@ def test_for_workspace_seeds_the_canonical_roles_once_when_opted_in(tmp_path):
 def test_seeding_is_idempotent_and_does_not_touch_files(tmp_path):
     workspace = tmp_path / "ws"
     seed_workspace_roles(workspace)
-    agents_dir = workspace / ".nexus" / "agents"
+    agents_dir = workspace / ".agents" / "agents"
     before = {
         path.name: path.read_bytes() for path in agents_dir.iterdir()
     }
@@ -545,7 +546,7 @@ def test_seeding_is_idempotent_and_does_not_touch_files(tmp_path):
 def test_deleted_seed_is_not_recreated_but_falls_back_to_builtin(tmp_path):
     workspace = tmp_path / "ws"
     AgentManager.for_workspace(workspace, seed=True)
-    target = workspace / ".nexus" / "agents" / "advisor.md"
+    target = workspace / ".agents" / "agents" / "advisor.md"
     target.unlink()
 
     mgr = AgentManager.for_workspace(workspace, seed=True)
@@ -561,6 +562,8 @@ def test_untouched_legacy_seeds_are_retired_once_and_edited_ones_kept(tmp_path):
     import json
     import os
 
+    from nexus.config.paths import project_state_dir
+
     workspace = tmp_path / "ws"
     agents_dir = workspace / ".nexus" / "agents"
     old_build = write_agent(agents_dir, "build", description="old", body="OLD")
@@ -573,9 +576,15 @@ def test_untouched_legacy_seeds_are_retired_once_and_edited_ones_kept(tmp_path):
 
     mgr = AgentManager.for_workspace(workspace)
     assert not old_build.exists()
-    assert list((workspace / ".nexus" / "trash" / "agents").glob("*/build.md"))
+    trash_root = project_state_dir(workspace) / "trash" / "agents"
+    assert list(trash_root.glob("*/build.md"))
     assert mgr.require("build").source is AgentSource.BUILTIN
-    assert edited.exists() and mgr.require("general").source is AgentSource.WORKSPACE
+    # The retired copy never lands back in the project.
+    assert not (workspace / ".nexus" / "trash").exists()
+    assert (
+        edited.exists()
+        and mgr.require("general").source is AgentSource.WORKSPACE_LEGACY
+    )
     state = json.loads(marker.read_text())
     assert state["version"] == SEED_VERSION and state["retired"] == ["build"]
     # A second run is a no-op.
@@ -595,7 +604,7 @@ def test_marker_alone_prevents_seeding(tmp_path):
 def test_seeding_does_not_overwrite_an_existing_definition(tmp_path):
     workspace = tmp_path / "ws"
     custom = write_agent(
-        workspace / ".nexus" / "agents", "task", description="mine"
+        workspace / ".agents" / "agents", "task", description="mine"
     )
     report = seed_workspace_roles(workspace)
     assert "task" in report.skipped
@@ -605,7 +614,7 @@ def test_seeding_does_not_overwrite_an_existing_definition(tmp_path):
 
 def test_seeding_refuses_to_follow_a_symlinked_target(tmp_path):
     workspace = tmp_path / "ws"
-    agents_dir = workspace / ".nexus" / "agents"
+    agents_dir = workspace / ".agents" / "agents"
     agents_dir.mkdir(parents=True)
     outside = tmp_path / "outside.txt"
     outside.write_text("DO NOT TOUCH", encoding="utf-8")
@@ -626,7 +635,7 @@ def test_seeding_reports_an_invalid_source_file(tmp_path):
     report = seed_workspace_roles(workspace, source=source)
     assert report.failed == ("bad",)
     assert report.written == ("good",)
-    assert not (workspace / ".nexus" / "agents" / "bad.md").exists()
+    assert not (workspace / ".agents" / "agents" / "bad.md").exists()
 
 
 def test_seeding_missing_source_is_reported_without_a_marker(tmp_path):
@@ -634,7 +643,7 @@ def test_seeding_missing_source_is_reported_without_a_marker(tmp_path):
     report = seed_workspace_roles(workspace, source=tmp_path / "absent")
     assert report.source_missing is True
     assert report.already_seeded is False
-    assert not (workspace / ".nexus" / "agents" / SEED_MARKER_NAME).exists()
+    assert not (workspace / ".agents" / "agents" / SEED_MARKER_NAME).exists()
 
 
 def test_default_seed_source_ships_all_roles():
@@ -650,6 +659,7 @@ def test_for_workspace_roots_are_builtin_user_workspace(tmp_path):
     assert [tier for tier, _path in mgr.roots] == [
         AgentSource.BUILTIN,
         AgentSource.USER,
+        AgentSource.WORKSPACE_LEGACY,
         AgentSource.WORKSPACE,
     ]
 
@@ -657,6 +667,7 @@ def test_for_workspace_roots_are_builtin_user_workspace(tmp_path):
 def test_builtin_roles_match_the_default_contract(tmp_path):
     mgr = AgentManager.for_workspace(tmp_path / "ws")
     assert mgr.require("build").contexts == ("root",)
+    assert mgr.require("orchestrator").contexts == ("root",)
     assert all(mgr.require(name).contexts == ("subagent",) for name in ("advisor", "task", "quick"))
     assert mgr.require("advisor").read_only
     assert not mgr.require("task").read_only and not mgr.require("quick").read_only
@@ -679,8 +690,22 @@ def test_legacy_names_resolve_to_the_new_builtins(tmp_path):
     workspace_root = tmp_path / "custom" / ".nexus" / "agents"
     write_agent(workspace_root, "planner", body="CUSTOM")
     custom = AgentManager.for_workspace(tmp_path / "custom")
-    assert custom.resolve("planner", context="subagent").source is AgentSource.WORKSPACE
+    assert (
+        custom.resolve("planner", context="subagent").source
+        is AgentSource.WORKSPACE_LEGACY
+    )
     assert any(d.code is AgentDiagnosticCode.DEPRECATED_PLANNER for d in custom.diagnostics)
+
+
+def test_for_workspace_agents_dir_wins_over_legacy_nexus(tmp_path):
+    """STATE_PLAN §5.4: ``.agents/agents`` outranks the legacy ``.nexus/agents``."""
+    workspace = tmp_path / "custom"
+    write_agent(workspace / ".nexus" / "agents", "planner", body="LEGACY")
+    write_agent(workspace / ".agents" / "agents", "planner", body="CURRENT")
+    mgr = AgentManager.for_workspace(workspace)
+    winner = mgr.resolve("planner", context="subagent")
+    assert winner.source is AgentSource.WORKSPACE
+    assert mgr.load_body("planner") == "CURRENT"
 
 
 def test_fallback_list_is_parsed_bounded_and_fingerprinted(tmp_path):
@@ -1094,3 +1119,17 @@ def test_seed_error_is_an_agent_error(tmp_path, monkeypatch):
     monkeypatch.setattr(manager_module, "_atomic_write", boom)
     with pytest.raises(AgentSeedError):
         seed_workspace_roles(tmp_path / "ws")
+
+
+def test_builtin_build_prompt_names_no_optional_tools_or_roles() -> None:
+    """Tools and subagent roles are discovered at runtime, not hardcoded.
+
+    The tool list and the ``subagent`` roster carry names and usage; the build
+    prompt may assume only read/search/edit, so it never names a tool or role.
+    """
+    body = (_default_seed_source() / "build.md").read_text()
+    for name in (
+        "bash", "todowrite", "question", "apply_patch", "webfetch", "websearch",
+        "skill", "subagent", "subagent_type", "advisor", "task", "quick",
+    ):
+        assert f"`{name}`" not in body and f"**{name}**" not in body, name

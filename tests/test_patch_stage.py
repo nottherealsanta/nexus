@@ -166,3 +166,78 @@ def test_hand_built_surrogate_content_raises_typed_stage_error() -> None:
         patch_stage.stage_patch((operation,), {"file.txt": None})
 
     assert caught.value.code == "invalid_content"
+
+
+HAIKU = (
+    b"Autumn leaves drift down\nMoonlight rests on quiet streams\n"
+    b"Night holds its breath still\n\nSoft rain taps the roof\n"
+    b"A small bird sings into dawn\nClouds wander away"
+)
+ADDED = b"\n\nSnow hushes the pines\nFootprints fade beneath the dusk\nStars kindle the sky"
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        # The exact patches gpt models sent in a real session, all once rejected.
+        (
+            "*** Begin Patch\n*** Update File: test.md\n@@\n Clouds wander away\n+\n"
+            "+Snow hushes the pines\n+Footprints fade beneath the dusk\n+Stars kindle the sky\n"
+            "*** End Patch"
+        ),
+        (
+            "*** Begin Patch\n*** Update File: test.md\n@@\n Soft rain taps the roof\n"
+            " A small bird sings into dawn\n Clouds wander away\n+\n+Snow hushes the pines\n"
+            "+Footprints fade beneath the dusk\n+Stars kindle the sky\n*** End Patch\n"
+        ),
+        (
+            "*** Begin Patch\n*** Update File: test.md\n@@ -4,3 +4,7 @@\n Soft rain taps the roof\n"
+            " A small bird sings into dawn\n Clouds wander away\n+\n+Snow hushes the pines\n"
+            "+Footprints fade beneath the dusk\n+Stars kindle the sky\n*** End Patch\n"
+        ),
+    ],
+)
+def test_codex_style_and_miscounted_hunks_locate_by_context(patch: str) -> None:
+    staged = patch_stage.stage_patch(patch_parse.parse_patch(patch), {"test.md": HAIKU})
+
+    assert staged.changes[0].new_bytes == HAIKU + ADDED
+
+
+def test_context_hunks_honour_anchor_whitespace_and_end_of_file() -> None:
+    operations = _parse(
+        "*** Update File: file.py\n"
+        "@@ def two():\n"
+        "-    return 1\n"
+        "+    return 2\n"
+        "@@\n"
+        " end  \n"
+        "+appended\n"
+        "*** End of File\n"
+    )
+    source = b"def one():\n    return 1\ndef two():\n    return 1\nend\n"
+
+    staged = patch_stage.stage_patch(operations, {"file.py": source})
+
+    assert staged.changes[0].new_bytes == (
+        b"def one():\n    return 1\ndef two():\n    return 2\nend\nappended\n"
+    )
+
+
+def test_update_with_move_to_applies_hunks_at_destination() -> None:
+    operations = _parse("*** Update File: a.txt\n*** Move to: b.txt\n@@\n-old\n+new\n")
+
+    staged = patch_stage.stage_patch(operations, {"a.txt": b"old\n", "b.txt": None})
+
+    assert [(c.path, c.old_bytes, c.new_bytes) for c in staged.changes] == [
+        ("a.txt", b"old\n", None),
+        ("b.txt", None, b"new\n"),
+    ]
+
+
+def test_context_mismatch_names_the_file() -> None:
+    operations = _parse("*** Update File: file.txt\n@@\n-missing\n+new\n")
+
+    with pytest.raises(patch_stage.PatchStageError) as caught:
+        patch_stage.stage_patch(operations, {"file.txt": b"actual\n"})
+
+    assert (caught.value.code, caught.value.path) == ("context_mismatch", "file.txt")

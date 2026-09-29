@@ -40,14 +40,14 @@ events ──► session log ──► view/reduce.py (pure) ──► Conversat
 | --- | --- | --- |
 | Sessions: open, fork, replay, delete/trash, export, locks | `session/` | `manager.py` (`SessionManager`, `SessionSummary`, `_state_for` gives idle/running/awaiting_*), `session.py` (handle), `store.py` (JSONL log, `EventRecord`, `MessageRecord`), `snapshot.py` |
 | Context assembly and budget | `context/` | `manager.py`, `parts.py`, `budget.py`, `compact.py`, `counting.py`, `cache.py` |
-| Tools and permissions | `tools/` | `spec.py` (tool contract), `manager.py` (dispatch), `permissions.py` (rule grammar, path security, approvals), `bundles.py` (profiles), `names.py` (public names), `questions.py` (agent questions), `builtin/*.py` (read, edit, multiedit, write, apply_patch, bash + jobs, glob, grep, ls, task, todo, skill, webfetch, websearch, meta) |
+| Tools and permissions | `tools/` | `spec.py` (tool contract), `manager.py` (dispatch), `permissions.py` (rule grammar, path security, approvals), `bundles.py` (profiles), `names.py` (public names), `questions.py` (agent questions), `builtin/*.py` (read, edit, multiedit, write, apply_patch (numbered unified hunks or Codex-style `@@ anchor` context hunks, located by content; `_patch_parse.py` → `_patch_stage.py` → `_patch_commit.py`), bash + jobs, glob, grep, ls, task, todo, skill, webfetch, websearch, meta) |
 | Subagents and worktrees | `agents/` | `manager.py`, `model.py` (`*.md` definitions), `runner.py`, `worktrees.py`, `worktree_review.py`, `worktree_integrate.py`, built-in roles in `agents/data/*.md` (root `build`; subagents `advisor` (read-only), `task`, `quick`; user overrides in `~/.nexus/agents/`) |
 | Skills | `skills/` | `manager.py`, `frontmatter.py`, `activation.py` |
 | Hooks | `hooks/` | `manager.py`, `model.py` |
 | MCP | `mcp/` | `manager.py` (`MCPServerStatus`, `MCPHealth`, `statuses()`), `client.py` (stdio/http/sse, `parse_server_config`), `bridge.py` |
 | Hot extensions | `ext/` | `manager.py` (atomic rebuild), `manifest.py`, `quarantine.py`, `tools/loader.py` |
 | Outbound network | `net/outbound.py` | pinned, public-address-only HTTP for webfetch/websearch |
-| Auth | `auth/` | experimental ChatGPT/Codex OAuth credential store |
+| Auth | `auth/` | keychain-backed provider sign-in: `codex.py` (ChatGPT OAuth, browser PKCE or device code), `copilot.py` (stored token only; no GitHub device flow — that used OpenCode's OAuth app), `api_key.py` (pasted keys such as OpenCode Go), `store.py` (secure keyring only) |
 
 ## Host layer (the surface every UI talks to)
 
@@ -64,6 +64,15 @@ validates the choice and writes `[providers.*]` and `[models].default` to
 the OAuth store or daemon environment and never enter setup commands. The
 running daemon needs a restart after saving because provider routes are built
 at startup.
+
+Settings → Providers connects ChatGPT (Codex), GitHub Copilot and OpenCode Go
+through `ProvidersStatus`, `ProviderLogin` + `ProviderLoginPoll`/`Cancel`,
+`ProviderKeySet` and `ProviderLogout` (`host_support/provider_auth.py`). A
+browser or device sign-in runs as a bounded daemon task and returns only its URL
+and user code. `ProviderKeySet` is the one command that carries a credential,
+inward only; it is never echoed, logged or written to config. Connecting writes
+`[providers.<id>]` (`auth = "chatgpt_oauth" | "github_copilot" | "keychain"`)
+to `~/.nexus/config.toml`; restart the daemon to route turns through it.
 
 | File | Role |
 | --- | --- |
