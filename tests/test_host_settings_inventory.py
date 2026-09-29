@@ -158,7 +158,7 @@ def test_every_settings_category_round_trips_in_both_scopes(tmp_path, monkeypatc
                     continue
                 read = await client.settings_read(scope, item.category, item.id)
                 assert read.body
-                assert not str(home) in read.rel_path
+                assert str(home) not in read.rel_path
                 assert read.sha256
 
     asyncio.run(scenario())

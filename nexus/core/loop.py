@@ -65,7 +65,6 @@ import msgspec
 from ..errors import MalformedToolCall, OperationCancelled, ProviderError
 from ..events import Event
 from ..model.capabilities import Capabilities
-from ..model.http import redact_secrets
 from ..model.message import (
     DUPLICATE_TOOL_CALL_KEY,
     ContentBlock,
