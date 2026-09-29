@@ -94,7 +94,6 @@ async def test_updated_sort_is_global_across_providers_and_shows_dates():
         assert [row["id"] for row in modal._visible_rows if row] == ["new", "middle", "old"]
         assert modal._visible_rows.count(None) == 1
         assert "Recently updated" in str(modal.query_one("#model-picker-options").get_option_at_index(0).prompt)
-        assert now.isoformat() in str(modal.query_one("#model-picker-options").get_option_at_index(1).prompt)
         await pilot.press("ctrl+s")
         await pilot.pause()
         assert [row["id"] for row in modal._visible_rows if row] == ["old", "middle", "new"]

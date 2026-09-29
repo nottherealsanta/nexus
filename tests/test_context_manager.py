@@ -461,3 +461,19 @@ def test_explicit_model_and_provider_overrides_win(tmp_path):
     request = manager.assemble(FakeSession())
     assert request.model == "override-model"
     assert request.provider == "override-provider"
+
+
+def test_agents_md_is_included_between_tools_and_skills(tmp_path):
+    (tmp_path / "AGENTS.md").write_text("PROJECT-RULES", encoding="utf-8")
+    manager = ContextManager(tmp_path, config=v2_config())
+
+    manager.assemble(FakeSession())
+    parts = manager.last_included_parts
+    assert parts["agents_md"].strip() == "PROJECT-RULES"
+    assert "PROJECT-RULES" in manager.assemble(FakeSession()).system
+
+
+def test_missing_agents_md_contributes_nothing(tmp_path):
+    manager = ContextManager(tmp_path, config=v2_config())
+    manager.assemble(FakeSession())
+    assert "agents_md" not in manager.last_included_parts

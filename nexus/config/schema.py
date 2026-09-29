@@ -139,6 +139,7 @@ class AgentSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     profile: str = "coding"
     instructions_file: str = "SOUL.md"
     memory_file: str = "MEMORY.md"
+    agents_file: str = "AGENTS.md"
     max_iterations: int = 60
     max_turn_seconds: float = 1800
     # Carried so a flat v1 layer can be bridged into v2 without losing it.
@@ -461,6 +462,7 @@ class ProviderSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
 class ContextLimits(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     memory: int = 8000
+    agents_md: int = 8000
     skills_index: int = 4000
     environment: int = 2000
     attachments: int = 20000

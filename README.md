@@ -216,8 +216,9 @@ multiline editor and the searchable `Ctrl+P` command palette. Model selection,
 root-agent selection, session switching, fork, export, details, and reconnect
 remain daemon operations through the host client.
 
-The conversation begins with a four-block context header for the system prompt,
-tools, skills, and MCP servers. User turns can be collapsed by their chevron.
+The conversation begins with a five-block context header for the system prompt,
+tools, `AGENTS.md` (project instructions, loaded automatically from the workspace root),
+skills, and MCP servers. User turns can be collapsed by their chevron.
 The composer shows agent, model, provider, effort, and context usage such as
 `24k (24%)`: the last request's size as the provider reported it (cached tokens
 included), plus the estimated growth since, against the model's context window

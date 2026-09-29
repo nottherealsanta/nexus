@@ -94,8 +94,6 @@ class ModelPickerScreen(ModalScreen[tuple[str, str | None, bool] | None]):
             yield Static("Select model                                      esc", id="model-picker-title")
             yield Input(placeholder="Search models and providers", id="model-picker-search")
             yield OptionList(id="model-picker-options")
-            yield Static("↑/↓ navigate · Enter select · Ctrl+F favorite · Ctrl+S sort · Esc close",
-                         id="model-picker-help")
 
     def on_mount(self) -> None:
         self._render_models()
@@ -134,15 +132,15 @@ class ModelPickerScreen(ModalScreen[tuple[str, str | None, bool] | None]):
                 seen.add(ref)
                 label = Text("  ")
                 label.append(sanitize(str(row.get("name") or row["id"]), 70), style="bold")
-                label.append("  " + sanitize(str(row["provider"]), 40), style="dim")
-                if self.sort_mode == "updated":
-                    updated = row.get("last_updated") or row.get("release_date")
-                    if isinstance(updated, str) and updated:
-                        label.append("  " + sanitize(updated, 10), style="dim")
                 if ref in self.favorites:
                     label.append("  ★", style="yellow")
                 if ref == self.current:
                     label.append("  ◀", style="dim")
+                provider = sanitize(str(row["provider"]), 40)
+                width = self.query_one(OptionList).size.width - 2  # scrollbar gutter
+                pad = max(2, width - label.cell_len - len(provider) - 1)
+                label.append(" " * pad)
+                label.append(provider, style="dim")
                 options.append(Option(label))
                 self._visible_rows.append(row)
         listing = self.query_one(OptionList)
@@ -173,10 +171,11 @@ class ModelPickerScreen(ModalScreen[tuple[str, str | None, bool] | None]):
             self._pending_effort = (self.stored_override if self.stored_override in levels else
                                     self.current_effort if _ref(row) == self.current
                                     and self.current_effort in levels else None)
-        effort = self._pending_effort or "model default"
-        self.query_one("#model-picker-help", Static).update(
-            f"Effort: {effort} · ←/→ change · Ctrl+F favorite · Ctrl+S sort: {self.sort_mode} · Esc"
-        )
+
+    def on_resize(self) -> None:
+        if self._visible_rows:
+            row = self._selected_row()
+            self._render_models(selected_ref=_ref(row) if row else None)
 
     @on(Input.Changed)
     def _search(self) -> None:
@@ -235,9 +234,15 @@ class ModelPickerScreen(ModalScreen[tuple[str, str | None, bool] | None]):
                 self._pending_effort = levels[(index + (1 if event.key == "right" else -1)) % len(levels)]
                 self._effort_touched = True
                 self._sync_effort()
-        elif event.key == "down" and isinstance(self.focused, Input):
+        elif event.key in {"down", "up"} and isinstance(self.focused, Input):
             event.stop()
-            self.query_one(OptionList).focus()
+            event.prevent_default()
+            listing = self.query_one(OptionList)
+            listing.focus()
+            if event.key == "down":
+                listing.action_cursor_down()
+            else:
+                listing.action_cursor_up()
         elif event.key == "enter" and isinstance(self.focused, Input):
             event.stop()
             event.prevent_default()

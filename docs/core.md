@@ -47,7 +47,7 @@ events ──► session records ──► view/reduce.py (pure) ──► Conve
 | MCP | `mcp/` | `manager.py` (`MCPServerStatus`, `MCPHealth`, `statuses()`), `client.py` (stdio/http/sse, `parse_server_config`), `bridge.py` |
 | Hot extensions | `ext/` | `manager.py` (atomic rebuild), `manifest.py`, `quarantine.py`, `tools/loader.py` |
 | Outbound network | `net/outbound.py` | pinned, public-address-only HTTP for webfetch/websearch |
-| Auth | `auth/` | keychain-backed provider sign-in: `codex.py` (ChatGPT OAuth, browser PKCE or device code), `copilot.py` (stored token only; no GitHub device flow — that used OpenCode's OAuth app), `api_key.py` (pasted keys such as OpenCode Go), `store.py` (secure keyring only) |
+| Auth | `auth/` | keychain-backed provider sign-in: `codex.py` (ChatGPT OAuth, browser PKCE or device code), `copilot.py` (GitHub.com device flow through the Nexus OAuth app; GitHub token in the keychain, short-lived Copilot token in memory; live Copilot exchange compatibility unverified), `api_key.py` (pasted keys such as OpenCode Go), `store.py` (secure keyring only) |
 
 ## Host layer (the surface every UI talks to)
 
@@ -72,7 +72,14 @@ browser or device sign-in runs as a bounded daemon task and returns only its URL
 and user code. `ProviderKeySet` is the one command that carries a credential,
 inward only; it is never echoed, logged or written to config. Connecting writes
 `[providers.<id>]` (`auth = "chatgpt_oauth" | "github_copilot" | "keychain"`)
-to `~/.nexus/config.toml`; restart the daemon to route turns through it.
+to `~/.nexus/config.toml` and, when no turn is running, rebuilds the routes in
+place (`Runtime.reload_model_routes`); otherwise restart the daemon. Copilot
+device login is currently GitHub.com-only; older v1 stored tokens must be
+reconnected. GitHub OAuth access tokens from apps configured to expire require
+another sign-in on expiry. The GitHub token is the Copilot API bearer directly
+(no `copilot_internal` exchange) and is checked against `/models` at login; the
+device flow uses OpenCode's OAuth app id. This has not yet been verified against
+a live account.
 
 | File | Role |
 | --- | --- |

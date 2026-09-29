@@ -188,7 +188,7 @@ class ContextHeader(Vertical):
 
     def compose(self) -> ComposeResult:
         for label, slug in (("System prompt", "prompt"), ("Task", "task"), ("Tools", "tools"),
-                            ("Skills", "skills"), ("MCP", "mcp")):
+                            ("AGENTS.md", "agents"), ("Skills", "skills"), ("MCP", "mcp")):
             classes = "context-block -task" if slug == "task" else "context-block"
             yield ContextBlock(label, id=f"context-{slug}", classes=classes)
 
@@ -241,6 +241,11 @@ class ContextHeader(Vertical):
         tools_block = self.query_one("#context-tools", ContextBlock)
         tools_block.result = result
         tools_block.set_data(render_columns(labels), "\n".join(tool_details) or "(none)", color=color)
+        agents = next(
+            (str(part.get("text") or "") for part in result.included_parts
+             if isinstance(part, Mapping) and part.get("name") == "agents_md"), "")
+        self.query_one("#context-agents", ContextBlock).set_data(
+            prompt_preview(agents) if agents.strip() else "", agents or "(none)", color=color)
         skills = [row for row in result.skills_index if isinstance(row, dict) and row.get("included", True)]
         skill_names = [str(row.get("name", "")) for row in skills if row.get("name")]
         skill_details = [f"{row.get('name', '?')} · {row.get('scope', '')} · {row.get('origin', '')}\n{row.get('description', '')}" for row in skills]

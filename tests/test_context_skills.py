@@ -137,7 +137,8 @@ def test_part_render_is_none_without_a_snapshot(tmp_path):
 
 
 def test_part_order_and_priority_are_unchanged():
-    assert PART_ORDER[4] == "skills_index"
+    assert PART_ORDER[5] == "skills_index"
+    assert PART_ORDER[4] == "agents_md"
     assert PART_PRIORITY["skills_index"] == 1
     parts = builtin_parts()
     assert tuple(p.name for p in parts) == PART_ORDER

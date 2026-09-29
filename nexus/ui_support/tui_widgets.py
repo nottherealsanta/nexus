@@ -826,7 +826,7 @@ class RootAgentBar(Horizontal):
         yield Static(" ", id="root-separator-provider", markup=False)
         yield PickerLink("", picker_kind="model", id="root-provider")
         yield Static("  ", id="root-separator-effort", markup=False)
-        yield PickerLink("", picker_kind="model", id="root-effort")
+        yield PickerLink("", picker_kind="effort", id="root-effort")
 
     def on_mount(self) -> None:
         self._sync_controls()

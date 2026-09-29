@@ -76,7 +76,9 @@ async def test_settings_providers_sign_in_save_key_and_disconnect(monkeypatch):
         assert not pane.query_one("#provider-opencode-go").query_one(".provider-logout", Button).display
 
         assert not pane.query("#provider-copilot-domain")
-        assert not pane.query("#provider-github-copilot .provider-action")
+        copilot_device = pane.query_one("#provider-github-copilot").query_one(".provider-action", Button)
+        assert copilot_device.name == "github-copilot|device"
+        assert str(copilot_device.label) == "Use a device code"
 
         key = pane.query_one("#provider-go-key", Input)
         key.value = "sk-go-0123456789"

@@ -4,8 +4,8 @@ Three providers connect from any surface:
 
 * ``codex`` — ChatGPT sign-in in the browser (PKCE, local callback on port
   1455) or with a device code.
-* ``github-copilot`` — no sign-in. Nexus has no GitHub OAuth app and will not
-  use OpenCode's. A token already in the keychain can still be disconnected.
+* ``github-copilot`` — GitHub.com device sign-in with Nexus's first-party OAuth
+  app. GitHub Enterprise is not supported yet.
 * ``opencode-go`` — an OpenCode Go API key pasted once.
 
 Credentials live in the secure native keychain of the daemon's machine. OAuth
@@ -15,7 +15,9 @@ sign-in URL and a short user code are returned so a client can show or open
 them. Each flow runs as a bounded daemon task that clients poll by an opaque
 ``login_id``. A successful connection also writes the provider's
 ``[providers.<id>]`` route to ``~/.nexus/config.toml``; routes are built at
-startup, so the daemon needs a restart before the provider serves turns.
+startup; when no turn is running the daemon rebuilds them in place
+(``Runtime.reload_model_routes``), otherwise it needs a restart before the
+provider serves turns.
 """
 
 from __future__ import annotations
@@ -31,7 +33,7 @@ from typing import Any
 
 from ..auth.api_key import StoredKeyAuth, validate_api_key
 from ..auth.codex import CodexOAuthManager
-from ..auth.copilot import CopilotAuthManager, api_base_url
+from ..auth.copilot import CopilotAuthManager, api_base_url, normalize_domain
 from ..errors import ConfigError
 from ..util import redact_secrets
 from . import settings_inventory
@@ -46,8 +48,8 @@ PROVIDERS: dict[str, tuple[str, tuple[str, ...], str]] = {
         "Sign in with your ChatGPT Plus or Pro account. This is not an OpenAI API key.",
     ),
     "github-copilot": (
-        "GitHub Copilot", (),
-        "Nexus does not sign in through OpenCode's GitHub app. Copilot needs its own OAuth app.",
+        "GitHub Copilot", ("device",),
+        "Sign in with GitHub.com using Nexus's first-party OAuth app. GitHub Enterprise is not supported yet.",
     ),
     "opencode-go": (
         "OpenCode Go", ("api_key",),
@@ -185,12 +187,34 @@ def provider_route(provider: str, domain: str | None = None) -> tuple[tuple[str,
     return _route(provider, domain)
 
 
-def _save_route(runtime: object, provider: str, domain: str | None = None) -> str:
+_RESTART = "Connected. Restart the daemon to use it (nexus daemon stop)."
+
+
+def _save_route(runtime: object, provider: str, domain: str | None = None) -> tuple[bool, str]:
+    """``(saved, message)``; ``saved`` says the route reached the global config."""
     try:
         write_global_keys(runtime, tuple((f"providers.{provider}", key, value) for key, value in _route(provider, domain)))
     except ConfigError as exc:
-        return f"Connected, but the route was not saved: {_safe(exc)}"
-    return "Connected. Restart the daemon to use it (nexus daemon stop)."
+        return False, f"Connected, but the route was not saved: {_safe(exc)}"
+    return True, _RESTART
+
+
+async def _apply_route(runtime: object, idle: Callable[[], bool] | None) -> bool:
+    """Rebuild the routes in place; only while no turn is running."""
+    reloader = getattr(runtime, "reload_model_routes", None)
+    if idle is None or not callable(reloader) or not idle():
+        return False
+    try:
+        return bool(await reloader())
+    except Exception:  # noqa: BLE001 - a bad config leaves the restart path
+        return False
+
+
+async def _finish_route(runtime: object, provider: str, domain: str | None, idle: Callable[[], bool] | None) -> str:
+    saved, message = await asyncio.to_thread(_save_route, runtime, provider, domain)
+    if saved and await _apply_route(runtime, idle):
+        return "Connected. It is ready to use."
+    return message
 
 
 async def providers_status(runtime: object) -> dict[str, Any]:
@@ -208,17 +232,25 @@ async def providers_status(runtime: object) -> dict[str, Any]:
     return {"providers": rows}
 
 
-async def provider_login(runtime: object, provider: str, method: str = "", domain: str = "") -> dict[str, Any]:
+async def provider_login(
+    runtime: object, provider: str, method: str = "", domain: str = "",
+    idle: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
     """Start one sign-in; returns the URL and code once they are known."""
     if provider not in PROVIDERS:
         raise ConfigError("unknown provider")
     methods = PROVIDERS[provider][1]
     method = method or (methods[0] if methods else "")
     if method not in methods or method == "api_key":
-        if provider == "github-copilot":
-            raise ConfigError("Nexus does not sign in through OpenCode's GitHub app")
         raise ConfigError(f"{PROVIDERS[provider][0]} does not support {method or 'that'} sign-in")
     host = None
+    if provider == "github-copilot":
+        try:
+            host = normalize_domain(domain)
+        except ValueError:
+            raise ConfigError("GitHub Copilot sign-in is currently supported only on GitHub.com") from None
+        if host != "github.com":
+            raise ConfigError("GitHub Copilot sign-in is currently supported only on GitHub.com")
     logins = _logins(runtime)
     # One flow per provider: a new attempt replaces an abandoned one.
     for login in list(logins.values()):
@@ -244,7 +276,7 @@ async def provider_login(runtime: object, provider: str, method: str = "", domai
                     await manager.browser_login(notify=lambda _text: None, browser_open=lambda url: show(url))
                 elif provider == "codex":
                     await manager.device_login(on_code=show, cancel=login.cancel)
-                else:
+                elif provider == "github-copilot":
                     await manager.device_login(domain=host, on_code=show, cancel=login.cancel)
         except asyncio.CancelledError:
             login.status, login.message = "cancelled", "Sign-in cancelled."
@@ -257,8 +289,15 @@ async def provider_login(runtime: object, provider: str, method: str = "", domai
         except Exception as exc:  # noqa: BLE001 - reported to the client, redacted
             login.status, login.message = "failed", _safe(exc)
         else:
+            if login.cancel.is_set():
+                login.status, login.message = "cancelled", "Sign-in cancelled."
+                return
+            # Once auth has persisted a credential, complete route creation and
+            # mark success without an await that could turn success into a
+            # misleading cancelled result with a credential left behind.
             login.status = "connected"
-            login.message = await asyncio.to_thread(_save_route, runtime, provider, host)
+            login.message = _RESTART
+            login.message = await _finish_route(runtime, provider, host, idle)
         finally:
             login.url = login.url if login.status == "pending" else ""
             login.ready.set()
@@ -297,7 +336,9 @@ async def provider_login_cancel(runtime: object, login_id: str) -> dict[str, Any
     return login.view()
 
 
-async def provider_key_set(runtime: object, provider: str, key: str) -> dict[str, Any]:
+async def provider_key_set(
+    runtime: object, provider: str, key: str, idle: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
     if provider not in PROVIDERS or "api_key" not in PROVIDERS[provider][1]:
         raise ConfigError("this provider does not use an API key")
     try:
@@ -306,13 +347,16 @@ async def provider_key_set(runtime: object, provider: str, key: str) -> dict[str
         raise ConfigError(str(exc)) from None
     except Exception as exc:  # noqa: BLE001 - keychain failures, never the key
         raise ConfigError(f"could not store the key: {_safe(exc)}") from None
-    message = await asyncio.to_thread(_save_route, runtime, provider)
+    message = await _finish_route(runtime, provider, None, idle)
     return {"provider": provider, "connected": True, "message": message}
 
 
 async def provider_logout(runtime: object, provider: str) -> dict[str, Any]:
     if provider not in PROVIDERS:
         raise ConfigError("unknown provider")
+    for login in list(_logins(runtime).values()):
+        if login.provider == provider and login.task is not None and not login.task.done():
+            await provider_login_cancel(runtime, login.id)
     try:
         await _manager(runtime, provider).logout()
     except Exception as exc:  # noqa: BLE001 - keychain failures
@@ -320,20 +364,25 @@ async def provider_logout(runtime: object, provider: str) -> dict[str, Any]:
     return {"provider": provider, "connected": False, "message": "Disconnected. The credential was removed from the keychain."}
 
 
-async def dispatch_providers(command: Any, runtime: object) -> Any | None:
-    """Handle the ``Provider*`` host commands, or return ``None``."""
+async def dispatch_providers(
+    command: Any, runtime: object, idle: Callable[[], bool] | None = None,
+) -> Any | None:
+    """Handle the ``Provider*`` host commands, or return ``None``.
+
+    ``idle`` says no turn is running, which is when routes may be rebuilt.
+    """
     from ..host import protocol as p
 
     if isinstance(command, p.ProvidersStatus):
         return p.ProvidersStatusResult(**await providers_status(runtime))
     if isinstance(command, p.ProviderLogin):
-        return p.ProviderLoginResult(**await provider_login(runtime, command.provider, command.method, command.domain))
+        return p.ProviderLoginResult(**await provider_login(runtime, command.provider, command.method, command.domain, idle))
     if isinstance(command, p.ProviderLoginPoll):
         return p.ProviderLoginResult(**await provider_login_poll(runtime, command.login_id))
     if isinstance(command, p.ProviderLoginCancel):
         return p.ProviderLoginResult(**await provider_login_cancel(runtime, command.login_id))
     if isinstance(command, p.ProviderKeySet):
-        return p.ProviderAuthResult(**await provider_key_set(runtime, command.provider, command.key))
+        return p.ProviderAuthResult(**await provider_key_set(runtime, command.provider, command.key, idle))
     if isinstance(command, p.ProviderLogout):
         return p.ProviderAuthResult(**await provider_logout(runtime, command.provider))
     return None

@@ -802,11 +802,6 @@ ModelPickerScreen {
     padding: 0 1;
 }
 
-#model-picker-help {
-    height: 2;
-    color: $nx-muted;
-}
-
 #context-dialog {
     width: 96%;
     max-width: 120;

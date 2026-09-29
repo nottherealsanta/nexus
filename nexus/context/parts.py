@@ -5,7 +5,7 @@ order** because prompt caching depends on a stable prefix; that order, and each
 part's drop priority, is declared once in :data:`PART_ORDER` and
 :data:`PART_PRIORITY` and never inferred from a dict's iteration order.
 
-The ten builtin parts are:
+The eleven builtin parts are:
 
 ====  ==============  ========  ============================================
 #     name            priority  kind
@@ -14,12 +14,13 @@ The ten builtin parts are:
 2     soul            0         text (``SOUL.md``)
 3     environment     1         text (frozen, deterministic field order)
 4     tools           0         structured :class:`ToolSchema` list, never text
-5     skills_index    1         sanitized ``name: description`` lines, whole-line
-6     mcp_index       2         connected MCP servers + resource roots (untrusted)
-7     memory          1         text (``MEMORY.md``)
-8     attachments     2         no-op placeholder
-9     history         3         message suffix, oldest-droppable
-10    user            0         current input + its pinned trailing messages
+5     agents_md       1         text (``AGENTS.md``, project instructions)
+6     skills_index    1         sanitized ``name: description`` lines, whole-line
+7     mcp_index       2         connected MCP servers + resource roots (untrusted)
+8     memory          1         text (``MEMORY.md``)
+9     attachments     2         no-op placeholder
+10    history         3         message suffix, oldest-droppable
+11    user            0         current input + its pinned trailing messages
 ====  ==============  ========  ============================================
 
 ``skills_index`` renders the frozen, sanitized ``name: description`` lines of the
@@ -128,6 +129,7 @@ PART_ORDER: tuple[str, ...] = (
     "soul",
     "environment",
     "tools",
+    "agents_md",
     "skills_index",
     "mcp_index",
     "memory",
@@ -142,6 +144,7 @@ PART_PRIORITY: Mapping[str, int] = {
     "soul": 0,
     "environment": 1,
     "tools": 0,
+    "agents_md": 1,
     "skills_index": 1,
     "mcp_index": 2,
     "memory": 1,
@@ -526,6 +529,8 @@ class AssemblyContext:
     #: ``mcp`` mapping, an iterable of server states, or an already-frozen text
     #: block. Empty/``None`` renders nothing, so the part is a no-op without MCP.
     mcp_index: Any = None
+    #: The frozen ``AGENTS.md`` body (project instructions). Empty renders nothing.
+    agents_text: str = ""
 
     def history(self) -> tuple[Message, ...]:
         """Droppable prefix: everything before the current user turn."""
@@ -689,12 +694,13 @@ class _UserPart:
 
 
 def builtin_parts() -> tuple[ContextPart, ...]:
-    """The ten builtin parts in fixed assembly order."""
+    """The eleven builtin parts in fixed assembly order."""
     return (
         _TextPart("identity", 0, "identity"),
         _TextPart("soul", 0, "soul_text"),
         _EnvironmentPart(),
         _ToolsPart(),
+        _TextPart("agents_md", 1, "agents_text"),
         _SkillsIndexPart(),
         _McpIndexPart(),
         _TextPart("memory", 1, "memory_text"),

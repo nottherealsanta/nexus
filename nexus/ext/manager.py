@@ -2202,6 +2202,7 @@ class ExtensionManager:
         for logical, filename in (
             ("soul", config.instructions_file),
             ("memory", config.memory_file),
+            ("agents", config.agents_file),
         ):
             if not isinstance(filename, str) or not filename:
                 continue

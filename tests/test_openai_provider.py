@@ -218,3 +218,33 @@ def test_responses_input_preserves_mixed_block_order():
             "output": "out",
         },
     ]
+
+
+async def test_endpoint_fallback_retries_once_on_the_other_dialect_and_remembers_it():
+    from nexus.model.providers.openai import EndpointFallback
+
+    urls: list[str] = []
+    done = _sse(
+        ("response.created", {"type": "response.created", "response": {"id": "r", "model": "m", "status": "in_progress"}}),
+        ("response.completed", {"type": "response.completed", "response": {"id": "r", "status": "completed"}}),
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        urls.append(request.url.path)
+        if request.url.path.endswith("/chat/completions"):
+            return httpx.Response(400, json={"error": {"message": 'model "m" is not accessible via the /chat/completions endpoint'}})
+        return httpx.Response(200, content=done, headers={"content-type": "text/event-stream"})
+
+    provider = OpenAIProvider(
+        api_key="k", model="m", api="chat", base_url="https://copilot.example/v1", environ={},
+        http_transport=httpx.MockTransport(handler), api_selector=EndpointFallback("chat"),
+    )
+    req = ModelRequest(model="m", messages=[Message(role="user", content=[Text(text="hi")])])
+    async for _ in provider.stream(req):
+        pass
+    assert urls == ["/v1/chat/completions", "/v1/responses"]
+    urls.clear()
+    async for _ in provider.stream(req):
+        pass
+    assert urls == ["/v1/responses"]  # learned; no second rejected call
+    await provider.aclose()

@@ -6,6 +6,7 @@ import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from nexus.auth.api_key import StoredKeyAuth
@@ -90,16 +91,87 @@ async def test_status_lists_the_three_providers_without_credentials(home):
     runtime, _ = _runtime(home)
     rows = (await provider_auth.providers_status(runtime))["providers"]
     assert [row["id"] for row in rows] == ["codex", "github-copilot", "opencode-go"]
-    assert [row["methods"] for row in rows] == [["browser", "device"], [], ["api_key"]]
+    assert [row["methods"] for row in rows] == [["browser", "device"], ["device"], ["api_key"]]
     assert not any(row["connected"] for row in rows)
 
 
-async def test_copilot_sign_in_refuses_opencode_oauth_app(home):
+async def test_copilot_sign_in_pending_then_connected_saves_pinned_github_route(home):
     device = FakeDevice()
     runtime, _ = _runtime(home, copilot=device)
-    with pytest.raises(Exception, match="OpenCode"):
-        await provider_auth.provider_login(runtime, "github-copilot", domain="Company.GHE.com")
-    assert device.domain_seen is None and not device.signed_in
+    started = await provider_auth.provider_login(runtime, "github-copilot", domain="HTTPS://GitHub.com/")
+    assert started["status"] == "pending"
+    assert started["url"] == "https://github.com/login/device"
+    assert device.domain_seen == "github.com" and not device.signed_in
+    device.approved.set()
+    await runtime._provider_logins[started["login_id"]].task
+    connected = await provider_auth.provider_login_poll(runtime, started["login_id"])
+    assert connected["status"] == "connected"
+    assert "route was not saved" not in connected["message"]
+    assert (home / ".nexus" / "config.toml").is_file(), connected["message"]
+    assert _config(home)["providers"]["github-copilot"] == {
+        "auth": "github_copilot", "base_url": "https://api.githubcopilot.com", "api": "chat",
+    }
+
+
+async def _connect_copilot(runtime, device, idle):
+    started = await provider_auth.provider_login(runtime, "github-copilot", idle=idle)
+    device.approved.set()
+    await runtime._provider_logins[started["login_id"]].task
+    return await provider_auth.provider_login_poll(runtime, started["login_id"])
+
+
+async def test_connect_rebuilds_routes_in_place_when_no_turn_is_running(home):
+    device, reloads = FakeDevice(), []
+    runtime, _ = _runtime(home, copilot=device)
+
+    async def reload():
+        reloads.append(True)
+        return True
+
+    runtime.reload_model_routes = reload
+    result = await _connect_copilot(runtime, device, lambda: True)
+    assert result["status"] == "connected" and reloads == [True]
+    assert "Restart" not in result["message"]
+
+
+async def test_connect_asks_for_restart_while_a_turn_runs_or_routes_are_injected(home):
+    device, reloads = FakeDevice(), []
+    runtime, _ = _runtime(home, copilot=device)
+
+    async def reload():
+        reloads.append(True)
+        return False  # routes were injected
+
+    runtime.reload_model_routes = reload
+    busy = await _connect_copilot(runtime, device, lambda: False)
+    assert busy["status"] == "connected" and reloads == []
+    assert "Restart the daemon" in busy["message"]
+
+    device2 = FakeDevice()
+    runtime2, _ = _runtime(home, copilot=device2)
+    runtime2.reload_model_routes = reload
+    injected = await _connect_copilot(runtime2, device2, lambda: True)
+    assert reloads == [True] and "Restart the daemon" in injected["message"]
+
+
+async def test_copilot_denial_and_cancel_do_not_write_config(home):
+    denied = FakeDevice(fail="GitHub device authorization was denied")
+    runtime, _ = _runtime(home, copilot=denied)
+    started = await provider_auth.provider_login(runtime, "github-copilot")
+    denied.approved.set()
+    for _ in range(20):
+        result = await provider_auth.provider_login_poll(runtime, started["login_id"])
+        if result["status"] == "failed":
+            break
+        await asyncio.sleep(0)
+    assert result["status"] == "failed" and "denied" in result["message"]
+    assert not (home / ".nexus" / "config.toml").exists()
+
+    cancelled_device = FakeDevice()
+    runtime, _ = _runtime(home, copilot=cancelled_device)
+    started = await provider_auth.provider_login(runtime, "github-copilot")
+    result = await provider_auth.provider_login_cancel(runtime, started["login_id"])
+    assert result["status"] == "cancelled" and not cancelled_device.signed_in
     assert not (home / ".nexus" / "config.toml").exists()
 
 
@@ -131,8 +203,12 @@ async def test_login_rejects_unknown_provider_method_and_domain(home):
         await provider_auth.provider_login(runtime, "../codex")
     with pytest.raises(Exception, match="does not support"):
         await provider_auth.provider_login(runtime, "opencode-go")
-    with pytest.raises(Exception, match="OpenCode"):
+    device = FakeDevice()
+    runtime, _ = _runtime(home, copilot=device)
+    with pytest.raises(Exception, match="only on GitHub.com"):
         await provider_auth.provider_login(runtime, "github-copilot", domain="localhost")
+    assert device.domain_seen is None
+    assert not (home / ".nexus" / "config.toml").exists()
 
 
 async def test_facade_stores_opencode_go_key_and_never_returns_it(home):
@@ -156,7 +232,7 @@ async def test_facade_stores_opencode_go_key_and_never_returns_it(home):
     assert not removed.connected and "opencode-go:default" not in secrets.values
 
 
-async def test_runtime_builds_copilot_and_opencode_go_routes_from_keychain(tmp_path):
+async def test_runtime_uses_direct_copilot_bearer_and_opencode_go_routes_from_keychain(tmp_path):
     secrets = MemorySecrets()
     (tmp_path / "nexus.toml").write_text(
         'config_version = 2\n\n[models]\ndefault = "opencode-go/kimi-k3"\n\n'
@@ -166,9 +242,14 @@ async def test_runtime_builds_copilot_and_opencode_go_routes_from_keychain(tmp_p
     )
     from nexus.auth.copilot import CopilotAuthManager
 
+    def no_exchange(request):
+        raise AssertionError(f"unexpected request {request.url}")
+
+    copilot_http = httpx.AsyncClient(transport=httpx.MockTransport(no_exchange))
+
     runtime = Runtime(
         tmp_path, home=tmp_path / "home", environ={},
-        copilot_auth_factory=lambda **kw: CopilotAuthManager(store=secrets, **kw),
+        copilot_auth_factory=lambda **kw: CopilotAuthManager(store=secrets, client=copilot_http, **kw),
         api_key_auth_factory=lambda provider, **kw: StoredKeyAuth(provider, store=secrets, **kw),
     )
     try:
@@ -178,11 +259,12 @@ async def test_runtime_builds_copilot_and_opencode_go_routes_from_keychain(tmp_p
         await secrets.write_secret("opencode-go:default", "sk-go-123456")
         headers = await go._headers({"messages": []})
         assert headers["authorization"] == "Bearer sk-go-123456"
-        await secrets.write_secret("github-copilot:default", '{"v":1,"token":"gho_x","domain":"github.com"}')
+        await secrets.write_secret("github-copilot:default", '{"v":2,"github_token":"gho_x","domain":"github.com"}')
         headers = await copilot._headers({"messages": [{"role": "tool", "content": "done"}]})
         assert headers["authorization"] == "Bearer gho_x" and headers["x-initiator"] == "agent"
     finally:
         await runtime.aclose()
+        await copilot_http.aclose()
 
 
 def test_config_rejects_api_key_on_keychain_providers(tmp_path):
@@ -196,3 +278,32 @@ def test_config_rejects_api_key_on_keychain_providers(tmp_path):
     )
     with pytest.raises(ConfigError, match="keychain"):
         Config.load(tmp_path, home=tmp_path / "home", environ={})
+
+
+@pytest.mark.parametrize("provider,api,base_url", [
+    ("github-copilot", "chat", "https://attacker.example"),
+    ("github-copilot", "responses", "https://api.githubcopilot.com"),
+    ("other", "chat", "https://api.githubcopilot.com"),
+])
+def test_copilot_route_cannot_send_credentials_to_another_endpoint(tmp_path, provider, api, base_url):
+    from nexus.config import ConfigError
+
+    (tmp_path / "nexus.toml").write_text(
+        f'config_version = 2\n[models]\ndefault = "{provider}/example"\n'
+        f'[providers.{provider}]\nauth = "github_copilot"\napi = "{api}"\nbase_url = "{base_url}"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match="official chat endpoint"):
+        Runtime(tmp_path, home=tmp_path / "home", environ={})
+
+
+def test_copilot_auth_rejects_non_openai_provider_kind(tmp_path):
+    from nexus.config import ConfigError
+
+    (tmp_path / "nexus.toml").write_text(
+        'config_version = 2\n[models]\ndefault = "github-copilot/example"\n'
+        '[providers.github-copilot]\nauth = "github_copilot"\nkind = "ollama"\napi = "chat"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError):
+        Runtime(tmp_path, home=tmp_path / "home", environ={})

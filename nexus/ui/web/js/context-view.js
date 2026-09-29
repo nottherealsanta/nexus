@@ -547,7 +547,7 @@ export function contextGroups(result) {
   const accounting = result.request_context && Object.keys(result.request_context).length ? result.request_context : result.budget;
   const request = [entry('Accounting', `\`\`\`json\n${json(accounting && Object.keys(accounting).length ? accounting : '(not reported)')}\n\`\`\``)];
   if (result.params && Object.values(result.params).some(value => value != null)) request.push(entry('Model parameters', `\`\`\`json\n${json(result.params)}\n\`\`\``));
-  const files = [['soul', 'SOUL.md'], ['memory', 'MEMORY.md']].map(([key, label]) => {
+  const files = [['soul', 'SOUL.md'], ['agents', 'AGENTS.md'], ['memory', 'MEMORY.md']].map(([key, label]) => {
     const item = result.system_files?.[key] || {};
     return `${label}: ${item.included_nonempty ? 'included' : item.loaded ? 'loaded, empty' : 'not loaded'}${item.source ? ` · ${item.source}` : ''}`;
   });

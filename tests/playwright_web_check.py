@@ -1311,6 +1311,7 @@ async def main() -> None:
                 assert await codex_card.get_by_role("button", name="Disconnect").is_visible()
                 copilot = providers.locator('[data-provider="github-copilot"]')
                 assert await copilot.get_by_role("button", name="Sign in with GitHub").count() == 0
+                assert await copilot.get_by_role("button", name="Use a device code").is_visible()
                 assert await copilot.get_by_role("textbox", name="GitHub Enterprise domain").count() == 0
                 go = providers.locator('[data-provider="opencode-go"]')
                 key_field = go.get_by_label("OpenCode Go API key")

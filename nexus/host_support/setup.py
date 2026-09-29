@@ -33,7 +33,13 @@ _ENV_NAMES = {
 }
 _PROVIDER_INFO = {
     "codex": ("ChatGPT (Codex)", "Sign in with your ChatGPT account in Settings → Providers."),
-    "github-copilot": ("GitHub Copilot", "Nexus does not sign in through OpenCode's GitHub app."),
+    "github-copilot": (
+        "GitHub Copilot",
+        (
+            "Sign in with a GitHub.com device code in Settings → Providers. "
+            "Live Copilot access with this OAuth app has not yet been verified."
+        ),
+    ),
     "opencode-go": ("OpenCode Go", "Paste your OpenCode Go API key in Settings → Providers."),
     "openai": ("OpenAI", "Set OPENAI_API_KEY in the daemon environment."),
     "anthropic": ("Anthropic", "Set ANTHROPIC_API_KEY in the daemon environment."),

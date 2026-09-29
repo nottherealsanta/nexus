@@ -593,6 +593,8 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
             await self._agent_picker_requested(AgentPickerRequested())
         elif kind == "model":
             await self._push_model_picker()
+        elif kind == "effort":
+            await self._open_effort_picker()
 
     async def _agent_command(self, args: tuple[str, ...]) -> None:
         action = args[0] if args else "list"

@@ -2639,7 +2639,7 @@ class Runtime:
             frozen_files = getattr(manifest, "system_files", None)
             getter = getattr(frozen_files, "get", None)
             context_config = getattr(frozen_env, "config", None)
-            for key, attribute in (("soul", "instructions_file"), ("memory", "memory_file")):
+            for key, attribute in (("soul", "instructions_file"), ("memory", "memory_file"), ("agents", "agents_file")):
                 filename = getattr(context_config, attribute, None)
                 entry = getter(key) if callable(getter) else None
                 loaded = entry is not None
@@ -3707,9 +3707,12 @@ class Runtime:
         base_url = getattr(section, "base_url", None) or None
         api = getattr(section, "api", None)
         auth = getattr(section, "auth", None)
-        if auth == "github_copilot" and not base_url:
+        if auth == "github_copilot":
             from .auth.copilot import DEFAULT_BASE_URL
 
+            if (name != "github-copilot" or kind not in (ADAPTER_OPENAI, OPENAI_COMPATIBLE)
+                    or base_url not in (None, DEFAULT_BASE_URL) or api not in (None, "chat")):
+                raise ConfigError("github_copilot requires providers.github-copilot with the official chat endpoint")
             base_url = DEFAULT_BASE_URL
         if kind == OPENAI_COMPATIBLE and not base_url:
             raise ConfigError(
@@ -3750,9 +3753,10 @@ class Runtime:
                 kwargs.update(base_url=CODEX_BASE_URL, api_key=None, auth_headers=ChatGPTOAuthHeaders(manager), default_max_tokens=None)
             elif auth == "github_copilot":
                 from .auth.copilot import CopilotAuthManager, CopilotHeaders
+                from .model.providers.openai import EndpointFallback
                 factory = self._copilot_auth_factory or CopilotAuthManager
                 manager = factory(profile=getattr(section, "profile", None) or "default")
-                kwargs.update(api_key=None, auth_headers=CopilotHeaders(manager))
+                kwargs.update(api_key=None, auth_headers=CopilotHeaders(manager), api_selector=EndpointFallback(api or "chat"))
             elif auth == "keychain":
                 from .auth.api_key import StoredKeyAuth
                 factory = self._api_key_auth_factory or StoredKeyAuth

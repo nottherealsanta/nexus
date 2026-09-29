@@ -39,6 +39,7 @@ LEGACY_KEYS = frozenset(
         "context_chars",
         "instructions_file",
         "memory_file",
+        "agents_file",
     }
 )
 V2_SECTION_KEYS = frozenset(
@@ -73,6 +74,7 @@ _LEGACY_ENV = {
     "NEXUS_CONTEXT_CHARS": "context_chars",
     "NEXUS_INSTRUCTIONS_FILE": "instructions_file",
     "NEXUS_MEMORY_FILE": "memory_file",
+    "NEXUS_AGENTS_FILE": "agents_file",
 }
 
 # Env coercion is schema-aware and conservative: only fields the schema declares
@@ -90,6 +92,7 @@ _V2_NUMERIC = {
     "context.safety_margin_tokens": int,
     "context.compact_at_fraction": float,
     "context.limits.memory": int,
+    "context.limits.agents_md": int,
     "context.limits.skills_index": int,
     "context.limits.environment": int,
     "context.limits.attachments": int,
@@ -210,6 +213,8 @@ def normalize_v1_to_v2(doc: Mapping[str, Any]) -> dict[str, Any]:
         agent["instructions_file"] = doc["instructions_file"]
     if "memory_file" in doc:
         agent["memory_file"] = doc["memory_file"]
+    if "agents_file" in doc:
+        agent["agents_file"] = doc["agents_file"]
     if agent:
         result["agent"] = agent
     if "context_chars" in doc:

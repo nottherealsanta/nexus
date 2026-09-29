@@ -118,6 +118,7 @@ __all__ = [
     "DEFAULT_BASE_URL",
     "DEFAULT_MAX_TOKENS",
     "OFFICIAL_HOSTS",
+    "EndpointFallback",
     "OpenAIProvider",
     "build_count_tokens_body",
     "build_request_body",
@@ -948,6 +949,35 @@ def _fallback_capabilities(model: str) -> Capabilities:
     )
 
 
+class EndpointFallback:
+    """Per-model dialect for hosts that serve some models on one endpoint only.
+
+    GitHub Copilot answers ``model "x" is not accessible via the
+    /chat/completions endpoint`` for models it serves on ``/responses`` (and the
+    reverse). The provider tries the configured dialect first; on that
+    rejection it remembers the other dialect for the model and retries once.
+    """
+
+    _PATHS = ((API_CHAT, "/chat/completions"), (API_RESPONSES, "/responses"))
+
+    def __init__(self, default: str = API_CHAT) -> None:
+        self._default = default
+        self._learned: dict[str, str] = {}
+
+    def api_for(self, model: str) -> str:
+        return self._learned.get(model, self._default)
+
+    def switch(self, model: str, api: str, error: BaseException) -> str | None:
+        """The other dialect when ``error`` says ``model`` is not served on ``api``."""
+        text = str(error)
+        for dialect, path in self._PATHS:
+            if api == dialect and f"not accessible via the {path} endpoint" in text:
+                other = API_RESPONSES if dialect == API_CHAT else API_CHAT
+                self._learned[model] = other
+                return other
+        return None
+
+
 class OpenAIProvider:
     """A :class:`~nexus.model.provider.Provider` for OpenAI and its dialects."""
 
@@ -975,12 +1005,14 @@ class OpenAIProvider:
         default_max_tokens: int = DEFAULT_MAX_TOKENS,
         extra_headers: Mapping[str, str] | None = None,
         auth_headers: Any | None = None,
+        api_selector: EndpointFallback | None = None,
     ) -> None:
         if api not in (API_RESPONSES, API_CHAT):
             raise ProviderError(f"openai: unknown api dialect {api!r}")
         self._api_key_spec = api_key
         self._model = model
         self._api = api
+        self._api_selector = api_selector
         self._base_url = (base_url or self.DEFAULT_BASE_URL).rstrip("/")
         self._environ = environ
         self._default_max_tokens = default_max_tokens
@@ -1096,11 +1128,6 @@ class OpenAIProvider:
             return f"{self._base_url}/chat/completions"
         return f"{self._base_url}/{suffix}"
 
-    def _stream_endpoint(self) -> str:
-        if self._api == API_CHAT:
-            return f"{self._base_url}/chat/completions"
-        return f"{self._base_url}/responses"
-
     def capabilities(self, model: str) -> Capabilities:
         base = self._capabilities
         if base is None:
@@ -1166,9 +1193,24 @@ class OpenAIProvider:
         model = req.model or self._model
         if not model:
             raise ProviderError("openai: no model specified")
+        selector = self._api_selector
+        api = selector.api_for(model) if selector is not None else self._api
+        started = False
+        try:
+            async for event in self._stream_api(req, model, api):
+                started = True
+                yield event
+        except ProviderError as exc:
+            alternate = None if started or selector is None else selector.switch(model, api, exc)
+            if alternate is None:
+                raise
+            async for event in self._stream_api(req, model, alternate):
+                yield event
+
+    async def _stream_api(self, req: ModelRequest, model: str, api: str) -> AsyncIterator[StreamEvent]:
         capabilities = self.capabilities(model)
         if (
-            self._api == API_RESPONSES
+            api == API_RESPONSES
             and req.params.reasoning_effort is not None
             and not capabilities.thinking
         ):
@@ -1181,7 +1223,7 @@ class OpenAIProvider:
         body = build_request_body(
             req,
             model=model,
-            api=self._api,
+            api=api,
             default_max_tokens=self._default_max_tokens,
             capabilities=capabilities,
         )
@@ -1189,7 +1231,7 @@ class OpenAIProvider:
         usage = _UsageTotals()
         accumulator = ToolCallAccumulator()
 
-        if self._api == API_CHAT:
+        if api == API_CHAT:
             events = self._stream_chat(body, headers, model, usage, accumulator)
         else:
             events = self._stream_responses(
@@ -1217,7 +1259,7 @@ class OpenAIProvider:
         async with aclosing(
             self._transport.aiter_sse(
                 "POST",
-                self._stream_endpoint(),
+                f"{self._base_url}/chat/completions",
                 headers=headers,
                 json=body,
                 stop_on_done=False,
@@ -1261,7 +1303,7 @@ class OpenAIProvider:
         async with aclosing(
             self._transport.aiter_sse(
                 "POST",
-                self._stream_endpoint(),
+                f"{self._base_url}/responses",
                 headers=headers,
                 json=body,
             )

@@ -226,7 +226,7 @@ async def test_picker_selection_is_durable_replayed_and_session_scoped(tmp_path)
             assert app.focused is app.screen.query_one("#model-picker-search")
             await pilot.press("down")
             assert app.focused is options
-            await pilot.press("down", "enter")
+            await pilot.press("enter")
             await _wait_for(
                 lambda: any(
                     isinstance(command, p.ModelSelect)

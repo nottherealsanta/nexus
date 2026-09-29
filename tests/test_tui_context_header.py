@@ -159,3 +159,13 @@ async def test_tools_block_opens_grouped_tools_dialog():
         await pilot.press("escape")
         await pilot.pause()
         assert app.screen is app.screen_stack[0]
+
+
+@pytest.mark.asyncio
+async def test_context_header_has_agents_block_between_tools_and_skills():
+    app = NexusTextualApp(_client(FakeTransport()))
+    async with app.run_test(size=(100, 35)) as pilot:
+        await pilot.pause()
+        header = app.query_one(ContextHeader)
+        ids = [child.id for child in header.children]
+        assert ids.index("context-tools") < ids.index("context-agents") < ids.index("context-skills")

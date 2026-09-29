@@ -136,8 +136,8 @@ def render_context_details(
         if isinstance(part, Mapping):
             lines.extend((f"### {_plain(part.get('name', 'part'), 100)}", "", _plain(part.get("text", ""), MAX_TEXT), ""))
 
-    lines.extend(("", "## SYSTEM FILE STATUS · SOUL.md / MEMORY.md"))
-    for key, label in (("soul", "SOUL.md"), ("memory", "MEMORY.md")):
+    lines.extend(("", "## SYSTEM FILE STATUS · SOUL.md / AGENTS.md / MEMORY.md"))
+    for key, label in (("soul", "SOUL.md"), ("agents", "AGENTS.md"), ("memory", "MEMORY.md")):
         item = result.system_files.get(key, {})
         if not isinstance(item, dict):
             item = {}
@@ -498,7 +498,7 @@ def context_groups(result: p.ContextInspectResult) -> list[ContextGroup]:
     if result.params:
         request.append(ContextEntry("Model parameters", _plain(result.params, None)))
     files = []
-    for key, label in (("soul", "SOUL.md"), ("memory", "MEMORY.md")):
+    for key, label in (("soul", "SOUL.md"), ("agents", "AGENTS.md"), ("memory", "MEMORY.md")):
         item = result.system_files.get(key) if isinstance(result.system_files.get(key), Mapping) else {}
         state = "included" if item.get("included_nonempty") else "loaded, empty" if item.get("loaded") else "not loaded"
         files.append(f"{label}: {state}" + (f" · {_plain(item['source'], 120)}" if item.get("source") else ""))

@@ -37,6 +37,7 @@ class Config:
     context_chars: int = 64_000
     instructions_file: str = "SOUL.md"
     memory_file: str = "MEMORY.md"
+    agents_file: str = "AGENTS.md"
     # Transitional provenance, deliberately excluded from equality and hashing so
     # the legacy frozen-Config API keeps working even when ``v2`` carries lists.
     version: int = field(default=1, compare=False)
@@ -46,7 +47,7 @@ class Config:
     source: str | None = field(default=None, compare=False)
 
     def __post_init__(self):
-        for key in ("executable", "sandbox", "instructions_file", "memory_file"):
+        for key in ("executable", "sandbox", "instructions_file", "memory_file", "agents_file"):
             if not isinstance(getattr(self, key), str) or not getattr(self, key).strip():
                 raise ValueError(f"{key} must be a nonempty string")
         if self.model is not None and (
@@ -104,6 +105,7 @@ class Config:
             context_chars=(v2.context.max_tokens or DEFAULT_CONTEXT_TOKENS) * 4,
             instructions_file=v2.agent.instructions_file,
             memory_file=v2.agent.memory_file,
+            agents_file=v2.agent.agents_file,
             version=2,
             v2=v2,
             source=source,

@@ -6,7 +6,7 @@
 
 export const PROVIDERS = [
   {id: 'codex', label: 'ChatGPT (Codex)', actions: [['browser', 'Sign in with browser'], ['device', 'Use a device code']]},
-  {id: 'github-copilot', label: 'GitHub Copilot', actions: []},
+  {id: 'github-copilot', label: 'GitHub Copilot', actions: [['device', 'Use a device code']]},
   {id: 'opencode-go', label: 'OpenCode Go', actions: [['api_key', 'Save key']], key: true},
 ];
 const POLL_MS = 1500, POLL_LIMIT = 600;

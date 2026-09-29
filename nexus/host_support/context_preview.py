@@ -110,7 +110,7 @@ def project_context_preview(result: Mapping[str, Any]) -> dict[str, Any]:
             "source": safe_text(value.get("source"), 120) or None,
         }
         for name, value in raw_system_files.items()
-        if isinstance(value, Mapping) and name in {"soul", "memory"}
+        if isinstance(value, Mapping) and name in {"soul", "memory", "agents"}
     }
     remaining = [MAX_REQUEST_DETAILS_CHARS]
     data["tools"] = [

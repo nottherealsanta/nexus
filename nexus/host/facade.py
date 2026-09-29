@@ -1233,7 +1233,7 @@ class HostFacade:
             return result
         if result := await dispatch_mock(command, self):
             return result
-        if result := await dispatch_providers(command, self.runtime):
+        if result := await dispatch_providers(command, self.runtime, lambda: not self.supervisor.running):
             return result
         if isinstance(command, (
             p.SessionArchive, p.SessionUnarchive, p.SessionListArchived,

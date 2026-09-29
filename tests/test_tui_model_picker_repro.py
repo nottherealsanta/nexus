@@ -232,12 +232,8 @@ async def test_model_modal_groups_rows_and_keeps_effort_hint_below_options():
         await pilot.pause()
 
         screen = app.screen
-        options = screen.query_one("#model-picker-options")
-        hint = screen.query_one("#model-picker-help")
         assert isinstance(screen, ModelPickerScreen)
-        assert hint.region.y >= options.region.y
         assert screen._visible_rows == [None, transport.models[0]]
-        assert "Effort:" in hint.render().plain
 
 
 @pytest.mark.asyncio
@@ -264,7 +260,6 @@ async def test_model_modal_search_filters_rows_and_ctrl_f_toggles_favorite():
 
         search.value = ""
         await pilot.pause()
-        await pilot.press("down")
         await pilot.press("ctrl+f")
         await pilot.pause()
         assert screen.favorites == ["fake/chosen"]
@@ -288,7 +283,8 @@ async def test_model_click_and_slash_open_same_modal_rows_without_losing_draft()
         assert isinstance(screen, ModelPickerScreen)
         options = screen.query_one("#model-picker-options")
         clicked_row = str(options.get_option_at_index(1).prompt)
-        assert clicked_row.startswith("  A Chosen Display Name  fake")
+        assert clicked_row.startswith("  A Chosen Display Name ")
+        assert clicked_row.rstrip().endswith("fake")
         assert not editor.disabled and app.focused is screen.query_one("#model-picker-search")
         await pilot.press("x")
         assert editor.text == "Keep this draft"
@@ -341,7 +337,8 @@ async def test_picker_uses_canonical_ids_when_display_name_is_missing_and_upperc
         screen = app.screen
         assert isinstance(screen, ModelPickerScreen)
         option = app.screen.query_one("#model-picker-options").get_option_at_index(1)
-        assert str(option.prompt).startswith("  fallback  fake")
+        assert str(option.prompt).startswith("  fallback ")
+        assert str(option.prompt).endswith("fake")
         await pilot.press("enter")
         await pilot.pause(0.1)
         assert p.ModelSelect(session="canonical-picker", ref="fake/fallback") in transport.commands
@@ -409,19 +406,18 @@ async def test_model_picker_effort_is_pending_until_enter_and_commits_after_mode
         await pilot.pause(0.1)
         screen = app.screen
         assert isinstance(screen, ModelPickerScreen)
-        help_text = screen.query_one("#model-picker-help")
         assert app.focused is screen.query_one("#model-picker-search")
-        assert "model default" in help_text.render().plain
+        assert screen._pending_effort is None
 
         await pilot.press("down")
         await pilot.press("right")
         await pilot.pause()
-        assert "Effort: low" in help_text.render().plain
+        assert screen._pending_effort == "low"
         assert _commands(transport, p.ModelSelect) == []
         assert _commands(transport, p.ReasoningEffortSelect) == []
 
         await pilot.press("right")
-        assert "Effort: high" in help_text.render().plain
+        assert screen._pending_effort == "high"
         await pilot.press("enter")
         await pilot.pause(0.1)
 
@@ -449,7 +445,7 @@ async def test_enter_on_current_model_preserves_stored_effort_without_effort_mut
         await pilot.pause(0.1)
         screen = app.screen
         assert isinstance(screen, ModelPickerScreen)
-        assert "Effort: high" in screen.query_one("#model-picker-help").render().plain
+        assert screen._pending_effort == "high"
 
         await pilot.press("enter")
         await pilot.pause(0.1)
@@ -474,7 +470,7 @@ async def test_enter_on_current_model_preserves_effective_agent_default_effort()
         await pilot.pause(0.1)
         screen = app.screen
         assert isinstance(screen, ModelPickerScreen)
-        assert "Effort: low" in screen.query_one("#model-picker-help").render().plain
+        assert screen._pending_effort == "low"
 
         await pilot.press("enter")
         await pilot.pause(0.1)
@@ -530,7 +526,7 @@ async def test_incompatible_stored_effort_is_kept_dormant_and_not_sent_to_new_mo
         await pilot.pause(0.1)
         screen = app.screen
         assert isinstance(screen, ModelPickerScreen)
-        assert "model default" in screen.query_one("#model-picker-help").render().plain
+        assert screen._pending_effort is None
 
         await pilot.press("enter")
         await pilot.pause(0.1)
@@ -557,7 +553,7 @@ async def test_default_clear_is_committed_only_after_explicit_effort_cycle():
         await pilot.pause()
         await pilot.press("down", "right")
         await pilot.pause()
-        assert "model default" in app.screen.query_one("#model-picker-help").render().plain
+        assert app.screen._pending_effort is None
         await pilot.press("enter")
         await pilot.pause(0.1)
 

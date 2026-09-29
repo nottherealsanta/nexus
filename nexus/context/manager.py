@@ -350,6 +350,7 @@ class AssemblyEnvironment:
     identity: str
     soul_text: str
     memory_text: str
+    agents_text: str
     environment: EnvironmentInfo
     counter: Any
     counter_async: bool
@@ -733,6 +734,7 @@ class ContextManager:
         system_files: Any = None,
         soul_text: str | None = None,
         memory_text: str | None = None,
+        agents_text: str | None = None,
         capabilities: Any | None = None,
         request_counter: Any | None = None,
         model: str | None = None,
@@ -806,6 +808,7 @@ class ContextManager:
             system_files is not None
             or soul_text is not None
             or memory_text is not None
+            or agents_text is not None
         ):
             frozen_soul = (
                 _system_file_text(system_files, "soul")
@@ -817,10 +820,16 @@ class ContextManager:
                 if memory_text is None
                 else memory_text
             )
+            frozen_agents = (
+                _system_file_text(system_files, "agents")
+                if agents_text is None
+                else agents_text
+            )
             snapshot._env = snapshot._build_env(
                 config,
                 soul_text="" if frozen_soul is None else frozen_soul,
                 memory_text="" if frozen_memory is None else frozen_memory,
+                agents_text="" if frozen_agents is None else frozen_agents,
             )
         elif config is not None:
             snapshot._env = snapshot._build_env(config)
@@ -918,6 +927,7 @@ class ContextManager:
         *,
         soul_text: str | None = None,
         memory_text: str | None = None,
+        agents_text: str | None = None,
     ) -> AssemblyEnvironment:
         capabilities = (
             self._capabilities
@@ -945,6 +955,11 @@ class ContextManager:
                 self._read(config.memory_file)
                 if memory_text is None
                 else memory_text
+            ),
+            agents_text=(
+                self._read(config.agents_file)
+                if agents_text is None
+                else agents_text
             ),
             environment=environment,
             counter=self._counter,
@@ -1076,6 +1091,7 @@ class ContextManager:
             identity=env.identity,
             soul_text=env.soul_text,
             memory_text=env.memory_text,
+            agents_text=env.agents_text,
             environment=env.environment,
             tool_schemas=tuple(self._tool_schemas),
             messages=snapshot,

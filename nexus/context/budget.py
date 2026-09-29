@@ -244,6 +244,7 @@ def part_caps(config: Any) -> Mapping[str, int | None]:
         "environment": limits.environment,
         "skills_index": limits.skills_index,
         "memory": limits.memory,
+        "agents_md": limits.agents_md,
         "attachments": limits.attachments,
     }
 

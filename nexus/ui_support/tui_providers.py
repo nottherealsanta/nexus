@@ -21,7 +21,7 @@ from .text import sanitize
 #: ``(id, label, actions)`` mirrored from the host; the host remains authoritative.
 PROVIDERS: tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...] = (
     ("codex", "ChatGPT (Codex)", (("browser", "Sign in with browser"), ("device", "Use a device code"))),
-    ("github-copilot", "GitHub Copilot", ()),
+    ("github-copilot", "GitHub Copilot", (("device", "Use a device code"),)),
     ("opencode-go", "OpenCode Go", (("api_key", "Save key"),)),
 )
 _POLL_SECONDS = 1.5
@@ -50,8 +50,7 @@ class ProvidersPane(VerticalScroll):
         if self._heading:
             yield Static("Providers", classes="settings-heading", markup=False)
             yield Static(
-                "Sign in to model providers. Credentials stay in this machine's keychain; "
-                "restart the daemon after connecting (nexus daemon stop).",
+                "Sign in to model providers. Credentials stay in this machine's keychain.",
                 classes="settings-help", markup=False,
             )
         for provider, label, actions in PROVIDERS:
