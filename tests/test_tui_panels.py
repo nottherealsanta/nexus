@@ -699,3 +699,24 @@ async def test_settings_new_item_is_saved_immediately():
         assert "name: helper" in transport.settings_body
         assert ("SettingsWrite", "global", "agents", "helper", "") in transport.trace
         assert not screen.dirty
+
+
+@pytest.mark.asyncio
+async def test_context_meter_and_details_show_live_thinking_and_clear_it():
+    from nexus.view import BlockView, MessageView
+
+    app = NexusTextualApp(_client(PanelTransport()), session="s")
+    async with app.run_test(size=(200, 50)) as pilot:
+        await pilot.pause()
+        block = BlockView(kind="thinking", text="**Checking candidates**")
+        message = MessageView(role="assistant", blocks=[block])
+        app.controller.view = ConversationView(turns=[TurnView(messages=[message])])
+        await app._sync_timeline()
+        assert "Thinking · Checking candidates" in app.query_one("#context-usage", Static).render().plain
+        assert "Thinking · Checking candidates" in app.query_one("#details-session", Static).render().plain
+        await pilot.pause()
+        assert app.query_one("#context-usage", Static).content_size.width > 18
+        block.finalized = True
+        await app._sync_timeline()
+        assert "Thinking" not in app.query_one("#context-usage", Static).render().plain
+        assert "Thinking" not in app.query_one("#details-session", Static).render().plain

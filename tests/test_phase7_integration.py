@@ -293,6 +293,7 @@ async def test_codex_model_reference_uses_responses_system_tools_and_normalized_
         assert captured["url"] == "https://api.openai.com/v1/responses"
         assert captured["body"] == {
             "model": "gpt-5.6-luna",
+            "reasoning": {"summary": "auto"},
             "instructions": "Nexus system prompt",
             "input": [
                 {

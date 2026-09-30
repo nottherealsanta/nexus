@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -580,6 +581,23 @@ def context_detail_usage(view: ConversationView) -> str:
     )
 
 
+def thinking_status(view: ConversationView) -> str:
+    """Latest provider summary in the active turn, projected from durable blocks."""
+    turn = view.active_turn
+    if turn is None or turn.phase != "active":
+        return ""
+    message = next((m for m in reversed(turn.messages) if m.role == "assistant"), None)
+    if message is None or message.done or not message.blocks:
+        return ""
+    if message.blocks[-1].kind != "thinking" or message.blocks[-1].finalized:
+        return ""
+    text = message.blocks[-1].text
+    headings = re.findall(r"\*\*([^*]+)\*\*", text)
+    phrase = " ".join((headings[-1] if headings else text).split()).strip("*")[:120]
+    phrase = _plain(phrase, 120)
+    return f"Thinking · {phrase}" if phrase else "Thinking"
+
+
 __all__ = [
     "ContextEntry",
     "ContextGroup",
@@ -592,6 +610,7 @@ __all__ = [
     "estimate_tokens",
     "render_context_details",
     "render_context_summary",
+    "thinking_status",
     "tool_entry",
     "tool_groups",
 ]

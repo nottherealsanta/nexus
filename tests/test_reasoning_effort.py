@@ -51,7 +51,7 @@ def test_responses_serializes_reasoning_effort_from_normalized_request(effort: s
 
     body = build_request_body(request, model="gpt-5", api=API_RESPONSES)
 
-    assert body["reasoning"] == {"effort": effort}
+    assert body["reasoning"] == {"effort": effort, "summary": "auto"}
     assert "thinking_budget" not in body
     assert reasoning_effort_applied(request, api=API_RESPONSES)
 
@@ -114,7 +114,7 @@ async def test_responses_provider_sends_effort_from_normalized_request():
     finally:
         await provider.aclose()
 
-    assert captured["body"]["reasoning"] == {"effort": "high"}  # type: ignore[index]
+    assert captured["body"]["reasoning"] == {"effort": "high", "summary": "auto"}  # type: ignore[index]
 
 
 async def test_responses_provider_omits_effort_for_non_reasoning_model():
@@ -854,3 +854,16 @@ def test_manifest_coordinator_forwards_reasoning_effort_to_context_iteration(tmp
 def test_unknown_or_empty_reasoning_effort_is_rejected(effort: str):
     with pytest.raises(ValueError, match="reasoning_effort"):
         SamplingParams(reasoning_effort=effort)
+
+
+def test_thinking_capability_requests_summary_with_default_effort():
+    body = build_request_body(
+        _request(), model="gpt-5", api=API_RESPONSES,
+        capabilities=Capabilities(thinking=True),
+    )
+    assert body["reasoning"] == {"summary": "auto"}
+    body = build_request_body(
+        _request(), model="plain", api=API_RESPONSES,
+        capabilities=Capabilities(thinking=False),
+    )
+    assert "reasoning" not in body

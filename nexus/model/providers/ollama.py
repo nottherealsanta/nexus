@@ -1071,12 +1071,12 @@ class OllamaProvider:
             delta = choice.get("delta")
             if not isinstance(delta, Mapping):
                 continue
-            content = delta.get("content")
-            if isinstance(content, str) and content:
-                yield TextDelta(text=content)
             reasoning = delta.get("reasoning_content") or delta.get("reasoning")
             if isinstance(reasoning, str) and reasoning:
                 yield ThinkingDelta(text=reasoning)
+            content = delta.get("content")
+            if isinstance(content, str) and content:
+                yield TextDelta(text=content)
             tool_calls = delta.get("tool_calls")
             if not isinstance(tool_calls, list):
                 continue

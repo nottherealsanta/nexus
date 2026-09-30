@@ -501,7 +501,9 @@ def _build_responses_body(
     if reasoning_effort_applied(
         req, api=API_RESPONSES, capabilities=capabilities
     ):
-        body["reasoning"] = {"effort": params.reasoning_effort}
+        body["reasoning"] = {"effort": params.reasoning_effort, "summary": "auto"}
+    elif capabilities is not None and capabilities.thinking:
+        body["reasoning"] = {"summary": "auto"}
     # Responses has no ``stop`` parameter; ``stop_sequences`` is dropped rather
     # than sent and rejected.
     return body
@@ -711,9 +713,6 @@ def _events_for_chat_chunk(
             continue
         delta = choice.get("delta")
         if isinstance(delta, Mapping):
-            content = delta.get("content")
-            if isinstance(content, str) and content:
-                yield TextDelta(text=content)
             reasoning = delta.get("reasoning_content")
             if not isinstance(reasoning, str):
                 reasoning = delta.get("reasoning")
@@ -722,6 +721,9 @@ def _events_for_chat_chunk(
             signature = delta.get("reasoning_signature")
             if isinstance(signature, str) and signature:
                 yield ThinkingEnd(signature=signature)
+            content = delta.get("content")
+            if isinstance(content, str) and content:
+                yield TextDelta(text=content)
             yield from _chat_tool_deltas(delta, state, accumulator)
             if delta.get("tool_calls"):
                 state.has_tools = True

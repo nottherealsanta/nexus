@@ -32,7 +32,7 @@ from nexus.model.providers.scripted import (
     text_response,
     tool_response,
 )
-from nexus.model.stream import MessageStart, MessageStop, TextDelta
+from nexus.model.stream import MessageStart, MessageStop, TextDelta, ThinkingDelta, ThinkingEnd
 from nexus.runtime import Runtime
 from nexus.session.records import EventRecord, MessageRecord
 
@@ -264,13 +264,44 @@ async def verify_context_main_pane() -> None:
         await browser.close()
 
 
+async def verify_thinking_context() -> None:
+    """Exercise the shipped meter renderer in Chromium, including untrusted text."""
+    source = (ROOT / "nexus/ui/web/js/app.js").read_text()
+    functions = "\n".join(line for line in source.splitlines() if line.startswith((
+        "function thinkingStatus(", "function renderContextMeter(",
+        "function contextUsage(", "function usageText(",
+    )))
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+        page = await browser.new_page()
+        await page.set_content('<span id="context-meter"></span><div id="activity-bar"></div>')
+        await page.evaluate("""functions => {
+            window.$ = id => document.getElementById(id);
+            window.state = {session:'s',view:{turns:[{phase:'active',messages:[{role:'assistant',done:false,blocks:[{kind:'thinking',text:'**Starting search****Checking <img src=x onerror=alert(1)>**',finalized:false}]}]}]}};
+            (0,eval)(functions);
+            renderContextMeter();
+        }""", functions)
+        assert await page.locator('#context-meter').inner_text() == '0 (0%) · Thinking · Checking <img src=x onerror=alert(1)>'
+        assert await page.locator('#context-meter img').count() == 0
+        await page.evaluate("state.view.turns[0].messages[0].blocks[0].finalized=true;renderContextMeter()")
+        assert await page.locator('#context-meter').inner_text() == '0 (0%)'
+        await browser.close()
+
+
 async def main() -> None:
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     await verify_context_main_pane()
+    await verify_thinking_context()
     gate = asyncio.Event()
+    thinking_gate = asyncio.Event()
+    ended_gate = asyncio.Event()
     provider = ScriptedProvider(
         [
             MessageStart(model="m", provider="scripted"),
+            ThinkingDelta(text="**Starting search****Checking candidates**\n\nProvider summary detail."),
+            Wait(thinking_gate),
+            ThinkingEnd(signature="opaque-thinking-signature"),
+            Wait(ended_gate),
             TextDelta(text="First streamed half. "),
             Wait(gate),
             TextDelta(text="Second streamed half."),
@@ -724,6 +755,22 @@ async def main() -> None:
                 started_at = time.monotonic()
                 result = await terminal.call(p.SessionStart(session=session, content="Started in Textual"))
                 assert isinstance(result, p.SessionStartResult)
+                await page.wait_for_function("() => document.querySelector('#context-meter').textContent.includes('Thinking · Checking candidates')")
+                assert 'Thinking · Checking candidates' in await page.locator('#inspector-content').inner_text()
+                await page.screenshot(path=str(ARTIFACTS / "thinking-live.png"), full_page=True)
+                viewport = page.viewport_size
+                await page.set_viewport_size({"width": 400, "height": 800})
+                assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                await page.screenshot(path=str(ARTIFACTS / "thinking-mobile.png"), full_page=True, animations="disabled")
+                await page.set_viewport_size(viewport)
+                # Replay during thinking must show the same phrase from SQLite.
+                await page.reload(wait_until="domcontentloaded")
+                await page.wait_for_function("() => document.querySelector('#context-meter').textContent.includes('Thinking · Checking candidates')")
+                thinking_gate.set()
+                await page.wait_for_function("() => !document.querySelector('#context-meter').textContent.includes('Thinking')")
+                assert not await page.locator('#stop-button').is_hidden()
+                assert 'Thinking · Checking candidates' not in await page.locator('#inspector-content').inner_text()
+                ended_gate.set()
                 try:
                     await page.get_by_text("First streamed half.", exact=False).wait_for(timeout=8_000)
                 except Exception as exc:

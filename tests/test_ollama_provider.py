@@ -762,3 +762,13 @@ async def test_from_config_kind_openai_compatible_selects_openai_mode():
 
     provider = OllamaProvider.from_config(_Config(), transport=_dummy_transport())
     assert provider.api == MODE_OPENAI
+
+
+async def test_mixed_compatible_reasoning_and_answer_keeps_thought_before_text():
+    body = b'data: {"choices":[{"delta":{"content":"answer","reasoning_content":"check"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+    provider, _ = _make(content=body, api="openai")
+    try:
+        events = await _collect(provider, ModelRequest(messages=[]))
+        assert [type(event) for event in events if isinstance(event, (ThinkingDelta, TextDelta))] == [ThinkingDelta, TextDelta]
+    finally:
+        await provider.aclose()
