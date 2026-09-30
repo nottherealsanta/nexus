@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.4](https://github.com/nottherealsanta/nexus/compare/v0.2.3...v0.2.4) (2026-09-30)
+
+
+### Bug fixes
+
+* give web client a browser-native visual finish ([768bc3e](https://github.com/nottherealsanta/nexus/commit/768bc3e1ee07b52083fdb7c7d25f8e5455bebb73))
+
 ## [0.2.3](https://github.com/nottherealsanta/nexus/compare/v0.2.2...v0.2.3) (2026-09-30)
 
 
