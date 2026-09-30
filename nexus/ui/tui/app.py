@@ -19,7 +19,7 @@ from textual.widgets import Button, Input, OptionList, Static, TextArea
 from ...client.protocol import Client, ClientError
 from ...events import Event
 from ...host import protocol as p
-from ...ui_support.context import context_measure
+from ...ui_support.context import context_measure, thinking_status
 from ...ui_support.tui_command_palette import (
     KEYBOARD_SHORTCUTS,
     SHORTCUTS,
@@ -709,7 +709,11 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
         await self.query_one("#conversation", ConversationTimeline).set_view(self.controller.view)
         self.query_one(SessionSidebar).set_current_running(self.controller.view.phase == "running")
         self._sync_topbar()
-        self.query_one("#context-usage", Static).update(context_usage(self.controller.view))
+        usage = context_usage(self.controller.view)
+        thinking = thinking_status(self.controller.view)
+        self.query_one("#context-usage", Static).update(
+            " · ".join(filter(None, (usage, thinking)))
+        )
         self._sync_activity()
         if self.controller.session and self._context_preview_session != self.controller.session:
             self._start_context_preview()

@@ -37,7 +37,7 @@ from textual.widgets import (
 )
 from textual.widgets.option_list import Option
 
-from .context import context_usage
+from .context import context_usage, thinking_status
 from .text import sanitize
 from .timeline import split_diff_files
 
@@ -608,6 +608,9 @@ class DetailsSidebar(VerticalScroll):
         ]
         if usage.input_tokens or usage.output_tokens:
             rows.append(("Tokens", f"{usage.input_tokens:,} in · {usage.output_tokens:,} out"))
+        thinking = thinking_status(view)
+        if thinking:
+            rows.append(("Activity", thinking))
         ctx = context_usage(view)
         if ctx != "Preview":
             rows.append(("Context", ctx))

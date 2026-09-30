@@ -415,7 +415,7 @@ body { font-size: 13px; line-height: var(--row); }
 .stop-button:hover { background: var(--danger-tint); }
 .composer-status { position: relative; display: flex; justify-content: flex-end; height: var(--row); padding-right: 6px; }
 .composer-status.is-recording::before { content: ""; position: absolute; top: 50%; left: 0; width: 5px; height: 5px; transform: translateY(-50%); border-radius: 50%; background: var(--accent); pointer-events: none; }
-.context-meter { color: var(--quiet); white-space: nowrap; }
+.context-meter { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; color: var(--quiet); white-space: nowrap; }
 .context-meter.warn { color: var(--warning); }
 .composer-footnote { display: none; }
 .activity-bar { position: relative; height: 2px; margin: 8px 24px 10px; overflow: hidden; border-radius: 0; background: var(--border); }

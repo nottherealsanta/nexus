@@ -222,6 +222,7 @@ def build_request_body(
     model: str,
     default_max_tokens: int | None = None,
     stream: bool = True,
+    capabilities: Capabilities | None = None,
 ) -> dict[str, Any]:
     """Translate a :class:`ModelRequest` into a Gemini request body.
 
@@ -247,6 +248,8 @@ def build_request_body(
             "thinkingBudget": budget,
             "includeThoughts": budget > 0,
         }
+    elif capabilities is not None and capabilities.thinking:
+        generation["thinkingConfig"] = {"includeThoughts": True}
     if generation:
         body["generationConfig"] = generation
     return body
@@ -835,7 +838,8 @@ class GeminiProvider:
         if not model:
             raise ProviderError("gemini: no model specified")
         body = build_request_body(
-            req, model=model, default_max_tokens=self._default_max_tokens
+            req, model=model, default_max_tokens=self._default_max_tokens,
+            capabilities=self.capabilities(model),
         )
         headers = self._headers()
         state = _ChunkState()

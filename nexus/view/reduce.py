@@ -528,6 +528,16 @@ def _on_thinking_delta(state: ConversationView, event: Event, data: Mapping[str,
     turn = _with_message(turn, message_index, replace(message, blocks=blocks))
     return _put(state, index, replace(turn, updated_ts=event.ts))
 
+def _on_thinking_end(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
+    """Close the current live thought run at its durable provider boundary."""
+    state, index = _turn_for(state, event)
+    turn, message_index = _ensure_assistant(state.turns[index], event, data)
+    message = turn.messages[message_index]
+    blocks = finalize_thinking(message.blocks, "", _as_str(data.get("signature")))
+    turn = _with_message(turn, message_index, replace(message, blocks=blocks))
+    return _put(state, index, replace(turn, updated_ts=event.ts))
+
+
 def _on_thinking(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
     state, index = _turn_for(state, event)
     turn, message_index = _ensure_assistant(state.turns[index], event, data)
@@ -1372,6 +1382,7 @@ _HANDLERS: dict[str, Any] = {
     "text.delta": _on_text_delta,
     "text": _on_text,
     "thinking.delta": _on_thinking_delta,
+    "thinking.end": _on_thinking_end,
     "thinking": _on_thinking,
     "model.usage": _on_model_usage,
     "model.stopped": _on_model_stopped,

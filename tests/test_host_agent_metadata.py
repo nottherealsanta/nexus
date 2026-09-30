@@ -463,7 +463,7 @@ async def test_max_only_effort_routes_through_host_request_and_responses_body(tm
         assert (request.provider, request.model) == ("openai", "model-a")
         assert request.params.reasoning_effort == "max"
         _events = [event async for event in provider.stream(request)]
-        assert captured["body"]["reasoning"] == {"effort": "max"}  # type: ignore[index]
+        assert captured["body"]["reasoning"] == {"effort": "max", "summary": "auto"}  # type: ignore[index]
     finally:
         await runtime.aclose()
 

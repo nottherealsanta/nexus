@@ -48,7 +48,7 @@ events ──► session records ──► view/reduce.py (pure) ──► Conve
 | Local dictation | `voice/` | `manager.py` (`VoiceManager`: consent-gated preparation, bounded serialized transcription, cached-only startup); `store.py` (pinned model manifest and cache); `engine.py` (`KestrelEngine`, Kestrel 0.8.0 `ParakeetTdtRuntime`) |
 | Hot extensions | `ext/` | `manager.py` (atomic rebuild), `manifest.py`, `quarantine.py`, `tools/loader.py` |
 | Outbound network | `net/outbound.py` | pinned, public-address-only HTTP for webfetch/websearch |
-| Auth | `auth/` | keychain-backed provider sign-in: `codex.py` (ChatGPT OAuth, browser PKCE or device code), `copilot.py` (GitHub.com device flow through the Nexus OAuth app; GitHub token in the keychain, short-lived Copilot token in memory; live Copilot exchange compatibility unverified), `api_key.py` (pasted keys such as OpenCode Go), `store.py` (secure keyring only) |
+| Auth | `auth/` | keychain-backed provider sign-in: `codex.py` (ChatGPT OAuth, browser PKCE or device code), `copilot.py` (GitHub.com device flow through the Nexus OAuth app; GitHub token in the keychain, sent directly to the Copilot API), `api_key.py` (pasted keys such as OpenCode Go), `store.py` (secure keyring only) |
 
 The optional `claude-agent` provider uses the official Claude Agent SDK and
 Claude Code subscription authentication. Its isolated worker disables SDK tools,
@@ -88,8 +88,11 @@ device login is currently GitHub.com-only; older v1 stored tokens must be
 reconnected. GitHub OAuth access tokens from apps configured to expire require
 another sign-in on expiry. The GitHub token is the Copilot API bearer directly
 (no `copilot_internal` exchange) and is checked against `/models` at login; the
-device flow uses OpenCode's OAuth app id. This has not yet been verified against
-a live account.
+device flow uses OpenCode's OAuth app id. Live `/models` and GPT-6 Luna inference
+requests have been verified using an existing connection; the device sign-in
+flow has not been live-tested. Luna is served on `/responses`: the adapter learns
+that route after Copilot rejects `/chat/completions` and requests reasoning
+summaries through the same Responses path as Codex.
 
 | File | Role |
 | --- | --- |
@@ -168,6 +171,29 @@ adds cache reads and writes back. `view/reduce.py` stores that as
 `measured_tokens` and carries it into the next assembly (measurement plus the
 estimate's growth), so the UI meter (`ui_support/context.py:context_measure`)
 shows a provider number whenever one exists.
+
+Responses requests for thinking-capable models ask for `reasoning.summary = "auto"`.
+Provider summary deltas are durably recorded as thinking blocks. Both clients
+show the latest live heading beside context usage and in the details pane, and
+clear the indicator when the block is finalized or the turn ends. The loop
+records `thinking.end` immediately on a provider boundary, or when an unsigned
+thought stream transitions to text, tools, or a completed response. Replaying
+the log preserves these boundaries without duplicating the final aggregate.
+Gemini requests `includeThoughts` for thinking-capable models even at the default
+budget; an explicit zero budget still disables thoughts. Anthropic, compatible
+chat endpoints, Ollama, and OpenCode use the same normalized thinking projection
+when their streams expose thoughts. Summaries are
+provider-supplied; a model may return none. The indicator does not invent a
+thinking duration. The Claude Agent SDK bridge buffers final text and currently
+does not expose live thoughts.
+
+The gated Copilot smoke test is repeatable with
+`NEXUS_COPILOT_THINKING_LIVE=1 pytest -m live tests/test_copilot_thinking_live.py`.
+Offline provider-to-context tests cover all streamed-thinking dialects, including
+unsigned local and ACP streams.
+
+For the reusable stream inventory, semantic mapping, live-probe safety, and
+verification checklist, see [provider onboarding](provider-onboarding.md).
 
 ## Long-running `bash` commands
 

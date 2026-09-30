@@ -49,6 +49,7 @@ MODEL_EVENTS = (
     "text.delta",
     "text",
     "thinking.delta",
+    "thinking.end",
     "thinking",
     "model.usage",
     "model.stopped",

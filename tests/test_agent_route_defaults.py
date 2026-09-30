@@ -106,7 +106,7 @@ async def test_agent_model_provider_effort_and_body_reach_responses_request(tmp_
         assert captured == {}
         [event async for event in session.send("review")]
         assert captured["model"] == "chosen-model"
-        assert captured["reasoning"] == {"effort": "high"}
+        assert captured["reasoning"] == {"effort": "high", "summary": "auto"}
         assert "Reviewer system body." in captured["instructions"]
         assert workspace_provider.calls == 0
     finally:
@@ -207,7 +207,7 @@ async def test_completed_turn_freezes_selected_agent_and_models_dev_effort_throu
         session.select_reasoning_effort(ReasoningEffortSelection(effort="low"))
         await session.wait_turn(turn_id)
 
-        assert captured["body"]["reasoning"] == {"effort": "high"}  # type: ignore[index]
+        assert captured["body"]["reasoning"] == {"effort": "high", "summary": "auto"}  # type: ignore[index]
         model_started = next(
             event for event in session.events
             if event.type == "model.started" and event.turn == turn_id

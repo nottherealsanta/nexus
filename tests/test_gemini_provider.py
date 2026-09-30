@@ -1040,3 +1040,24 @@ async def test_from_config_reads_google_and_gemini_sections():
         "/v1beta/models/gemini-3-pro:streamGenerateContent"
     )
     await provider.aclose()
+
+
+@pytest.mark.parametrize("thinking", [False, True])
+def test_default_thought_summary_request_respects_capability(thinking):
+    body = build_request_body(
+        ModelRequest(messages=[Message("user", [Text("check")])]),
+        model="gemini", capabilities=Capabilities(thinking=thinking),
+    )
+    if thinking:
+        assert body["generationConfig"]["thinkingConfig"] == {"includeThoughts": True}
+    else:
+        assert "generationConfig" not in body
+
+
+def test_disabled_thinking_does_not_request_default_summary():
+    body = build_request_body(
+        ModelRequest(messages=[Message("user", [Text("check")])],
+                     params=SamplingParams(thinking_budget=0)),
+        model="gemini", capabilities=Capabilities(thinking=True),
+    )
+    assert body["generationConfig"]["thinkingConfig"]["includeThoughts"] is False

@@ -1020,3 +1020,50 @@ def test_usage_event_reports_the_whole_prompt_for_every_adapter():
     assert _usage_event_data(Usage(input=10, output=5, cache_read=80, cache_write=10), AnthropicProvider)["prompt"] == 100
     assert _usage_event_data(Usage(input=100, output=5, cache_read=80), object())["prompt"] == 100
     assert "prompt" not in _usage_event_data(Usage(), object())
+
+
+async def test_thinking_end_is_live_durable_and_preserves_separate_signatures():
+    from nexus.ui_support.context import thinking_status
+    from nexus.view.fold import fold
+
+    gate = asyncio.Event()
+    provider = ScriptedProvider([
+        MessageStart(), ThinkingDelta(text="**First check**"), ThinkingEnd(signature="first"),
+        Wait(gate), ThinkingDelta(text="**Second check**"), ThinkingEnd(signature="second"),
+        TextDelta(text="answer"), MessageStop(stop_reason="end_turn"),
+    ])
+    session, sink, lease = FakeSession(), FakeSink(), FakeLease("t")
+    task = asyncio.create_task(_run(session, provider, sink, lease))
+    try:
+        async with asyncio.timeout(3):
+            while "thinking.end" not in sink.types:
+                await asyncio.sleep(0)
+        live = fold(record.event for record in sink.events)
+        assert live.turns[0].messages[-1].thinking == "**First check**"
+        assert thinking_status(live) == ""
+    finally:
+        gate.set()
+        outcome = await task
+    assert outcome.ok
+    thoughts = [block for block in session.appended[1].content if type(block).__name__ == "Thinking"]
+    assert [(block.text, block.signature) for block in thoughts] == [
+        ("**First check**", "first"), ("**Second check**", "second"),
+    ]
+    replay = fold(record.event for record in sink.events)
+    assert replay.turns[0].messages[-1].thinking == "**First check****Second check**"
+    assert thinking_status(replay) == ""
+
+
+async def test_signature_only_thinking_carrier_preserves_wire_order_and_replay():
+    from nexus.view.fold import fold
+
+    provider = ScriptedProvider([MessageStart(), TextDelta(text="answer"),
+                                 ThinkingEnd(signature="carrier"), MessageStop(stop_reason="end_turn")])
+    session, sink = FakeSession(), FakeSink()
+    assert (await _run(session, provider, sink, FakeLease("t"))).ok
+    blocks = session.appended[1].content
+    assert [type(block).__name__ for block in blocks] == ["Text", "Thinking"]
+    assert blocks[1].text == ""
+    assert blocks[1].signature == "carrier"
+    replay_blocks = fold(record.event for record in sink.events).turns[0].messages[-1].blocks
+    assert [(block.kind, block.text) for block in replay_blocks] == [("text", "answer"), ("thinking", "")]

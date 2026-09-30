@@ -14,6 +14,7 @@ import json
 from typing import Any
 
 import httpx
+import pytest
 
 from nexus.model.message import (
     Message,
@@ -25,7 +26,7 @@ from nexus.model.message import (
 )
 from nexus.model.providers.openai import OpenAIProvider, build_request_body
 from nexus.model.request import ModelRequest
-from nexus.model.stream import MessageStop, ToolCallEnd
+from nexus.model.stream import MessageStop, ThinkingDelta, ThinkingEnd, ToolCallEnd
 
 
 def _sse(*frames: tuple[str, dict[str, Any]]) -> bytes:
@@ -248,3 +249,45 @@ async def test_endpoint_fallback_retries_once_on_the_other_dialect_and_remembers
         pass
     assert urls == ["/v1/responses"]  # learned; no second rejected call
     await provider.aclose()
+
+
+@pytest.mark.parametrize("model", ["gpt-6-luna", "gpt-6-sol", "gpt-6-astra", "gpt-5.6-luna", "gpt-5.6-sol"])
+async def test_copilot_responses_only_models_request_thinking_summaries(model):
+    from nexus.model.providers.openai import EndpointFallback
+    from nexus.model.capabilities import Capabilities
+
+    requests = []
+    def handle(request):
+        requests.append((request.url.path, json.loads(request.content)))
+        if request.url.path == "/chat/completions":
+            return httpx.Response(400, json={"error": {"message": f'model "{model}" is not accessible via the /chat/completions endpoint'}})
+        return httpx.Response(200, content=
+            b'data: {"type":"response.created","response":{"id":"r"}}\n\n'
+            b'data: {"type":"response.reasoning_summary_text.delta","delta":"**Checking candidates**"}\n\n'
+            b'data: {"type":"response.output_item.done","item":{"type":"reasoning"}}\n\n'
+            b'data: {"type":"response.completed","response":{"status":"completed"}}\n\n')
+    provider = OpenAIProvider(
+        api_key="test", base_url="https://api.githubcopilot.com", api="chat",
+        api_selector=EndpointFallback(), model=model, capabilities=Capabilities(thinking=True),
+        http_transport=httpx.MockTransport(handle),
+    )
+    try:
+        events = [event async for event in provider.stream(ModelRequest(messages=[Message("user", [Text("check")])]))]
+        assert [path for path, _ in requests] == ["/chat/completions", "/responses"]
+        assert requests[-1][1]["reasoning"] == {"summary": "auto"}
+        assert any(isinstance(event, ThinkingDelta) for event in events)
+        assert any(isinstance(event, ThinkingEnd) for event in events)
+    finally:
+        await provider.aclose()
+
+
+async def test_mixed_chat_reasoning_and_answer_keeps_thought_before_text():
+    body = b'data: {"choices":[{"delta":{"content":"answer","reasoning_content":"check"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+    provider = OpenAIProvider(api_key="test", model="m", api="chat",
+                              http_transport=httpx.MockTransport(lambda request: httpx.Response(200, content=body)))
+    try:
+        events = [event async for event in provider.stream(ModelRequest(messages=[]))]
+        from nexus.model.stream import TextDelta
+        assert [type(event) for event in events if isinstance(event, (ThinkingDelta, TextDelta))] == [ThinkingDelta, TextDelta]
+    finally:
+        await provider.aclose()

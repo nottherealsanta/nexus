@@ -79,6 +79,20 @@ def finalize_thinking(
                 replacement["signature"] = signature
             out[i] = replace(out[i], **replacement)
         return out
+    # The loop publishes thinking.end as each run closes, then the legacy
+    # aggregate thinking event at response completion. That aggregate must not
+    # append the same text/signature a second time after every run was finalized.
+    thinking = [block for block in out if block.kind == "thinking"]
+    if (
+        thinking
+        and all(block.finalized for block in thinking)
+        and text == "".join(block.text for block in thinking)
+        and (
+            any(block.streamed for block in thinking)
+            or (not text and signature == thinking[-1].signature)
+        )
+    ):
+        return out
     if text or signature is not None:
         out.append(
             BlockView(kind="thinking", text=text, signature=signature, finalized=True)

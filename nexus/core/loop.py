@@ -618,8 +618,10 @@ class _BlockCollector:
         self._flush_text()
         self._thinking.append(text)
 
-    def thinking_end(self, signature: str) -> None:
+    def thinking_end(self, signature: str | None) -> None:
         self._signature = signature
+        self._flush_text()
+        self._flush_thinking()
 
     def tool_start(self, call_id: str, name: str) -> None:
         self._flush_text()
@@ -849,27 +851,45 @@ async def _collect_stream(
     stop_reason: str | None = None
     usage: StreamUsage | None = None
     malformed: MalformedToolCall | None = None
+    thinking_open = False
+
+    async def end_thinking(signature: str | None = None) -> None:
+        nonlocal thinking_open
+        collector.thinking_end(signature)
+        await emitter.emit("thinking.end", {"signature": signature})
+        thinking_open = False
+
     try:
         stream = _aiter_cancellable(provider.stream(request), token)
         async with contextlib.aclosing(stream) as events:
             async for event in events:
                 if isinstance(event, TextDelta):
+                    if thinking_open and event.text:
+                        await end_thinking()
                     collector.text_delta(event.text)
                     await emitter.emit("text.delta", {"text": event.text})
                 elif isinstance(event, ThinkingDelta):
+                    thinking_open = thinking_open or bool(event.text)
                     collector.thinking_delta(event.text)
                     await emitter.emit("thinking.delta", {"text": event.text})
                 elif isinstance(event, ThinkingEnd):
-                    collector.thinking_end(event.signature)
+                    if thinking_open or event.signature:
+                        await end_thinking(event.signature)
                 elif isinstance(event, ToolCallStart):
+                    if thinking_open:
+                        await end_thinking()
                     collector.tool_start(event.id, event.name)
                 elif isinstance(event, ToolCallDelta):
                     collector.tool_delta(event.id, event.partial_json)
                 elif isinstance(event, ToolCallEnd):
+                    if thinking_open:
+                        await end_thinking()
                     collector.tool_end(event.id, event.input)
                 elif isinstance(event, StreamUsage):
                     usage = event
                 elif isinstance(event, MessageStop):
+                    if thinking_open:
+                        await end_thinking()
                     stop_reason = event.stop_reason
                 # MessageStart and Raw carry no block content for Phase 1.
     except MalformedToolCall as exc:
