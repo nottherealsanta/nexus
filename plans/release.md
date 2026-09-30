@@ -1,6 +1,6 @@
 # Release automation plan
 
-Status: **in progress** · updated 2026-09-29 · follows [install.md](install.md) (its Phase 3, "PyPI release")
+Status: **in progress** · updated 2026-09-30 · follows [install.md](install.md) (its Phase 3, "PyPI release")
 
 Phases 1–3 are on `main`. The first release-please run, the first release PR and the
 `v0.1.0` publish are still to verify (Phase 4). Read "Progress" and "What we learned"
@@ -14,7 +14,7 @@ below before the phase text: several details in the phases changed while landing
 | Python floor | **Done.** `requires-python = ">=3.13"` (see "What we learned"). | `89abf1a` |
 | 2. Convention, repo settings | Code **done**; merge settings **done** by the maintainer; `main` **ruleset still to create**. | `1a3e535` `pr-title.yml` + `scripts/hooks/commit-msg` (hook enabled locally with `git config core.hooksPath scripts/hooks`) |
 | 3. release-please + publishing | Files **pushed**; first run not yet verified. | `fdbf33f` config, manifest, `release.yml` (with `Release-As: 0.1.0`); `8c694a9` diagnostics removed; `3cdb3ff` docs |
-| 4. First release `v0.1.0` | Not started. Merging the release PR is the maintainer's step. | |
+| 4. First release `v0.1.0` | **Done (2026-09-30).** Release PR #1 merged; the first publish failed (pending publisher had the wrong project name), then the `workflow_dispatch` re-run of `v0.1.0` published it. Checked: PyPI 0.1.0, release assets, clean `uv tool install` prints `nexus 0.1.0`, Python 3.12 refused. | run 36662502628 |
 | 5–7. Installer default, `nexus update`, update notice | Not started; they wait on Phase 4. | |
 | 8. Docs | Partly done: `AGENTS.md` convention bullet and the "Releasing" section in `docs/core.md`. `plans/install.md` and the README still to do. | `3cdb3ff` |
 
