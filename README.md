@@ -1014,3 +1014,46 @@ fixture suite, which is what makes "add a provider later" safe.
 workspace, and adds `/mock` to run scripted scenarios with no real model calls:
 long tool chains, parallel tools, parallel and nested subagents, errors, and
 more. `nexus mock all --speed 0` runs every non-interactive scenario headlessly.
+
+### Claude Pro/Max via the Agent SDK
+
+Install the optional official SDK integration:
+
+```sh
+uv tool install --force 'nexus-harness[claude-agent]'
+```
+
+Sign in through Claude Code with `claude auth login` using your Claude Pro/Max
+account. If Claude Code is not installed separately, use the SDK's bundled CLI:
+
+```sh
+uv run --no-project --with 'nexus-harness[claude-agent]' python -c 'from nexus.model.providers.claude_agent_auth import cli_path; import subprocess; subprocess.run([cli_path(), "auth", "login"], check=True)'
+```
+
+First-run setup in both `nexus chat` and `nexus web` detects the subscription login
+and offers **Claude Pro/Max**. For an existing installation, add this to your
+user-global `~/.nexus/config.toml` (or workspace `.agents/nexus.toml`):
+
+```toml
+config_version = 2
+
+[providers.claude-agent]
+kind = "claude-agent"
+# executable = "/absolute/path/to/claude"  # optional; SDK bundle by default
+# timeout_seconds = 600
+
+[models]
+default = "claude-agent/claude-sonnet-4-6"
+```
+
+Restart with `nexus daemon restart`; `/model` lists the projected Anthropic models.
+Model availability and subscription limits are controlled by Anthropic. This
+provider requires a Claude.ai login and refuses API-key logins. Nexus neither
+reads nor copies Claude's tokens. [Anthropic's current SDK subscription guidance](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
+says SDK use still draws from subscription limits.
+
+Replies are buffered and text-only. Nexus executes tool requests through its own
+permissions and durable session log; the SDK's built-in tools and project hooks
+are disabled. Temperature, top-p, stop sequences, exact output-token caps, and
+explicit thinking budgets are not supported by this bridge. See
+[the implementation plan](plans/CLAUDE_AGENT_PLAN.md) for its boundaries and tests.

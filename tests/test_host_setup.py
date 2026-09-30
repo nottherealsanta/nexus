@@ -53,6 +53,9 @@ def _offline_catalogue(monkeypatch):
         registry.install_raw(json.dumps(CATALOGUE))
         return registry
     monkeypatch.setattr(setup, "_registry", registry)
+    async def disconnected(runtime):
+        return False
+    monkeypatch.setattr(setup, "_claude_connected", disconnected)
 
 
 class _OAuth:
@@ -109,7 +112,7 @@ def test_setup_status_exposes_bounded_choices_without_environment_values(tmp_pat
     assert result["global_model"] == ""
     assert result["effective_model"] == "workspace/model"
     assert [row["id"] for row in result["providers"]] == [
-        "codex", "github-copilot", "opencode-go", "openai", "anthropic", "google", "ollama"
+        "codex", "github-copilot", "opencode-go", "openai", "anthropic", "claude-agent", "google", "ollama"
     ]
     assert not next(row for row in result["providers"] if row["id"] == "github-copilot")["connected"]
     assert all(set(row) == {"id", "label", "connected", "instruction", "auto"} for row in result["providers"])
@@ -318,3 +321,21 @@ async def test_host_setup_persists_global_default_across_unrelated_workspaces(tm
 
     from nexus.config import Config
     assert Config.load(second, home=home, environ={}).model == "openai/gpt-6-sol"
+
+
+def test_setup_save_claude_subscription_uses_sdk_route(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    _home(monkeypatch, home)
+    runtime = _runtime(home)
+    async def connected(runtime):
+        return True
+    async def models(runtime, provider):
+        assert provider == "claude-agent"
+        return ["claude-sdk"]
+    monkeypatch.setattr(setup, "_claude_connected", connected)
+    monkeypatch.setattr(setup, "_models", models)
+    result = asyncio.run(setup.setup_save(runtime, "claude-agent"))
+    saved = tomllib.loads((home / ".nexus" / "config.toml").read_text())
+    assert result["global_model"] == "claude-agent/claude-sdk"
+    assert saved["providers"]["claude-agent"] == {"kind": "claude-agent"}
+    assert "api_key" not in repr(saved)
