@@ -820,11 +820,33 @@ async def _update(args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> i
             "installer from the README, then `nexus update` works.\n"
         )
         return 1
+    source = install.install_source()
+    command = install.update_command(
+        uv,
+        source,
+        extras=install.installed_extras(),
+        python=f"{sys.version_info.major}.{sys.version_info.minor}",
+        channel=args.channel,
+        version=args.release,
+        ref=args.ref,
+    )
+    if command is None:
+        stderr.write(
+            "Error: this install did not come from PyPI or git, so `nexus update` "
+            "cannot pick a release. Re-run the installer from the README, or use "
+            "`nexus update --channel git`.\n"
+        )
+        return 1
     before = install.package_version()
     running = await install.running_daemons()
+    if source == "git" and args.channel == "stable" and not args.release:
+        stdout.write(
+            "Moving this install from git to PyPI releases "
+            "(use --channel git to stay on git).\n"
+        )
     stdout.write(f"Updating nexus (currently {before}) ...\n")
     stdout.flush()
-    code = await asyncio.to_thread(install.run_update, uv, method)
+    code = await asyncio.to_thread(install.run_update, command)
     if code != 0:
         stderr.write(f"Error: uv exited with status {code}; Nexus was not changed.\n")
         return 1
@@ -1168,6 +1190,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     update = sub.add_parser("update", help="Upgrade Nexus and restart running daemons")
     update.add_argument(
+        "--channel",
+        choices=("stable", "git"),
+        default="stable",
+        help="stable = PyPI releases (default); git = the newest code from GitHub",
+    )
+    update.add_argument("--ref", help="Branch, tag or commit for --channel git (default: main)")
+    update.add_argument("--version", dest="release", help="Install exactly this release (e.g. 0.1.0)")
+    update.add_argument(
         "--no-restart", action="store_true", help="Leave running daemons on the old version"
     )
 
@@ -1389,6 +1419,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "doctor":
             return asyncio.run(_doctor(workspace, args, stdout))
         if args.command == "update":
+            if args.ref and args.channel != "git":
+                parser.error("--ref needs --channel git")
+            if args.release and args.channel == "git":
+                parser.error("--version cannot be combined with --channel git")
             return asyncio.run(_update(args, stdout, stderr))
         parser.error(f"unknown command {args.command!r}")
         return 2

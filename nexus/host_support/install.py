@@ -14,10 +14,16 @@ import os
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+
+InstallSource = Literal["pypi", "git", "path", "unknown"]
 
 PACKAGE = "nexus-harness"
+REPO_URL = "https://github.com/nottherealsanta/nexus"
+#: ``uv-receipt.toml`` is tiny; anything larger is not one of ours.
+_RECEIPT_MAX_BYTES = 64 * 1024
 #: ``nexus update`` waits at most this long for one daemon to exit.
 _STOP_POLLS = 100
 _STOP_POLL_SECONDS = 0.1
@@ -34,21 +40,53 @@ def package_version() -> str:
         return "0.0.0"
 
 
-def install_method() -> str:
-    """One of ``uv-tool``, ``editable``, ``git``, ``pip``."""
+def _direct_url() -> dict[str, Any] | None:
+    """The install's ``direct_url.json`` (PEP 610), or ``None`` when absent."""
     try:
         from importlib.metadata import distribution
 
         raw = distribution(PACKAGE).read_text("direct_url.json")
-        if raw:
-            data = json.loads(raw)
-            if (data.get("dir_info") or {}).get("editable"):
-                return "editable"
-            if "vcs_info" in data:
-                return "git" if not _is_uv_tool() else "uv-tool"
-    except Exception:  # noqa: BLE001, S110 - detection is best effort
-        pass
+        data = json.loads(raw) if raw else None
+    except Exception:  # noqa: BLE001 - detection is best effort
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def install_method() -> str:
+    """How this copy is managed: ``uv-tool``, ``editable`` or ``pip``."""
+    data = _direct_url()
+    if data and (data.get("dir_info") or {}).get("editable"):
+        return "editable"
     return "uv-tool" if _is_uv_tool() else "pip"
+
+
+def install_source() -> InstallSource:
+    """Where this copy came from: an index (``pypi``), ``git``, a local ``path``."""
+    data = _direct_url()
+    if data is None:
+        return "pypi"
+    if "vcs_info" in data:
+        return "git"
+    dir_info = data.get("dir_info")
+    if isinstance(dir_info, dict) and not dir_info.get("editable"):
+        return "path"
+    return "unknown"
+
+
+def installed_extras() -> list[str]:
+    """Extras the uv tool was installed with, from its ``uv-receipt.toml``."""
+    receipt = Path(sys.prefix) / "uv-receipt.toml"
+    try:
+        if receipt.stat().st_size > _RECEIPT_MAX_BYTES:
+            return []
+        data = tomllib.loads(receipt.read_text(encoding="utf-8"))
+        requirements = data["tool"]["requirements"]
+        for req in requirements:
+            if req.get("name") == PACKAGE:
+                return sorted({str(e) for e in req.get("extras") or []})
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    return []
 
 
 def _is_uv_tool() -> bool:
@@ -182,19 +220,43 @@ async def install_report(home: str | Path | None = None) -> dict[str, Any]:
     }
 
 
-def update_command(uv: str, method: str) -> list[str]:
-    """The uv invocation that upgrades this install."""
-    if method == "git":
-        return [uv, "tool", "install", "--force", "--reinstall", PACKAGE]
-    return [uv, "tool", "upgrade", PACKAGE]
+def _spec(extras: list[str], suffix: str = "") -> str:
+    name = f"{PACKAGE}[{','.join(extras)}]" if extras else PACKAGE
+    return f"{name}{suffix}"
 
 
-def run_update(uv: str, method: str) -> int:
+def update_command(
+    uv: str,
+    source: str,
+    *,
+    extras: list[str],
+    python: str,
+    channel: str = "stable",
+    version: str | None = None,
+    ref: str | None = None,
+) -> list[str] | None:
+    """The uv invocation that updates this install, or ``None`` to refuse.
+
+    ``python`` is ``"X.Y"``: never the path of the tool venv's own interpreter,
+    because ``--force`` deletes that venv.
+    """
+    install = [uv, "tool", "install", "--force", "--python", python]
+    if channel == "git":
+        spec = _spec(extras, f" @ git+{REPO_URL}@{ref or 'main'}")
+        return [*install, "--reinstall", spec]
+    if version:
+        return [*install, _spec(extras, f"=={version}")]
+    if source == "pypi":
+        return [uv, "tool", "upgrade", "--refresh-package", PACKAGE, PACKAGE]
+    if source == "git":  # migration: git installs move to PyPI releases
+        return [*install[:4], "--refresh-package", PACKAGE, *install[4:], _spec(extras)]
+    return None
+
+
+def run_update(command: list[str]) -> int:
     """Run the upgrade, streaming uv's output. Returns uv's exit code."""
     try:
-        return subprocess.run(
-            update_command(uv, method), check=False, timeout=UPDATE_TIMEOUT_SECONDS
-        ).returncode
+        return subprocess.run(command, check=False, timeout=UPDATE_TIMEOUT_SECONDS).returncode
     except subprocess.TimeoutExpired:
         return 124
 

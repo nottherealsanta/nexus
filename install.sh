@@ -3,11 +3,12 @@
 #
 #   curl -LsSf https://raw.githubusercontent.com/nottherealsanta/nexus/main/install.sh | sh
 #
-# Installs uv when missing, lets uv provide Python >= 3.13, installs Nexus as an
-# isolated uv tool, and puts `nexus` on PATH. Re-running upgrades in place.
+# Installs uv when missing, lets uv provide Python >= 3.13, installs the latest
+# Nexus release from PyPI as an isolated uv tool, and puts `nexus` on PATH.
+# Re-running upgrades in place.
 # Options (flags win over environment variables):
 #   --version X         NEXUS_VERSION      pin a release (or git tag for the git source)
-#   --source S          NEXUS_SOURCE       git (default) | pypi | any package spec or path
+#   --source S          NEXUS_SOURCE       pypi (default) | git | any package spec or path
 #   --git-ref R         NEXUS_GIT_REF      branch, tag or commit for the git source (main)
 #   --python V          NEXUS_PYTHON       Python for the tool venv (3.13)
 #   --extras E          NEXUS_EXTRAS       e.g. documents
@@ -46,11 +47,11 @@ parse_args() {
             --no-modify-path) NEXUS_NO_MODIFY_PATH=1; shift ;;
             --no-doctor) NEXUS_NO_DOCTOR=1; shift ;;
             --strict) NEXUS_STRICT=1; shift ;;
-            -h | --help) sed -n '2,19p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
+            -h | --help) sed -n '2,20p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
             *) die 1 "unknown option: $1" ;;
         esac
     done
-    NEXUS_SOURCE=${NEXUS_SOURCE:-git}
+    NEXUS_SOURCE=${NEXUS_SOURCE:-pypi}
     NEXUS_GIT_REF=${NEXUS_GIT_REF:-main}
     NEXUS_PYTHON=${NEXUS_PYTHON:-3.13}
     NEXUS_EXTRAS=${NEXUS_EXTRAS:-}
@@ -135,7 +136,7 @@ package_spec() {
             if [ -n "${NEXUS_VERSION:-}" ]; then SPEC="$PACKAGE$extras==$NEXUS_VERSION"; fi
             ;;
         git)
-            have git || die 4 "the git source needs git installed (or use --source pypi)."
+            have git || die 4 "the git source needs git installed (or use the default --source pypi)."
             ref=$NEXUS_GIT_REF
             if [ -n "${NEXUS_VERSION:-}" ]; then ref="v${NEXUS_VERSION#v}"; fi
             SPEC="$PACKAGE$extras @ git+$REPO_URL@$ref"

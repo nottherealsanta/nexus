@@ -74,18 +74,30 @@ def test_syntax():
     assert subprocess.run([SH, "-n", str(SCRIPT)], check=False).returncode == 0
 
 
-def test_installs_from_git_by_default(env):
+def test_installs_from_pypi_by_default(env):
     vars_, log, _ = env
     result = run(vars_, "--no-modify-path")
     assert result.returncode == 0, result.stderr
     calls = log.read_text()
-    assert (
-        "tool install --force --python 3.13 "
-        "nexus-harness @ git+https://github.com/nottherealsanta/nexus@main"
-    ) in calls
+    assert "tool install --force --python 3.13 nexus-harness\n" in calls
+    assert "git+" not in calls
     assert "nexus --version" in calls
     assert "nexus daemon stop --all" in calls
     assert "nexus chat" in result.stdout
+
+
+def test_git_source_uses_ref(env):
+    vars_, log, _ = env
+    result = run(vars_, "--source", "git", "--git-ref", "abc123", "--no-doctor")
+    assert result.returncode == 0, result.stderr
+    assert (
+        "tool install --force --python 3.13 "
+        "nexus-harness @ git+https://github.com/nottherealsanta/nexus@abc123"
+    ) in log.read_text()
+
+    log.write_text("")
+    run(vars_, "--source", "git", "--version", "0.2.0", "--no-doctor")
+    assert "nexus@v0.2.0" in log.read_text()
 
 
 def test_pypi_source_with_version_and_extras(env):
@@ -197,8 +209,82 @@ def test_parser_accepts_update_and_stop_all():
 def test_update_command_argv():
     from nexus.host_support.install import update_command
 
-    assert update_command("/u/uv", "uv-tool") == ["/u/uv", "tool", "upgrade", "nexus-harness"]
-    assert update_command("/u/uv", "git")[:4] == ["/u/uv", "tool", "install", "--force"]
+    kw = {"python": "3.14", "extras": []}
+    assert update_command("/u/uv", "pypi", **kw) == [
+        "/u/uv", "tool", "upgrade", "--refresh-package", "nexus-harness", "nexus-harness",
+    ]
+    # migration: a git install moves to PyPI, keeping extras and the Python minor
+    assert update_command("/u/uv", "git", python="3.14", extras=["documents"]) == [
+        "/u/uv", "tool", "install", "--force", "--refresh-package", "nexus-harness",
+        "--python", "3.14", "nexus-harness[documents]",
+    ]
+    assert update_command("/u/uv", "pypi", version="0.1.0", **kw) == [
+        "/u/uv", "tool", "install", "--force", "--python", "3.14", "nexus-harness==0.1.0",
+    ]
+    assert update_command("/u/uv", "path", channel="git", python="3.14", extras=["a", "b"]) == [
+        "/u/uv", "tool", "install", "--force", "--python", "3.14", "--reinstall",
+        "nexus-harness[a,b] @ git+https://github.com/nottherealsanta/nexus@main",
+    ]
+    assert update_command("/u/uv", "pypi", channel="git", ref="v0.2.0", **kw)[-1].endswith("@v0.2.0")
+    assert update_command("/u/uv", "path", **kw) is None
+    assert update_command("/u/uv", "unknown", **kw) is None
+    assert update_command("/u/uv", "path", version="0.1.0", **kw) is not None
+
+
+def _fake_dist(monkeypatch, direct_url):
+    import importlib.metadata as md
+
+    class Dist:
+        def read_text(self, name):
+            return direct_url
+
+    monkeypatch.setattr(md, "distribution", lambda name: Dist())
+
+
+@pytest.mark.parametrize(
+    ("direct_url", "expected"),
+    [
+        (None, "pypi"),
+        ('{"url": "https://x", "vcs_info": {"vcs": "git"}}', "git"),
+        ('{"url": "file:///x", "dir_info": {}}', "path"),
+        ('{"url": "file:///x", "dir_info": {"editable": true}}', "unknown"),
+        ('{"url": "https://x/a.whl", "archive_info": {}}', "unknown"),
+        ("not json", "pypi"),
+    ],
+)
+def test_install_source(monkeypatch, direct_url, expected):
+    from nexus.host_support import install
+
+    _fake_dist(monkeypatch, direct_url)
+    assert install.install_source() == expected
+
+
+def test_install_method_never_reports_git(monkeypatch):
+    from nexus.host_support import install
+
+    _fake_dist(monkeypatch, '{"vcs_info": {"vcs": "git"}}')
+    monkeypatch.setattr(install, "_is_uv_tool", lambda: True)
+    assert install.install_method() == "uv-tool"
+    _fake_dist(monkeypatch, '{"dir_info": {"editable": true}}')
+    assert install.install_method() == "editable"
+
+
+def test_installed_extras(monkeypatch, tmp_path):
+    from nexus.host_support import install
+
+    monkeypatch.setattr(install.sys, "prefix", str(tmp_path))
+    receipt = tmp_path / "uv-receipt.toml"
+    assert install.installed_extras() == []  # missing
+    receipt.write_text(
+        '[tool]\nrequirements = [{ name = "nexus-harness", extras = ["web", "documents"] }]\n'
+    )
+    assert install.installed_extras() == ["documents", "web"]
+    receipt.write_text('[tool]\nrequirements = [{ name = "nexus-harness" }]\n')
+    assert install.installed_extras() == []  # without extras
+    receipt.write_text("[tool\nbroken")
+    assert install.installed_extras() == []  # malformed
+    receipt.write_text("# " + "x" * (install._RECEIPT_MAX_BYTES + 1))
+    assert install.installed_extras() == []  # oversized
 
 
 def test_find_uv_checks_usual_install_dirs(tmp_path):
@@ -255,6 +341,11 @@ def test_update_refuses_editable_and_non_uv_installs(monkeypatch, capsys):
     assert cli.main(["update"]) == 1
     assert "not installed with uv" in capsys.readouterr().err
 
+    monkeypatch.setattr(install, "find_uv", lambda environ=None: "/u/uv")
+    monkeypatch.setattr(install, "install_source", lambda: "path")
+    assert cli.main(["update"]) == 1
+    assert "--channel git" in capsys.readouterr().err
+
 
 def test_update_upgrades_then_restarts_running_daemons(monkeypatch, capsys):
     import subprocess as sp
@@ -275,11 +366,13 @@ def test_update_upgrades_then_restarts_running_daemons(monkeypatch, capsys):
         return 1
 
     monkeypatch.setattr(install, "install_method", lambda: "uv-tool")
+    monkeypatch.setattr(install, "install_source", lambda: "pypi")
+    monkeypatch.setattr(install, "installed_extras", lambda: [])
     monkeypatch.setattr(install, "find_uv", lambda environ=None: "/u/uv")
     monkeypatch.setattr(install, "package_version", lambda: next(versions))
     monkeypatch.setattr(install, "running_daemons", daemons)
     monkeypatch.setattr(install, "stop_all_daemons", stop_all)
-    monkeypatch.setattr(install, "run_update", lambda uv, method: 0)
+    monkeypatch.setattr(install, "run_update", lambda command: 0)
     monkeypatch.setattr(install, "installed_version_after_update", lambda b=None: "0.2.0")
     monkeypatch.setattr(
         sp, "run",
@@ -303,9 +396,53 @@ def test_update_failure_leaves_daemons_alone(monkeypatch, capsys):
         raise AssertionError("must not stop daemons when the upgrade failed")
 
     monkeypatch.setattr(install, "install_method", lambda: "uv-tool")
+    monkeypatch.setattr(install, "install_source", lambda: "pypi")
+    monkeypatch.setattr(install, "installed_extras", lambda: [])
     monkeypatch.setattr(install, "find_uv", lambda environ=None: "/u/uv")
     monkeypatch.setattr(install, "running_daemons", daemons)
     monkeypatch.setattr(install, "stop_all_daemons", boom)
-    monkeypatch.setattr(install, "run_update", lambda uv, method: 2)
+    monkeypatch.setattr(install, "run_update", lambda command: 2)
     assert cli.main(["update"]) == 1
     assert "not changed" in capsys.readouterr().err
+
+
+def test_update_migration_message_only_when_moving_from_git(monkeypatch, capsys):
+    from nexus import cli
+    from nexus.host_support import install
+
+    ran: list[list[str]] = []
+
+    async def no_daemons(home=None):
+        return []
+
+    monkeypatch.setattr(install, "install_method", lambda: "uv-tool")
+    monkeypatch.setattr(install, "installed_extras", lambda: ["documents"])
+    monkeypatch.setattr(install, "find_uv", lambda environ=None: "/u/uv")
+    monkeypatch.setattr(install, "running_daemons", no_daemons)
+    monkeypatch.setattr(install, "run_update", lambda command: ran.append(command) or 0)
+    monkeypatch.setattr(install, "installed_version_after_update", lambda b=None: "0.1.0")
+
+    migration = "Moving this install from git to PyPI releases"
+    monkeypatch.setattr(install, "install_source", lambda: "git")
+    assert cli.main(["update"]) == 0
+    assert capsys.readouterr().out.count(migration) == 1
+    assert ran[-1][-1] == "nexus-harness[documents]"
+
+    assert cli.main(["update", "--channel", "git", "--ref", "dev"]) == 0
+    assert migration not in capsys.readouterr().out
+    assert ran[-1][-1].endswith("@dev")
+
+    monkeypatch.setattr(install, "install_source", lambda: "pypi")
+    assert cli.main(["update"]) == 0
+    assert migration not in capsys.readouterr().out
+
+
+def test_update_rejects_conflicting_flags(capsys):
+    from nexus import cli
+
+    with pytest.raises(SystemExit):
+        cli.main(["update", "--ref", "x"])
+    assert "--ref needs --channel git" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        cli.main(["update", "--channel", "git", "--version", "0.1.0"])
+    assert "cannot be combined" in capsys.readouterr().err

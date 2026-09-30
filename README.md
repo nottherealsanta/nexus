@@ -8,31 +8,20 @@ Runtime dependencies are `httpx`, `msgspec`, `mcp`, `keyring`, `textual`, and
 `textual-diff-view`. Python 3.13+ on macOS or
 Linux. No vendor SDK, no agent framework, no OS sandbox.
 
-New here? Read [ARCHITECTURE.md](ARCHITECTURE.md) for the design and
-[EXTENDING.md](EXTENDING.md) to add tools, skills, agents, hooks, MCP servers,
-or providers.
-
 ## Install
-
-One line (macOS, Linux, WSL). It installs [uv](https://docs.astral.sh/uv/) if it is
-missing, lets uv provide Python 3.13+, installs Nexus as an isolated tool, and puts
-`nexus` on your `PATH`:
 
 ```sh
 curl -LsSf https://raw.githubusercontent.com/nottherealsanta/nexus/main/install.sh | sh
 ```
 
-Prefer to read it first? `curl -LsSf …/install.sh -o install.sh && less install.sh && sh install.sh`.
-Options (also as `sh -s -- --flag`): `NEXUS_VERSION`, `NEXUS_SOURCE` (`git` or
-`pypi`), `NEXUS_GIT_REF`, `NEXUS_PYTHON`, `NEXUS_EXTRAS` (e.g. `documents`),
-`NEXUS_NO_MODIFY_PATH`, `NEXUS_NO_DOCTOR`. Native Windows is not supported yet
-(the daemon needs Unix sockets); use WSL.
+Then `cd` into a project and run `nexus chat` (or `nexus web`). Update with
+`nexus update`. macOS, Linux and WSL; installs [uv](https://docs.astral.sh/uv/) and
+Python 3.13+ for you if they are missing. Already have uv? `uv tool install nexus-harness`.
+Options: `sh install.sh --help`. Changes: [CHANGELOG.md](CHANGELOG.md).
 
-Update with `nexus update`: it upgrades through uv and restarts running daemons.
-`nexus --version` prints the version, `nexus daemon stop --all` stops every
-workspace daemon, and `nexus doctor` warns about duplicate `nexus` binaries and
-daemons still running an older version. Uninstall with `uv tool uninstall nexus-harness`
-(sessions in `~/.nexus` are kept).
+New here? Read [ARCHITECTURE.md](ARCHITECTURE.md) for the design and
+[EXTENDING.md](EXTENDING.md) to add tools, skills, agents, hooks, MCP servers,
+or providers.
 
 ### From a clean checkout
 
@@ -43,6 +32,22 @@ pip install -e .
 # To run tests/build wheels:
 pip install -e '.[dev]'
 ```
+
+### Install details
+
+Prefer to read the script first? `curl -LsSf …/install.sh -o install.sh && less install.sh && sh install.sh`.
+Options (also as `sh -s -- --flag`): `NEXUS_VERSION`, `NEXUS_SOURCE` (`pypi`, the
+default, or `git`), `NEXUS_GIT_REF`, `NEXUS_PYTHON`, `NEXUS_EXTRAS` (e.g. `documents`),
+`NEXUS_NO_MODIFY_PATH`, `NEXUS_NO_DOCTOR`. Native Windows is not supported yet
+(the daemon needs Unix sockets); use WSL.
+
+`nexus update` upgrades to the latest PyPI release through uv and restarts running
+daemons. `--version X` installs an exact release; `--channel git [--ref R]` installs
+the newest code from GitHub (default ref `main`); an install made from git moves to
+PyPI releases on its next plain `nexus update`. `nexus --version` prints the version,
+`nexus daemon stop --all` stops every workspace daemon, and `nexus doctor` warns about
+duplicate `nexus` binaries and daemons still running an older version. Uninstall with
+`uv tool uninstall nexus-harness` (sessions in `~/.nexus` are kept).
 
 The Textual chat shell is installed with the normal CLI runtime dependencies.
 `nexus chat` requires an interactive terminal; use `nexus run` for piped or

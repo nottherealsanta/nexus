@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install from this commit (clean runner, uv not preinstalled)
-        run: sh install.sh --git-ref "$GITHUB_SHA" --strict
+        run: sh install.sh --source git --git-ref "$GITHUB_SHA" --strict
         env:
           NEXUS_ALLOW_ROOT: "1"
       - name: Smoke
@@ -31,12 +31,13 @@ jobs:
       - name: Re-run is an idempotent upgrade
         run: |
           export PATH="$HOME/.local/bin:$PATH"
-          sh install.sh --git-ref "$GITHUB_SHA" --no-doctor
+          sh install.sh --source git --git-ref "$GITHUB_SHA" --no-doctor
           nexus --version
-      - name: nexus update refuses cleanly or upgrades
+      - name: nexus update moves a git install to PyPI
         run: |
           export PATH="$HOME/.local/bin:$PATH"
           nexus update
+          nexus --version
   docker:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
@@ -56,4 +57,9 @@ jobs:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
+      # The real default: the published script installs the latest PyPI release.
       - run: curl -LsSf https://raw.githubusercontent.com/nottherealsanta/nexus/main/install.sh | NEXUS_ALLOW_ROOT=1 sh
+      - run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          nexus --version
+          nexus update
