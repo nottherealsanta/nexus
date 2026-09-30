@@ -839,3 +839,12 @@ body { font-size: 13px; line-height: var(--row); }
 .agent-form-label { flex: none; width: 72px; color: var(--muted); font-size: 12.5px; }
 .agent-fallbacks { display: grid; flex: 1; gap: 6px; }
 @media (max-width: 720px) { .files-body { grid-template-columns: 1fr; } }
+
+#file-attachments { width: 100%; }
+.file-attachment { padding: 8px; overflow-wrap: anywhere; }
+.file-attachment pre { white-space: pre-wrap; max-height: 300px; overflow: auto; }
+.attachment-image { max-width: 100%; max-height: 300px; }
+
+.turn-folded .message-images { display: none; }
+
+.attachment-full-text { width: 100%; resize: vertical; font-family: var(--font-mono); }

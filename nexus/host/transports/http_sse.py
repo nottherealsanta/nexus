@@ -648,8 +648,8 @@ class HTTPSSEServer:
             if length < 0:
                 return _RequestError(400, "malformed content-length")
 
-        # Authenticate before buffering the larger voice body; the route checks again.
-        if method == "POST" and split.path == "/v1/web/voice" and self._web is not None:
+        # Authenticate before buffering larger voice/attachment bodies; the route checks again.
+        if method == "POST" and split.path in ("/v1/web/voice", "/v1/web/attachment") and self._web is not None:
             if not self._web._host_ok(headers.get("host", "")):
                 return _RequestError(421, "invalid host")
             active = self._web._session(headers)
@@ -663,6 +663,7 @@ class HTTPSSEServer:
         route_body_limit = (
             MAX_WEB_VOICE_BODY_BYTES
             if split.path == "/v1/web/voice"
+            else 12 * 1024 * 1024 if split.path == "/v1/web/attachment"
             else self.max_body_bytes
         )
         if length > route_body_limit:

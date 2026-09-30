@@ -918,8 +918,18 @@ def _user_message_id(queued_id: str, event: Event) -> str:
 def _user_blocks(content: object) -> list[BlockView]:
     if not isinstance(content, Sequence) or isinstance(content, str):
         return []
-    text = _content_text(content)
-    return [BlockView(kind="text", text=text, finalized=True)] if text else []
+    blocks = []
+    for block in content:
+        if not isinstance(block, Mapping):
+            continue
+        if block.get("type") == "image":
+            media = block.get("media_type")
+            data = block.get("data")
+            if media in ("image/png", "image/jpeg", "image/gif", "image/webp") and isinstance(data, str):
+                blocks.append(BlockView(kind="image", image_url=f"data:{media};base64,{data}", finalized=True))
+        elif isinstance(block.get("text"), str):
+            blocks.append(BlockView(kind="text", text=block["text"], finalized=True))
+    return blocks
 
 def _on_input(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
     queue = list(state.input_queue)
@@ -930,7 +940,7 @@ def _on_input(state: ConversationView, event: Event, data: Mapping[str, Any]) ->
         turn = state.turns[index]
         if any(message.id == message_id for message in turn.messages):
             return state
-        content = jsonable(data.get("content")) if data.get("content") is not None else []
+        content = data.get("content") if data.get("content") is not None else []
         message = MessageView(
             id=message_id,
             event_seq=event.seq,
@@ -956,7 +966,7 @@ def _on_input(state: ConversationView, event: Event, data: Mapping[str, Any]) ->
         )
     queued_id = _as_str(data.get("queued_id")) or ""
     if event.type == "input.queued":
-        content = jsonable(data.get("content")) if data.get("content") is not None else []
+        content = data.get("content") if data.get("content") is not None else []
         # A live follower can observe ``input.consumed`` before its matching
         # ``input.queued`` (the turn starts from the cursor first). That earlier
         # event already removed the queue entry and opened the user message, so

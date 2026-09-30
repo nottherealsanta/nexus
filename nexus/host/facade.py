@@ -43,6 +43,7 @@ from ..devtools import dev_enabled
 from ..errors import ExtensionTrashError, SessionBusy
 from ..events import Event
 from ..ext.quarantine import sanitize_text
+from ..host_support.attachments import AttachmentStore
 from ..host_support.agent_context import project_agent_context
 from ..host_support.browser_view import json_patch as _json_patch
 from ..host_support.browser_view import web_view as _web_view
@@ -119,6 +120,7 @@ class HostFacade:
         emit: Any | None = None,
     ) -> None:
         self.runtime = runtime
+        self.attachments = AttachmentStore(runtime)
         self.presence = Presence()
         self.supervisor = Supervisor(max_concurrent=max_concurrent_turns, emit=emit)
         self._owns_runtime = bool(owns_runtime)
@@ -1333,15 +1335,19 @@ class HostFacade:
                     command.session, create=command.create, recover=command.recover
                 )
             )
+        if isinstance(command, p.AttachmentPrepare):
+            return await self.attachments.prepare(command)
         if isinstance(command, p.SessionStart):
             turn_id = await self.start_turn(
-                command.session, _content(command.content, command.blocks)
+                command.session, self.attachments.content(command.content, command.blocks, command.attachments)
             )
+            self.attachments.release(command.attachments)
             return p.SessionStartResult(session=command.session, turn_id=turn_id)
         if isinstance(command, p.SessionEnqueue):
             queued_id, turn_id = await self.enqueue(
-                command.session, _content(command.content, command.blocks), mode=command.mode
+                command.session, self.attachments.content(command.content, command.blocks, command.attachments), mode=command.mode
             )
+            self.attachments.release(command.attachments)
             return p.SessionEnqueueResult(
                 session=command.session,
                 queued_id=queued_id,

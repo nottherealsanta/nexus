@@ -1270,6 +1270,7 @@ name = "nexus-harness"
 version = "0.2.7"
 source = { editable = "." }
 dependencies = [
+    { name = "firecrawl-anydoc" },
     { name = "httpcore" },
     { name = "httpx" },
     { name = "keyring" },
@@ -1301,6 +1302,7 @@ voice = [
 [package.metadata]
 requires-dist = [
     { name = "claude-agent-sdk", marker = "extra == 'claude-agent'", specifier = "==0.2.162" },
+    { name = "firecrawl-anydoc", specifier = "==0.2.4" },
     { name = "firecrawl-anydoc", marker = "extra == 'documents'", specifier = "==0.2.4" },
     { name = "httpcore", specifier = "==1.0.9" },
     { name = "httpx", specifier = ">=0.27" },

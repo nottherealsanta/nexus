@@ -29,7 +29,7 @@ export async function bootstrap() {
 }
 
 export async function command(command, {signal} = {}) {
-  const result = await json(`${API}/command`, { method:'POST', headers:{'Content-Type':'application/json','X-CSRF-Token':csrf}, body:JSON.stringify(command), signal });
+  const result = await json(`${API}/${command.type==='AttachmentPrepare'?'attachment':'command'}`, { method:'POST', headers:{'Content-Type':'application/json','X-CSRF-Token':csrf}, body:JSON.stringify(command), signal });
   if (result.type === 'ErrorResult') throw new Error(result.message || 'The command failed');
   return result;
 }

@@ -88,6 +88,9 @@
         <div class="approval-strip" id="approval-strip" hidden></div>
         <div class="slash-menu" id="slash-menu" role="listbox" aria-label="Commands" hidden></div>
         <form class="composer" id="composer-form">
+          <button type="button" id="attach-file" class="text-button">Attach file</button>
+          <input type="file" id="attachment-picker" multiple hidden>
+          <div id="file-attachments"></div>
           <label class="sr-only" for="composer-input">Message Nexus</label>
           <textarea id="composer-input" rows="1" placeholder="" autocomplete="off" aria-controls="slash-menu"></textarea>
           <div class="composer-bottom">

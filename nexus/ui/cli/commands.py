@@ -47,6 +47,7 @@ class CommandSpec:
 
 #: The PLAN section 14.11 command set, plus ``/help`` and ``/exit``.
 SPECS: tuple[CommandSpec, ...] = (
+    CommandSpec("/attach", "Attach an image or document", "<path> | clear"),
     CommandSpec("/new", "Start a new session", "[id]", aliases=("/clear",)),
     CommandSpec("/sessions", "List sessions and switch", "[id]", aliases=("/session",)),
     CommandSpec("/model", "List models or set this session's model", "[list|tier|provider/model|id]"),

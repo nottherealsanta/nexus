@@ -142,10 +142,26 @@ class SessionOpen(msgspec.Struct, tag=True, frozen=True):
     recover: bool = True
 
 
+class AttachmentPrepare(msgspec.Struct, tag=True, frozen=True):
+    """Prepare a user-selected local file or uploaded bytes for a prompt."""
+
+    name: str = ""
+    path: str = ""
+    data: bytes = b""
+
+
+class AttachmentPrepareResult(msgspec.Struct, tag=True, frozen=True):
+    attachment_id: str
+    name: str
+    kind: str
+    preview: str
+
+
 class SessionStart(msgspec.Struct, tag=True, frozen=True):
     session: str
     content: str = ""
     blocks: list[dict[str, Any]] = msgspec.field(default_factory=list)
+    attachments: list[str] = msgspec.field(default_factory=list)
 
 
 class SessionEnqueue(msgspec.Struct, tag=True, frozen=True):
@@ -153,6 +169,7 @@ class SessionEnqueue(msgspec.Struct, tag=True, frozen=True):
     mode: str = "queue"  # queue | steer | interrupt
     content: str = ""
     blocks: list[dict[str, Any]] = msgspec.field(default_factory=list)
+    attachments: list[str] = msgspec.field(default_factory=list)
 
 
 class SessionCancel(msgspec.Struct, tag=True, frozen=True):
@@ -517,6 +534,7 @@ Command = (
     | SessionPreview
     | SessionSearch
     | SessionOpen
+    | AttachmentPrepare
     | SessionStart
     | SessionEnqueue
     | SessionCancel
@@ -592,6 +610,7 @@ COMMANDS: tuple[type, ...] = (
     SessionPreview,
     SessionSearch,
     SessionOpen,
+    AttachmentPrepare,
     SessionStart,
     SessionEnqueue,
     SessionCancel,
@@ -1202,6 +1221,7 @@ Result = (
     | SessionPreviewResult
     | SessionSearchResult
     | SessionOpenResult
+    | AttachmentPrepareResult
     | SessionStartResult
     | SessionEnqueueResult
     | SessionCancelResult
@@ -1275,6 +1295,7 @@ RESULTS: tuple[type, ...] = (
     SessionPreviewResult,
     SessionSearchResult,
     SessionOpenResult,
+    AttachmentPrepareResult,
     SessionStartResult,
     SessionEnqueueResult,
     SessionCancelResult,

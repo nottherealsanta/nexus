@@ -9,7 +9,7 @@ import uuid
 #: URL userinfo (``scheme://user:password@host``). The userinfo section may not
 #: contain ``/`` or whitespace, so a bare email address (``user@host``) is never
 #: matched -- only credentials that precede a URL authority.
-_URL_USERINFO = re.compile(r"(?P<scheme>[a-zA-Z][a-zA-Z0-9+.\-]*://)[^/@\s]+@")
+_URL_USERINFO = re.compile(r"(?<![a-zA-Z0-9+.\-])(?P<scheme>[a-zA-Z][a-zA-Z0-9+.\-]*://)[^/@\s]+@")
 
 _CREDENTIAL = "<redacted>"
 

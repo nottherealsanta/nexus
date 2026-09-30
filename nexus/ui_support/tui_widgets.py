@@ -182,7 +182,7 @@ class ChatEditor(TextArea):
         elif event.key in {"enter", "ctrl+enter", "alt+enter"}:
             event.stop()
             event.prevent_default()
-            if self.text.strip():
+            if self.text.strip() or getattr(self.app, "_attachments", []):
                 self.post_message(self.SubmitRequested(self.text,
                     {"ctrl+enter": "steer", "alt+enter": "interrupt"}.get(event.key, "queue")))
                 self.clear()
@@ -363,6 +363,9 @@ class ChatInput(Vertical):
         hint = Static("Enter queue · Ctrl+Enter steer · Alt+Enter interrupt", id="message-send-hint", markup=False)
         hint.display = False
         yield hint
+        files = Static("", id="file-attachments", markup=False)
+        files.display = False
+        yield files
         yield Vertical(id="paste-attachments")
         yield ChatEditor(id="chat-editor", soft_wrap=True, tab_behavior="indent")
         with Horizontal(id="runtime-info"):
