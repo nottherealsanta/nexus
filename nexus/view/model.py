@@ -332,6 +332,7 @@ class PresenceView(_View):
 @dataclass
 class QueuedInputView(_View):
     queued_id: str = ""
+    mode: str = "queue"
     content: list[Any] = field(default_factory=list)
     depth: int = 0
 

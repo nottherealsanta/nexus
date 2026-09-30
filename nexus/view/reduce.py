@@ -981,13 +981,16 @@ def _on_input(state: ConversationView, event: Event, data: Mapping[str, Any]) ->
                         ),
                     )
                 return state
-        queue.append(
-            QueuedInputView(
-                queued_id=queued_id,
-                content=content,
-                depth=_as_int(data.get("queue_depth"), len(queue) + 1),
-            )
+        item = QueuedInputView(
+            queued_id=queued_id,
+            content=content,
+            depth=_as_int(data.get("queue_depth"), len(queue) + 1),
+            mode=_as_str(data.get("mode")) or "queue",
         )
+        if item.mode == "interrupt":
+            queue.insert(0, item)
+        else:
+            queue.append(item)
         return replace(state, input_queue=queue)
     # consumed / dropped: remove the entry, remembering its content first.
     pending_content = next(
@@ -1010,7 +1013,7 @@ def _on_input(state: ConversationView, event: Event, data: Mapping[str, Any]) ->
                 id=message_id,
                 event_seq=event.seq,
                 role="user",
-                blocks=_user_blocks(pending_content),
+                blocks=_user_blocks(data.get("content", pending_content)),
                 iteration=turn.iteration,
                 done=True,
             )
@@ -1019,7 +1022,8 @@ def _on_input(state: ConversationView, event: Event, data: Mapping[str, Any]) ->
                 index,
                 replace(
                     turn,
-                    messages=[message, *turn.messages],
+                    messages=([*turn.messages, message] if data.get("mode") == "steer"
+                              else [message, *turn.messages]),
                     user_ts=(
                         turn.user_ts
                         if turn.user_ts is not None

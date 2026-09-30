@@ -1821,6 +1821,10 @@ async def run_turn(
                 break
             token.raise_if_cancelled()
 
+            consume_steering = getattr(session, "consume_steering", None)
+            if callable(consume_steering):
+                await _maybe_await(consume_steering())
+
             # Pin exactly one generation synchronously, before any await, and
             # build this iteration's environment from that snapshot. The pin is
             # released after every tool call and event for the iteration.
@@ -2091,6 +2095,11 @@ async def run_turn(
             )
 
             if not has_tools:
+                consume_steering = getattr(session, "consume_steering", None)
+                if effective_stop != "error" and callable(consume_steering) and await _maybe_await(consume_steering()):
+                    state = msgspec.structs.replace(state, iteration=state.iteration + 1)
+                    _release_manifest()
+                    continue
                 if effective_stop == "error":
                     terminal = state.fail("model stopped with stop_reason 'error'")
                 else:

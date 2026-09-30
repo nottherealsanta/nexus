@@ -96,7 +96,9 @@ async def test_cli_agent_command_parsing_and_completion():
     parsed = commands.parse("/agent list")
     assert parsed is not None and parsed.name == "/agent" and parsed.args == ("list",)
     assert "general" not in commands.help_text()
-    assert "Enter submits" in commands.help_text()
+    assert "Enter queues while working" in commands.help_text()
+    assert "Ctrl+Enter steers" in commands.help_text()
+    assert "Alt+Enter interrupts" in commands.help_text()
     assert "Shift+Enter inserts a line" in commands.help_text()
     assert "Ctrl+S submits" not in commands.help_text()
 

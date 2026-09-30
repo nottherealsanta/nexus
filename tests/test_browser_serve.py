@@ -52,8 +52,8 @@ def test_bridge_sequences_parse_as_modified_enter():
 
 
 def test_editor_newline_contract_covers_browser_and_terminal_keys():
-    assert ChatEditor.NEWLINE_KEYS >= {"shift+enter", "ctrl+enter"}
-    assert "enter" not in ChatEditor.NEWLINE_KEYS
+    assert ChatEditor.NEWLINE_KEYS >= {"shift+enter", "ctrl+shift+enter", "ctrl+j"}
+    assert not ChatEditor.NEWLINE_KEYS & {"enter", "ctrl+enter", "alt+enter"}
 
 
 def test_injected_template_places_bridge_before_textual_js():

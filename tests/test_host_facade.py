@@ -76,7 +76,7 @@ class _FakeHandle:
     def bind(self, **kwargs):
         self.bound.update(kwargs)
 
-    def enqueue(self, content):
+    def enqueue(self, content, *, mode="queue"):
         queued_id = f"q{len(self.enqueued)}"
         self.enqueued.append((queued_id, content))
         return queued_id
@@ -1331,3 +1331,40 @@ def test_host_layer_never_imports_a_ui():
             module for module in _imports(path) if module.startswith(forbidden)
         )
         assert not violations, f"{path.name} imports {violations}"
+
+
+@pytest.mark.parametrize("mode", ["queue", "steer", "interrupt"])
+async def test_messages_during_active_turn(tmp_path, mode):
+    gate = asyncio.Event()
+    provider = ScriptedProvider(
+        [MessageStart(model="m", provider="scripted"), TextDelta(text="working"),
+         Wait(gate), MessageStop(stop_reason="stop")],
+        text_response("followup"), text_response("queued response"),
+    )
+    runtime = _runtime(tmp_path, provider)
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+    try:
+        await facade.start_turn("s", "original")
+        await wait_for(lambda: provider.calls == 1)
+        await facade.enqueue("s", "later")
+        result = await facade.handle(p.SessionEnqueue(session="s", content="direction", mode=mode))
+        assert isinstance(result, p.SessionEnqueueResult)
+        if mode != "interrupt":
+            assert provider.calls == 1
+            assert len(facade.state("s")[0].input_queue) == 2
+            gate.set()
+        await facade.wait_idle(timeout=5)
+        handle = runtime.session("s")
+        assert handle.queue_depth == 0
+        kinds = [e.type for e in handle.events]
+        assert kinds.count("turn.started") == (2 if mode == "steer" else 3)
+        assert kinds.count("turn.cancelled") == (1 if mode == "interrupt" else 0)
+        texts = ["".join(b.text for b in m.content if isinstance(b, Text))
+                 for m in handle.messages if m.role == "user"]
+        assert texts == (["original", "later", "direction"] if mode == "queue"
+                         else ["original", "direction", "later"])
+        assert facade.state("s")[0].to_dict() == fold(handle.events).to_dict()
+        assert all(t.phase != "failed" for t in facade.state("s")[0].turns)
+    finally:
+        await runtime.aclose()

@@ -179,8 +179,8 @@ class Client:
     async def start_turn(self, session: str, content: str) -> str:
         return (await self._request(p.SessionStart(session=session, content=content))).turn_id  # type: ignore[union-attr]
 
-    async def enqueue(self, session: str, content: str) -> tuple[str, str]:
-        result = await self._request(p.SessionEnqueue(session=session, content=content))
+    async def enqueue(self, session: str, content: str, *, mode: str = "queue") -> tuple[str, str]:
+        result = await self._request(p.SessionEnqueue(session=session, content=content, mode=mode))
         return result.queued_id, result.turn_id  # type: ignore[union-attr]
 
     async def cancel(self, session: str, *, reason: str = "", drop_queue: bool = True) -> tuple[bool, int]:

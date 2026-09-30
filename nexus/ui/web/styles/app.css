@@ -275,7 +275,7 @@ body { font-size: 13px; line-height: var(--row); }
 .turn-boundary { display: flex; flex-wrap: wrap; gap: 0 var(--cell); padding: 0 16px; box-shadow: inset 2px 0 0 var(--danger); color: var(--danger); }
 .turn-boundary strong { font-weight: 400; }
 .turn-boundary p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.queued { padding: 0 16px; color: var(--quiet); }
+.queued { padding: 0 16px; color: var(--quiet); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* unified diffs (details panel, expanded tool details) */
 .diff-lines { max-width: 100%; overflow: auto; padding: 0; background: var(--elevated); font: 12px/16px var(--font-mono); }
@@ -409,7 +409,7 @@ body { font-size: 13px; line-height: var(--row); }
 .model-chip small { color: var(--muted); font-size: 13px; font-style: normal; }
 .reasoning-effort { color: var(--muted); }
 .reasoning-effort[data-effort=default], .reasoning-effort[data-effort=unavailable], .reasoning-effort[data-effort=loading] { color: var(--quiet); }
-.composer-hint { color: var(--warning); white-space: nowrap; }
+.composer-hint { color: var(--warning); white-space: normal; }
 .composer-hint:empty { display: none; }
 .stop-button { height: 26px; min-width: 30px; padding: 0 8px; border: 1px solid var(--danger); border-radius: var(--radius-sm); background: transparent; color: var(--danger); font: 13px/var(--row) var(--font-sans); }
 .stop-button:hover { background: var(--danger-tint); }

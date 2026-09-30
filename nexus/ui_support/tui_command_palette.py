@@ -12,8 +12,10 @@ from textual.widgets import Static
 from ..ui.cli import commands
 
 SHORTCUTS: tuple[tuple[str, str | None, str], ...] = (
-    ("enter", None, "Send message"),
-    ("shift+enter", None, "Insert newline (Alt+Enter, Ctrl+Enter, or Ctrl+J)"),
+    ("enter", None, "Send message (queue while working)"),
+    ("ctrl+enter", None, "Steer at the next model step"),
+    ("alt+enter", None, "Interrupt and send message"),
+    ("shift+enter", None, "Insert newline (or Ctrl+J)"),
     ("ctrl+p", "command_palette", "Commands (Show keyboard shortcuts, chat commands)"),
     ("ctrl+n", "new_session", "New session"),
     ("ctrl+o", "list_sessions", "List sessions"),

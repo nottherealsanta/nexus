@@ -207,6 +207,7 @@ class _QueuedInput:
 
     queued_id: str
     content: list[ContentBlock]
+    mode: str = "queue"
 
 
 class _Fanout:
@@ -1155,7 +1156,7 @@ class Session:
 
     # -- input queue -------------------------------------------------------
 
-    def enqueue(self, user_input: str | list[ContentBlock]) -> str:
+    def enqueue(self, user_input: str | list[ContentBlock], *, mode: str = "queue") -> str:
         """Persist a submission to run at the next turn boundary; return its id.
 
         The input is appended as an ``input.queued`` event (durable, drawable)
@@ -1167,16 +1168,42 @@ class Session:
         self._ensure_writable()
         content = _coerce_user_input(user_input)
         queued_id = new_id()
-        self._queue.append(_QueuedInput(queued_id, content))
+        item = _QueuedInput(queued_id, content, mode)
+        if mode == "interrupt":
+            self._queue.appendleft(item)
+        else:
+            self._queue.append(item)
         self._emit(
             "input.queued",
             {
                 "queued_id": queued_id,
                 "content": _encode_queued_content(content),
                 "queue_depth": len(self._queue),
+                "mode": mode,
             },
         )
         return queued_id
+
+    async def consume_steering(self) -> bool:
+        """Persist steering messages at a safe model boundary (plan section 4)."""
+        items = [item for item in self._queue if item.mode == "steer"]
+        consumed = False
+        for item in items:
+            content, blocked = await self._gate_user_prompt(item.content)
+            if item not in self._queue:
+                continue
+            if blocked:
+                self._emit("input.dropped", {"queued_id": item.queued_id, "reason": blocked})
+                self._remove_queued(item)
+                continue
+            self._emit("input.consumed", {"queued_id": item.queued_id,
+                       "turn": self.active_turn_id, "mode": "steer",
+                       "content": _encode_queued_content(content)})
+            self._remove_queued(item)
+            self.append_message(Message(role="user", content=content,
+                                        meta=MessageMeta(turn_id=self.active_turn_id)))
+            consumed = True
+        return consumed
 
     def _drop_queue(self, reason: str | None = None) -> None:
         while self._queue:
@@ -1212,7 +1239,11 @@ class Session:
                 content = _decode_queued_content(data.get("content"))
                 if content is None:
                     continue
-                pending[queued_id] = _QueuedInput(queued_id, content)
+                item = _QueuedInput(queued_id, content, str(data.get("mode", "queue")))
+                if item.mode == "interrupt":
+                    pending = {queued_id: item, **pending}
+                else:
+                    pending[queued_id] = item
             else:
                 pending.pop(queued_id, None)
         self._queue = deque(pending.values())

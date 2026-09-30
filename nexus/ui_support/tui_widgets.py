@@ -88,7 +88,8 @@ def _provider_display_name(provider: str | None) -> str:
 class ChatEditor(TextArea):
     """Multiline prompt editor with an unambiguous submit/newline contract.
 
-    Enter submits; Shift+Enter (or Alt+Enter/Ctrl+Enter) inserts a newline.
+    Enter queues; Ctrl+Enter steers; Alt+Enter interrupts and sends.
+    Shift+Enter and Ctrl+J insert a newline.
     Handlers live on the focused editor because Textual dispatches keys there
     first, so a container ``on_key`` would only run after TextArea inserted its
     default newline for ``enter``.
@@ -104,7 +105,7 @@ class ChatEditor(TextArea):
 
     #: Modified-Enter key names that insert a newline instead of submitting.
     NEWLINE_KEYS: frozenset[str] = frozenset(
-        {"shift+enter", "ctrl+enter", "ctrl+shift+enter", "alt+enter", "ctrl+j"}
+        {"shift+enter", "ctrl+shift+enter", "ctrl+j"}
     )
 
     #: TextArea binds word motion to Ctrl+Left/Right only. macOS terminals send
@@ -141,9 +142,10 @@ class ChatEditor(TextArea):
     class SubmitRequested(Message):
         """Enter was pressed with a non-empty draft."""
 
-        def __init__(self, content: str) -> None:
+        def __init__(self, content: str, mode: str = "queue") -> None:
             super().__init__()
             self.content = content
+            self.mode = mode
 
     def on_key(self, event) -> None:
         actions = {
@@ -177,11 +179,12 @@ class ChatEditor(TextArea):
                     self.clear()
             else:
                 self.parent.accept_completion()
-        elif event.key == "enter":
+        elif event.key in {"enter", "ctrl+enter", "alt+enter"}:
             event.stop()
             event.prevent_default()
             if self.text.strip():
-                self.post_message(self.SubmitRequested(self.text))
+                self.post_message(self.SubmitRequested(self.text,
+                    {"ctrl+enter": "steer", "alt+enter": "interrupt"}.get(event.key, "queue")))
                 self.clear()
         elif event.key in self.NEWLINE_KEYS:
             event.stop()
@@ -345,7 +348,7 @@ class PastedContentScreen(ModalScreen[tuple[str, str] | None]):
 class ChatInput(Vertical):
     """Keyboard-first multiline prompt editor.
 
-    There are no send/cancel controls: Enter submits (handled by
+    Enter queues, Ctrl+Enter steers, and Alt+Enter interrupts (handled by
     :class:`ChatEditor`); cancellation remains available through the command
     palette, ``/cancel``, and the terminal interrupt key.
     """
@@ -354,6 +357,12 @@ class ChatInput(Vertical):
         popup = CompletionPopup("", id="completion-popup")
         popup.display = False
         yield popup
+        pending = Static("", id="input-queue-preview", markup=False)
+        pending.display = False
+        yield pending
+        hint = Static("Enter queue · Ctrl+Enter steer · Alt+Enter interrupt", id="message-send-hint", markup=False)
+        hint.display = False
+        yield hint
         yield Vertical(id="paste-attachments")
         yield ChatEditor(id="chat-editor", soft_wrap=True, tab_behavior="indent")
         with Horizontal(id="runtime-info"):
@@ -785,7 +794,7 @@ class ChatInput(Vertical):
         self._pasted_content.clear()
         self._paste_markers.clear()
         self._refresh_pasted_content()
-        self.post_message(InputSubmitted(content))
+        self.post_message(InputSubmitted(content, message.mode))
         self.query_one(ChatEditor).focus()
 
 class PickerLink(Static):

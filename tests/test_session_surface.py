@@ -680,3 +680,18 @@ async def test_queued_multimodal_bytes_are_json_safe_and_reopen(tmp_path):
     blocks = reopened.messages[0].content
     assert isinstance(blocks[0], Image) and blocks[0].data == image.data
     assert isinstance(blocks[1], Document) and blocks[1].data == document.data
+
+
+async def test_pending_submission_modes_and_priority_survive_reopen(tmp_path):
+    provider = ScriptedProvider(text_response("interrupt"), text_response("later"),
+                                text_response("steering"))
+    manager = SessionManager(tmp_path, assemble=RecordingAssembler(), provider_for=Resolver(provider))
+    session = manager.open("modes")
+    later = session.enqueue("later")
+    steer = session.enqueue("steering", mode="steer")
+    interrupt = session.enqueue("interrupt", mode="interrupt")
+    manager.close("modes")
+    reopened = manager.open("modes")
+    assert reopened.queued_ids == (interrupt, later, steer)
+    assert [item.mode for item in reopened._queue] == ["interrupt", "queue", "steer"]
+    await reopened.aclose()

@@ -103,6 +103,7 @@ class Supervisor:
         content: Any = None,
         *,
         queued_id: str = "",
+        priority: bool = False,
     ) -> str:
         """Queue one turn for ``session_id``; return its pre-assigned turn id.
 
@@ -112,7 +113,8 @@ class Supervisor:
         """
         turn_id = new_id()
         self._sessions[session_id] = session
-        self._queues.setdefault(session_id, deque()).append(
+        queue = self._queues.setdefault(session_id, deque())
+        (queue.appendleft if priority else queue.append)(
             _Pending(turn_id=turn_id, content=content, queued_id=queued_id)
         )
         if session_id not in self._rotation:
@@ -268,7 +270,8 @@ class Supervisor:
                 pending = queue.popleft()
                 if not queue:
                     self._queues.pop(session_id, None)
-                await self._start(session_id, session, pending)
+                if not pending.queued_id or pending.queued_id in getattr(session, "queued_ids", (pending.queued_id,)):
+                    await self._start(session_id, session, pending)
                 if self._queues.get(session_id) and session_id not in self._rotation:
                     self._rotation.append(session_id)
             self._maybe_idle()

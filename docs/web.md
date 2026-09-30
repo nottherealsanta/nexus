@@ -186,3 +186,11 @@ current session, workspace and browser preferences together; appearance resets
 to System. Full-size controls share a common height.
 
 The Skills and MCP header blocks mirror the terminal's `Project N | Global N` counts and individual session controls. Choices are available before the first turn and locked afterward to preserve the prompt cache, alongside agent selection.
+
+### Messages during a turn
+
+Enter queues a message for a new turn. Ctrl+Enter steers the active turn at
+the next model step, after its current operation finishes. Alt+Enter interrupts
+the active turn and sends the message first, preserving other queued messages.
+Shift+Enter and Ctrl+J insert a newline in the terminal; Shift+Enter does so in
+the browser. Pending input is durable and visible after reconnecting.
