@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.7](https://github.com/nottherealsanta/nexus/compare/v0.2.6...v0.2.7) (2026-09-30)
+
+
+### Bug fixes
+
+* discover scoped extensions and lock session context choices ([222e958](https://github.com/nottherealsanta/nexus/commit/222e95893e4dae6469f929f7011dab7060c2235e))
+
 ## [0.2.6](https://github.com/nottherealsanta/nexus/compare/v0.2.5...v0.2.6) (2026-09-30)
 
 
