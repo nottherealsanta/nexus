@@ -94,7 +94,8 @@ Tests need no network or credentials. They use temporary workspaces,
   `git config core.hooksPath scripts/hooks`.
 - Version bumps: when a version bump is needed, a minor bump (the second number)
   always requires asking the user first. Otherwise always bump the patch number
-  (the third one).
+  (the third one). The exact steps (which files, conflicts with the release PR) are in
+  [docs/release.md](docs/release.md#raising-a-pr-and-bumping-the-version).
 - Security posture: loopback only, credentials never leave the daemon, and tool
   paths are checked by `tools/permissions.py`. Don't weaken these to make a
   feature easier.
