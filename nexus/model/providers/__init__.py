@@ -29,6 +29,7 @@ documented ACP subprocess surface (:class:`OpenCodeProvider`); Nexus never reads
 its credential store.
 """
 from .anthropic import AnthropicProvider
+from .claude_agent import ClaudeAgentProvider
 from .gemini import GeminiProvider
 from .ollama import OllamaProvider
 from .openai import OpenAIProvider
@@ -37,6 +38,7 @@ from .scripted import ScriptedProvider
 
 __all__ = [
     "AnthropicProvider",
+    "ClaudeAgentProvider",
     "GeminiProvider",
     "OllamaProvider",
     "OpenAIProvider",

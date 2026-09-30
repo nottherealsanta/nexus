@@ -79,6 +79,7 @@ from .model.providers.openai import OpenAIProvider
 from .model.providers.opencode import OpenCodeProvider
 from .model.registry import (
     ADAPTER_ANTHROPIC,
+    ADAPTER_CLAUDE_AGENT,
     ADAPTER_GEMINI,
     ADAPTER_OLLAMA,
     ADAPTER_OPENAI,
@@ -130,6 +131,7 @@ _CORE_ADAPTERS: dict[str, str] = {
     "gemini": ADAPTER_GEMINI,
     "ollama": ADAPTER_OLLAMA,
     "opencode": ADAPTER_OPENCODE,
+    "claude-agent": ADAPTER_CLAUDE_AGENT,
 }
 
 #: ``kind`` spellings that mean "any OpenAI-compatible endpoint".
@@ -3638,6 +3640,8 @@ class Runtime:
         sections = getattr(v2, "providers", None) or {}
         providers_cfg = {name: section for name, section in sections.items()}
         provider_aliases = {"codex": "openai"} if (codex := sections.get("codex")) and not self._is_legacy_codex_section(codex) else {}
+        provider_aliases.update({name: "anthropic" for name, section in sections.items()
+                                 if self._adapter_kind(name, section) == ADAPTER_CLAUDE_AGENT})
         # Not project-specific: one shared catalogue cache under the home root
         # (STATE_PLAN §5.4).
         cache_path = nexus_home(self._home) / "cache" / "models.dev.json"
@@ -3747,6 +3751,17 @@ class Runtime:
                 "(Nexus will not default an OpenAI-compatible vendor to the "
                 "official OpenAI endpoint)"
             )
+        if kind == ADAPTER_CLAUDE_AGENT:
+            from .model.providers.claude_agent import ClaudeAgentProvider
+
+            if any(getattr(section, field, None) is not None for field in
+                   ("api_key", "base_url", "api", "auth", "command", "args", "env", "inherit_env", "permission_policy", "profile")):
+                raise ConfigError("claude-agent uses Claude Code subscription login; only executable and timeout_seconds are supported")
+            provider = ClaudeAgentProvider(workspace=self.workspace, model=self._model_for(name, model_ref),
+                                           executable=getattr(section, "executable", None),
+                                           timeout_seconds=getattr(section, "timeout_seconds", None), environ=self._environ)
+            provider.name = name
+            return provider
         if kind == ADAPTER_OPENCODE:
             return self._construct_opencode(name, section, model_ref)
         model = self._model_for(name, model_ref)

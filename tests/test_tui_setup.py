@@ -168,3 +168,21 @@ def test_own_state_never_shadows_textual_internals(cls):
     base = cls.__mro__[1]
     textual = set(vars(base())) | set(dir(base))
     assert assigned and not assigned & textual
+
+
+@pytest.mark.asyncio
+async def test_claude_subscription_instructions_render_from_shared_host_data():
+    class ClaudeSetupTransport(SetupTransport):
+        async def request(self, command):
+            result = await super().request(command)
+            if isinstance(command, p.SetupStatus):
+                return p.SetupStatusResult(required=True, providers=[{
+                    "id": "claude-agent", "label": "Claude Pro/Max", "connected": False,
+                    "auto": True, "instruction": "Install nexus-harness[claude-agent], then run claude auth login."}])
+            return result
+    app = NexusTextualApp(_client(ClaudeSetupTransport()), session="s")
+    async with app.run_test(size=(110, 42)) as pilot:
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, SetupScreen)
+        text = app.screen.query_one("#setup-env", Static).render().plain
+        assert "Claude Pro/Max" in text and "claude auth login" in text

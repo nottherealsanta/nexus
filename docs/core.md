@@ -27,7 +27,7 @@ events ──► session records ──► view/reduce.py (pure) ──► Conve
 | --- | --- | --- |
 | L0 | `config/`, `errors.py`, `events.py`, `util.py` | `config/schema.py` (v2 `msgspec` config: `ModelSection`, `PermissionsSection`, `MCPSection`…), `config/layers.py` (merge order), `events.py` (the `Event` envelope, the public UI boundary) |
 | L0½ | `view/` | `reduce.py` (pure reducer `apply`/`fold`), `model.py` (`ConversationView`, `TurnView`, `MessageView`, `ToolCallView`, `PermissionView`, `AgentView`…), `fold.py` |
-| L1 | `model/` | `message.py` (message IR), `provider.py` (Provider protocol), `stream.py` (stream events + tool-call accumulator), `providers/*.py` (anthropic, openai, gemini, ollama, opencode, **scripted** for tests), `router.py`, `registry.py` (models.dev catalogue), `tiers.py`, `reasoning_effort.py`, `selection.py` |
+| L1 | `model/` | `message.py` (message IR), `provider.py` (Provider protocol), `stream.py` (stream events + tool-call accumulator), `providers/*.py` (anthropic, openai, gemini, ollama, opencode, claude_agent, **scripted** for tests), `router.py`, `registry.py` (models.dev catalogue), `tiers.py`, `reasoning_effort.py`, `selection.py` |
 | L2 | `core/` | `loop.py` (the agentic loop), `turn.py` (turn state, limits, usage), `bus.py`, `cancel.py`, `registry.py`, `watch.py` |
 | L3 | managers | see the next table |
 | L4 | `runtime.py` | composition root: builds managers, providers, router, per-turn tool manager, MCP, agents, hooks, extension rebuilds |
@@ -49,6 +49,15 @@ events ──► session records ──► view/reduce.py (pure) ──► Conve
 | Hot extensions | `ext/` | `manager.py` (atomic rebuild), `manifest.py`, `quarantine.py`, `tools/loader.py` |
 | Outbound network | `net/outbound.py` | pinned, public-address-only HTTP for webfetch/websearch |
 | Auth | `auth/` | keychain-backed provider sign-in: `codex.py` (ChatGPT OAuth, browser PKCE or device code), `copilot.py` (GitHub.com device flow through the Nexus OAuth app; GitHub token in the keychain, short-lived Copilot token in memory; live Copilot exchange compatibility unverified), `api_key.py` (pasted keys such as OpenCode Go), `store.py` (secure keyring only) |
+
+The optional `claude-agent` provider uses the official Claude Agent SDK and
+Claude Code subscription authentication. Its isolated worker disables SDK tools,
+hooks, settings sources, and session persistence. Structured tool intentions
+return to the Nexus loop for normal durable logging, permissions, and execution.
+It is text-only and buffers replies. Setup's shared host data detects Claude.ai
+login without exposing credentials; both clients show the same connection row.
+See [the provider plan](../plans/CLAUDE_AGENT_PLAN.md) and
+[setup instructions](../README.md#claude-promax-via-the-agent-sdk).
 
 ## Host layer (the surface every UI talks to)
 

@@ -23,7 +23,7 @@ from ..model.registry import DEFAULT_CATALOGUE_URL, ModelInfo, ModelRegistry
 from . import provider_auth, settings_inventory
 from .settings_scope import settings_target
 
-_PROVIDERS = ("codex", "github-copilot", "opencode-go", "openai", "anthropic", "google", "ollama")
+_PROVIDERS = ("codex", "github-copilot", "opencode-go", "openai", "anthropic", "claude-agent", "google", "ollama")
 #: Signed in from Settings → Providers; credentials live in the keychain.
 _SIGNED_IN = ("codex", "github-copilot", "opencode-go")
 _ENV_NAMES = {
@@ -42,6 +42,7 @@ _PROVIDER_INFO = {
     ),
     "opencode-go": ("OpenCode Go", "Paste your OpenCode Go API key in Settings → Providers."),
     "openai": ("OpenAI", "Set OPENAI_API_KEY in the daemon environment."),
+    "claude-agent": ("Claude Pro/Max", "Install nexus-harness[claude-agent], then run claude auth login with your Claude subscription."),
     "anthropic": ("Anthropic", "Set ANTHROPIC_API_KEY in the daemon environment."),
     "google": (
         "Google Gemini",
@@ -50,7 +51,7 @@ _PROVIDER_INFO = {
     "ollama": ("Ollama", "Local provider; availability is not checked. Install and run Ollama locally."),
 }
 #: Setup providers whose models.dev entry has another id.
-_CATALOGUE_IDS = {"codex": "openai"}
+_CATALOGUE_IDS = {"codex": "openai", "claude-agent": "anthropic"}
 #: Last resort when neither the catalogue nor the packaged snapshot lists the provider.
 _FALLBACK_MODELS = {"github-copilot": "claude-sonnet-5", "opencode-go": "kimi-k3"}
 #: Ollama serves whatever is pulled locally, so setup never picks its model.
@@ -67,10 +68,20 @@ def _environment(runtime: object) -> Mapping[str, str]:
 async def _connected(runtime: object, provider: str) -> bool:
     if provider in _SIGNED_IN:
         return await provider_auth.connected(runtime, provider)
+    if provider == "claude-agent":
+        return await _claude_connected(runtime)
     if provider == "ollama":
         return await _ollama_connected()
     environ = _environment(runtime)
     return any(bool(environ.get(name)) for name in _ENV_NAMES[provider])
+
+
+async def _claude_connected(runtime: object) -> bool:
+    """Ask the official CLI for a subscription login; never read its tokens."""
+    from ..model.providers.claude_agent_auth import subscription_connected
+    config = _load_config(runtime)
+    section = getattr(getattr(config, "v2", None), "providers", {}).get("claude-agent")
+    return await subscription_connected(getattr(section, "executable", None), _environment(runtime))
 
 
 async def _ollama_connected() -> bool:
@@ -243,6 +254,8 @@ async def setup_save(runtime: object, provider: str, model: str = "", *, reload:
 def _provider_config(provider: str, runtime: object, domain: str | None = None) -> tuple[tuple[str, str], ...]:
     if provider in _SIGNED_IN:
         return provider_auth.provider_route(provider, domain)
+    if provider == "claude-agent":
+        return (("kind", "claude-agent"),)
     if provider == "openai":
         return (("api_key", "${env:OPENAI_API_KEY}"), ("api", "responses"))
     if provider == "anthropic":

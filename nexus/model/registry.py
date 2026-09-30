@@ -45,6 +45,7 @@ __all__ = [
     "ADAPTER_OLLAMA",
     "ADAPTER_OPENAI",
     "ADAPTER_OPENCODE",
+    "ADAPTER_CLAUDE_AGENT",
     "DEFAULT_CATALOGUE_URL",
     "DEFAULT_MAX_BYTES",
     "DEFAULT_TIMEOUT_S",
@@ -88,10 +89,11 @@ ADAPTER_OLLAMA = "ollama"
 #: protocol, so it declares no model capabilities; the registry maps it only so
 #: a catalogue listing is not reported as adapter-less.
 ADAPTER_OPENCODE = "opencode"
+ADAPTER_CLAUDE_AGENT = "claude-agent"
 OPENAI_COMPATIBLE = "openai_compatible"
 
 _KNOWN_ADAPTERS = frozenset(
-    {ADAPTER_ANTHROPIC, ADAPTER_OPENAI, ADAPTER_GEMINI, ADAPTER_OLLAMA, ADAPTER_OPENCODE}
+    {ADAPTER_ANTHROPIC, ADAPTER_OPENAI, ADAPTER_GEMINI, ADAPTER_OLLAMA, ADAPTER_OPENCODE, ADAPTER_CLAUDE_AGENT}
 )
 
 #: ``kind`` spellings that alias a canonical adapter. ``google`` is the
@@ -144,6 +146,7 @@ _DIRECT_ADAPTERS: dict[str, str] = {
     "gemini": ADAPTER_GEMINI,
     "ollama": ADAPTER_OLLAMA,
     "opencode": ADAPTER_OPENCODE,
+    "claude-agent": ADAPTER_CLAUDE_AGENT,
 }
 
 #: Bounds that keep a hostile or corrupt catalogue from exhausting memory. The
@@ -772,6 +775,8 @@ def build_index(
         status = _provider_status(provider, cfg, configured=configured, reachable=reachable)
         if runtime_id != catalogue_id:
             status = msgspec.structs.replace(status, id=runtime_id)
+        if runtime_id == "claude-agent" or normalize_adapter_kind(_cfg_value(cfg, "kind")) == ADAPTER_CLAUDE_AGENT:
+            status = msgspec.structs.replace(status, adapter=ADAPTER_CLAUDE_AGENT, kind=ADAPTER_CLAUDE_AGENT, reachable=False)
         statuses.append(status); retained.add(runtime_id)
     raw_models: list[ModelInfo] = []
     for runtime_id, catalogue_id in runtime_catalogue.items():
@@ -801,6 +806,10 @@ def build_index(
                 last_updated=model.last_updated,
                 release_date=model.release_date,
             )
+            if runtime_id == "claude-agent" or normalize_adapter_kind(_cfg_value(provider_cfg.get(runtime_id), "kind")) == ADAPTER_CLAUDE_AGENT:
+                # SDK bridge capabilities, rather than direct Messages API claims.
+                info = msgspec.structs.replace(info, input_modalities=("text",), reasoning=False,
+                                               structured_output=False, temperature=False, cost=None)
             if tier_table is not None:
                 tier = str(tier_table.assign(info))
                 if len(tier) <= _MAX_TIER_LEN:
