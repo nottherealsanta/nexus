@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.5](https://github.com/nottherealsanta/nexus/compare/v0.2.4...v0.2.5) (2026-09-30)
+
+
+### Bug fixes
+
+* autosave settings and unify scoped reset controls ([#19](https://github.com/nottherealsanta/nexus/issues/19)) ([0706ed4](https://github.com/nottherealsanta/nexus/commit/0706ed4e0dae2d4fdfd1e70d7320590b6bf00846))
+
 ## [0.2.4](https://github.com/nottherealsanta/nexus/compare/v0.2.3...v0.2.4) (2026-09-30)
 
 
