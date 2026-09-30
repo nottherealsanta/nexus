@@ -92,6 +92,9 @@ Tests need no network or credentials. They use temporary workspaces,
   into the version bump and changelog. Don't edit `version` in `pyproject.toml` or
   `CHANGELOG.md` by hand. Enable the local check once per clone with
   `git config core.hooksPath scripts/hooks`.
+- Version bumps: when a version bump is needed, a minor bump (the second number)
+  always requires asking the user first. Otherwise always bump the patch number
+  (the third one).
 - Security posture: loopback only, credentials never leave the daemon, and tool
   paths are checked by `tools/permissions.py`. Don't weaken these to make a
   feature easier.
