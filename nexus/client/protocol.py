@@ -176,11 +176,14 @@ class Client:
     async def open_session(self, session: str, *, create: bool = True, recover: bool = True) -> Any:
         return (await self._request(p.SessionOpen(session=session, create=create, recover=recover))).session  # type: ignore[union-attr]
 
+    async def prepare_attachment(self, path: str) -> p.AttachmentPrepareResult:
+        return await self._request(p.AttachmentPrepare(path=path))  # type: ignore[return-value]
+
     async def start_turn(self, session: str, content: str) -> str:
         return (await self._request(p.SessionStart(session=session, content=content))).turn_id  # type: ignore[union-attr]
 
-    async def enqueue(self, session: str, content: str, *, mode: str = "queue") -> tuple[str, str]:
-        result = await self._request(p.SessionEnqueue(session=session, content=content, mode=mode))
+    async def enqueue(self, session: str, content: str, *, mode: str = "queue", attachments: list[str] | None = None) -> tuple[str, str]:
+        result = await self._request(p.SessionEnqueue(session=session, content=content, mode=mode, attachments=attachments or []))
         return result.queued_id, result.turn_id  # type: ignore[union-attr]
 
     async def cancel(self, session: str, *, reason: str = "", drop_queue: bool = True) -> tuple[bool, int]:

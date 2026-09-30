@@ -213,9 +213,11 @@ class BrowserRoutes:
                     common.update({"Content-Type": "application/json"})
                     await server._write_response(writer, 200, data, headers=common)
                 return True
-            if path == "/v1/web/command" and request.method == "POST":
+            if path in ("/v1/web/command", "/v1/web/attachment") and request.method == "POST":
                 try:
                     command = p.decode_command(request.body)
+                    if path == "/v1/web/attachment" and not isinstance(command, p.AttachmentPrepare):
+                        raise ValueError("attachment command required")
                     if isinstance(command, (p.Shutdown, getattr(p, "WebLaunch", p.Shutdown))):
                         await server._write_response(writer, 403, self._json({"error": "command unavailable to browser"}), headers=common)
                         return True

@@ -36,9 +36,9 @@ def web_view(
             return {
                 item.name: (
                     getattr(value, item.name)
-                    if item.name == "text"
-                    and assistant_prose
-                    and value.kind in {"text", "thinking"}
+                    if item.name == "image_url" or (item.name == "text"
+                    and (assistant_prose or value.text.startswith("\n\nAttachment:"))
+                    and value.kind in {"text", "thinking"})
                     else web_view(getattr(value, item.name))
                 )
                 for item in fields(value)

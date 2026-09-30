@@ -55,6 +55,13 @@ def _dump(value: object) -> Any:
         result = {}
         for item in fields(value):
             field_value = getattr(value, item.name)
+            if isinstance(value, BlockView) and item.name == "image_url":
+                if field_value is not None:
+                    result[item.name] = field_value[:12 * 1024 * 1024]
+                continue
+            if isinstance(value, BlockView) and item.name == "text" and field_value.startswith("\n\nAttachment:"):
+                result[item.name] = field_value[:8 * 1024 * 1024]
+                continue
             # UI reconciliation identifiers are reducer-local implementation
             # detail, preserving the established daemon projection wire shape.
             if item.name in {"id", "event_seq"} and isinstance(value, (MessageView, ToolCallView)):
@@ -157,6 +164,7 @@ class UsageTotals(_View):
 class BlockView(_View):
     """One text/thinking block; ``streamed`` guards against a duplicate final."""
 
+    image_url: str | None = None
     kind: str = "text"
     text: str = ""
     signature: str | None = None

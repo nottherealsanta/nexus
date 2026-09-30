@@ -53,6 +53,7 @@ from .messages import (
     TurnFinished,
 )
 from .keychord import LeaderKeys
+from .attachments import AttachmentsMixin
 from .new_session import apply_agent_choice, open_new_session_picker
 from .panels import MainLayout, PanelsMixin, TopBar
 from .permission import ListPrompt, PermissionScreen, ask_pending_question
@@ -72,7 +73,7 @@ from .widgets import (
 )
 
 
-class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
+class NexusTextualApp(AttachmentsMixin, ExtraCommandsMixin, PanelsMixin, App[int]):
     """Full-screen interactive client of the existing Nexus daemon protocol."""
 
     TITLE = "Nexus"
@@ -398,6 +399,8 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
             await self._dispatch_chat_command(stripped)
             return
         if block_unconfigured_turn(self, message.content): return
+        if await self.send_attachments(message):
+            return
         if self.controller.running or self.controller.view.active_turn is not None:
             try:
                 await self.controller.client.enqueue(self.controller.session, message.content, mode=message.mode)
@@ -420,7 +423,9 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
             return
         args = parsed.args
         try:
-            if parsed.name == "/help":
+            if parsed.name == "/attach":
+                await self.attach_file(raw)
+            elif parsed.name == "/help":
                 await self._show_notice(commands.help_text())
             elif parsed.name == "/exit":
                 await self.action_quit_shell()
@@ -522,6 +527,7 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
 
     async def _switch_session(self, session: str) -> None:
         await self.voice.cancel()
+        self.clear_attachments()
         self._context_preview_generation += 1
         preview = self.query_one("#context-preview", ContextPreview)
         preview.display = False

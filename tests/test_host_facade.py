@@ -314,6 +314,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.SessionPreview(session="s"),
         p.SessionSearch(query="term"),
         p.SessionOpen(session="s"),
+        p.AttachmentPrepare(name="note.txt", data=b"note"),
         p.SessionStart(session="s", content="hi"),
         p.SessionEnqueue(session="s", content="hi"),
         p.SessionCancel(session="s"),
@@ -373,6 +374,7 @@ def test_protocol_round_trips_every_command_and_result():
 
     summary = SessionSummary(id="s", title="hello", last_seq=4, viewers=2)
     results = [
+        p.AttachmentPrepareResult("id", "note.txt", "markdown", "note"),
         p.SettingsInventoryResult(scope="project", root_display="<project>/.nexus"),
         p.SettingsReadResult(body="", rel_path="agents/a.md", builtin=False, sha256=""),
         p.SettingsWriteResult(status="written"),

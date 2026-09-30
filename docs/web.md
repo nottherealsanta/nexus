@@ -84,6 +84,7 @@ is in `webplan.md`; the visual spec is in `design.md`. The host side is in
 | `POST /v1/web/ticket/redeem` | one-use, 60-second ticket → `HttpOnly; SameSite=Strict` cookie + CSRF token |
 | `GET /v1/web/bootstrap` | CSRF token + workspace path |
 | `POST /v1/web/command` | any host protocol command as JSON `{type:'SessionList', …}`, except `Shutdown` and `WebLaunch`. Requires an exact `Origin` and `X-CSRF-Token`. |
+| `POST /v1/web/attachment` | JSON `AttachmentPrepare` only, with the same cookie/Origin/CSRF checks before buffering and a 12 MiB request cap for base64-encoded files. Enqueue commands carry small draft IDs. |
 | `POST /v1/web/voice?request_id=…` | Raw mono 16 kHz PCM16 WAV for host transcription; same cookie/Origin/CSRF checks, with an 8 MiB route-specific cap (the normal command cap remains 1 MiB). |
 | `GET /v1/web/session-view?session=` | versioned snapshot (`schema_version: 1`, `seq`, `view`) from `HostFacade.web_snapshot` / `host_support/browser_view.py` |
 | `GET /v1/web/session-events?session=&from_seq=` | SSE `view` frames carrying JSON-Pointer ops (`add`/`replace`/`remove`/`append`), or `resync: true` |
@@ -206,3 +207,27 @@ the next model step, after its current operation finishes. Alt+Enter interrupts
 the active turn and sends the message first, preserving other queued messages.
 Shift+Enter and Ctrl+J insert a newline in the terminal; Shift+Enter does so in
 the browser. Pending input is durable and visible after reconnecting.
+
+### File and image input
+
+Use `/attach <path>` to attach a local file (`/attach clear` removes pending
+attachments). The browser also has an Attach file button and accepts image/file
+paste and drag/drop in the composer. Expand an attachment to inspect it before
+sending; the TUI opens converted documents in a scrollable Markdown preview.
+Enter submits attachments even without prompt text; queue, steer, and interrupt
+use the same attachment path. Switching sessions clears pending attachments.
+
+PNG, JPEG, GIF, and WebP inputs remain image blocks for vision-capable models.
+Images have labelled metadata in the terminal and visible previews in the browser,
+including after reconnect. AnyDoc converts PDF, Word, PowerPoint, Excel,
+OpenDocument, RTF, EPUB, and CSV to Markdown automatically and is installed by
+default. Text/source files are included directly, including Unicode BOM encodings.
+Unsupported binary files, malformed documents, and scanned PDFs requiring hosted
+OCR produce a visible error; hosted OCR is disabled. Files are limited to 8 MiB,
+eight per message, with a 12 MiB encoded combined-input limit. Prepared drafts
+expire after one hour; submitted content is retained in the durable session log.
+
+Validation: `tests/test_attachments.py`, `tests/test_tui_attachments.py`, and
+`.venv/bin/python tests/playwright_attachments_check.py` exercise real conversion,
+provider image payloads, replay, TUI submit modes, browser upload/paste/drop,
+previews, removal, large files, authentication, reconnect, and responsive layout.
