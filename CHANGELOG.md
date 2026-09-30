@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/nottherealsanta/nexus/compare/v0.2.2...v0.2.3) (2026-09-30)
+
+
+### Bug fixes
+
+* add Claude subscription provider through Agent SDK ([#15](https://github.com/nottherealsanta/nexus/issues/15)) ([a1a70d5](https://github.com/nottherealsanta/nexus/commit/a1a70d5678dc40ff0c928221671be26c66d50b45))
+
 ## [0.2.2](https://github.com/nottherealsanta/nexus/compare/v0.2.1...v0.2.2) (2026-09-30)
 
 
