@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.8](https://github.com/nottherealsanta/nexus/compare/v0.2.7...v0.2.8) (2026-09-30)
+
+
+### Bug fixes
+
+* accept image and document attachments in both chat clients ([#28](https://github.com/nottherealsanta/nexus/issues/28)) ([ded98b0](https://github.com/nottherealsanta/nexus/commit/ded98b039a64e26e61d7040a5c40091d1206023c))
+* present complete tool details and align settings across clients ([#27](https://github.com/nottherealsanta/nexus/issues/27)) ([2b027c3](https://github.com/nottherealsanta/nexus/commit/2b027c380e527c3b6c2d1bd1d124a6ca982a7be3))
+* queue messages and add steer and interrupt controls ([#25](https://github.com/nottherealsanta/nexus/issues/25)) ([6b47f02](https://github.com/nottherealsanta/nexus/commit/6b47f02cdc6011d0b41f90dbc74f45d4ab489d80))
+
 ## [0.2.7](https://github.com/nottherealsanta/nexus/compare/v0.2.6...v0.2.7) (2026-09-30)
 
 
