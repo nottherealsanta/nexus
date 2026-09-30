@@ -186,9 +186,10 @@ async def main():
                     .wait_for()
                 )
                 await page.locator(".attachment-text summary").click()
-                assert (
-                    await page.locator(".attachment-full-text").input_value()
-                ).endswith("x" * (1024 * 1024 + 20))
+                await page.wait_for_function(
+                    "length=>document.querySelector('.attachment-full-text').value.endsWith('x'.repeat(length))",
+                    arg=1024 * 1024 + 20,
+                )
                 await page.locator("#attachment-picker").set_input_files(
                     {
                         "name": "unsupported.bin",
