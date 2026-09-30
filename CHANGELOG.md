@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.6](https://github.com/nottherealsanta/nexus/compare/v0.2.5...v0.2.6) (2026-09-30)
+
+
+### Bug fixes
+
+* show provider thinking in context panes ([#21](https://github.com/nottherealsanta/nexus/issues/21)) ([dd921c5](https://github.com/nottherealsanta/nexus/commit/dd921c540ff90f2c96c8f8d5d6b812b72d4d096a))
+
 ## [0.2.5](https://github.com/nottherealsanta/nexus/compare/v0.2.4...v0.2.5) (2026-09-30)
 
 
