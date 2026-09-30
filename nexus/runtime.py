@@ -3094,6 +3094,11 @@ class Runtime:
         value = getattr(section, "auto_archive_days", 2)
         return value if type(value) is int and 0 <= value <= 3650 else 14
 
+    def update_check_enabled(self) -> bool:
+        """Whether ``[updates] check`` allows the daily release lookup."""
+        section = getattr(getattr(self._load_config(), "v2", None), "updates", None)
+        return getattr(section, "check", True) is not False
+
     def _unattended_decision(self) -> str:
         """Derived-presence fallback policy from ``permissions.on_unattended``.
 

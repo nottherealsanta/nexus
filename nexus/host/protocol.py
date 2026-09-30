@@ -441,6 +441,10 @@ class Doctor(msgspec.Struct, tag=True, frozen=True):
     explain_reload: bool = False
 
 
+class UpdateStatus(msgspec.Struct, tag=True, frozen=True):
+    """Is a newer release available? Answered from the daemon's cached check."""
+
+
 class Health(msgspec.Struct, tag=True, frozen=True):
     """Daemon-level liveness and scheduling counters."""
 
@@ -543,6 +547,7 @@ Command = (
     | VoiceCancel
     | VoiceRemove
     | Doctor
+    | UpdateStatus
     | Health
     | MockList
     | MockStart
@@ -615,6 +620,7 @@ COMMANDS: tuple[type, ...] = (
     VoiceCancel,
     VoiceRemove,
     Doctor,
+    UpdateStatus,
     Health,
     MockList,
     MockStart,
@@ -1090,6 +1096,15 @@ class VoiceCancelResult(msgspec.Struct, tag=True, frozen=True):
     cancelled: bool = False
 
 
+class UpdateStatusResult(msgspec.Struct, tag=True, frozen=True):
+    enabled: bool = False
+    current: str = ""
+    latest: str | None = None
+    #: The newer release, when there is one.
+    available: str | None = None
+    command: str = "nexus update"
+
+
 class HealthResult(msgspec.Struct, tag=True, frozen=True):
     ok: bool = True
     version: int = PROTOCOL_VERSION
@@ -1203,6 +1218,7 @@ Result = (
     | VoiceStatusResult
     | VoiceTranscribeResult
     | VoiceCancelResult
+    | UpdateStatusResult
     | HealthResult
     | MockListResult
     | MockStartResult
@@ -1274,6 +1290,7 @@ RESULTS: tuple[type, ...] = (
     VoiceStatusResult,
     VoiceTranscribeResult,
     VoiceCancelResult,
+    UpdateStatusResult,
     HealthResult,
     MockListResult,
     MockStartResult,
@@ -1331,6 +1348,8 @@ __all__ = [
     "DaemonLogPage",
     "Doctor",
     "DoctorResult",
+    "UpdateStatus",
+    "UpdateStatusResult",
     "ErrorResult",
     "ExtensionsList",
     "ExtensionsListResult",

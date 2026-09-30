@@ -117,6 +117,7 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
         self._picker_restore_focus = None
         self._status_error = False
         self._status_text = ""
+        self._update_notice = ""
         self._last_ctrl_c = 0.0
         self._logs_open = False
         self._logs_generation = 0
@@ -1242,7 +1243,10 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
             error = False
         self._status_error = error
         self._status_text = text
-        self.query_one("#connection-status", ConnectionStatus).set_status(text, error=error)
+        # The release notice only fills an otherwise empty status line.
+        self.query_one("#connection-status", ConnectionStatus).set_status(
+            text or self._update_notice, error=error
+        )
         self._sync_activity()
 
     async def on_unmount(self) -> None:

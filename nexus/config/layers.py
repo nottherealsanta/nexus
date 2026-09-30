@@ -60,6 +60,7 @@ V2_SECTION_KEYS = frozenset(
         "settings",
         "telemetry",
         "voice",
+        "updates",
     }
 )
 # ``model`` is the one name shared by both shapes: a string in v1, a table in v2.

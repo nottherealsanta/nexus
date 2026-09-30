@@ -153,8 +153,18 @@ class PanelsMixin:
             self._health, self._health_error = dict(getattr(result, "report", {}) or {}), None
         except Exception as exc:  # noqa: BLE001 - health is advisory
             self._health, self._health_error = None, str(exc) or type(exc).__name__
+        try:
+            update = await self.controller.client.update_status()
+            self._update_notice = (
+                f"{sanitize(str(update.available))} available: {sanitize(str(update.command))}"
+                if update.available
+                else ""
+            )
+        except Exception:  # noqa: BLE001 - the notice is advisory
+            self._update_notice = ""
         if not self.is_mounted:
             return
+        self._sync_status()
         self.query_one(DetailsSidebar).set_mcp(self._health, error=self._health_error)
         if isinstance(self.screen, SettingsScreen):
             self.screen.set_health(self._health, error=self._health_error)
