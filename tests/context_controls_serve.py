@@ -52,7 +52,7 @@ class App(NexusTextualApp):
                     widgets[widget.id]["text"] = str(widget.render())
         session = self.controller.session
         handle = self.controller.client.transport.facade.runtime.session(session)
-        data = {"widgets": widgets, "session": session, "locked": handle.context_locked, "calls": self.controller.client.transport.calls, "disabled": {key: sorted(value) for key, value in handle.disabled_extensions.items()}, "turns": len(self.controller.view.turns)}
+        data = {"columns": self.size.width, "rows": self.size.height, "widgets": widgets, "session": session, "locked": handle.context_locked, "calls": self.controller.client.transport.calls, "disabled": {key: sorted(value) for key, value in handle.disabled_extensions.items()}, "turns": len(self.controller.view.turns)}
         target = Path(os.environ["NEXUS_CONTEXT_TELEMETRY"])
         temporary = target.with_suffix(".tmp")
         temporary.write_text(json.dumps(data))

@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
-from playwright_tui_check import _free_port, _stop, _wait_ready, _terminal_cell_point
+from playwright_tui_check import _free_port, _stop, _wait_ready
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = ROOT / "artifacts/context-controls"
@@ -35,8 +35,12 @@ def wait(page, path, predicate, timeout=15):
 def click(page, path, widget):
     data = wait(page, path, lambda data: widget in data.get("widgets", {}))
     region = data["widgets"][widget]
-    point = _terminal_cell_point(page, region["x"] + min(3, region["width"] - 1), region["y"] + min(1, region["height"] - 1))
-    page.mouse.click(*point)
+    screen = page.locator(".xterm-screen").bounding_box()
+    assert screen and data["columns"] and data["rows"], "Terminal geometry unavailable"
+    column = region["x"] + min(3, region["width"] - 1)
+    row = region["y"] + (0 if widget.startswith("context-") else min(1, region["height"] - 1))
+    page.mouse.click(screen["x"] + (column + 0.5) * screen["width"] / data["columns"],
+                     screen["y"] + (row + 0.5) * screen["height"] / data["rows"])
     page.wait_for_timeout(500)
 
 
