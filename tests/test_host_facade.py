@@ -352,6 +352,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.ToolsList(),
         p.ContextInspect(session="s"),
         p.Doctor(explain_reload=True),
+        p.UpdateStatus(),
         p.Health(),
         p.MockList(),
         p.MockStart(scenario="hello", speed=0.0, seed=1, session="mock-hello-1"),
@@ -440,6 +441,7 @@ def test_protocol_round_trips_every_command_and_result():
             included_parts=[{"name": "identity", "text": "standing prompt"}],
         ),
         p.DoctorResult(ok=True, report={"workspace": "/tmp/ws"}),
+        p.UpdateStatusResult(enabled=True, current="0.1.1", latest="0.1.2", available="0.1.2"),
         p.HealthResult(ok=True, version=PROTOCOL_VERSION),
         p.MockListResult(scenarios=[p.MockScenarioInfo(name="hello", summary="s")]),
         p.MockStartResult(session="mock-hello-1", scenario="hello", turn_id="t"),
@@ -525,6 +527,11 @@ async def test_facade_handle_dispatches_every_verb():
     doctor = await facade.handle(p.Doctor(explain_reload=True))
     assert isinstance(doctor, p.DoctorResult) and doctor.ok
     assert doctor.report["reload"]["hot"]
+
+    # A runtime that cannot answer never breaks the advisory notice (and never
+    # reaches the network from a test).
+    update = await facade.handle(p.UpdateStatus())
+    assert isinstance(update, p.UpdateStatusResult) and update.available is None
 
     refreshed = await facade.handle(p.ModelsRefresh())
     assert isinstance(refreshed, p.ModelsRefreshResult)

@@ -727,6 +727,12 @@ async def _doctor(
         from .host_support.install import install_report
 
         report["install"] = await install_report()
+        try:
+            import msgspec
+
+            report["update"] = msgspec.structs.asdict(await client.update_status())
+        except Exception:  # noqa: BLE001 - the notice is advisory
+            report["update"] = None
         if args.json:
             stdout.write(json.dumps(report, ensure_ascii=False, sort_keys=True) + "\n")
             return 0
@@ -980,6 +986,11 @@ def _print_doctor(report: dict[str, Any], stdout: TextIO) -> None:
             f"install: nexus {install.get('version', '?')} via {install.get('method', '?')}"
             f" ({install.get('python', '?')})\n"
         )
+        from .host_support.update_check import notice
+
+        line = notice(report["update"]) if isinstance(report.get("update"), dict) else ""
+        if line:
+            stdout.write(f"  update: {line}\n")
         stdout.writelines(f"  warning: {w}\n" for w in install.get("warnings", ()) or ())
     database = report.get("database")
     if isinstance(database, dict):
@@ -1335,7 +1346,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.version:
         from .host_support.install import package_version
 
-        print(f"nexus {package_version()}")
+        from .host_support.update_check import notice, update_status
+
+        line = notice(update_status(cached_only=True))
+        print(f"nexus {package_version()}" + (f" ({line})" if line else ""))
         return 0
     if args.command is None:
         parser.error("the following arguments are required: command")

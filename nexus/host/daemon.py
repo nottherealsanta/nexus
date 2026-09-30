@@ -990,6 +990,11 @@ def _redact_value(value: Any) -> Any:
     return value
 
 
+#: ``daemon.err`` never grows past this (it is reset on the next start beyond it).
+_EARLY_OUTPUT_MAX_BYTES = 64 * 1024
+_EARLY_OUTPUT_TAIL_BYTES = 4096
+
+
 def _default_spawn(
     workspace: Path,
     path: Path,
@@ -1015,15 +1020,49 @@ def _default_spawn(
     if max_concurrent_turns is not None:
         argv += ["--max-concurrent-turns", str(max_concurrent_turns)]
     env = {**os.environ, **dict(environ or {})}
-    return subprocess.Popen(
-        argv,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-        cwd=str(workspace),
-        env=env,
-    )
+    # A crash before the daemon's own log opens (bad install, import error)
+    # would otherwise leave nothing behind, so its stdout/stderr go to a small
+    # file beside the socket; a failed start quotes the tail of it.
+    early = _early_output_path(path)
+    try:
+        if early.stat().st_size > _EARLY_OUTPUT_MAX_BYTES:
+            early.unlink()
+    except OSError:
+        pass
+    try:
+        sink: Any = os.open(early, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    except OSError:
+        sink = subprocess.DEVNULL
+    try:
+        return subprocess.Popen(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=sink,
+            stderr=sink,
+            start_new_session=True,
+            cwd=str(workspace),
+            env=env,
+        )
+    finally:
+        if sink is not subprocess.DEVNULL:
+            os.close(sink)
+
+
+def _early_output_path(socket: Path) -> Path:
+    return _auxiliary(socket, ".err")
+
+
+def _early_output_tail(socket: Path) -> str:
+    """The redacted last lines a failed daemon start wrote, or ``""``."""
+    try:
+        with open(_early_output_path(socket), "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - _EARLY_OUTPUT_TAIL_BYTES))
+            text = handle.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+    lines = [line for line in text.strip().splitlines() if line.strip()]
+    return redact_secrets("\n".join(lines[-6:]))
 
 
 async def ensure_daemon(
@@ -1103,9 +1142,11 @@ async def ensure_daemon(
             # the deadline so a winner that is still coming up can be adopted;
             # only surface the failure once time runs out.
             if expired:
+                tail = _early_output_tail(path)
                 raise DaemonUnavailable(
                     f"daemon exited with code {process.returncode} "
                     f"before readiness: {last_error}"
+                    + (f"\ndaemon output:\n{tail}" if tail else "")
                 )
         elif expired:
             with contextlib.suppress(Exception):

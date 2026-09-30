@@ -12,12 +12,12 @@ below before the phase text: several details in the phases changed while landing
 | --- | --- | --- |
 | 1. Test CI, Actions budget | **Done.** `ci-ok` is green on `main` (test job ~6 min). | `c23cef4` ruff config; `ea92ce2` `ci.yml` + `install.yml` trim; `8d2a226` pytest-asyncio in the build job; `d6eb32c` Linux 3.13 only; `537180e` skip Textual pilot tests |
 | Python floor | **Done.** `requires-python = ">=3.13"` (see "What we learned"). | `89abf1a` |
-| 2. Convention, repo settings | Code **done**; merge settings **done** by the maintainer; `main` **ruleset still to create**. | `1a3e535` `pr-title.yml` + `scripts/hooks/commit-msg` (hook enabled locally with `git config core.hooksPath scripts/hooks`) |
-| 3. release-please + publishing | Files **pushed**; first run not yet verified. | `fdbf33f` config, manifest, `release.yml` (with `Release-As: 0.1.0`); `8c694a9` diagnostics removed; `3cdb3ff` docs |
+| 2. Convention, repo settings | **Done.** Code, merge settings and the `main` ruleset are all in place. | `1a3e535` `pr-title.yml` + `scripts/hooks/commit-msg` (hook enabled locally with `git config core.hooksPath scripts/hooks`) |
+| 3. release-please + publishing | **Done.** Verified by the first two releases (the `uv.lock` updater and the App token both work). | `fdbf33f` config, manifest, `release.yml` (with `Release-As: 0.1.0`); `8c694a9` diagnostics removed; `3cdb3ff` docs |
 | 4. First release `v0.1.0` | **Done (2026-09-30).** Release PR #1 merged; the first publish failed (pending publisher had the wrong project name), then the `workflow_dispatch` re-run of `v0.1.0` published it. Checked: PyPI 0.1.0, release assets, clean `uv tool install` prints `nexus 0.1.0`, Python 3.12 refused. | run 36662502628 |
 | 5–6. Installer default, README, `nexus update` | **Done and released as 0.1.1 (2026-09-30).** `install.sh` defaults to PyPI; `install.yml` installs this commit with `--source git`; nightly `published-script` runs the real default then `nexus update`; README leads with the one-liner; `nexus update` has `--channel`, `--ref`, `--version` and migrates git installs. `update --version` uses `dest="release"` because the top-level `--version` shares the name. 4399 tests pass. Verified after the release: a git install ran `nexus update`, printed the migration line and ended on PyPI 0.1.1 (the first try right after publishing still saw 0.1.0: PyPI index lag). | `4febed4` |
-| 7. Update notice | Not started. | |
-| 8. Docs | Partly done: `AGENTS.md` convention bullet and the "Releasing" section in `docs/core.md`. `plans/install.md` and the README still to do. | `3cdb3ff` |
+| 7. Update notice | **Done (PR pending).** `update_check.py`, the `UpdateStatus` host command, TUI status line, web top bar, `nexus doctor`, `nexus --version` (cache only). Also in this change: the daemon's early stdout/stderr go to `<socket>.err` and a failed start quotes its tail; workflow actions bumped to `checkout@v7`, `setup-uv@v10`, `action-semantic-pull-request@v6`. | branch `feat/update-notice` |
+| 8. Docs | **Done.** `AGENTS.md`, `docs/core.md` (Releasing, update notice), README, `plans/install.md`. | `3cdb3ff` and this change |
 
 Maintainer setup, all done: GitHub App `nexus-release` with `RELEASE_APP_ID` (variable)
 and `RELEASE_APP_PRIVATE_KEY` (secret), the PyPI pending publisher for `nexus-harness`
@@ -73,7 +73,7 @@ the `pypi` environment. Skipped on purpose: the TestPyPI rehearsal.
   v10, `actions/create-github-app-token` v3, `googleapis/release-please-action` v5,
   `amannn/action-semantic-pull-request` v6. `release.yml` uses `create-github-app-token@v3`
   and `release-please-action@v5` (their inputs were checked). The other workflows still use
-  `checkout@v4` and `setup-uv@v5`, which only warn about Node 20; bump them in one change.
+  `checkout@v4` and `setup-uv@v5`, which only warn about Node 20; bumped later (Phase 7 change).
 - **Daemon start-up errors are invisible.** `_default_spawn` in `nexus/host/daemon.py`
   sends the daemon's stdout and stderr to `/dev/null`, so a crash before the log file
   opens leaves nothing behind ("daemon exited with code 1 before readiness"). Worth

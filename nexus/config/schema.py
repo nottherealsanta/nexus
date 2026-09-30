@@ -718,6 +718,11 @@ class TelemetrySection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     )
 
 
+class UpdatesSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    #: Ask PyPI once a day whether a newer release exists (never installs one).
+    check: bool = True
+
+
 class ConfigV2(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     config_version: Literal[2] = 2
     agent: AgentSection = msgspec.field(default_factory=AgentSection)
@@ -735,6 +740,7 @@ class ConfigV2(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     sessions: SessionsSection = msgspec.field(default_factory=SessionsSection)
     settings: SettingsSection = msgspec.field(default_factory=SettingsSection)
     telemetry: TelemetrySection = msgspec.field(default_factory=TelemetrySection)
+    updates: UpdatesSection = msgspec.field(default_factory=UpdatesSection)
 
     def __post_init__(self) -> None:
         for provider_name, provider in self.providers.items():
@@ -803,5 +809,6 @@ __all__ = [
     "SettingsSection",
     "TelemetrySection",
     "ToolsSection",
+    "UpdatesSection",
     "WebSection",
 ]

@@ -416,6 +416,10 @@ class Doctor(msgspec.Struct, tag=True, frozen=True):
     explain_reload: bool = False
 
 
+class UpdateStatus(msgspec.Struct, tag=True, frozen=True):
+    """Is a newer release available? Answered from the daemon's cached check."""
+
+
 class Health(msgspec.Struct, tag=True, frozen=True):
     """Daemon-level liveness and scheduling counters."""
 
@@ -513,6 +517,7 @@ Command = (
     | WorktreeIntegrate
     | WorktreeDiscard
     | Doctor
+    | UpdateStatus
     | Health
     | MockList
     | MockStart
@@ -580,6 +585,7 @@ COMMANDS: tuple[type, ...] = (
     WorktreeIntegrate,
     WorktreeDiscard,
     Doctor,
+    UpdateStatus,
     Health,
     MockList,
     MockStart,
@@ -1029,6 +1035,15 @@ class DoctorResult(msgspec.Struct, tag=True, frozen=True):
     report: dict[str, Any] = msgspec.field(default_factory=dict)
 
 
+class UpdateStatusResult(msgspec.Struct, tag=True, frozen=True):
+    enabled: bool = False
+    current: str = ""
+    latest: str | None = None
+    #: The newer release, when there is one.
+    available: str | None = None
+    command: str = "nexus update"
+
+
 class HealthResult(msgspec.Struct, tag=True, frozen=True):
     ok: bool = True
     version: int = PROTOCOL_VERSION
@@ -1139,6 +1154,7 @@ Result = (
     | WorktreeAcknowledgeResult
     | WorktreeMutationResult
     | DoctorResult
+    | UpdateStatusResult
     | HealthResult
     | MockListResult
     | MockStartResult
@@ -1207,6 +1223,7 @@ RESULTS: tuple[type, ...] = (
     WorktreeAcknowledgeResult,
     WorktreeMutationResult,
     DoctorResult,
+    UpdateStatusResult,
     HealthResult,
     MockListResult,
     MockStartResult,
@@ -1264,6 +1281,8 @@ __all__ = [
     "DaemonLogPage",
     "Doctor",
     "DoctorResult",
+    "UpdateStatus",
+    "UpdateStatusResult",
     "ErrorResult",
     "ExtensionsList",
     "ExtensionsListResult",
