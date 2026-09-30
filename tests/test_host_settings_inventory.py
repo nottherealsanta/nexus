@@ -261,3 +261,80 @@ def test_default_agent_setting_applies_to_new_sessions(tmp_path, monkeypatch):
         assert 'name = "reviewer"' in (workspace / ".agents" / "nexus.toml").read_text()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("scope", ["project", "global"])
+@pytest.mark.parametrize("category,item,body", [
+    ("tools", "helper", "pass\n"),
+    ("skills", "helper", "---\nname: helper\ndescription: test\n---\nBody.\n"),
+    ("mcp", "mcp", '{"mcpServers": {}}'),
+    ("hooks", "hooks", ""), ("soul", "soul", "Instructions."),
+    ("config", "config", "config_version = 2\n"),
+    ("agents", "build", "---\nname: build\ndescription: test\n---\nBody.\n"),
+])
+def test_settings_reset_trashes_scope_files(tmp_path, monkeypatch, scope, category, item, body):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    async def scenario():
+        client = _client(tmp_path / "workspace")
+        await client.settings_write(scope, category, item, body)
+        result = await client.settings_reset(scope, category)
+        assert result.status == "reset" and len(result.trash_ids) == 1
+        root = tmp_path / "home" / ".nexus" if scope == "global" else tmp_path / "workspace" / ".agents"
+        assert (root / "trash" / "settings" / result.trash_ids[0] / "item").read_text() == body
+        items = (await client.settings_inventory(scope)).items
+        assert not any(row.category == category and not row.builtin for row in items)
+        assert (await client.settings_reset(scope, category)).trash_ids == []
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("category", ["voice", "agents"])
+@pytest.mark.parametrize("scope", ["project", "global"])
+def test_settings_reset_config_keys_preserves_other_settings(tmp_path, monkeypatch, category, scope):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    async def scenario():
+        client = _client(tmp_path / "workspace")
+        body = 'config_version = 2\n# Keep me\n[agent]\nname = "build"\n[voice]\nenabled = true\ndevice = "cpu"\n[updates]\ncheck = false\n'
+        await client.settings_write(scope, "config", "config", body)
+        result = await client.settings_reset(scope, category)
+        saved = (await client.settings_read(scope, "config", "config")).body
+        assert "# Keep me" in saved and "check = false" in saved
+        assert ('name = "build"' in saved) == (category == "voice")
+        assert ('enabled = true' in saved) == (category == "agents")
+        assert len(result.trash_ids) == 1
+    asyncio.run(scenario())
+
+
+def test_settings_reset_rejects_unknown_category(tmp_path):
+    async def scenario():
+        with pytest.raises(FacadeError, match="unknown settings category"):
+            await _client(tmp_path).settings_reset("project", "providers")
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("scope", ["project", "global"])
+def test_reset_all_tools_and_preserve_custom_agents(tmp_path, monkeypatch, scope):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    async def scenario():
+        client = _client(tmp_path / "workspace")
+        for name in ("one", "two"):
+            await client.settings_write(scope, "tools", name, "pass\n")
+        assert len((await client.settings_reset(scope, "tools")).trash_ids) == 2
+        await client.settings_write(scope, "agents", "custom", "---\nname: custom\ndescription: test\n---\nBody.\n")
+        await client.settings_reset(scope, "agents")
+        assert "Body." in (await client.settings_read(scope, "agents", "custom")).body
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("category", ["agents", "voice"])
+def test_reset_inline_config(tmp_path, category):
+    async def scenario():
+        client = _client(tmp_path)
+        body = 'config_version = 2\nagent = {name = "build"}\nvoice = {enabled = true}\nupdates = {check = false}\n'
+        await client.settings_write("project", "config", "config", body)
+        await client.settings_reset("project", category)
+        import tomllib
+        config = tomllib.loads((await client.settings_read("project", "config", "config")).body)
+        assert config["updates"] == {"check": False}
+        assert ("voice" in config) == (category == "agents")
+        assert ("name" in config["agent"]) == (category == "voice")
+    asyncio.run(scenario())

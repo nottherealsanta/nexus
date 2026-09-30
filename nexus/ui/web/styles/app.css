@@ -799,3 +799,17 @@ body { font-size: 13px; line-height: var(--row); }
 }
 .dev-badge { color: var(--accent); letter-spacing: 0.08em; font-weight: 600; cursor: default; }
 @media (max-width: 699px) { .update-notice { display: none; } }
+
+/* Shared full-size controls; compact inline actions retain their own sizing. */
+.toolbar-button, .icon-button, .stop-button, .segmented label,
+.inspector-tabs button, select, .provider-actions button, .settings-reset {
+  height: var(--control-h); min-height: var(--control-h); box-sizing: border-box;
+}
+.settings-page-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.settings-page-heading h3 { margin: 0; }
+.settings-nav-group { font-size: 10px; color: var(--muted); padding: 8px 12px 4px; }
+.settings-nav-group.configure { margin-top: 16px; }
+@media (max-width: 699px) {
+  .settings-nav-group { display: none; }
+  .settings-nav a[href="#settings-providers"] { margin-left: 16px; }
+}

@@ -26,6 +26,7 @@ from textual.markup import escape
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import (
+    Button,
     ContentSwitcher,
     Input,
     OptionList,
@@ -720,13 +721,17 @@ class SettingsScreen(ModalScreen[None]):
     def compose_general_panes(self) -> ComposeResult:
         """Appearance, Layout, Keyboard and Workspace panes (reused by Settings)."""
         with VerticalScroll(id="appearance"):
-            yield Static("Appearance", classes="settings-heading", markup=False)
+            with Horizontal(classes="settings-heading-row"):
+                yield Static("Appearance", classes="settings-heading", markup=False)
+                yield Button("Reset to default", id="settings-reset-appearance")
             yield Static("Theme for this terminal shell.", classes="settings-help", markup=False)
             with RadioSet(id="settings-theme"):
                 for name, label in self._themes:
                     yield RadioButton(label, value=self._prefs["theme"] == name, name=name)
         with VerticalScroll(id="layout"):
-            yield Static("Layout", classes="settings-heading", markup=False)
+            with Horizontal(classes="settings-heading-row"):
+                yield Static("Layout", classes="settings-heading", markup=False)
+                yield Button("Reset to default", id="settings-reset-layout")
             yield Static("Panels hide automatically on narrow terminals.", classes="settings-help", markup=False)
             for key, label, hint in (
                 ("sessions_sidebar", "Sessions sidebar", "ctrl+b"),

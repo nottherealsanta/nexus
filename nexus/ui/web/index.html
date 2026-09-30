@@ -119,19 +119,21 @@
     <section class="settings-dialog dialog" id="settings-dialog" role="dialog" tabindex="-1" aria-modal="true" aria-labelledby="settings-title">
       <nav class="settings-nav" aria-label="Settings sections">
         <h2 id="settings-title">Settings</h2>
+        <span class="settings-nav-group">GENERAL</span>
         <a href="#settings-appearance" class="selected">Appearance</a>
         <a href="#settings-detail">Conversation detail</a>
         <a href="#settings-keys">Keyboard</a>
         <a href="#settings-workspace">Workspace</a>
+        <span class="settings-nav-group configure">CONFIGURE</span>
         <a href="#settings-providers">Providers</a>
-        <a href="#settings-agents">Agents</a>
         <a href="#settings-voice">Voice</a>
+        <a href="#settings-agents">Agents</a>
       </nav>
       <div class="settings-body" id="settings-body">
         <header class="settings-header"><span class="settings-crumb" id="settings-crumb">Appearance</span></header>
         <div class="settings-scroll" id="settings-scroll">
         <section class="settings-section" id="settings-appearance" aria-labelledby="settings-appearance-title">
-          <h3 id="settings-appearance-title">Appearance</h3>
+          <div class="settings-page-heading"><h3 id="settings-appearance-title">Appearance</h3><button type="button" class="toolbar-button settings-reset" id="reset-settings-appearance">Reset to default</button></div>
           <p class="settings-help">Stored in this browser only.</p>
           <div class="theme-options" id="settings-theme" role="radiogroup" aria-label="Theme">
             <label class="theme-option"><input type="radio" name="theme" value="system"><span class="theme-swatch system" aria-hidden="true"><i></i><i></i></span><span>System</span></label>
@@ -140,7 +142,7 @@
           </div>
         </section>
         <section class="settings-section" id="settings-detail" aria-labelledby="settings-detail-title">
-          <h3 id="settings-detail-title">Conversation detail</h3>
+          <div class="settings-page-heading"><h3 id="settings-detail-title">Conversation detail</h3><button type="button" class="toolbar-button settings-reset" id="reset-settings-detail">Reset to default</button></div>
           <p class="settings-help">How much tool activity the transcript shows. The most specific setting wins: session, then workspace, then browser.</p>
           <div class="settings-effective-card"><span class="eyebrow">In effect</span><p id="settings-effective" class="settings-effective"></p><p id="settings-scope" class="settings-scope"></p></div>
           <dl class="detail-legend">
@@ -154,7 +156,6 @@
               <label><input type="radio" name="session-detail" value="balanced" aria-label="Balanced" aria-describedby="settings-scope"><span>Balanced</span></label>
               <label><input type="radio" name="session-detail" value="complete" aria-label="Complete" aria-describedby="settings-scope"><span>Complete</span></label>
             </div>
-            <button type="button" class="text-button reset-scope" id="clear-session-detail">Use workspace default</button>
           </fieldset>
           <fieldset class="detail-scope" data-detail-scope="workspace"><legend>Workspace default</legend>
             <div class="segmented">
@@ -162,7 +163,6 @@
               <label><input type="radio" name="workspace-detail" value="balanced" aria-label="Balanced"><span>Balanced</span></label>
               <label><input type="radio" name="workspace-detail" value="complete" aria-label="Complete"><span>Complete</span></label>
             </div>
-            <button type="button" class="text-button reset-scope" id="clear-workspace-detail">Use browser default</button>
           </fieldset>
           <fieldset class="detail-scope" data-detail-scope="browser"><legend>Browser default</legend>
             <div class="segmented">
@@ -170,7 +170,6 @@
               <label><input type="radio" name="browser-detail" value="balanced" aria-label="Balanced"><span>Balanced</span></label>
               <label><input type="radio" name="browser-detail" value="complete" aria-label="Complete"><span>Complete</span></label>
             </div>
-            <button type="button" class="text-button reset-scope" id="reset-browser-detail">Reset browser default</button>
           </fieldset>
         </section>
         <section class="settings-section" id="settings-keys" aria-labelledby="settings-keys-title">
@@ -206,22 +205,8 @@
           <p class="settings-help">Sign in to model providers. Credentials stay in the keychain of the machine running Nexus; restart the daemon after connecting (<code>nexus daemon stop</code>).</p>
           <div class="provider-list" id="provider-list"><p class="settings-help">Loading providers…</p></div>
         </section>
-        <section class="settings-section" id="settings-agents" aria-labelledby="settings-agents-title">
-          <h3 id="settings-agents-title">Agents</h3>
-          <p class="settings-help">The root agent every new session starts with. Written to <code>[agent] name</code>; a project setting overrides the global one.</p>
-          <fieldset class="detail-scope"><legend>Save to</legend>
-            <div class="segmented" id="default-agent-scope">
-              <label><input type="radio" name="default-agent-scope" value="global" checked><span>Global · ~/.nexus</span></label>
-              <label><input type="radio" name="default-agent-scope" value="project"><span>Project · .agents</span></label>
-            </div>
-          </fieldset>
-          <fieldset class="detail-scope"><legend>New sessions start with</legend>
-            <div class="segmented" id="default-agent-choices" role="radiogroup" aria-label="Default agent"></div>
-            <p class="settings-help" id="default-agent-note" role="status" aria-live="polite"></p>
-          </fieldset>
-        </section>
         <section class="settings-section" id="settings-voice" aria-labelledby="settings-voice-title">
-          <h3 id="settings-voice-title">Voice</h3>
+          <div class="settings-page-heading"><h3 id="settings-voice-title">Voice</h3><button type="button" class="toolbar-button settings-reset" id="reset-settings-voice">Reset to default</button></div>
           <p class="settings-help">Local speech recognition. The model downloads only after you confirm; audio is transcribed locally and is not saved.</p>
           <p class="voice-settings-status" id="settings-voice-status" role="status" aria-live="polite">Checking voice status…</p>
           <label class="voice-setting"><input id="voice-enabled" type="checkbox"><span>Enable voice input</span></label>
@@ -234,6 +219,21 @@
           </label>
           <div class="voice-settings-actions"><button class="toolbar-button" id="voice-settings-download" type="button">Download / Retry model</button><button class="toolbar-button" id="voice-settings-remove" type="button">Remove model</button></div>
         </section>
+        <section class="settings-section" id="settings-agents" aria-labelledby="settings-agents-title">
+          <div class="settings-page-heading"><h3 id="settings-agents-title">Agents</h3><button type="button" class="toolbar-button settings-reset" id="reset-settings-agents">Reset to default</button></div>
+          <p class="settings-help">The root agent every new session starts with. Written to <code>[agent] name</code>; a project setting overrides the global one.</p>
+          <fieldset class="detail-scope"><legend>Save to</legend>
+            <div class="segmented" id="default-agent-scope">
+              <label><input type="radio" name="default-agent-scope" value="global" checked><span>Global · ~/.nexus</span></label>
+              <label><input type="radio" name="default-agent-scope" value="project"><span>Project · .agents</span></label>
+            </div>
+          </fieldset>
+          <fieldset class="detail-scope"><legend>New sessions start with</legend>
+            <div class="segmented" id="default-agent-choices" role="radiogroup" aria-label="Default agent"></div>
+            <p class="settings-help" id="default-agent-note" role="status" aria-live="polite"></p>
+          </fieldset>
+        </section>
+
         </div>
       </div>
     </section>

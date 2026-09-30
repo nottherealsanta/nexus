@@ -87,6 +87,8 @@ class PanelTransport(FakeTransport):
             return p.SessionPreviewResult(text="user: archived prompt", truncated=False)
         if isinstance(command, p.SessionSearch):
             return p.SessionSearchResult(ids=list(self.archived))
+        if isinstance(command, p.VoiceStatus):
+            return p.VoiceStatusResult()
         if isinstance(command, p.SettingsInventory):
             return p.SettingsInventoryResult(
                 scope=command.scope,
@@ -475,12 +477,8 @@ async def test_settings_console_edits_host_inventory_with_sha():
         editor.text = "name: improved\n"
         sections.highlighted = screen._section_index("skills")
         await pilot.pause()
-        assert "Discard unsaved changes" in app.screen.query_one("#settings-confirm-text").render().plain
-        await pilot.click("#settings-confirm-no")
-        await pilot.pause()
-        assert screen.category == "tools"
-        await screen.action_save()
-        await pilot.pause()
+        assert screen.category == "skills"
+        await screen._change_category("tools")
         assert transport.settings_body == "name: improved\n"
         # Edits default to the user's ~/.nexus scope.
         assert ("SettingsWrite", "global", "tools", "helper", "old") in transport.trace
@@ -544,7 +542,7 @@ async def test_settings_agent_form_edits_frontmatter_and_saves_override():
         await pilot.pause()
         assert screen._fallbacks() == ["openai/gpt-5"]
         assert not screen.query(".agent-fallback-row")[1].display
-        await screen.action_save()
+        await pilot.pause(0.9)
         await pilot.pause()
         body = transport.settings_body
         assert "model: anthropic/claude-sonnet-5\n" in body
@@ -601,3 +599,103 @@ async def test_settings_switch_theme_and_layout_and_persist(tmp_path):
         await pilot.press("escape")
     stored = json.loads(path.read_text())
     assert stored["theme"] == "nexus-light" and stored["sessions_sidebar"] is False
+
+
+@pytest.mark.asyncio
+async def test_settings_autosave_debounce_and_invalid_navigation():
+    transport = PanelTransport()
+    app = NexusTextualApp(_client(transport), session="s")
+    async with app.run_test(size=(160, 45)) as pilot:
+        await pilot.pause()
+        app.action_open_settings("tools")
+        await pilot.pause()
+        screen = app.screen
+        await screen._open_item(0)
+        editor = screen.query_one("#settings-file-editor")
+        editor.text = "first"
+        await pilot.pause(0.2)
+        assert transport.settings_body != "first"
+        editor.text = "second"
+        await pilot.pause(0.2)
+        assert transport.settings_body != "second"
+        await pilot.pause(0.8)
+        assert transport.settings_body == "second" and not screen.dirty
+        async def reject(*args, **kwargs):
+            raise ValueError("Invalid TOML")
+        screen._write_call = reject
+        editor.text = "invalid"
+        await pilot.pause(0.8)
+        assert screen.dirty
+        assert "Invalid TOML" in screen.query_one("#settings-file-status").render().plain
+        screen.run_worker(screen._change_category("skills"))
+        await pilot.pause()
+        assert "Discard invalid changes" in app.screen.query_one("#settings-confirm-text").render().plain
+        await pilot.click("#settings-confirm-no")
+        assert screen.category == "tools" and screen.dirty
+        configure = next(i for i, row in enumerate(screen.SECTIONS) if row == (None, "CONFIGURE"))
+        assert screen.SECTIONS[configure - 1] == (None, "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("category", ["appearance", "layout", "voice", *SettingsConsole.FILE_CATEGORIES])
+async def test_settings_page_reset_confirms_and_routes(category):
+    transport = PanelTransport()
+    app = NexusTextualApp(_client(transport), session="s")
+    async with app.run_test(size=(160, 45)) as pilot:
+        await pilot.pause()
+        app.action_open_settings(category)
+        await pilot.pause()
+        screen = app.screen
+        calls = []
+        async def reset(scope, key):
+            calls.append((scope, key))
+        screen._reset_call = reset
+        app.prefs.set("context_preview", False)
+        screen.run_worker(screen._reset_page(category))
+        await pilot.pause()
+        assert not calls
+        await pilot.click("#settings-confirm-yes")
+        await pilot.pause()
+        if category in {"appearance", "layout"}:
+            assert not calls
+            if category == "layout":
+                assert app.prefs["context_preview"] is True
+        else:
+            assert calls == [("global", category)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("destination", ["scope", "close"])
+async def test_settings_leaving_flushes_before_debounce(destination):
+    transport = PanelTransport()
+    app = NexusTextualApp(_client(transport), session="s")
+    async with app.run_test(size=(160, 45)) as pilot:
+        await pilot.pause()
+        app.action_open_settings("tools")
+        await pilot.pause()
+        screen = app.screen
+        await screen._open_item(0)
+        screen.query_one("#settings-file-editor").text = "last edit"
+        if destination == "scope":
+            await screen._change_scope("project")
+            assert screen.scope == "project"
+        else:
+            await screen._attempt_close()
+            assert app.screen is not screen
+        assert transport.settings_body == "last edit"
+        assert ("SettingsWrite", "global", "tools", "helper", "old") in transport.trace
+
+
+@pytest.mark.asyncio
+async def test_settings_new_item_is_saved_immediately():
+    transport = PanelTransport()
+    app = NexusTextualApp(_client(transport), session="s")
+    async with app.run_test(size=(160, 45)) as pilot:
+        await pilot.pause()
+        app.action_open_settings("agents")
+        await pilot.pause()
+        screen = app.screen
+        await screen._create_named("helper")
+        assert "name: helper" in transport.settings_body
+        assert ("SettingsWrite", "global", "agents", "helper", "") in transport.trace
+        assert not screen.dirty

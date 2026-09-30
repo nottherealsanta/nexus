@@ -68,6 +68,11 @@ class SettingsWrite(msgspec.Struct, tag=True, frozen=True):
     expected_sha256: str | None = None
 
 
+class SettingsReset(msgspec.Struct, tag=True, frozen=True):
+    scope: Literal["global", "project"]
+    category: str
+
+
 class SettingsDelete(msgspec.Struct, tag=True, frozen=True):
     scope: Literal["global", "project"]
     category: str
@@ -489,6 +494,7 @@ Command = (
     | SettingsRead
     | SettingsWrite
     | SettingsDelete
+    | SettingsReset
     | SetupStatus
     | SetupSave
     | ProvidersStatus
@@ -562,6 +568,7 @@ COMMANDS: tuple[type, ...] = (
     SettingsRead,
     SettingsWrite,
     SettingsDelete,
+    SettingsReset,
     SetupStatus,
     SetupSave,
     ProvidersStatus,
@@ -674,6 +681,11 @@ class SettingsWriteResult(msgspec.Struct, tag=True, frozen=True):
     unloaded: list[str] = msgspec.field(default_factory=list)
     failed: list[str] = msgspec.field(default_factory=list)
     config_reloaded: bool = False
+
+
+class SettingsResetResult(msgspec.Struct, tag=True, frozen=True):
+    status: str
+    trash_ids: list[str] = msgspec.field(default_factory=list)
 
 
 class SettingsDeleteResult(msgspec.Struct, tag=True, frozen=True):
@@ -1166,6 +1178,7 @@ Result = (
     | SettingsReadResult
     | SettingsWriteResult
     | SettingsDeleteResult
+    | SettingsResetResult
     | SetupStatusResult
     | SetupSaveResult
     | ProvidersStatusResult
@@ -1233,6 +1246,7 @@ RESULTS: tuple[type, ...] = (
     SettingsReadResult,
     SettingsWriteResult,
     SettingsDeleteResult,
+    SettingsResetResult,
     SetupStatusResult,
     SetupSaveResult,
     ProvidersStatusResult,
@@ -1435,6 +1449,8 @@ __all__ = [
     "SessionUnarchive",
     "SessionUnarchiveResult",
     "SettingsCategory",
+    "SettingsReset",
+    "SettingsResetResult",
     "SettingsDelete",
     "SettingsDeleteResult",
     "SettingsInventory",

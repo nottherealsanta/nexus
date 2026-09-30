@@ -18,6 +18,7 @@ writes an override in the selected scope (``~/.nexus`` by default) and
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from typing import Any, ClassVar
 
@@ -76,6 +77,7 @@ class SettingsConsole(SettingsScreen):
         (None, "GENERAL"),
         ("appearance", "Appearance"), ("layout", "Layout"),
         ("keys", "Keyboard"), ("workspace", "Workspace"),
+        (None, ""),
         (None, "CONFIGURE"),
         ("providers", "Providers"),
         ("voice", "Voice"),
@@ -86,7 +88,7 @@ class SettingsConsole(SettingsScreen):
     GENERAL = ("appearance", "layout", "keys", "workspace")
     FILE_CATEGORIES = ("agents", "tools", "mcp", "skills", "hooks", "config", "soul")
     BINDINGS: ClassVar[list[tuple[str, str, str]]] = [
-        ("escape", "attempt_close", "Close"), ("ctrl+s", "save", "Save")
+        ("escape", "attempt_close", "Close")
     ]
     _HELP: ClassVar[dict[str, str]] = {
         "agents": "Build is the default root agent; advisor, task and quick are subagents. "
@@ -111,6 +113,7 @@ class SettingsConsole(SettingsScreen):
         read: Callable[[str, str, str], Awaitable[Any]],
         write: Callable[..., Awaitable[Any]],
         delete: Callable[[str, str, str], Awaitable[Any]],
+        reset: Callable[[str, str], Awaitable[Any]] | None = None,
         category: str = "appearance",
         list_agents: Callable[[], Awaitable[Any]] | None = None,
         default_agent: Callable[[], Awaitable[str]] | None = None,
@@ -123,6 +126,10 @@ class SettingsConsole(SettingsScreen):
         self._read_call = read
         self._write_call = write
         self._delete_call = delete
+        self._reset_call = reset
+        self._save_lock = asyncio.Lock()
+        self._read_revision = 0
+        self._save_timer = None
         self._list_agents = list_agents
         self._default_agent = default_agent
         self._set_default_agent = set_default_agent
@@ -136,11 +143,13 @@ class SettingsConsole(SettingsScreen):
         self.scope = "global"
         self._items: list[Any] = []
         self._visible_items: list[Any] = []
+        self._pending_new = False
         self._current_id = ""
         self._sha: str | None = None
         self._saved_body = ""
         self._builtin = False
         self._overrides_builtin = False
+        self._voice_values: dict[str, object] = {}
         self._loading_voice = False
         self._voice_controls_active = False
 
@@ -155,7 +164,9 @@ class SettingsConsole(SettingsScreen):
                 yield from self.compose_general_panes()
                 yield ProvidersPane(self._providers)
                 with VerticalScroll(id="voice"):
-                    yield Static("Voice", classes="settings-heading", markup=False)
+                    with Horizontal(classes="settings-heading-row"):
+                        yield Static("Voice", classes="settings-heading", markup=False)
+                        yield Button("Reset to default", id="settings-reset-voice")
                     yield Static("Local speech-to-text dictation. Transcripts stay in the composer until you send them.", classes="settings-help", markup=False)
                     with Horizontal(classes="settings-row"):
                         yield Static("Enable voice input", classes="settings-label", markup=False)
@@ -178,7 +189,9 @@ class SettingsConsole(SettingsScreen):
                         yield Button("Download / Retry", id="settings-voice-download")
                         yield Button("Remove model", id="settings-voice-remove")
                 with Vertical(id="settings-file-pane"):
-                    yield Static("", id="settings-file-heading", classes="settings-heading", markup=False)
+                    with Horizontal(classes="settings-heading-row"):
+                        yield Static("", id="settings-file-heading", classes="settings-heading", markup=False)
+                        yield Button("Reset to default", id="settings-reset-file")
                     yield Static("", id="settings-file-help", classes="settings-help", markup=False)
                     with Horizontal(id="settings-scope-row"):
                         yield Button("global", id="settings-scope-global")
@@ -211,11 +224,9 @@ class SettingsConsole(SettingsScreen):
                             yield TextArea(id="settings-file-editor", soft_wrap=True)
                             yield Static("", id="settings-file-status", markup=False)
                             with Horizontal(id="settings-file-actions"):
-                                yield Button("Save", id="settings-save", variant="warning")
-                                yield Button("Revert", id="settings-revert")
                                 yield Button("Delete", id="settings-delete")
             yield Static(
-                "↑↓ section · n new · e edit · d delete · g scope · ctrl+s save · esc close",
+                "↑↓ section · n new · e edit · d delete · g scope · esc close",
                 id="settings-console-hint", markup=False,
             )
 
@@ -234,7 +245,7 @@ class SettingsConsole(SettingsScreen):
 
     @property
     def dirty(self) -> bool:
-        return self._current_id != "" and self.query_one("#settings-file-editor", TextArea).text != self._saved_body
+        return self._current_id != "" and (self._pending_new or self.query_one("#settings-file-editor", TextArea).text != self._saved_body)
 
     def _show_category(self, category: str) -> None:
         self.category = category
@@ -300,6 +311,7 @@ class SettingsConsole(SettingsScreen):
             hook()
 
     def _clear_editor(self) -> None:
+        self._pending_new = False
         self._current_id = ""
         self._sha = None
         self._saved_body = ""
@@ -346,6 +358,8 @@ class SettingsConsole(SettingsScreen):
         auto_send = self.query_one("#settings-voice-auto-send", Switch)
         device = self.query_one("#settings-voice-device", Select)
         max_seconds = self.query_one("#settings-voice-max-seconds", Select)
+        self._voice_values = {"enabled": bool(status.enabled), "auto_send": bool(status.auto_send),
+                              "device": status.configured_device, "max_seconds": status.max_seconds}
         self._loading_voice = True
         try:
             enabled.value = bool(status.enabled)
@@ -369,6 +383,8 @@ class SettingsConsole(SettingsScreen):
         ):
             return
         key = "enabled" if event.switch.id == "settings-voice-enabled" else "auto_send"
+        if self._voice_values.get(key) == bool(event.value):
+            return
         async def save() -> None:
             await self._save_voice({key: bool(event.value)})
         self.run_worker(save(), group="settings-voice-save", exclusive=True)
@@ -384,6 +400,8 @@ class SettingsConsole(SettingsScreen):
             return
         key = "device" if event.select.id == "settings-voice-device" else "max_seconds"
         value = str(event.value) if key == "device" else int(event.value)
+        if self._voice_values.get(key) == value:
+            return
         self.run_worker(self._save_selected_voice(key, value), group="settings-voice-save", exclusive=True)
 
     async def _save_selected_voice(self, key: str, value: object) -> None:
@@ -436,14 +454,19 @@ class SettingsConsole(SettingsScreen):
     async def _open_item(self, index: int) -> None:
         if not 0 <= index < len(self._visible_items):
             return
-        if self.dirty and not await self.app.push_screen_wait(ConfirmSettingsAction("Discard unsaved changes?")):
+        if not await self._leave_editor():
             return
         item = self._visible_items[index]
+        self._read_revision += 1
+        revision = self._read_revision
+        scope, category = self.scope, self.category
         item_id = str(_field(item, "id", ""))
         try:
-            result = await self._read_call(self.scope, self.category, item_id)
+            result = await self._read_call(scope, category, item_id)
         except Exception as exc:  # noqa: BLE001 - host returns a safe error
             self._status(sanitize(str(exc), 160))
+            return
+        if not self.is_mounted or revision != self._read_revision or (scope, category) != (self.scope, self.category):
             return
         self._current_id = item_id
         self._sha = _field(result, "sha256")
@@ -572,9 +595,27 @@ class SettingsConsole(SettingsScreen):
 
     @on(TextArea.Changed, "#settings-file-editor")
     def _editor_changed(self) -> None:
+        if self._save_timer is not None:
+            self._save_timer.stop()
+        if self.dirty:
+            self._save_timer = self.set_timer(0.7, self._flush)
         # Hand edits to the frontmatter show up in the form.
         if self.category == "agents" and self._current_id:
             self._sync_agent_form()
+
+    async def _flush(self) -> None:
+        if self._save_timer is not None:
+            self._save_timer.stop()
+            self._save_timer = None
+        async with self._save_lock:
+            if self.dirty:
+                await self.action_save()
+
+    async def _leave_editor(self) -> bool:
+        await self._flush()
+        return not self.dirty or bool(await self.app.push_screen_wait(
+            ConfirmSettingsAction("Discard invalid changes?")
+        ))
 
     def _status(self, text: str) -> None:
         if self.is_mounted:
@@ -584,6 +625,7 @@ class SettingsConsole(SettingsScreen):
         if not self._current_id or self.category not in self.FILE_CATEGORIES:
             return
         body = self.query_one("#settings-file-editor", TextArea).text
+        self._status("Saving…")
         try:
             result = await self._write_call(
                 self.scope, self.category, self._current_id, body,
@@ -597,6 +639,7 @@ class SettingsConsole(SettingsScreen):
             return
         self._sha = _field(result, "sha256")
         self._saved_body = body
+        self._pending_new = False
         self._overrides_builtin = self._overrides_builtin or self._builtin
         self._builtin = False
         self._sync_actions()
@@ -614,6 +657,8 @@ class SettingsConsole(SettingsScreen):
                 method()
 
     async def _delete_current(self) -> None:
+        if not await self._leave_editor():
+            return
         if not self._current_id or self._builtin:
             return
         prompt = (
@@ -634,17 +679,17 @@ class SettingsConsole(SettingsScreen):
         self._refresh_app()
 
     async def _attempt_close(self) -> None:
-        if self.dirty and not await self.app.push_screen_wait(ConfirmSettingsAction("Discard unsaved changes?")):
+        if not await self._leave_editor():
             return
         self.dismiss()
 
     def action_attempt_close(self) -> None:
-        self.run_worker(self._attempt_close(), group="settings-close", exclusive=True)
+        self.run_worker(self._attempt_close(), group="settings-close")
 
     async def _change_category(self, category: str) -> None:
         if category == self.category:
             return
-        if self.dirty and not await self.app.push_screen_wait(ConfirmSettingsAction("Discard unsaved changes?")):
+        if not await self._leave_editor():
             self.query_one("#settings-sections", OptionList).highlighted = self._section_index(self.category)
             return
         self._show_category(category)
@@ -652,7 +697,7 @@ class SettingsConsole(SettingsScreen):
     async def _change_scope(self, scope: str) -> None:
         if scope == self.scope:
             return
-        if self.dirty and not await self.app.push_screen_wait(ConfirmSettingsAction("Discard unsaved changes?")):
+        if not await self._leave_editor():
             return
         self.scope = scope
         self._clear_editor()
@@ -663,7 +708,7 @@ class SettingsConsole(SettingsScreen):
     def show_section(self, index: int) -> None:
         key = self.SECTIONS[index][0]
         if key:
-            self.run_worker(self._change_category(key), group="settings-category", exclusive=True)
+            self.run_worker(self._change_category(key), group="settings-category")
 
     def enter_section(self, index: int) -> None:
         key = self.SECTIONS[index][0]
@@ -685,7 +730,7 @@ class SettingsConsole(SettingsScreen):
         if event.key == "g" and file_area:
             self.run_worker(
                 self._change_scope("project" if self.scope == "global" else "global"),
-                group="settings-scope", exclusive=True,
+                group="settings-scope",
             )
         elif event.key == "n" and file_area:
             field = self.query_one("#settings-new-name", Input)
@@ -703,15 +748,20 @@ class SettingsConsole(SettingsScreen):
     @on(OptionList.OptionSelected, "#settings-file-list")
     def _item_selected(self, event: OptionList.OptionSelected) -> None:
         if event.option_index is not None:
-            self.run_worker(self._open_item(event.option_index), group="settings-read", exclusive=True)
+            self.run_worker(self._open_item(event.option_index), group="settings-read")
 
     @on(Input.Submitted, "#settings-new-name")
     def _new_named(self, event: Input.Submitted) -> None:
-        name = event.value.strip()
+        self.run_worker(self._create_named(event.value.strip()), group="settings-new")
+
+    async def _create_named(self, name: str) -> None:
         if not name:
             return
+        if not await self._leave_editor():
+            return
+        self._pending_new = True
         self._current_id = name
-        self._sha = None
+        self._sha = ""
         self._saved_body = ""
         self._builtin = self._overrides_builtin = False
         self.query_one("#settings-file-title", Static).update(name)
@@ -721,15 +771,61 @@ class SettingsConsole(SettingsScreen):
             f"---\nname: {name}\ndescription: Describe when the root agent should use {name}.\n"
             "contexts: [subagent]\n---\nYou are a subagent. Do the task you are given and "
             "finish with a report that lists every file you changed.\n"
-            if self.category == "agents" else ""
+            if self.category == "agents" else (
+                f"---\nname: {name}\ndescription: Describe this skill.\n---\nInstructions.\n"
+                if self.category == "skills" else '{"mcpServers": {}}\n' if self.category == "mcp" else ""
+            )
         )
         self.query_one("#settings-new-name", Input).display = False
         self._sync_agent_form()
         self._sync_actions()
         editor.focus()
+        await self._flush()
+
+    async def _reset_page(self, category: str) -> None:
+        if not await self._leave_editor():
+            return
+        names = [str(_field(row, "id")) for row in self._items
+                 if _field(row, "category") == category and not _field(row, "builtin", False)
+                 and (category != "agents" or _field(row, "overrides_builtin", False))]
+        prompt = f"Reset {category} to default? Removed files move to trash."
+        if names:
+            prompt += "\n" + ", ".join(names)
+        if not await self.app.push_screen_wait(ConfirmSettingsAction(prompt)):
+            return
+        if category in {"appearance", "layout"}:
+            keys = ("theme",) if category == "appearance" else ("sessions_sidebar", "details_sidebar", "context_preview")
+            for key in keys:
+                value = TuiPreferences.DEFAULTS[key]
+                self._prefs.set(key, value)
+                self.post_message(self.Changed(key, value))
+                if key != "theme":
+                    self.query_one(f"#pref-{key}", Switch).value = value
+            if category == "appearance":
+                for radio in self.query("#settings-theme RadioButton"):
+                    radio.value = radio.name == self._prefs["theme"]
+            return
+        try:
+            if self._reset_call is None:
+                raise RuntimeError("Settings reset is unavailable")
+            await self._reset_call("global" if category == "voice" else self.scope, category)
+            self._clear_editor()
+            await self._load_inventory()
+            if category == "voice":
+                await self._load_voice()
+            elif category == "agents":
+                await self._load_default_agent()
+            self._status("Reset to default")
+            self._refresh_app()
+        except Exception as exc:
+            self._status(sanitize(str(exc), 200))
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
+        if button_id.startswith("settings-reset-"):
+            category = button_id.removeprefix("settings-reset-")
+            self.run_worker(self._reset_page(self.category if category == "file" else category), group="settings-reset")
+            return
         if button_id in {"settings-voice-download", "settings-voice-remove"}:
             self.run_worker(self._voice_action("download" if button_id.endswith("download") else "remove"), group="settings-voice-action", exclusive=True)
             return
@@ -743,16 +839,11 @@ class SettingsConsole(SettingsScreen):
         elif button_id.startswith("settings-scope-"):
             self.run_worker(
                 self._change_scope(button_id.removeprefix("settings-scope-")),
-                group="settings-scope", exclusive=True,
+                group="settings-scope",
             )
         elif button_id == "settings-new":
             field = self.query_one("#settings-new-name", Input)
             field.display = True
             field.focus()
-        elif button_id == "settings-save":
-            self.run_worker(self.action_save(), group="settings-save", exclusive=True)
-        elif button_id == "settings-revert":
-            self.query_one("#settings-file-editor", TextArea).text = self._saved_body
-            self._sync_agent_form()
         elif button_id == "settings-delete":
             self.run_worker(self._delete_current(), group="settings-delete", exclusive=True)

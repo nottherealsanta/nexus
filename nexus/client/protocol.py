@@ -137,6 +137,9 @@ class Client:
                                   expected_sha256=expected_sha256)
         return await self._request(command)  # type: ignore[return-value]
 
+    async def settings_reset(self, scope: str, category: str) -> p.SettingsResetResult:
+        return await self._request(p.SettingsReset(scope=scope, category=category))  # type: ignore[return-value]
+
     async def settings_delete(self, scope: str, category: str, id: str) -> p.SettingsDeleteResult:
         return await self._request(p.SettingsDelete(scope=scope, category=category, id=id))  # type: ignore[return-value]
 

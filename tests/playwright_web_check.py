@@ -1687,15 +1687,18 @@ async def main() -> None:
                 assert "Workspace default" in await settings.locator("#settings-effective").inner_text()
                 await settings.locator('[data-detail-scope="session"] input[value="complete"]').check()
                 assert "Session override" in await settings.locator("#settings-effective").inner_text()
-                await settings.get_by_role("button", name="Use workspace default").click()
-                assert await page.locator("html").get_attribute("data-detail") == "focused"
-                assert "Workspace default" in await settings.locator("#settings-effective").inner_text()
-                await settings.locator('[data-detail-scope="browser"] input[value="complete"]').check()
-                await settings.get_by_role("button", name="Use browser default").click()
-                assert "Browser default" in await settings.locator("#settings-effective").inner_text()
                 await settings.locator('[data-detail-scope="browser"] input[value="focused"]').check()
-                await settings.get_by_role("button", name="Reset browser default").click()
+                page.once("dialog", lambda dialog: dialog.accept())
+                await settings.locator("#reset-settings-detail").click()
                 assert "Balanced · Browser default" in await settings.locator("#settings-effective").inner_text()
+                assert await settings.locator('.settings-nav-group').all_text_contents() == ["GENERAL", "CONFIGURE"]
+                heights = await settings.locator('button:visible, .segmented label:visible, select:visible').evaluate_all(
+                    "els => els.map(e => e.getBoundingClientRect().height)"
+                )
+                assert heights and all(height == 28 for height in heights), heights
+                page.once("dialog", lambda dialog: dialog.accept())
+                await settings.locator("#reset-settings-appearance").click()
+                assert await settings.locator('input[name="theme"]:checked').get_attribute("value") == "system"
                 await settings.locator('input[name="theme"][value="light"]').check()
                 await page.keyboard.press("Escape")
                 await page.screenshot(path=str(ARTIFACTS / "balanced-light-large.png"), full_page=True)

@@ -210,6 +210,7 @@ class PanelsMixin:
             read=client.settings_read,
             write=client.settings_write,
             delete=client.settings_delete,
+            reset=client.settings_reset,
             category=category,
             list_agents=client.list_agents,
             default_agent=client.default_agent,

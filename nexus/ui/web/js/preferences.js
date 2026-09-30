@@ -21,3 +21,6 @@ export function setBrowserDetail(value){if(valid.has(value))write(browserKey,val
 export function clearBrowserDetail(){remove(browserKey);}
 export function getTheme(){try{const v=localStorage.getItem('nexus-web-theme');return ['system','light','dark'].includes(v)?v:'dark';}catch{return 'dark';}}
 export function setTheme(v){if(['system','light','dark'].includes(v))write('nexus-web-theme',v);}
+
+export function resetDetail(workspace,session){clearSessionDetail(workspace,session);clearWorkspaceDetail(workspace);clearBrowserDetail();}
+export function resetTheme(){setTheme('system');}

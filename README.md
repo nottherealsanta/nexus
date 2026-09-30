@@ -254,7 +254,12 @@ undoes it. Old idle sessions auto-archive after two days by default. `/archived`
 opens the searchable archive browser to preview or resume them. `Ctrl+S` opens
 Settings (a full-screen page with a sidebar: theme, panels, keyboard, workspace,
 agents with model/effort/fallback fields, tools, MCP, skills, hooks, config, and soul),
-saved to `$XDG_CONFIG_HOME/nexus/tui.json`. `/details` expands the reduced `ConversationView` into model,
+with shell preferences saved to `$XDG_CONFIG_HOME/nexus/tui.json`. File edits
+autosave after 700 ms and before navigation; invalid edits remain visible with
+an error. Confirmed **Reset to default** actions restore page defaults and move
+removed files to trash. Tools and Skills reset all custom items in the selected
+scope; Agents retains custom agents and resets built-in overrides and the
+default choice. `/details` expands the reduced `ConversationView` into model,
 usage, context budget/compaction, queued inputs, pending approvals, and the
 subagent tree. `/reconnect` re-attaches from the last reduced `seq`, replays the
 missed tail, and resumes an active turn without polling.
