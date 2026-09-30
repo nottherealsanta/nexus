@@ -2154,3 +2154,18 @@ SetupScreen {
 #voice SelectCurrent { height: 1; border: none; padding: 0 1; }
 .settings-row Switch .switch--slider { color: $nx-muted; background: $nx-element; }
 .settings-row Switch.-on .switch--slider { color: $nx-accent; }
+
+/* Keep the worktree action labels reachable beside the child list. */
+#worktrees-actions {
+    layout: grid;
+    grid-size: 3;
+    grid-columns: 1fr 1fr 1fr;
+    grid-rows: 1;
+    grid-gutter: 1 1;
+    height: 3;
+}
+#worktrees-actions Button {
+    width: 1fr;
+    min-width: 8;
+    margin: 0;
+}
