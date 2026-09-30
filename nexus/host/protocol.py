@@ -347,6 +347,13 @@ class ToolsList(msgspec.Struct, tag=True, frozen=True):
     """The model-facing tool catalog for the current config and manifest."""
 
 
+class ContextExtensionSelect(msgspec.Struct, tag=True, frozen=True):
+    session: str
+    category: Literal["skills", "mcp"]
+    name: str
+    enabled: bool
+
+
 class ContextInspect(msgspec.Struct, tag=True, frozen=True):
     """Preview one session's next-turn standing context without starting a turn."""
 
@@ -539,6 +546,7 @@ Command = (
     | AgentDefaultSet
     | ToolsList
     | ContextInspect
+    | ContextExtensionSelect
     | FileSearch
     | GitDiff
     | WorktreeList
@@ -613,6 +621,7 @@ COMMANDS: tuple[type, ...] = (
     AgentDefaultSet,
     ToolsList,
     ContextInspect,
+    ContextExtensionSelect,
     FileSearch,
     GitDiff,
     WorktreeList,
@@ -1000,6 +1009,7 @@ class ContextInspectResult(msgspec.Struct, tag=True, frozen=True):
     system_files: dict[str, Any] = msgspec.field(default_factory=dict)
     system_text: str | None = None
     redacted_for_display: bool = False
+    context_locked: bool = False
     skills_index: list[dict[str, Any]] = msgspec.field(default_factory=list)
     mcp_index: str = ""
     mcp_servers: list[dict[str, Any]] = msgspec.field(default_factory=list)
@@ -1358,6 +1368,7 @@ __all__ = [
     "ArchivedSummary",
     "Command",
     "ContextInspect",
+    "ContextExtensionSelect",
     "ContextInspectResult",
     "DaemonLogPage",
     "Doctor",

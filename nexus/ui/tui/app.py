@@ -913,6 +913,9 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
 
     @on(AgentPickerRequested)
     async def _agent_picker_requested(self, _: AgentPickerRequested) -> None:
+        if self.controller.view.turns:
+            self._sync_status("Agents are locked after the first turn to preserve the prompt cache. Start a new session to change agents.")
+            return
         try:
             self._agents = await self.controller.client.list_agents()
             self._show_inline_picker(
@@ -1206,6 +1209,9 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
 
     async def _cycle_root_agent(self) -> None:
         """Select the next root-capable agent through the host contract."""
+        if self.controller.view.turns:
+            self._sync_status("Agents are locked after the first turn to preserve the prompt cache. Start a new session to change agents.")
+            return
         try:
             self._agents = await self.controller.client.list_agents()
             eligible = [

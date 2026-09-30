@@ -122,3 +122,9 @@ Removed files and previous config values move to settings trash. Keyboard,
 Workspace and Providers have no reset. Browser conversation detail resets the
 current session, workspace and browser preferences together; appearance resets
 to System. Full-size controls share a common height.
+
+### Skill and MCP context controls
+
+The Skills and MCP context blocks show `Project N | Global N` counts of discovered entries, including entries switched off. Click either block to see individual On/Off buttons and their scope. Choices are saved for the current session, survive reconnect, and can be changed before its first turn. After the first turn, controls are disabled with a prompt-cache explanation; agent picking and cycling follow the same rule. Subagent request headers remain read-only.
+
+`python tests/playwright_context_controls_check.py` exercises both scopes through the actual TUI in Chromium at wide and narrow sizes, backed by a real runtime and local MCP subprocesses. It checks repeated toggles, disabled controls after a turn, and screenshots under `artifacts/context-controls/`.

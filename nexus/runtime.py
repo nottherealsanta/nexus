@@ -1195,7 +1195,7 @@ class _ManifestEnvironmentFactory:
         self, session: Any, lease: Any, iteration: int, *, cancel: Any = None
     ) -> _IterationEnv:
         runtime = self._runtime
-        manifest = lease.manifest
+        manifest = runtime._selected_manifest(lease.manifest, session)
         config = getattr(manifest, "config", None)
         if config is None:
             config = runtime._load_config()
@@ -1313,7 +1313,7 @@ class _ManifestEnvironmentFactory:
             session_id=session_id,
             turn_id=self._turn_id,
             config=config,
-            skills=runtime._skills,
+            skills=runtime._selected_skills(session),
             extensions=runtime._extensions,
             activations=runtime._activations,
             subagents=runner,
@@ -2579,6 +2579,7 @@ class Runtime:
             reasoning_effort_selection = getattr(
                 session, "reasoning_effort_selection", None
             )
+            disabled_extensions = getattr(session, "disabled_extensions", {})
             attended = bool(getattr(session, "attended", False))
             # Only the durable selection fields are relevant to standing
             # context. Do not replay real-session events into preview setup.
@@ -2707,10 +2708,14 @@ class Runtime:
                     mcp_servers.append({
                         "name": status.name,
                         "status": "connected" if status.connected else "disabled" if not status.enabled else "failed",
+                        "scope": getattr(self._extensions, "mcp_scopes", {}).get(status.name, "project"),
+                        "config_enabled": status.enabled,
+                        "enabled": status.enabled and status.name not in session.disabled_extensions["mcp"],
                         "tool_count": status.tool_count,
                         "tools": names,
                     })
             return {
+                "context_locked": session.context_locked,
                 "manifest_generation": generation,
                 "agent": agent_info,
                 "system_files": system_files,
@@ -2734,7 +2739,8 @@ class Runtime:
                                 for line in parts.get("skills_index", "").splitlines()
                             )
                         ),
-                        "scope": str(getattr(getattr(entry, "provenance", None), "tier", "")),
+                        "enabled": getattr(entry, "name", "").casefold() not in session.disabled_extensions["skills"],
+                        "scope": "project" if "workspace" in str(getattr(getattr(entry, "provenance", None), "tier", "")).lower() else "global",
                         "origin": str(getattr(getattr(entry, "provenance", None), "relpath", "")),
                     }
                     for entry in skills_snapshot[:512]
@@ -2894,6 +2900,50 @@ class Runtime:
         handle.select_model(selection)
         return selection
 
+    def _selected_skills(self, session):
+        manager = self._skills
+        disabled = getattr(session, "disabled_extensions", {}).get("skills", ())
+
+        class SelectedSkills:
+            def get(self, name):
+                return None if name.casefold() in disabled else manager.get(name)
+
+            def __getattr__(self, name):
+                return getattr(manager, name)
+
+        return SelectedSkills()
+
+    def _selected_manifest(self, manifest, session):
+        disabled = getattr(session, "disabled_extensions", {})
+        skills = disabled.get("skills", ())
+        servers = disabled.get("mcp", ())
+        if not skills and not servers:
+            return manifest
+        disabled_tools = {
+            tool.name for name, server in manifest.mcp.items() if name in servers
+            for tool in getattr(server, "tools", ())
+        }
+        tools = {name: tool for name, tool in manifest.tools.items() if name not in disabled_tools}
+        selected_servers = {name: value for name, value in manifest.mcp.items() if name not in servers}
+        if not any(getattr(server, "resources", ()) or getattr(server, "resource_templates", ()) for server in selected_servers.values()):
+            tools.pop("ReadMcpResource", None)
+        resource_tool = tools.get("ReadMcpResource")
+        if resource_tool is not None and servers:
+            async def read_resource(arguments, context):
+                if arguments.get("server") in servers:
+                    from .tools.spec import ToolExecutionResult
+                    return ToolExecutionResult.text("This MCP server is switched off for this session.", is_error=True)
+                return await resource_tool.run(arguments, context)
+
+            tools["ReadMcpResource"] = replace(resource_tool, run=read_resource)
+        return msgspec.structs.replace(
+            manifest,
+            skills={name: value for name, value in manifest.skills.items() if name.casefold() not in skills},
+            skill_tools={name: value for name, value in manifest.skill_tools.items() if name.casefold() not in skills},
+            mcp=selected_servers,
+            tools=tools,
+        )
+
     def select_session_agent(
         self, session_id: str, name: str | None, *, create: bool = True
     ) -> tuple[str, str]:
@@ -2906,6 +2956,8 @@ class Runtime:
         else:
             definition = None
         handle = self._sessions.open(session_id, create=create, recover=True)
+        if handle.context_locked:
+            raise ConfigError("Agents are locked after the first turn to preserve the prompt cache. Start a new session to change agents.")
         if name is None:
             handle.reset_agent()
             return self.effective_session_agent(handle)
@@ -3391,7 +3443,7 @@ class Runtime:
             turn_id=turn_id,
             config=config,
             agent_id="root",
-            skills=self._skills,
+            skills=self._selected_skills(session),
             extensions=self._extensions,
             activations=self._activations,
             subagents=runner,
@@ -4891,6 +4943,12 @@ class Runtime:
         path_guard: PathGuard | None = None,
     ) -> ToolManager:
         manifest = self.manifest
+        logical_id = str(getattr(spec, "session_id", ""))
+        if manifest is not None and "/sub/" in logical_id:
+            root_id = logical_id.split("/sub/", 1)[0]
+            if self._sessions.store.exists(root_id):
+                root_session = self._sessions.open(root_id, create=False, recover=True)
+                manifest = self._selected_manifest(manifest, root_session)
         catalog_map: dict[str, Any] = (
             dict(manifest.tools) if manifest is not None else {}
         )

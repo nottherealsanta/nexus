@@ -134,7 +134,7 @@ CommandPalette #--results {
     color: $nx-text;
 }
 
-ContextModal {
+ContextModal, ExtensionsModal {
     align: center middle;
     background: $nx-scrim;
 }

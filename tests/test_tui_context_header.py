@@ -78,7 +78,7 @@ async def test_context_blocks_align_rows_and_grey_out_empty_parts():
         assert app.query_one("#context-prompt", ContextBlock).render().plain.splitlines()[1:] == ["  one", "  two"]
         for slug in ("skills", "mcp"):
             block = app.query_one(f"#context-{slug}", ContextBlock)
-            assert "(none)" not in block.render().plain and block.render().plain.strip() in {"Skills", "MCP"}
+            assert "Project 0 | Global 0" in block.render().plain
             assert block.has_class("-empty") and block.label_color == "$nx-label-neutral"
         assert app.query_one("#context-tools", ContextBlock).label_color == agent_color("build")
 

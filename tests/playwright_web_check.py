@@ -677,7 +677,7 @@ async def main() -> None:
                 assert chips == ["System prompt", "Tools", "AGENTS.md", "Skills", "MCP"], chips
                 assert "Prompt line 5" in main_context and "Prompt line 6" not in main_context
                 assert "… +7 more lines" in main_context
-                assert "Read" in main_context and "included-skill" in main_context and "available-skill" not in main_context
+                assert "Read" in main_context and "included-skill" in main_context and "available-skill" in main_context
                 assert await header.locator("script").count() == 0
                 # The System prompt block shows only the prompt, rendered as Markdown.
                 await header.locator(".context-block").first.click()
@@ -687,6 +687,11 @@ async def main() -> None:
                 assert await system_dialog.locator(".ctx-system .context-markdown").count() == 1
                 await page.keyboard.press("Escape")
                 await header.locator(".context-block").nth(3).click()
+                await page.locator("#text-overlay").wait_for(state="visible")
+                assert "Project 0 | Global 2" in await page.locator("#text-title").inner_text()
+                assert await page.locator("#text-body button").count() == 2
+                await page.keyboard.press("Escape")
+                await page.locator("#context-toolbar").click()
                 context_dialog = page.get_by_role("dialog", name="Current context")
                 await context_dialog.wait_for(state="visible")
                 # Grouped like the TUI: system prompt, tools, then one group per turn, all collapsed.

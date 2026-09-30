@@ -318,6 +318,9 @@ class Client:
 
     async def list_tools(self) -> list[dict[str, Any]]: return list((await self._request(p.ToolsList())).tools)  # type: ignore[union-attr]
 
+    async def select_context_extension(self, session: str, category: str, name: str, enabled: bool) -> p.ContextInspectResult:
+        return await self._request(p.ContextExtensionSelect(session=session, category=category, name=name, enabled=enabled))
+
     async def inspect_context(self, session: str) -> p.ContextInspectResult:
         """Preview next-turn standing context; no prompt is persisted or sent."""
         return await self._request(p.ContextInspect(session=session))  # type: ignore[return-value]

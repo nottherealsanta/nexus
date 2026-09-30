@@ -709,6 +709,32 @@ class Session:
         self._model_selection = latest
 
     @property
+    def context_locked(self) -> bool:
+        return any(event.type == "turn.started" for event in self.read().events())
+
+    @property
+    def disabled_extensions(self) -> dict[str, frozenset[str]]:
+        disabled = {"skills": set(), "mcp": set()}
+        for event in self.read().events():
+            if event.type != "context.extension_selected" or not isinstance(event.data, Mapping):
+                continue
+            category, name = event.data.get("category"), event.data.get("name")
+            if isinstance(category, str) and category in disabled and isinstance(name, str):
+                if event.data.get("enabled") is False:
+                    disabled[category].add(name.casefold() if category == "skills" else name)
+                elif event.data.get("enabled") is True:
+                    disabled[category].discard(name.casefold() if category == "skills" else name)
+        return {key: frozenset(value) for key, value in disabled.items()}
+
+    def select_extension(self, category: str, name: str, enabled: bool) -> None:
+        self._ensure_writable()
+        if category not in {"skills", "mcp"} or not isinstance(name, str) or not name or len(name) > 256 or not isinstance(enabled, bool):
+            raise ValueError("Invalid extension selection")
+        if self.context_locked:
+            raise ValueError("Skills, MCP and agents are locked after the first turn to preserve the prompt cache. Start a new session to change them.")
+        self._emit("context.extension_selected", {"category": category, "name": name, "enabled": enabled})
+
+    @property
     def agent_selection(self) -> AgentSelection | None:
         """The durable root-agent override, or ``None`` for config/default."""
         return self._agent_selection
