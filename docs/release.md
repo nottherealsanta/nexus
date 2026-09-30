@@ -27,7 +27,11 @@ release PR "chore(main): release 0.2.0"                       ▼
 
 ## Raising a PR and bumping the version
 
-Default: **do not touch the version.** Give the PR a Conventional Commit title and
+**Never edit the version by hand.** Not in `pyproject.toml`, `uv.lock`,
+`.release-please-manifest.json` or `CHANGELOG.md`. The manifest must hold the last
+*released* version, the one that has a git tag. Setting it to a version that has no
+tag makes release-please compute nonsense (a hand-set 0.2.1 with only `v0.2.0` tagged
+produced a release PR for 0.1.2). Give the PR a Conventional Commit title and
 release-please picks the bump when the maintainer merges the release PR.
 
 | Change | PR title type | Resulting bump |
@@ -35,6 +39,9 @@ release-please picks the bump when the maintainer merges the release PR.
 | Bug fix, perf, dependency | `fix:` / `perf:` / `deps:` | patch |
 | New feature or breaking change (pre-1.0) | `feat:` / `feat!:` | **minor: ask the user first** |
 | Docs, tests, refactor, CI, chores | `docs:` / `test:` / `refactor:` / `ci:` / `chore:` | none |
+
+So "bump the patch number" means: use `fix:` (or `perf:`/`deps:`). If a change would
+be `feat:`, ask the user before using it, because that is a minor bump.
 
 Steps for an agent:
 
@@ -45,23 +52,9 @@ Steps for an agent:
    (`pr-title` fails otherwise) and is the squash commit subject.
 4. Confirm `ci-ok` and `pr-title` pass and the PR is mergeable
    (`gh pr view N --json mergeable,mergeStateStatus`).
-
-**When the user explicitly asks for the number to be bumped in the PR** (a patch bump
-unless they say otherwise; a minor bump always needs their approval first):
-
-1. Read the current version from `main`, not from your branch: the release PR may have
-   merged since you branched (`git fetch && git show origin/main:.release-please-manifest.json`).
-2. Set the new value in all three places, and nowhere else:
-   `pyproject.toml` (`version = ...`), `.release-please-manifest.json`, and the
-   `nexus-harness` entry in `uv.lock`. Do not edit `CHANGELOG.md`. Do not touch other
-   `0.x.y` strings in `uv.lock`, which belong to other packages.
-3. Commit it as `chore: bump version to X.Y.Z` (a `chore:` adds no release of its own).
-4. **Conflicts:** the three version files conflict whenever the release PR merges first.
-   Do not merge them by hand. `git fetch && git rebase origin/main`, take main's side of
-   the three files, redo step 2 from main's new version, `git rebase --continue`, then
-   `git push --force-with-lease`.
-5. Expect release-please to open its own release PR after merge; check that it does not
-   propose the same version twice (it reads the manifest and the commits since).
+5. After merge, the `release` workflow updates the release PR. Check its version and
+   that its changelog lists only commits since the last tag. If it proposes a lower or
+   repeated version, the manifest or tags are out of step: fix those, not the PR text.
 
 ## Moving parts
 
