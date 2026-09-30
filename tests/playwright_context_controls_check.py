@@ -40,7 +40,7 @@ def click(page, path, widget):
     column = region["x"] + min(3, region["width"] - 1)
     row = region["y"] + (0 if widget.startswith("context-") else min(1, region["height"] - 1))
     page.mouse.click(screen["x"] + (column + 0.5) * screen["width"] / data["columns"],
-                     screen["y"] + (row + 0.5) * screen["height"] / data["rows"])
+                     screen["y"] + (row + 0.5) * screen["height"] / data["rows"], delay=100)
     page.wait_for_timeout(500)
 
 
