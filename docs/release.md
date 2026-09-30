@@ -11,7 +11,7 @@ reference. History of how it was built: `git log -- docs/release.md plans/releas
 2. Commit subjects follow Conventional Commits. `release-please` reads them.
 3. On each push to `main`, the `release` workflow opens or updates **one** release PR
    ("chore(main): release X.Y.Z") that bumps the version and writes the changelog.
-4. **Nothing ships until the maintainer merges that PR.** Merging tags `vX.Y.Z`, creates
+4. **Nothing ships until the release PR is merged.** Merging tags `vX.Y.Z`, creates
    the GitHub release, builds, tests the wheel, and publishes to PyPI.
 5. `install.sh` and `nexus update` install the newest PyPI release.
 
@@ -40,21 +40,50 @@ release-please picks the bump when the maintainer merges the release PR.
 | New feature or breaking change (pre-1.0) | `feat:` / `feat!:` | **minor: ask the user first** |
 | Docs, tests, refactor, CI, chores | `docs:` / `test:` / `refactor:` / `ci:` / `chore:` | none |
 
-So "bump the patch number" means: use `fix:` (or `perf:`/`deps:`). If a change would
-be `feat:`, ask the user before using it, because that is a minor bump.
+### Agent contract: a version-bump request includes the merge
 
-Steps for an agent:
+When the user asks to "bump the version", "bump the patch number", or "release",
+carry out the complete workflow below. Default to **X.Y.(Z+1)** from the latest
+released version. The request authorizes creating, pushing, and merging the change
+PR and the release PR, then verifying publication. Do not stop after opening a PR
+or ask again for merge approval. A minor bump (the second number) still requires
+explicit user approval; never silently ship one.
 
-1. Branch from an up-to-date `main` (`git fetch && git switch -c fix/short-name origin/main`).
-2. Commit with a Conventional Commit subject. Run `.venv/bin/python -m pytest -q` and
-   `ruff check nexus tests`.
-3. Push and open the PR with `gh pr create`. The title must be a Conventional Commit
-   (`pr-title` fails otherwise) and is the squash commit subject.
-4. Confirm `ci-ok` and `pr-title` pass and the PR is mergeable
-   (`gh pr view N --json mergeable,mergeStateStatus`).
-5. After merge, the `release` workflow updates the release PR. Check its version and
-   that its changelog lists only commits since the last tag. If it proposes a lower or
-   repeated version, the manifest or tags are out of step: fix those, not the PR text.
+1. Fetch `origin` and inspect the latest release/tag, `origin/main`, and open PRs.
+   Preserve unrelated work. Branch from up-to-date `origin/main` for any changes.
+2. Use a `fix:` commit and PR title for the requested patch release. If there is no
+   code change and no pending releasable commit, an empty `fix: trigger patch
+   release` commit is sufficient. Reuse an existing suitable PR rather than creating
+   duplicates. Never edit version files by hand.
+3. Run `.venv/bin/python -m pytest -q` and `ruff check nexus tests` for code changes.
+   For documentation-only changes, review the diff and validate links. Push the
+   branch and open the change PR with `gh pr create`; the title becomes the squash
+   commit subject.
+4. Wait for the required `ci-ok` and `pr-title` checks and confirm the PR is
+   mergeable (`gh pr view N --json mergeable,mergeStateStatus`). Docs-only CI may be
+   skipped by the workflow; inspect the applicable checks and branch requirements.
+   Merge with `gh pr merge N --squash` when requirements are satisfied. Do not bypass
+   failed checks or branch protection.
+5. Wait for the `release` workflow on `main` to create or update the release PR.
+   Inspect its complete diff: the expected patch version must agree in
+   `pyproject.toml`, `uv.lock`, and `.release-please-manifest.json`; `CHANGELOG.md`
+   must list the changes since the last release. Only those four files should change.
+   If it proposes a lower or repeated version, repair the underlying manifest/tag
+   mismatch through a reviewed PR. If it proposes a minor bump, obtain user approval
+   or use a `Release-As: X.Y.Z` commit body to request the intended patch after
+   checking the pending changes; do not edit generated version files.
+6. Wait for the release PR's required checks, confirm mergeability, and **merge the
+   release PR** with `gh pr merge N --squash`. This starts tagging and publication.
+7. Watch the resulting `release` workflow through completion. Verify the GitHub
+   tag/release and its installer, checksums, and distribution assets, and confirm
+   PyPI serves the exact new version. Report the released version, both PR links
+   when applicable, and publication status.
+
+A request is complete only after the release PR is merged and publication is
+verified. If authentication, permissions, checks, merge conflicts, or publishing
+block progress, report the exact blocker and completed steps; do not claim the
+version was released. A user who explicitly requests a dry run authorizes only
+inspection and a proposed plan, without pushes, PRs, merges, tags, or publication.
 
 ## Moving parts
 
@@ -160,7 +189,8 @@ Config lives in `release-please-config.json`:
 2. When ready, open the release PR and check the diff: only `pyproject.toml`, `uv.lock`,
    `CHANGELOG.md` and the manifest change, and `ci-ok` is green. Edit the PR text now if
    you want to; the next push to `main` regenerates it.
-3. Merge it. The same workflow run then:
+3. Merge it. For an authorized version-bump request, the agent performs this step
+   without asking for a second approval. The same workflow run then:
    1. release-please creates tag `vX.Y.Z` and the GitHub release (changelog as notes).
    2. `publish` checks out the tag and verifies the tag equals the `pyproject.toml`
       version.
