@@ -80,7 +80,7 @@ Tests need no network or credentials. They use temporary workspaces,
   timeline, composer rows, details sidebar, the same chat commands (from
   `ui/cli/commands.py`) and the same Control-key shortcuts. It should feel and
   behave the same. It may look more modern (softer corners, taller lines,
-  floating dialogs) and uses the Monaspace Argon font. A feature or wording
+  floating dialogs) and uses sans-serif interface text, stroke icons, and Monaspace Argon for code. A feature or wording
   change in one surface goes into the other. Details are in [docs/web.md](docs/web.md).
 
 - Match the surrounding style: module docstrings state the contract and cite the

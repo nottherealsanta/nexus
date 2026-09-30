@@ -1,3 +1,8 @@
+> Browser finish update: `docs/web.md` is authoritative for the current web UI.
+> Use system sans-serif for interface text, Monaspace Argon for code, stroke
+> icons, rounded controls and soft dialog shadows. Keep the TUI region order
+> and action placement. The Signal specification below records the original finish.
+
 # Nexus web app design
 
 ## Purpose

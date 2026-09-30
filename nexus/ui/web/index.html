@@ -33,7 +33,7 @@
   </svg>
   <div class="app-shell" id="app">
     <header class="topbar">
-      <button class="topbar-glyph" id="sidebar-toggle" type="button" aria-label="Toggle sessions sidebar" title="Toggle sessions sidebar">▌</button>
+      <button class="topbar-glyph" id="sidebar-toggle" type="button" aria-label="Toggle sessions sidebar" title="Toggle sessions sidebar"><svg aria-hidden="true"><use href="#i-sidebar"/></svg></button>
       <button class="icon-button mobile-nav" id="mobile-nav" title="Sessions" aria-label="Open sessions"><svg><use href="#i-menu"/></svg></button>
       <div class="topbar-title"><h1 id="session-title">New Session</h1><div class="session-meta sr-only"><span id="workspace-name">Nexus</span><span class="meta-separator">/</span><span id="session-id">Ready when you are</span></div></div>
       <div class="topbar-actions">
@@ -42,13 +42,13 @@
         <button class="topbar-text" id="session-menu" title="Export session as Markdown" aria-label="Export session as Markdown">Export</button>
         <span class="update-notice" id="update-notice" role="status" hidden></span>
         <span class="live-state" id="live-state"><i></i> <span>Idle</span></span>
-        <button class="topbar-glyph" id="topbar-new" type="button" title="New session (⌘N)" aria-label="New session">+</button>
-        <button class="topbar-glyph inspector-toggle" id="inspector-toggle" title="Toggle details panel" aria-label="Open details">▐</button>
+        <button class="topbar-glyph" id="topbar-new" type="button" title="New session (⌘N)" aria-label="New session"><svg aria-hidden="true"><use href="#i-plus"/></svg></button>
+        <button class="topbar-glyph inspector-toggle" id="inspector-toggle" title="Toggle details panel" aria-label="Open details"><svg aria-hidden="true"><use href="#i-panel"/></svg></button>
       </div>
     </header>
     <aside class="sidebar" id="sidebar" aria-label="Sessions">
       <span class="sr-only" id="workspace-label">workspace</span>
-      <button class="new-session" id="new-session" title="New session (⌘N)"><span>+ New session</span><kbd>ctrl+n</kbd></button>
+      <button class="new-session" id="new-session" title="New session (⌘N)"><span><svg aria-hidden="true"><use href="#i-plus"/></svg>New session</span><kbd>ctrl+n</kbd></button>
       <label class="session-search"><span class="sr-only">Filter sessions</span><input id="session-filter" type="search" placeholder="Filter sessions" autocomplete="off" spellcheck="false"></label>
       <div class="session-scroll">
         <section class="session-group">
