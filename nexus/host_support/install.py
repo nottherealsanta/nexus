@@ -247,7 +247,7 @@ def update_command(
     if version:
         return [*install, _spec(extras, f"=={version}")]
     if source == "pypi":
-        return [uv, "tool", "upgrade", "--refresh-package", PACKAGE, PACKAGE]
+        return [uv, "tool", "upgrade", PACKAGE]
     if source == "git":  # migration: git installs move to PyPI releases
         return [*install[:4], "--refresh-package", PACKAGE, *install[4:], _spec(extras)]
     return None

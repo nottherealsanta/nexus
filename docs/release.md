@@ -25,6 +25,44 @@ release PR "chore(main): release 0.2.0"                       ▼
   after D:  (unchanged: docs is not releasable)        `nexus update` sees 0.2.0
 ```
 
+## Raising a PR and bumping the version
+
+Default: **do not touch the version.** Give the PR a Conventional Commit title and
+release-please picks the bump when the maintainer merges the release PR.
+
+| Change | PR title type | Resulting bump |
+| --- | --- | --- |
+| Bug fix, perf, dependency | `fix:` / `perf:` / `deps:` | patch |
+| New feature or breaking change (pre-1.0) | `feat:` / `feat!:` | **minor: ask the user first** |
+| Docs, tests, refactor, CI, chores | `docs:` / `test:` / `refactor:` / `ci:` / `chore:` | none |
+
+Steps for an agent:
+
+1. Branch from an up-to-date `main` (`git fetch && git switch -c fix/short-name origin/main`).
+2. Commit with a Conventional Commit subject. Run `.venv/bin/python -m pytest -q` and
+   `ruff check nexus tests`.
+3. Push and open the PR with `gh pr create`. The title must be a Conventional Commit
+   (`pr-title` fails otherwise) and is the squash commit subject.
+4. Confirm `ci-ok` and `pr-title` pass and the PR is mergeable
+   (`gh pr view N --json mergeable,mergeStateStatus`).
+
+**When the user explicitly asks for the number to be bumped in the PR** (a patch bump
+unless they say otherwise; a minor bump always needs their approval first):
+
+1. Read the current version from `main`, not from your branch: the release PR may have
+   merged since you branched (`git fetch && git show origin/main:.release-please-manifest.json`).
+2. Set the new value in all three places, and nowhere else:
+   `pyproject.toml` (`version = ...`), `.release-please-manifest.json`, and the
+   `nexus-harness` entry in `uv.lock`. Do not edit `CHANGELOG.md`. Do not touch other
+   `0.x.y` strings in `uv.lock`, which belong to other packages.
+3. Commit it as `chore: bump version to X.Y.Z` (a `chore:` adds no release of its own).
+4. **Conflicts:** the three version files conflict whenever the release PR merges first.
+   Do not merge them by hand. `git fetch && git rebase origin/main`, take main's side of
+   the three files, redo step 2 from main's new version, `git rebase --continue`, then
+   `git push --force-with-lease`.
+5. Expect release-please to open its own release PR after merge; check that it does not
+   propose the same version twice (it reads the manifest and the commits since).
+
 ## Moving parts
 
 | Piece | File / place | Role |
@@ -142,8 +180,8 @@ Config lives in `release-please-config.json`:
    - pypi.org/project/nexus-harness shows the new version
    - the GitHub release has the installer, `SHA256SUMS` and dists
    - `uv tool install nexus-harness && nexus --version` on a clean machine prints the
-     version (PyPI's index can lag a minute or two; `nexus update` passes
-     `--refresh-package` for that reason)
+     version (PyPI's index can lag a minute or two, so `nexus update` may not see a
+     brand-new release right away; `uv tool upgrade` has no refresh flag, so retry)
    - Python 3.12 or older refuses the wheel with "requires Python >=3.13"
 
 ### Overrides
@@ -177,8 +215,8 @@ Config lives in `release-please-config.json`:
 
   | Situation | Command |
   | --- | --- |
-  | PyPI install, stable | `uv tool upgrade --refresh-package nexus-harness nexus-harness` |
-  | Git install, stable (**migration**) | `uv tool install --force --refresh-package nexus-harness --python X.Y "nexus-harness[extras]"` |
+  | PyPI install, stable | `uv tool upgrade nexus-harness` |
+  | Git install, stable (**migration**) | `uv tool install --force --refresh-package nexus-harness --python X.Y "nexus-harness[extras]"` (`--refresh-package` is valid on `install`, not on `upgrade`) |
   | `--version V` | `uv tool install --force --python X.Y "nexus-harness[extras]==V"` |
   | `--channel git [--ref R]` | `uv tool install --force --reinstall --python X.Y "nexus-harness[extras] @ git+https://github.com/nottherealsanta/nexus@R"` |
   | path / unknown source | refused; re-run the installer or use `--channel git` |
