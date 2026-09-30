@@ -718,6 +718,32 @@ class TelemetrySection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     )
 
 
+class VoiceSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """Local dictation policy (VOICE_PLAN sections 5 and 9)."""
+
+    enabled: bool = True
+    autoload: bool = False
+    model: str = "moondream/parakeet-redux"
+    revision: str = "2bf128600aac4b16946f7ed8372e56117fe5e23b"
+    device: Literal["auto", "cpu", "mps", "cuda"] = "auto"
+    max_seconds: int = 120
+    timestamps: bool = False
+    auto_send: bool = False
+    unload_after_minutes: int = 0
+
+    def __post_init__(self) -> None:
+        if type(self.max_seconds) is not int or not 1 <= self.max_seconds <= 120:
+            raise ValueError("voice.max_seconds must be an integer from 1 to 120")
+        if type(self.unload_after_minutes) is not int or not 0 <= self.unload_after_minutes <= 1440:
+            raise ValueError("voice.unload_after_minutes must be an integer from 0 to 1440")
+        if self.model != "moondream/parakeet-redux":
+            raise ValueError("voice.model must be moondream/parakeet-redux")
+        if self.revision != "2bf128600aac4b16946f7ed8372e56117fe5e23b":
+            raise ValueError("voice.revision has no trusted manifest")
+        if self.device not in {"auto", "cpu", "mps", "cuda"}:
+            raise ValueError("voice.device must be auto, cpu, mps or cuda")
+
+
 class ConfigV2(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     config_version: Literal[2] = 2
     agent: AgentSection = msgspec.field(default_factory=AgentSection)
@@ -735,6 +761,7 @@ class ConfigV2(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     sessions: SessionsSection = msgspec.field(default_factory=SessionsSection)
     settings: SettingsSection = msgspec.field(default_factory=SettingsSection)
     telemetry: TelemetrySection = msgspec.field(default_factory=TelemetrySection)
+    voice: VoiceSection = msgspec.field(default_factory=VoiceSection)
 
     def __post_init__(self) -> None:
         for provider_name, provider in self.providers.items():
@@ -804,4 +831,5 @@ __all__ = [
     "TelemetrySection",
     "ToolsSection",
     "WebSection",
+    "VoiceSection",
 ]

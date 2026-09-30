@@ -309,7 +309,9 @@ async def main() -> None:
             launch_url = await daemon.web_launch()
             terminal = await UDSClient.connect(socket, client_id="playwright-terminal")
             async with async_playwright() as playwright:
-                browser = await playwright.chromium.launch(headless=True)
+                browser = await playwright.chromium.launch(headless=True, args=[
+                    "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream",
+                ])
                 page = await browser.new_page(viewport={"width": 1440, "height": 900}, device_scale_factor=1)
                 await page.add_init_script("try{localStorage.setItem('nexus-web-panel','closed')}catch{}")
                 await page.add_init_script("window.__nexusEventSources=[];const NativeEventSource=window.EventSource;window.EventSource=class extends NativeEventSource{constructor(...args){super(...args);window.__nexusEventSources.push(this)}}")
@@ -325,6 +327,8 @@ async def main() -> None:
                 delayed_context = {"session": None, "entered": asyncio.Event(), "release": asyncio.Event()}
                 context_failure = {"message": ""}
                 setup_state = {"openai": False, "saved": False}
+                voice_state = {"state": "absent", "prepare_calls": 0, "status_calls": 0, "prepare_at": 0.0, "auto_send": False, "session_starts": 0}
+                delayed_voice = {"entered": asyncio.Event(), "release": asyncio.Event(), "hold": False}
                 context_fixture = {
                     "type": "ContextInspectResult", "mode": "next_turn_preview", "actually_sent": False,
                     "draft_provided": False, "manifest_generation": 17,
@@ -354,6 +358,25 @@ async def main() -> None:
                         await route.fallback()
                         return
                     command = json.loads(request.post_data or "{}")
+                    if command.get("type") == "VoiceStatus":
+                        voice_state["status_calls"] += 1
+                        if voice_state["prepare_calls"] and time.monotonic() - voice_state["prepare_at"] > 1.0:
+                            voice_state["state"] = "ready"
+                        await route.fulfill(status=200, content_type="application/json", body=json.dumps({
+                            "type": "VoiceStatusResult", "state": voice_state["state"], "enabled": True,
+                            "progress": 0.5 if voice_state["state"] == "downloading" else 0,
+                            "max_seconds": 120, "device": "cpu", "auto_send": voice_state["auto_send"],
+                        }))
+                        return
+                    if command.get("type") == "VoicePrepare":
+                        voice_state["prepare_calls"] += 1
+                        voice_state["prepare_at"] = time.monotonic()
+                        voice_state["state"] = "downloading"
+                        await route.fulfill(status=200, content_type="application/json", body=json.dumps({
+                            "type": "VoiceStatusResult", "state": "downloading", "enabled": True,
+                            "progress": 0.1, "max_seconds": 120,
+                        }))
+                        return
                     if command.get("type") == "SetupStatus":
                         result = {
                             "type": "SetupStatusResult", "required": not setup_state["saved"],
@@ -378,6 +401,10 @@ async def main() -> None:
                         await route.fulfill(status=200, content_type="application/json", body=json.dumps({
                             "type": "SetupSaveResult", "global_model": "openai/gpt-6-sol", "restart_required": False,
                         }))
+                        return
+                    if command.get("type") == "SessionStart":
+                        voice_state["session_starts"] += 1
+                        await route.fallback()
                         return
                     if command.get("type") != "ContextInspect":
                         await route.fallback()
@@ -422,6 +449,153 @@ async def main() -> None:
                 await page.get_by_text("Using openai/gpt-6-sol").wait_for(timeout=5_000)
                 assert setup_state["saved"]
                 assert await page.locator("#setup-overlay").is_hidden()
+                # Voice status polling is read-only: explicitly dismissing first use
+                # must not prepare or download the model.
+                await page.wait_for_function("window.__nexusEventSources.length > 0")
+                assert await page.locator("#composer-voice").count() == 0
+                assert await page.locator("#voice-indicator, #voice-top-status, #voice-progress, #voice-ready").count() == 0
+
+                voice_agent_geometry = await page.locator("#composer-agent").bounding_box()
+                voice_model_geometry = await page.locator("#composer-model").bounding_box()
+                voice_context_geometry = await page.locator("#context-meter").bounding_box()
+                voice_status_geometry = await page.locator("#composer-status").bounding_box()
+
+                async def assert_recording_dot(recording: bool) -> None:
+                    result = await page.locator("#composer-status").evaluate("""node => {
+                      const dot = getComputedStyle(node, '::before');
+                      const expected = document.createElement('i');
+                      expected.style.backgroundColor = 'var(--accent)';
+                      document.body.append(expected);
+                      const warning = getComputedStyle(expected).backgroundColor;
+                      expected.remove();
+                      const rect = node.getBoundingClientRect();
+                      const meter = document.querySelector('#context-meter').getBoundingClientRect();
+                      return {recording: node.classList.contains('is-recording'), content: dot.content,
+                               color: dot.backgroundColor, warning, position: dot.position,
+                               top: dot.top, left: parseFloat(dot.left), transformY: new DOMMatrixReadOnly(dot.transform).m42,
+                               rowLeft: rect.left, dotLeft: rect.left + parseFloat(dot.left),
+                               rowTop: rect.top, rowHeight: rect.height,
+                               meterTop: meter.top, meterHeight: meter.height,
+                               rowCenter: rect.top + rect.height / 2,
+                               dotCenter: rect.top + rect.height / 2 + new DOMMatrixReadOnly(dot.transform).m42 + parseFloat(dot.height) / 2};
+                    }""")
+                    assert result["recording"] is recording, result
+                    assert (result["content"] != "none") is recording, result
+                    if recording:
+                        assert result["color"] == result["warning"], result
+                        assert result["position"] == "absolute", result
+                        assert result["left"] == 0, result
+                        assert abs(float(result["top"].removesuffix("px")) - result["rowHeight"] / 2) < 1, result
+                        assert result["transformY"] == -2.5, result
+                        assert abs(result["dotLeft"] - result["rowLeft"]) < 1, result
+                        assert abs(result["dotCenter"] - result["rowCenter"]) < 1, result
+                        assert result["rowTop"] == result["meterTop"] and result["rowHeight"] == result["meterHeight"], result
+                    assert await page.locator("#composer-agent").bounding_box() == voice_agent_geometry
+                    assert await page.locator("#composer-model").bounding_box() == voice_model_geometry
+                    assert await page.locator("#context-meter").bounding_box() == voice_context_geometry
+                    assert await page.locator("#composer-status").bounding_box() == voice_status_geometry
+
+                await assert_recording_dot(False)
+                await page.locator("#composer-input").focus()
+                await page.keyboard.press("Control+Space")
+                voice_dialog = page.locator("#voice-dialog")
+                try:
+                    await voice_dialog.wait_for(state="visible", timeout=5_000)
+                except Exception as exc:
+                    raise AssertionError({"voice_status": voice_state, "page_errors": errors,
+                                          "console_errors": console_errors,
+                                          "commands": context_commands[-4:]}) from exc
+                assert voice_state["prepare_calls"] == 0
+                await page.locator("#voice-dismiss").click()
+                await voice_dialog.wait_for(state="hidden")
+                assert voice_state["prepare_calls"] == 0
+                await page.keyboard.press("Control+Space")
+                await page.locator("#voice-confirm").click()
+                await _wait_for(lambda: voice_state["prepare_calls"] == 1)
+                assert voice_state["prepare_calls"] == 1
+                assert await page.locator("#voice-overlay").is_visible()
+                await page.locator("#voice-dismiss").wait_for(state="visible", timeout=10_000)
+                automatic_voice_copy = await page.locator("#voice-dialog").inner_text()
+                assert not any(text in automatic_voice_copy for text in (
+                    "Downloading", "Loading voice model", "Preparing the voice model", "You can now use voice", "Ready ·", "transcribing",
+                )), automatic_voice_copy
+                assert await page.locator("#voice-confirm").is_hidden()
+                assert "about 178 MB" in automatic_voice_copy
+                assert await page.locator("#voice-overlay").is_visible()
+                await page.locator("#voice-dismiss").click()
+                voice_uploads: list[bytes] = []
+                voice_request_ids: list[str] = []
+
+                async def route_voice(route) -> None:
+                    request = route.request
+                    wav = route.request.post_data_buffer or b""
+                    assert wav[:4] == b"RIFF" and wav[8:12] == b"WAVE", wav[:16]
+                    assert wav[22:24] == b"\x01\x00" and wav[24:28] == b"\x80\x3e\x00\x00", wav[:32]
+                    voice_uploads.append(wav)
+                    voice_request_ids.append(request.url.split("request_id=", 1)[-1].split("&", 1)[0])
+                    if delayed_voice["hold"]:
+                        delayed_voice["entered"].set()
+                        await delayed_voice["release"].wait()
+                    await route.fulfill(status=200, content_type="application/json", body=json.dumps({
+                        "type": "VoiceTranscribeResult", "request_id": voice_request_ids[-1], "text": "dictated words",
+                        "duration_s": max(0.2, (len(wav) - 44) / 32000), "elapsed_s": 0.01,
+                    }))
+
+                await page.route("**/v1/web/voice**", route_voice)
+                editor = page.locator("#composer-input")
+                await editor.fill("before after")
+                await editor.evaluate("node => node.setSelectionRange(7, 7)")
+                await page.keyboard.press("Control+Space")
+                await page.wait_for_function("() => document.querySelector('#composer-status').classList.contains('is-recording')", timeout=5_000)
+                await assert_recording_dot(True)
+                await page.wait_for_timeout(450)
+                await page.keyboard.press("Control+Space")
+                await assert_recording_dot(False)
+                assert "transcrib" not in (await page.locator("#app").inner_text()).lower()
+                try:
+                    await page.wait_for_function("() => document.querySelector('#composer-input').value.includes('dictated words')", timeout=10_000)
+                except Exception as exc:
+                    raise AssertionError({"uploads": len(voice_uploads), "indicator": await page.locator("#composer-agent").inner_text(),
+                                          "page_errors": errors, "console_errors": console_errors}) from exc
+                assert await editor.input_value() == "before dictated words after", await editor.input_value()
+                assert voice_uploads and len(voice_uploads[0]) > 44
+                # Ctrl+X leader: V records, any other key stops; M opens the model chooser.
+                await editor.fill("lead ")
+                await editor.focus()
+                await page.keyboard.press("Control+x")
+                await page.wait_for_function("() => document.querySelector('#leader-hint').textContent.includes('Ctrl+X')", timeout=5_000)
+                await page.keyboard.press("v")
+                await page.wait_for_function("() => document.querySelector('#composer-status').classList.contains('is-recording')", timeout=5_000)
+                await assert_recording_dot(True)
+                await page.wait_for_timeout(450)
+                await page.keyboard.press("a")
+                await assert_recording_dot(False)
+                await page.wait_for_function("() => document.querySelector('#composer-input').value.includes('dictated words')", timeout=10_000)
+                assert "lead" in await editor.input_value() and not (await editor.input_value()).endswith("a"), await editor.input_value()
+                await editor.fill("before dictated words after")
+                assert await page.evaluate("navigator.mediaDevices.getUserMedia !== undefined")
+                # If the composer loses focus during dictation, discard the
+                # completed transcription even when auto-send is enabled.
+                voice_state["auto_send"] = True
+                delayed_voice["hold"] = True
+                await editor.focus()
+                await page.keyboard.press("Control+Space")
+                await page.wait_for_function("() => document.querySelector('#composer-status').classList.contains('is-recording')", timeout=5_000)
+                await assert_recording_dot(True)
+                await page.wait_for_timeout(450)
+                starts_before_blur = voice_state["session_starts"]
+                await page.keyboard.press("Control+Space")
+                await assert_recording_dot(False)
+                assert "transcrib" not in (await page.locator("#app").inner_text()).lower()
+                await asyncio.wait_for(delayed_voice["entered"].wait(), timeout=10)
+                assert "transcrib" not in (await page.locator("#app").inner_text()).lower()
+                await page.locator("#session-filter").focus()
+                delayed_voice["release"].set()
+                await page.wait_for_timeout(250)
+                await assert_recording_dot(False)
+                assert await editor.input_value() == "before dictated words after"
+                assert voice_state["session_starts"] == starts_before_blur
+                delayed_voice["hold"] = False
                 await page.locator("#new-session").click()
                 new_picker = page.get_by_role("dialog", name="New session · choose an agent")
                 await new_picker.wait_for(timeout=5_000)
@@ -452,11 +626,11 @@ async def main() -> None:
                 assert await page.locator("#timeline > *").first.evaluate("n => n.classList.contains('context-header')")
                 assert await page.locator("#context-preview").is_hidden()
                 main_context = await header.inner_text()
-                assert [await chip.text_content() for chip in await header.locator(".context-chip").all()] == ["System prompt", "Tools", "Skills", "MCP"]
+                chips = [await chip.text_content() for chip in await header.locator(".context-chip").all()]
+                assert chips == ["System prompt", "Tools", "AGENTS.md", "Skills", "MCP"], chips
                 assert "Prompt line 5" in main_context and "Prompt line 6" not in main_context
                 assert "… +7 more lines" in main_context
                 assert "Read" in main_context and "included-skill" in main_context and "available-skill" not in main_context
-                assert await header.locator(".context-block.empty").count() == 1
                 assert await header.locator("script").count() == 0
                 # The System prompt block shows only the prompt, rendered as Markdown.
                 await header.locator(".context-block").first.click()
@@ -465,7 +639,7 @@ async def main() -> None:
                 await system_dialog.get_by_text("Prompt line 12", exact=False).first.wait_for()
                 assert await system_dialog.locator(".ctx-system .context-markdown").count() == 1
                 await page.keyboard.press("Escape")
-                await header.locator(".context-block").nth(2).click()
+                await header.locator(".context-block").nth(3).click()
                 context_dialog = page.get_by_role("dialog", name="Current context")
                 await context_dialog.wait_for(state="visible")
                 # Grouped like the TUI: system prompt, tools, then one group per turn, all collapsed.
@@ -981,6 +1155,12 @@ async def main() -> None:
                 await page.locator("#composer-input").fill(draft)
                 composer = page.locator("#composer-input")
                 await composer.focus()
+                await page.keyboard.press("Control+x")
+                await page.keyboard.press("m")
+                await page.wait_for_function("() => !document.querySelector('#overlay').hidden", timeout=5_000)
+                await page.keyboard.press("Escape")
+                await page.wait_for_function("() => document.querySelector('#overlay').hidden", timeout=5_000)
+                await composer.focus()
                 await page.keyboard.press("Control+t")
                 await page.get_by_text("Effort: high", exact=True).wait_for()
                 await page.keyboard.press("Control+t")
@@ -1444,7 +1624,7 @@ async def main() -> None:
                 await agent_modal.wait_for(state="visible", timeout=5_000)
                 assert "/a/" in page.url
                 assert await agent_modal.locator(".topbar").is_visible()
-                assert await agent_modal.locator(".context-header .context-block").count() == 4
+                assert await agent_modal.locator(".context-header .context-block").count() == 5
                 assert await agent_modal.locator(".agent-readonly").is_visible()
                 assert await agent_modal.get_by_text("Child agent transcript is available.").count() == 1
                 assert await agent_modal.locator(".tool-card").count() == 1

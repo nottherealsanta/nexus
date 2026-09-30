@@ -312,6 +312,10 @@ async def dispatch_settings(command: Any, runtime: object) -> Any | None:
     if isinstance(command, p.SettingsWrite):
         result = write(runtime, command.scope, command.category, command.id, command.body, command.expected_sha256)
         if result.get("status") == "written":
+            if command.category == "config":
+                refresh_voice = getattr(runtime, "refresh_voice_config", None)
+                if callable(refresh_voice):
+                    refresh_voice()
             manager = getattr(runtime, "extensions", None)
             reload_extensions = getattr(manager, "reload", None)
             if callable(reload_extensions):

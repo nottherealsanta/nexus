@@ -603,6 +603,11 @@ class Daemon:
             self._last_activity = self._started_at
             self._stop_event = asyncio.Event()
             self._log("daemon.started", pid=os.getpid(), socket=str(self._socket))
+            voice = getattr(self._runtime, "voice", None)
+            if voice is not None and voice.config.enabled:
+                # Warm cached models only. First download requires the client's
+                # explicit confirmation and is never a daemon-start side effect.
+                voice.schedule_prepare(allow_download=False)
             self._reaper = asyncio.ensure_future(self._reap())
         except BaseException:
             # Close a partially-bound listener before releasing the lock so a
@@ -767,6 +772,8 @@ class Daemon:
         if self._facade.presence.total_viewers() > 0:
             return False
         if self._facade.supervisor.running or self._facade.supervisor.queued:
+            return False
+        if getattr(getattr(self._runtime, "voice", None), "active", False):
             return False
         return (time.time() - self._last_activity) >= self.idle_timeout
 

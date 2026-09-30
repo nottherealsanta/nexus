@@ -108,6 +108,7 @@ def test_parser_exposes_the_canonical_command_set():
         "auth",
         "update",
         "mock",
+        "voice",
     } == choices
 
     for action, expected in (

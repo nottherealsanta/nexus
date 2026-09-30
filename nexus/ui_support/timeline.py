@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from ..ui_support.text import escape_controls, redact, sanitize
@@ -86,6 +86,30 @@ _TOOL_VERBS = {
     "task": "◉ Task", "subagent": "◉ Task", "question": "? Question",
 }
 _RAW_OUTPUT_TOOLS = frozenset({"bash", "bashoutput", "glob", "grep", "ls"})
+
+#: Gutter glyphs joining the calls one model response issued together.
+BATCH_GLYPHS = {"first": "┌", "middle": "│", "last": "└"}
+
+
+def tool_batches(tools: Sequence[ToolCallView]) -> dict[str, str]:
+    """Map call id -> ``first|middle|last`` for calls sharing a model iteration.
+
+    Only runs of two or more consecutive calls with the same iteration form a
+    batch; a lone call is absent so it renders exactly as before.
+    """
+    out: dict[str, str] = {}
+    ordered = sorted(tools, key=lambda tool: tool.event_seq)
+    start = 0
+    while start < len(ordered):
+        end = start + 1
+        while end < len(ordered) and ordered[end].iteration == ordered[start].iteration:
+            end += 1
+        if end - start > 1:
+            for offset, tool in enumerate(ordered[start:end]):
+                position = "first" if offset == 0 else "last" if end - start - 1 == offset else "middle"
+                out[tool.call_id] = position
+        start = end
+    return out
 
 
 def tool_heading(tool: ToolCallView) -> str:
@@ -472,6 +496,8 @@ def _turn_summary(turn: TurnView) -> str:
 
 
 __all__ = [
+    "BATCH_GLYPHS",
+    "tool_batches",
     "DIFF_TOOLS",
     "_DETAIL_LIMIT",
     "DiffSection",

@@ -11,7 +11,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import ClassVar
 
-from textual import constants, on
+from textual import constants, events, on
 from textual.app import App, ComposeResult
 from textual.command import Provider
 from textual.widgets import Button, Input, OptionList, Static, TextArea
@@ -33,6 +33,7 @@ from ...ui_support.tui_context_header import ContextBlock, ContextHeader, Contex
 from ...ui_support.tui_model_picker import ModelPickerScreen
 from ...ui_support.tui_panels import DetailsSidebar, SessionSidebar, TuiPreferences
 from ...ui_support.tui_setup import block_unconfigured_turn, open_first_run_setup
+from ...ui_support.tui_voice import VoiceController
 from ..cli import commands
 from ..cli.details import detail_lines
 from ..cli.render import sanitize
@@ -51,6 +52,7 @@ from .messages import (
     StreamDisconnected,
     TurnFinished,
 )
+from .keychord import LeaderKeys
 from .new_session import apply_agent_choice, open_new_session_picker
 from .panels import MainLayout, PanelsMixin, TopBar
 from .permission import ListPrompt, PermissionScreen, ask_pending_question
@@ -109,6 +111,8 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
         self._pending_permission_id: str | None = None
         self._permission_result: asyncio.Future[str | None] | None = None
         self._reasoning_effort_in_flight = False
+        self.voice = VoiceController(self)
+        self.leader = LeaderKeys(self)
         self._inline_picker_kind: str | None = None
         self._picker_restore_focus = None
         self._status_error = False
@@ -156,6 +160,7 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
                 yield ConnectionStatus("Connecting to Nexus daemon…", id="connection-status")
                 yield AgentPickerPanel(id="inline-picker")
                 yield ChatInput(id="chat-input")
+                yield Static("", id="leader-hint", markup=False)
                 yield ActivityProgress(id="activity-progress")
             yield DetailsSidebar(id="details-sidebar")
             yield LogsDrawer(id="logs-drawer")
@@ -176,13 +181,28 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
             self._sync_panels()
             self.set_interval(2.0, self._poll_sessions)
             self.set_interval(30.0, self._poll_health)
+            self.set_interval(1.0, self.voice.refresh_status)
             self.run_worker(self._poll_sessions(), group="sessions")
             self.run_worker(self._poll_health(), group="health")
+            await self.voice.refresh_status()
         except ClientError as exc:
             self._sync_status(f"Disconnected · {exc}", error=True)
 
+    async def on_event(self, event) -> None:
+        if isinstance(event, events.Key) and not event.is_forwarded and self.leader.intercept(event):
+            return
+        await super().on_event(event)
+
     async def on_key(self, event) -> None:
-        if event.key == "ctrl+e" and self._is_main_screen():
+        if event.key in {"ctrl+space", "ctrl+@", "ctrl+nul", "ctrl+0"} and self._is_main_screen():
+            event.stop()
+            event.prevent_default()
+            self.run_worker(self.voice.toggle(), group="voice", exclusive=True)
+        elif event.key == "escape" and self.voice.transcribing:
+            event.stop()
+            event.prevent_default()
+            self.run_worker(self.voice.cancel(), group="voice", exclusive=True)
+        elif event.key == "ctrl+e" and self._is_main_screen():
             event.stop()
             event.prevent_default()
             self.action_toggle_logs()
@@ -351,6 +371,20 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
                 )
             )
 
+    async def action_open_model_picker(self) -> None:
+        if self._is_main_screen():
+            await self._push_model_picker()
+
+    async def action_start_voice(self) -> None:
+        if self._is_main_screen() and not self.voice.recording:
+            await self.voice.start_or_confirm()
+
+    def action_show_shortcuts(self) -> None:
+        self.push_screen(ShortcutsScreen(KEYBOARD_SHORTCUTS))
+
+    def action_toggle_voice(self) -> None:
+        self.run_worker(self.voice.toggle(), group="voice", exclusive=True)
+
     @on(Button.Pressed, "#logs-close")
     def _logs_close_pressed(self, _: Button.Pressed) -> None:
         self.action_close_logs()
@@ -454,6 +488,8 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
                 ) or "No tools used in this transcript")
             elif parsed.name == "/details":
                 await self._show_notice("\n".join(detail_lines(self.controller.session, self.controller.view)))
+            elif parsed.name == "/voice":
+                await self.voice.command(args)
             elif parsed.name == "/context":
                 await self.action_open_context()
             elif parsed.name == "/worktrees":
@@ -482,6 +518,7 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
         self._sync_status(sanitize(text, 240))
 
     async def _switch_session(self, session: str) -> None:
+        await self.voice.cancel()
         self._context_preview_generation += 1
         preview = self.query_one("#context-preview", ContextPreview)
         preview.display = False
@@ -504,6 +541,7 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
         # keep the status widget mounted as the existing spacer row.
         self._sync_status("")
         self._start_context_preview()
+        await self.voice.refresh_status(force=True)
         if self._logs_open:
             self._start_logs_polling()
 
@@ -1095,6 +1133,7 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
         await self._dispatch_chat_command("/fork")
 
     async def action_quit_shell(self) -> None:
+        await self.voice.close()
         await self.controller.close()
         self.exit(0)
 
@@ -1219,6 +1258,7 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
         self._cancel_logs_polling()
         if self._permission_result is not None and not self._permission_result.done():
             self._permission_result.set_result(None)
+        await self.voice.close()
         await self.controller.close()
 
 __all__ = [

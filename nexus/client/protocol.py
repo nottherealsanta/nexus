@@ -206,6 +206,21 @@ class Client:
         command = p.LogsRead(session=session, daemon_cursor=daemon_cursor, session_cursor=session_cursor, limit=limit)
         return await self._request(command)  # type: ignore[return-value]
 
+    async def voice_status(self) -> p.VoiceStatusResult:
+        return await self._request(p.VoiceStatus())  # type: ignore[return-value]
+
+    async def voice_prepare(self, *, force: bool = False) -> p.VoiceStatusResult:
+        return await self._request(p.VoicePrepare(force=force))  # type: ignore[return-value]
+
+    async def voice_transcribe(self, audio: bytes, request_id: str, *, session: str = "") -> p.VoiceTranscribeResult:
+        return await self._request(p.VoiceTranscribe(audio=audio, request_id=request_id, session=session))  # type: ignore[return-value]
+
+    async def voice_cancel(self, request_id: str) -> p.VoiceCancelResult:
+        return await self._request(p.VoiceCancel(request_id=request_id))  # type: ignore[return-value]
+
+    async def voice_remove(self) -> p.VoiceStatusResult:
+        return await self._request(p.VoiceRemove())  # type: ignore[return-value]
+
     async def agent_transcript(self, session: str, agent_id: str) -> dict[str, Any]:
         result = await self._request(
             p.AgentTranscript(session=session, agent_id=agent_id)

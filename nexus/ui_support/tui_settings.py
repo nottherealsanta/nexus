@@ -23,9 +23,9 @@ from typing import Any, ClassVar
 
 from textual import on
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, ContentSwitcher, Input, OptionList, Static, TextArea
+from textual.widgets import Button, ContentSwitcher, Input, OptionList, Select, Static, Switch, TextArea
 from textual.widgets._option_list import Option
 
 from .agent_frontmatter import (
@@ -38,6 +38,7 @@ from .text import sanitize
 from .tui_model_picker import ModelPickerScreen
 from .tui_panels import SettingsScreen, TuiPreferences
 from .tui_providers import ProvidersPane
+from .tui_voice import VoiceConsentScreen, set_voice_config
 
 
 def _field(value: Any, key: str, default: Any = None) -> Any:
@@ -77,6 +78,7 @@ class SettingsConsole(SettingsScreen):
         ("keys", "Keyboard"), ("workspace", "Workspace"),
         (None, "CONFIGURE"),
         ("providers", "Providers"),
+        ("voice", "Voice"),
         ("agents", "Agents"), ("tools", "Tools"), ("mcp", "MCP servers"),
         ("skills", "Skills"), ("hooks", "Hooks"), ("config", "Config"),
         ("soul", "Soul"),
@@ -139,6 +141,8 @@ class SettingsConsole(SettingsScreen):
         self._saved_body = ""
         self._builtin = False
         self._overrides_builtin = False
+        self._loading_voice = False
+        self._voice_controls_active = False
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="settings-console"):
@@ -150,6 +154,29 @@ class SettingsConsole(SettingsScreen):
             with ContentSwitcher(initial="appearance", id="settings-panes"):
                 yield from self.compose_general_panes()
                 yield ProvidersPane(self._providers)
+                with VerticalScroll(id="voice"):
+                    yield Static("Voice", classes="settings-heading", markup=False)
+                    yield Static("Local speech-to-text dictation. Transcripts stay in the composer until you send them.", classes="settings-help", markup=False)
+                    with Horizontal(classes="settings-row"):
+                        yield Static("Enable voice input", classes="settings-label", markup=False)
+                        yield Static("", classes="settings-key", markup=False)
+                        yield Switch(value=False, id="settings-voice-enabled")
+                    with Horizontal(classes="settings-row"):
+                        yield Static("Send transcripts automatically", classes="settings-label", markup=False)
+                        yield Static("opt-in", classes="settings-key", markup=False)
+                        yield Switch(value=False, id="settings-voice-auto-send")
+                    with Horizontal(classes="settings-row"):
+                        yield Static("Device", classes="settings-label", markup=False)
+                        yield Static("", classes="settings-key", markup=False)
+                        yield Select(((name, name) for name in ("auto", "cpu", "mps", "cuda")), value="auto", id="settings-voice-device")
+                    with Horizontal(classes="settings-row"):
+                        yield Static("Maximum recording length", classes="settings-label", markup=False)
+                        yield Static("seconds", classes="settings-key", markup=False)
+                        yield Select(((str(seconds), seconds) for seconds in (15, 30, 60, 90, 120)), value=120, id="settings-voice-max-seconds")
+                    yield Static("Checking voice status…", id="settings-voice-status", markup=False)
+                    with Horizontal(id="settings-voice-actions"):
+                        yield Button("Download / Retry", id="settings-voice-download")
+                        yield Button("Remove model", id="settings-voice-remove")
                 with Vertical(id="settings-file-pane"):
                     yield Static("", id="settings-file-heading", classes="settings-heading", markup=False)
                     yield Static("", id="settings-file-help", classes="settings-help", markup=False)
@@ -211,6 +238,7 @@ class SettingsConsole(SettingsScreen):
 
     def _show_category(self, category: str) -> None:
         self.category = category
+        self._voice_controls_active = category == "voice"
         file_area = category in self.FILE_CATEGORIES
         self.query_one("#settings-panes", ContentSwitcher).current = (
             "settings-file-pane" if file_area else category
@@ -222,6 +250,8 @@ class SettingsConsole(SettingsScreen):
             self._clear_editor()
         if category == "providers":
             self.query_one(ProvidersPane).reload()
+        if category == "voice":
+            self.run_worker(self._load_voice(), group="settings-voice", exclusive=True)
         row = self.query_one("#settings-default-agent-row")
         row.display = category == "agents" and self._default_agent is not None
         if row.display:
@@ -301,6 +331,86 @@ class SettingsConsole(SettingsScreen):
                 count = counts.get(key)
                 sections.replace_option_prompt_at_index(index, f"{label}  {count}" if count else label)
         self._render_items()
+
+    async def _load_voice(self) -> None:
+        if self._providers is None:
+            return
+        try:
+            status = await self._providers.voice_status()
+        except Exception as exc:  # noqa: BLE001 - show host/transport result
+            self.query_one("#settings-voice-status", Static).update(sanitize(str(exc), 140))
+            return
+        if not self.is_mounted:
+            return
+        enabled = self.query_one("#settings-voice-enabled", Switch)
+        auto_send = self.query_one("#settings-voice-auto-send", Switch)
+        device = self.query_one("#settings-voice-device", Select)
+        max_seconds = self.query_one("#settings-voice-max-seconds", Select)
+        self._loading_voice = True
+        try:
+            enabled.value = bool(status.enabled)
+            auto_send.value = bool(status.auto_send)
+            device.value = status.configured_device
+            max_seconds.value = status.max_seconds
+        finally:
+            self._loading_voice = False
+        self.query_one("#settings-voice-status", Static).update(
+            f"{status.state} · {status.device or status.configured_device} · {status.revision or 'model not downloaded'}"
+        )
+
+    @on(Switch.Changed, "#settings-voice-enabled")
+    @on(Switch.Changed, "#settings-voice-auto-send")
+    def _voice_switch_changed(self, event: Switch.Changed) -> None:
+        if (
+            self._providers is None
+            or self._loading_voice
+            or not self._voice_controls_active
+            or event.switch.id not in {"settings-voice-enabled", "settings-voice-auto-send"}
+        ):
+            return
+        key = "enabled" if event.switch.id == "settings-voice-enabled" else "auto_send"
+        async def save() -> None:
+            await self._save_voice({key: bool(event.value)})
+        self.run_worker(save(), group="settings-voice-save", exclusive=True)
+
+    @on(Select.Changed, "#settings-voice-device")
+    @on(Select.Changed, "#settings-voice-max-seconds")
+    def _voice_select_changed(self, event: Select.Changed) -> None:
+        if (
+            self._providers is None or self._loading_voice or event.value is Select.BLANK
+            or not self._voice_controls_active
+            or event.select.id not in {"settings-voice-device", "settings-voice-max-seconds"}
+        ):
+            return
+        key = "device" if event.select.id == "settings-voice-device" else "max_seconds"
+        value = str(event.value) if key == "device" else int(event.value)
+        self.run_worker(self._save_selected_voice(key, value), group="settings-voice-save", exclusive=True)
+
+    async def _save_selected_voice(self, key: str, value: object) -> None:
+        await self._save_voice({key: value})
+
+    async def _save_voice(self, updates: Mapping[str, object]) -> None:
+        try:
+            await set_voice_config(self._providers, **updates)
+            await self._load_voice()
+            voice = getattr(self.app, "voice", None)
+            if voice is not None:
+                await voice.refresh_status(force=True)
+        except Exception as exc:  # noqa: BLE001 - display safe settings error
+            self.query_one("#settings-voice-status", Static).update(sanitize(str(exc), 160))
+
+    async def _voice_action(self, action: str) -> None:
+        try:
+            if action == "download":
+                self.app.push_screen(
+                    VoiceConsentScreen(self._providers),
+                    callback=lambda _ready: self.run_worker(self._load_voice(), group="settings-voice"),
+                )
+            else:
+                await self._providers.voice_remove()
+            await self._load_voice()
+        except Exception as exc:  # noqa: BLE001 - display safe host error
+            self.query_one("#settings-voice-status", Static).update(sanitize(str(exc), 160))
 
     def _render_items(self) -> None:
         if not self.is_mounted:
@@ -559,6 +669,8 @@ class SettingsConsole(SettingsScreen):
         key = self.SECTIONS[index][0]
         if key == "providers":
             next(iter(self.query_one(ProvidersPane).query("Button, Input"))).focus()
+        elif key == "voice":
+            self.query_one("#settings-voice-enabled", Switch).focus()
         elif key in self.GENERAL:
             pane = self.query_one(f"#{key}")
             target = next(iter(pane.query("RadioSet, Switch")), None)
@@ -618,6 +730,9 @@ class SettingsConsole(SettingsScreen):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
+        if button_id in {"settings-voice-download", "settings-voice-remove"}:
+            self.run_worker(self._voice_action("download" if button_id.endswith("download") else "remove"), group="settings-voice-action", exclusive=True)
+            return
         if self._agent_form_pressed(button_id):
             return
         if event.button.has_class("settings-default-agent") and event.button.name:

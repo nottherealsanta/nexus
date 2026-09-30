@@ -76,6 +76,7 @@ SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("/review", "Ask the agent to review changes"),
     CommandSpec("/commit", "Ask the agent to commit changes"),
     CommandSpec("/archived", "Browse archived sessions", aliases=("/resume",)),
+    CommandSpec("/voice", "Dictate into the composer", "[status|download|on|off]"),
 )
 
 #: ``/mock`` exists only in dev mode (``NEXUS_DEV=1``; MOCK_PLAN §3.2).

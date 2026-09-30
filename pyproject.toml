@@ -32,6 +32,10 @@ dev = [
 documents = [
     "firecrawl-anydoc==0.2.4",
 ]
+voice = [
+    "moondream==2.4.0",
+    "sounddevice>=0.5,<1",
+]
 
 [project.scripts]
 nexus = "nexus.cli:main"
@@ -47,6 +51,7 @@ include = ["nexus*"]
 [tool.setuptools.package-data]
 "nexus.model" = ["data/models.min.json", "data/NOTICE"]
 "nexus.auth" = ["NOTICE"]
+"nexus.voice" = ["NOTICE"]
 "nexus.agents" = ["data/*.md"]
 "nexus.ui.tui" = ["*.tcss"]
 "nexus.ui.web" = ["index.html", "styles/*.css", "js/*.js", "assets/*"]

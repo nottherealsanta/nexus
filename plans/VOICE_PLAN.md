@@ -1,17 +1,221 @@
-# Voice input plan (Parakeet Redux)
+# Voice input plan and implementation status (Parakeet Redux)
 
-Add local, offline speech-to-text dictation to Nexus. The user presses a key or
-the mic control, speaks, and the transcript lands in the composer, ready to edit
-and send. The same feature works in `nexus chat` (Textual) and `nexus web`
-(browser). The model is **Moondream Parakeet Redux**
+> **Status on 2026-09-30:** This worktree contains the voice implementation and
+> offline tests, but the pinned real inference runtime has not been installed or
+> exercised with model weights. Real microphone capture, transcription
+> performance, platform support, and network behavior remain unverified. Do not
+> treat the historical design and phase exits below as completed verification.
+
+## Current use and architecture
+
+Voice is an optional dependency: install with `uv sync --extra voice` (or the
+package's `[voice]` extra). This installs the Kestrel-backed runtime and
+`sounddevice` capture dependency; the model itself is a separate download of
+about 179 MB.
+
+In `nexus chat` and `nexus web`, use the mic control or Ctrl+Space. On first use,
+confirm **Download model**; dismissing the confirmation does not start a
+download. `/voice download` and `nexus voice download` are explicit download
+actions as well. The dialog remains visible through UI download and loading and
+until the ready acknowledgment. `/voice status|download|on|off` and Settings →
+Voice expose status and controls. Audio is captured in the client as bounded mono 16 kHz
+PCM16 WAV, sent through the host boundary, and transcribed by the daemon. The
+transcript is inserted into the composer; it is not stored as audio or as a
+session record. Auto-send is off by default.
+
+The daemon may verify and warm an already cached model at startup, but startup
+and transcription never download a missing model. A user must explicitly invoke
+the UI confirmation or CLI download action. Model files are stored under `~/.nexus/models/voice/` and
+checked against the pinned four-file manifest in `nexus/voice/store.py` before
+activation. `NEXUS_VOICE=off` disables voice.
+
+The TUI/web confirmation is enforced by the built-in client interaction;
+`nexus voice download` is also an explicit download action. `VoicePrepare` has
+no host-issued consent token, so UI consent is a client-flow contract, not a host
+authorization invariant.
+
+The inference adapter is `KestrelEngine`, using Kestrel 0.8.0's internal
+`ParakeetTdtRuntime` with the verified model directory. This avoids the
+high-level Photon reporter observed in source inspection; it is a
+version-sensitive adaptation, not a verified offline guarantee. See
+[VOICE_SPIKE.md](VOICE_SPIKE.md) for manifest and verification caveats.
+
+## Worktree implementation map
+
+| Area | Files / behavior |
+| --- | --- |
+| Runtime and model | `nexus/voice/`: bounded WAV validation, pinned store, `KestrelEngine`, serialized manager; `runtime.py` owns the manager; daemon startup is cached-only. |
+| Host/client | `host/protocol.py`, `host/facade.py`, `host_support/voice.py`, `client/protocol.py`: status, prepare, transcribe, cancel, remove; Doctor projection; bounded/redacted host errors. Browser upload is `POST /v1/web/voice`, authenticated like other web operations, with an 8 MiB route-specific body limit. |
+| TUI | `ui_support/voice_capture.py`, `ui_support/tui_voice.py`, `ui_support/tui_settings.py`, `ui/tui/app.py`: microphone capture, consent/progress/ready dialog, composer insertion, `/voice`, shortcut and settings. |
+| Web | `ui/web/js/voice.js`, `voice-worklet.js`, `app.js`, `api.js`, `index.html`, `styles/app.css`: browser capture/resampling, modal, status, settings, and composer insertion. |
+| Dependencies | `[voice]` optional extra in `pyproject.toml`; `uv.lock` includes the resolved extra and pins Kestrel 0.8.0. Attribution is packaged as `nexus/voice/NOTICE`. |
+
+Offline voice, host, TUI, and transport tests cover fakes and bounded behavior;
+they do not load the real model. At the documentation update, the focused test
+run produced 91 passes and 3 failures: two stale expected-message assertions in
+`tests/test_voice_engine.py`, and a `BrokenPipeError` in the oversized-command
+portion of the HTTP route test. These results are not a green phase exit.
+The browser Playwright check passed against its scripted daemon and fake
+microphone; this is UI-flow coverage, not model verification.
+
+## Historical design plan (pre-implementation; not current requirements)
+
+The remainder of this document preserves the original proposal and phase ledger
+for context. Its automatic first-launch download, Photon adapter, normal
+dependency, line caps, and unfinished-feature checklists were superseded by the
+current decisions above and must not be read as implementation status. First-use
+consent overrides every historical auto-download flow. The current runtime
+choice and verification limitations are documented in [VOICE_SPIKE.md](VOICE_SPIKE.md).
+
+> The remaining plan and stop-point handoff are archived. Their present-tense
+> statements describe historical checkpoints, not the current worktree; their
+> automatic-download, Photon, dependency, and completion claims are superseded
+> by the current status and [VOICE_SPIKE.md](VOICE_SPIKE.md).
+
+### Historical handoff snapshot — 2026-09-30 (superseded by status above)
+
+Work was stopped at the user's request. All three Luna subagents
+(`voice_audio`, `voice_manager`, `voice_spike`) were interrupted. Changes remain
+uncommitted in the shared worktree. **This is incomplete implementation, not a
+working feature or a green phase exit.** Continue from the files below rather
+than restarting the plan. No model weights were downloaded, no voice runtime was
+installed, and no real microphone or inference benchmark was run.
+
+#### Decisions and source findings recorded at that checkpoint
+
+- First use requires the confirmation/progress/ready modal described above,
+  in both TUI and web. Missing models must never download on daemon startup or
+  as an automatic side effect of transcription. Startup may verify and warm a
+  previously downloaded cache. `VoicePrepare` has no host-issued consent token;
+  `/voice download` and `nexus voice download` are explicit user-invoked download
+  actions.
+- `VoiceSection` currently defaults to `enabled=true`, `autoload=false`,
+  `auto_send=false`, a 120-second maximum, and the pinned revision below.
+  `NEXUS_VOICE=off` is handled in v2 environment overlays and Runtime.
+- `pyproject.toml` introduces a **voice optional extra** with
+  `moondream==2.4.0` and `sounddevice>=0.5,<1`, plus packaged model attribution.
+  Moondream 2.4.0 pins Kestrel 0.8.0. The extra avoids imposing Torch/native
+  runtime dependencies on every installation. Install the extra separately from
+  downloading the model; both are required for voice use.
+- Exact Kestrel 0.8.0 source inspection found that high-level Photon creates
+  a telemetry reporter, posts during startup, then reports periodically, with
+  no discovered opt-out. The drafted engine therefore uses the internal
+  `kestrel.models.parakeet_tdt.ParakeetTdtRuntime` directly, bypassing Photon's
+  reporter. This is a version-sensitive adaptation requiring real integration
+  verification and appropriate import allowlisting, not a verified offline
+  production path.
+- In that pinned runtime, `model_path` is a **directory containing all four
+  files**, not a safetensors filename. Earlier proposed Photon calls and
+  older manifest uncertainty is superseded by the full manifest in
+  `VOICE_SPIKE.md`; real download verification is still outstanding.
+- Pinned model revision: `2bf128600aac4b16946f7ed8372e56117fe5e23b`.
+  `nexus/voice/store.py` contains the full size/SHA-256 manifest:
+
+| File | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `config.json` | 12,988 | `503c653b2e3bb788adbcb04f5abdee532d958686564081baeed133ff10143f6e` |
+| `tokenizer.json` | 1,159,960 | `bd321b096832a3f270bd3b2a88823957920f1a5c5ada71114a26ea729d0cbe91` |
+| `ternary.json` | 57,970 | `1221c6d3ce901ffe09c089da758a8db8b76189f80cff41c5afc244fc61e2051d` |
+| `model.safetensors` | 177,774,490 | `78ec25733ee0d0c1586d1346fc86db9d0c2e436e3a8ab1d32a82d1bb8f848d21` |
+
+#### Files recorded at that checkpoint
+
+| Area | Work recorded at that checkpoint |
+| --- | --- |
+| Voice package | `nexus/voice/{__init__,audio,model,store,engine,manager}.py` and `NOTICE`: strict PCM WAV validation, frozen state/results, pinned download with lock/hash checks/atomic activation, one-thread engine, bounded manager queue/cancellation/warm-up. Unit tests exist for all these areas. |
+| Configuration | `nexus/config/schema.py`, `layers.py`, `tests/test_voice_config.py`: section, bounds, pinned model/revision, environment coercion and disable flag. |
+| Host/client | `host/protocol.py`, `host/facade.py`, `host_support/voice.py`, `client/protocol.py`: five voice commands/results, host WAV validation and redacted errors, client methods, Doctor voice block. `VoiceStatusResult` also exposes `auto_send` and `configured_device`. Exhaustive protocol round-trip cases updated in `tests/test_host_facade.py`; new `tests/test_host_voice.py`. |
+| Runtime/daemon | Constructor injection, manager ownership/shutdown, cached-only startup call, idle activity check, and config refresh after SettingsWrite were drafts at this checkpoint; their current wiring is listed above. |
+| TUI | Capture/controller, mic button, shortcut, and consent flow were drafts at this checkpoint. Current modules are listed above; pilot tests use fakes, not real microphone/model inference. |
+| Web | Raw WAV route and early client pieces were drafts at this checkpoint. Current capture module, modal, HTML/CSS and app wiring are listed above; browser checks use fake daemon/microphone behavior. |
+
+#### Breakages and next steps recorded at that checkpoint
+
+1. **At that checkpoint, fix runtime engine naming.** Runtime imported/constructed
+   `PhotonEngine`, but `nexus/voice/engine.py` defines `KestrelEngine` only.
+   This broke ordinary Runtime construction and host tests at that checkpoint;
+   the current runtime now constructs `KestrelEngine`.
+2. **Complete cached-only startup contract before launching the daemon.**
+   Daemon calls `voice.schedule_prepare(allow_download=False)`, but the manager
+   had no `allow_download` parameter. Store already supported
+   `ensure(progress_cb, allow_download=False)` and raises `FileNotFoundError`
+   for a missing/unverified cache. Add the flag through manager scheduling and
+   preparation, use `loading` while checking cache, and transition to `absent`
+   without downloading on that exception. Transcription's current absent/error
+   path still calls unrestricted `schedule_prepare()`; change it to cached-only
+   so it cannot bypass consent.
+3. The checkpoint plan was to check engine availability before downloading ~179 MB of files. The drafted
+   engine exposes `KestrelEngine.available()` but the manager does not use it.
+   Finish disabled → enabled state transitions after SettingsWrite and ensure
+   disabling during preparation cannot later report ready or insert a result.
+4. Review cancellation/lifecycle thoroughly: store shields and drains download
+   threads, manager retains inference capacity while timed-out work finishes.
+   Test removal/shutdown versus preparation, anonymous requests, duplicate IDs,
+   retries, idle unload, device changes, and cancellation without leaked work.
+5. At that checkpoint, finish TUI wiring. `/voice` was not yet registered in shared
+   `ui/cli/commands.py`; app references `self.voice.command(args)`, but the
+   drafted controller has no `command` method yet. Several controller
+   constructions were inserted into app handlers; review lifecycle ownership.
+   The TOML helper currently needs `config_version = 2` handling and quoted
+   string settings. Finish Settings → Voice, styling, topbar/details status,
+   auto-send policy, resource cleanup, and UI-layer import allowlists.
+   Keep the modal visible during preparation and ready acknowledgment; current
+   Escape dismissal behavior needs review against that requirement.
+6. At that checkpoint, finish web `voice.js`, confirmation/progress/ready modal, mic control,
+   shortcuts/slash commands, Settings/details/topbar integration, cursor
+   insertion and stale-result cancellation. Test resampling boundaries and
+   recording caps, and complete raw-route auth/body-cap checks.
+7. At that checkpoint, add CLI `nexus voice status|download|remove|transcribe`, Doctor printing,
+   offline test isolation (`NEXUS_VOICE=off` with voice-test opt-in), voice
+   layering cases and documentation updates. Update the lockfile and packaging
+   verification for the optional extra/NOTICE.
+8. Reconcile Phase 0 notes, perform a real local-runtime probe after explicit
+   approval to download weights, verify CPU/MPS behavior and no inference
+   network traffic, then run full pytest/ruff and existing UI/browser checks.
+   The old line-cap figures below are historical; AGENTS.md now says no line
+   caps. Do not refactor only to meet those old figures. The CLI and documentation
+   have since been added.
+
+#### Verification recorded at the stop point
+
+- Latest combined command:
+  `.venv/bin/python -m pytest -q tests/test_voice_audio.py tests/test_voice_config.py tests/test_voice_store.py tests/test_voice_manager.py tests/test_voice_engine.py tests/test_host_voice.py tests/test_host_facade.py`
+  → **68 passed, 14 failed**. Twelve failures stem from Runtime's missing
+  `PhotonEngine` import. Two engine tests have incorrect expected error strings:
+  incomplete existing directory versus missing directory, and closed engine
+  versus not-ready wording.
+- Focused Ruff over new voice modules, capture/controller and voice tests
+  reports **two unused imports in `ui_support/tui_voice.py`** (`asyncio` and
+  host protocol). No cleanup was performed after the stop request.
+- Earlier checkpoints passed 23 audio/config tests, 7 manager tests, and 48
+  host/audio/facade tests before the unfinished Runtime integration. Those are
+  intermediate checkpoints, not evidence that the current integrated tree is
+  green. No full suite, TUI pilot or browser dictation check has passed.
+
+#### Worktree preservation note recorded at the stop point
+
+At task start these files already contained unrelated install work:
+`.github/workflows/install.yml`, `README.md`, `install.sh`, `nexus/cli.py`,
+`nexus/host_support/install.py`, `tests/test_install_script.py`. Preserve them.
+`plans/release.md` also appears modified at the handoff and was not part of the
+voice assignment. Do not revert unrelated changes or assume all dirty files
+belong to this feature. Implementation has been left as-is for continuation;
+the only edits after stopping subagents are this handoff documentation.
+
+### Archived initial proposal
+
+Add local speech-to-text dictation to Nexus. The user presses a key or the mic
+control, speaks, and the transcript lands in the composer, ready to edit and
+send. The same feature was proposed for `nexus chat` (Textual) and `nexus web`
+(browser). The model was **Moondream Parakeet Redux**
 (`moondream/parakeet-redux`, a 1.58-bit build of `parakeet-tdt-0.6b-v3`,
-178 MB of weights, multilingual, running on Photon from `moondream>=2.4.0`). It
-is **downloaded and loaded automatically the first time Nexus starts** and is
-kept warm afterwards.
+178 MB of weights, multilingual, originally proposed to run through Photon from
+`moondream>=2.4.0`). The proposal's automatic first-start download was
+superseded by the first-use consent requirement above.
 
-This plan follows the rules in `AGENTS.md`: one-way layering, UI through the host
-contract, line budgets, a durable log first, bounded everything, and loopback
-only.
+The proposal followed the then-current layering, host contract, durable log,
+boundedness, and loopback principles. Its line budgets were historical and are
+not current project requirements.
 
 ---
 

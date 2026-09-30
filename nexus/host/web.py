@@ -26,6 +26,7 @@ COOKIE_TTL = 12 * 60 * 60.0
 MAX_WEB_RESPONSE = 32 * 1024 * 1024
 COOKIE_NAME = "nexus_web"
 _SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}\Z")
+_VOICE_REQUEST_ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 
 
 @dataclass
@@ -169,6 +170,31 @@ class BrowserRoutes:
                 common["Content-Type"] = "application/json"
                 await server._write_response(writer, 200, self._json({"schema_version": 1, "csrf": active[1].csrf, "workspace": self.workspace}), headers=common)
                 return True
+            if path == "/v1/web/voice":
+                if request.method != "POST":
+                    await server._write_response(writer, 405, self._json({"error": "method not allowed"}), headers={**common, "Allow": "POST"})
+                    return True
+                content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                if content_type != "audio/wav":
+                    await server._write_response(writer, 415, self._json({"error": "expected audio/wav"}), headers=common)
+                    return True
+                request_ids = parse_qs(request.query, keep_blank_values=True).get("request_id", [])
+                request_id = request_ids[0] if len(request_ids) == 1 else ""
+                if not _VOICE_REQUEST_ID.fullmatch(request_id):
+                    await server._write_response(writer, 400, self._json({"error": "invalid request id"}), headers=common)
+                    return True
+                try:
+                    result = await self.facade.handle(p.VoiceTranscribe(audio=request.body, request_id=request_id))
+                    data = p.encode_result(result)
+                except Exception:  # noqa: BLE001 - never expose audio or facade details
+                    await server._write_response(writer, 500, self._json({"error": "voice request failed"}), headers=common)
+                    return True
+                if len(data) > MAX_WEB_RESPONSE:
+                    await server._write_response(writer, 413, self._json({"error": "voice result too large"}), headers=common)
+                    return True
+                common["Content-Type"] = "application/json"
+                await server._write_response(writer, 200, data, headers=common)
+                return True
             params = parse_qs(request.query)
             session = (params.get("session") or [""])[0]
             if path == "/v1/web/session-view" and request.method == "GET":
@@ -238,6 +264,8 @@ class BrowserRoutes:
             await server._write_response(writer, 404, self._json({"error": "not found"}), headers=common)
             return True
         common.update({"Content-Type": mimetypes.guess_type(target.name)[0] or "application/octet-stream", "Cache-Control": "no-cache"})
+        if path == "/" or is_session_page:
+            common["Permissions-Policy"] = "microphone=(self)"
         await server._write_response(writer, 200, b"" if request.method == "HEAD" else data, headers=common)
         return True
 

@@ -16,10 +16,16 @@ from nexus.host.transports.http_sse import HTTPSSEServer
 class _Facade:
     def __init__(self):
         self.commands = []
+        self.voice_calls = []
         self.large = False
         self.large_command = False
 
     async def handle(self, command):
+        if isinstance(command, p.VoiceTranscribe):
+            self.voice_calls.append((command.request_id, len(command.audio)))
+            return p.VoiceTranscribeResult(
+                request_id=command.request_id, text="hello", duration_s=0.25, elapsed_s=0.1
+            )
         self.commands.append(command)
         if isinstance(command, p.SessionExport) and self.large_command:
             return p.SessionExportResult(
@@ -56,11 +62,11 @@ class _Facade:
         return {"schema_version": 1, "session": session_id, "seq": 0, "view": {"turns": []}}
 
 
-async def _request(port, method, path, *, headers=None, body=b""):
+async def _request(port, method, path, *, headers=None, body=b"", content_length=None):
     reader, writer = await asyncio.open_connection("127.0.0.1", port)
     values = {"Host": f"127.0.0.1:{port}", "Connection": "close"}
-    if body:
-        values["Content-Length"] = str(len(body))
+    if body or content_length is not None:
+        values["Content-Length"] = str(len(body) if content_length is None else content_length)
     values.update(headers or {})
     raw = [f"{method} {path} HTTP/1.1", *(f"{k}: {v}" for k, v in values.items()), "", ""]
     writer.write("\r\n".join(raw).encode("latin-1") + body)
@@ -258,6 +264,7 @@ async def test_static_app_and_deep_link_are_same_origin_hardened():
         assert "default-src 'self'" in headers["content-security-policy"]
         assert headers["x-content-type-options"] == "nosniff"
         assert "frame-ancestors 'none'" in headers["content-security-policy"]
+        assert headers["permissions-policy"] == "microphone=(self)"
         # A subagent page deep link (the agent id is percent-encoded) serves the same app.
         status, _, body = await _request(server.port, "GET", "/s/session-1/a/session-1%2Fsub%2F1")
         assert status == 200 and b"Nexus" in body
@@ -285,6 +292,81 @@ async def test_static_app_and_deep_link_are_same_origin_hardened():
         assert status == 204 and "Max-Age=0" in logout_headers["set-cookie"]
         status, _, _ = await _request(server.port, "GET", "/v1/web/bootstrap", headers={"Cookie": cookie})
         assert status == 401
+    finally:
+        await server.aclose()
+
+
+@pytest.mark.asyncio
+async def test_voice_route_auth_csrf_and_route_specific_body_limit():
+    facade = _Facade()
+    server = await HTTPSSEServer(facade).start()
+    try:
+        origin = f"http://127.0.0.1:{server.port}"
+        ticket = server._web.issue_ticket()
+        status, headers, payload = await _request(
+            server.port, "POST", "/v1/web/ticket/redeem",
+            headers={"Origin": origin, "Content-Type": "application/json"},
+            body=msgspec.json.encode({"ticket": ticket}),
+        )
+        assert status == 200
+        cookie = headers["set-cookie"].split(";", 1)[0]
+        csrf = msgspec.json.decode(payload)["csrf"]
+        recording = b"x" * (1024 * 1024 + 1)
+        target = "/v1/web/voice?request_id=voice_1"
+        base = {"Content-Type": "audio/wav"}
+
+        status, _, _ = await _request(
+            server.port, "POST", target, headers={**base, "Origin": origin},
+            content_length=len(recording),
+        )
+        assert status == 401
+        status, _, _ = await _request(
+            server.port, "POST", target,
+            headers={**base, "Cookie": cookie, "Origin": origin},
+            content_length=len(recording),
+        )
+        assert status == 403
+
+        # The server must decide authorization from the headers alone rather
+        # than wait for an advertised body from an unauthenticated caller.
+        status, _, _ = await asyncio.wait_for(
+            _request(
+                server.port, "POST", target,
+                headers=base, content_length=2 * 1024 * 1024,
+            ),
+            timeout=1,
+        )
+        assert status == 401
+        status, _, _ = await _request(
+            server.port, "POST", target,
+            headers={**base, "Cookie": cookie, "Origin": "http://evil.test", "X-CSRF-Token": csrf},
+            content_length=len(recording),
+        )
+        assert status == 403
+
+        status, _, payload = await _request(
+            server.port, "POST", target,
+            headers={**base, "Cookie": cookie, "Origin": origin, "X-CSRF-Token": csrf}, body=recording,
+        )
+        assert status == 200
+        result = p.decode_result(payload)
+        assert isinstance(result, p.VoiceTranscribeResult) and result.text == "hello"
+        assert facade.voice_calls == [("voice_1", len(recording))]
+
+        # Raising the voice route's cap does not change the 1 MiB command cap.
+        status, _, _ = await _request(
+            server.port, "POST", "/v1/web/command",
+            headers={"Cookie": cookie, "Origin": origin, "X-CSRF-Token": csrf,
+                     "Content-Type": "application/json"},
+            content_length=1024 * 1024 + 1,
+        )
+        assert status == 413
+        status, _, _ = await _request(
+            server.port, "POST", target,
+            headers={**base, "Cookie": cookie, "Origin": origin, "X-CSRF-Token": csrf},
+            content_length=http_sse_module.MAX_WEB_VOICE_BODY_BYTES + 1,
+        )
+        assert status == 413
     finally:
         await server.aclose()
 

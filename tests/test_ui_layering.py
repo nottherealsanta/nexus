@@ -34,6 +34,11 @@ ALLOWED_NEXUS_PREFIXES = (
 
 #: Only the first-class TUI is permitted to import these presentation packages.
 ALLOWED_THIRD_PARTY: tuple[str, ...] = ("textual_diff_view",)
+TEXTUAL_SUPPORT_FILES = {
+    "tui_widgets.py", "tui_panels.py", "tui_list.py", "tui_context_header.py",
+    "tui_archived.py", "tui_diff.py", "tui_settings.py", "tui_setup.py",
+    "tui_providers.py", "tui_voice.py",
+}
 
 #: The interpreter's standard-library module names, for a precise allow-list.
 STDLIB = set(sys.stdlib_module_names)
@@ -102,7 +107,7 @@ def test_ui_client_imports_only_allowed_layers(path: Path):
                 f"{path.relative_to(REPO_ROOT)} imports {module}"
             )
         elif top in {"textual", "rich"}:
-            assert path in TUI_FILES, (
+            assert path in TUI_FILES or (path.parent.name == "ui_support" and path.name in TEXTUAL_SUPPORT_FILES), (
                 f"{path.relative_to(REPO_ROOT)} imports {module} outside ui/tui"
             )
         elif top not in ALLOWED_THIRD_PARTY:

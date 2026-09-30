@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING, Any, Self
 
 import httpx
 import msgspec
+import os
 
 from .agents import SubagentOutcome, SubagentRunner, SubagentUsage
 from .agents.model import AgentError, AgentNotFoundError
@@ -1999,6 +2000,8 @@ class Runtime:
         codex_auth_factory: Callable[..., Any] | None = None,
         copilot_auth_factory: Callable[..., Any] | None = None,
         api_key_auth_factory: Callable[..., Any] | None = None,
+        voice_engine_factory: Callable[..., Any] | None = None,
+        voice_store: Any | None = None,
     ) -> None:
         self.workspace = Path(workspace).resolve()
         self._home = Path(home) if home is not None else None
@@ -2069,6 +2072,25 @@ class Runtime:
 
         if initial is None:
             initial = self._load_config()
+
+        from .config.schema import VoiceSection
+        from .voice.manager import VoiceManager
+        from .voice.store import ModelStore
+        voice_config = initial.v2.voice if initial.v2 else VoiceSection()
+        voice_environ = os.environ if environ is None else environ
+        if voice_environ.get("NEXUS_VOICE", "").strip().lower() == "off":
+            voice_config = msgspec.structs.replace(voice_config, enabled=False)
+        if voice_engine_factory is None:
+            from .voice.engine import KestrelEngine
+
+            def voice_engine_factory(path):
+                return KestrelEngine(path, device=self.voice.config.device)
+
+            voice_engine_factory.available = KestrelEngine.available
+        self.voice = VoiceManager(
+            voice_config, engine_factory=voice_engine_factory,
+            store=voice_store if voice_store is not None else ModelStore(nexus_home(self._home), revision=voice_config.revision),
+        )
 
         self._outbound_http_service = (
             outbound_http_service
@@ -5166,11 +5188,22 @@ class Runtime:
 
     # -- lifecycle ---------------------------------------------------------
 
+    def refresh_voice_config(self) -> None:
+        """Apply persisted voice settings without rebuilding provider routes."""
+        from .config.schema import VoiceSection
+        config = Config.load(self.workspace, home=self._home, environ=self._environ)
+        section = config.v2.voice if config.v2 else VoiceSection()
+        environ = os.environ if self._environ is None else self._environ
+        if environ.get("NEXUS_VOICE", "").strip().lower() == "off":
+            section = msgspec.structs.replace(section, enabled=False)
+        self.voice.configure(section)
+
     async def aclose(self) -> None:
         """Close providers this runtime owns. Idempotent."""
         if self._closed:
             return
         self._closed = True
+        await self.voice.shutdown()
         for provider in self._owned_providers:
             aclose = getattr(provider, "aclose", None)
             if aclose is not None:

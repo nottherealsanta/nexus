@@ -69,6 +69,8 @@ EVENTS_PATH = "/v1/events"
 DEFAULT_MAX_HEADER_BYTES = 16 * 1024
 #: Upper bound on one request body (a command, never an upload).
 DEFAULT_MAX_BODY_BYTES = 1024 * 1024
+# The browser voice route carries one bounded PCM WAV recording.
+MAX_WEB_VOICE_BODY_BYTES = 8 * 1024 * 1024
 #: Upper bound on the number of header fields.
 DEFAULT_MAX_HEADERS = 64
 #: Upper bound on simultaneous client connections.
@@ -99,6 +101,7 @@ _REASONS = {
     408: "Request Timeout",
     413: "Content Too Large",
     415: "Unsupported Media Type",
+    421: "Misdirected Request",
     431: "Request Header Fields Too Large",
     500: "Internal Server Error",
     503: "Service Unavailable",
@@ -644,7 +647,25 @@ class HTTPSSEServer:
                 return _RequestError(400, "malformed content-length")
             if length < 0:
                 return _RequestError(400, "malformed content-length")
-        if length > self.max_body_bytes:
+
+        # Authenticate before buffering the larger voice body; the route checks again.
+        if method == "POST" and split.path == "/v1/web/voice" and self._web is not None:
+            if not self._web._host_ok(headers.get("host", "")):
+                return _RequestError(421, "invalid host")
+            active = self._web._session(headers)
+            if not active:
+                return _RequestError(401, "unauthorized")
+            if not self._web._origin_ok(headers.get("origin", "")) or not self._web._csrf_matches(
+                headers.get("x-csrf-token", ""), active[1].csrf
+            ):
+                return _RequestError(403, "forbidden")
+
+        route_body_limit = (
+            MAX_WEB_VOICE_BODY_BYTES
+            if split.path == "/v1/web/voice"
+            else self.max_body_bytes
+        )
+        if length > route_body_limit:
             return _RequestError(413, "request body too large")
 
         body = b""
@@ -959,6 +980,7 @@ __all__ = [
     "COMMAND_PATH",
     "DEFAULT_KEEPALIVE",
     "DEFAULT_MAX_BODY_BYTES",
+    "MAX_WEB_VOICE_BODY_BYTES",
     "DEFAULT_MAX_CONNECTIONS",
     "DEFAULT_MAX_HEADERS",
     "DEFAULT_MAX_HEADER_BYTES",

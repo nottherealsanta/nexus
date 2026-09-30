@@ -31,6 +31,19 @@ kbd { display: inline-block; min-width: 18px; padding: 0 5px; border: 1px solid 
 .text-button { padding: 0; border: 0; background: none; color: var(--accent-ink); font-size: 12.5px; }
 .text-button:hover { text-decoration: underline; }
 
+.activity-bar #leader-hint { position: absolute; inset: 0 0 auto auto; display: none; padding: 0 8px; color: var(--accent); background: var(--canvas); }
+.activity-bar #leader-hint:not(:empty) { display: block; }
+.voice-overlay { z-index: 52; place-items: center; padding: 20px; }
+.voice-dialog { width: min(480px, calc(100vw - 32px)); padding: 22px; }
+.voice-dialog h2 { margin: 6px 0 12px; font-size: 16px; }
+.voice-dialog p { color: var(--muted); }
+.voice-dialog .voice-error { min-height: var(--row); color: var(--danger); }
+.voice-actions, .voice-settings-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.voice-setting { display: flex; align-items: center; gap: 8px; min-height: var(--row); color: var(--muted); }
+.voice-setting input { accent-color: var(--accent); }
+.voice-setting select { margin-left: auto; max-width: 170px; height: 28px; border: 1px solid var(--border); border-radius: 0; background: var(--elevated); color: var(--text); }
+.voice-settings-status { padding: 8px; border-left: 2px solid var(--accent); background: var(--raised); color: var(--accent); }
+
 /* ---------- shell ----------
    One to one with the Textual shell (nexus/ui/tui/app.tcss). One terminal cell is
    8px wide and 16px tall: sessions sidebar 34 cells, details 42, top bar 2 rows. */
@@ -196,6 +209,12 @@ body { font-size: 13px; line-height: var(--row); }
 .task-live .tool-glyph { color: var(--accent); animation: rotate 1.2s linear infinite; transform-origin: center; }
 .card-head:hover, .card-head:focus-visible { color: var(--muted); }
 .tool-glyph { flex: none; }
+.tool-batch { position: relative; flex: none; align-self: stretch; width: 1ch; color: var(--quiet); }
+/* Drawn, not typed: the vendored Latin subset has no box glyphs, so ⎾ │ ⎿ would come from mismatched fallback fonts. */
+.tool-batch::before { content: ""; position: absolute; left: 50%; right: 0; border: 0 solid currentColor; border-left-width: 1px; }
+[data-batch="first"] .tool-batch::before { top: 50%; bottom: 0; border-top-width: 1px; }
+[data-batch="middle"] .tool-batch::before { top: 0; bottom: 0; }
+[data-batch="last"] .tool-batch::before { top: 0; bottom: 50%; border-bottom-width: 1px; }
 .status-failed .tool-glyph { color: var(--danger); }
 .status-running .tool-glyph, .status-requested .tool-glyph { color: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
 .card-head strong { flex: none; font-weight: 400; text-transform: capitalize; }
@@ -393,7 +412,8 @@ body { font-size: 13px; line-height: var(--row); }
 .composer-hint:empty { display: none; }
 .stop-button { height: 26px; min-width: 30px; padding: 0 8px; border: 1px solid var(--danger); border-radius: var(--radius-sm); background: transparent; color: var(--danger); font: 13px/var(--row) var(--font-mono); }
 .stop-button:hover { background: var(--danger-tint); }
-.composer-status { display: flex; justify-content: flex-end; height: var(--row); padding-right: 6px; }
+.composer-status { position: relative; display: flex; justify-content: flex-end; height: var(--row); padding-right: 6px; }
+.composer-status.is-recording::before { content: ""; position: absolute; top: 50%; left: 0; width: 5px; height: 5px; transform: translateY(-50%); border-radius: 50%; background: var(--accent); pointer-events: none; }
 .context-meter { color: var(--quiet); white-space: nowrap; }
 .context-meter.warn { color: var(--warning); }
 .composer-footnote { display: none; }

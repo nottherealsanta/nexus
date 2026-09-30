@@ -625,6 +625,7 @@ def _on_tool_requested(state: ConversationView, event: Event, data: Mapping[str,
                 ToolCallView(
                     call_id=call_id,
                     event_seq=event.seq,
+                    iteration=turn.iteration,
                     name=name,
                     input=tool_input,
                     child_agent_ids=_child_agents_for_call(state, call_id),

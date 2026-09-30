@@ -736,6 +736,183 @@ async def _doctor(
         await client.aclose()
 
 
+async def _voice_command(
+    workspace: Path, args: argparse.Namespace, stdout: TextIO, stderr: TextIO
+) -> int:
+    """Run a voice lifecycle or transcription request through the daemon."""
+    from .ui.cli import open_client
+
+    client = await open_client(workspace)
+    try:
+        return await _dispatch_voice(client, args, stdout, stderr)
+    finally:
+        await client.aclose()
+
+
+async def _dispatch_voice(
+    client: Any, args: argparse.Namespace, stdout: TextIO, stderr: TextIO
+) -> int:
+    """Dispatch the CLI voice subcommands using the public client contract."""
+    from .client.protocol import FacadeError
+    from .host.protocol import VoiceStatusResult, VoiceTranscribeResult
+
+    action = args.voice_action
+    try:
+        if action == "status":
+            result = await client.voice_status()
+            if not isinstance(result, VoiceStatusResult):
+                raise RuntimeError("daemon returned an unexpected voice status")
+            _print_voice_status(result, stdout)
+            return 0 if result.enabled else 1
+
+        if action == "download":
+            # Invoking `voice download` is the user's explicit consent to fetch
+            # the local model. The daemon owns the cache and download lifecycle.
+            result = await client.voice_prepare()
+            if not isinstance(result, VoiceStatusResult):
+                raise RuntimeError("daemon returned an unexpected voice status")
+            return await _wait_voice_download(client, result, stdout, stderr)
+
+        if action == "remove":
+            result = await client.voice_remove()
+            if not isinstance(result, VoiceStatusResult):
+                raise RuntimeError("daemon returned an unexpected voice status")
+            _print_voice_status(result, stdout)
+            return 0 if result.state == "absent" else 1
+
+        if action == "transcribe":
+            # Status supplies the configured duration limit. This path must not
+            # prepare the voice model: transcribe reports voice_not_ready when
+            # the cache is absent, rather than silently downloading it.
+            status = await client.voice_status()
+            if not isinstance(status, VoiceStatusResult):
+                raise RuntimeError("daemon returned an unexpected voice status")
+            data = _read_voice_wav(args.file, status.max_seconds)
+            result = await client.voice_transcribe(data, uuid.uuid4().hex)
+            if not isinstance(result, VoiceTranscribeResult):
+                raise RuntimeError("daemon returned an unexpected transcription")
+            # Keep stdout machine-friendly: it contains only the transcript.
+            stdout.write(result.text)
+            if result.text and not result.text.endswith("\n"):
+                stdout.write("\n")
+            return 0
+
+        raise ValueError(f"unknown voice action {action!r}")
+    except FacadeError as exc:
+        stderr.write(f"Error: {_voice_error_text(exc.message)}\n")
+        return 1
+    except (OSError, ValueError) as exc:
+        # Do not echo filenames or raw OS exceptions, which may reveal paths.
+        message = str(exc) if isinstance(exc, ValueError) else "could not read WAV file"
+        stderr.write(f"Error: {_voice_error_text(message)}\n")
+        return 1
+
+
+_VOICE_DOWNLOAD_TIMEOUT = 10 * 60
+_VOICE_POLL_SECONDS = 1.0
+_VOICE_DOWNLOAD_TERMINAL = {"ready", "error", "unsupported", "disabled"}
+
+
+async def _wait_voice_download(
+    client: Any, initial: Any, stdout: TextIO, stderr: TextIO
+) -> int:
+    """Wait boundedly for the daemon's background voice preparation task."""
+    from .host.protocol import VoiceStatusResult
+
+    deadline = asyncio.get_running_loop().time() + _VOICE_DOWNLOAD_TIMEOUT
+    result = initial
+    last_progress: tuple[str, int] | None = None
+    while result.state not in _VOICE_DOWNLOAD_TERMINAL:
+        progress_bucket = int(max(0.0, min(1.0, float(result.progress))) * 10)
+        marker = (result.state, progress_bucket)
+        if marker != last_progress:
+            stderr.write(
+                f"Preparing local voice model: {_voice_error_text(result.state)} "
+                f"({progress_bucket * 10}%)\n"
+            )
+            stderr.flush()
+            last_progress = marker
+
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            _print_voice_status(result, stdout)
+            stderr.write(
+                f"Error: voice preparation did not finish within "
+                f"{_VOICE_DOWNLOAD_TIMEOUT} seconds. Check `nexus voice status` and retry.\n"
+            )
+            return 1
+        await asyncio.sleep(min(_VOICE_POLL_SECONDS, remaining))
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            continue
+        try:
+            result = await asyncio.wait_for(client.voice_status(), timeout=remaining)
+        except TimeoutError:
+            _print_voice_status(result, stdout)
+            stderr.write(
+                f"Error: voice preparation did not finish within "
+                f"{_VOICE_DOWNLOAD_TIMEOUT} seconds. Check `nexus voice status` and retry.\n"
+            )
+            return 1
+        if not isinstance(result, VoiceStatusResult):
+            raise RuntimeError("daemon returned an unexpected voice status")
+
+    _print_voice_status(result, stdout)
+    if result.state == "unsupported":
+        detail = _voice_error_text(result.message) if result.message else "Voice runtime is unavailable."
+        stderr.write(
+            f"Error: {detail} Install Nexus with its voice extra "
+            "(`uv pip install 'nexus-harness[voice]'`). If the extra was installed "
+            "while the daemon was already running, restart it with `nexus daemon restart`.\n"
+        )
+        return 1
+    return 0 if result.state == "ready" else 1
+
+
+_VOICE_WAV_HARD_LIMIT = 4 * 1024 * 1024
+_VOICE_WAV_HEADER_ALLOWANCE = 1024
+
+
+def _read_voice_wav(path: str | Path, max_seconds: int) -> bytes:
+    """Read a WAV only up to the configured audio duration and hard byte cap."""
+    from .voice.audio import SAMPLE_RATE
+
+    seconds = max(1, min(120, int(max_seconds)))
+    max_bytes = min(
+        _VOICE_WAV_HARD_LIMIT,
+        _VOICE_WAV_HEADER_ALLOWANCE + SAMPLE_RATE * 2 * seconds,
+    )
+    try:
+        with Path(path).open("rb") as handle:
+            data = handle.read(max_bytes + 1)
+    except OSError:
+        raise OSError("could not read WAV file") from None
+    if len(data) > max_bytes:
+        raise ValueError("WAV file exceeds the configured voice audio size limit")
+    return data
+
+
+def _voice_error_text(value: Any) -> str:
+    """Bound and redact control characters and absolute paths in CLI errors."""
+    text = "".join(char if char.isprintable() else " " for char in str(value))
+    text = re.sub(r"(?<![\w])/(?:[^\s,;]+/)*[^\s,;]*", "[path]", text)
+    return text[:240]
+
+
+def _print_voice_status(result: Any, stdout: TextIO) -> None:
+    stdout.write(
+        f"state: {_voice_error_text(result.state)}\n"
+        f"enabled: {'yes' if result.enabled else 'no'}\n"
+        f"progress: {max(0.0, min(1.0, float(result.progress))):.0%}\n"
+    )
+    if result.bytes_total > 0:
+        stdout.write(f"download: {max(0, result.bytes_done)}/{result.bytes_total} bytes\n")
+    if result.device:
+        stdout.write(f"device: {_voice_error_text(result.device)}\n")
+    if result.message:
+        stdout.write(f"message: {_voice_error_text(result.message)}\n")
+
+
 # ---------------------------------------------------------------------------
 # Local daemon commands (no facade)
 # ---------------------------------------------------------------------------
@@ -1030,6 +1207,20 @@ def _print_doctor(report: dict[str, Any], stdout: TextIO) -> None:
             f"models={registry.get('models', 0)} stale={registry.get('stale', False)}\n"
         )
     _print_registry_mismatches(report.get("registry_mismatches"), stdout)
+    voice = report.get("voice")
+    if isinstance(voice, dict):
+        stdout.write(
+            f"voice: state={_voice_error_text(voice.get('state', '?'))} "
+            f"enabled={'yes' if voice.get('enabled') else 'no'}"
+        )
+        progress = voice.get("progress")
+        if isinstance(progress, (int, float)) and not isinstance(progress, bool):
+            stdout.write(f" progress={max(0.0, min(1.0, float(progress))):.0%}")
+        stdout.write("\n")
+        if voice.get("device"):
+            stdout.write(f"  device: {_voice_error_text(voice['device'])}\n")
+        if voice.get("message"):
+            stdout.write(f"  message: {_voice_error_text(voice['message'])}\n")
     extensions = report.get("extensions")
     if isinstance(extensions, dict):
         stdout.write(
@@ -1283,6 +1474,16 @@ def build_parser() -> argparse.ArgumentParser:
     tools_sub = tools.add_subparsers(dest="tools_action", required=True)
     tools_sub.add_parser("list", help="List available tools")
 
+    voice = sub.add_parser("voice", help="Manage local voice transcription")
+    voice_sub = voice.add_subparsers(dest="voice_action", required=True)
+    voice_sub.add_parser("status", help="Show local voice model status")
+    voice_sub.add_parser("download", help="Download and prepare the local voice model")
+    voice_sub.add_parser("remove", help="Remove the cached local voice model")
+    voice_transcribe = voice_sub.add_parser(
+        "transcribe", help="Transcribe a WAV file with the cached local model"
+    )
+    voice_transcribe.add_argument("file", metavar="FILE.wav")
+
     worktrees = sub.add_parser("worktrees", help="Inspect and manage child worktrees")
     worktrees_sub = worktrees.add_subparsers(dest="worktrees_action", required=True)
     worktrees_sub.add_parser("list", help="List daemon-owned child worktrees")
@@ -1414,6 +1615,8 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(_agents_command(workspace, args, stdout))
         if args.command == "tools":
             return asyncio.run(_tools_command(workspace, args, stdout))
+        if args.command == "voice":
+            return asyncio.run(_voice_command(workspace, args, stdout, stderr))
         if args.command == "worktrees":
             return asyncio.run(_worktrees_command(workspace, args, stdout, stderr))
         if args.command == "doctor":
@@ -1429,6 +1632,9 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         if args.command == "chat":
             return 130
+        if args.command == "voice" and args.voice_action == "download":
+            stderr.write("Voice download interrupted; preparation may continue in the daemon.\n")
+            return 130
         stderr.write("Cancelled. Workspace changes may already have occurred.\n")
         return 130
     except Exception as exc:  # noqa: BLE001 - the CLI boundary reports, never tracebacks
@@ -1436,6 +1642,8 @@ def main(argv: list[str] | None = None) -> int:
             _json_error(args, exc)
         elif args.command == "worktrees":
             stderr.write(f"Error: {_worktree_text(str(exc))}\n")
+        elif args.command == "voice":
+            stderr.write(f"Error: {_voice_error_text(str(exc))}\n")
         else:
             stderr.write(f"Error: {exc}\n")
         return 1

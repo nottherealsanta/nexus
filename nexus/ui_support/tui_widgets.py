@@ -359,6 +359,9 @@ class ChatInput(Vertical):
         with Horizontal(id="runtime-info"):
             yield RootAgentBar(id="root-agent")
         with Horizontal(id="bottom-info"):
+            dot = Static("●", id="root-agent-recording", markup=False)
+            dot.display = False
+            yield dot
             yield ContextUsage("", id="context-usage", markup=False)
 
     async def on_mount(self) -> None:

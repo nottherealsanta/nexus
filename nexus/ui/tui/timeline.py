@@ -16,6 +16,8 @@ from textual.widgets import Button, Markdown, Static
 
 from ...ui_support.text import redact
 from ...ui_support.timeline import (
+    BATCH_GLYPHS,
+    tool_batches,
     _agent_link_label,
     _agent_metrics,
     _has_message_content,
@@ -188,6 +190,21 @@ class ToolActivityWidget(Widget):
         self.tool = tool
         self._spinner_index = 0
         self._spinner = None
+        self.batch: str | None = None
+
+    def set_batch(self, position: str | None) -> None:
+        """Join this card to the calls its model response issued together."""
+        if position == self.batch:
+            return
+        self.batch = position
+        self.set_class(position is not None, "-batched")
+        if self.is_mounted:
+            self._render_header()
+
+    @property
+    def _gutter(self) -> str:
+        glyph = BATCH_GLYPHS.get(self.batch or "")
+        return f"{glyph} " if glyph else ""
 
     def compose(self) -> ComposeResult:
         yield Static("", id="tool-header", markup=False)
@@ -236,7 +253,7 @@ class ToolActivityWidget(Widget):
         summary = redact(summary)
         suffix = f" · {summary}" if summary else (f" · {marker}" if marker != "completed" else "")
         header = self.query_one("#tool-header", Static)
-        header.update(f"{indicator}{tool_heading(tool)}{suffix}")
+        header.update(f"{self._gutter}{indicator}{tool_heading(tool)}{suffix}")
         self._style_header()
 
     def _style_header(self) -> None:
@@ -325,7 +342,7 @@ class TaskActivityWidget(ToolActivityWidget):
         tool = self.tool
         child = next(iter(self._children()), None)
         line, running = _task_header(tool, child, self._spinner_index)
-        self.query_one("#tool-header", Static).update(line)
+        self.query_one("#tool-header", Static).update(f"{self._gutter}{line}" if self._gutter else line)
         self._sync_metrics(child, running)
         self._style_header()
 
@@ -480,6 +497,7 @@ class TurnWidget(Widget):
         )
         if self.collapsed:
             entries = [entry for entry in entries if isinstance(entry[2], MessageView) and entry[2].role == "user"]
+        batches = tool_batches(turn.tools)
         wanted = {key for _, key, _ in entries}
         for key, widget in tuple(self._items.items()):
             if not self.is_attached:
@@ -517,12 +535,15 @@ class TurnWidget(Widget):
                         widget, AssistantMessage
                     ) else widget.set_message(value)
             elif isinstance(value, ToolCallView):
+                if widget is not None and isinstance(widget, ToolActivityWidget):
+                    widget.set_batch(batches.get(value.call_id))
                 if widget is None:
                     widget = (
                         TaskActivityWidget(value, agents, classes="tool-card")
                         if value.name.casefold() in {"task", "subagent"}
                         else ToolActivityWidget(value, classes="tool-card")
                     )
+                    widget.set_batch(batches.get(value.call_id))
                     if not await self._mount_item(widget):
                         return
                     self._items[key] = widget

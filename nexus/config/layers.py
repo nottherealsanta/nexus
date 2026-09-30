@@ -59,6 +59,7 @@ V2_SECTION_KEYS = frozenset(
         "sessions",
         "settings",
         "telemetry",
+        "voice",
     }
 )
 # ``model`` is the one name shared by both shapes: a string in v1, a table in v2.
@@ -114,6 +115,8 @@ _V2_NUMERIC = {
     "mcp.connect_timeout_s": float,
     "mcp.restart_max": int,
     "session.snapshot_every": int,
+    "voice.max_seconds": int,
+    "voice.unload_after_minutes": int,
 }
 _V2_BOOL = frozenset(
     {
@@ -125,6 +128,10 @@ _V2_BOOL = frozenset(
         "mcp.enabled",
         "models.offline",
         "tools.web.fetch_enabled",
+        "voice.enabled",
+        "voice.autoload",
+        "voice.auto_send",
+        "voice.timestamps",
     }
 )
 
@@ -319,6 +326,8 @@ def env_overlay_v2(environ: Mapping[str, str]) -> dict[str, Any]:
                 cursor[key] = existing
             cursor = existing
         cursor[keys[-1]] = _coerce_v2(keys, raw)
+    if environ.get("NEXUS_VOICE", "").strip().lower() == "off":
+        overlay.setdefault("voice", {})["enabled"] = False
     return overlay
 
 

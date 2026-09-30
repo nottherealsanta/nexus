@@ -194,6 +194,8 @@ class ToolCallView(_View):
 
     call_id: str = ""
     event_seq: int = 0
+    #: Model iteration that requested the call; calls sharing it are one batch.
+    iteration: int = 0
     name: str = ""
     status: str = "requested"  # requested|running|completed|failed
     bundle: str | None = None

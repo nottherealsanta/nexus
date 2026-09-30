@@ -24,6 +24,7 @@ SHORTCUTS: tuple[tuple[str, str | None, str], ...] = (
     ("ctrl+s", "open_settings", "Settings"),
     ("ctrl+i", "open_context", "Inspect context preview and usage"),
     ("ctrl+t", None, "Cycle root reasoning effort"),
+    ("ctrl+space", "toggle_voice", "Dictate (voice input)"),
     ("ctrl+e", None, "Toggle the Logs drawer"),
     ("a", None, "Open the root-agent picker"),
     ("shift+tab", None, "Cycle root agent"),
@@ -34,12 +35,36 @@ SHORTCUTS: tuple[tuple[str, str | None, str], ...] = (
 )
 
 
+#: Ctrl+X leader: press Ctrl+X, then one letter. Rows are (letter, app action, description).
+LEADER_KEY = "ctrl+x"
+LEADER_SHORTCUTS: tuple[tuple[str, str, str], ...] = (
+    ("m", "open_model_picker", "Choose model"),
+    ("v", "start_voice", "Dictate; any key stops, Esc discards"),
+    ("n", "new_session", "New session"),
+    ("o", "list_sessions", "List sessions"),
+    ("f", "fork_session", "Fork session"),
+    ("g", "pick_agent", "Open the root-agent picker"),
+    ("b", "toggle_sessions", "Toggle the sessions sidebar"),
+    ("l", "toggle_details", "Toggle the details sidebar"),
+    ("s", "open_settings", "Settings"),
+    ("i", "open_context", "Inspect context preview and usage"),
+    ("e", "toggle_logs", "Toggle the Logs drawer"),
+    ("t", "cycle_reasoning_effort", "Cycle root reasoning effort"),
+    ("r", "reconnect", "Reconnect"),
+    ("?", "show_shortcuts", "Show keyboard shortcuts"),
+)
+
+
 def _shortcut_lines() -> tuple[str, ...]:
     labels = [(key.title(), description) for key, _, description in SHORTCUTS]
-    width = max(len(key) for key, _ in labels)
+    leader = [(f"Ctrl+X {key.upper()}", description) for key, _, description in LEADER_SHORTCUTS]
+    width = max(len(key) for key, _ in (*labels, *leader))
     return (
         "Keyboard shortcuts",
         *(f"  {key:<{width}} {description}" for key, description in labels),
+        "",
+        "Ctrl+X leader (press Ctrl+X, then a key)",
+        *(f"  {key:<{width}} {description}" for key, description in leader),
     )
 
 

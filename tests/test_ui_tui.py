@@ -2146,11 +2146,20 @@ def test_keyboard_reference_and_bindings_share_one_source():
     # The rendered reference is exactly one line per shortcut, same order, with
     # the same description; and every actionable entry is a live binding.
     assert KEYBOARD_SHORTCUTS[0] == "Keyboard shortcuts"
-    rendered = KEYBOARD_SHORTCUTS[1:]
+    from nexus.ui_support.tui_command_palette import LEADER_SHORTCUTS
+
+    rendered = KEYBOARD_SHORTCUTS[1:1 + len(SHORTCUTS)]
     assert len(rendered) == len(SHORTCUTS)
     for line, (key, action, description) in zip(rendered, SHORTCUTS):
         assert line.strip().startswith(key.title())
         assert line.split(maxsplit=1)[1] == description
+    # The Ctrl+X leader section follows a blank line and its own heading.
+    leader = KEYBOARD_SHORTCUTS[1 + len(SHORTCUTS):]
+    assert leader[0] == "" and leader[1].startswith("Ctrl+X leader")
+    assert len(leader[2:]) == len(LEADER_SHORTCUTS)
+    for line, (letter, _action, description) in zip(leader[2:], LEADER_SHORTCUTS):
+        assert line.strip().startswith(f"Ctrl+X {letter.upper()}")
+        assert line.endswith(description)
     assert list(NexusTextualApp.BINDINGS) == [
         (key, action, description)
         for key, action, description in SHORTCUTS

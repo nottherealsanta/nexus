@@ -407,6 +407,31 @@ class WorktreeDiscard(msgspec.Struct, tag=True, frozen=True):
     confirmation_token: str = ""
 
 
+class VoiceStatus(msgspec.Struct, tag=True, frozen=True):
+    """Read the bounded local voice model status."""
+
+
+class VoicePrepare(msgspec.Struct, tag=True, frozen=True):
+    force: bool = False
+
+
+class VoiceTranscribe(msgspec.Struct, tag=True, frozen=True, repr_omit_defaults=True):
+    audio: bytes
+    request_id: str
+    session: str = ""
+
+    def __repr__(self) -> str:
+        return f"VoiceTranscribe(request_id={self.request_id!r}, audio=<redacted>)"
+
+
+class VoiceCancel(msgspec.Struct, tag=True, frozen=True):
+    request_id: str
+
+
+class VoiceRemove(msgspec.Struct, tag=True, frozen=True):
+    """Remove the cached local voice model."""
+
+
 class Doctor(msgspec.Struct, tag=True, frozen=True):
     """A redacted health report: config, providers, registry, extensions, MCP.
 
@@ -512,6 +537,11 @@ Command = (
     | WorktreeAcknowledge
     | WorktreeIntegrate
     | WorktreeDiscard
+    | VoiceStatus
+    | VoicePrepare
+    | VoiceTranscribe
+    | VoiceCancel
+    | VoiceRemove
     | Doctor
     | Health
     | MockList
@@ -579,6 +609,11 @@ COMMANDS: tuple[type, ...] = (
     WorktreeAcknowledge,
     WorktreeIntegrate,
     WorktreeDiscard,
+    VoiceStatus,
+    VoicePrepare,
+    VoiceTranscribe,
+    VoiceCancel,
+    VoiceRemove,
     Doctor,
     Health,
     MockList,
@@ -1029,6 +1064,32 @@ class DoctorResult(msgspec.Struct, tag=True, frozen=True):
     report: dict[str, Any] = msgspec.field(default_factory=dict)
 
 
+class VoiceStatusResult(msgspec.Struct, tag=True, frozen=True):
+    state: str = "absent"
+    progress: float = 0.0
+    bytes_done: int = 0
+    bytes_total: int = 0
+    device: str = ""
+    revision: str = ""
+    message: str = ""
+    max_seconds: int = 120
+    enabled: bool = False
+    auto_send: bool = False
+    configured_device: str = "auto"
+
+
+class VoiceTranscribeResult(msgspec.Struct, tag=True, frozen=True):
+    request_id: str
+    text: str
+    duration_s: float
+    elapsed_s: float
+    language: str = ""
+
+
+class VoiceCancelResult(msgspec.Struct, tag=True, frozen=True):
+    cancelled: bool = False
+
+
 class HealthResult(msgspec.Struct, tag=True, frozen=True):
     ok: bool = True
     version: int = PROTOCOL_VERSION
@@ -1139,6 +1200,9 @@ Result = (
     | WorktreeAcknowledgeResult
     | WorktreeMutationResult
     | DoctorResult
+    | VoiceStatusResult
+    | VoiceTranscribeResult
+    | VoiceCancelResult
     | HealthResult
     | MockListResult
     | MockStartResult
@@ -1207,6 +1271,9 @@ RESULTS: tuple[type, ...] = (
     WorktreeAcknowledgeResult,
     WorktreeMutationResult,
     DoctorResult,
+    VoiceStatusResult,
+    VoiceTranscribeResult,
+    VoiceCancelResult,
     HealthResult,
     MockListResult,
     MockStartResult,
@@ -1368,6 +1435,14 @@ __all__ = [
     "ToolsListResult",
     "WebLaunch",
     "WebLaunchResult",
+    "VoiceCancel",
+    "VoiceCancelResult",
+    "VoicePrepare",
+    "VoiceRemove",
+    "VoiceStatus",
+    "VoiceStatusResult",
+    "VoiceTranscribe",
+    "VoiceTranscribeResult",
     "WorktreeAcknowledge",
     "WorktreeAcknowledgeResult",
     "WorktreeDiscard",

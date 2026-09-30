@@ -87,7 +87,9 @@ local and needs no daemon. `run` takes a prompt, or `-` to read the prompt from
 stdin. `chat` is the full-screen Textual shell; `Ctrl+P` opens chat commands,
 `Ctrl+N` starts a session, `Ctrl+O` opens the Sessions dialog, `Ctrl+F` forks,
 `Ctrl+B` / `Ctrl+L` toggle the sessions and details sidebars, `Ctrl+S` opens
-Settings, and `Shift+Tab` cycles root agents. `Enter` sends the prompt, and `Shift+Enter` (or
+Settings, and `Shift+Tab` cycles root agents. `Ctrl+X` is a leader key: `Ctrl+X M`
+opens the model picker, `Ctrl+X V` starts dictation (any key then stops it, `Esc`
+discards), and `Ctrl+X ?` lists the rest. `Enter` sends the prompt, and `Shift+Enter` (or
 `Ctrl+Enter`) inserts a newline; `Alt+Enter` does the same only when the
 terminal's key protocol preserves the modifier; `Ctrl+J` inserts one too, which
 is the fallback for terminals that cannot report a modified Enter. A non-TTY

@@ -386,6 +386,10 @@ ArchivedSessionsScreen {
     color: $nx-quiet;
 }
 
+.tool-card.-batched #tool-header {
+    color: $nx-quiet;
+}
+
 .tool-card:hover, .tool-card:focus {
     background: $nx-element;
 }
@@ -463,6 +467,67 @@ ArchivedSessionsScreen {
     background: $nx-panel;
 }
 
+#leader-hint {
+    height: auto;
+    margin: 0 2;
+    color: $nx-accent;
+    display: none;
+}
+
+VoiceConsentScreen {
+    align: center middle;
+    background: $nx-scrim;
+}
+
+#voice-consent-dialog {
+    width: 64;
+    max-width: 90%;
+    height: auto;
+    padding: 1 2;
+    background: $nx-dialog;
+}
+
+#voice-title {
+    height: 1;
+    margin-bottom: 1;
+    color: $nx-accent;
+    text-style: bold;
+}
+
+#voice-status {
+    height: auto;
+    min-height: 2;
+    color: $nx-text;
+}
+
+#voice-actions {
+    height: auto;
+    margin-top: 1;
+}
+
+#voice-actions Button, #voice-retry, #voice-ready {
+    width: auto;
+    min-width: 14;
+    margin-right: 1;
+}
+
+#settings-voice-actions {
+    height: auto;
+    margin-top: 1;
+}
+
+#settings-voice-actions Button {
+    width: auto;
+    margin-right: 1;
+}
+
+#voice Select {
+    width: 20;
+    height: 3;
+    border: none;
+    background: $nx-panel;
+}
+
 #inline-picker {
     display: none;
     width: 1fr;
@@ -519,6 +584,20 @@ ArchivedSessionsScreen {
     content-align: left middle;
     overflow-x: hidden;
     text-overflow: ellipsis;
+}
+
+#bottom-info {
+    layers: base overlay;
+}
+
+#root-agent-recording {
+    layer: overlay;
+    position: absolute;
+    offset: 0 0;
+    width: 1;
+    height: 1;
+    padding: 0;
+    color: #f5a742;
 }
 
 #root-separator-model, #root-separator-provider, #root-separator-effort {

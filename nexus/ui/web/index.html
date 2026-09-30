@@ -90,12 +90,12 @@
           <label class="sr-only" for="composer-input">Message Nexus</label>
           <textarea id="composer-input" rows="1" placeholder="" autocomplete="off" aria-controls="slash-menu"></textarea>
           <div class="composer-bottom">
-            <div class="composer-context"><button type="button" class="chip agent-chip" id="composer-agent" aria-haspopup="dialog" aria-label="Choose agent">Default agent</button><button type="button" class="chip model-chip" id="composer-model" aria-haspopup="dialog" aria-label="Choose model">Default model</button><button type="button" class="chip reasoning-effort" id="reasoning-effort" aria-haspopup="dialog" aria-live="polite" title="Current root effort for the next turn">Effort: default</button></div>
+      <div class="composer-context"><button type="button" class="chip agent-chip" id="composer-agent" aria-haspopup="dialog" aria-label="Choose agent">Default agent</button><button type="button" class="chip model-chip" id="composer-model" aria-haspopup="dialog" aria-label="Choose model">Default model</button><button type="button" class="chip reasoning-effort" id="reasoning-effort" aria-haspopup="dialog" aria-live="polite" title="Current root effort for the next turn">Effort: default</button></div>
             <div class="composer-actions"><span class="composer-hint" id="composer-hint"></span><button class="stop-button" id="stop-button" type="button" aria-label="Stop" title="Stop the running turn" hidden>■ stop</button></div>
           </div>
-          <div class="composer-status"><span class="context-meter" id="context-meter"></span></div>
+          <div class="composer-status" id="composer-status"><span class="context-meter" id="context-meter"></span></div>
         </form>
-        <div class="activity-bar" id="activity-bar" aria-hidden="true"><i></i></div>
+        <div class="activity-bar" id="activity-bar" aria-hidden="true"><i></i><span id="leader-hint"></span></div>
         <div class="composer-footnote" hidden><span class="composer-path" id="composer-path"></span></div>
       </footer>
     </main>
@@ -124,6 +124,7 @@
         <a href="#settings-workspace">Workspace</a>
         <a href="#settings-providers">Providers</a>
         <a href="#settings-agents">Agents</a>
+        <a href="#settings-voice">Voice</a>
       </nav>
       <div class="settings-body" id="settings-body">
         <header class="settings-header"><span class="settings-crumb" id="settings-crumb">Appearance</span></header>
@@ -189,6 +190,7 @@
             <div><dt>Inspect context</dt><dd><kbd>Ctrl</kbd><kbd>I</kbd></dd></div>
             <div><dt>Reasoning effort</dt><dd><kbd>Ctrl</kbd><kbd>T</kbd></dd></div>
             <div><dt>Toggle logs</dt><dd><kbd>Ctrl</kbd><kbd>E</kbd></dd></div>
+            <div><dt>Dictate (voice input)</dt><dd><kbd>Ctrl</kbd><kbd>Space</kbd></dd></div>
             <div><dt>Cancel the active turn</dt><dd><kbd>Ctrl</kbd><kbd>C</kbd></dd></div>
             <div><dt>Reconnect</dt><dd><kbd>Ctrl</kbd><kbd>R</kbd></dd></div>
             <div><dt>Close panel or dialog</dt><dd><kbd>Esc</kbd></dd></div>
@@ -216,6 +218,20 @@
             <div class="segmented" id="default-agent-choices" role="radiogroup" aria-label="Default agent"></div>
             <p class="settings-help" id="default-agent-note" role="status" aria-live="polite"></p>
           </fieldset>
+        </section>
+        <section class="settings-section" id="settings-voice" aria-labelledby="settings-voice-title">
+          <h3 id="settings-voice-title">Voice</h3>
+          <p class="settings-help">Local speech recognition. The model downloads only after you confirm; audio is transcribed locally and is not saved.</p>
+          <p class="voice-settings-status" id="settings-voice-status" role="status" aria-live="polite">Checking voice status…</p>
+          <label class="voice-setting"><input id="voice-enabled" type="checkbox"><span>Enable voice input</span></label>
+          <label class="voice-setting"><input id="voice-auto-send" type="checkbox"><span>Send dictated text automatically</span></label>
+          <label class="voice-setting" for="voice-device">Device
+            <select id="voice-device"><option value="auto">Auto</option><option value="cpu">CPU</option><option value="mps">Apple Metal</option><option value="cuda">CUDA</option></select>
+          </label>
+          <label class="voice-setting" for="voice-max-seconds">Maximum recording
+            <select id="voice-max-seconds"><option value="30">30 seconds</option><option value="60">60 seconds</option><option value="120">120 seconds</option></select>
+          </label>
+          <div class="voice-settings-actions"><button class="toolbar-button" id="voice-settings-download" type="button">Download / Retry model</button><button class="toolbar-button" id="voice-settings-remove" type="button">Remove model</button></div>
         </section>
         </div>
       </div>
@@ -275,6 +291,15 @@
         <ul class="setup-env" id="setup-env" aria-label="Providers connected through the daemon environment"></ul>
       </div>
       <footer class="setup-actions"><span class="setup-action-status" id="setup-action-status" role="status" aria-live="polite"></span><button class="toolbar-button" id="setup-retry" type="button" hidden>Try again</button><button class="toolbar-button" id="setup-dismiss" type="button">Not now</button></footer>
+    </section>
+  </div>
+  <div class="overlay voice-overlay" id="voice-overlay" hidden>
+    <section class="dialog voice-dialog" id="voice-dialog" role="dialog" tabindex="-1" aria-modal="true" aria-labelledby="voice-title" aria-describedby="voice-message">
+      <p class="eyebrow">Local speech recognition</p>
+      <h2 id="voice-title">Use voice input?</h2>
+      <p id="voice-message">Nexus will download the pinned voice model (about 178 MB) and load it on this machine. Audio is transcribed locally and is not saved.</p>
+      <p class="voice-error" id="voice-error" role="alert" aria-live="assertive"></p>
+      <div class="voice-actions"><button class="toolbar-button" id="voice-dismiss" type="button">Not now</button><button class="toolbar-button btn-signal" id="voice-confirm" type="button">Download and load</button><button class="toolbar-button" id="voice-retry" type="button" hidden>Retry</button></div>
     </section>
   </div>
   <div class="toast-region" id="toast-region" aria-live="polite"></div>

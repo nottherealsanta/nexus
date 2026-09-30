@@ -12,6 +12,7 @@ Start here, then open the doc for the area you are changing:
 | Loop, providers, tools, context, sessions, managers, runtime, host/daemon, protocol, reducer | [docs/core.md](docs/core.md) |
 | `nexus chat`, the Textual shell (`nexus/ui/tui/`, `nexus/ui_support/`) | [docs/textual.md](docs/textual.md) |
 | `nexus web`, the browser client (`nexus/ui/web/`, `nexus/host/web.py`) | [docs/web.md](docs/web.md) |
+| Releases, versioning, CI, publishing, `nexus update` | [docs/release.md](docs/release.md) |
 
 The longer reference docs at the root are background. Search them; don't read them end to end:
 `ARCHITECTURE.md` (layers, five contracts, security), `EXTENDING.md` (add a
@@ -54,7 +55,7 @@ Tests need no network or credentials. They use temporary workspaces,
    `nexus/ui_support/tui_context_header.py`, `nexus/ui_support/tui_archived.py`,
   `nexus/ui_support/tui_diff.py`,
   `nexus/ui_support/tui_settings.py`, `nexus/ui_support/tui_setup.py`,
-  `nexus/ui_support/tui_providers.py`).
+  `nexus/ui_support/tui_providers.py`, `nexus/ui_support/tui_voice.py`).
    Checked by `tests/test_ui_layering.py`.
 3. **No line caps.** Line counts are recorded in the Phase 3 baseline report
    (`tests/test_phase3_exit.py`) for information only. New Textual behavior still

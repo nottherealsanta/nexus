@@ -126,6 +126,32 @@ api_key = "${env:ACME_API_KEY}"
 Pass the provider conformance suite (`tests/provider_conformance/`) against a
 recorded fixture before relying on it. If it passes, the loop will drive it.
 
+## A voice inference engine
+
+Local dictation is an optional built-in manager, not an extension loaded from a
+workspace. The engine seam is the `Engine` protocol in
+`nexus/voice/manager.py` (`load`, `transcribe(bytes)`, `close`); `Runtime`
+supplies an engine factory to `VoiceManager`. To add or replace an adapter,
+implement that protocol in `nexus/voice/`, keep dependency imports lazy, and
+preserve the existing bounded WAV, serialized-worker, model-store, and
+host-command boundaries. Add fake-engine unit coverage; no UI should import the
+inference library or access the model cache directly.
+
+The current adapter is `KestrelEngine`, using Kestrel 0.8.0's internal
+`ParakeetTdtRuntime` with the pinned local model directory. Photon is not used:
+source inspection found telemetry in its high-level runtime and no discovered
+opt-out. The internal API is version-sensitive, and real inference, platform
+support, benchmarks, and network behavior remain unverified. Do not describe the
+current path as proven offline. The model is distributed under CC-BY-4.0; retain
+the attribution in `nexus/voice/NOTICE`.
+
+Voice runtime dependencies are in the optional `[voice]` extra
+(`uv sync --extra voice`); users separately approve a model download in the TUI
+or web confirmation dialog, or explicitly run `nexus voice download`. Daemon
+startup can warm only a verified cache; ordinary startup and transcription must
+not download missing weights. See
+[`VOICE_PLAN.md`](VOICE_PLAN.md) and [`VOICE_SPIKE.md`](VOICE_SPIKE.md).
+
 ## A custom skill
 
 `.agents/skills/<dir>/SKILL.md`. The six supported keys are exactly `name`,

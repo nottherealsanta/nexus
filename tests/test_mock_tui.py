@@ -13,6 +13,7 @@ from nexus.runtime import Runtime
 from nexus.ui.cli import commands
 from nexus.ui.cli.client import Client
 from nexus.ui.tui.app import NexusTextualApp
+from nexus.ui.tui.timeline import ToolActivityWidget
 from nexus.ui_support.tui_context_header import ContextModal
 from tests.test_tui_integration_render import _FacadeTransport
 
@@ -73,6 +74,35 @@ async def test_mock_command_lists_runs_and_switches_session(dev_env):
             verdict = next(m.text for m in app.controller.view.messages if "mock verdict" in (m.text or ""))
             assert verdict.startswith(("✓", "All workers")) and "✗" not in verdict
             assert len(app.controller.view.agents) >= 5  # workers (+ grandchild) reached the UI
+    finally:
+        await facade.wait_idle(timeout=10.0)
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_mock_parallel_tools_render_as_grouped_batches(dev_env):
+    sandbox = ensure_sandbox(dev_env)
+    runtime = Runtime(sandbox, home=dev_env.parent, environ={"NEXUS_DEV": "1"})
+    facade = HostFacade(runtime)
+    facade.open_session("main")
+    app = NexusTextualApp(Client(_FacadeTransport(facade)), session="main")
+    try:
+        async with app.run_test(size=(120, 60)) as pilot:
+            await pilot.pause()
+            await _submit(app, pilot, "/mock parallel-tools --speed 0")
+            await _until(
+                pilot,
+                lambda: any("mock verdict" in (m.text or "") for m in app.controller.view.messages),
+            )
+            await pilot.pause(0.5)
+            cards = [c for c in app.query(ToolActivityWidget) if c.tool.name]
+            by_position = [c.batch for c in sorted(cards, key=lambda c: c.tool.event_seq)]
+            assert by_position[0] is None  # the lone glob has no gutter
+            assert by_position[1] == "first" and "last" in by_position
+            first = next(c for c in cards if c.batch == "first")
+            assert str(first.query_one("#tool-header", Static).render()).startswith("┌ ")
+            last = next(c for c in cards if c.batch == "last")
+            assert str(last.query_one("#tool-header", Static).render()).startswith("└ ")
     finally:
         await facade.wait_idle(timeout=10.0)
         await runtime.aclose()

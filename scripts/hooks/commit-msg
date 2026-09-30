@@ -1,6 +1,6 @@
 #!/bin/sh
 # Conventional Commits check for the subject line. release-please reads these
-# subjects to pick the version bump and write the changelog (plans/release.md).
+# subjects to pick the version bump and write the changelog (docs/release.md).
 # Install once per clone:  git config core.hooksPath scripts/hooks
 subject=$(head -n 1 "$1")
 case "$subject" in

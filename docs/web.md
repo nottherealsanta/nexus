@@ -21,6 +21,8 @@ and behave the same. Only the finish may be more modern.
 | Details: `SESSION` rows (Status, Agent, Model, Effort, Turns, Tool calls, Tokens, Context), `MODIFIED FILES`, `MCP SERVERS`; Tools rows open the tool detail modal | `renderOverview`, `renderDetails` |
 | Chat commands: every `SPECS` entry in `ui/cli/commands.py`, same names, usage, summaries and hidden aliases | `SLASH_COMMANDS`, `parseSlash` |
 | Keys: `ui/tui/app.py:SHORTCUTS` (Ctrl+P/N/O/F/G/B/L/S/I/T/E/C/R, Shift+Tab, `a`, Esc). ⌘K and ⌘N also work. | global `keydown` handler, `SHORTCUTS` |
+| Ctrl+X leader (`leaderKey`, `LEADER`): `M` model, `V` dictate (any key stops, Esc discards), plus N/O/F/G/B/L/S/I/E/T/R/`?`. | `LEADER`, `#leader-hint` |
+| Voice dictation: Ctrl+Space, `/voice status|download|on|off`, Settings → Voice; first-use confirmation before model download, silent preparation, and an orange dot at the far left of the context-size row only while recording, without shifting the line | `voice.js`, `VoicePrepare` host command, `#voice-overlay` |
 | Agent color: the host's `color` first, else the TUI's name hash (`agent_color`) | `agentColor` |
 
 Project-scoped settings and extensions are written under `<workspace>/.agents/`;
@@ -67,6 +69,7 @@ is in `webplan.md`; the visual spec is in `design.md`. The host side is in
 | `POST /v1/web/ticket/redeem` | one-use, 60-second ticket → `HttpOnly; SameSite=Strict` cookie + CSRF token |
 | `GET /v1/web/bootstrap` | CSRF token + workspace path |
 | `POST /v1/web/command` | any host protocol command as JSON `{type:'SessionList', …}`, except `Shutdown` and `WebLaunch`. Requires an exact `Origin` and `X-CSRF-Token`. |
+| `POST /v1/web/voice?request_id=…` | Raw mono 16 kHz PCM16 WAV for host transcription; same cookie/Origin/CSRF checks, with an 8 MiB route-specific cap (the normal command cap remains 1 MiB). |
 | `GET /v1/web/session-view?session=` | versioned snapshot (`schema_version: 1`, `seq`, `view`) from `HostFacade.web_snapshot` / `host_support/browser_view.py` |
 | `GET /v1/web/session-events?session=&from_seq=` | SSE `view` frames carrying JSON-Pointer ops (`add`/`replace`/`remove`/`append`), or `resync: true` |
 | `GET /v1/web/workspace-events` | SSE `workspace` frames with the session list (`HostFacade.subscribe_workspace`, polled every 0.5s) |
@@ -81,10 +84,11 @@ files are listed in `pyproject.toml` (`"nexus.ui.web" = ["index.html", "styles/*
 
 | File | Contents |
 | --- | --- |
-| `ui/web/index.html` | The whole DOM: SVG icon sprite (`#i-*`), `.app-shell` grid (areas `top`/`side`/`main`/`insp`) with the full-width `.topbar` (`▌` `#sidebar-toggle`, title, Context/Logs/Export, `#live-state`, `+` `#topbar-new`, `▐` `#inspector-toggle`), `#sidebar`, `.main-pane` (`#conversation` holding the hidden legacy `#context-preview`, `#timeline` and `#empty-state`, then `.composer-wrap` holding `#approval-strip`, `#slash-menu`, `#composer-form` and `#activity-bar`), `#inspector`, and the overlays `#overlay` (palette/picker), `#settings-overlay`, `#context-overlay`, `#worktree-confirm-overlay`, `#toast-region`. |
+| `ui/web/index.html` | The whole DOM: SVG icon sprite (`#i-*`), `.app-shell` grid (areas `top`/`side`/`main`/`insp`) with the full-width `.topbar` (`▌` `#sidebar-toggle`, title, Context/Logs/Export, `#live-state`, `+` `#topbar-new`, `▐` `#inspector-toggle`), `#sidebar`, `.main-pane` (`#conversation` holding the hidden legacy `#context-preview`, `#timeline` and `#empty-state`, then `.composer-wrap` holding `#approval-strip`, `#slash-menu`, `#composer-form` and `#activity-bar`), `#inspector`, and the overlays `#overlay` (palette/picker), `#settings-overlay`, `#context-overlay`, `#worktree-confirm-overlay`, `#voice-overlay`, `#toast-region`. |
 | `ui/web/js/app.js` | All behavior. Dense one-function-per-line style, so search by function name. |
 | `#setup-overlay` | First-run setup, mirroring `ui_support/tui_setup.py`: a second `createProviders` instance (`#setup-provider-list`) plus the env-key providers (`#setup-env`). `pollSetup` polls `SetupStatus`; the first connected provider marked `auto` goes to `completeSetup` → `SetupSave` without a model (the host picks the newest and reloads routes), then the dialog closes into chat. It transmits no credentials. |
-| `ui/web/js/api.js` | `bootstrap()`, `command(cmd)`, `snapshot(session)`, `eventUrl(session, seq)`, `exportSession`. |
+| `ui/web/js/api.js` | `bootstrap()`, `command(cmd)`, `voice(wav, requestId)` for the bounded `/v1/web/voice` route, `snapshot(session)`, `eventUrl(session, seq)`, `exportSession`. |
+| `ui/web/js/voice.js`, `voice-worklet.js` | Browser microphone capture, resampling to mono 16 kHz PCM16 WAV, and bounded recording buffers. First use requires explicit confirmation; the model is not downloaded by page or daemon startup. |
 | `ui/web/js/projection.js` | `applyOperations(root, ops)`: validates and applies patches on a detached copy (atomic). |
 | `ui/web/js/preferences.js` | localStorage detail level (session → workspace → browser precedence) and theme. |
 | `ui/web/js/providers.js` | `createProviders({api, el, $, listId, isOpen})`: Settings → Providers cards (also rendered by first-run setup), mirroring `ui_support/tui_providers.py` (sign-in link and code, `ProviderLoginPoll` polling, password field for the OpenCode Go key). |
@@ -134,6 +138,12 @@ Dev loop against a real daemon with a scripted model (no API key):
 Rules of thumb:
 
 - Keep parity with the Textual shell (see "Parity with the TUI" above). New functionality lands in both surfaces, in the same place.
+
+- Voice needs the optional package extra (`uv sync --extra voice`) and a separate
+  model download. The confirmation dialog must precede any missing-model
+  download; keep it open during preparation and until the user acknowledges
+  readiness, without automatic progress/loading/ready labels. Browser capture is local, but real-model inference/network behavior
+  has not yet been verified; do not claim proven offline operation.
 
 - New data or actions go through a host command (see [core.md](core.md)). Never compute server state in JS from files.
 - Keep IDs stable. The Playwright check selects on `#composer-input`, `#composer-model`, `#composer-agent`, `#reasoning-effort`, `#inspector`, `#inspector-toggle`, `#close-inspector`, `#tab-*`, `#logs-toggle`, `#settings-open`, `#settings-overlay`, `#settings-effective`, `input[name=theme|session-detail|workspace-detail|browser-detail]`, `#context-*`, `#timeline`, `.tool-card`, `.tool-status-text`, `.permission-card`, `.logs-source`, `.log-entry`, `.worktree-*`, `.sidebar`, `.palette-item`.

@@ -1,5 +1,5 @@
 name: release
-# Releases are driven by release-please (plans/release.md): every push to main
+# Releases are driven by release-please (docs/release.md): every push to main
 # updates one "release PR"; merging it tags vX.Y.Z, creates the GitHub release and
 # publishes nexus-harness to PyPI. Nothing ships until that PR is merged.
 # The file name is bound to the PyPI trusted publisher; do not rename it.

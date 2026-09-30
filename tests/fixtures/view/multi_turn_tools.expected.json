@@ -147,7 +147,9 @@
   "session_id": "s1",
   "turns": [
     {
+      "assistant_ts": 19.0,
       "context": [],
+      "elapsed_ms": 14000,
       "error": null,
       "hooks": [],
       "id": "t1",
@@ -231,6 +233,7 @@
           "executed": true,
           "finished_ts": 17.0,
           "is_error": false,
+          "iteration": 0,
           "name": "Bash",
           "progress": [
             "listing"
@@ -241,16 +244,14 @@
         }
       ],
       "updated_ts": 22.0,
-      "user_ts": 5.0,
-      "assistant_ts": 19.0,
-      "elapsed_ms": 14000,
       "usage": {
         "cache_read_tokens": 5,
         "cache_write_tokens": 0,
         "input_tokens": 42,
         "output_tokens": 7,
         "reasoning_tokens": 0
-      }
+      },
+      "user_ts": 5.0
     },
     {
       "context": [],

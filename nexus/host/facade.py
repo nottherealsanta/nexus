@@ -63,6 +63,7 @@ from ..host_support.session_archive import (
 from ..host_support.settings_inventory import dispatch_settings
 from ..host_support.setup import setup_save, setup_status
 from ..host_support.workspace import search_files as _search_files
+from ..host_support.voice import dispatch_voice, doctor_voice
 from ..host_support.worktree_projection import (
     worktree_diff_row as _worktree_diff_row,
 )
@@ -884,12 +885,14 @@ class HostFacade:
         session handle is opened. Only counts, provider/model/reason tallies, and
         bounded samples cross the boundary; the raw provider ``detail`` does not.
         """
-        return doctor_report(
+        report = doctor_report(
             self.runtime,
             list_sessions=self.list_sessions,
             list_extensions=self.list_extensions,
             explain_reload=explain_reload,
         )
+        report["voice"] = doctor_voice(self.runtime)
+        return report
 
     async def refresh_models(self) -> Any | None:
         """Force a catalogue acquisition; return the registry status."""
@@ -1229,6 +1232,8 @@ class HostFacade:
             )
 
     async def _dispatch(self, command: p.Command) -> p.Result:
+        if result := await dispatch_voice(command, self.runtime):
+            return result
         if result := await dispatch_settings(command, self.runtime):
             return result
         if result := await dispatch_mock(command, self):

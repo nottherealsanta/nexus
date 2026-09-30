@@ -713,3 +713,17 @@ def test_context_usage_without_a_window_uses_the_input_budget():
         _ev(3, "model.usage", {"input": 0, "output": 5}, turn="t1"),
     ])
     assert context_measure(state) == (500, 8000, False)
+
+
+def test_tool_batches_group_calls_sharing_a_model_iteration():
+    from nexus.ui_support.timeline import tool_batches
+    from nexus.view import ToolCallView
+
+    tools = [
+        ToolCallView(call_id="a", event_seq=1, iteration=1),
+        ToolCallView(call_id="b", event_seq=2, iteration=2),
+        ToolCallView(call_id="c", event_seq=3, iteration=2),
+        ToolCallView(call_id="d", event_seq=4, iteration=2),
+        ToolCallView(call_id="e", event_seq=5, iteration=3),
+    ]
+    assert tool_batches(tools) == {"b": "first", "c": "middle", "d": "last"}

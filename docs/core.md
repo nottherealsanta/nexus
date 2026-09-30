@@ -45,6 +45,7 @@ events ──► session records ──► view/reduce.py (pure) ──► Conve
 | Skills | `skills/` | `manager.py`, `frontmatter.py`, `activation.py` |
 | Hooks | `hooks/` | `manager.py`, `model.py` |
 | MCP | `mcp/` | `manager.py` (`MCPServerStatus`, `MCPHealth`, `statuses()`), `client.py` (stdio/http/sse, `parse_server_config`), `bridge.py` |
+| Local dictation | `voice/` | `manager.py` (`VoiceManager`: consent-gated preparation, bounded serialized transcription, cached-only startup); `store.py` (pinned model manifest and cache); `engine.py` (`KestrelEngine`, Kestrel 0.8.0 `ParakeetTdtRuntime`) |
 | Hot extensions | `ext/` | `manager.py` (atomic rebuild), `manifest.py`, `quarantine.py`, `tools/loader.py` |
 | Outbound network | `net/outbound.py` | pinned, public-address-only HTTP for webfetch/websearch |
 | Auth | `auth/` | keychain-backed provider sign-in: `codex.py` (ChatGPT OAuth, browser PKCE or device code), `copilot.py` (GitHub.com device flow through the Nexus OAuth app; GitHub token in the keychain, short-lived Copilot token in memory; live Copilot exchange compatibility unverified), `api_key.py` (pasted keys such as OpenCode Go), `store.py` (secure keyring only) |
@@ -83,7 +84,7 @@ a live account.
 
 | File | Role |
 | --- | --- |
-| `host/protocol.py` | Wire contract: frozen, tagged `msgspec` commands and `*Result` structs, `PROTOCOL_VERSION`, `decode_command`. Commands include `SessionList/Open/Start/Enqueue/Cancel/Subscribe/State/Fork/Delete/Restore/Export`, `PermissionResolve`, `ModelsList/ModelSelect/ReasoningEffortSelect`, `AgentsList` (its `default` is `[agent] name`, the agent new sessions start with)`/AgentCurrent/AgentSelect/AgentReset/AgentDefaultSet` (writes `[agent] name` via `host_support/settings_inventory.py`), `ToolsList`, `ContextInspect`, `FileSearch`, `LogsRead`, `Worktree*`, `Doctor` (includes MCP status), `Health`, `WebLaunch`, `Shutdown`. |
+| `host/protocol.py` | Wire contract: frozen, tagged `msgspec` commands and `*Result` structs, `PROTOCOL_VERSION`, `decode_command`. Includes `VoiceStatus`, `VoicePrepare`, `VoiceTranscribe`, `VoiceCancel`, and `VoiceRemove`, alongside session, model, agent, tools, context, worktree, Doctor, health, web-launch, and shutdown commands. |
 | `host/facade.py` | `HostFacade`: implements every command (`handle`), `list_sessions`, `start_turn`, `resolve_permission`, `delete`/`restore`, `doctor` (+ `_mcp_report`), `web_snapshot` and `subscribe_workspace` for the browser. |
 | `host/daemon.py` | Process lifecycle, UDS socket + handshake, idle shutdown, `web_launch()` (starts the HTTP listener, mints a one-use URL). |
 | `host/supervisor.py` | Turn scheduling under the global concurrency cap. |
@@ -91,6 +92,7 @@ a live account.
 | `host/transports/uds.py` | Length-framed JSON over the Unix socket (`UDSClient.connect(...).call(cmd)`). |
 | `host/transports/http_sse.py` | HTTP commands + SSE events. It also dispatches browser routes to `host/web.py`. |
 | `host/web.py` | Browser auth (ticket → cookie → CSRF), static files, `/v1/web/*` routes. See [web.md](web.md). |
+| `host_support/voice.py` | Bounded/redacted voice command dispatch and Doctor projection; browser audio uses the authenticated `POST /v1/web/voice` route. |
 | `host_support/` | Read-only projections kept out of `host/` for budget and clarity: `browser_view.py` (web snapshot + JSON patches), `context_preview.py`, `approval.py`, `workspace.py` (file search), `worktree_projection.py`. |
 | `observability/` | Bounded daemon and session log projections behind `LogsRead`. |
 | `client/protocol.py` | Transport-neutral `Client` used by the CLI and TUI. |
@@ -101,6 +103,29 @@ a live account.
 2. Handle the command in `HostFacade.handle` (`host/facade.py`). Return redacted, bounded data.
 3. Expose it on `client/protocol.py` if the TUI or CLI needs it. The browser calls `api.command({type:'FooCommand', …})` directly.
 4. Tests: `tests/test_host_facade.py` style for the facade, and `tests/test_web_transport.py` if the browser uses it.
+
+### Voice manager boundary
+
+Voice is an optional local-dictation manager owned by `Runtime`. The TUI and web
+capture bounded mono 16 kHz PCM16 WAV and use the host contract; they never
+access the model store or runtime directly. The daemon may prepare a verified
+cache at startup but passes `allow_download=False`; UI confirmation or the
+explicit `nexus voice download` action calls `VoicePrepare`. An absent-model
+transcription stays cached-only. The `voice` optional extra installs
+Moondream/Kestrel and `sounddevice`; model weights are downloaded separately to
+`~/.nexus/models/voice/` after confirmation.
+
+The built-in TUI and web flows gate first download behind a confirmation modal.
+`VoicePrepare` itself does not carry a consent token, so UI consent is a
+client-flow contract. The CLI download subcommand is itself an explicit user
+action; neither flow has a host-enforced authorization token.
+
+The adapter currently uses Kestrel 0.8.0's internal `ParakeetTdtRuntime` rather
+than high-level Photon because source inspection found telemetry in Photon with
+no discovered opt-out. This is version-sensitive; real inference and network
+behavior have not been verified, so the implementation must not be described as
+proven offline. See [VOICE_PLAN.md](../plans/VOICE_PLAN.md) and
+[VOICE_SPIKE.md](../plans/VOICE_SPIKE.md).
 
 The browser may send any command except `Shutdown` and `WebLaunch` (`host/web.py`).
 
@@ -157,7 +182,7 @@ Host contract: `MockList`, `MockStart`, `MockClean` (errors outside dev mode),
 
 ## Releasing
 
-Releases are automatic but never ship on their own (`plans/release.md`). Every change
+Releases are automatic but never ship on their own (`docs/release.md`). Every change
 lands on `main`. On each push, the `release` workflow (release-please) opens or
 updates one release PR that bumps `pyproject.toml` and the `nexus-harness` entry in
 `uv.lock`, and writes `CHANGELOG.md`. Merging that PR tags `vX.Y.Z`, creates the GitHub
