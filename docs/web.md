@@ -5,9 +5,11 @@ for the same per-workspace daemon.
 
 ## Parity with the TUI
 
-The web app is the Textual shell ([textual.md](textual.md)) in a browser. It has
-**the same functionality, with everything in the same place**, and should feel
-and behave the same. Only the finish may be more modern.
+The web app shares the Textual shell’s ([textual.md](textual.md)) functionality
+and information layout: **everything stays in the same place** so users can
+switch surfaces easily. Typography, icons, corners and depth are browser-native
+and can evolve independently. Shared actions, wording and keyboard shortcuts
+remain consistent.
 
 | Same as `nexus chat` | Where |
 | --- | --- |
@@ -31,12 +33,12 @@ lower-precedence fallback. Session records for all workspaces are stored in the
 shared `~/.nexus/nexus.db` database, while caches and logs are machine state
 under `~/.nexus/`.
 
-What may differ is the finish only, specified in [design.md](../design.md)
-("Signal"): Monaspace Argon, 20px lines (`--row`), square corners
-(`--radius: 0`), flat surfaces, signal-colored tags and rule headings, and hard offset shadows (never blur) on primary buttons and
-floating dialogs. The web also has a few browser-only affordances: the details panel tabs
-(Tools, Agents, Trees, Logs), the Context/Logs/Export buttons, and the Settings
-dialog. Keep these where they are.
+The browser uses system sans-serif for interface text and conversation prose,
+Monaspace Argon for code and diagnostics, rounded controls, and soft dialog
+shadows. Stroke SVG icons replace terminal panel glyphs in the same top-bar
+positions. Semantic color roles remain shared. The browser-only details tabs
+(Tools, Agents, Trees, Logs), Context/Logs/Export buttons and Settings dialog
+keep their existing positions.
 
 When the TUI changes (`app.tcss`, `theme.py`, `ui/cli/commands.py`,
 `ui/tui/app.py:SHORTCUTS`, `ui_support/timeline.py`, `tui_panels.py`,
@@ -49,7 +51,8 @@ The UI font is **Monaspace Argon** (Latin, 400; fontsource
 `monaspace-argon@5.3.0`, SIL OFL 1.1). The CSP allows no external hosts, so the
 files are vendored as `ui/web/assets/monaspace-argon-latin-400.woff2` and `.woff`
 and declared with `@font-face` at the top of `tokens.css`. It is first in
-`--font-mono`, and the whole UI uses `--font-mono`. To add weights or scripts,
+`--font-mono`, for code and technical data. Interface text uses `--font-sans`, a local system
+font stack that needs no download. To add weights or scripts,
 download more fontsource files into `assets/`. Never link the CDN. A turn started in the terminal is live in
 the browser and vice versa, and closing a view never stops work. Product intent
 is in `webplan.md`; the visual spec is in `design.md`. The host side is in
@@ -93,7 +96,7 @@ files are listed in `pyproject.toml` (`"nexus.ui.web" = ["index.html", "styles/*
 | `ui/web/js/preferences.js` | localStorage detail level (session → workspace → browser precedence) and theme. |
 | `ui/web/js/providers.js` | `createProviders({api, el, $, listId, isOpen})`: Settings → Providers cards (also rendered by first-run setup), mirroring `ui_support/tui_providers.py` (sign-in link and code, `ProviderLoginPoll` polling, password field for the OpenCode Go key). |
 | `ui/web/js/context-view.js` | `renderCurrentContext(…)` for the inline context preview and the context dialog. |
-| `ui/web/styles/tokens.css` | The Monaspace Argon `@font-face`; color tokens copied from `ui/tui/theme.py` (`_DARK`/`_LIGHT`); `--cell` (8px column) and `--row` (20px line); radii and the dialog shadow. `data-theme` = `dark`, `light` or `system`. Change a color in both files. |
+| `ui/web/styles/tokens.css` | System sans-serif and the Monaspace Argon `@font-face`; color tokens copied from `ui/tui/theme.py` (`_DARK`/`_LIGHT`); `--cell` (8px column) and `--row` (20px line); radii and the dialog shadow. `data-theme` = `dark`, `light` or `system`. Preserve the shared semantic color roles. |
 | `ui/web/assets/` | Vendored font files (`monaspace-argon-latin-400.woff2`/`.woff`). |
 | `ui/web/styles/app.css` | All layout and component CSS, sectioned by region, with responsive rules at the end. |
 | `ui/web/styles/context-preview.css` | Context preview cards (line clamps are asserted by tests). |

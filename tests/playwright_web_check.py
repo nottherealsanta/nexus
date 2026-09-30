@@ -429,6 +429,22 @@ async def main() -> None:
 
                 await page.route("**/v1/web/command", route_context_command)
                 await page.goto(launch_url, wait_until="domcontentloaded")
+                # Browser typography differs from the terminal without moving its controls.
+                assert "Monaspace" not in await page.locator("body").evaluate(
+                    "node => getComputedStyle(node).fontFamily"
+                )
+                for control in ("sidebar-toggle", "topbar-new", "inspector-toggle"):
+                    assert await page.locator(f"#{control} svg use").count() == 1
+                assert await page.locator("#sidebar-toggle").evaluate(
+                    "node => node.getBoundingClientRect().left"
+                ) < await page.locator("#session-title").evaluate(
+                    "node => node.getBoundingClientRect().left"
+                )
+                assert await page.locator("#topbar-new").evaluate(
+                    "node => node.getBoundingClientRect().left"
+                ) < await page.locator("#inspector-toggle").evaluate(
+                    "node => node.getBoundingClientRect().left"
+                )
                 setup_dialog = page.get_by_role("dialog", name="Connect a provider")
                 await setup_dialog.wait_for(state="visible", timeout=5_000)
                 assert await page.locator("#app").evaluate("node => node.inert")
