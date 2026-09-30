@@ -591,7 +591,7 @@ class ToolManager:
         ):
             raise ToolManagerError("max_parallel must be a positive integer")
         self._default_timeout_s = default_timeout_s
-        self._bash_timeout_s = float(tools_section.bash_timeout_s)
+        self._bash_max_s = float(tools_section.bash_max_s)
 
         permissions = _permissions_section(config)
         self._path_guard = path_guard or PathGuard(
@@ -1629,7 +1629,7 @@ class ToolManager:
         if spec.timeout_s is not None:
             return spec.timeout_s
         if spec.name == "bash":
-            return self._bash_timeout_s + BASH_TIMEOUT_GRACE_S
+            return self._bash_max_s + BASH_TIMEOUT_GRACE_S
         return self._default_timeout_s
 
     def cap_result(

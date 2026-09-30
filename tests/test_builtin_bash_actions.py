@@ -212,7 +212,9 @@ async def test_invalid_shapes_fail_before_side_effects(registry, ctx, args):
         {"action": "status", "job_id": "job_missing", "stdout_offset": -1},
         {"action": "status", "job_id": "job_missing", "stderr_offset": True},
         {"action": "wait", "job_id": "job_missing", "wait_s": 0},
-        {"action": "wait", "job_id": "job_missing", "wait_s": 31},
+        {"action": "wait", "job_id": "job_missing", "wait_s": 31, "until": "output"},
+        {"action": "wait", "job_id": "job_missing", "wait_s": 3601},
+        {"action": "wait", "job_id": "job_missing", "until": "never"},
         {"action": "wait", "job_id": "job_missing", "wait_s": float("inf")},
     ],
 )

@@ -55,7 +55,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with: {ref: "${{ env.TAG }}"}
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.2.0
       - name: Tag matches pyproject version
         run: |
           v=$(python3 -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')

@@ -35,7 +35,9 @@ SEED_FILES: dict[str, str] = {
         "offline = true\n\n"
         "[permissions]\n"
         'mode = "allow"\n'
-        'ask = ["bash(git push*)"]\n'
+        'ask = ["bash(git push*)"]\n\n'
+        "[tools]\n"
+        "bash_yield_s = 3\n"  # short window so the bash-wait scenario yields quickly
     ),
     "README.md": (
         "# Mock sandbox\n\n"

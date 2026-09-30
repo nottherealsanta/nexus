@@ -1461,3 +1461,51 @@ def test_core_loop_has_no_tools_dependency():
     assert not any(m.startswith("nexus.tools") for m in modules)
     assert not any(m.startswith("nexus.session") for m in modules)
     assert not any(m.startswith("nexus.runtime") for m in modules)
+
+
+async def test_slow_chatty_command_needs_two_model_calls_not_a_polling_loop(tmp_path):
+    """Regression (plans/BASH_WAIT_PLAN.md): yield, then one wait; not 9+ calls."""
+    import re
+
+    def wait_for_yielded_job(req):
+        text = str(req.messages[-1].content)
+        match = re.search(r"job_id: (job_[0-9a-f]+)", text)
+        assert match, text
+        assert "moved to background" in text
+        return tool_response(("w1", "bash", {"action": "wait", "job_id": match.group(1)}))
+
+    provider = ScriptedProvider(
+        tool_response((
+            "b1",
+            "bash",
+            {"command": "for i in 1 2 3 4 5 6; do echo tick-$i; sleep 0.3; done; echo ALL-DONE"},
+        )),
+        [wait_for_yielded_job],
+        text_response("finished"),
+    )
+    config = make_config()
+    config = Config(
+        model=config.model,
+        version=2,
+        v2=ConfigV2(
+            model=config.v2.model,
+            agent=config.v2.agent,
+            permissions=config.v2.permissions,
+            tools=ToolsSection(bash_yield_s=0.5),
+        ),
+    )
+    runtime = make_runtime(tmp_path, provider, config)
+    session = runtime.session("slow-chatty")
+    events = await drain(session.send("run the slow build"))
+    assert types(events)[-1] == "turn.completed"
+    assert provider.calls == 3  # bash, one wait, final answer
+    results = [
+        block
+        for m in session.messages
+        for block in m.content
+        if isinstance(block, ToolResult)
+    ]
+    assert len(results) == 2
+    assert "ALL-DONE" in str(results[1].content)
+    assert "status: completed" in str(results[1].content)
+    await runtime.aclose()

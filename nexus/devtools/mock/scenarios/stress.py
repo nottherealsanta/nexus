@@ -103,7 +103,7 @@ def _wait_bg(ctx: Ctx):
     match = re.findall(r"job[_ ]?id[\"'=: ]+\s*([A-Za-z0-9_-]+)", text, re.IGNORECASE)
     if not match:
         return say("No background job id was reported; continuing.")
-    return calls(call("bash", action="wait", job_id=match[-1], wait_s=3), text="Collecting the background job.")
+    return calls(call("bash", action="wait", job_id=match[-1]), text="Collecting the background job.")
 
 
 _ACTORS, _SPAWN = _actors()

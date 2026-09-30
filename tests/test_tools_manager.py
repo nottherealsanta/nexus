@@ -1222,3 +1222,13 @@ def test_research_profile_excludes_mutating_mcp_tools(tmp_path: Path):
     assert "mcp__s__write" not in m.names
     # The read-only profile still rejects a call to the dropped tool.
     assert m.get("mcp__s__write") is None
+
+
+def test_bash_backstop_follows_bash_max_s_not_the_yield_window(tmp_path: Path):
+    from nexus.tools.builtin import bash
+    from nexus.tools.manager import BASH_TIMEOUT_GRACE_S
+
+    m = ToolManager(cfg(bash_timeout_s=120, bash_max_s=900), workspace=tmp_path)
+    # A 600s timeout_s must not be cut at yield window + grace (125s).
+    assert m._timeout_for(bash.SPEC) == 900 + BASH_TIMEOUT_GRACE_S
+    assert m._timeout_for(bash.SPEC) > 600
