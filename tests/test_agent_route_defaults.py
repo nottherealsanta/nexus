@@ -35,6 +35,85 @@ from nexus.session.agent_selection import AgentSelection
 from nexus.view import fold
 
 
+@pytest.mark.parametrize("scope", ["global", "project"])
+@pytest.mark.parametrize("hint", [None, "low", "medium", "high"])
+async def test_subagent_settings_model_applies_to_next_call_and_restart(tmp_path, monkeypatch, scope, hint):
+    home = tmp_path / "home"
+    home.mkdir()
+    (tmp_path / "ws").mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    config = Config(
+        model="rootprov/root-model",
+        version=2,
+        v2=ConfigV2(
+            model=ModelSection(default="rootprov/root-model"),
+            permissions=PermissionsSection(mode="allow", on_unattended="allow"),
+        ),
+    )
+
+    def delegate(call_id):
+        args = {"prompt": "work", "subagent_type": "task"}
+        if hint is not None:
+            args["model"] = hint
+        return tool_response((call_id, "subagent", args))
+
+    def definition(model):
+        return (
+            "---\nname: task\ndescription: worker\ncontexts: [subagent]\n"
+            f"model: childprov/{model}\n---\nWorker prompt.\n"
+        )
+
+    async def change_during_child(request):
+        assert request.model == "first-model"
+        await save("second-model")
+        return text_response("first child done")
+
+    child = ScriptedProvider(
+        [change_during_child], text_response("second child done"), name="childprov"
+    )
+    runtime = Runtime(
+        tmp_path / "ws", home=tmp_path / "home", config=config,
+        providers={
+            "rootprov": ScriptedProvider(
+                delegate("first"), delegate("second"), text_response("done"), name="rootprov"
+            ),
+            "childprov": child,
+        },
+    )
+    facade = HostFacade(runtime)
+
+    async def save(model):
+        result = await facade.handle(p.SettingsWrite(
+            scope=scope, category="agents", id="task", body=definition(model)
+        ))
+        assert isinstance(result, p.SettingsWriteResult), result
+        assert result.status == "written"
+    try:
+        await save("first-model")
+        events = [event async for event in runtime.session("model-refresh").send("delegate twice")]
+        assert [request.model for request in child.requests] == ["first-model", "second-model"]
+        assert [event.data["model"] for event in events if event.type == "agent.spawned"] == [
+            "childprov/first-model", "childprov/second-model"
+        ]
+        await save("restart-model")
+    finally:
+        await runtime.aclose()
+
+    restarted_child = ScriptedProvider(text_response("restarted child done"), name="childprov")
+    restarted = Runtime(
+        tmp_path / "ws", home=tmp_path / "home", config=config,
+        providers={
+            "rootprov": ScriptedProvider(delegate("third"), text_response("done"), name="rootprov"),
+            "childprov": restarted_child,
+        },
+    )
+    try:
+        [event async for event in restarted.session("model-refresh").send("delegate again")]
+        assert [request.model for request in restarted_child.requests] == ["restart-model"]
+    finally:
+        await restarted.aclose()
+
+
 async def test_agent_model_provider_effort_and_body_reach_responses_request(tmp_path):
     captured: dict[str, object] = {}
 

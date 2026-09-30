@@ -1036,7 +1036,8 @@ uv run --no-project --with 'nexus-harness[claude-agent]' python -c 'from nexus.m
 
 First-run setup in both `nexus chat` and `nexus web` detects the subscription login
 and offers **Claude Pro/Max**. For an existing installation, add this to your
-user-global `~/.nexus/config.toml` (or workspace `.agents/nexus.toml`):
+user-global `~/.nexus/config.toml` (or workspace `.agents/nexus.toml`), or run
+`nexus claude init [--model ID]` to write it and make Claude the default model:
 
 ```toml
 config_version = 2

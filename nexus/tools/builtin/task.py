@@ -97,9 +97,11 @@ _TASK_SCHEMA: dict[str, Any] = {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Optional provider/model or bare id. Omit it to run on the parent's "
-                "model. A tier name ('low'/'medium'/'high') only sets the permission "
-                "tier and is clamped to the configured max tier."
+                "Optional concrete provider/model or bare model id override; a provider "
+                "name alone is not a model id. Omit it to use the role's configured "
+                "model, falling back to the parent's model. A tier name "
+                "('low'/'medium'/'high') does not override the role's configured model; "
+                "routing remains subject to the configured max tier."
             ),
         },
         "description": {

@@ -156,6 +156,13 @@ switching to this storage if they need to be retained.
 
 ## The loop, briefly
 
+Subagent calls use the role's current configured model unless the call supplies
+a concrete model override. Bare tier hints (`low`, `medium`, `high`) do not
+replace a configured role model; the effective route still obeys the subagent
+tier cap. Saving an agent definition through Settings applies to the next child
+call, including during a running parent turn, and persists across restarts.
+Without a role model, children inherit the parent's model.
+
 `core/loop.py` refreshes the extension manifest on every iteration, so tools
 written mid-turn are visible on the next iteration. The assistant message is
 persisted before any tool runs. The permission gate checks the whole batch

@@ -5,6 +5,11 @@ harness. A per-workspace daemon owns sessions and turns. Three surfaces are clie
 of it: a Textual chat app, a one-shot CLI and JSONL stream, and a plain HTML/CSS/JS
 browser app.
 
+**The idea of Nexus is that the context is clearly presented to the user and to
+agents.** Keep this in mind for every change: show everything that matters
+(every parameter, every output), labelled and readable, never a raw JSON dump,
+and never hide information from the user that the agent can see.
+
 Start here, then open the doc for the area you are changing:
 
 | You are working on… | Read |
@@ -82,6 +87,10 @@ Tests need no network or credentials. They use temporary workspaces,
   behave the same. It may look more modern (softer corners, taller lines,
   floating dialogs) and uses sans-serif interface text, stroke icons, and Monaspace Argon for code. A feature or wording
   change in one surface goes into the other. Details are in [docs/web.md](docs/web.md).
+
+- **Present context clearly.** Tool calls, results, context blocks and errors
+  render as labelled, structured rows that miss nothing (`ui_support/tool_details.py`
+  and its web port `ui/web/js/tool-details.js`); clipping is always announced.
 
 - Match the surrounding style: module docstrings state the contract and cite the
   plan section. Structs are frozen `msgspec` or dataclasses. Errors are redacted

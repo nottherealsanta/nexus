@@ -24,6 +24,7 @@ remain consistent.
 | Chat commands: every `SPECS` entry in `ui/cli/commands.py`, same names, usage, summaries and hidden aliases | `SLASH_COMMANDS`, `parseSlash` |
 | Keys: `ui/tui/app.py:SHORTCUTS` (Ctrl+P/N/O/F/G/B/L/S/I/T/E/C/R, Shift+Tab, `a`, Esc). ⌘K and ⌘N also work. | global `keydown` handler, `SHORTCUTS` |
 | Ctrl+X leader (`leaderKey`, `LEADER`): `M` model, `V` dictate (any key stops, Esc discards), plus N/O/F/G/B/L/S/I/E/T/R/`?`. | `LEADER`, `#leader-hint` |
+| Model picker: small refresh button at the top right of the model dialog (`#palette-refresh`) sends `ModelsRefresh` and reloads the list in place; mirrors `↻`/`Ctrl+R` in the TUI | `app.js` `refreshModels` |
 | Voice dictation: Ctrl+Space, `/voice status|download|on|off`, Settings → Voice; first-use confirmation before model download, silent preparation, and an orange dot at the far left of the context-size row only while recording, without shifting the line | `voice.js`, `VoicePrepare` host command, `#voice-overlay` |
 | Agent color: the host's `color` first, else the TUI's name hash (`agent_color`) | `agentColor` |
 
@@ -35,7 +36,18 @@ under `~/.nexus/`.
 
 The browser uses system sans-serif for interface text and conversation prose,
 Monaspace Argon for code and diagnostics, rounded controls, and soft dialog
-shadows. Stroke SVG icons replace terminal panel glyphs in the same top-bar
+shadows. One design system applies everywhere (`tokens.css`, `app.css`):
+radii come from three tokens (`--radius` 12px for cards, dialogs and the
+composer; `--radius-sm` 8px for controls, rows and code blocks; `--radius-xs`
+5px for tags, chips and keys; status dots are round), nothing is square and
+nothing has a hard offset shadow. Floating layers use `--shadow`/`--shadow-sm`.
+All status labels share the `.tag` shape (11px, semibold, capitals). Sidebar,
+details and logs section labels share one style. Selected rows (sessions,
+palette, slash menu, settings nav) are a tinted or neutral fill with no side
+bar. Markdown renders as web prose (semibold headings, dot bullets, inline
+code chips). On wide screens the conversation, composer, slash menu and
+approvals share one centered column (`--column`, 860px) and the timeline stays
+pinned to the newest message while the layout reflows. Stroke SVG icons replace terminal panel glyphs in the same top-bar
 positions. Semantic color roles remain shared. The browser-only details tabs
 (Tools, Agents, Trees, Logs), Context/Logs/Export buttons and Settings dialog
 keep their existing positions.
@@ -110,12 +122,12 @@ files are listed in `pyproject.toml` (`"nexus.ui.web" = ["index.html", "styles/*
 | Left sidebar | `renderSessions` lists current and archived sessions as one-line `SessionRow`s (glyph from `data-glyph`: `●` current, braille spinner via the `spin` keyframes while working, `✓` done, `·` idle, `◇` archived; title; status or age; `×`). Every row has a visible Delete button (`SessionDelete` to restorable trash). `archiveSession` uses `SessionArchive`; both actions offer Undo. `#session-filter` searches both sections. `toggleSidebar`/`syncSidebarToggle` hide the docked sidebar (localStorage `nexus-web-sidebar`) or open it as an overlay below 960px. |
 | Header and composer | `renderHeader` (title, plain-text status, agent/model/effort labels, agent color `--agent-color` on `#app`, `↵`/`■ stop`), `renderContextMeter` (`usageText`, same format as `ui_support/context.py:context_usage`) and the activity bar, `sendMessage`, `stopTurn`, drafts (`saveDraft`/`loadDraft` in sessionStorage) |
 | Chat commands | `SLASH_COMMANDS` (mirrors `ui/cli/commands.py:SPECS`), `SLASH_ALIASES`, `parseSlash` (a typed `/cmd args` runs on Enter), `renderSlash`, `runSlash` (capture-phase keydown on the composer); `showText`/`closeText` is the text dialog for `/help`, `/hotkeys`, `/diff`, `/mcp` and `/skills` |
-| Timeline | `renderTimeline` → `renderContextHeader` (first child; the five `System prompt`/`Tools`/`AGENTS.md`/`Skills`/`MCP` blocks from the last good `ContextInspect` in `state.header`, ported from `ui_support/tui_context_header.py`) → `entities` (messages, tools, boundaries, and a `footer` per finished turn) → `renderMessage` (`renderUserChrome` adds the `▼` fold toggle; thinking renders as the `Thought:` line), `renderTool` (one-line glyph + call arguments + first result summary; activation opens the full call/result modal), `renderBoundary`, `renderFooter` (`AGENT · model · 1.2s`); `markdown`/`updateMarkdown` (escaping mini-Markdown) |
+| Timeline | `renderTimeline` → `renderContextHeader` (first child; the five `System prompt`/`Tools`/`AGENTS.md`/`Skills`/`MCP` blocks from the last good `ContextInspect` in `state.header`, ported from `ui_support/tui_context_header.py`) → `entities` (messages, tools, boundaries, and a `footer` per finished turn) → `renderMessage` (`renderUserChrome` adds the `▼` fold toggle; thinking renders as the `Thought:` line), `renderTool` (one-line glyph + call arguments + first result summary; activation opens the call modal: `tool-details.js` `toolDetailSections`/`renderToolDetails`, the port of `ui_support/tool_details.py`, as labelled rows), `renderBoundary`, `renderFooter` (`AGENT · model · 1.2s`); `markdown`/`updateMarkdown` (escaping mini-Markdown) |
 | Approvals and questions | `renderApprovals` (approval and question cards as `.slash-item` lists; keys `y/a/n/d` or `1-3`), `approvalChoices` (mirrors `ui_support/prompts.py`), `resolvePermission`, `pendingQuestions`, `answerQuestion` (`QuestionAnswer` by `call_id`), `permissionTargetsUnavailable` (the background goes inert while an approval is pending) |
 | Subagent page | `openAgent`/`closeAgent`/`renderAgentModal`: `#agent-overlay` is a second `app-shell` over the root at `/s/<session>/a/<agent>` (deep-linkable; Back, `←` and Esc return to the parent). Clicking a Task card opens it directly (`openToolDetails` skips the details dialog when a child exists). It has the root's top bar, a context header built by `headerBlocks` from the request the child actually sent plus a grey Task block after the System prompt (`agentTaskPrompt`: the recorded prompt, else the Task call's input) (`AgentTranscript` → `context`, fetched by `fetchAgentContext`), `agent.body` rendered with the root renderers (`renderMessage`, `renderTool`, `renderFooter`, `renderAgentCards`) by swapping `nodes` for `agentNodes` and `state.view` for the body, a read-only composer row and a details panel. Re-rendered from `renderTimeline` on every patch, so a running child is live. Context blocks open the root context dialog on `state.context.agentResult` (never refreshed). |
 | Right panel | `renderDetails(force)` dispatches by `state.tab`; `renderOverview` (session summary, `modifiedFiles` + `diffRows`, `mcpSectionBody`); `overviewSignature` decides when to re-render; `loadWorkspaceHealth` (`Doctor`, 20s cache); tools/agents tabs inline; `renderWorktrees*`; `renderLogs`/`readLogs` (polling) |
 | Pickers and palette | `showPalette`, `renderPalette`, `chooseFromList`, `chooseModel`/`commitModel` (Left/Right adjusts effort), `chooseAgent`, `cycleReasoningEffort` (Ctrl+T), `effortCommand`/`selectEffort` (`/effort`) |
-| Settings | `openSettings`, `renderSettings`, `installSettingGroups`, `installSettingsNav`/`syncSettingsNav`, `renderSettingsWorkspace` |
+| Settings (one page per section like the terminal: Appearance, Layout, Conversation detail, Keyboard, Workspace; Providers, Voice, and the file areas Agents, Tools, MCP servers, Skills, Hooks, Config, Soul sharing a global/project scope, list, editor with 700 ms autosave and the agent model/fallback form: `js/settings-files.js`, port of `ui_support/tui_settings.py` over `SettingsInventory/Read/Write/Delete/Reset`) | `selectSettingsPane`, `syncLayoutSettings`, `openSettings`, `renderSettings`, `installSettingGroups`, `installSettingsNav`/`syncSettingsNav`, `renderSettingsWorkspace` |
 | Context | `refreshContextPreview` (also feeds the header), `renderContextInline` (the legacy inline preview; kept hidden, as the terminal's preview is off by default), `openContextDialog(mode)` (Context button, `/context`, or a header block; the System prompt block opens `mode='system'` (Markdown), the Tools block `mode='tools'`), `renderContextReport` (grouped context or tools list, with Expand all) |
 
 ### Responsive contract (asserted in `tests/playwright_web_check.py`)

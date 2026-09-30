@@ -647,6 +647,10 @@ async def main() -> None:
                 await page.locator("#new-session").click()
                 new_picker = page.get_by_role("dialog", name="New session · choose an agent")
                 await new_picker.wait_for(timeout=5_000)
+                title_widths = await new_picker.locator(".palette-item > span:first-child").evaluate_all(
+                    "els => els.map(e => e.getBoundingClientRect().width)"
+                )
+                assert title_widths and all(width > 40 for width in title_widths), title_widths  # long descriptions never squeeze titles
                 await page.keyboard.press("Enter")  # keep the preselected agent
                 try:
                     await page.wait_for_url("**/s/*", timeout=10_000)
@@ -837,6 +841,7 @@ async def main() -> None:
                 await page.locator("#stop-button").wait_for(state="hidden", timeout=8_000)
                 assert await page.locator("#send-button").count() == 0
                 assert await page.locator("#connection-banner").is_hidden()
+                assert await page.locator("#timeline").evaluate("n => n.scrollHeight - n.scrollTop - n.clientHeight < 8")  # stays pinned to the newest message
                 await page.screenshot(path=str(ARTIFACTS / "light.png"), full_page=True)
 
                 baseline = await terminal.call(p.SessionState(session=session))
@@ -931,6 +936,8 @@ async def main() -> None:
                     "completed": asyncio.Event(),
                 }
 
+                models_refreshed = {"done": False}
+
                 async def route_effort_command(route) -> None:
                     import json
 
@@ -940,8 +947,15 @@ async def main() -> None:
                         return
                     command = json.loads(request.post_data or "{}")
                     sid = command.get("session")
+                    if command.get("type") == "ModelsRefresh":
+                        models_refreshed["done"] = True
+                        result = {"type": "ModelsRefreshResult", "status": {"source": "network", "models": 4, "stale": False}}
+                        await route.fulfill(status=200, content_type="application/json", body=json.dumps(result))
+                        return
                     if command.get("type") == "ModelsList":
                         result = {"type": "ModelsListResult", "count": 3, "models": [
+                            *([{"provider": "scripted", "id": "fresh", "reference": "scripted/fresh", "name": "Fresh model",
+                                "supported_efforts": []}] if models_refreshed["done"] else []),
                             {"provider": "scripted", "id": "n", "reference": "scripted/n", "name": "Alternate model",
                              "supported_efforts": ["none", "xhigh"]},
                             {"provider": "scripted", "id": "m", "reference": "scripted/m", "name": "Medium model",
@@ -1462,6 +1476,21 @@ async def main() -> None:
                 assert len(selection_commands) == before_selection
                 assert len(effort_commands) == before_effort
 
+                await page.locator("#composer-model").click()
+                picker = page.get_by_role("dialog", name="Choose a model")
+                await picker.wait_for()
+                assert await page.locator("#palette-refresh").is_visible()
+                assert await picker.get_by_text("Fresh model").count() == 0
+                await page.locator("#palette-refresh").click()
+                await picker.get_by_text("Fresh model").wait_for()
+                assert "Medium model" in await picker.locator('.palette-item.selected').inner_text()
+                await page.keyboard.press("Escape")
+                await page.locator("#composer-agent").click()
+                await page.get_by_role("dialog", name="Choose an agent").wait_for()
+                assert not await page.locator("#palette-refresh").is_visible()
+                await page.keyboard.press("Escape")
+                models_refreshed["done"] = False
+
                 reject_effort["next"] = True
                 await page.locator("#composer-model").click()
                 picker = page.get_by_role("dialog", name="Choose a model")
@@ -1501,6 +1530,8 @@ async def main() -> None:
                 await tool_dialog.wait_for()
                 assert "src/read-1.py" in await tool_dialog.locator("#text-body").inner_text()
                 assert "Result for read-1" in await tool_dialog.locator("#text-body").inner_text()
+                assert await tool_dialog.locator(".td-section .td-title").all_text_contents() == ["Overview", "Parameters", "Summary", "Result"]
+                assert await tool_dialog.locator(".td-label", has_text="query").count() == 1
                 await page.keyboard.press("Escape")
                 await tool_dialog.wait_for(state="hidden")
                 assert await page.evaluate("document.activeElement?.closest('.tool-card')?.dataset.callId") == "read-1"
@@ -1548,6 +1579,7 @@ async def main() -> None:
                 settings = page.get_by_role("dialog", name="Settings")
                 await page.wait_for_timeout(300)
                 preference_command_baseline = len(command_requests)
+                await settings.get_by_role("link", name="Conversation detail").click()
                 assert await settings.get_by_text("Balanced · Browser default").count() == 1
                 assert await settings.get_by_text("Recommended").count() == 1
                 assert await settings.locator('input[name="session-detail"]').count() == 3
@@ -1572,6 +1604,13 @@ async def main() -> None:
                 assert provider_keys == [16] and await key_field.input_value() == ""
                 await page.screenshot(path=str(ARTIFACTS / "settings-providers-dark.png"))
                 await settings.get_by_role("link", name="Appearance").click()
+                await settings.get_by_role("link", name="Soul").click()
+                assert await settings.locator("#files-heading").text_content() == "Soul"
+                assert await settings.locator("#settings-appearance").is_hidden()
+                await settings.get_by_role("link", name="Layout").click()
+                assert await settings.locator("#pref-context-header").is_checked()
+                assert await settings.locator(".settings-nav a").all_text_contents() != [] and await settings.locator(".settings-nav a[data-category]").count() == 7
+                await settings.get_by_role("link", name="Conversation detail").click()
                 balanced_option = settings.locator('input[name="session-detail"][value="balanced"]')
                 assert await balanced_option.get_attribute("aria-label") == "Balanced"
                 assert "Recommended" not in await balanced_option.get_attribute("aria-label")
@@ -1604,6 +1643,7 @@ async def main() -> None:
                 await page.locator("#timeline").evaluate("e=>e.scrollTop=0")
                 await page.get_by_role("button",name="Settings").click()
                 boundary_settings=page.get_by_role("dialog",name="Settings")
+                await boundary_settings.get_by_role("link", name="Conversation detail").click()
                 await boundary_settings.locator('input[name="session-detail"][value="focused"]').check()
                 await page.keyboard.press("Escape")
                 assert await page.locator(".tool-group").count()==0
@@ -1659,6 +1699,7 @@ async def main() -> None:
                 await page.get_by_text("Current live response remains fully visible.").wait_for(timeout=5_000)
                 await page.locator("#settings-open").click()
                 settings = page.get_by_role("dialog", name="Settings")
+                await settings.get_by_role("link", name="Conversation detail").click()
                 await settings.locator('input[name="session-detail"][value="complete"]').check()
                 await page.keyboard.press("Escape")
                 assert await page.locator(".tool-card").count() == 10
@@ -1736,6 +1777,7 @@ async def main() -> None:
 
                 await page.get_by_role("button", name="Settings").click()
                 settings = page.get_by_role("dialog", name="Settings")
+                await settings.get_by_role("link", name="Conversation detail").click()
                 preference_command_baseline = len(command_requests)
                 await settings.locator('[data-detail-scope="workspace"] input[value="focused"]').check()
                 assert "Workspace default" in await settings.locator("#settings-effective").inner_text()
@@ -1751,6 +1793,7 @@ async def main() -> None:
                 )
                 assert heights and all(height == 28 for height in heights), heights
                 page.once("dialog", lambda dialog: dialog.accept())
+                await settings.get_by_role("link", name="Appearance").click()
                 await settings.locator("#reset-settings-appearance").click()
                 assert await settings.locator('input[name="theme"]:checked').get_attribute("value") == "system"
                 await settings.locator('input[name="theme"][value="light"]').check()
@@ -2077,6 +2120,7 @@ async def main() -> None:
                 assert any(row.get("type") == "PermissionResolve" and row.get("decision") == "deny_once" for row in approval_commands), approval_commands
                 before_export = await terminal.call(p.SessionExport(session=session, format="json"))
                 await page.locator("#settings-open").evaluate("e=>e.click()")
+                await page.locator("#settings-overlay").get_by_role("link", name="Conversation detail").click()
                 await page.locator("#settings-overlay [data-detail-scope='session'] input[value='focused']").check()
                 after_export = await terminal.call(p.SessionExport(session=session, format="json"))
                 assert before_export.content == after_export.content

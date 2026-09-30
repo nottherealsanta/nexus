@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import re
 from calendar import monthrange
+from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime
 
 from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.events import Key
 from textual.screen import ModalScreen
 from textual.widgets import Input, OptionList, Static
@@ -74,7 +75,8 @@ class ModelPickerScreen(ModalScreen[tuple[str, str | None, bool] | None]):
 
     def __init__(self, rows: list[dict], *, current: str, current_effort: str | None,
                  stored_override: str | None, effort_source: str | None,
-                 favorites: list[str], recent: list[str], on_favorites) -> None:
+                 favorites: list[str], recent: list[str], on_favorites,
+                 on_refresh: Callable[[], Awaitable[list[dict]]] | None = None) -> None:
         super().__init__()
         self.rows = recent_models(rows)[:2000]
         self.sort_mode = "updated"
@@ -85,13 +87,17 @@ class ModelPickerScreen(ModalScreen[tuple[str, str | None, bool] | None]):
         self.favorites = list(favorites)
         self.recent = list(recent)
         self.on_favorites = on_favorites
+        self.on_refresh = on_refresh
+        self._refreshing = False
         self._visible_rows: list[dict | None] = []
         self._pending_effort: str | None = None
         self._effort_touched = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="model-picker-dialog"):
-            yield Static("Select model                                      esc", id="model-picker-title")
+            with Horizontal(id="model-picker-head"):
+                yield Static("Select model                                      esc", id="model-picker-title")
+                yield Static("↻ ctrl+r", id="model-picker-refresh")
             yield Input(placeholder="Search models and providers", id="model-picker-search")
             yield OptionList(id="model-picker-options")
 
@@ -172,6 +178,30 @@ class ModelPickerScreen(ModalScreen[tuple[str, str | None, bool] | None]):
                                     self.current_effort if _ref(row) == self.current
                                     and self.current_effort in levels else None)
 
+    async def _refresh_catalogue(self) -> None:
+        """Re-fetch models.dev through the host, then rebuild the list in place."""
+        if self.on_refresh is None or self._refreshing:
+            return
+        self._refreshing = True
+        button = self.query_one("#model-picker-refresh", Static)
+        button.update("↻ refreshing…")
+        try:
+            rows = await self.on_refresh()
+        except Exception as exc:  # noqa: BLE001 - surfaced in the modal, list is kept
+            button.update(f"↻ failed · {sanitize(str(exc), 60)}")
+        else:
+            row = self._selected_row()
+            self.rows = recent_models(rows)[:2000]
+            self._render_models(selected_ref=_ref(row) if row else None)
+            button.update(f"↻ {len(self.rows)} models")
+        finally:
+            self._refreshing = False
+
+    def on_click(self, event) -> None:
+        if getattr(event.widget, "id", None) == "model-picker-refresh":
+            event.stop()
+            self.run_worker(self._refresh_catalogue(), group="model-refresh", exclusive=True)
+
     def on_resize(self) -> None:
         if self._visible_rows:
             row = self._selected_row()
@@ -215,6 +245,10 @@ class ModelPickerScreen(ModalScreen[tuple[str, str | None, bool] | None]):
                                   if ref in self.favorites else [ref, *self.favorites][:100])
                 self.on_favorites(self.favorites)
                 self._render_models(selected_ref=ref)
+        elif event.key == "ctrl+r":
+            event.stop()
+            event.prevent_default()
+            self.run_worker(self._refresh_catalogue(), group="model-refresh", exclusive=True)
         elif event.key == "ctrl+s":
             event.stop()
             event.prevent_default()

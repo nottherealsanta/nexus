@@ -110,7 +110,7 @@
   </div>
   <div class="overlay" id="overlay" hidden>
     <section class="palette dialog" id="palette-dialog" role="dialog" aria-modal="true" aria-labelledby="palette-title">
-      <h2 class="sr-only" id="palette-title">Command palette</h2><div class="palette-input-row"><svg aria-hidden="true"><use href="#i-search"/></svg><input id="palette-input" role="combobox" aria-expanded="true" aria-controls="palette-results" aria-autocomplete="list" aria-label="Search sessions, agents, and models" placeholder="Search sessions and commands…" autocomplete="off"><kbd>esc</kbd></div>
+      <h2 class="sr-only" id="palette-title">Command palette</h2><div class="palette-input-row"><svg aria-hidden="true"><use href="#i-search"/></svg><input id="palette-input" role="combobox" aria-expanded="true" aria-controls="palette-results" aria-autocomplete="list" aria-label="Search sessions, agents, and models" placeholder="Search sessions and commands…" autocomplete="off"><button type="button" class="palette-refresh" id="palette-refresh" hidden title="Refresh the model list from models.dev" aria-label="Refresh models from models.dev"><svg aria-hidden="true"><use href="#i-refresh"/></svg></button><kbd>esc</kbd></div>
       <div class="palette-results" id="palette-results"></div>
       <div class="palette-footer" id="palette-footer"><span>Navigate <kbd>↑</kbd><kbd>↓</kbd></span><span>Open <kbd>↵</kbd></span></div>
     </section>
@@ -121,13 +121,20 @@
         <h2 id="settings-title">Settings</h2>
         <span class="settings-nav-group">GENERAL</span>
         <a href="#settings-appearance" class="selected">Appearance</a>
+        <a href="#settings-layout">Layout</a>
         <a href="#settings-detail">Conversation detail</a>
         <a href="#settings-keys">Keyboard</a>
         <a href="#settings-workspace">Workspace</a>
         <span class="settings-nav-group configure">CONFIGURE</span>
         <a href="#settings-providers">Providers</a>
         <a href="#settings-voice">Voice</a>
-        <a href="#settings-agents">Agents</a>
+        <a href="#settings-files" data-category="agents">Agents</a>
+        <a href="#settings-files" data-category="tools">Tools</a>
+        <a href="#settings-files" data-category="mcp">MCP servers</a>
+        <a href="#settings-files" data-category="skills">Skills</a>
+        <a href="#settings-files" data-category="hooks">Hooks</a>
+        <a href="#settings-files" data-category="config">Config</a>
+        <a href="#settings-files" data-category="soul">Soul</a>
       </nav>
       <div class="settings-body" id="settings-body">
         <header class="settings-header"><span class="settings-crumb" id="settings-crumb">Appearance</span></header>
@@ -140,6 +147,13 @@
             <label class="theme-option"><input type="radio" name="theme" value="light"><span class="theme-swatch light" aria-hidden="true"><i></i><i></i></span><span>Light</span></label>
             <label class="theme-option"><input type="radio" name="theme" value="dark"><span class="theme-swatch dark" aria-hidden="true"><i></i><i></i></span><span>Dark</span></label>
           </div>
+        </section>
+        <section class="settings-section" id="settings-layout" aria-labelledby="settings-layout-title">
+          <div class="settings-page-heading"><h3 id="settings-layout-title">Layout</h3><button type="button" class="toolbar-button settings-reset" id="reset-settings-layout">Reset to default</button></div>
+          <p class="settings-help">Panels hide automatically on narrow windows.</p>
+          <label class="settings-row"><span class="settings-label">Sessions sidebar</span><span><kbd>Ctrl</kbd><kbd>B</kbd></span><input type="checkbox" id="pref-sessions-sidebar" role="switch"></label>
+          <label class="settings-row"><span class="settings-label">Details sidebar</span><span><kbd>Ctrl</kbd><kbd>L</kbd></span><input type="checkbox" id="pref-details-sidebar" role="switch"></label>
+          <label class="settings-row"><span class="settings-label">Show context header</span><span></span><input type="checkbox" id="pref-context-header" role="switch"></label>
         </section>
         <section class="settings-section" id="settings-detail" aria-labelledby="settings-detail-title">
           <div class="settings-page-heading"><h3 id="settings-detail-title">Conversation detail</h3><button type="button" class="toolbar-button settings-reset" id="reset-settings-detail">Reset to default</button></div>
@@ -219,19 +233,40 @@
           </label>
           <div class="voice-settings-actions"><button class="toolbar-button" id="voice-settings-download" type="button">Download / Retry model</button><button class="toolbar-button" id="voice-settings-remove" type="button">Remove model</button></div>
         </section>
-        <section class="settings-section" id="settings-agents" aria-labelledby="settings-agents-title">
-          <div class="settings-page-heading"><h3 id="settings-agents-title">Agents</h3><button type="button" class="toolbar-button settings-reset" id="reset-settings-agents">Reset to default</button></div>
-          <p class="settings-help">The root agent every new session starts with. Written to <code>[agent] name</code>; a project setting overrides the global one.</p>
-          <fieldset class="detail-scope"><legend>Save to</legend>
-            <div class="segmented" id="default-agent-scope">
-              <label><input type="radio" name="default-agent-scope" value="global" checked><span>Global · ~/.nexus</span></label>
-              <label><input type="radio" name="default-agent-scope" value="project"><span>Project · .agents</span></label>
+        <section class="settings-section" id="settings-files" aria-labelledby="files-heading">
+          <div class="settings-page-heading"><h3 id="files-heading">Agents</h3><button type="button" class="toolbar-button settings-reset" id="reset-settings-files">Reset to default</button></div>
+          <p class="settings-help" id="files-help"></p>
+          <div class="files-scope-row">
+            <div class="segmented two" id="files-scope" role="radiogroup" aria-label="Save to">
+              <label><input type="radio" name="files-scope" value="global" checked><span>global</span></label>
+              <label><input type="radio" name="files-scope" value="project"><span>project</span></label>
             </div>
-          </fieldset>
-          <fieldset class="detail-scope"><legend>New sessions start with</legend>
+            <span class="settings-help" id="files-scope-path">~/.nexus</span>
+          </div>
+          <fieldset class="detail-scope" id="files-default-agent"><legend>New sessions start with</legend>
             <div class="segmented" id="default-agent-choices" role="radiogroup" aria-label="Default agent"></div>
             <p class="settings-help" id="default-agent-note" role="status" aria-live="polite"></p>
           </fieldset>
+          <div class="files-body">
+            <div class="files-list-pane">
+              <button type="button" class="toolbar-button" id="files-new">✚ New</button>
+              <input class="files-input" id="files-new-name" placeholder="Name for new item" aria-label="Name for new item" hidden>
+              <div class="files-list" id="files-list"></div>
+            </div>
+            <div class="files-editor-pane">
+              <div class="files-title" id="files-title">Select an item</div>
+              <div class="agent-form" id="agent-form" hidden>
+                <div class="agent-form-row"><span class="agent-form-label">Model</span><input class="files-input" id="agent-model" list="agent-model-options" placeholder="inherit session model" aria-label="Model"><button type="button" class="toolbar-button" id="agent-model-clear" aria-label="Clear model">×</button></div>
+                <div class="agent-form-row"><span class="agent-form-label">Effort</span><select id="agent-effort" aria-label="Reasoning effort"></select></div>
+                <div class="agent-form-row top"><span class="agent-form-label">Fallbacks</span><div class="agent-fallbacks" id="agent-fallbacks"></div></div>
+                <div class="agent-form-row"><span class="agent-form-label"></span><button type="button" class="toolbar-button" id="agent-fallback-add">+ Add fallback</button></div>
+                <datalist id="agent-model-options"></datalist>
+              </div>
+              <textarea class="files-editor" id="files-editor" spellcheck="false" aria-label="File contents" disabled></textarea>
+              <p class="settings-help" id="files-status" role="status" aria-live="polite"></p>
+              <div class="files-actions"><button type="button" class="toolbar-button" id="files-delete" disabled>Delete</button></div>
+            </div>
+          </div>
         </section>
 
         </div>
