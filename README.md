@@ -514,15 +514,27 @@ Tools execute **on the host** under the permission engine. There is **no OS
 sandbox and no container isolation**: an approved `Bash` call runs with your
 user's privileges.
 
+### File and image attachments
+
+Use `/attach <path>` in `nexus chat` or `nexus web`; `/attach clear` removes
+pending files. The browser also offers Attach file, clipboard image/file paste,
+and drag/drop. Inspect document or image previews before sending. Images remain
+vision input, while supported documents convert automatically to Markdown with
+AnyDoc, included in the default install. Text and source files are included
+directly. Enter sends attachments even without prompt text; queue, steer, and
+interrupt preserve them. Submitted content survives reconnects.
+
+Attachments support PNG, JPEG, GIF, WebP, PDF, Office, OpenDocument, RTF, EPUB,
+and CSV. Unsupported binary files and scanned PDFs requiring hosted OCR report
+an error. Limits: 8 MiB per file, eight files per message, and 12 MiB for the
+encoded combined input. Large browser input previews announce clipping and
+provide an inspector containing the complete input.
+
 ### Local document reading
 
 `read` converts supported local documents to Markdown with
-[Firecrawl AnyDoc](https://github.com/firecrawl/anydoc). Install the optional
-dependency with:
-
-```sh
-pip install 'nexus-harness[documents]'
-```
+[Firecrawl AnyDoc](https://github.com/firecrawl/anydoc), included in the default
+install. The `documents` extra remains available for compatibility.
 
 Supported extensions are `.pdf`, `.doc`, `.docx`, `.docm`, `.ppt`, `.pptx`,
 `.pptm`, `.pps`, `.pot`, `.ppsx`, `.ppsm`, `.xls`, `.xlsx`, `.xlsm`, `.xlsb`,
@@ -537,8 +549,8 @@ Document reads remain non-mutating and pass through path-keyed `read` permission
 checks and hard `read_denyroots`. Individual file reads are not globally confined
 to the workspace; directory listing is limited to the workspace. The conversion
 worker runs as the same OS user as Nexus with a scrubbed environment, not inside
-a strong OS sandbox. Images remain a separate future goal and are not attached
-or converted by this document feature.
+a strong OS sandbox. Image attachments use the composer flow above; the document
+`read` tool does not convert images.
 
 ### Web search
 
