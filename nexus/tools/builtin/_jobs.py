@@ -57,7 +57,7 @@ import secrets
 import signal
 import time
 from collections import deque
-from collections.abc import Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
@@ -112,6 +112,12 @@ DEFAULT_MAX_RETAINED_BYTES = 64 * 1024 * 1024
 #: the per-session count but whose output is small enough not to trip the byte
 #: cap.
 DEFAULT_MAX_TOTAL_COMPLETED_JOBS = 256
+#: Default hard runtime limit for a job when config cannot be read.
+DEFAULT_MAX_RUNTIME_S = 3600.0
+#: Seconds between ``tool.progress`` events while ``bash`` blocks.
+PROGRESS_INTERVAL_S = 2.0
+#: Progress events emitted per blocking ``bash`` call.
+MAX_PROGRESS_EVENTS = 300
 #: Pipe read size while draining.
 _READ_CHUNK = 65536
 
@@ -251,6 +257,14 @@ class ShellJob:
         self._finish_lock = asyncio.Lock()
         self._final: JobStatus | None = None
         self._terminating = False
+        #: Per-job read cursor: bytes of stdout/stderr already returned to the
+        #: model by ``bash`` ``status``/``wait`` (explicit offsets override it).
+        self.read_stdout = 0
+        self.read_stderr = 0
+        #: True once a foreground run yielded, or the job started in background.
+        self.background = False
+        #: Hard-limit watchdog; held so the task is not garbage collected.
+        self.watchdog: asyncio.Task[None] | None = None
 
     def __repr__(self) -> str:
         return (
@@ -847,14 +861,22 @@ async def await_job(
     job: ShellJob,
     *,
     timeout: float | None = None,
+    yield_after: float | None = None,
     cancel_token: object | None = None,
+    kill_on_cancel: bool = True,
+    tick: Callable[[], Awaitable[None]] | None = None,
+    tick_s: float = PROGRESS_INTERVAL_S,
 ) -> str:
-    """Await foreground completion, timeout, or cooperative cancellation.
+    """Await completion, a yield/timeout window, or cooperative cancellation.
 
-    Returns ``"completed"`` or ``"timeout"``. Cooperative cancellation and
-    task cancellation both terminate the process group and then raise, so no
-    descendants survive the cancelled path.
+    Returns ``"completed"``, ``"yielded"`` (``yield_after`` elapsed; the job is
+    left running) or ``"timeout"`` (``timeout`` elapsed; the process group is
+    terminated). With ``kill_on_cancel`` (foreground runs) cooperative and task
+    cancellation terminate the process group and then raise; without it (a
+    ``wait`` on a background job) the job is left running. ``tick`` is called
+    about every ``tick_s`` seconds while waiting, for progress reporting.
     """
+    limit = yield_after if yield_after is not None else timeout
     completion = asyncio.ensure_future(job.wait())
     waiters: set[asyncio.Future[object]] = {completion}
     cancel_waiter: asyncio.Future[object] | None = None
@@ -863,26 +885,62 @@ async def await_job(
         if wait is not None:
             cancel_waiter = asyncio.ensure_future(wait())
             waiters.add(cancel_waiter)
+    loop = asyncio.get_running_loop()
+    deadline = None if limit is None else loop.time() + limit
     try:
-        done, _ = await asyncio.wait(
-            waiters, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
-        )
-        if completion in done:
-            return "completed"
-        if cancel_waiter is not None and cancel_waiter in done:
-            await job.terminate(reason=JobStatus.KILLED)
-            reason = getattr(cancel_token, "reason", None)
-            raise OperationCancelled(reason or "cancelled")
-        await job.terminate(reason=JobStatus.TIMED_OUT)
-        return "timeout"
+        while True:
+            slice_s = tick_s if tick is not None else None
+            if deadline is not None:
+                remaining = max(deadline - loop.time(), 0.0)
+                slice_s = remaining if slice_s is None else min(slice_s, remaining)
+            done, _ = await asyncio.wait(
+                waiters, timeout=slice_s, return_when=asyncio.FIRST_COMPLETED
+            )
+            if completion in done:
+                return "completed"
+            if cancel_waiter is not None and cancel_waiter in done:
+                if kill_on_cancel:
+                    await job.terminate(reason=JobStatus.KILLED)
+                reason = getattr(cancel_token, "reason", None)
+                raise OperationCancelled(reason or "cancelled")
+            if deadline is not None and loop.time() >= deadline:
+                if yield_after is not None:
+                    return "yielded"
+                await job.terminate(reason=JobStatus.TIMED_OUT)
+                return "timeout"
+            if tick is not None:
+                await tick()
     except asyncio.CancelledError:
-        await asyncio.shield(job.terminate(reason=JobStatus.KILLED))
+        if kill_on_cancel:
+            await asyncio.shield(job.terminate(reason=JobStatus.KILLED))
         raise
     finally:
         for waiter in waiters:
             if not waiter.done():
                 waiter.cancel()
         await asyncio.gather(*waiters, return_exceptions=True)
+
+
+def enforce_max_runtime(job: ShellJob, limit: float) -> None:
+    """Terminate ``job`` (status ``timed_out``) once it has run for ``limit`` s."""
+
+    async def _watch() -> None:
+        try:
+            await job.wait(limit)
+        except TimeoutError:
+            await job.terminate(reason=JobStatus.TIMED_OUT)
+
+    job.watchdog = asyncio.ensure_future(_watch())
+
+
+def last_output_line(job: ShellJob) -> str:
+    """The last non-empty line of recent output (stdout, else stderr)."""
+    for buffer in (job.stdout, job.stderr):
+        tail = buffer.snapshot()[-2048:].decode("utf-8", "replace")
+        for line in reversed(tail.splitlines()):
+            if line.strip():
+                return line.strip()[:200]
+    return ""
 
 
 def format_job_output(
@@ -932,7 +990,15 @@ def format_job_output(
     reserved = len("\n".join(header)) + sum(len(n) + 1 for n in notices)
     budget = max(max_chars - reserved, 256)
     if len(body) > budget:
-        body = body[:budget] + f"\n[output truncated at {budget} chars]"
+        # Head + tail: test runners and builds print their summary last.
+        head = budget * 2 // 5
+        tail = budget - head
+        omitted = len(body) - budget
+        body = (
+            body[:head]
+            + f"\n[... {omitted} chars omitted ...]\n"
+            + body[len(body) - tail :]
+        )
     parts = header + notices + [body]
     return "\n".join(parts)
 
@@ -951,11 +1017,41 @@ def _default_timeout(config: object) -> float:
     return 120.0
 
 
-def resolve_timeout(args: dict[str, object], config: object) -> float:
-    """Per-call ``timeout_s`` override, else the configured default."""
+def _tools_number(config: object, name: str) -> float | None:
+    v2 = getattr(config, "v2", None)
+    tools = getattr(v2, "tools", None) if v2 is not None else None
+    value = getattr(tools, name, None)
+    if (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value > 0
+    ):
+        return float(value)
+    return None
+
+
+def yield_window(config: object) -> float:
+    """Seconds a foreground run blocks before yielding to the background."""
+    value = _tools_number(config, "bash_yield_window_s")
+    return value if value is not None else _default_timeout(config)
+
+
+def max_runtime(config: object) -> float:
+    """Hard runtime limit for any job (``tools.bash_max_s``)."""
+    value = _tools_number(config, "bash_max_s")
+    return value if value is not None else DEFAULT_MAX_RUNTIME_S
+
+
+def resolve_timeout(args: dict[str, object], config: object) -> float | None:
+    """Per-call ``timeout_s`` hard-kill limit, capped at ``bash_max_s``.
+
+    ``None`` means the caller did not ask for one: only the yield window and
+    ``bash_max_s`` apply.
+    """
     raw = args.get("timeout_s") if isinstance(args, dict) else None
     if raw is None:
-        return _default_timeout(config)
+        return None
     if (
         isinstance(raw, bool)
         or not isinstance(raw, (int, float))
@@ -963,7 +1059,7 @@ def resolve_timeout(args: dict[str, object], config: object) -> float:
         or raw <= 0
     ):
         raise ValueError("timeout_s must be a positive finite number")
-    return float(raw)
+    return min(float(raw), max_runtime(config))
 
 
 def resolve_env(args: dict[str, object]) -> dict[str, str] | None:

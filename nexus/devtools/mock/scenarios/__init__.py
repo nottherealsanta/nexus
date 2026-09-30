@@ -23,6 +23,7 @@ _MODULES = (
     "context_pressure",
     "diff_review",
     "stress",
+    "bash_wait",
 )
 
 

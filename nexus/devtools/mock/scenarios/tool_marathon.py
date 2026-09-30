@@ -11,7 +11,7 @@ def _wait_job(ctx: Ctx):
     match = next((m for r in ctx.last_results if (m := _JOB.search(r.text))), None)
     if match is None:
         return say("The background job did not report an id; skipping its status check.")
-    return calls(call("bash", action="wait", job_id=match.group(1), wait_s=2), text="Checking the background job.")
+    return calls(call("bash", action="wait", job_id=match.group(1)), text="Checking the background job.")
 
 
 def _steps():

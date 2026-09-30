@@ -550,12 +550,25 @@ class PermissionsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True
 
 
 class ToolsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    #: Deprecated alias for ``bash_yield_s``; used only when that is unset.
     bash_timeout_s: float = 120
+    #: How long a foreground ``bash`` run blocks before yielding a
+    #: still-running job to the background. ``None`` falls back to
+    #: ``bash_timeout_s``.
+    bash_yield_s: float | None = None
+    #: Hard runtime limit for any ``bash`` job, foreground or background.
+    bash_max_s: float = 3600
     #: Strict deadline for the isolated ``Grep`` regex worker. Finite, positive.
     grep_timeout_s: float = 5.0
     max_result_tokens: int = 25000
     max_parallel: int = 8
     web: WebSection = msgspec.field(default_factory=lambda: WebSection())
+
+    @property
+    def bash_yield_window_s(self) -> float:
+        """The effective yield window (``bash_yield_s``, else the alias)."""
+        value = self.bash_timeout_s if self.bash_yield_s is None else self.bash_yield_s
+        return float(value)
 
     def __post_init__(self) -> None:
         if (
@@ -565,6 +578,17 @@ class ToolsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
             or self.bash_timeout_s <= 0
         ):
             raise ValueError("tools.bash_timeout_s must be a positive finite number")
+        for name in ("bash_yield_s", "bash_max_s"):
+            value = getattr(self, name)
+            if value is None and name == "bash_yield_s":
+                continue
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value <= 0
+            ):
+                raise ValueError(f"tools.{name} must be a positive finite number")
         if (
             isinstance(self.grep_timeout_s, bool)
             or not isinstance(self.grep_timeout_s, (int, float))

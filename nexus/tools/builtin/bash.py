@@ -5,10 +5,15 @@ allow/deny/ask rules against it. That is **policy matching, not sandboxing** —
 it does not constrain what the command may read or write.
 
 Foreground commands return their captured output and exit code; a nonzero exit
-is a normal, model-visible result. Background jobs can be read, waited on, and
-stopped through action-specific requests addressed by registry-owned job IDs.
-Timeouts and cancellation SIGTERM the whole process group, grace, then SIGKILL,
-and always reap the direct child.
+is a normal, model-visible result. A foreground command still running after the
+yield window (``tools.bash_yield_s``) is **yielded** to the background instead
+of killed: the result names its ``job_id`` and the model calls ``wait``, which
+returns when the job exits (``until="exit"``, the default) with only output not
+returned before (a per-job read cursor). Background jobs can be read, waited
+on, and stopped through action-specific requests addressed by registry-owned
+job IDs. ``timeout_s`` is a hard kill limit capped at ``tools.bash_max_s``;
+timeouts and cancellation SIGTERM the whole process group, grace, then SIGKILL,
+and always reap the direct child. A cancelled ``wait`` leaves its job running.
 """
 from __future__ import annotations
 
@@ -48,8 +53,9 @@ _WORKDIR = {
 _TIMEOUT = {
     "type": "number",
     "description": (
-        "Wall-clock timeout in seconds before the process group is "
-        "terminated. Defaults to the configured tools.bash_timeout_s."
+        "Optional hard limit in seconds: the process group is killed when it "
+        "elapses (capped at tools.bash_max_s). Omit it for long commands; they "
+        "are moved to the background after the yield window instead."
     ),
 }
 _BACKGROUND = {
@@ -86,13 +92,26 @@ _STDERR_OFFSET = {
 }
 _WAIT = {
     "type": "number",
-    "description": "Maximum seconds to wait for new output or completion (1–30).",
+    "description": (
+        "Maximum seconds to wait. Optional: with until=exit it defaults to "
+        "the job's remaining lifetime; with until=output it is at most 30."
+    ),
+}
+_UNTIL = {
+    "type": "string",
+    "enum": ["exit", "output"],
+    "default": "exit",
+    "description": (
+        "wait: return when the job exits (default) or as soon as it prints "
+        "new output."
+    ),
 }
 _RUN_FIELDS = {
     "command", "timeout_s", "run_in_background", "env", "shell", "workdir"
 }
 _JOB_FIELDS = {"job_id"}
 _OUTPUT_FIELDS = {"stdout_offset", "stderr_offset"}
+_WAIT_FIELDS = {"wait_s", "until"}
 _MAX_WAIT_S = 30.0
 
 SPEC = ToolSpec(
@@ -104,7 +123,10 @@ SPEC = ToolSpec(
         "and the workspace directory; run actions may select an allowlisted "
         "shell executable and a checked in-workspace directory. Use it to run "
         "tests, builds, and programs; prefer the dedicated read, search, and "
-        "edit tools for file work when they are available."
+        "edit tools for file work when they are available. Run long commands "
+        "(test suites, builds) in the foreground. If one is still running "
+        "after the yield window you get a job_id; call action=wait once, and "
+        "it returns when the job exits. Don't poll."
     ),
     input_schema={
         "type": "object",
@@ -120,6 +142,7 @@ SPEC = ToolSpec(
             "stdout_offset": _STDOUT_OFFSET,
             "stderr_offset": _STDERR_OFFSET,
             "wait_s": _WAIT,
+            "until": _UNTIL,
         },
         "additionalProperties": False,
     },
@@ -142,7 +165,9 @@ def _permission_key(data: dict[str, Any]) -> str:
     return f"{action}:{data.get('job_id', '')}"
 
 
-def _validate_shape(args: dict[str, Any]) -> tuple[str, ToolExecutionResult | None]:
+def _validate_shape(
+    args: dict[str, Any], max_runtime_s: float = 3600.0
+) -> tuple[str, ToolExecutionResult | None]:
     action = args.get("action", "run")
     if not isinstance(action, str) or action not in {
         "run", "status", "wait", "stop"
@@ -156,8 +181,7 @@ def _validate_shape(args: dict[str, Any]) -> tuple[str, ToolExecutionResult | No
         allowed = _JOB_FIELDS | _OUTPUT_FIELDS
         required = {"job_id"}
         if action == "wait":
-            allowed = allowed | {"wait_s"}
-            required.add("wait_s")
+            allowed = allowed | _WAIT_FIELDS
     else:
         allowed = _JOB_FIELDS
         required = _JOB_FIELDS
@@ -187,13 +211,15 @@ def _validate_shape(args: dict[str, Any]) -> tuple[str, ToolExecutionResult | No
         if (
             isinstance(wait_s, bool)
             or not isinstance(wait_s, (int, float))
-            or not 0 < wait_s <= _MAX_WAIT_S
+            or wait_s <= 0
             or not math.isfinite(wait_s)
         ):
-            return "", _error(
-                f"bash: wait_s must be a positive finite number no greater than "
-                f"{_MAX_WAIT_S:g} seconds"
-            )
+            return "", _error("bash: wait_s must be a positive finite number")
+        cap = max_runtime_s if args.get("until", "exit") == "exit" else _MAX_WAIT_S
+        if wait_s > cap:
+            return "", _error(f"bash: wait_s must not exceed {cap:g} seconds")
+    if action == "wait" and args.get("until", "exit") not in ("exit", "output"):
+        return "", _error("bash: until must be 'exit' or 'output'")
     return action, None
 
 
@@ -240,17 +266,17 @@ async def run(
     """Run a command or perform a validated action on an owned background job."""
     if not isinstance(args, dict):
         return _error("bash: arguments must be an object")
-    action, invalid = _validate_shape(args)
+    action, invalid = _validate_shape(args, _jobs.max_runtime(ctx.config))
     if invalid is not None:
         return invalid
 
     if action == "status":
         return await bash_output._read_job_output(
-            args, ctx, tool_name="bash"
+            args, ctx, tool_name="bash", unified=True
         )
     if action == "wait":
         return await bash_output._read_job_output(
-            args, ctx, tool_name="bash", max_wait_s=_MAX_WAIT_S
+            args, ctx, tool_name="bash", max_wait_s=_MAX_WAIT_S, unified=True
         )
     if action == "stop":
         return await kill_shell._stop_job(
@@ -296,8 +322,14 @@ async def run(
     except (OSError, RuntimeError, ValueError, _jobs.JobRegistryError) as exc:
         return _error(f"bash: failed to start command: {exc}")
 
+    max_s = _jobs.max_runtime(ctx.config)
+    limit = timeout if timeout is not None else max_s
     background = bool(args.get("run_in_background", False))
     if background:
+        job.background = True
+        _jobs.enforce_max_runtime(job, limit)
+        job.read_stdout = len(job.stdout)
+        job.read_stderr = len(job.stderr)
         return ToolExecutionResult.text(
             _jobs.format_job_output(job, show_offsets=True),
             display=(
@@ -306,21 +338,59 @@ async def run(
             ),
             context_note=(
                 f"[bash {command!r} started in background as {job.job_id}; "
-                "use action=status/wait/stop with this job_id]"
+                "use action=wait (returns when it exits) or status/stop with "
+                "this job_id]"
             ),
         )
 
+    yield_s = _jobs.yield_window(ctx.config)
+    # A hard limit inside the yield window keeps today's behavior: block, then
+    # kill. Otherwise block for the yield window and hand the job over to the
+    # background, where a watchdog still enforces the hard limit.
+    yielding = limit > yield_s
+    if yielding:
+        _jobs.enforce_max_runtime(job, limit)
     outcome = await _jobs.await_job(
-        job, timeout=timeout, cancel_token=ctx.cancel_token
+        job,
+        timeout=None if yielding else limit,
+        yield_after=yield_s if yielding else None,
+        cancel_token=ctx.cancel_token,
+        tick=bash_output._progress_tick(job, ctx),
     )
+    if outcome == "yielded":
+        job.background = True
+        text = _jobs.format_job_output(job, show_offsets=True)
+        job.read_stdout = len(job.stdout)
+        job.read_stderr = len(job.stderr)
+        return ToolExecutionResult.text(
+            f"[still running: moved to background after {yield_s:g}s; call "
+            f"bash action=wait job_id={job.job_id} to block until it exits]\n"
+            + text,
+            display=f"moved {job.job_id} to background after {yield_s:g}s",
+            context_note=(
+                f"[Bash {command!r} still running after {yield_s:g}s; moved to "
+                f"background as {job.job_id}. Call action=wait with this "
+                "job_id; do not poll.]"
+            ),
+        )
     if outcome == "timeout":
         return ToolExecutionResult.text(
-            f"[timed out after {timeout:g}s; process group terminated]\n"
+            f"[timed out after {limit:g}s; process group terminated]\n"
             + _jobs.format_job_output(job),
             is_error=True,
             context_note=(
-                f"[Bash {command!r} timed out after {timeout:g}s and was "
+                f"[Bash {command!r} timed out after {limit:g}s and was "
                 "terminated; re-run with a longer timeout only if safe]"
+            ),
+        )
+    if job.status is _jobs.JobStatus.TIMED_OUT:
+        return ToolExecutionResult.text(
+            f"[timed out after {limit:g}s; process group terminated]\n"
+            + _jobs.format_job_output(job),
+            is_error=True,
+            context_note=(
+                f"[Bash {command!r} timed out after {limit:g}s and was "
+                "terminated]"
             ),
         )
     return ToolExecutionResult.text(

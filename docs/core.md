@@ -160,6 +160,25 @@ adds cache reads and writes back. `view/reduce.py` stores that as
 estimate's growth), so the UI meter (`ui_support/context.py:context_measure`)
 shows a provider number whenever one exists.
 
+## Long-running `bash` commands
+
+A foreground `bash` run blocks until exit, the yield window (`tools.bash_yield_s`,
+default 120s), or cancel. At the window a still-running command is **yielded**, not
+killed: it becomes a background job, and the result says `status: running`, names
+the `job_id`, and tells the model to call `action=wait`. `wait` defaults to
+`until="exit"` (returns when the job exits; `wait_s` is an optional bound up to
+`tools.bash_max_s`); `until="output"` keeps the old return-on-new-output behavior
+with a 30s cap. Each job keeps a read cursor, so `status`/`wait` without offsets
+return only unseen output; explicit offsets override it. `timeout_s` is a hard kill
+limit capped at `tools.bash_max_s` (3600s), which also bounds every background job
+and is the base of the `ToolManager` backstop. Cancel during the blocking window kills
+the process group; cancel during `wait` stops waiting and leaves the job running.
+While blocking, `bash` emits throttled `tool.progress` events (last output line,
+one per 2s, at most 300 per call). Truncated output keeps head and tail. The legacy
+`BashOutput` tool is unchanged. Jobs still running at turn end are not announced
+(deferred: completion notifications). Code: `tools/builtin/{bash,bash_output,_jobs}.py`;
+tests: `tests/test_builtin_bash_wait.py`; scenario: `/mock bash-wait`.
+
 ## Testing the core
 
 - Scripted runs: `ScriptedProvider(text_response(...), tool_response(("id", "Edit", {...})), [MessageStart(...), TextDelta(...), Wait(event), ...])`. Each script is consumed once, in order, across all sessions.

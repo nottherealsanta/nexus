@@ -99,6 +99,8 @@ _V2_NUMERIC = {
     "context.limits.environment": int,
     "context.limits.attachments": int,
     "tools.bash_timeout_s": float,
+    "tools.bash_yield_s": float,
+    "tools.bash_max_s": float,
     "tools.web.search_timeout_s": float,
     "tools.web.fetch_timeout_s": float,
     "tools.web.max_results": int,

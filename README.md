@@ -349,6 +349,13 @@ The full surface (`[agent]`, `[models]`, `[model]`, `[providers.*]`,
 `[model]` is a compatibility section; `[models]` is canonical. If both set the
 same field to different values, that is an error, not a precedence puzzle.
 
+Long shell commands are yielded, not killed. Under `[tools]`:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `bash_yield_s` | `120` | How long a foreground `bash` run blocks. A command still running then moves to the background and returns its `job_id`; `bash action=wait` returns when it exits. `bash_timeout_s` is a deprecated alias. |
+| `bash_max_s` | `3600` | Hard runtime limit for any `bash` job, foreground or background. A per-call `timeout_s` is a kill limit capped at this. |
+
 ### Secrets references only
 
 Config values may reference a secret; they may never contain one:

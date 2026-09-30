@@ -595,6 +595,9 @@ def test_tool_numeric_fields_validated(tmp_path):
         "[tools]\nbash_timeout_s = 0\n",
         "[tools]\nbash_timeout_s = -3\n",
         "[tools]\nbash_timeout_s = nan\n",
+        "[tools]\nbash_yield_s = 0\n",
+        "[tools]\nbash_max_s = -1\n",
+        "[tools]\nbash_max_s = nan\n",
         "[tools]\nmax_result_tokens = 0\n",
         "[tools]\nmax_result_tokens = -10\n",
     ):
@@ -756,3 +759,27 @@ def test_web_tool_numeric_environment_values_are_type_checked():
                 "tools": {"web": {"search_timeout_s": "invalid"}},
             }
         )
+
+
+def test_bash_yield_and_max_defaults_and_alias():
+    tools = build_v2({"config_version": 2}).tools
+    assert tools.bash_yield_s is None
+    assert tools.bash_max_s == 3600
+    assert tools.bash_yield_window_s == 120
+    # The deprecated bash_timeout_s is the yield window until bash_yield_s is set.
+    aliased = build_v2({"config_version": 2, "tools": {"bash_timeout_s": 7}}).tools
+    assert aliased.bash_yield_window_s == 7
+    explicit = build_v2(
+        {"config_version": 2, "tools": {"bash_timeout_s": 7, "bash_yield_s": 9}}
+    ).tools
+    assert explicit.bash_yield_window_s == 9
+
+
+def test_bash_yield_and_max_load_from_toml(tmp_path):
+    home = _home(tmp_path)
+    (tmp_path / "nexus.toml").write_text(
+        "config_version = 2\n[tools]\nbash_yield_s = 15\nbash_max_s = 900\n"
+    )
+    config = Config.load(tmp_path, home=home, environ={})
+    assert config.v2.tools.bash_yield_window_s == 15
+    assert config.v2.tools.bash_max_s == 900
