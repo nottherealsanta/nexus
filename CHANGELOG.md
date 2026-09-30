@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.1](https://github.com/nottherealsanta/nexus/compare/v0.2.0...v0.2.1) (2026-09-30)
+
+
+### Bug fixes
+
+* complete patch release requests through merge and publication ([#12](https://github.com/nottherealsanta/nexus/issues/12)) ([5293830](https://github.com/nottherealsanta/nexus/commit/5293830e233cae7828e33542f3a24d9ee7c0c43b))
+* drop unsupported --refresh-package from uv tool upgrade in nexus update ([#8](https://github.com/nottherealsanta/nexus/issues/8)) ([f64ce73](https://github.com/nottherealsanta/nexus/commit/f64ce733065e4b7aa2070ef2f4350207893c4390))
+* restore last released version so release-please proposes 0.2.1 ([#10](https://github.com/nottherealsanta/nexus/issues/10)) ([a3d7ba0](https://github.com/nottherealsanta/nexus/commit/a3d7ba03e93737c30d2fb4609c64cdca87f8649c))
+
 ## [0.2.0](https://github.com/nottherealsanta/nexus/compare/v0.1.2...v0.2.0) (2026-09-30)
 
 
