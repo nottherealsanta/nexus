@@ -116,6 +116,10 @@ class FakeTransport:
                 status="running",
                 view={},
             )
+        if isinstance(command, p.SessionEnqueue):
+            self.last_input = command.content
+            self.last_mode = command.mode
+            return p.SessionEnqueueResult(session=command.session, queued_id="q", turn_id="t", depth=1)
         if isinstance(command, p.SessionStart):
             self.trace.append("start_turn")
             self.last_input = command.content
@@ -1592,29 +1596,22 @@ async def test_enter_sends_shift_enter_newlines_and_editor_clears():
 
 
 @pytest.mark.asyncio
-async def test_enter_while_turn_running_restores_draft_and_shows_not_sent_notice():
+@pytest.mark.parametrize("key,mode", [("enter", "queue"), ("ctrl+enter", "steer"), ("alt+enter", "interrupt")])
+async def test_submit_while_running_uses_requested_mode(key, mode):
     from nexus.ui.tui.widgets import ChatEditor
-
     transport = FakeTransport()
     app = NexusTextualApp(_client(transport), session="s")
     async with app.run_test() as pilot:
         await pilot.pause()
         editor = app.query_one(ChatEditor)
-        editor.text = "keep this unsent draft"
+        editor.text = "new direction"
         app.controller.running = True
-        before = list(transport.trace)
-
-        await pilot.press("enter")
+        await pilot.press(key)
         await pilot.pause(0.1)
-
-        assert editor.text == "keep this unsent draft"
-        assert "start_turn" not in transport.trace
-        assert "SessionStart" not in transport.trace
-        assert "SessionEnqueue" not in transport.trace
-        assert transport.trace == before
-        assert "Turn running · message not sent" in app.query_one(
-            "#connection-status"
-        ).render().plain
+        assert editor.text == ""
+        assert transport.last_input == "new direction"
+        assert transport.last_mode == mode
+        assert "SessionEnqueue" in transport.trace
 
 
 @pytest.mark.asyncio
@@ -2045,10 +2042,7 @@ async def _feed_terminal(app, sequence: str, parser=None):
     "newline_sequence",
     [
         "\x1b[13;2u",  # Kitty CSI-u Shift+Enter
-        "\x1b[13;3u",  # Kitty CSI-u Alt+Enter
         "\x1b[27;2;13~",  # xterm modifyOtherKeys Shift+Enter
-        "\x1b[27;3;13~",  # xterm modifyOtherKeys Alt+Enter
-        "\x1b[27;5;13~",  # xterm modifyOtherKeys Ctrl+Enter
         "\n",  # legacy Ctrl+J (LF): the fallback when Shift+Enter is bare CR
     ],
 )
@@ -2803,3 +2797,27 @@ async def test_reopen_resets_stale_poll_status_and_cursors_but_retains_session_h
         assert "old transient failure" not in rendered
         assert "Earlier entries unavailable" not in rendered
         release.set()
+
+
+@pytest.mark.asyncio
+async def test_controller_follows_queued_turn_after_completion():
+    from nexus.ui.tui.controller import TuiController
+    from nexus.view import apply
+    controller = TuiController(_client(FakeTransport()), "s")
+    events = [
+        Event(type="turn.started", seq=1, session="s", turn="t1"),
+        Event(type="input.queued", seq=2, session="s", data={"queued_id": "q", "content": [{"type": "text", "text": "later"}]}),
+        Event(type="turn.completed", seq=3, session="s", turn="t1"),
+        Event(type="turn.started", seq=4, session="s", turn="t2"),
+        Event(type="input.consumed", seq=5, session="s", data={"queued_id": "q", "turn": "t2"}),
+        Event(type="turn.completed", seq=6, session="s", turn="t2"),
+    ]
+    async def source():
+        for event in events:
+            yield event
+    def ingest(event):
+        controller.view = apply(controller.view, event)
+    await controller._consume("s", source(), ingest)
+    assert controller.view.last_seq == 6
+    assert not controller.running
+    assert not controller.view.input_queue

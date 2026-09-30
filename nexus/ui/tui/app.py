@@ -398,13 +398,15 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
             await self._dispatch_chat_command(stripped)
             return
         if block_unconfigured_turn(self, message.content): return
-        if self.controller.running:
-            editor = self.query_one("#chat-editor", TextArea)
-            if editor.text:
-                editor.text = f"{message.content}\n{editor.text}"
-            else:
-                editor.text = message.content
-            self._sync_status("Turn running · message not sent", error=False)
+        if self.controller.running or self.controller.view.active_turn is not None:
+            try:
+                await self.controller.client.enqueue(self.controller.session, message.content, mode=message.mode)
+                self._sync_status({"queue": "Message queued", "steer": "Steering queued", "interrupt": "Interrupt requested"}[message.mode])
+                if not self.controller.running:
+                    self.controller.resume(self._post_event)
+            except ClientError as exc:
+                self.query_one("#chat-editor", TextArea).text = message.content
+                self._sync_status(str(exc), error=True)
             return
         try:
             self._sync_status("Turn running · Ctrl+C cancels")
@@ -714,6 +716,17 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
         self.query_one("#context-usage", Static).update(
             " · ".join(filter(None, (usage, thinking)))
         )
+
+        queue = self.controller.view.input_queue
+        preview = self.query_one("#input-queue-preview", Static)
+        preview.display = bool(queue)
+        preview.update("\n".join(
+            f"{item.mode.title() if item.mode != 'queue' else 'Queued'} · " +
+            sanitize("".join(block.get("text", "") for block in item.content if isinstance(block, dict)), 160)
+            for item in queue[:3]
+        ) + (f"\n+{len(queue) - 3} more queued" if len(queue) > 3 else ""))
+        self.query_one("#message-send-hint", Static).display = self.controller.running
+
         self._sync_activity()
         if self.controller.session and self._context_preview_session != self.controller.session:
             self._start_context_preview()

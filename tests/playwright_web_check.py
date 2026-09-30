@@ -307,6 +307,7 @@ async def main() -> None:
             TextDelta(text="Second streamed half."),
             MessageStop(stop_reason="end_turn"),
         ],
+        text_response("Queued draft processed."),
         text_response("Web prompt reached the same daemon."),
         tool_response(("approval-call", "Write", {"path": "approval.txt", "content": "should be denied"})),
         text_response("The requested write was denied."),
@@ -433,7 +434,7 @@ async def main() -> None:
                             "type": "SetupSaveResult", "global_model": "openai/gpt-6-sol", "restart_required": False,
                         }))
                         return
-                    if command.get("type") == "SessionStart":
+                    if command.get("type") in {"SessionStart", "SessionEnqueue"}:
                         voice_state["session_starts"] += 1
                         await route.fallback()
                         return
@@ -821,14 +822,15 @@ async def main() -> None:
                     "node => getComputedStyle(node, '::before').animationName"
                 ) == "spin"
                 before_active_send = len([r for r in daemon.facade.runtime.session(session).read().records if isinstance(r, EventRecord) and r.event.type in {"input.started", "input.queued"}])
-                assert await page.locator("#composer-input").is_disabled()
+                assert await page.locator("#composer-input").is_enabled()
                 await page.locator("#composer-form").evaluate("e=>e.requestSubmit()")
                 await page.keyboard.press("Enter")
                 await page.wait_for_timeout(120)
                 after_records = daemon.facade.runtime.session(session).read().records
                 after_active_send = len([r for r in after_records if isinstance(r, EventRecord) and r.event.type in {"input.started", "input.queued"}])
-                assert after_active_send == before_active_send
-                assert await page.locator("#composer-input").input_value() == "must remain an unsent draft"
+                assert after_active_send == before_active_send + 1
+                assert await page.locator("#composer-input").input_value() == ""
+                await page.locator(".queued").filter(has_text="must remain an unsent draft").wait_for()
                 await page.screenshot(path=str(ARTIFACTS / "running-draft.png"), full_page=True)
                 gate.set()
                 await page.get_by_text("Second streamed half.", exact=False).wait_for(timeout=8_000)

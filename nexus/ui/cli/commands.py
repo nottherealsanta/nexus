@@ -159,7 +159,8 @@ def help_text() -> str:
         usage = f" {spec.usage}" if spec.usage else ""
         lines.append(f"  {names[spec.name]:<{width}}{usage}  {spec.summary}")
     lines.append(
-        "Controls: Enter submits; Shift+Enter inserts a line; Ctrl+P opens "
+        "Controls: Enter queues while working; Ctrl+Enter steers; Alt+Enter interrupts; "
+        "Shift+Enter inserts a line; Ctrl+P opens "
         "commands (see \"Show keyboard shortcuts\"); Ctrl+C cancels."
     )
     return "\n".join(lines)

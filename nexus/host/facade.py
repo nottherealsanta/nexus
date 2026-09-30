@@ -620,7 +620,7 @@ class HostFacade:
         handle = self._session(session_id)
         return await self.supervisor.submit(session_id, handle, content)
 
-    async def enqueue(self, session_id: str, content: Any) -> tuple[str, str]:
+    async def enqueue(self, session_id: str, content: Any, *, mode: str = "queue") -> tuple[str, str]:
         """Persist a submission and schedule its consumption at the boundary.
 
         Returns ``(queued_id, turn_id)``. The submission is durable through the
@@ -628,9 +628,13 @@ class HostFacade:
         it runs, so the global cap applies to queued work too.
         """
         handle = self._session(session_id)
-        queued_id = handle.enqueue(content)
+        if mode not in {"queue", "steer", "interrupt"}:
+            raise ValueError("mode must be queue, steer, or interrupt")
+        if mode == "interrupt":
+            await self.cancel(session_id, reason="Interrupted by user message", drop_queue=False)
+        queued_id = handle.enqueue(content, mode=mode)
         turn_id = await self.supervisor.submit(
-            session_id, handle, None, queued_id=queued_id
+            session_id, handle, None, queued_id=queued_id, priority=mode == "interrupt"
         )
         return queued_id, turn_id
 
@@ -1336,7 +1340,7 @@ class HostFacade:
             return p.SessionStartResult(session=command.session, turn_id=turn_id)
         if isinstance(command, p.SessionEnqueue):
             queued_id, turn_id = await self.enqueue(
-                command.session, _content(command.content, command.blocks)
+                command.session, _content(command.content, command.blocks), mode=command.mode
             )
             return p.SessionEnqueueResult(
                 session=command.session,

@@ -176,6 +176,8 @@ class TuiController:
                     if session != self.session:
                         return
                     terminal = event.type in {"turn.completed", "turn.failed", "turn.cancelled"}
+                    if event.type == "turn.started":
+                        self.running = True
                     if terminal:
                         # Clear before the UI handles the final event so its last
                         # sync stops the activity animation.
@@ -184,7 +186,9 @@ class TuiController:
                     if handled is not None:
                         await handled
                     if terminal:
-                        break
+                        if not self.view.input_queue:
+                            break
+                        self.running = True
         except asyncio.CancelledError:
             raise
         except ClientError:

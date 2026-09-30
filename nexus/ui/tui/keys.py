@@ -1,7 +1,7 @@
 """Terminal key-protocol compatibility for the Nexus Textual shell.
 
-The shell's editor contract is unambiguous: ``Enter`` submits, a modified Enter
-(``Shift+Enter`` / ``Ctrl+Enter``) inserts a newline. Whether a *terminal* can
+The editor uses ``Enter`` to queue, ``Ctrl+Enter`` to steer, ``Alt+Enter``
+to interrupt, and ``Shift+Enter`` to insert a newline. Whether a *terminal* can
 report that distinction is a property of the terminal, not the app, so this
 module exists to close the one gap Textual leaves open:
 

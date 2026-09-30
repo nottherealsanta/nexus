@@ -31,7 +31,7 @@ Textual is pinned (`textual==8.2.8`, `textual-diff-view==0.1.5` in `pyproject.to
 | `ui/tui/agent_row.py` | Selectable row for one `AgentView`. |
 | `ui/tui/permission.py` | `PermissionScreen` and `QuestionScreen`: list prompts (`ListPrompt` in `ui_support/tui_list.py`) docked above the composer like the pickers; `ask_pending_question` opens pending `question` calls. Arbitration stays daemon-side. |
 | `ui/tui/messages.py` | Typed Textual messages (`EventReceived`, `TurnFinished`, `PermissionRequested`, `AgentPickerRequested`, …). |
-| `ui/tui/keys.py` | `NexusDriver`: xterm `modifyOtherKeys` / Kitty CSI-u decoding, so Shift+Enter, Ctrl+Enter and Ctrl+J insert newlines. |
+| `ui/tui/keys.py` | `NexusDriver`: xterm `modifyOtherKeys` / Kitty CSI-u decoding, so Shift+Enter/Ctrl+J insert newlines and Ctrl+Enter/Alt+Enter steer/interrupt. |
 | `ui/tui/theme.py` | `NEXUS_DARK` / `NEXUS_LIGHT` (opencode palette). Both define the `nx-*` variables (`$nx-bg`, `$nx-panel`, `$nx-element`, `$nx-accent`, `$nx-blue`, …) that all CSS and markup use. |
 | `ui/tui/app.tcss` | All Textual CSS for the shell. Colors only through `$nx-*` variables, so both themes work. |
 | `ui/tui/run.py` | Entry point; passes `preferences_path()` = `$XDG_CONFIG_HOME/nexus/tui.json` (theme, panels, context preview). |
@@ -128,3 +128,11 @@ to System. Full-size controls share a common height.
 The Skills and MCP context blocks show `Project N | Global N` counts of discovered entries, including entries switched off. Click either block to see individual On/Off buttons and their scope. Choices are saved for the current session, survive reconnect, and can be changed before its first turn. After the first turn, controls are disabled with a prompt-cache explanation; agent picking and cycling follow the same rule. Subagent request headers remain read-only.
 
 `python tests/playwright_context_controls_check.py` exercises both scopes through the actual TUI in Chromium at wide and narrow sizes, backed by a real runtime and local MCP subprocesses. It checks repeated toggles, disabled controls after a turn, and screenshots under `artifacts/context-controls/`.
+
+### Messages during a turn
+
+Enter queues a message for a new turn. Ctrl+Enter steers the active turn at
+the next model step, after its current operation finishes. Alt+Enter interrupts
+the active turn and sends the message first, preserving other queued messages.
+Shift+Enter and Ctrl+J insert a newline in the terminal; Shift+Enter does so in
+the browser. Pending input is durable and visible after reconnecting.

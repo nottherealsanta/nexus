@@ -92,9 +92,9 @@ stdin. `chat` is the full-screen Textual shell; `Ctrl+P` opens chat commands,
 `Ctrl+B` / `Ctrl+L` toggle the sessions and details sidebars, `Ctrl+S` opens
 Settings, and `Shift+Tab` cycles root agents. `Ctrl+X` is a leader key: `Ctrl+X M`
 opens the model picker, `Ctrl+X V` starts dictation (any key then stops it, `Esc`
-discards), and `Ctrl+X ?` lists the rest. `Enter` sends the prompt, and `Shift+Enter` (or
-`Ctrl+Enter`) inserts a newline; `Alt+Enter` does the same only when the
-terminal's key protocol preserves the modifier; `Ctrl+J` inserts one too, which
+discards), and `Ctrl+X ?` lists the rest. `Enter` queues a prompt while the agent works. `Ctrl+Enter` steers at the next
+model step; `Alt+Enter` interrupts and sends first, preserving queued messages.
+`Shift+Enter` inserts a newline; `Ctrl+J` inserts one too, which
 is the fallback for terminals that cannot report a modified Enter. A non-TTY
 invocation fails with guidance to use `nexus run` instead of silently changing
 interaction modes.
@@ -124,8 +124,7 @@ Textual negotiates it and resolves `CSI 13;2u` to `Shift+Enter`. The Nexus
 key-protocol driver (`nexus/ui/tui/keys.py`) additionally decodes the older xterm
 `modifyOtherKeys` form (`CSI 27;2;13~`) for terminals or tmux setups that already
 emit it; that mode is not force-enabled, because doing so re-encodes printable
-shifted keys in a way Textual's parser does not preserve. `Alt+Enter` is only a
-newline where the terminal encodes it distinctly (`CSI 13;3u`, or the
+shifted keys in a way Textual's parser does not preserve. `Alt+Enter` interrupts only where the terminal encodes it distinctly (`CSI 13;3u`, or the
 `modifyOtherKeys` form the driver rewrites); terminals that map it to `ESC CR`
 lose the modifier, and the app cannot recover it. Terminals that send a bare
 carriage return for *every* Enter cannot be distinguished — those bytes mean

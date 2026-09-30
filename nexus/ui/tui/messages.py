@@ -41,9 +41,10 @@ class PermissionRequested(Message):
 class InputSubmitted(Message):
     """The chat editor submitted a prompt."""
 
-    def __init__(self, content: str) -> None:
+    def __init__(self, content: str, mode: str = "queue") -> None:
         super().__init__()
         self.content = content
+        self.mode = mode
 
 
 class CancelRequested(Message):

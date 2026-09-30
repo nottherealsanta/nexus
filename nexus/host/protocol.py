@@ -150,6 +150,7 @@ class SessionStart(msgspec.Struct, tag=True, frozen=True):
 
 class SessionEnqueue(msgspec.Struct, tag=True, frozen=True):
     session: str
+    mode: str = "queue"  # queue | steer | interrupt
     content: str = ""
     blocks: list[dict[str, Any]] = msgspec.field(default_factory=list)
 

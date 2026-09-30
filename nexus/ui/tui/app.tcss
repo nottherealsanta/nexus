@@ -2169,3 +2169,10 @@ SetupScreen {
     min-width: 8;
     margin: 0;
 }
+
+
+#input-queue-preview, #message-send-hint {
+    height: auto;
+    color: $nx-muted;
+    padding: 0 2;
+}
