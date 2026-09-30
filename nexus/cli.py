@@ -1335,7 +1335,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--dev", action="store_true",
         help="Dev mode: isolated home, sandbox workspace and /mock scenarios (also NEXUS_DEV=1)",
     )
+    parser.add_argument("--session", default=None, help="Reopen this session in chat")
     sub = parser.add_subparsers(dest="command")
+    parser.set_defaults(command="chat")
 
     sub.add_parser(
         "init",
@@ -1377,6 +1379,12 @@ def build_parser() -> argparse.ArgumentParser:
     replay = sub.add_parser("replay", help="Re-render a session from its log")
     replay.add_argument("session_id")
     replay.add_argument("--json", action="store_true", help="Emit the view model as JSON")
+
+    searchserver = sub.add_parser("searchserver", help="Manage the local SearXNG Docker service")
+    searchserver.add_subparsers(dest="searchserver_action", required=True).add_parser("start", help="Start SearXNG with Docker Compose")
+
+    restart = sub.add_parser("restart", help="Restart the workspace daemon (alias for daemon restart)")
+    restart.set_defaults(command="daemon", daemon_action="restart")
 
     daemon = sub.add_parser("daemon", help="Manage the workspace daemon")
     daemon_sub = daemon.add_subparsers(dest="daemon_action", required=True)
@@ -1552,8 +1560,6 @@ def main(argv: list[str] | None = None) -> int:
         line = notice(update_status(cached_only=True))
         print(f"nexus {package_version()}" + (f" ({line})" if line else ""))
         return 0
-    if args.command is None:
-        parser.error("the following arguments are required: command")
     workspace = args.workspace.resolve()
     if args.command == "mock" and args.mock_action == "run" and not args.scenario:
         parser.error("`nexus mock run` needs a scenario name")
@@ -1562,6 +1568,10 @@ def main(argv: list[str] | None = None) -> int:
     stdout = sys.stdout
     stderr = sys.stderr
     try:
+        if args.command == "searchserver":
+            from .host_support.searchserver import start
+
+            return start(stdout, stderr)
         if args.command == "init":
             initialize(workspace)
             return 0
