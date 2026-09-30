@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.0](https://github.com/nottherealsanta/nexus/compare/v0.1.2...v0.2.0) (2026-09-30)
+
+
+### Features
+
+* show an update-available notice and keep early daemon output ([#5](https://github.com/nottherealsanta/nexus/issues/5)) ([5b6cbb5](https://github.com/nottherealsanta/nexus/commit/5b6cbb523256995cf6cee79cd8fe719f1a266f41))
+* yield long bash commands to the background and wait until exit ([#7](https://github.com/nottherealsanta/nexus/issues/7)) ([8a41bdf](https://github.com/nottherealsanta/nexus/commit/8a41bdf395a7d5e7bf1fc041456bf3d912ba8bba))
+
 ## [0.1.2](https://github.com/nottherealsanta/nexus/compare/v0.1.1...v0.1.2) (2026-09-30)
 
 
