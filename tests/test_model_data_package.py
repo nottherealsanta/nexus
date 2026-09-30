@@ -99,6 +99,8 @@ def test_built_wheel_ships_web_tui_and_agent_assets(tmp_path: Path):
     wheel = _build_wheel(tmp_path)
     with zipfile.ZipFile(wheel) as archive:
         names = archive.namelist()
+    assert "nexus/host_support/searchserver/compose.yaml" in names
+    assert "nexus/host_support/searchserver/searxng/settings.yml" in names
     assert "nexus/ui/web/index.html" in names
     assert "nexus/ui/web/js/app.js" in names
     assert any(n.startswith("nexus/ui/tui/") and n.endswith(".tcss") for n in names)

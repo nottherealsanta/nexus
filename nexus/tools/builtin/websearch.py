@@ -469,7 +469,7 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
         if "timed out" in outcomes:
             return _error("WebSearch unavailable: SearXNG request timed out")
         if selected_provider == LOCAL_SEARCH_ORIGIN and "network unavailable" in outcomes:
-            return _error("WebSearch unavailable: local SearXNG is unreachable; start it with docker compose -f websearch/compose.yaml up -d")
+            return _error("WebSearch unavailable: local SearXNG is unreachable; start it with nexus searchserver start")
         detail = ", ".join(dict.fromkeys(outcomes)) or "request failed"
         return _error(f"WebSearch unavailable: configured SearXNG instances could not serve the search ({detail})")
 

@@ -171,11 +171,11 @@ async def test_default_config_uses_fixed_local_service_and_encoded_query():
 
 
 @pytest.mark.asyncio
-async def test_unreachable_default_local_search_gives_compose_start_hint():
+async def test_unreachable_default_local_search_gives_start_hint():
     local_service = FakeService(OutboundNetworkError())
     result = await websearch.run({"query": "headphones"}, _local_context(local_service))
     assert result.is_error
-    assert "docker compose -f websearch/compose.yaml up -d" in _text(result)
+    assert "nexus searchserver start" in _text(result)
 
 
 @pytest.mark.asyncio

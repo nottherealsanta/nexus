@@ -756,3 +756,36 @@ async def test_token_rotation_in_mcp_json_reconfigures_the_server(
         assert await wait_for(lambda: runtime.manifest.mcp["fs"].connected)
     finally:
         await runtime.aclose()
+
+
+async def test_workspace_skill_loads_and_calls_its_declared_mcp_tool(tmp_path: Path) -> None:
+    """Discover a workspace skill, activate it, and dispatch its MCP tool in a turn."""
+    root = make_server_root(tmp_path)
+    control = control_path(tmp_path)
+    write_control(control)
+    write_mcp_config(tmp_path, {"fs": fs_definition(root, control)})
+    skill = tmp_path / ".agents" / "skills" / "mcp-reader"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: mcp-reader\ndescription: Read files with MCP\n"
+        "allowed-tools: [mcp__fs__read_file]\n---\nRead hello.txt using MCP.\n",
+        encoding="utf-8",
+    )
+    provider = ScriptedProvider(
+        tool_response(("s1", "skill", {"name": "mcp-reader"})),
+        tool_response(("m1", "mcp__fs__read_file", {"path": "hello.txt"})),
+        text_response("done"),
+    )
+    runtime = make_runtime(tmp_path, provider)
+    try:
+        events = [event async for event in runtime.session("skill-mcp").send("read using the skill")]
+        assert events[-1].type == "turn.completed"
+        assert "mcp-reader" in runtime.manifest.skills
+        assert [schema.name for schema in provider.requests[1].tools] == ["mcp__fs__read_file"]
+        results = [
+            block for message in provider.requests[2].messages
+            for block in message.content if isinstance(block, ToolResult)
+        ]
+        assert any("hello-mcp" in str(result.content) for result in results)
+    finally:
+        await runtime.aclose()

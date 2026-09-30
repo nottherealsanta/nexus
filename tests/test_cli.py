@@ -99,6 +99,8 @@ def test_parser_exposes_the_canonical_command_set():
         "web",
         "replay",
         "daemon",
+        "restart",
+        "searchserver",
         "sessions",
         "ext",
         "models",
@@ -140,6 +142,8 @@ def test_parser_exposes_the_canonical_command_set():
         ["daemon", "status"],
         ["daemon", "stop"],
         ["daemon", "restart"],
+        ["restart"],
+        ["searchserver", "start"],
         ["daemon", "logs"],
         ["sessions", "list"],
         ["sessions", "fork", "s"],
@@ -189,12 +193,14 @@ def test_chat_starts_a_new_session_unless_one_is_named(monkeypatch):
     monkeypatch.setattr(cli.sys, "stdout", Tty())
     monkeypatch.setattr(cli.importlib.util, "find_spec", lambda name: object())
     monkeypatch.setenv("TERM", "xterm")
-    assert cli.main(["chat"]) == 0
+    assert cli.main([]) == 0
     assert cli.main(["chat"]) == 0
     assert cli.main(["chat", "--session", "keep"]) == 0
     assert seen[0].startswith("session-") and seen[1].startswith("session-")
     assert seen[0] != seen[1]
     assert seen[2] == "keep"
+    assert cli.main(["--session", "keep"]) == 0
+    assert seen[3] == "keep"
 
 
 def test_chat_rejects_mode_flags():
@@ -204,7 +210,8 @@ def test_chat_rejects_mode_flags():
             parser.parse_args(["chat", flag])
 
 
-def test_chat_non_tty_fails_without_opening_client(monkeypatch):
+@pytest.mark.parametrize("argv", [[], ["chat"]])
+def test_chat_non_tty_fails_without_opening_client(monkeypatch, argv):
     class Stream(io.StringIO):
         def isatty(self):
             return False
@@ -215,7 +222,7 @@ def test_chat_non_tty_fails_without_opening_client(monkeypatch):
     monkeypatch.setattr(cli.sys, "stderr", err)
     monkeypatch.setenv("TERM", "xterm-256color")
     monkeypatch.setattr(cli, "_chat_entry", lambda *_args, **_kwargs: pytest.fail("must not launch Textual"))
-    assert cli.main(["chat"]) == 2
+    assert cli.main(argv) == 2
     assert "interactive terminal" in err.getvalue()
     assert "nexus run" in err.getvalue()
 
@@ -677,9 +684,10 @@ def test_daemon_status_reports_the_running_daemon(cli_env):
     assert report["pid"] > 0
 
 
-def test_daemon_restart_replaces_the_running_daemon(cli_env):
+@pytest.mark.parametrize("argv", [("daemon", "restart"), ("restart",)])
+def test_daemon_restart_replaces_the_running_daemon(cli_env, argv):
     before = json.loads(_cli(cli_env, "daemon", "status", "--json").stdout)["pid"]
-    result = _cli(cli_env, "daemon", "restart")
+    result = _cli(cli_env, *argv)
     assert result.stdout.startswith("restarted pid=")
     after = json.loads(_cli(cli_env, "daemon", "status", "--json").stdout)
     assert after["running"] is True

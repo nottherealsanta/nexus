@@ -14,7 +14,7 @@ Linux. No vendor SDK, no agent framework, no OS sandbox.
 curl -LsSf https://raw.githubusercontent.com/nottherealsanta/nexus/main/install.sh | sh
 ```
 
-Then `cd` into a project and run `nexus chat` (or `nexus web`). Update with
+Then `cd` into a project and run `nexus` (or `nexus chat` / `nexus web`). Update with
 `nexus update`. macOS, Linux and WSL; installs [uv](https://docs.astral.sh/uv/) and
 Python 3.13+ for you if they are missing. Already have uv? `uv tool install nexus-harness`.
 Options: `sh install.sh --help`. Changes: [CHANGELOG.md](CHANGELOG.md).
@@ -157,7 +157,7 @@ flight.
 nexus daemon status      # running? pid, socket, live counters
 nexus daemon logs        # tail the daemon log
 nexus daemon stop        # graceful shutdown
-nexus daemon restart     # stop, then start a fresh daemon (picks up code/config changes)
+nexus restart            # stop, then start a fresh daemon (picks up code/config changes)
 ```
 
 ## What it does
@@ -188,10 +188,12 @@ nexus daemon restart     # stop, then start a fresh daemon (picks up code/config
 | `nexus init` | Create `nexus.toml`, `SOUL.md`, `MEMORY.md` without overwriting. |
 | `nexus doctor [--explain-reload] [--json]` | Validate config, providers, registry, extensions, MCP, and state what is hot vs. restart-only. |
 | `nexus run <prompt\|->` | One turn. `--session NAME`, `--json` for headless JSONL. |
-| `nexus chat` | Interactive Textual shell. `--session NAME`. Requires stdin/stdout TTY. |
+| `nexus` / `nexus chat` | Interactive Textual shell. `--session NAME`. Requires stdin/stdout TTY. |
 | `nexus web [--no-browser]` | Open the workspace in a local browser client served by the running daemon (one-use launch URL). |
 | `nexus replay <id> [--json]` | Re-render a session from its log (same path as `sessions replay`). |
 | `nexus daemon status\|stop\|logs` | Manage the workspace daemon. `status --json`; `logs --lines N`. |
+| `nexus restart` / `nexus daemon restart` | Restart the workspace daemon. |
+| `nexus searchserver start` | Start the local SearXNG Docker service. |
 | `nexus sessions list` | List sessions with state, `last_seq`, viewers, title. |
 | `nexus sessions fork <id> [--at-seq N]` | Branch a session. |
 | `nexus sessions replay <id>` | Re-render a session from its log. |
@@ -538,14 +540,14 @@ or converted by this document feature.
 
 Web search uses a local SearXNG instance by default at
 `http://127.0.0.1:18765/search`; Nexus does not use a public search provider by
-default. Start the Docker Compose service from the repository root:
+default. Install Docker and start its engine, then run from any workspace:
 
 ```sh
-cd websearch
-umask 077
-printf 'SEARXNG_SECRET=%s\n' "$(openssl rand -hex 32)" > .env
-docker compose -f compose.yaml up -d
+nexus searchserver start
 ```
+
+This stores the Compose configuration and generated secret under
+`~/.nexus/searchserver/` and preserves them across subsequent starts.
 
 The JSON search endpoint is
 `http://127.0.0.1:18765/search?q=nexus&format=json`. See

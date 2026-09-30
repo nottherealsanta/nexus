@@ -49,6 +49,7 @@ include = ["nexus*"]
 # fallback. ``tests/test_model_data_package.py`` builds a wheel and asserts both
 # entries are present.
 [tool.setuptools.package-data]
+"nexus.host_support" = ["searchserver/compose.yaml", "searchserver/searxng/settings.yml"]
 "nexus.model" = ["data/models.min.json", "data/NOTICE"]
 "nexus.auth" = ["NOTICE"]
 "nexus.voice" = ["NOTICE"]
