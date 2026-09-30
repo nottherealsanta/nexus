@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import Mapping
 from typing import Any
 
@@ -41,7 +40,6 @@ from ...ui_support.timeline import (
     format_arguments,
     thought_title,
     tool_heading,
-    tool_output,
     tool_status,
     tool_summary,
 )
@@ -50,6 +48,12 @@ from ...ui_support.tui_diff import ToolDiff, tool_diff_signature
 from ...view import AgentView, ConversationView, MessageView, ToolCallView, TurnView
 from ..cli.render import escape_controls
 from .messages import AgentOpenRequested
+from ...ui_support.tool_details import (
+    DetailRow,
+    DetailSection,
+    sections_to_text,
+    tool_detail_sections,
+)
 from .tool_details import ToolDetailsScreen
 
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -273,41 +277,15 @@ class ToolActivityWidget(Widget):
             self._spinner.stop()
             self._spinner = None
 
+    def _detail_sections(self) -> list[DetailSection]:
+        return tool_detail_sections(self.tool)
+
     def _details_text(self) -> str:
-        tool = self.tool
-        sections = [f"Status: {tool_status(tool)}"]
-        if tool.duration_ms is not None:
-            sections.append(f"Duration: {tool.duration_ms} ms")
-        if tool.input:
-            payload = json.dumps(tool.input, ensure_ascii=True, indent=2, default=str)
-            sections.append("Call parameters:\n" + redact(escape_controls(payload))[:8192])
-        if tool.progress:
-            progress = "\n".join(redact(_literal(item, 300)) for item in tool.progress)
-            sections.append("Progress:\n" + progress)
-        if tool.display:
-            sections.append("Summary:\n" + redact(_literal(tool.display, 8192)))
-        if tool.result:
-            result = json.dumps(tool.result, ensure_ascii=True, indent=2, default=str)
-            sections.append("Result:\n" + redact(escape_controls(result))[:8192])
-        if tool.error:
-            sections.append("Error:\n" + tool_output(tool))
-        if tool.context_note:
-            sections.append("Context:\n" + redact(_literal(tool.context_note, 400)))
-        if isinstance(tool.diff, Mapping):
-            path = _text(tool.diff.get("path") or "edit", 160)
-            hunk = tool.diff.get("hunk")
-            diff = f"{path}: +{tool.diff.get('added_lines', 0)} -{tool.diff.get('removed_lines', 0)}"
-            if tool.diff.get("truncated"):
-                diff += " (preview truncated)"
-            if isinstance(hunk, str) and hunk:
-                diff += "\n" + redact(_literal(hunk, 8192))
-            sections.append("Diff:\n" + diff)
-        text = "\n\n".join(sections)
-        return text if len(text) <= 32_000 else text[:32_000] + "\n[Details clipped]"
+        return sections_to_text(self._detail_sections())
 
     async def open_details(self) -> None:
         title = f"{tool_heading(self.tool)} · {tool_status(self.tool)}"
-        await self.app.push_screen(ToolDetailsScreen(title, self._details_text()))
+        await self.app.push_screen(ToolDetailsScreen(title, self._detail_sections()))
 
     async def on_click(self, event: Click) -> None:
         event.stop()
@@ -371,10 +349,15 @@ class TaskActivityWidget(ToolActivityWidget):
     def _children(self) -> tuple[AgentView, ...]:
         return _task_children(self.tool, self.agents)
 
-    def _details_text(self) -> str:
-        details = super()._details_text()
+    def _detail_sections(self) -> list[DetailSection]:
+        sections = super()._detail_sections()
         rows = _task_child_details(self._children())
-        return details + ("\n\nChild agents:\n" + "\n".join(rows) if rows else "")
+        if rows:
+            sections.append(DetailSection(
+                "Child agents",
+                tuple(DetailRow(f"#{i}", row) for i, row in enumerate(rows, 1)),
+            ))
+        return sections
 
     async def open_details(self) -> None:
         # A spawned child opens straight on its sub agent page; a call that
@@ -384,7 +367,7 @@ class TaskActivityWidget(ToolActivityWidget):
             self.post_message(AgentOpenRequested(child.id))
             return
         title = f"{tool_heading(self.tool)} · {tool_status(self.tool)}"
-        await self.app.push_screen(ToolDetailsScreen(title, self._details_text()))
+        await self.app.push_screen(ToolDetailsScreen(title, self._detail_sections()))
 
 class AgentActivityLink(Button):
     """Focusable child projection; it holds no activity state of its own."""

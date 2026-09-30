@@ -121,7 +121,7 @@ async def test_real_read_edit_events_render_as_timeline_tool_cards(tmp_path):
             await pilot.pause()
             assert isinstance(app.screen, ToolDetailsScreen)
             detail = app.screen.query_one("#tool-details-body", Static).render().plain
-            assert '"path": "note.md"' in detail
+            assert "path: note.md" in detail
             assert "-world" in detail and "+nexus" in detail
     finally:
         await runtime.aclose()

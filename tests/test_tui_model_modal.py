@@ -134,3 +134,35 @@ async def test_modal_explains_when_workspace_has_no_configured_models():
         option = modal.query_one("#model-picker-options").get_option_at_index(0)
         assert "No selectable models" in str(option.prompt)
         assert "nexus.toml" in str(option.prompt)
+
+
+@pytest.mark.asyncio
+async def test_ctrl_r_refreshes_catalogue_in_place():
+    transport = ModelPickerTransport()
+    transport.models = [{"provider": "fake", "id": "old", "name": "Old"}]
+    app = NexusTextualApp(Client(transport), session="refresh")
+    fresh = [
+        {"provider": "fake", "id": "old", "name": "Old"},
+        {"provider": "fake", "id": "new", "name": "Brand New"},
+    ]
+    calls = []
+
+    async def refresh():
+        calls.append(1)
+        return fresh
+
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause()
+        screen = ModelPickerScreen(list(transport.models), current="", current_effort=None,
+                                   stored_override=None, effort_source=None,
+                                   favorites=[], recent=[], on_favorites=lambda _r: None,
+                                   on_refresh=refresh)
+        app.push_screen(screen)
+        await pilot.pause()
+        assert [r["id"] for r in screen._visible_rows if r] == ["old"]
+        await pilot.press("ctrl+r")
+        await pilot.pause()
+        await pilot.pause()
+        assert calls == [1]
+        assert sorted(r["id"] for r in screen._visible_rows if r) == ["new", "old"]
+        assert app.screen is screen

@@ -1490,22 +1490,35 @@ def _tool_result_event_view(result: ToolResult) -> dict[str, Any]:
     }
 
 
+_SECRET_KEY = re.compile(r"(?i)(api[-_]?key|authorization|access[-_]?token|refresh[-_]?token|client[-_]?secret|password|secret|token)")
+
+
+def _safe_metric(item: object, depth: int = 0) -> object:
+    """Bounded, redacted copy of a metric; nested maps and lists survive for display."""
+    if item is None or isinstance(item, (bool, int)):
+        return item
+    if isinstance(item, float):
+        return item if item == item and abs(item) != float("inf") else None
+    if isinstance(item, str):
+        return redact_secrets(item)[:1000]
+    if depth >= 4:
+        return "[nested value omitted]"
+    if isinstance(item, Mapping):
+        return {
+            str(key)[:100]: "***" if _SECRET_KEY.search(str(key)) else _safe_metric(value, depth + 1)
+            for key, value in list(item.items())[:64]
+        }
+    if isinstance(item, (list, tuple)):
+        return [_safe_metric(part, depth + 1) for part in item[:64]]
+    return f"<{type(item).__name__}>"
+
+
 def _safe_transcript_metrics(value: object) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         return None
-    safe: dict[str, Any] = {}
-    for key, item in list(value.items())[:32]:
-        if item is None or isinstance(item, (bool, int)):
-            safe[str(key)[:100]] = item
-        elif isinstance(item, float):
-            safe[str(key)[:100]] = item if item == item and abs(item) != float("inf") else None
-        elif isinstance(item, str):
-            safe[str(key)[:100]] = redact_secrets(item)[:200]
-        elif isinstance(item, (list, tuple)):
-            safe[str(key)[:100]] = [redact_secrets(str(part))[:200] for part in item[:64]]
-        else:
-            safe[str(key)[:100]] = f"<{type(item).__name__}>"
-    return safe
+    return {
+        str(key)[:100]: _safe_metric(item) for key, item in list(value.items())[:32]
+    }
 
 
 async def _emit_tool_results(emitter: _Emitter, results: Sequence[ToolResult]) -> None:

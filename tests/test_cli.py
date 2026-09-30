@@ -108,6 +108,7 @@ def test_parser_exposes_the_canonical_command_set():
         "tools",
         "worktrees",
         "auth",
+        "claude",
         "update",
         "mock",
         "voice",
@@ -169,6 +170,8 @@ def test_parser_exposes_the_canonical_command_set():
         ["chat"],
         ["worktrees", "list"],
         ["worktrees", "inspect", "child"],
+        ["claude", "init"],
+        ["claude", "init", "--model", "claude-sonnet-4-6"],
         ["worktrees", "review", "child", "--cursor", "8", "--json"],
         ["worktrees", "review", "child", "--all"],
         ["worktrees", "acknowledge", "child", "a" * 32, "b" * 64],
@@ -180,6 +183,29 @@ def test_parser_accepts_every_documented_invocation(argv):
     args = cli.build_parser().parse_args(["--workspace", "/tmp/ws", *argv])
     assert args.workspace == Path("/tmp/ws")
     assert args.command is not None
+
+
+async def test_claude_init_saves_provider_through_the_host(monkeypatch, tmp_path):
+    calls: list[tuple[str, str]] = []
+
+    class Client:
+        async def setup_save(self, provider, model=""):
+            calls.append((provider, model))
+            return argparse.Namespace(global_model="claude-agent/claude-sonnet-4-6", restart_required=True)
+
+        async def aclose(self):
+            pass
+
+    async def open_client(workspace):
+        return Client()
+
+    monkeypatch.setattr("nexus.ui.cli.open_client", open_client)
+    out = io.StringIO()
+    args = cli.build_parser().parse_args(["claude", "init", "--model", "claude-sonnet-4-6"])
+    assert await cli._claude_command(tmp_path, args, out, io.StringIO()) == 0
+    assert calls == [("claude-agent", "claude-sonnet-4-6")]
+    assert "claude-agent/claude-sonnet-4-6" in out.getvalue()
+    assert "nexus daemon restart" in out.getvalue()
 
 
 def test_chat_starts_a_new_session_unless_one_is_named(monkeypatch):

@@ -1039,9 +1039,9 @@ class SubagentRunner:
     # -- tier and permission key ------------------------------------------
 
     def role_model_reference(self, request: object) -> str | None:
-        """The reference to resolve: the request's, else the role's, else inherit."""
+        """Concrete request override, then the role default, then a tier hint."""
         req = TaskRequest.from_value(request)
-        if req.model:
+        if req.model and req.model not in self._tiers.order and req.model != MODEL_INHERIT:
             if "/" not in req.model and req.model not in self._tiers.order:
                 try:
                     role = self._agents.resolve(req.subagent_type, context="subagent")
@@ -1054,7 +1054,7 @@ class SubagentRunner:
             role = self._agents.resolve(req.subagent_type, context="subagent")
         except AgentNotFoundError:
             role = None
-        if role is not None and role.model:
+        if role is not None and role.model and role.model != MODEL_INHERIT:
             if role.model in self._tiers.order or "/" in role.model:
                 return role.model
             if role.provider:
@@ -1063,7 +1063,7 @@ class SubagentRunner:
         if role is not None and role.provider and self._parent_model:
             inherited_model = self._parent_model.rsplit("/", 1)[-1]
             return f"{role.provider}/{inherited_model}"
-        return None
+        return req.model
 
     def role_provider(self, request: object) -> str | None:
         """Provider supplied by a role default, unless Task.model overrides it."""

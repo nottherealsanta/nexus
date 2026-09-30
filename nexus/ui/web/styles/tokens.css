@@ -68,14 +68,18 @@
   --diff-remove: color-mix(in srgb, var(--danger) 14%, var(--canvas));
   /* Browser depth; semantic color roles stay shared with the terminal. */
   --shadow: 0 18px 60px color-mix(in srgb, var(--drop) 35%, transparent);
+  --shadow-sm: 0 6px 20px color-mix(in srgb, var(--drop) 28%, transparent);
   --ease: cubic-bezier(.2, .75, .25, 1);
   --fast: 120ms;
   /* Layout follows the terminal's cells (8px columns); rows are taller (20px).
      Controls use the browser finish without changing panel placement. */
   --cell: 8px;
   --row: 20px;
+  /* One radius scale: cards and dialogs, controls and rows, tags and keys. Dots use 50%. */
   --radius: 12px;
-  --radius-sm: 6px;
+  --radius-sm: 8px;
+  --radius-xs: 5px;
+  --column: 860px;
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-mono: "Monaspace Argon", "JetBrains Mono", "Berkeley Mono", "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-family: var(--font-sans);

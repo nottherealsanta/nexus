@@ -855,10 +855,25 @@ ModelPickerScreen {
     background: $nx-panel;
 }
 
+#model-picker-head {
+    height: 2;
+}
+
 #model-picker-title {
+    width: 1fr;
     height: 2;
     color: $nx-text;
     text-style: bold;
+}
+
+#model-picker-refresh {
+    width: auto;
+    height: 1;
+    color: $nx-muted;
+}
+
+#model-picker-refresh:hover {
+    color: $nx-text;
 }
 
 #model-picker-search {

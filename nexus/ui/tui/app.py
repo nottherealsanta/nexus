@@ -623,7 +623,13 @@ class NexusTextualApp(ExtraCommandsMixin, PanelsMixin, App[int]):
             effort_source=self.controller.reasoning_effort_source,
             favorites=self.prefs["model_favorites"], recent=self.prefs["model_recent"],
             on_favorites=lambda refs: self.prefs.set("model_favorites", refs),
+            on_refresh=self._refresh_model_catalogue,
         ), callback=selected)
+
+    async def _refresh_model_catalogue(self) -> list[dict]:
+        await self.controller.client.refresh_models()
+        models = await self.controller.client.list_models(selectable_only=True)
+        return [row for row in models if model_reference(row)]
 
     def _remember_model(self, ref: str) -> None:
         self.prefs.set("model_recent", [ref, *(value for value in self.prefs["model_recent"]

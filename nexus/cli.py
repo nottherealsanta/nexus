@@ -742,6 +742,23 @@ async def _doctor(
         await client.aclose()
 
 
+async def _claude_command(
+    workspace: Path, args: argparse.Namespace, stdout: TextIO, stderr: TextIO
+) -> int:
+    """Save the claude-agent provider and default model through the daemon."""
+    from .ui.cli import open_client
+
+    client = await open_client(workspace)
+    try:
+        result = await client.setup_save("claude-agent", args.model)
+        stdout.write(f"claude-agent enabled; default model {result.global_model}\n")
+        if result.restart_required:
+            stdout.write("Restart the daemon to use it: nexus daemon restart\n")
+        return 0
+    finally:
+        await client.aclose()
+
+
 async def _voice_command(
     workspace: Path, args: argparse.Namespace, stdout: TextIO, stderr: TextIO
 ) -> int:
@@ -1344,6 +1361,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Create nexus.toml, SOUL.md, and MEMORY.md without overwriting",
     )
 
+    claude = sub.add_parser("claude", help="Claude Pro/Max subscription provider")
+    claude_sub = claude.add_subparsers(dest="claude_action", required=True)
+    claude_init = claude_sub.add_parser(
+        "init", help="Enable claude-agent in ~/.nexus/config.toml and make it the default"
+    )
+    claude_init.add_argument("--model", default="", help="Model id (newest when omitted)")
+
     doctor = sub.add_parser("doctor", help="Validate config, providers, registry, extensions")
     doctor.add_argument(
         "--explain-reload",
@@ -1643,6 +1667,8 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(_voice_command(workspace, args, stdout, stderr))
         if args.command == "worktrees":
             return asyncio.run(_worktrees_command(workspace, args, stdout, stderr))
+        if args.command == "claude":
+            return asyncio.run(_claude_command(workspace, args, stdout, stderr))
         if args.command == "doctor":
             return asyncio.run(_doctor(workspace, args, stdout))
         if args.command == "update":
