@@ -311,6 +311,7 @@ class SettingsConsole(SettingsScreen):
             hook()
 
     def _clear_editor(self) -> None:
+        self._read_revision += 1
         self._pending_new = False
         self._current_id = ""
         self._sha = None

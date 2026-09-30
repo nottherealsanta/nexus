@@ -1804,6 +1804,8 @@ ConfirmSettingsAction {
 
 #settings-confirm-dialog {
     width: 60;
+    max-height: 85%;
+    overflow-y: auto;
     height: auto;
     padding: 1 2;
     background: $nx-settings-panel;

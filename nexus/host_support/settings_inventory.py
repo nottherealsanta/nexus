@@ -353,7 +353,11 @@ def reset(runtime: object, scope: str, category: str) -> dict[str, Any]:
                     continue
                 kept.append(line)
             body = "".join(kept)
-            if tomllib.loads(body) != expected:
+            try:
+                matches = tomllib.loads(body) == expected
+            except tomllib.TOMLDecodeError:
+                matches = False
+            if not matches:
                 body = "".join(f"{json.dumps(key)} = {_toml_literal(value)}\n" for key, value in expected.items())
                 if tomllib.loads(body) != expected:
                     raise ConfigError("cannot reset settings without changing unrelated values")
