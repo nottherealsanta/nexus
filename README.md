@@ -44,8 +44,11 @@ default, or `git`), `NEXUS_GIT_REF`, `NEXUS_PYTHON`, `NEXUS_EXTRAS` (e.g. `docum
 `nexus update` upgrades to the latest PyPI release through uv and restarts running
 daemons. `--version X` installs an exact release; `--channel git [--ref R]` installs
 the newest code from GitHub (default ref `main`); an install made from git moves to
-PyPI releases on its next plain `nexus update`. `nexus --version` prints the version,
-`nexus daemon stop --all` stops every workspace daemon, and `nexus doctor` warns about
+PyPI releases on its next plain `nexus update`. Nexus checks PyPI once a day and shows
+"X.Y.Z available: nexus update" in the chat status line, the web top bar, `nexus doctor`
+and `nexus --version`; it never updates by itself. Turn the check off with
+`NEXUS_NO_UPDATE_CHECK=1` or `[updates] check = false`. `nexus --version` prints the
+version, `nexus daemon stop --all` stops every workspace daemon, and `nexus doctor` warns about
 duplicate `nexus` binaries and daemons still running an older version. Uninstall with
 `uv tool uninstall nexus-harness` (sessions in `~/.nexus` are kept).
 

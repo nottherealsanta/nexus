@@ -201,5 +201,11 @@ release and publishes to PyPI (trusted publishing, the `pypi` environment).
   release. `install.sh --version X` pins an exact version.
 - The workflow file name `release.yml` is bound to the PyPI trusted publisher; don't
   rename it.
+- **Update notice:** `nexus/host_support/update_check.py` asks PyPI at most once a day
+  (cached in `~/.nexus/cache/update-check.json`, failures included) and the daemon
+  answers the `UpdateStatus` host command from it. The TUI status line, the web top
+  bar, `nexus doctor` and `nexus --version` show "X.Y.Z available: nexus update". Off
+  with `NEXUS_NO_UPDATE_CHECK=1`, `[updates] check = false`, `CI`, or an editable
+  install. `nexus --version` only reads the cache, so it never waits on the network.
 - Python 3.13 or newer is required (`object.__setattr__` on msgspec Structs, used
   across the codebase, fails on 3.12 and older).

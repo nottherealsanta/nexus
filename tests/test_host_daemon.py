@@ -1310,3 +1310,18 @@ def test_layering_daemon_does_not_import_a_ui():
             else:
                 continue
             assert not any(mod.startswith(("nexus.ui", "nexus.cli")) for mod in names), name
+
+
+def test_default_spawn_keeps_early_daemon_output_for_the_failure_message(tmp_path, monkeypatch):
+    """A daemon that dies before its log opens still leaves a readable trace."""
+    script = tmp_path / "fake-python"
+    script.write_text("#!/bin/sh\necho 'ImportError: boom sk-abcdefghijklmnopqrstuvwxyz123456' >&2\nexit 3\n")
+    script.chmod(0o755)
+    monkeypatch.setattr(daemon_module.sys, "executable", str(script))
+    socket = tmp_path / "d.sock"
+    process = daemon_module._default_spawn(tmp_path, socket)
+    assert process.wait(timeout=10) == 3
+    tail = daemon_module._early_output_tail(socket)
+    assert "ImportError: boom" in tail and "sk-abcdefghijklmnop" not in tail
+    assert (tmp_path / "d.err").stat().st_mode & 0o777 == 0o600
+    assert daemon_module._early_output_tail(tmp_path / "missing.sock") == ""

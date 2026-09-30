@@ -1,6 +1,6 @@
 # One-line install plan
 
-Status: implemented (phases 1-4; phase 3 waits on the first tagged release) · 2026-09-29
+Status: implemented (phases 1-4). Phase 3 shipped through release-please and PyPI; see [release.md](release.md). · 2026-09-30
 
 ## Goal
 

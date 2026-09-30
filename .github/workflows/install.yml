@@ -18,7 +18,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install from this commit (clean runner, uv not preinstalled)
         run: sh install.sh --source git --git-ref "$GITHUB_SHA" --strict
         env:
@@ -45,7 +45,7 @@ jobs:
       matrix:
         image: [debian:stable-slim, alpine:3.20]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: No Python, minimal image
         run: |
           docker run --rm -v "$PWD:/src" -e NEXUS_ALLOW_ROOT=1 ${{ matrix.image }} sh -c '

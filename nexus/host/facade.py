@@ -53,6 +53,7 @@ from ..host_support.context_preview import (
     safe_text as _worktree_text,
 )
 from ..host_support.doctor import doctor_report
+from ..host_support.update_check import update_status
 from ..host_support.git_diff import git_diff
 from ..host_support.mock import dispatch_mock
 from ..host_support.provider_auth import dispatch_providers
@@ -894,6 +895,13 @@ class HostFacade:
         report["voice"] = doctor_voice(self.runtime)
         return report
 
+    def update_status(self) -> dict[str, Any]:
+        """The cached "newer release available" answer; never raises."""
+        try:
+            return update_status(config_enabled=self.runtime.update_check_enabled())
+        except Exception:  # noqa: BLE001 - an advisory notice must not break a surface
+            return {"enabled": False}
+
     async def refresh_models(self) -> Any | None:
         """Force a catalogue acquisition; return the registry status."""
         return await self.runtime.refresh_models()
@@ -1546,6 +1554,10 @@ class HostFacade:
                 self.doctor, explain_reload=command.explain_reload
             )
             return p.DoctorResult(ok=not self._closed, report=report)
+        if isinstance(command, p.UpdateStatus):
+            # One bounded HTTP request at most once a day (cached on disk), so
+            # it runs off the event loop like ``Doctor``.
+            return p.UpdateStatusResult(**await asyncio.to_thread(self.update_status))
         if isinstance(command, p.Health):
             return p.HealthResult(**self.health())
         if isinstance(command, p.Shutdown):
