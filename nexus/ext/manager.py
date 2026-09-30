@@ -1531,8 +1531,8 @@ class ExtensionManager:
             return legacy
         return current
 
-    def _load_mcp_definitions(
-        self,
+    def _read_mcp_definitions(
+        self, path: Path | None = None,
     ) -> tuple[dict[str, Any] | None, tuple[ReloadFailure, ...]]:
         """Read and validate the ``servers`` map from ``mcp.json``.
 
@@ -1546,7 +1546,7 @@ class ExtensionManager:
         (comments/trailing commas) into a strict JSON object, rejecting duplicate
         keys and non-standard constants.
         """
-        path = self.mcp_config_path()
+        path = path or self.mcp_config_path()
         try:
             if not path.is_file():
                 return {}, ()
@@ -1593,7 +1593,7 @@ class ExtensionManager:
                     path=sanitize_text(str(path), limit=200),
                 ),
             )
-        unknown = sorted(set(document) - {"servers"})
+        unknown = sorted(set(document) - {"servers", "mcpServers"})
         if unknown:
             return None, (
                 ReloadFailure(
@@ -1604,7 +1604,7 @@ class ExtensionManager:
                     path=sanitize_text(str(path), limit=200),
                 ),
             )
-        servers = document.get("servers", {})
+        servers = document.get("servers", document.get("mcpServers", {}))
         if not isinstance(servers, Mapping):
             return None, (
                 ReloadFailure(
@@ -1616,6 +1616,17 @@ class ExtensionManager:
                 ),
             )
         return dict(servers), ()
+
+    def _load_mcp_definitions(self):
+        from ..config.paths import nexus_home
+
+        global_defs, global_failures = self._read_mcp_definitions(nexus_home(self._home_arg) / "mcp.json")
+        project_defs, project_failures = self._read_mcp_definitions(self.mcp_config_path())
+        if global_defs is None or project_defs is None:
+            return None, (*global_failures, *project_failures)
+        self.mcp_scopes = {name: "global" for name in global_defs}
+        self.mcp_scopes.update({name: "project" for name in project_defs})
+        return {**global_defs, **project_defs}, (*global_failures, *project_failures)
 
     def _failure_from_apply(self, failure: Any) -> ReloadFailure:
         to_dict = getattr(failure, "to_dict", None)

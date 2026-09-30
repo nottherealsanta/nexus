@@ -184,3 +184,5 @@ Removed files and previous config values move to settings trash. Keyboard,
 Workspace and Providers have no reset. Browser conversation detail resets the
 current session, workspace and browser preferences together; appearance resets
 to System. Full-size controls share a common height.
+
+The Skills and MCP header blocks mirror the terminal's `Project N | Global N` counts and individual session controls. Choices are available before the first turn and locked afterward to preserve the prompt cache, alongside agent selection.

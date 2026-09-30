@@ -490,7 +490,7 @@ async def test_empty_context_preview_shows_ten_lines_then_full_details_with_safe
         assert "sixth" not in preview
         assert "Read" in app.query_one("#context-tools").render().plain
         assert "active-skill" in app.query_one("#context-skills").render().plain
-        assert "available-skill" not in app.query_one("#context-skills").render().plain
+        assert "available-skill" in app.query_one("#context-skills").render().plain
         assert app.query_one("#context-header") in app.query_one("#conversation").children
 
         await pilot.click("#context-prompt")

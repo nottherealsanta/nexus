@@ -817,6 +817,8 @@ def test_manifest_coordinator_forwards_reasoning_effort_to_context_iteration(tmp
         workspace = tmp_path
         _path_guard = None
         _skills = _extensions = _activations = None
+        _selected_manifest = staticmethod(lambda manifest, _session: manifest)
+        _selected_skills = staticmethod(lambda _session: None)
         _agents = SimpleNamespace(select_tools=lambda *_args, **_kwargs: SimpleNamespace(selected=()))
         _assembler = ContextAssembler()
         _pre_compact_gate = staticmethod(lambda *_args: None)

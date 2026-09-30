@@ -1541,6 +1541,16 @@ class HostFacade:
         if isinstance(command, p.ToolsList):
             tools = await self.list_tools()
             return p.ToolsListResult(count=len(tools), tools=tools)
+        if isinstance(command, p.ContextExtensionSelect):
+            session = self._session(command.session, create=False, recover=False)
+            if session.context_locked or session.active:
+                raise ValueError("Skills, MCP and agents are locked after the first turn to preserve the prompt cache. Start a new session to change them.")
+            context = await self.inspect_context(command.session)
+            rows = context["skills_index" if command.category == "skills" else "mcp_servers"]
+            if not any(row.get("name") == command.name for row in rows):
+                raise ValueError("Unknown extension")
+            session.select_extension(command.category, command.name, command.enabled)
+            return p.ContextInspectResult(session=command.session, **await self.inspect_context(command.session))
         if isinstance(command, p.ContextInspect):
             result = await self.inspect_context(command.session)
             return p.ContextInspectResult(session=command.session, **result)

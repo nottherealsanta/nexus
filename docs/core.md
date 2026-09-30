@@ -263,3 +263,9 @@ release and publishes to PyPI (trusted publishing, the `pypi` environment).
   install. `nexus --version` only reads the cache, so it never waits on the network.
 - Python 3.13 or newer is required (`object.__setattr__` on msgspec Structs, used
   across the codebase, fails on 3.12 and older).
+
+### Discovered extensions and session choices
+
+Skills are scanned automatically under `~/.nexus/skills/`, the exact workspace's `.agents/skills/`, and its legacy `.nexus/skills/` fallback. MCP merges `~/.nexus/mcp.json` with the workspace's `.agents/mcp.json` (or legacy `.nexus/mcp.json` when the canonical file is absent). Project server names override global names. Both `servers` and `mcpServers` maps are accepted; parsing remains bounded and corruption retains the previous set.
+
+`ContextExtensionSelect` records an individual skill or MCP choice in the session's append-only log. Disabled skills are excluded from the index, invocation and bundled tools; disabled MCP servers are excluded from that session's tools and resource index. Other sessions keep their own choices. Once `turn.started` is recorded, skill, MCP and root-agent changes are rejected to preserve the prompt cache; create a new session to change them.

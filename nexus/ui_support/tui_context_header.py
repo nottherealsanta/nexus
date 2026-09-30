@@ -149,6 +149,74 @@ class ToolsModal(Screen):
             self.app.call_after_refresh(lambda: self.app.action_open_settings(category="tools"))
 
 
+def scope_counts(rows: list[dict]) -> str:
+    project = sum(row.get("scope") == "project" for row in rows)
+    return f"Project {project} | Global {len(rows) - project}"
+
+
+class ExtensionsModal(Screen):
+    """Session choices backed by durable host commands (plan §1)."""
+
+    BINDINGS: ClassVar[list[tuple[str, str, str]]] = [("escape", "dismiss", "Close")]
+
+    def __init__(self, category: str, result: ContextInspectResult, *, locked: bool = False) -> None:
+        super().__init__()
+        self.category, self.result = category, result
+        self.locked = result.context_locked or locked
+        self.rows = result.skills_index if category == "skills" else result.mcp_servers
+        self.pending = False
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="context-modal"):
+            yield Static(f"{self.category.title()} · {scope_counts(self.rows)}", id="context-modal-title", markup=False)
+            yield Static(
+                "Locked after the first turn to preserve the prompt cache. Start a new session to change skills, MCP or agents."
+                if self.locked else "Choose what this session can use before its first turn.",
+                id="extension-note", markup=False,
+            )
+            with VerticalScroll(id="context-modal-scroll"):
+                if not self.rows:
+                    yield Static("(none)", markup=False)
+                for index, row in enumerate(self.rows):
+                    enabled = row.get("enabled", True)
+                    yield Button(
+                        escape(f"{'On' if enabled else 'Off'} · {row.get('name', '?')} · {row.get('scope', 'global')}"),
+                        id=f"extension-{index}", disabled=self.locked or row.get("config_enabled") is False,
+                    )
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        if self.pending or not event.button.id or not event.button.id.startswith("extension-"):
+            return
+        index = int(event.button.id.split("-")[1])
+        row = self.rows[index]
+        self.pending = True
+        try:
+            controller = self.app.controller
+            if controller.session != self.result.session:
+                self.dismiss()
+                return
+            result = await controller.client.select_context_extension(
+                self.result.session, self.category, row["name"], not row.get("enabled", True))
+            if controller.session != self.result.session or not self.is_mounted:
+                return
+            self.result = result
+            self.rows = result.skills_index if self.category == "skills" else result.mcp_servers
+            updated = self.rows[index]
+            event.button.label = escape(f"{'On' if updated.get('enabled', True) else 'Off'} · {updated['name']} · {updated.get('scope', 'global')}")
+            self.app._refresh_context_after_selection(result.session)
+        except Exception as exc:
+            if not self.is_mounted:
+                return
+            self.query_one("#extension-note", Static).update(str(exc))
+            if "locked" in str(exc).lower():
+                self.locked = True
+                for button in self.query(Button):
+                    button.disabled = True
+        finally:
+            self.pending = False
+
+
 class ContextBlock(Static):
     """A compact clickable summary of one request part."""
 
@@ -173,6 +241,9 @@ class ContextBlock(Static):
         event.stop()
         if self.label == "Tools" and self.result is not None:
             self.app.push_screen(ToolsModal(list(self.result.tools), supported=self.result.tools_supported))
+            return
+        if self.label in {"Skills", "MCP"} and self.result is not None and hasattr(self.app, "controller") and self.result.session == self.app.controller.session:
+            self.app.push_screen(ExtensionsModal("skills" if self.label == "Skills" else "mcp", self.result, locked=bool(self.app.controller.view.turns)))
             return
         category = {"Tools": "tools", "Skills": "skills", "MCP": "mcp"}.get(self.label, "")
         self.app.push_screen(ContextModal(
@@ -246,17 +317,25 @@ class ContextHeader(Vertical):
              if isinstance(part, Mapping) and part.get("name") == "agents_md"), "")
         self.query_one("#context-agents", ContextBlock).set_data(
             prompt_preview(agents) if agents.strip() else "", agents or "(none)", color=color)
-        skills = [row for row in result.skills_index if isinstance(row, dict) and row.get("included", True)]
-        skill_names = [str(row.get("name", "")) for row in skills if row.get("name")]
+        skills = [row for row in result.skills_index if isinstance(row, dict)]
+        skill_names = [str(row.get("name", "")) + (" (off)" if row.get("enabled") is False else "") for row in skills if row.get("name")]
         skill_details = [f"{row.get('name', '?')} · {row.get('scope', '')} · {row.get('origin', '')}\n{row.get('description', '')}" for row in skills]
         self.query_one("#context-skills", ContextBlock).set_data(
-            render_columns(skill_names), "\n\n".join(skill_details) or "(none)", color=color)
+            scope_counts(skills) + ("\n" + render_columns(skill_names) if skills else ""), "\n\n".join(skill_details) or "(none)", color=color)
+        self.query_one("#context-skills", ContextBlock).result = result
+        self.query_one("#context-mcp", ContextBlock).result = result
+        if not skills:
+            block = self.query_one("#context-skills", ContextBlock)
+            block.set_data(scope_counts(skills), block.detail, color="$nx-label-neutral")
+            block.add_class("-empty")
         servers = list(getattr(result, "mcp_servers", ()) or ())
         if servers:
-            mcp_labels = [f"{row.get('name')}({row.get('tool_count', 0)})" for row in servers]
+            mcp_labels = [f"{row.get('name')}({row.get('tool_count', 0)})" + (" (off)" if row.get("enabled") is False else "") for row in servers]
             mcp_detail = "\n".join(f"{row.get('name')} · {row.get('status')}\n  " + ", ".join(row.get("tools", ())) for row in servers)
         else:
             mcp_labels = [f"{name}({len(rows)})" for name, rows in mcp_tools.items()]
             mcp_detail = result.mcp_index or "(none)"
         self.query_one("#context-mcp", ContextBlock).set_data(
-            render_columns(mcp_labels), mcp_detail, color=color)
+            scope_counts(servers) + ("\n" + render_columns(mcp_labels) if mcp_labels else ""), mcp_detail, color=color if servers or mcp_labels else "$nx-label-neutral")
+        if not servers and not mcp_labels:
+            self.query_one("#context-mcp", ContextBlock).add_class("-empty")

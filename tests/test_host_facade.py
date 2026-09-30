@@ -357,6 +357,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.AgentDefaultSet(name="build"),
         p.ToolsList(),
         p.ContextInspect(session="s"),
+        p.ContextExtensionSelect(session="s", category="skills", name="example", enabled=False),
         p.Doctor(explain_reload=True),
         p.UpdateStatus(),
         p.Health(),

@@ -87,6 +87,9 @@ def project_context_preview(result: Mapping[str, Any]) -> dict[str, Any]:
             "name": redact_secrets(str(row.get("name", ""))[:256]),
             "description": redact_secrets(str(row.get("description", ""))[:2_048]),
             "included": bool(row.get("included", False)),
+            "enabled": bool(row.get("enabled", True)),
+            "scope": safe_text(row.get("scope"), 40),
+            "origin": safe_text(row.get("origin"), 256),
         }
         for row in data.get("skills_index", ())[:512]
         if isinstance(row, Mapping)
