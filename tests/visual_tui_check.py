@@ -7,6 +7,7 @@ Browser binaries are intentionally external to the repository; install once with
 
 from __future__ import annotations
 
+import asyncio
 import os
 import signal
 import subprocess
@@ -52,9 +53,45 @@ def _png_size(path: Path) -> tuple[int, int]:
     return int.from_bytes(header[16:20], "big"), int.from_bytes(header[20:24], "big")
 
 
+async def capture_settings() -> list[Path]:
+    """Capture every Settings pane from the actual shell's deterministic fixture."""
+    from test_tui_panels import PanelTransport, _client
+    from nexus.ui.tui.app import NexusTextualApp
+    from nexus.ui_support.tui_settings import SettingsConsole
+    from textual.widgets import Button
+
+    app = NexusTextualApp(_client(PanelTransport()), session="s")
+    outputs = []
+    async with app.run_test(size=(160, 45)) as pilot:
+        await pilot.pause()
+        app.action_open_settings()
+        await pilot.pause()
+        screen = app.screen
+        for category, _ in SettingsConsole.SECTIONS:
+            if category is None:
+                continue
+            screen.query_one("#settings-sections").highlighted = screen._section_index(category)
+            await screen._change_category(category)
+            await pilot.pause()
+            for button in screen.query(Button):
+                if button.visible and button.region.height:
+                    assert button.region.height == 1, (category, button.id, button.region)
+            output = ARTIFACTS / f"settings-{category}.svg"
+            output.write_text(app.export_screenshot(), encoding="utf-8")
+            outputs.append(output)
+    return outputs
+
+
 def main() -> None:
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
+    settings = asyncio.run(capture_settings())
     with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page(viewport={"width": 1800, "height": 1300})
+        for svg in settings:
+            page.goto(svg.as_uri())
+            page.locator("svg").screenshot(path=str(svg.with_suffix(".png")))
+        browser.close()
         for name, state, width, height in STATES:
             command = [
                 "uv", "run", "textual", "serve", "--host", "127.0.0.1", "--port", str(PORT), "--command",

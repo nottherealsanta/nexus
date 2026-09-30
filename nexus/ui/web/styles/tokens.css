@@ -14,6 +14,7 @@
    values are the web's five signal colors on a near-black canvas. Dark is
    the default; light mirrors every role. */
 :root {
+  --control-h: 28px;
   color-scheme: dark;
   --canvas: #141414;
   --sidebar: #0f0f0f;

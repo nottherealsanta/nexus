@@ -2356,6 +2356,10 @@ async def test_worktrees_review_and_mutation_confirmation_modal_are_host_backed(
         screen = app.screen
         assert isinstance(screen, WorktreesScreen)
         assert screen.selected_id is None
+        actions = screen.query_one("#worktrees-actions")
+        for button in actions.query("Button"):
+            assert button.region.height == 1
+            assert actions.region.contains_region(button.region)
         await pilot.click("#worktree-row-0")
         await pilot.pause(0.1)
         detail = app.screen.query_one("#worktrees-detail").render().plain

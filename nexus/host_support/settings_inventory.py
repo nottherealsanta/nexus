@@ -300,10 +300,89 @@ def set_default_agent(runtime: object, scope: str, name: str) -> dict[str, Any]:
             "scope": scope, "rel_path": _rel(target)}
 
 
+def _toml_literal(value: Any) -> str:
+    """Encode parsed TOML values for the uncommon inline/dotted-table fallback."""
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_literal(item) for item in value) + "]"
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{json.dumps(key)} = {_toml_literal(item)}" for key, item in value.items()) + "}"
+    return value.isoformat()  # TOML date, time or datetime
+
+
+def reset(runtime: object, scope: str, category: str) -> dict[str, Any]:
+    """Restore scoped defaults, preserving removed files in settings trash."""
+    if category not in (*CATEGORIES, "voice"):
+        raise ConfigError("unknown settings category")
+    root, _ = _root(runtime, scope)
+    paths = _paths(root, category, scope) if category != "voice" else []
+    if len(paths) > MAX_ITEMS:
+        raise ConfigError("too many settings items to reset")
+    if category == "agents":
+        paths = [(name, path) for name, path in paths if name in _builtin_agents()]
+    # Validate every target before mutating any of them.
+    for name, _ in paths:
+        settings_target(runtime, scope, category, name)
+    trash_ids = []
+    if category in {"agents", "voice"}:
+        target = settings_target(runtime, scope, "config", "config")
+        if target.path.exists():
+            old = _read_bounded(target.path)
+            text = old.decode("utf-8")
+            document = tomllib.loads(text)
+            expected = tomllib.loads(text)
+            if category == "voice":
+                expected.pop("voice", None)
+            elif "agent" in document:
+                expected["agent"].pop("name", None)
+            lines = text.splitlines(keepends=True)
+            table = ""
+            kept = []
+            for line in lines:
+                match = _TABLE.match(line)
+                if match:
+                    table = match.group(1)
+                if category == "voice" and (table == "voice" or table.startswith("voice.")):
+                    continue
+                if category == "agents" and table == "agent" and re.match(r"\s*name\s*=", line):
+                    continue
+                kept.append(line)
+            body = "".join(kept)
+            try:
+                matches = tomllib.loads(body) == expected
+            except tomllib.TOMLDecodeError:
+                matches = False
+            if not matches:
+                body = "".join(f"{json.dumps(key)} = {_toml_literal(value)}\n" for key, value in expected.items())
+                if tomllib.loads(body) != expected:
+                    raise ConfigError("cannot reset settings without changing unrelated values")
+            _validate("config", "config", body)
+            if body != text:
+                trash_ids.append(delete(runtime, scope, "config", "config")["trash_id"])
+                write(runtime, scope, "config", "config", body, "")
+    for name, _ in paths:
+        trash_ids.append(delete(runtime, scope, category, name)["trash_id"])
+    return {"status": "reset", "trash_ids": trash_ids}
+
+
 async def dispatch_settings(command: Any, runtime: object) -> Any | None:
     from ..host import protocol as p
     if isinstance(command, p.AgentDefaultSet):
         return p.AgentDefaultSetResult(**set_default_agent(runtime, command.scope, command.name))
+    if isinstance(command, p.SettingsReset):
+        result = reset(runtime, command.scope, command.category)
+        refresh = getattr(runtime, "refresh_voice_config", None)
+        if callable(refresh):
+            refresh()
+        reload = getattr(getattr(runtime, "extensions", None), "reload", None)
+        if callable(reload):
+            await reload(trigger="settings")
+        return p.SettingsResetResult(**result)
     if isinstance(command, p.SettingsInventory):
         import msgspec
         return msgspec.convert(inventory(runtime, command.scope), type=p.SettingsInventoryResult)

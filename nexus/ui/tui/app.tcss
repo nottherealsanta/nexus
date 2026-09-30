@@ -523,7 +523,7 @@ VoiceConsentScreen {
 
 #voice Select {
     width: 20;
-    height: 3;
+    height: 1;
     border: none;
     background: $nx-panel;
 }
@@ -1130,11 +1130,7 @@ OptionList > .option-list--option-highlighted {
 
 #worktrees-list-items Button {
     width: 1fr;
-    height: auto;
-    min-height: 2;
-    padding: 0 1;
     margin: 0;
-    border: none;
     background: transparent;
     color: $nx-muted;
     text-align: left;
@@ -1177,7 +1173,6 @@ OptionList > .option-list--option-highlighted {
 #worktrees-actions Button, #worktrees-pages Button, #worktree-confirm-actions Button {
     width: auto;
     min-width: 12;
-    height: 2;
     margin: 0 1 0 0;
 }
 
@@ -1534,9 +1529,6 @@ SettingsConsole {
 #settings-scope-row Button {
     width: auto;
     min-width: 9;
-    height: 1;
-    min-height: 1;
-    border: none;
     margin-right: 1;
     background: $nx-panel;
     color: $nx-muted;
@@ -1568,9 +1560,6 @@ SettingsConsole {
 #settings-default-agent-choices Button {
     width: auto;
     min-width: 7;
-    height: 1;
-    min-height: 1;
-    border: none;
     margin-right: 1;
     background: $nx-panel;
     color: $nx-muted;
@@ -1650,10 +1639,6 @@ SettingsConsole {
 
 /* Model and fallback rows open the shared model picker. */
 .agent-form-row Button {
-    height: 1;
-    min-height: 1;
-    border: none;
-    padding: 0 1;
     background: $nx-field;
     color: $nx-text;
     text-style: none;
@@ -1711,8 +1696,8 @@ SettingsScreen Input, SettingsScreen Input:focus {
     height: 1;
 }
 
-/* Every Settings button (and its confirm dialog): one row, no border. */
-SettingsScreen Button, ConfirmSettingsAction Button {
+/* Full-size terminal buttons share one row. */
+Button {
     height: 1;
     min-height: 1;
     border: none;
@@ -1780,9 +1765,6 @@ SettingsScreen Button, ConfirmSettingsAction Button {
 .provider-actions Button {
     width: auto;
     min-width: 8;
-    height: 1;
-    min-height: 1;
-    border: none;
     margin-right: 1;
     background: $nx-panel;
     color: $nx-muted;
@@ -1822,6 +1804,8 @@ ConfirmSettingsAction {
 
 #settings-confirm-dialog {
     width: 60;
+    max-height: 85%;
+    overflow-y: auto;
     height: auto;
     padding: 1 2;
     background: $nx-settings-panel;
@@ -1902,31 +1886,31 @@ ConfirmSettingsAction {
 }
 
 #settings-theme RadioButton {
-    background: $nx-panel;
     padding: 0 1;
+    background: $nx-panel;
 }
 
 .settings-row {
-    height: 3;
-    border-bottom: solid $nx-border;
+    height: 1;
+    border: none;
 }
 
 .settings-label {
     width: 1fr;
-    height: 3;
+    height: 1;
     content-align: left middle;
     color: $nx-text;
 }
 
 .settings-key {
     width: 10;
-    height: 3;
+    height: 1;
     content-align: right middle;
     color: $nx-quiet;
 }
 
 .settings-row Switch {
-    height: 3;
+    height: 1;
     border: none;
     background: $nx-panel;
 }
@@ -2160,9 +2144,28 @@ SetupScreen {
 }
 
 #setup-buttons Button {
-    height: 1;
-    min-height: 1;
-    border: none;
-    padding: 0 1;
     margin-left: 1;
+}
+
+.settings-heading-row { height: 1; margin-bottom: 1; }
+.settings-heading-row .settings-heading { width: 1fr; }
+.settings-heading-row Button { width: auto; }
+
+#voice SelectCurrent { height: 1; border: none; padding: 0 1; }
+.settings-row Switch .switch--slider { color: $nx-muted; background: $nx-element; }
+.settings-row Switch.-on .switch--slider { color: $nx-accent; }
+
+/* Keep the worktree action labels reachable beside the child list. */
+#worktrees-actions {
+    layout: grid;
+    grid-size: 3;
+    grid-columns: 1fr 1fr 1fr;
+    grid-rows: 1;
+    grid-gutter: 1 1;
+    height: 3;
+}
+#worktrees-actions Button {
+    width: 1fr;
+    min-width: 8;
+    margin: 0;
 }

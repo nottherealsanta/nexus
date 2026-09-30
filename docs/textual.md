@@ -104,3 +104,21 @@ exists only in dev mode (`commands.DEV_SPECS`, added to `SPECS` at import when
 - Setup is never required in dev mode (mock models need no provider).
 
 See `plans/MOCK_PLAN.md` and `nexus/devtools/mock/`.
+
+## Settings saving and reset
+
+Settings changes save automatically. In the terminal file editor, edits save
+700 ms after typing stops and flush before changing item, page or scope or
+closing Settings. Validation and disk conflicts leave the edit unsaved with
+an error; leaving then asks whether to discard invalid changes. Built-in agent
+edits create scoped overrides, and new items save their template on naming.
+
+GENERAL and CONFIGURE separate the sidebar groups. Page headings offer a
+confirmed Reset to default where settings exist: appearance, terminal layout,
+voice, agents, and terminal file categories. Agents reset only built-in overrides
+and the scoped default-agent choice; custom agents stay. Tools and Skills reset
+all custom items in the selected scope and list them before confirmation.
+Removed files and previous config values move to settings trash. Keyboard,
+Workspace and Providers have no reset. Browser conversation detail resets the
+current session, workspace and browser preferences together; appearance resets
+to System. Full-size controls share a common height.
