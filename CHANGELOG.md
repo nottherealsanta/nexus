@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/nottherealsanta/nexus/compare/v0.2.1...v0.2.2) (2026-09-30)
+
+
+### Bug fixes
+
+* simplify CLI startup and manage local search service ([#13](https://github.com/nottherealsanta/nexus/issues/13)) ([f3f340c](https://github.com/nottherealsanta/nexus/commit/f3f340c8e7dc5dcb7e68208832e3faff4fcfc02d))
+
 ## [0.2.1](https://github.com/nottherealsanta/nexus/compare/v0.2.0...v0.2.1) (2026-09-30)
 
 
