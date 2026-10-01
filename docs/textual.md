@@ -183,3 +183,10 @@ clicking the message body opens the complete attached text and image metadata.
 
 Settings → Agents uses one shared user configuration in `~/.nexus/agents/`,
 with no global/project selector. Other file categories retain scoped editing.
+
+Inline Edit/Patch diffs are clickable previews: code and filename clicks open
+the complete tool details. Preview text does not start a competing Textual
+selection; text remains selectable in the details dialog. Wheel events over a
+preview scroll the surrounding conversation, including Shift/Ctrl wheel events,
+rather than the diff library's nested horizontal containers. Long lines wrap
+within the original and updated columns.

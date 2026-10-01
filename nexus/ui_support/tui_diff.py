@@ -11,6 +11,8 @@ from collections.abc import Mapping
 
 from textual.content import Content
 from textual.containers import Vertical
+from textual.events import MouseScrollDown, MouseScrollUp
+from textual.widget import Widget
 from textual.widgets import Static
 from textual_diff_view import DiffView
 
@@ -34,7 +36,43 @@ def tool_diff_signature(tool: ToolCallView) -> tuple[object, ...] | None:
 
 
 class FileDiffView(DiffView):
-    """Use a plain filename title with the library's change counts."""
+    """A clickable, wrapping preview whose wheel scrolls the conversation."""
+
+    DEFAULT_CSS = """
+    FileDiffView DiffScrollContainer {
+        overflow: hidden hidden;
+    }
+    """
+
+    async def on_mount(self) -> None:
+        await super().on_mount()
+        self.call_after_refresh(self._disable_preview_selection)
+
+    async def recompose(self) -> None:
+        await super().recompose()
+        self._disable_preview_selection()
+
+    def _disable_preview_selection(self) -> None:
+        # This preview is a click target for the tool's details. The library's
+        # wrapped code visuals should not start a competing text selection.
+        for widget in self.walk_children(Widget):
+            widget.ALLOW_SELECT = False
+
+    def _scroll_conversation(self, event: MouseScrollDown | MouseScrollUp, direction: int) -> None:
+        for ancestor in self.ancestors:
+            if isinstance(ancestor, Widget) and ancestor.allow_vertical_scroll:
+                ancestor.scroll_relative(
+                    y=direction * self.app.scroll_sensitivity_y,
+                    animate=False, immediate=True,
+                )
+                event.stop()
+                return
+
+    def on_mouse_scroll_down(self, event: MouseScrollDown) -> None:
+        self._scroll_conversation(event, 1)
+
+    def on_mouse_scroll_up(self, event: MouseScrollUp) -> None:
+        self._scroll_conversation(event, -1)
 
     def get_title(self) -> Content:
         additions, removals = self.counts

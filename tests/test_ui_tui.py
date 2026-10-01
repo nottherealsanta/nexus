@@ -1351,7 +1351,9 @@ async def test_tool_diff_is_mounted_inline_and_stays_available_in_modal():
 
         (view,) = card.query(DiffView)
         assert (view.path_modified, view.code_original, view.code_modified) == ("f.py", "old", "new")
-        await card.open_details()
+        view.scroll_visible(animate=False)
+        await pilot.pause()
+        await pilot.click(view.query_one("DiffCode"), offset=(7, 0))
         await pilot.pause()
         details = str(app.screen.query_one("#tool-details-body", Static).render())
         assert "@@ -1 +1 @@" in details and "-old" in details and "+new" in details

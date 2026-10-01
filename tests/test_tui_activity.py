@@ -548,3 +548,54 @@ async def test_read_grep_and_todo_compact_previews():
             header = pilot.app.query_one("#tool-header", Static)
             assert header.styles.height.value == len(rows)
             assert all(row in str(header.render()) for row in rows)
+
+
+async def test_diff_preview_click_and_wheel_use_the_surrounding_view():
+    from textual.containers import VerticalScroll
+    from textual.events import MouseDown, MouseMove, MouseScrollDown, MouseScrollUp, MouseUp
+
+    from nexus.ui.tui.tool_details import ToolDetailsScreen
+
+    class DiffApp(App):
+        def compose(self) -> ComposeResult:
+            with VerticalScroll(id="conversation"):
+                for name in ("Edit", "apply_patch"):
+                    yield ToolActivityWidget(ToolCallView(
+                        call_id=name, name=name, status="completed",
+                        diff={"path": "f.py", "hunk": (
+                            "--- a/f.py\n+++ b/f.py\n@@ -1,2 +1,2 @@\n"
+                            " keep\n-" + "old " * 40 + "\n+" + "new " * 40
+                        )},
+                    ))
+                yield Static("following content\n" * 60)
+
+    app = DiffApp()
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        conversation = app.query_one("#conversation", VerticalScroll)
+        for card in app.query(ToolActivityWidget):
+            code = card.query_one("DiffCode")
+            code.scroll_visible(animate=False)
+            await pilot.pause()
+            assert not code.allow_select
+            # A slight mouse movement must not leave a selection competing with
+            # the tool card's click, including on a wrapped code continuation.
+            await pilot._post_mouse_events([MouseDown], code, offset=(8, 1), button=1)
+            await pilot._post_mouse_events([MouseMove, MouseUp], code, offset=(9, 1), button=1)
+            await pilot.click(code, offset=(9, 1))
+            await pilot.pause()
+            assert isinstance(app.screen, ToolDetailsScreen)
+            assert not app.screen_stack[0].selections
+            await pilot.press("escape")
+            await pilot.pause()
+            code = card.query_one("DiffCode")
+            code.scroll_visible(animate=False)
+            await pilot.pause()
+            for modifiers in ({}, {"shift": True}, {"control": True}):
+                y = conversation.scroll_y
+                await pilot._post_mouse_events([MouseScrollDown], code, offset=(8, 1), **modifiers)
+                await pilot.pause()
+                assert conversation.scroll_y > y
+                await pilot._post_mouse_events([MouseScrollUp], code, offset=(8, 3), **modifiers)
+                await pilot.pause()
+                assert conversation.scroll_y == y
