@@ -75,6 +75,14 @@ python3 benchmark/bench.py list | setup [NAME] | run file-edit | run shell-comma
   files and tool events, not the model's final text.
 - Tests: `tests/test_benchmark.py`. Details: `benchmark/README.md`.
 
+The benchmark workspace also includes an offline extension smoke fixture:
+`benchmark/mcp_echo.py`, `.agents/mcp.json`, and the `benchmark-echo` skill
+under `.agents/skills/`. With `benchmark/` selected as the workspace, the skill
+loads through `skill` and calls `mcp__echo__echo`, returning `benchmark-mcp-ok`.
+The runtime integration check uses a scripted model and a real stdio subprocess:
+`pytest -q tests/test_mcp_integration.py -k benchmark_skill`. It launches from
+outside the workspace to verify relative MCP script resolution.
+
 ## Local search (`websearch/`)
 
 A Docker Compose SearXNG bound to `127.0.0.1:18765` for the `websearch` tool

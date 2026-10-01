@@ -789,3 +789,50 @@ async def test_workspace_skill_loads_and_calls_its_declared_mcp_tool(tmp_path: P
         assert any("hello-mcp" in str(result.content) for result in results)
     finally:
         await runtime.aclose()
+
+
+@pytest.mark.parametrize("cwd", [None, "relative", "absolute"])
+async def test_benchmark_skill_and_relative_mcp_script_load_outside_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cwd: str | None,
+) -> None:
+    """Selected workspace, rather than daemon cwd, anchors stdio scripts."""
+    import shutil
+
+    benchmark = Path(__file__).resolve().parents[1] / "benchmark"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    shutil.copytree(benchmark / ".agents", workspace / ".agents")
+    server_dir = workspace if cwd is None else workspace / "server"
+    server_dir.mkdir(exist_ok=True)
+    shutil.copyfile(benchmark / "mcp_echo.py", server_dir / "mcp_echo.py")
+    config_path = workspace / ".agents" / "mcp.json"
+    definitions = json.loads(config_path.read_text())
+    definitions["servers"]["echo"]["command"] = sys.executable
+    if cwd is not None:
+        definitions["servers"]["echo"]["cwd"] = (
+            "server" if cwd == "relative" else str(server_dir)
+        )
+    config_path.write_text(json.dumps(definitions))
+    monkeypatch.chdir(tmp_path)
+    provider = ScriptedProvider(
+        tool_response(("s1", "skill", {"name": "benchmark-echo"})),
+        tool_response(("m1", "mcp__echo__echo", {"text": "benchmark-mcp-ok"})),
+        text_response("done"),
+    )
+    runtime = make_runtime(workspace, provider)
+    try:
+        session = runtime.session("benchmark-extensions")
+        events = [event async for event in session.send("Use benchmark-echo")]
+        assert events[-1].type == "turn.completed"
+        assert "benchmark-echo" in runtime.manifest.skills
+        assert runtime.manifest.mcp["echo"].connected
+        assert "benchmark-echo" in provider.requests[0].system
+        assert "mcp__echo__echo" in {tool.name for tool in provider.requests[0].tools}
+        assert [tool.name for tool in provider.requests[1].tools] == ["mcp__echo__echo"]
+        assert "benchmark-mcp-ok" in tool_result_text(session)
+        assert not any(
+            block.is_error for message in session.messages
+            for block in message.content if isinstance(block, ToolResult)
+        )
+    finally:
+        await runtime.aclose()
