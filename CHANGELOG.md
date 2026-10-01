@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.14](https://github.com/nottherealsanta/nexus/compare/v0.2.13...v0.2.14) (2026-10-01)
+
+
+### Bug fixes
+
+* use one shared agent model settings page ([#44](https://github.com/nottherealsanta/nexus/issues/44)) ([9773632](https://github.com/nottherealsanta/nexus/commit/97736324dedd77812786128d5b816a339b183467))
+
 ## [0.2.13](https://github.com/nottherealsanta/nexus/compare/v0.2.12...v0.2.13) (2026-10-01)
 
 
