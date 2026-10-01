@@ -162,6 +162,7 @@ class SessionStart(msgspec.Struct, tag=True, frozen=True):
     content: str = ""
     blocks: list[dict[str, Any]] = msgspec.field(default_factory=list)
     attachments: list[str] = msgspec.field(default_factory=list)
+    attachment_labels: list[str] = msgspec.field(default_factory=list)
 
 
 class SessionEnqueue(msgspec.Struct, tag=True, frozen=True):
@@ -170,12 +171,14 @@ class SessionEnqueue(msgspec.Struct, tag=True, frozen=True):
     content: str = ""
     blocks: list[dict[str, Any]] = msgspec.field(default_factory=list)
     attachments: list[str] = msgspec.field(default_factory=list)
+    attachment_labels: list[str] = msgspec.field(default_factory=list)
 
 
 class SessionCancel(msgspec.Struct, tag=True, frozen=True):
     session: str
     reason: str = ""
     drop_queue: bool = True
+    return_queue: bool = False  # recover removed queued text for the composer
 
 
 class SessionSubscribe(msgspec.Struct, tag=True, frozen=True):
@@ -779,6 +782,7 @@ class SessionCancelResult(msgspec.Struct, tag=True, frozen=True):
     session: str
     cancelled: bool = False
     dropped: int = 0
+    returned_messages: list[str] = msgspec.field(default_factory=list)
 
 
 class SessionSubscribeResult(msgspec.Struct, tag=True, frozen=True):

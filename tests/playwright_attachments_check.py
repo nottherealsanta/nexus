@@ -106,7 +106,7 @@ async def main():
                 await page.locator("#file-attachments details").nth(2).wait_for()
                 assert (
                     await page.locator("#file-attachments").inner_text()
-                    == "photo.png · image\nreport.pdf · markdown\nlarge.md · markdown"
+                    == "image 1 · photo.png · image\ndocument 1 · report.pdf · markdown\ndocument 2 · large.md · markdown"
                 )
                 await (
                     page.locator("#file-attachments details")
@@ -127,7 +127,9 @@ async def main():
                 assert (
                     await page.locator("#file-attachments pre").nth(1).inner_text()
                 ).endswith("Last line")
-                await page.locator("#composer-input").fill("Inspect attachments")
+                assert await page.locator("#composer-input").input_value() == "image 1document 1document 2"
+                assert "image 1" in await page.locator("#file-attachments").inner_text()
+                await page.locator("#composer-input").fill("Inspect image 1 using document 1 and document 2")
                 await page.locator("#composer-input").press("Enter")
                 await (
                     page.locator("#timeline")
@@ -139,14 +141,27 @@ async def main():
                 assert await page.locator(".message-images img").evaluate(
                     "(img)=>img.complete&&img.naturalWidth===1"
                 )
+                assert await page.locator("#timeline .submitted-attachment").count() == 3
+                assert "Attachment:" not in await page.locator("#timeline .message.user .message-body").inner_text()
+                await page.locator("#timeline .submitted-attachment").nth(2).locator("summary").click()
                 assert "Last line" in await page.locator("#timeline").inner_text()
+                await page.screenshot(path="artifacts/attachments-submitted.png")
                 await page.reload()
                 await page.locator(".message-images img").wait_for()
+                await page.locator("#timeline .submitted-attachment").nth(1).locator("summary").click()
                 await (
                     page.locator("#timeline")
                     .get_by_text("Attachment PDF works", exact=False)
                     .first.wait_for()
                 )
+                context_cards = await page.evaluate("""async()=>{
+                    const api=await import('/js/api.js');
+                    const ui=await import('/js/context-view.js');
+                    const result=await api.command({type:'ContextInspect',session:decodeURIComponent(location.pathname.split('/s/')[1])});
+                    const rendered=ui.renderCurrentContext({result});
+                    return [...rendered.querySelectorAll('.attachment-reference')].map(n=>n.textContent);
+                }""")
+                assert context_cards == ["image 1", "document 1", "document 2"], context_cards
                 blocks = provider.requests[0].messages[-1].content
                 assert any(isinstance(b, Image) and b.data == PNG for b in blocks)
                 assert any(
@@ -154,7 +169,9 @@ async def main():
                     for b in blocks
                 )
                 # Browser clipboard images and drag/drop both use the real route.
-                for event_name in ("paste", "drop"):
+                for number, event_name in enumerate(("paste", "drop"), 1):
+                    await page.locator("#composer-input").fill("use  instead")
+                    await page.locator("#composer-input").evaluate("input=>input.setSelectionRange(4,4)")
                     await page.evaluate(
                         """({data,eventName})=>{const bytes=Uint8Array.from(atob(data),c=>c.charCodeAt(0));const transfer=new DataTransfer();transfer.items.add(new File([bytes],eventName+'.png',{type:'image/png'}));const target=document.querySelector(eventName==='paste'?'#composer-input':'#composer-form');target.dispatchEvent(eventName==='paste'?new ClipboardEvent('paste',{clipboardData:transfer,bubbles:true,cancelable:true}):new DragEvent('drop',{dataTransfer:transfer,bubbles:true,cancelable:true}));}""",
                         {
@@ -163,6 +180,7 @@ async def main():
                         },
                     )
                     await page.locator("#file-attachments summary").wait_for()
+                    assert await page.locator("#composer-input").input_value() == f"use image {number} instead"
                     await page.locator("#file-attachments summary").click()
                     await page.locator("#file-attachments button").click()
                     assert not await page.locator("#file-attachments details").count()
@@ -185,9 +203,9 @@ async def main():
                     .get_by_text("Attachment received 1", exact=False)
                     .wait_for()
                 )
-                await page.locator(".attachment-text summary").click()
+                await page.locator("#timeline .submitted-attachment").last.locator("summary").click()
                 await page.wait_for_function(
-                    "length=>document.querySelector('.attachment-full-text').value.endsWith('x'.repeat(length))",
+                    "length=>[...document.querySelectorAll('.submitted-document')].at(-1).textContent.endsWith('x'.repeat(length))",
                     arg=1024 * 1024 + 20,
                 )
                 await page.locator("#attachment-picker").set_input_files(

@@ -1370,3 +1370,31 @@ async def test_messages_during_active_turn(tmp_path, mode):
         assert all(t.phase != "failed" for t in facade.state("s")[0].turns)
     finally:
         await runtime.aclose()
+
+
+async def test_cancel_returns_pending_messages_to_composer_in_order(tmp_path):
+    gate = asyncio.Event()
+    runtime = _runtime(tmp_path, ScriptedProvider([
+        MessageStart(model="m", provider="scripted"), TextDelta(text="working"),
+        Wait(gate), MessageStop(stop_reason="stop"),
+    ]))
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+    try:
+        await facade.start_turn("s", "already sent")
+        await wait_for(lambda: runtime.session("s").active)
+        await facade.enqueue("s", "message 1")
+        await facade.enqueue("s", "message 2")
+        result = await facade.handle(p.SessionCancel(session="s", return_queue=True))
+        assert result.returned_messages == ["message 1", "message 2"]
+        assert result.cancelled and result.dropped == 2
+        assert runtime.session("s").queue_depth == 0
+        await facade.wait_idle(timeout=5)
+        assert facade.state("s")[0].input_queue == []
+        again = await facade.handle(p.SessionCancel(session="s", return_queue=True))
+        assert again.returned_messages == []
+        queued = [event for event in runtime.session("s").events if event.type == "input.queued"]
+        assert [event.data["content"][0]["text"] for event in queued] == ["message 1", "message 2"]
+    finally:
+        await facade.supervisor.aclose()
+        await runtime.aclose()

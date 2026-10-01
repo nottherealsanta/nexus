@@ -31,6 +31,8 @@ class AttachmentPreview(ModalScreen):
 class AttachmentsMixin:
     def clear_attachments(self):
         self._attachments = []
+        self._attachment_labels = {}
+        self._attachment_counts = {}
         widget = self.query_one("#file-attachments", Static)
         widget.update("")
         widget.display = False
@@ -51,15 +53,29 @@ class AttachmentsMixin:
                 if len(getattr(self, "_attachments", [])) >= 8:
                     raise ValueError("At most 8 attachments per message")
                 self._attachments = [*getattr(self, "_attachments", []), item]
+                self._add_attachment_reference(item)
                 self._render_attachments()
         except (ClientError, ValueError, OSError, TimeoutError) as exc:
             self._sync_status(str(exc), error=True)
         return True
 
+    def _add_attachment_reference(self, item):
+        kind = "image" if item.kind == "image" else "document"
+        counts = getattr(self, "_attachment_counts", {})
+        counts[kind] = counts.get(kind, 0) + 1
+        self._attachment_counts = counts
+        label = f"{kind} {counts[kind]}"
+        labels = getattr(self, "_attachment_labels", {})
+        labels[item.attachment_id] = label
+        self._attachment_labels = labels
+        editor = self.query_one("#chat-editor", TextArea)
+        replaced = editor.replace(label, *editor.selection)
+        editor.move_cursor(replaced.end_location)
+
     def _render_attachments(self):
         widget = self.query_one("#file-attachments", Static)
         widget.update("\n".join(
-            f"Attachment: {value.name} · {value.kind} · /attach clear to remove"
+            f"{self._attachment_labels[value.attachment_id]}: {value.name} · {value.kind} · /attach clear to remove"
             for value in self._attachments
         ))
         widget.display = bool(self._attachments)
@@ -81,6 +97,7 @@ class AttachmentsMixin:
         if session != self.controller.session:
             return
         self._attachments = [*items, item]
+        self._add_attachment_reference(item)
         self._render_attachments()
         if item.kind == "markdown":
             await self.push_screen(AttachmentPreview(item))
@@ -96,6 +113,7 @@ class AttachmentsMixin:
                 message.content,
                 mode=message.mode,
                 attachments=[item.attachment_id for item in items],
+                attachment_labels=[self._attachment_labels[item.attachment_id] for item in items],
             )
             if session == self.controller.session:
                 self.clear_attachments()

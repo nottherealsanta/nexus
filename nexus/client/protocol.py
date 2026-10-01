@@ -183,13 +183,19 @@ class Client:
     async def start_turn(self, session: str, content: str) -> str:
         return (await self._request(p.SessionStart(session=session, content=content))).turn_id  # type: ignore[union-attr]
 
-    async def enqueue(self, session: str, content: str, *, mode: str = "queue", attachments: list[str] | None = None) -> tuple[str, str]:
-        result = await self._request(p.SessionEnqueue(session=session, content=content, mode=mode, attachments=attachments or []))
+    async def enqueue(self, session: str, content: str, *, mode: str = "queue", attachments: list[str] | None = None, attachment_labels: list[str] | None = None) -> tuple[str, str]:
+        result = await self._request(p.SessionEnqueue(session=session, content=content, mode=mode, attachments=attachments or [], attachment_labels=attachment_labels or []))
         return result.queued_id, result.turn_id  # type: ignore[union-attr]
 
     async def cancel(self, session: str, *, reason: str = "", drop_queue: bool = True) -> tuple[bool, int]:
         result = await self._request(p.SessionCancel(session=session, reason=reason, drop_queue=drop_queue))
         return result.cancelled, result.dropped  # type: ignore[union-attr]
+
+    async def cancel_to_composer(self, session: str, *, reason: str = "") -> p.SessionCancelResult:
+        """Stop work and return the authoritative removed queue in FIFO order."""
+        return await self._request(p.SessionCancel(
+            session=session, reason=reason, drop_queue=True, return_queue=True,
+        ))  # type: ignore[return-value]
 
     async def fork(self, session: str, at_seq: int | None = None, *, new_id: str | None = None) -> Any:
         return (await self._request(p.SessionFork(session=session, at_seq=at_seq, new_id=new_id))).session  # type: ignore[union-attr]

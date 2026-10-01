@@ -56,7 +56,8 @@ async def test_attach_preview_and_submit_even_without_prompt(key, mode):
         await pilot.pause()
         assert transport.sent.attachments == ["prepared"]
         assert transport.sent.mode == mode
-        assert transport.sent.content == ""
+        assert transport.sent.content == "document 1"
+        assert transport.sent.attachment_labels == ["document 1"]
         assert not app.query_one("#file-attachments").display
 
 
@@ -95,9 +96,12 @@ async def test_ctrl_v_uploads_clipboard_image(monkeypatch):
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         editor = app.query_one(ChatEditor)
+        editor.text = "use  instead of that"
+        editor.move_cursor((0, 4))
         editor.focus()
         await pilot.press("ctrl+v")
         await pilot.pause()
+        assert editor.text == "use image 1 instead of that"
         assert prepared[0].data == image
         assert prepared[0].path == ""
         assert app._attachments[0].name == "clipboard.png"
@@ -168,3 +172,22 @@ def test_native_clipboard_timeout(monkeypatch):
     monkeypatch.setattr(clipboard.subprocess, "run", timeout)
     with pytest.raises(ValueError, match="timed out"):
         clipboard.read_clipboard_image()
+
+
+def test_submitted_attachment_rows_keep_prompt_readable():
+    from nexus.ui.tui.timeline import UserMessage
+    from nexus.view import BlockView, MessageView
+
+    message = MessageView(role="user", blocks=[
+        BlockView(kind="text", text="Use image 1 with document 1"),
+        BlockView(kind="text", text="\n\nAttachment: image 1 · photo.png · image/png · 42 bytes\n"),
+        BlockView(kind="image"),
+        BlockView(kind="text", text="\n\nAttachment: document 1 · report.txt\n\nFull document body"),
+    ])
+    widget = UserMessage(message)
+    rendered = widget._content(message)
+    assert "Use image 1 with document 1" in rendered
+    assert "image 1 · photo.png" in rendered
+    assert "document 1 · report.txt" in rendered
+    assert "Full document body" not in rendered
+    assert "Click to inspect" in rendered
