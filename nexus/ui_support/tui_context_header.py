@@ -14,7 +14,7 @@ from textual.screen import Screen
 from textual.widgets import Button, Markdown, Static
 
 from ..host.protocol import ContextInspectResult
-from .context import _compact_tokens, tool_groups
+from .context import _compact_tokens, header_system_prompt, tool_groups
 from .tui_widgets import agent_color, context_group_widgets
 
 
@@ -296,7 +296,7 @@ class ContextHeader(Vertical):
         name = str(result.agent.get("name") or "build")
         host_color = result.agent.get("color")
         color = color or (host_color if isinstance(host_color, str) and host_color else agent_color(name))
-        prompt = result.system_text or ""
+        prompt = header_system_prompt(result)
         self.query_one("#context-prompt", ContextBlock).set_data(
             prompt_preview(prompt) if prompt else "", prompt or "(empty)", color=color)
         groups, mcp_tools = group_tools(result.tools)

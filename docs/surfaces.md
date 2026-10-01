@@ -76,7 +76,9 @@ Pure presentation helpers, importable by all surfaces. The TUI-only widgets
 ## Context presentation
 
 - The context header blocks open grouped, collapsed dialogs with token estimates
-  (~4 chars/token, `estimate_tokens`). The System prompt opens as Markdown; the
+  (~4 chars/token, `estimate_tokens`). The System prompt opens as Markdown, excluding AGENTS.md because it has its
+  own block (the full request inspection still shows the exact assembled text).
+  Incomplete or clipped snapshots retain the original text to avoid losing context. The
   Tools block lists one collapsed row per tool (`tool_groups`: by `group`, then a
   group per MCP server).
 - **Skill and MCP controls.** Those two blocks show `Project N | Global N`

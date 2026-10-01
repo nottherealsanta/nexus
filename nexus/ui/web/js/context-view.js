@@ -634,7 +634,7 @@ export function renderContextGroups({result, usage = ''}) {
 
 export function renderSystemPrompt({result}) {
   const root = node('div', 'context-request-tree ctx-report');
-  const text = result.system_text || '';
+  const text = headerSystemPrompt(result);
   root.append(node('p', 'context-muted', `~${compactTokens(estimateTokens(text))} tokens`));
   const body = node('div', 'ctx-body ctx-system');
   body.append(markdown(text || '(empty)'));
@@ -654,4 +654,13 @@ export function renderToolsReport({result}) {
   if (!groups.length) root.append(node('p', 'context-muted', '(none)'));
   root.append(list);
   return root;
+}
+
+export function headerSystemPrompt(result) {
+  const system = result.system_text || '';
+  const parts = (result.included_parts || []).filter(part => part && typeof part === 'object');
+  if (parts.some(part => part.name === 'agents_md') && parts.map(part => String(part.text || '')).join('\n\n') === system) {
+    return parts.filter(part => part.name !== 'agents_md').map(part => String(part.text || '')).join('\n\n');
+  }
+  return system;
 }

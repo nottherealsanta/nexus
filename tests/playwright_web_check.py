@@ -159,6 +159,17 @@ async def verify_context_main_pane() -> None:
                 await route.fulfill(status=200, content_type="text/html", body="<link rel='stylesheet' href='/styles/context-preview.css'><main><div id='context-inline-content'></div></main>")
         await page.route("http://context.test/**", route_fixture)
         await page.goto("http://context.test/")
+        assert await page.evaluate("""async () => {
+          const {headerSystemPrompt, renderSystemPrompt} = await import('./js/context-view.js');
+          const result = {system_text: 'Coding assistant\\n\\nProject rules\\n\\nMemory',
+            included_parts: [{name: 'soul', text: 'Coding assistant'},
+              {name: 'agents_md', text: 'Project rules'}, {name: 'memory', text: 'Memory'}]};
+          const report = renderSystemPrompt({result});
+          return headerSystemPrompt(result) === 'Coding assistant\\n\\nMemory'
+            && !report.textContent.includes('Project rules')
+            && report.textContent.includes('Memory')
+            && headerSystemPrompt({...result, included_parts: []}) === result.system_text;
+        }""")
         await page.evaluate("""async () => {
           const contextModule = await import('./js/context-view.js');
           const {renderCurrentContext} = contextModule;
