@@ -199,6 +199,7 @@ here, so add a row when you add a file.
 | `agent_context.py` | The request context one subagent actually sent, shaped for the context header |
 | `approval.py` | Bounded permission-request projection shared by attended host clients |
 | `archive_protocol.py` | Wire records for the bounded session archive commands |
+| `attachments.py` | Bounded attachment preparation (images stay image blocks, documents via the isolated AnyDoc worker); drafts expire |
 | `browser_view.py` | Browser-safe reducer projection and compact structural JSON patches |
 | `context_preview.py` | Privacy projection for a read-only, next-turn context preview |
 | `doctor.py` | Bounded, redacted health projections for doctor |
@@ -377,6 +378,7 @@ here, so add a row when you add a file.
 | File | Purpose |
 | --- | --- |
 | `__init__.py` | Optional Textual shell for the daemon-backed Nexus client |
+| `attachments.py` | TUI attachment preparation and Markdown preview through the host |
 | `agent_picker.py` | Searchable picker for root agents and selectable models |
 | `agent_row.py` | Keyboard and mouse selectable row for one reducer-owned AgentView |
 | `agent_transcript.py` | Live sub agent page: the child's session laid out exactly like the root |
