@@ -37,7 +37,7 @@ system applies everywhere (`tokens.css`, `app.css`).
   `light` or `system`. Preserve the shared semantic roles.
 - **Components:** all status labels share the `.tag` shape (11px, semibold,
   capitals); section labels share one style; selected rows are a tinted or
-  neutral fill with no side bar; Markdown renders as web prose (semibold
+  neutral fill (the current session card adds a left accent bar); Markdown renders as web prose (semibold
   headings, dot bullets, inline code chips); stroke SVG icons replace terminal
   glyphs in the same top-bar positions. `--cell` (8px) and `--row` (20px) keep
   the terminal grid relationship (at 1600px wide, one terminal column = one web
@@ -82,7 +82,7 @@ Packaged files are listed in `pyproject.toml` (`"nexus.ui.web" = ["index.html",
 
 | File | Contents |
 | --- | --- |
-| `index.html` | the whole DOM: SVG icon sprite (`#i-*`), `.app-shell` grid (`top`/`side`/`main`/`insp`) with the full-width `.topbar` (`▌` `#sidebar-toggle`, title, Context/Logs/Export, `#live-state`, `+` `#topbar-new`, `▐` `#inspector-toggle`), `#sidebar`, `.main-pane` (`#conversation`, `#timeline`, `#empty-state`, `.composer-wrap` with `#approval-strip`, `#slash-menu`, `#composer-form`, `#activity-bar`), `#inspector`, and overlays `#overlay`, `#settings-overlay`, `#context-overlay`, `#worktree-confirm-overlay`, `#voice-overlay`, `#setup-overlay`, `#agent-overlay`, `#toast-region` |
+| `index.html` | the whole DOM: SVG icon sprite (`#i-*`), `.app-shell` grid (`top`/`side`/`main`/`insp`) with the full-width two-row `.topbar` (`.topbar-tabs`: `▌` `#sidebar-toggle`, `#session-tabs`, `+` `#topbar-new`, `▐` `#inspector-toggle`; `.topbar-crumbs`: `#crumb`, Context/Logs/Export, `#live-state`), `#sidebar`, `.main-pane` (`#conversation`, `#timeline`, `#empty-state`, `.composer-wrap` with `#approval-strip`, `#slash-menu`, `#composer-form`, `#activity-bar`), `#inspector`, and overlays `#overlay`, `#settings-overlay`, `#context-overlay`, `#worktree-confirm-overlay`, `#voice-overlay`, `#setup-overlay`, `#agent-overlay`, `#toast-region` |
 | `js/app.js` | all behavior; dense one-function-per-line style, so search by function name |
 | `js/api.js` | `bootstrap()`, `command(cmd)`, `voice(wav, requestId, {partial})`, `snapshot(session)`, `eventUrl(session, seq)`, `exportSession` |
 | `js/projection.js` | `applyOperations(root, ops)`: validates and applies patches on a detached copy (atomic) |
@@ -95,6 +95,8 @@ Packaged files are listed in `pyproject.toml` (`"nexus.ui.web" = ["index.html",
 | `js/voice.js`, `voice-worklet.js` | microphone capture, resample to mono 16 kHz PCM16 WAV, bounded buffers, `snapshot()` for live previews; first use needs explicit confirmation |
 | `js/voice-strip.js` | `#voice-strip`: the live dictation card above the composer (canvas waveform, fading-in preview words, "Transcribing" glow); twin of the TUI `VoiceStrip` |
 | `js/mock.js` | dev-mode `/mock` and the `DEV` badge |
+| `js/hints.js` | empty-session tips (copy of `ui_support/hints.py`), seeded per session |
+| `js/fuzzy.js` | fuzzy matcher shared in scoring with `ui_support/fuzzy.py` (palette, model picker) |
 | `styles/tokens.css` | font-face, color tokens, radii, shadows, `--cell`/`--row` |
 | `styles/app.css` | all layout and component CSS, sectioned by region, responsive rules last |
 | `styles/context-preview.css` | context preview cards (line clamps are asserted by tests) |
@@ -105,16 +107,17 @@ Packaged files are listed in `pyproject.toml` (`"nexus.ui.web" = ["index.html",
 | --- | --- |
 | State | the `state` object (session, view, seq, sessions, tab, detail, theme, context, worktrees, logs, openFiles, health); `nodes` = keyed DOM cache for the timeline |
 | Boot and routing | `start`, `autoPanel` (details panel opens by default ≥ 1280px unless closed; localStorage `nexus-web-panel`), `openSession`, `connectSession` (snapshot → SSE → `applyOperations` → `queuePaint`), `startWorkspaceStream`, `popstate` |
-| Sessions sidebar | `renderSessions` (current and archived as one-line rows; visible Delete → `SessionDelete` to restorable trash), `archiveSession` (`SessionArchive`; both offer Undo), `#session-filter`, `toggleSidebar`/`syncSidebarToggle` (localStorage `nexus-web-sidebar`; overlay below 960px) |
+| Top bar | `renderTabs`/`syncTabs`/`closeTab` (session tabs; `state.tabs`, `state.closedTabs`), `renderCrumbs` (Doctor `git`/`home`) |
+| Sessions sidebar | `renderSessions` (two-line cards via `sessionSubline`; visible Delete → `SessionDelete` to restorable trash), `archiveSession` (`SessionArchive`; both offer Undo), `#session-filter`, `toggleSidebar`/`syncSidebarToggle` (localStorage `nexus-web-sidebar`; overlay below 960px) |
 | Header and composer | `renderHeader` (title, status, agent/model/effort, `--agent-color` on `#app`, `↵`/`■ stop`), `renderContextMeter` (`usageText`, same format as `context_usage`), `sendMessage`, `stopTurn`, drafts (`saveDraft`/`loadDraft` in sessionStorage) |
 | Chat commands | `SLASH_COMMANDS` (mirrors `commands.SPECS`), `SLASH_ALIASES`, `parseSlash`, `renderSlash`, `runSlash`; `showText`/`closeText` for `/help`, `/hotkeys`, `/diff`, `/mcp`, `/skills` |
-| Timeline | `renderTimeline` → `renderContextHeader` → `entities` → `renderMessage` (`renderUserChrome`), `renderTool`, `renderBoundary`, `renderFooter`; `markdown`/`updateMarkdown` (escaping mini-Markdown) |
+| Timeline | `renderTimeline` → `renderContextHeader` → `renderEmptyHints` → `entities` → `renderMessage` (`renderUserChrome` adds the turn number), `renderTool` (`liveShellTail`), `renderBoundary`, `renderFooter` (right-aligned stats); `markdown`/`updateMarkdown` (escaping mini-Markdown) |
 | Approvals | `renderApprovals`, `approvalChoices`, `resolvePermission`, `pendingQuestions`, `answerQuestion` (`QuestionAnswer` by `call_id`), `permissionTargetsUnavailable` |
 | Subagent page | `openAgent`/`closeAgent`/`renderAgentModal`: `#agent-overlay` at `/s/<session>/a/<agent>` (deep-linkable; Back, `←`, Esc return); `headerBlocks`, `agentTaskPrompt`, `fetchAgentContext`; swaps `nodes` for `agentNodes` and renders the child's body with the root renderers; re-rendered on every patch so a running child is live |
 | Right panel | `renderDetails(force)` by `state.tab`; `renderOverview` (`modifiedFiles`, `diffRows`, `mcpSectionBody`), `overviewSignature`, `loadWorkspaceHealth` (`Doctor`, 20s cache), tools/agents tabs, `renderWorktrees*`, `renderLogs`/`readLogs` |
 | Pickers | `showPalette`, `renderPalette`, `chooseFromList`, `chooseModel`/`commitModel` (Left/Right adjusts effort; `#palette-refresh` sends `ModelsRefresh` like `↻`/Ctrl+R in the TUI), `chooseAgent`, `cycleReasoningEffort` (Ctrl+T), `refreshModels` (`#palette-refresh`) |
 | Settings | `selectSettingsPane`, `syncLayoutSettings`, `openSettings`, `renderSettings`, `installSettingGroups`, `installSettingsNav`, `renderSettingsWorkspace` |
-| Context | `refreshContextPreview`, `openContextDialog(mode)` (`'system'` literal text, `'tools'`), `renderContextReport` (Expand all); the legacy inline preview stays hidden |
+| Context | `refreshContextPreview`, `openContextDialog(mode)` (`'system'` literal text, `'tools'` family table), `renderContextReport` (`renderTurnUsage`, `pricingNote`; Expand all), `openSkills` (sidebar + SKILL.md), `priceTierThresholds` (meter marks); the legacy inline preview stays hidden |
 | Setup | `pollSetup`, `completeSetup` (`SetupStatus` / `SetupSave` without a model; no credentials transmitted) |
 
 Details-panel tabs (Tools, Agents, Trees, Logs), Context/Logs/Export buttons and

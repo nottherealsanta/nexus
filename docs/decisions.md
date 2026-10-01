@@ -137,3 +137,32 @@ so `install.sh` adds `voice` itself except on musl (or with `--no-voice`), and
 needs `[voice]`; source checkouts use `uv sync --extra voice`. Claude login and the
 consent-gated voice model download remain separate setup steps. Voice runtime
 platform support beyond macOS and glibc Linux is not verified (see [voice.md](voice.md)).
+
+## The 2026-10 UI redesign: picks from the design mock-ups
+
+The 26 elements in `design-mockups/` were judged variant by variant and the
+picks applied to both surfaces ([surfaces.md](surfaces.md) has the result).
+Notable choices and why:
+
+- **Two-row top bar (tabs, then breadcrumb + status).** Several sessions run at
+  once; tabs make every active one one click away with its status glyph, and the
+  breadcrumb answers "where does this session work" (directory, worktree,
+  branch). Closing a tab only hides it: sessions are daemon state, not window
+  state, so tabs are in-memory per window (not persisted, not shared).
+- **Branch from `.git/HEAD`, no subprocess** (`host_support/git_head.py`, in the
+  Doctor report). Bounded file reads keep the health poll cheap and safe.
+- **Problems-first logs.** Warnings and errors are what a reader opens logs for;
+  the info/debug lines stay one click away, counted, never dropped.
+- **Context header keeps today's chips**, adds grey token estimates and one-line
+  previews; full text stays in the dialogs. **Tools dialog as a family table**
+  and **Skills with a Markdown body** (SKILL.md through `SettingsRead`, so the UI
+  still reads no files). **Usage by turn** in the Context dialog uses recorded
+  provider usage, next to the estimated next request.
+- **Tiered pricing** (models.dev `cost.tiers`) is parsed into `Cost.tiers`, used
+  for cost accounting, and surfaced as `pricing` in the request context so the
+  meter can mark where the price rises; it is advisory display, not a limit.
+- **Thought headline** labels reasoning the provider did not share instead of
+  showing nothing, so the user sees the model did reason.
+- **Fuzzy search** (`ui_support/fuzzy.py` + `js/fuzzy.js`, same constants) for the
+  model picker and web palette; the Textual palette already uses Textual's fuzzy
+  matcher.

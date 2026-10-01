@@ -715,8 +715,9 @@ async def main() -> None:
                 main_context = await header.inner_text()
                 chips = [await chip.text_content() for chip in await header.locator(".context-chip").all()]
                 assert chips == ["System prompt", "Tools", "AGENTS.md", "Skills", "MCP"], chips
-                assert "Prompt line 5" in main_context and "Prompt line 6" not in main_context
-                assert "… +7 more lines" in main_context
+                # One preview line (the rest counted) and a grey token estimate per block.
+                assert "Prompt line 2" not in main_context and "… +11 more lines" in main_context
+                assert await header.locator(".context-tokens").count() >= 2
                 assert "Read" in main_context and "included-skill" in main_context and "available-skill" in main_context
                 assert await header.locator("script").count() == 0
                 # The System prompt block shows only the prompt, rendered literally.
@@ -730,7 +731,10 @@ async def main() -> None:
                 await header.locator(".context-block").nth(3).click()
                 await page.locator("#text-overlay").wait_for(state="visible")
                 assert "Project 0 | Global 2" in await page.locator("#text-title").inner_text()
-                assert await page.locator("#text-body button").count() == 2
+                # Skills: a sidebar of both skills, the selected one's switch and SKILL.md body.
+                assert await page.locator("#text-body .skills-item").count() == 2
+                assert await page.locator("#text-body .extension-choice").count() == 1
+                await page.locator("#text-body .skills-body").wait_for()
                 await page.keyboard.press("Escape")
                 await page.locator("#context-toolbar").click()
                 context_dialog = page.get_by_role("dialog", name="Current context")
@@ -755,10 +759,11 @@ async def main() -> None:
                 await header.locator(".context-block").nth(1).click()
                 tools_dialog = page.get_by_role("dialog", name="Tools")
                 await tools_dialog.wait_for(state="visible")
-                # One row per tool; a family of one tool has no header of its own.
-                assert await tools_dialog.locator(".ctx-entry").count() >= 1
-                assert await tools_dialog.locator(".ctx-entry[open]").count() == 0
-                assert await tools_dialog.locator(".ctx-group:not([open])").count() == 0
+                # A table of families (built-in, then MCP); rows expand to their tools.
+                assert await tools_dialog.locator(".tools-group").count() >= 1
+                assert await tools_dialog.locator(".tools-group[open]").count() == 0
+                await tools_dialog.locator(".tools-group > summary").first.click()
+                assert await tools_dialog.locator(".tools-group[open] .tools-tool").count() >= 1
                 assert "definition" in await tools_dialog.inner_text()
                 await page.keyboard.press("Escape")
                 assert await tools_dialog.count() == 0
@@ -1948,8 +1953,12 @@ async def main() -> None:
                 await page.locator("#timeline").evaluate("e=>e.scrollTop=0")
                 before_logs_scroll = await page.locator("#timeline").evaluate("e=>e.scrollTop")
                 await page.locator("#composer-input").focus()
+                reads_before_logs = len(logs_reads)
                 await page.keyboard.press("Control+e")
                 await page.get_by_role("tab", name="Logs").wait_for(state="visible")
+                # Problems come first; info/debug lines are folded behind a counted toggle.
+                await page.locator(".logs-problems").wait_for()
+                await page.locator(".logs-rest").evaluate("d => { d.open = true; }")  # keeps composer focus
                 await page.get_by_text("Daemon ready <script>window.logsPwned=true</script>�[31m", exact=True).wait_for()
                 await page.locator(".logs-source").nth(1).get_by_text(f"Session {fixture_disconnect} ready", exact=False).wait_for()
                 await page.locator(".logs-source").nth(1).get_by_text(f"Session ID · {fixture_disconnect}", exact=True).wait_for()
@@ -1964,13 +1973,13 @@ async def main() -> None:
                 assert await page.locator("#composer-input").input_value() == logs_draft
                 assert await page.locator("#composer-input").evaluate("e=>e===document.activeElement")
                 assert await page.locator("#timeline").evaluate("e=>e.scrollTop") == before_logs_scroll
-                assert logs_reads[-1] == {"type": "LogsRead", "session": fixture_disconnect,
-                                          "daemon_cursor": None, "session_cursor": None, "limit": 50}
+                assert logs_reads[reads_before_logs] == {"type": "LogsRead", "session": fixture_disconnect,
+                                                         "daemon_cursor": None, "session_cursor": None, "limit": 50}
                 await page.get_by_role("button", name="Close details").click()
                 assert await page.locator("#composer-input").evaluate("e=>e===document.activeElement")
                 await page.locator("#logs-toggle").click()
-                await page.get_by_text("Daemon update", exact=True).wait_for(timeout=4_000)
-                await page.get_by_text(f"Session {fixture_disconnect} update", exact=False).wait_for(timeout=4_000)
+                await page.locator(".logs-rest").get_by_text("Daemon update", exact=True).wait_for(timeout=4_000)
+                await page.locator(".logs-rest").get_by_text(f"Session {fixture_disconnect} update", exact=False).wait_for(timeout=4_000)
                 assert await page.locator('.logs-source:nth-child(1) .log-entry[data-seq="3"]').count() == 1
                 assert await page.locator('.logs-source:nth-child(2) .log-entry[data-seq="3"]').count() == 1
                 assert await page.locator('.logs-source:nth-child(2) .log-entry[data-seq="2"] .log-time').inner_text() == "Time unavailable"
@@ -1992,7 +2001,7 @@ async def main() -> None:
                 logs_failure["status"] = 503
                 await page.wait_for_timeout(2_100)
                 await page.get_by_text("Logs temporarily unavailable", exact=True).wait_for(timeout=3_000)
-                assert await page.get_by_text("Daemon update", exact=True).count() == 1
+                assert await page.locator(".logs-rest").get_by_text("Daemon update", exact=True).count() == 1
                 logs_failure["status"] = 0
                 await page.wait_for_timeout(2_100)
                 assert await page.locator(".logs-error").count() == 0

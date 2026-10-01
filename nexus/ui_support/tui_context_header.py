@@ -17,7 +17,7 @@ from textual.widgets import Button, Markdown, OptionList, Static
 from ..host.protocol import ContextInspectResult
 from .context import ContextEntry, ContextGroup, _compact_tokens, estimate_tokens, header_system_prompt, tool_entry, tool_groups
 from .text import escape_controls
-from .tui_widgets import agent_color, context_group_widgets
+from .tui_widgets import agent_color
 
 
 def prompt_preview(text: str, lines: int = 5) -> str:

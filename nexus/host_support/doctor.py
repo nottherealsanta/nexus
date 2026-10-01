@@ -193,6 +193,8 @@ def doctor_report(
     """Assemble a bounded health projection without coupling host support to host."""
     report: dict[str, Any] = {
         "workspace": str(getattr(runtime, "workspace", "") or ""),
+        # Lets a browser shorten the breadcrumb to ``~/…`` as the terminal does.
+        "home": str(Path.home()),
         "git": git_head(getattr(runtime, "workspace", None)),
         "providers": _provider_report(runtime),
         "registry": _status_dict(

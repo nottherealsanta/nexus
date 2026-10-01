@@ -18,10 +18,10 @@ use `nexus run` or JSONL. Textual is pinned (`textual==8.2.8`,
 
 | File | Owns |
 | --- | --- |
-| `ui/tui/app.py` | `NexusTextualApp` (mixes in `PanelsMixin`): `compose` (`TopBar` over `MainLayout` = sessions sidebar · chat column · details sidebar · logs drawer), the `SHORTCUTS` table, slash dispatch (`_dispatch_chat_command`), command palette, session switching, inline pickers, permissions, reconnect, `_sync_status`/`_sync_agent`/`_sync_timeline` |
-| `ui/tui/panels.py` | `PanelsMixin`: sidebar visibility (docked or transient overlay when narrow), top-bar sync, `SessionList`/`Doctor` polling, archive/delete/restore, Sessions and Archived dialogs, Settings console, panel toggles; `MainLayout` relays resizes |
+| `ui/tui/app.py` | `NexusTextualApp` (mixes in `PanelsMixin`): `compose` (`SessionTabs` and `TopBar` over `MainLayout` = sessions sidebar · chat column · details sidebar · logs drawer), the `SHORTCUTS` table, slash dispatch (`_dispatch_chat_command`), command palette, session switching, inline pickers, permissions, reconnect, `_sync_status`/`_sync_agent`/`_sync_timeline` |
+| `ui/tui/panels.py` | `PanelsMixin`: sidebar visibility (docked or transient overlay when narrow), top-bar sync (`_sync_tabs`: which sessions are tabs; tab open/close), `SessionList`/`Doctor` polling, archive/delete/restore, Sessions and Archived dialogs, Settings console, panel toggles; `MainLayout` relays resizes |
 | `ui/tui/controller.py` | `TuiController`: event bridge and reducer seam: `bootstrap`, `start_turn`, `resume`, `ingest(event)` (applies `view.reduce.apply`), `switch_session`, model/agent/effort selection, `cancel`; holds `view: ConversationView` |
-| `ui/tui/timeline.py` | `ConversationTimeline.set_view(view)` reconciles `TurnWidget`s by durable ids; `UserMessage` (chevron collapse), `ThoughtLine`, `AssistantMessage` (streaming Markdown), `ToolActivityWidget` (one muted line plus an inline diff for completed Edit/Patch), `TaskActivityWidget` (child-agent details and modal link); the first child is the context header |
+| `ui/tui/timeline.py` | `ConversationTimeline.set_view(view)` reconciles `TurnWidget`s by durable ids; `UserMessage` (chevron collapse, right-aligned turn number, attachment chips), `ThoughtLine` (`◇` headline, hidden-reasoning label), the `◆ Agent` label, `AssistantMessage` (streaming Markdown), `ToolActivityWidget` (one muted line plus an inline diff for completed Edit/Patch, a live output tail for a running shell), `EmptyHints`, `TaskActivityWidget` (child-agent details and modal link); the first child is the context header |
 | `ui/tui/tool_details.py` | `ToolDetailsScreen`: bounded, scrollable modal over `ui_support/tool_details.py`; Esc or outside click returns focus to the row |
 | `ui/tui/agent_picker.py` | `AgentPickerPanel` (inline agents/effort picker) and the modal `AgentPicker` |
 | `ui/tui/agent_transcript.py` | `AgentTranscriptScreen`: a live child page laid out like the root |
@@ -49,10 +49,10 @@ import Textual besides `ui/tui/`):
 | File | Owns |
 | --- | --- |
 | `tui_widgets.py` | `ChatInput`/`ChatEditor` (slash, argument and file completion, history), `RootAgentBar`, `ActivityProgress`, `ConnectionStatus`, `ContextDetailsScreen` (Ctrl+I), `ContextEntryWidget` (bodies mount on first expand), `LogsDrawer`, worktree screens |
-| `tui_panels.py` | `TopBar`, `SessionSidebar`/`SessionRow`, `DetailsSidebar`, `SessionsScreen`, base `SettingsScreen`, `TuiPreferences` |
-| `tui_context_header.py` | scrollable context header and its modals (`ToolsModal`, `ContextModal`) |
+| `tui_panels.py` | `SessionTabs`/`SessionTab` (row 1), `TopBar` (breadcrumb + status, row 2), `SessionSidebar`/`SessionRow` (two-line cards), `DetailsSidebar`, `SessionsScreen`, base `SettingsScreen`, `TuiPreferences` |
+| `tui_context_header.py` | scrollable context header (token estimates, one-line previews) and its modals (`ToolsModal` family table, `SkillsModal`, `ExtensionsModal` for MCP, `ContextModal`) |
 | `tui_list.py` | shared `ListPanel`/`ListItem` (completions and pickers): dim rows, grey selection, orange scrollbar, filter row |
-| `tui_model_picker.py` | searchable, grouped `/model` modal with favorites, recents, sort, `↻`/Ctrl+R refresh (`ModelsRefresh`) |
+| `tui_model_picker.py` | fuzzy-searchable (`fuzzy.py`), grouped `/model` modal with favorites, recents, sort, `↻`/Ctrl+R refresh (`ModelsRefresh`) |
 | `tui_command_palette.py` | palette entries and the `SHORTCUTS`/`LEADER_SHORTCUTS` reference |
 | `tui_settings.py` | full-screen Settings page over `Settings*` commands |
 | `tui_setup.py`, `tui_providers.py` | first-run setup; Providers pane (Claude card takes a pasted sign-in code) |
@@ -72,8 +72,9 @@ literal system-prompt text, so terminal escape sequences cannot affect display.
   so a new dialog needs only an Escape binding.
 - The composer has a transparent editor. Pasted text over 20 lines or 2,000 chars
   becomes an editable attachment pill expanded inline on submit.
-- The activity bar shows context fill when idle and motion during a turn or
-  reconnect. Thinking expands inline.
+- The activity bar shows context fill when idle (with a `┃` at each price-tier
+  threshold) and motion during a turn or reconnect. The Logs drawer lists
+  problems first and folds info/debug lines behind a counted toggle. Thinking expands inline.
 - Ctrl+X no longer cuts in the composer on the main screen.
 - Dictation runtime comes from the `voice` extra, which the installer adds except on musl ([voice.md](voice.md)).
 
