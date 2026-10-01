@@ -232,3 +232,6 @@ clicking the message body opens the complete attached text and image metadata.
 
 Inline Edit/Patch diffs stay in two columns at every width: original on the left,
 updated on the right. Long lines wrap within their column.
+
+Settings → Agents uses one shared user configuration in `~/.nexus/agents/`,
+with no global/project selector. Other file categories retain scoped editing.

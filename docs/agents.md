@@ -35,6 +35,9 @@ sessions, cache, trash and daemon files stay blocked).
 **Packaged roles:** roots `build` (default) and `orchestrator`; subagents
 `advisor` (read-only), `task`, `quick`. They are global, not copied into
 workspaces; editing one in Settings writes an override to `~/.nexus/agents/`.
+Settings presents one shared Agents page, with no global/project selector; model,
+effort, fallback and prompt edits are saved to the user override. File-based
+workspace definitions still follow the discovery precedence below.
 `agents.seed_roles` opts a workspace into seeding `.agents/agents/` (once per
 marker). Legacy names: `general` → `task` (`build` as a root); `explore`,
 `plan`, `planner` → read-only `advisor`.

@@ -157,6 +157,9 @@ fields display masked and unchanged masked values are restored on save. Reset an
 delete move previous content to settings trash. UI behavior:
 [surfaces.md](surfaces.md#settings).
 
+Settings → Agents uses one shared user configuration in `~/.nexus/agents/`,
+with no global/project selector. Other file categories retain scoped editing.
+
 ## Testing
 
 `tests/test_ext_*.py`, `test_hot_*.py` (including the 200-reload leak test and

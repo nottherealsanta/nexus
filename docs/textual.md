@@ -180,3 +180,6 @@ Submitted messages separate the prompt sentence from numbered attachment rows.
 The browser shows labelled image thumbnails and expandable full document cards,
 also in request-context messages. The terminal shows compact labelled rows;
 clicking the message body opens the complete attached text and image metadata.
+
+Settings → Agents uses one shared user configuration in `~/.nexus/agents/`,
+with no global/project selector. Other file categories retain scoped editing.
