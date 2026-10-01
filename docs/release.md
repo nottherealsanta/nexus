@@ -2,7 +2,7 @@
 
 How Nexus (`nexus-harness` on PyPI) is released, end to end: the commit convention, CI,
 the release PR, publishing, how users receive the update, and what to do when something
-goes wrong. The short version lives in [core.md](core.md#releasing); this is the full
+goes wrong. The rules that bind agents are in [AGENTS.md](../AGENTS.md); this is the full
 reference. History of how it was built: `git log -- docs/release.md plans/release.md`.
 
 ## Overview
