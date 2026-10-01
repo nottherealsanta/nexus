@@ -1694,6 +1694,12 @@ async def main() -> None:
                 await settings.get_by_role("link", name="Appearance").click()
                 await settings.get_by_role("link", name="Soul").click()
                 assert await settings.locator("#files-heading").text_content() == "Soul"
+                await settings.locator('input[name="files-scope"][value="project"]').check()
+                await settings.get_by_role("link", name="Agents", exact=True).click()
+                assert await settings.locator("#files-scope").is_hidden()
+                assert await settings.locator('input[name="files-scope"][value="global"]').is_checked()
+                await settings.get_by_role("link", name="Soul").click()
+                assert await settings.locator("#files-scope").is_visible()
                 assert await settings.locator("#settings-appearance").is_hidden()
                 await settings.get_by_role("link", name="Layout").click()
                 assert await settings.locator("#pref-context-header").is_checked()

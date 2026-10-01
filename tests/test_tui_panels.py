@@ -531,6 +531,15 @@ async def test_settings_agent_form_edits_frontmatter_and_saves_override():
         await pilot.pause()
         screen = app.screen
         assert isinstance(screen, SettingsConsole) and screen.category == "agents"
+        assert not screen.query_one("#settings-scope-global").display
+        assert not screen.query_one("#settings-scope-project").display
+        await screen._change_scope("project")
+        assert screen.scope == "global"
+        await screen._change_category("tools")
+        await screen._change_scope("project")
+        assert screen.scope == "project"
+        await screen._change_category("agents")
+        assert screen.scope == "global"
         screen._visible_items = [p.SettingsItem(category="agents", id="task", label="task", summary="", builtin=True)]
         await screen._open_item(0)
         await pilot.pause()

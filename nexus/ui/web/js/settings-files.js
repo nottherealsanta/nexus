@@ -141,7 +141,11 @@ export function createSettingsFiles({api, el, $, notify, onChange = () => {}}) {
 
   async function showCategory(category) {
     if (!(await leave())) return false;
-    s.category = category; const [label, help] = FILE_CATEGORIES[category];
+    s.category = category;
+    if (category === 'agents') s.scope = 'global';
+    $('files-scope').hidden = category === 'agents';
+    document.querySelectorAll('input[name="files-scope"]').forEach(r => { r.checked = r.value === s.scope; });
+    const [label, help] = FILE_CATEGORIES[category];
     $('files-heading').textContent = label; $('files-help').textContent = help;
     $('files-default-agent').hidden = category !== 'agents';
     $('files-new-name').hidden = true; clearEditor(); renderList();
@@ -149,7 +153,7 @@ export function createSettingsFiles({api, el, $, notify, onChange = () => {}}) {
     loadInventory(); return true;
   }
   async function setScope(scope) {
-    if (scope === s.scope || !(await leave())) { document.querySelector(`input[name="files-scope"][value="${s.scope}"]`).checked = true; return; }
+    if (s.category === 'agents' || scope === s.scope || !(await leave())) { document.querySelector(`input[name="files-scope"][value="${s.scope}"]`).checked = true; return; }
     s.scope = scope; clearEditor(); await loadInventory(); onChange('scope');
   }
   async function create(name) {

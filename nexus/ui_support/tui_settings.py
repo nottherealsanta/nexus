@@ -8,11 +8,11 @@ from ``SettingsInventory`` and edit them through ``SettingsRead``/``Write``/
 ``Delete``, so every write is validated and scoped by the host.
 
 Agents get a "New sessions start with" row that writes ``[agent] name`` to the
-selected scope (``AgentDefaultSet``), and a form above the prompt editor: one
-model row (provider, model and effort chosen together in the shared
+shared user configuration (``AgentDefaultSet``), and a form above the prompt
+editor: one model row (provider, model and effort chosen together in the shared
 ``ModelPickerScreen``) and an ordered list of fallbacks, each picked the same
 way. Built-in agents are listed alongside custom ones; saving one
-writes an override in the selected scope (``~/.nexus`` by default) and
+writes a shared override in ``~/.nexus`` and
 "Reset to default" moves that override to trash.
 """
 
@@ -249,6 +249,11 @@ class SettingsConsole(SettingsScreen):
 
     def _show_category(self, category: str) -> None:
         self.category = category
+        scope_changed = category == "agents" and self.scope != "global"
+        if category == "agents":
+            self.scope = "global"
+        for scope in ("global", "project"):
+            self.query_one(f"#settings-scope-{scope}", Button).display = category != "agents"
         self._voice_controls_active = category == "voice"
         file_area = category in self.FILE_CATEGORIES
         self.query_one("#settings-panes", ContentSwitcher).current = (
@@ -268,6 +273,8 @@ class SettingsConsole(SettingsScreen):
         if row.display:
             self.run_worker(self._load_default_agent(), group="settings-default-agent", exclusive=True)
         self._render_items()
+        if scope_changed:
+            self.run_worker(self._load_inventory(), group="settings-inventory", exclusive=True)
 
     async def _load_default_agent(self, note: str = "") -> None:
         """Offer every root-capable agent; the current default is highlighted."""
@@ -696,7 +703,7 @@ class SettingsConsole(SettingsScreen):
         self._show_category(category)
 
     async def _change_scope(self, scope: str) -> None:
-        if scope == self.scope:
+        if self.category == "agents" or scope == self.scope:
             return
         if not await self._leave_editor():
             return
