@@ -48,7 +48,7 @@ with a `base_url`.
 | `gemini.py` | `google`, `gemini`, `kind = "google"` | `generateContent` streaming; synthetic call ids |
 | `ollama.py` | `ollama` | native `/api/chat` or OpenAI-compatible mode; keyless, loopback default `http://localhost:11434`; conservative capabilities (`tools = false` unless the registry says otherwise) |
 | `opencode.py` | `opencode` (`kind` `acp`) | OpenCode over its Agent Client Protocol subprocess only; ACP tool calls stay inside that agent; child env is an explicit allowlist |
-| `claude_agent.py` (+ `_claude_agent_worker.py`, `claude_agent_auth.py`) | `claude-agent` | optional `claude-agent` extra; text-only, buffers replies; SDK tools, hooks, settings and persistence disabled; structured tool intentions return to the Nexus loop |
+| `claude_agent.py` (+ `_claude_agent_worker.py`, `claude_agent_auth.py`) | `claude-agent` | included in every install; text-only, buffers replies; SDK built-ins, hooks, settings and persistence disabled; Nexus schemas registered through an in-process MCP intention bridge |
 | `scripted.py` | tests | deterministic offline provider ([testing.md](testing.md)) |
 | `discovery.py` | `.agents/providers/*.py`, `~/.nexus/providers/*.py` | quarantined file providers (`PROVIDER`, `PROVIDERS` or `build(context)`); a configured section always wins a same-named file; legacy `.nexus/providers/` is a lower-precedence fallback |
 | `devtools/mock/provider.py` | dev mode | `mock/<scenario>` models ([devtools.md](devtools.md)) |
@@ -121,3 +121,17 @@ First run: `SetupStatus` offers packaged candidate models; `SetupSave` writes
 `[providers.*]` and `[models].default` to `~/.nexus/config.toml` (blank model
 picks the provider's newest tool-calling model). Credentials never enter setup
 commands. Claude.ai login is detected without exposing credentials.
+
+### Claude SDK tool handoff
+
+The isolated worker registers the request's Nexus tool schemas on an in-process
+`nexus` MCP server using `ClaudeSDKClient`. Native SDK tools remain disabled.
+The first assistant tool batch is returned immediately as Nexus tool intentions;
+the SDK never executes workspace tools or continues with fabricated results.
+MCP handlers only queue intentions if reached during SDK dispatch. Nexus performs
+validation, approvals, execution, and durable logging, then supplies actual results
+on the next request. Unexpected SDK tool calls fail the provider request rather
+than disappearing into final prose. The SDK's `StructuredOutput` formatting tool
+is permitted internally. Early handoffs have no final SDK usage report, so usage
+for those requests is unavailable (reported as zero). Offline handoff and schema
+tests are verified; live subscription inference is not verified.
