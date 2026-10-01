@@ -63,7 +63,7 @@ browser route:
 | `GET /v1/web/bootstrap` | CSRF token + workspace path |
 | `POST /v1/web/command` | any host command as JSON `{type:'SessionList', …}` except `Shutdown` and `WebLaunch`; requires an exact `Origin` and `X-CSRF-Token` |
 | `POST /v1/web/attachment` | JSON `AttachmentPrepare` only; same cookie/Origin/CSRF checks before buffering, 12 MiB request cap. Enqueue commands carry small draft IDs. |
-| `POST /v1/web/voice?request_id=…` | raw mono 16 kHz PCM16 WAV for transcription; same auth checks; 8 MiB cap (commands cap at 1 MiB) |
+| `POST /v1/web/voice?request_id=…[&partial=1]` | raw mono 16 kHz PCM16 WAV for transcription (`partial=1`: a live preview, see [voice.md](voice.md#flow)); same auth checks; 8 MiB cap (commands cap at 1 MiB) |
 | `GET /v1/web/session-view?session=` | versioned snapshot (`schema_version: 1`, `seq`, `view`) from `HostFacade.web_snapshot` |
 | `GET /v1/web/session-events?session=&from_seq=` | SSE `view` frames of JSON-Pointer ops (`add`/`replace`/`remove`/`append`) or `resync: true` |
 | `GET /v1/web/workspace-events` | SSE `workspace` frames with the session list (polled every 0.5s) |
@@ -84,14 +84,15 @@ Packaged files are listed in `pyproject.toml` (`"nexus.ui.web" = ["index.html",
 | --- | --- |
 | `index.html` | the whole DOM: SVG icon sprite (`#i-*`), `.app-shell` grid (`top`/`side`/`main`/`insp`) with the full-width `.topbar` (`▌` `#sidebar-toggle`, title, Context/Logs/Export, `#live-state`, `+` `#topbar-new`, `▐` `#inspector-toggle`), `#sidebar`, `.main-pane` (`#conversation`, `#timeline`, `#empty-state`, `.composer-wrap` with `#approval-strip`, `#slash-menu`, `#composer-form`, `#activity-bar`), `#inspector`, and overlays `#overlay`, `#settings-overlay`, `#context-overlay`, `#worktree-confirm-overlay`, `#voice-overlay`, `#setup-overlay`, `#agent-overlay`, `#toast-region` |
 | `js/app.js` | all behavior; dense one-function-per-line style, so search by function name |
-| `js/api.js` | `bootstrap()`, `command(cmd)`, `voice(wav, requestId)`, `snapshot(session)`, `eventUrl(session, seq)`, `exportSession` |
+| `js/api.js` | `bootstrap()`, `command(cmd)`, `voice(wav, requestId, {partial})`, `snapshot(session)`, `eventUrl(session, seq)`, `exportSession` |
 | `js/projection.js` | `applyOperations(root, ops)`: validates and applies patches on a detached copy (atomic) |
 | `js/preferences.js` | localStorage detail level (session → workspace → browser precedence) and theme |
 | `js/tool-details.js` | `toolDetailSections`/`renderToolDetails`: port of `ui_support/tool_details.py` |
 | `js/context-view.js` | port of `ui_support/context.py`: `renderContextGroups`, `renderToolsReport`, `renderCurrentContext` |
 | `js/settings-files.js` | Agents/Tools/MCP/Skills/Hooks/Config/Soul editors over `Settings*` (700 ms autosave, agent model/fallback form); port of `tui_settings.py` |
 | `js/providers.js` | `createProviders({api, el, $, listId, isOpen})`: Settings → Providers cards, also used by first-run setup |
-| `js/voice.js`, `voice-worklet.js` | microphone capture, resample to mono 16 kHz PCM16 WAV, bounded buffers; first use needs explicit confirmation |
+| `js/voice.js`, `voice-worklet.js` | microphone capture, resample to mono 16 kHz PCM16 WAV, bounded buffers, `snapshot()` for live previews; first use needs explicit confirmation |
+| `js/voice-strip.js` | `#voice-strip`: the live dictation card above the composer (canvas waveform, fading-in preview words, "Transcribing" glow); twin of the TUI `VoiceStrip` |
 | `js/mock.js` | dev-mode `/mock` and the `DEV` badge |
 | `styles/tokens.css` | font-face, color tokens, radii, shadows, `--cell`/`--row` |
 | `styles/app.css` | all layout and component CSS, sectioned by region, responsive rules last |
@@ -112,7 +113,7 @@ Packaged files are listed in `pyproject.toml` (`"nexus.ui.web" = ["index.html",
 | Right panel | `renderDetails(force)` by `state.tab`; `renderOverview` (`modifiedFiles`, `diffRows`, `mcpSectionBody`), `overviewSignature`, `loadWorkspaceHealth` (`Doctor`, 20s cache), tools/agents tabs, `renderWorktrees*`, `renderLogs`/`readLogs` |
 | Pickers | `showPalette`, `renderPalette`, `chooseFromList`, `chooseModel`/`commitModel` (Left/Right adjusts effort; `#palette-refresh` sends `ModelsRefresh` like `↻`/Ctrl+R in the TUI), `chooseAgent`, `cycleReasoningEffort` (Ctrl+T), `refreshModels` (`#palette-refresh`) |
 | Settings | `selectSettingsPane`, `syncLayoutSettings`, `openSettings`, `renderSettings`, `installSettingGroups`, `installSettingsNav`, `renderSettingsWorkspace` |
-| Context | `refreshContextPreview`, `openContextDialog(mode)` (`'system'` Markdown, `'tools'`), `renderContextReport` (Expand all); the legacy inline preview stays hidden |
+| Context | `refreshContextPreview`, `openContextDialog(mode)` (`'system'` literal text, `'tools'`), `renderContextReport` (Expand all); the legacy inline preview stays hidden |
 | Setup | `pollSetup`, `completeSetup` (`SetupStatus` / `SetupSave` without a model; no credentials transmitted) |
 
 Details-panel tabs (Tools, Agents, Trees, Logs), Context/Logs/Export buttons and
@@ -146,7 +147,7 @@ Reduced motion disables transitions.
 - Overlays set `#app` `inert` and trap Tab; Escape or a backdrop click closes the
   top-most layer; dialogs focus themselves on open. Follow the existing
   open/close helpers.
-- Dictation: the optional `voice` extra and a separate model download are
+- Dictation: the installer includes the runtime (`voice` extra, not on musl); a separate model download is
   required; the confirmation dialog precedes any download and stays open during
   preparation until the user acknowledges readiness. Real-model inference and
   network behavior are not verified; do not claim proven offline operation.
@@ -204,3 +205,26 @@ drafts expire after one hour; submitted content stays in the durable log.
 
 Validation: `tests/test_attachments.py`, `tests/test_tui_attachments.py`,
 `tests/playwright_attachments_check.py`.
+
+Escape and Ctrl+C dismiss open dialogs and Settings (including nested screens)
+and restore focus on the main conversation. On the main conversation, two Escape
+presses within 1.5 seconds cancel the active turn and return pending queued messages to the composer via
+`SessionCancel(return_queue=True)`. Messages keep queue order, separated by blank
+lines, followed by any existing unsent draft; they no longer run automatically.
+A single Escape shows a stop hint. Ctrl+C retains immediate
+turn cancellation on the main conversation.
+
+Attachments insert editable `image 1`, `image 2`, or `document 1`,
+`document 2` references at the composer cursor (each kind is numbered separately
+within a draft). Preview rows show the same reference and filename. Removing a
+browser attachment does not renumber remaining references. Submitted attachment
+metadata carries the same labels beside the image bytes or complete document text
+in the durable user message, so references in sentences stay meaningful on replay.
+
+Submitted messages separate the prompt sentence from numbered attachment rows.
+The browser shows labelled image thumbnails and expandable full document cards,
+also in request-context messages. The terminal shows compact labelled rows;
+clicking the message body opens the complete attached text and image metadata.
+
+Inline Edit/Patch diffs stay in two columns at every width: original on the left,
+updated on the right. Long lines wrap within their column.

@@ -79,7 +79,7 @@ def test_installs_from_pypi_by_default(env):
     result = run(vars_, "--no-modify-path")
     assert result.returncode == 0, result.stderr
     calls = log.read_text()
-    assert "tool install --force --python 3.13 nexus-harness\n" in calls
+    assert "tool install --force --python 3.13 nexus-harness[voice]\n" in calls
     assert "git+" not in calls
     assert "nexus --version" in calls
     assert "nexus daemon stop --all" in calls
@@ -92,7 +92,7 @@ def test_git_source_uses_ref(env):
     assert result.returncode == 0, result.stderr
     assert (
         "tool install --force --python 3.13 "
-        "nexus-harness @ git+https://github.com/nottherealsanta/nexus@abc123"
+        "nexus-harness[voice] @ git+https://github.com/nottherealsanta/nexus@abc123"
     ) in log.read_text()
 
     log.write_text("")
@@ -107,7 +107,29 @@ def test_pypi_source_with_version_and_extras(env):
         "--no-doctor",
     )
     assert result.returncode == 0, result.stderr
-    assert "tool install --force --python 3.13 nexus-harness[documents]==0.2.0" in log.read_text()
+    assert "tool install --force --python 3.13 nexus-harness[documents,voice]==0.2.0" in log.read_text()
+
+
+def test_no_voice_skips_dictation(env):
+    vars_, log, _ = env
+    result = run(vars_, "--no-voice", "--no-doctor")
+    assert result.returncode == 0, result.stderr
+    assert "tool install --force --python 3.13 nexus-harness\n" in log.read_text()
+
+    log.write_text("")
+    run({**vars_, "NEXUS_EXTRAS": "voice"}, "--no-doctor")
+    assert "nexus-harness[voice]\n" in log.read_text()  # not duplicated
+
+
+def test_musl_installs_without_voice(env):
+    """kestrel-native (voice) ships no musl wheels; Alpine must still install."""
+    vars_, log, stubs = env
+    _exe(stubs / "uname", '#!/bin/sh\ncase "$1" in -s) echo Linux ;; *) echo x86_64 ;; esac\n')
+    _exe(stubs / "ldd", "#!/bin/sh\necho 'musl libc (x86_64)' >&2\nexit 1\n")
+    result = run(vars_, "--no-doctor")
+    assert result.returncode == 0, result.stderr
+    assert "tool install --force --python 3.13 nexus-harness\n" in log.read_text()
+    assert "musl libc detected" in result.stdout
 
 
 def test_flags_beat_environment(env):

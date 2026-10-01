@@ -1339,13 +1339,13 @@ class HostFacade:
             return await self.attachments.prepare(command)
         if isinstance(command, p.SessionStart):
             turn_id = await self.start_turn(
-                command.session, self.attachments.content(command.content, command.blocks, command.attachments)
+                command.session, self.attachments.content(command.content, command.blocks, command.attachments, command.attachment_labels)
             )
             self.attachments.release(command.attachments)
             return p.SessionStartResult(session=command.session, turn_id=turn_id)
         if isinstance(command, p.SessionEnqueue):
             queued_id, turn_id = await self.enqueue(
-                command.session, self.attachments.content(command.content, command.blocks, command.attachments), mode=command.mode
+                command.session, self.attachments.content(command.content, command.blocks, command.attachments, command.attachment_labels), mode=command.mode
             )
             self.attachments.release(command.attachments)
             return p.SessionEnqueueResult(
@@ -1355,11 +1355,26 @@ class HostFacade:
                 turn_id=turn_id,
             )
         if isinstance(command, p.SessionCancel):
+            returned_messages = []
+            if command.return_queue:
+                if not command.drop_queue:
+                    raise ValueError("Returning queued messages requires removing them from the queue")
+                # No await between this authoritative capture and Supervisor.cancel:
+                # input consumed before the stop must never reappear in the draft.
+                handle = self._session(command.session, create=False, recover=False)
+                pending = set(handle.queued_ids)
+                view, _ = self.state(command.session)
+                returned_messages = [
+                    "".join(block.get("text", "") for block in item.content
+                            if isinstance(block, dict) and block.get("type") == "text")
+                    for item in view.input_queue if item.queued_id in pending
+                ]
             cancelled, dropped = await self.cancel(
                 command.session, reason=command.reason or None, drop_queue=command.drop_queue
             )
             return p.SessionCancelResult(
-                session=command.session, cancelled=cancelled, dropped=dropped
+                session=command.session, cancelled=cancelled, dropped=dropped,
+                returned_messages=returned_messages,
             )
         if isinstance(command, p.SessionSubscribe):
             return p.SessionSubscribeResult(

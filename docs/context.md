@@ -111,3 +111,7 @@ next-turn preview (no provider count calls, no summarizer) for `ContextInspect`;
   (and its web port `ui/web/js/context-view.js`) so the user can see it.
 - Keep parts deterministic: same inputs, same bytes (prompt caching depends on it).
 - Tests: `tests/test_context_*.py`, `test_anthropic_count_cache.py`.
+
+User file attachments are part of message history, rather than the system
+`attachments` placeholder. Numbered image/document references are paired with
+labelled payloads in the user message and retained during replay.

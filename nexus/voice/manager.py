@@ -170,7 +170,7 @@ class VoiceManager:
                     if callable(availability) and not availability():
                         self._state = self._new_state(
                             "unsupported",
-                            message="Voice runtime is not installed. Install the voice extra (uv sync --extra voice) and restart the daemon.",
+                            message="Voice runtime is not installed. Install the voice extra (nexus-harness[voice]; uv sync --extra voice for source checkouts; not available on musl/Alpine) and restart the daemon.",
                         )
                         return self._state
                 path = await self.store.ensure(
@@ -240,8 +240,19 @@ class VoiceManager:
             )
 
     async def transcribe(
-        self, audio: bytes, request_id: str = "", *, duration_s: float | None = None
+        self,
+        audio: bytes,
+        request_id: str = "",
+        *,
+        duration_s: float | None = None,
+        partial: bool = False,
     ) -> TranscribeResult:
+        """Transcribe one bounded WAV.
+
+        ``partial`` marks a live preview of a recording in progress: it never
+        waits behind other inference (``voice_busy`` instead), so previews
+        cannot delay the final transcript of the same recording.
+        """
         self._sync_enabled()
         if not self._enabled():
             raise VoiceError("voice_unavailable", "Voice input is disabled")
@@ -267,6 +278,8 @@ class VoiceManager:
             raise VoiceError("voice_bad_audio", "Invalid voice request identifier")
         if self._pending >= 3 or (request_id and request_id in self._requests):
             raise VoiceError("voice_busy", "Voice is busy; try again shortly")
+        if partial and (self._pending or self._worker_lock.locked()):
+            raise VoiceError("voice_busy", "Voice is busy; preview skipped")
         self._pending += 1
         task = asyncio.create_task(
             self._run_transcribe(audio, float(duration_s)),

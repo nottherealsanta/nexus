@@ -178,7 +178,7 @@ async def test_claude_subscription_instructions_render_from_shared_host_data():
             if isinstance(command, p.SetupStatus):
                 return p.SetupStatusResult(required=True, providers=[{
                     "id": "claude-agent", "label": "Claude Pro/Max", "connected": False,
-                    "auto": True, "instruction": "Install nexus-harness[claude-agent], then run claude auth login."}])
+                    "auto": True, "instruction": "Run claude auth login."}])
             return result
     app = NexusTextualApp(_client(ClaudeSetupTransport()), session="s")
     async with app.run_test(size=(110, 42)) as pilot:

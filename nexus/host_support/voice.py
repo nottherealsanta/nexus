@@ -64,7 +64,9 @@ async def dispatch_voice(command: Any, runtime: Any) -> p.Result | None:
         try:
             limit = min(120, max(1, int(getattr(manager.config, "max_seconds", 120))))
             info = parse_wav(command.audio, max_seconds=limit)
-            result = await manager.transcribe(command.audio, command.request_id, duration_s=info.duration_s)
+            result = await manager.transcribe(
+                command.audio, command.request_id, duration_s=info.duration_s, partial=command.partial
+            )
             return p.VoiceTranscribeResult(
                 request_id=command.request_id, text=str(result.text)[:100_000],
                 duration_s=float(result.duration_s), elapsed_s=float(result.elapsed_s),

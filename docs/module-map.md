@@ -405,6 +405,7 @@ here, so add a row when you add a file.
 | File | Purpose |
 | --- | --- |
 | `__init__.py` | Static browser client for the Nexus daemon |
+| `js/voice-strip.js` | Floating dictation waveform and bounded live transcript preview |
 
 ### `nexus/ui_support/`
 

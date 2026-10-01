@@ -14,12 +14,17 @@ dependencies = [
     "mcp>=1.2,<2",
     "keyring>=24",
     "firecrawl-anydoc==0.2.4",
+    "claude-agent-sdk==0.2.162",
+    "sounddevice>=0.5,<1",
     # The TUI is verified against this compatible pair.
     "textual==8.2.8",
     "textual-diff-view==0.1.5",
 ]
 
 [project.optional-dependencies]
+# claude-agent and documents are compatibility aliases, included by default.
+# voice is separate: its runtime (kestrel-native) has no musl wheels, so a default
+# dependency would break installs on Alpine. install.sh adds it except on musl.
 claude-agent = [
     "claude-agent-sdk==0.2.162",
 ]

@@ -3,12 +3,13 @@
 The durable ``diff`` artifact on a :class:`ToolCallView` is the only input;
 nothing is read from disk. :func:`diff_sections` turns its bounded unified
 hunk into per-file before/after text, and each file becomes one ``DiffView``.
-Unified layout by default, split automatically when the code fits side by side.
+Split layout always places original text on the left and updated text on the right.
 """
 from __future__ import annotations
 
 from collections.abc import Mapping
 
+from textual.content import Content
 from textual.containers import Vertical
 from textual.widgets import Static
 from textual_diff_view import DiffView
@@ -30,6 +31,17 @@ def tool_diff_signature(tool: ToolCallView) -> tuple[object, ...] | None:
     ):
         return None
     return (diff.get("path"), diff.get("hunk"), bool(diff.get("truncated")))
+
+
+class FileDiffView(DiffView):
+    """Use a plain filename title with the library's change counts."""
+
+    def get_title(self) -> Content:
+        additions, removals = self.counts
+        return Content.from_markup(
+            "[dim]$path[/dim] ([$text-success][b]+$additions[/b][/], [$text-error][b]-$removals[/b][/])",
+            path=self.path_modified, additions=additions, removals=removals,
+        ).stylize_before("$text")
 
 
 class ToolDiff(Vertical):
@@ -57,13 +69,13 @@ class ToolDiff(Vertical):
 
     def compose(self):
         for section in diff_sections(self._diff):
-            yield DiffView(
+            yield FileDiffView(
                 section.path,
                 section.path,
                 section.before,
                 section.after,
-                split=False,
-                auto_split=True,
+                split=True,
+                auto_split=False,
                 annotations=True,
                 wrap=True,
             )

@@ -11,7 +11,8 @@
 #   --source S          NEXUS_SOURCE       pypi (default) | git | any package spec or path
 #   --git-ref R         NEXUS_GIT_REF      branch, tag or commit for the git source (main)
 #   --python V          NEXUS_PYTHON       Python for the tool venv (3.13)
-#   --extras E          NEXUS_EXTRAS       e.g. documents
+#   --extras E          NEXUS_EXTRAS       e.g. documents (voice is added by default)
+#   --no-voice          NEXUS_NO_VOICE     skip local dictation (always skipped on musl)
 #   --no-modify-path    NEXUS_NO_MODIFY_PATH
 #   --no-doctor         NEXUS_NO_DOCTOR    skip the post-install smoke check
 #   --strict            NEXUS_STRICT       make a failed smoke check fatal
@@ -44,10 +45,11 @@ parse_args() {
             --git-ref) [ $# -ge 2 ] || die 1 "--git-ref needs a value"; NEXUS_GIT_REF=$2; shift 2 ;;
             --python) [ $# -ge 2 ] || die 1 "--python needs a value"; NEXUS_PYTHON=$2; shift 2 ;;
             --extras) [ $# -ge 2 ] || die 1 "--extras needs a value"; NEXUS_EXTRAS=$2; shift 2 ;;
+            --no-voice) NEXUS_NO_VOICE=1; shift ;;
             --no-modify-path) NEXUS_NO_MODIFY_PATH=1; shift ;;
             --no-doctor) NEXUS_NO_DOCTOR=1; shift ;;
             --strict) NEXUS_STRICT=1; shift ;;
-            -h | --help) sed -n '2,20p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
+            -h | --help) sed -n '2,21p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
             *) die 1 "unknown option: $1" ;;
         esac
     done
@@ -125,6 +127,27 @@ ensure_uv() {
         die 3 "uv install failed. Check your network or install uv from https://docs.astral.sh/uv/ and re-run."
     UV=$(locate_uv) || die 3 "uv was installed but cannot be found; open a new shell and re-run."
     say "installed uv: $UV"
+}
+
+# Local dictation (the `voice` extra) is on by default, but its runtime ships no
+# musl wheels, so Alpine and other musl systems install without it.
+is_musl() {
+    [ "$os" = Linux ] || return 1
+    ls /lib/ld-musl-* >/dev/null 2>&1 && return 0
+    ldd --version 2>&1 | grep -qi musl
+}
+
+add_voice_extra() {
+    [ -n "${NEXUS_NO_VOICE:-}" ] && return 0
+    if is_musl; then
+        say "musl libc detected; installing without local dictation (voice)"
+        return 0
+    fi
+    case ",$NEXUS_EXTRAS," in
+        *,voice,*) ;;
+        ,,) NEXUS_EXTRAS=voice ;;
+        *) NEXUS_EXTRAS="$NEXUS_EXTRAS,voice" ;;
+    esac
 }
 
 package_spec() {
@@ -229,6 +252,7 @@ main() {
     parse_args "$@"
     detect_platform
     ensure_uv
+    add_voice_extra
     package_spec
     BIN_DIR=$("$UV" tool dir --bin 2>/dev/null) || BIN_DIR="$HOME/.local/bin"
     "$UV" python find ">=$MIN_PYTHON" >/dev/null 2>&1 ||

@@ -167,3 +167,13 @@ Tool names, error text, previews and message payloads stay private.
 - Bound every list, page, size and timeout.
 - Durable first: state a reconnecting client needs must come from the log or a
   host command, never only from memory.
+
+`SessionStart` and `SessionEnqueue` accept optional `attachment_labels` parallel
+to draft IDs. The host validates unique, kind-matching numbered labels and stores
+them in attachment metadata; omitted labels are numbered in attachment order.
+
+`SessionCancel(return_queue=True)` atomically captures pending queued text before
+removing it from scheduling and returns `returned_messages` in queue order.
+The TUI and web Stop actions prepend these messages to the current draft.
+Consumed inputs are excluded; the original input records remain in the durable
+log. Other callers retain the existing cancellation contract by default.

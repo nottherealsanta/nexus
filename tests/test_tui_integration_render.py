@@ -103,7 +103,9 @@ async def test_real_read_edit_events_render_as_timeline_tool_cards(tmp_path):
             read_card = cards["read-render"]
             read_header = read_card.query_one("#tool-header", Static).render().plain
             # "→ Read path" headers; a finished call carries no spinner or failure mark.
-            assert read_header == "→ Read note.md · Read note.md: 2 of 2 lines"
+            assert read_header == "→ Read note.md"
+            details = read_card._details_text()
+            assert "hello" in details and "world" in details
             assert len(read_card.children) == 1
             assert len(read_header.splitlines()) == 1
 

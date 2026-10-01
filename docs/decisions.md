@@ -44,6 +44,7 @@ this page and the code win.
 | **Project extensions and settings live in `<workspace>/.agents/`; legacy `.nexus/` is a read-only lower-precedence fallback.** Machine state is under `~/.nexus/`. | A conventional, tool-neutral project dir; writes have one home. | [config.md](config.md) |
 | **Config: layered, `msgspec`, unknown keys are errors; lists append; flat v1 bridges into v2.** | Typos must fail loudly; old configs keep working. | `config/` |
 | **Secrets are references (`${env:…}`/keychain)**, resolved at use. | Nothing secret in files, logs or events. | [security.md](security.md) |
+| **Keychain reads are cached per process, invalidated by a non-secret stamp file** (`~/.nexus/locks/credential-<sha256>.stamp`, replaced on every Nexus write or delete). Replaced a keychain read on every model request and status check. | macOS asks to allow access each time an executable outside an item's access list reads it (a second Python install, an upgrade, a Codex refresh rewriting the item), so per-request reads caused repeated prompts. Nexus logins and logouts in other processes are still seen on the next request; edits made in Keychain Access are seen after a daemon restart. | `auth/store.py` |
 | **Python ≥ 3.13.** | `object.__setattr__` on msgspec Structs, used across the codebase, fails on 3.12 and older. | `pyproject.toml` |
 
 ## Tools, permissions, extensions
@@ -82,6 +83,7 @@ this page and the code win.
 | **Claude subscription via the official Agent SDK in an isolated worker,** SDK tools/hooks/settings/persistence disabled; text-only, buffered. | Nexus keeps logging, permissions and execution. | `model/providers/claude_agent.py` |
 | **Thinking summaries are provider-supplied and never invented;** no duration is fabricated. | Honest presentation. | [loop.md](loop.md#thinking) |
 | **Voice uses Kestrel's internal Parakeet runtime, not Photon** (telemetry, no opt-out). Model download is consent-gated and never implicit. | Privacy. Real inference is unverified. | [voice.md](voice.md) |
+| **Live dictation re-transcribes the growing recording as non-queueing `partial` previews; the final transcript still comes from one pass over the whole recording.** | Parakeet TDT here is offline, not streaming; whole-recording passes avoid word-boundary seams between chunks, and previews can never delay or replace the final text. Cost grows with length, bounded by `max_seconds`. | [voice.md](voice.md#flow) |
 
 ## Web
 
@@ -119,3 +121,16 @@ Stated so nobody builds on a false assumption.
   unverified. **Copilot** device sign-in is not live-tested.
 - **Not done:** completion notifications for background shell jobs still running
   at turn end; `nexus ext restore`.
+
+## Standard installation includes Claude Agent; the installer adds voice
+
+Claude Agent SDK and `sounddevice` are required package dependencies; the old
+`claude-agent` extra remains a compatibility alias. The voice runtime
+(`moondream`, which needs `kestrel-native`) stays in the `voice` extra because
+`kestrel-native` publishes no musl wheels: as a hard dependency it made
+`install.sh` fail outright on Alpine. PEP 508 markers cannot tell musl from glibc,
+so `install.sh` adds `voice` itself except on musl (or with `--no-voice`), and
+`nexus update` keeps installed extras. Plain `pip`/`uv tool install nexus-harness`
+needs `[voice]`; source checkouts use `uv sync --extra voice`. Claude login and the
+consent-gated voice model download remain separate setup steps. Voice runtime
+platform support beyond macOS and glibc Linux is not verified (see [voice.md](voice.md)).

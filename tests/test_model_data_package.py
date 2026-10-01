@@ -105,3 +105,19 @@ def test_built_wheel_ships_web_tui_and_agent_assets(tmp_path: Path):
     assert "nexus/ui/web/js/app.js" in names
     assert any(n.startswith("nexus/ui/tui/") and n.endswith(".tcss") for n in names)
     assert any(n.startswith("nexus/agents/data/") and n.endswith(".md") for n in names)
+
+
+def test_standard_wheel_requires_claude_agent_and_voice_capture(tmp_path: Path):
+    """moondream stays in the ``voice`` extra: its runtime has no musl wheels."""
+    from email.parser import Parser
+
+    wheel = _build_wheel(tmp_path)
+    with zipfile.ZipFile(wheel) as archive:
+        metadata_path = next(name for name in archive.namelist() if name.endswith(".dist-info/METADATA"))
+        metadata = Parser().parsestr(archive.read(metadata_path).decode())
+    requirements = metadata.get_all("Requires-Dist", [])
+    for package in ("claude-agent-sdk", "sounddevice"):
+        assert any(requirement.startswith(package) and ";" not in requirement
+                   for requirement in requirements), (package, requirements)
+    moondream = [r for r in requirements if r.startswith("moondream")]
+    assert moondream and all('extra == "voice"' in r for r in moondream), requirements

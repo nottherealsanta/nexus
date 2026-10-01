@@ -183,13 +183,19 @@ class Client:
     async def start_turn(self, session: str, content: str) -> str:
         return (await self._request(p.SessionStart(session=session, content=content))).turn_id  # type: ignore[union-attr]
 
-    async def enqueue(self, session: str, content: str, *, mode: str = "queue", attachments: list[str] | None = None) -> tuple[str, str]:
-        result = await self._request(p.SessionEnqueue(session=session, content=content, mode=mode, attachments=attachments or []))
+    async def enqueue(self, session: str, content: str, *, mode: str = "queue", attachments: list[str] | None = None, attachment_labels: list[str] | None = None) -> tuple[str, str]:
+        result = await self._request(p.SessionEnqueue(session=session, content=content, mode=mode, attachments=attachments or [], attachment_labels=attachment_labels or []))
         return result.queued_id, result.turn_id  # type: ignore[union-attr]
 
     async def cancel(self, session: str, *, reason: str = "", drop_queue: bool = True) -> tuple[bool, int]:
         result = await self._request(p.SessionCancel(session=session, reason=reason, drop_queue=drop_queue))
         return result.cancelled, result.dropped  # type: ignore[union-attr]
+
+    async def cancel_to_composer(self, session: str, *, reason: str = "") -> p.SessionCancelResult:
+        """Stop work and return the authoritative removed queue in FIFO order."""
+        return await self._request(p.SessionCancel(
+            session=session, reason=reason, drop_queue=True, return_queue=True,
+        ))  # type: ignore[return-value]
 
     async def fork(self, session: str, at_seq: int | None = None, *, new_id: str | None = None) -> Any:
         return (await self._request(p.SessionFork(session=session, at_seq=at_seq, new_id=new_id))).session  # type: ignore[union-attr]
@@ -219,8 +225,12 @@ class Client:
     async def voice_prepare(self, *, force: bool = False) -> p.VoiceStatusResult:
         return await self._request(p.VoicePrepare(force=force))  # type: ignore[return-value]
 
-    async def voice_transcribe(self, audio: bytes, request_id: str, *, session: str = "") -> p.VoiceTranscribeResult:
-        return await self._request(p.VoiceTranscribe(audio=audio, request_id=request_id, session=session))  # type: ignore[return-value]
+    async def voice_transcribe(
+        self, audio: bytes, request_id: str, *, session: str = "", partial: bool = False
+    ) -> p.VoiceTranscribeResult:
+        return await self._request(
+            p.VoiceTranscribe(audio=audio, request_id=request_id, session=session, partial=partial)
+        )  # type: ignore[return-value]
 
     async def voice_cancel(self, request_id: str) -> p.VoiceCancelResult:
         return await self._request(p.VoiceCancel(request_id=request_id))  # type: ignore[return-value]

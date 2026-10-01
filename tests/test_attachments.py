@@ -197,3 +197,17 @@ def test_large_text_redaction_does_not_scan_every_possible_scheme_start():
         redact_url_userinfo(text)
         == "x" * 1_000_000 + " https://<redacted>@example.com/path"
     )
+
+
+async def test_numbered_references_pair_with_payload_and_validate(store):
+    image = await store.prepare(p.AttachmentPrepare(name="a.png", data=PNG))
+    document = await store.prepare(p.AttachmentPrepare(name="b.txt", data=b"Full document"))
+    ids = [image.attachment_id, document.attachment_id]
+    blocks = store.content("Use image 2 with document 1", [], ids, ["image 2", "document 1"])
+    assert blocks[0].text == "Use image 2 with document 1"
+    assert "image 2" in blocks[1].text
+    assert blocks[2].data == PNG
+    assert "document 1" in blocks[3].text and "Full document" in blocks[3].text
+    for labels in (["image 1"], ["document 1", "document 1"], ["image 0", "document 1"]):
+        with pytest.raises(ValueError):
+            store.content("", [], ids, labels)

@@ -500,7 +500,9 @@ async def test_empty_context_preview_shows_ten_lines_then_full_details_with_safe
         await pilot.click("#context-prompt")
         await pilot.pause()
         assert app.screen.query_one("#context-modal-title").render().plain == "System prompt"
-        assert "eleventh" in app.screen.query_one("#context-modal-body").source
+        body = app.screen.query_one("#context-modal-body").render().plain
+        assert "eleventh" in body
+        assert "\x1b" not in body
         await pilot.press("escape")
         await pilot.pause()
         assert not isinstance(app.screen, ContextDetailsScreen)
@@ -878,9 +880,8 @@ async def test_superseded_setup_errors_and_pre_prompt_greetings_are_hidden_only_
             assert prompt in rendered
         for turn_id in ("config", "provider"):
             tool = timeline._turns[turn_id]._items[f"tool:preview-{turn_id}"]
-            assert "credentials reference: unauthorized" in str(
-                tool.query_one("#tool-header").render()
-            )
+            assert tool.query_one("#tool-header").render().plain == "→ Read notes.txt"
+            assert "credentials reference: unauthorized" in tool._details_text()
         assert view.turns[1].error and view.turns[2].error
         # The canonical reducer still owns every failed turn for inspection/export.
         assert [turn.phase for turn in view.turns] == ["completed", "failed", "failed", "completed"]
@@ -2145,8 +2146,9 @@ def test_keyboard_reference_and_bindings_share_one_source():
     rendered = KEYBOARD_SHORTCUTS[1:1 + len(SHORTCUTS)]
     assert len(rendered) == len(SHORTCUTS)
     for line, (key, action, description) in zip(rendered, SHORTCUTS):
-        assert line.strip().startswith(key.title())
-        assert line.split(maxsplit=1)[1] == description
+        label = key.title()
+        assert line.strip().startswith(label)
+        assert line.strip()[len(label):].strip() == description
     # The Ctrl+X leader section follows a blank line and its own heading.
     leader = KEYBOARD_SHORTCUTS[1 + len(SHORTCUTS):]
     assert leader[0] == "" and leader[1].startswith("Ctrl+X leader")

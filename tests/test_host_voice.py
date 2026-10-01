@@ -18,6 +18,7 @@ class FakeVoice:
         self.state = VoiceState(state="ready", device="cpu", revision="rev")
         self.audio_seen = b""
         self.cancelled: list[str] = []
+        self.partials: list[bool] = []
 
     def status(self) -> VoiceState:
         return self.state
@@ -25,8 +26,11 @@ class FakeVoice:
     def schedule_prepare(self, force: bool = False) -> VoiceState:
         return self.state
 
-    async def transcribe(self, audio: bytes, request_id: str, *, duration_s: float) -> TranscribeResult:
+    async def transcribe(
+        self, audio: bytes, request_id: str, *, duration_s: float, partial: bool = False
+    ) -> TranscribeResult:
         self.audio_seen = audio
+        self.partials.append(partial)
         return TranscribeResult("private transcript", duration_s, 0.1)
 
     async def cancel(self, request_id: str) -> bool:
@@ -77,3 +81,16 @@ def test_voice_transcribe_command_repr_redacts_audio_and_round_trips() -> None:
     decoded = p.decode_command(p.encode_command(command))
     assert isinstance(decoded, p.VoiceTranscribe)
     assert decoded.audio == b"secret audio"
+
+
+@pytest.mark.asyncio
+async def test_partial_voice_preview_reaches_the_manager_and_redacts_audio() -> None:
+    voice = FakeVoice()
+    facade = facade_for(voice)
+    command = p.VoiceTranscribe(audio=silence(0.25), request_id="req_p1", partial=True)
+    assert "partial=True" in repr(command) and "RIFF" not in repr(command)
+    decoded = p.decode_command(p.encode_command(command))
+    assert isinstance(decoded, p.VoiceTranscribe) and decoded.partial
+    result = await facade.handle(decoded)
+    assert isinstance(result, p.VoiceTranscribeResult)
+    assert voice.partials == [True]

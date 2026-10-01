@@ -37,6 +37,21 @@ CommandPalette #--results {
     width: 1fr;
     height: 1fr;
     layout: vertical;
+    layers: base overlay;
+}
+
+/* Live dictation: floats above the composer (offset set by VoiceStrip.place). */
+#voice-strip {
+    layer: overlay;
+    position: absolute;
+    width: 100%;
+    height: auto;
+    max-height: 6;
+    margin: 0 1;
+    padding: 0 1;
+    border: round $nx-accent;
+    border-title-color: $nx-accent;
+    background: $nx-panel;
 }
 
 #logs-drawer {
@@ -1940,7 +1955,7 @@ ConfirmSettingsAction {
     width: 100%;
     height: auto;
     margin: 0 0 1 0;
-    padding: 0 3;
+    padding: 0 2;
     color: $nx-accent 70%;
 }
 
@@ -1955,7 +1970,7 @@ ConfirmSettingsAction {
 .tool-card.task-card {
     background: transparent;
     border-left: none;
-    padding: 0 3;
+    padding: 0 2;
 }
 
 .tool-card.task-card:hover, .tool-card.task-card:focus {
@@ -1965,7 +1980,7 @@ ConfirmSettingsAction {
 .tool-card.task-card #task-metrics {
     width: 1fr;
     height: auto;
-    margin-left: 2;
+    margin-left: 0;
     color: $nx-muted;
 }
 

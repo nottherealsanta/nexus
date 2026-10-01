@@ -162,6 +162,7 @@ class SessionStart(msgspec.Struct, tag=True, frozen=True):
     content: str = ""
     blocks: list[dict[str, Any]] = msgspec.field(default_factory=list)
     attachments: list[str] = msgspec.field(default_factory=list)
+    attachment_labels: list[str] = msgspec.field(default_factory=list)
 
 
 class SessionEnqueue(msgspec.Struct, tag=True, frozen=True):
@@ -170,12 +171,14 @@ class SessionEnqueue(msgspec.Struct, tag=True, frozen=True):
     content: str = ""
     blocks: list[dict[str, Any]] = msgspec.field(default_factory=list)
     attachments: list[str] = msgspec.field(default_factory=list)
+    attachment_labels: list[str] = msgspec.field(default_factory=list)
 
 
 class SessionCancel(msgspec.Struct, tag=True, frozen=True):
     session: str
     reason: str = ""
     drop_queue: bool = True
+    return_queue: bool = False  # recover removed queued text for the composer
 
 
 class SessionSubscribe(msgspec.Struct, tag=True, frozen=True):
@@ -449,9 +452,12 @@ class VoiceTranscribe(msgspec.Struct, tag=True, frozen=True, repr_omit_defaults=
     audio: bytes
     request_id: str
     session: str = ""
+    #: A live preview of a recording still in progress. The daemon answers
+    #: ``voice_busy`` at once instead of queueing it behind other inference.
+    partial: bool = False
 
     def __repr__(self) -> str:
-        return f"VoiceTranscribe(request_id={self.request_id!r}, audio=<redacted>)"
+        return f"VoiceTranscribe(request_id={self.request_id!r}, partial={self.partial!r}, audio=<redacted>)"
 
 
 class VoiceCancel(msgspec.Struct, tag=True, frozen=True):
@@ -779,6 +785,7 @@ class SessionCancelResult(msgspec.Struct, tag=True, frozen=True):
     session: str
     cancelled: bool = False
     dropped: int = 0
+    returned_messages: list[str] = msgspec.field(default_factory=list)
 
 
 class SessionSubscribeResult(msgspec.Struct, tag=True, frozen=True):

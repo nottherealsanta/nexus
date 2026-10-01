@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
+import re
 import secrets
 import stat
 import time
@@ -148,18 +149,30 @@ class AttachmentStore:
         for token in tokens:
             self.drafts.pop(token, None)
 
-    def content(self, text: str, blocks: list[dict], attachments: list[str]):
+    def content(self, text: str, blocks: list[dict], attachments: list[str], labels: list[str] | None = None):
         self.expire()
         if len(attachments) > MAX_ATTACHMENTS:
             raise ValueError("At most 8 attachments per message")
+        if labels and (len(labels) != len(attachments) or len(set(labels)) != len(labels)):
+            raise ValueError("Attachment labels must be unique and match attachments")
         if not attachments:
             return msgspec.convert(blocks, type=list[ContentBlock]) if blocks else text
         content = [Text(text)] if text else []
         content.extend(msgspec.convert(blocks, type=list[ContentBlock]))
-        for token in attachments:
+        counts = {"image": 0, "document": 0}
+        for index, token in enumerate(attachments):
             if token not in self.drafts:
                 raise ValueError("Attachment expired; attach the file again")
-            content.extend(self.drafts[token][1])
+            prepared = self.drafts[token][1]
+            kind = "image" if any(isinstance(block, Image) for block in prepared) else "document"
+            counts[kind] += 1
+            label = labels[index] if labels else f"{kind} {counts[kind]}"
+            if not re.fullmatch(rf"{kind} [1-9][0-9]{{0,5}}", label):
+                raise ValueError("Invalid attachment reference label")
+            # Pair the reference directly with its payload; the durable log and
+            # provider input retain the same mapping without changing image bytes.
+            content.append(Text(prepared[0].text.replace("Attachment:", f"Attachment: {label} ·", 1)))
+            content.extend(prepared[1:])
         if len(msgspec.json.encode(content)) > 12 * 1024 * 1024:
             raise ValueError("Combined attachments exceed the message size limit")
         return content

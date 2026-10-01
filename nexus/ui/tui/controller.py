@@ -12,6 +12,7 @@ from typing import Any
 from ...client.protocol import Client, ClientError
 from ...client.turn_stream import turn_events
 from ...events import Event
+from ...host.protocol import SessionCancelResult
 from ...view import ConversationView, apply, initial_state
 
 
@@ -240,8 +241,8 @@ class TuiController:
         self.client = client
         return previous
 
-    async def cancel(self) -> tuple[bool, int]:
-        return await self.client.cancel(self.session, reason="user requested")
+    async def cancel(self) -> SessionCancelResult:
+        return await self.client.cancel_to_composer(self.session, reason="user requested")
 
     async def select_model(self, ref: str) -> Any:
         return await self._select_with_metadata_refresh(

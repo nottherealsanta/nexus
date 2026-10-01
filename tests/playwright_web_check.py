@@ -165,9 +165,13 @@ async def verify_context_main_pane() -> None:
             included_parts: [{name: 'soul', text: 'Coding assistant'},
               {name: 'agents_md', text: 'Project rules'}, {name: 'memory', text: 'Memory'}]};
           const report = renderSystemPrompt({result});
+          const literal = 'Coding assistant\\n\\n<environment>\\nworkspace: /tmp/project\\nplatform: darwin\\nprofile: coding\\n</environment>\\n[literal] **prompt**';
+          const literalReport = renderSystemPrompt({result: {system_text: literal}});
           return headerSystemPrompt(result) === 'Coding assistant\\n\\nMemory'
             && !report.textContent.includes('Project rules')
             && report.textContent.includes('Memory')
+            && literalReport.querySelector('.ctx-system').textContent === literal
+            && !literalReport.querySelector('environment')
             && headerSystemPrompt({...result, included_parts: []}) === result.system_text;
         }""")
         await page.evaluate("""async () => {
@@ -610,7 +614,6 @@ async def main() -> None:
                 await page.wait_for_timeout(450)
                 await page.keyboard.press("Control+Space")
                 await assert_recording_dot(False)
-                assert "transcrib" not in (await page.locator("#app").inner_text()).lower()
                 try:
                     await page.wait_for_function("() => document.querySelector('#composer-input').value.includes('dictated words')", timeout=10_000)
                 except Exception as exc:
@@ -631,6 +634,25 @@ async def main() -> None:
                 await assert_recording_dot(False)
                 await page.wait_for_function("() => document.querySelector('#composer-input').value.includes('dictated words')", timeout=10_000)
                 assert "lead" in await editor.input_value() and not (await editor.input_value()).endswith("a"), await editor.input_value()
+                # Live dictation: while recording, growing snapshots go up as partial
+                # previews and their text shows in the floating strip without moving the composer.
+                await editor.fill("")
+                await editor.focus()
+                uploads_before = len(voice_uploads)
+                await page.keyboard.press("Control+Space")
+                await page.wait_for_function("() => document.querySelector('#composer-status').classList.contains('is-recording')", timeout=5_000)
+                strip = page.locator("#voice-strip")
+                await strip.wait_for(state="visible", timeout=5_000)
+                assert await strip.get_attribute("data-phase") == "recording"
+                await page.wait_for_function("() => document.querySelector('#voice-strip [data-voice-text]').textContent.includes('dictated words')", timeout=10_000)
+                assert any(rid.endswith(("-p1", "-p2")) for rid in voice_request_ids[uploads_before:]), voice_request_ids
+                await assert_recording_dot(True)
+                strip_box, composer_box = await strip.bounding_box(), await page.locator("#composer-form").bounding_box()
+                assert strip_box["y"] + strip_box["height"] <= composer_box["y"], (strip_box, composer_box)
+                await page.screenshot(path=str(ARTIFACTS / "web-voice-live.png"))
+                await page.keyboard.press("Control+Space")
+                await page.wait_for_function("() => document.querySelector('#composer-input').value.includes('dictated words')", timeout=10_000)
+                await strip.wait_for(state="hidden", timeout=5_000)
                 await editor.fill("before dictated words after")
                 assert await page.evaluate("navigator.mediaDevices.getUserMedia !== undefined")
                 # If the composer loses focus during dictation, discard the
@@ -645,13 +667,15 @@ async def main() -> None:
                 starts_before_blur = voice_state["session_starts"]
                 await page.keyboard.press("Control+Space")
                 await assert_recording_dot(False)
-                assert "transcrib" not in (await page.locator("#app").inner_text()).lower()
                 await asyncio.wait_for(delayed_voice["entered"].wait(), timeout=10)
-                assert "transcrib" not in (await page.locator("#app").inner_text()).lower()
+                # The live strip stays up, animating, while the final transcript runs.
+                assert await page.locator("#voice-strip").get_attribute("data-phase") == "transcribing"
+                assert await page.locator("#voice-strip").is_visible()
                 await page.locator("#session-filter").focus()
                 delayed_voice["release"].set()
                 await page.wait_for_timeout(250)
                 await assert_recording_dot(False)
+                assert await page.locator("#voice-strip").is_hidden()
                 assert await editor.input_value() == "before dictated words after"
                 assert voice_state["session_starts"] == starts_before_blur
                 delayed_voice["hold"] = False
@@ -695,12 +719,13 @@ async def main() -> None:
                 assert "… +7 more lines" in main_context
                 assert "Read" in main_context and "included-skill" in main_context and "available-skill" in main_context
                 assert await header.locator("script").count() == 0
-                # The System prompt block shows only the prompt, rendered as Markdown.
+                # The System prompt block shows only the prompt, rendered literally.
                 await header.locator(".context-block").first.click()
                 system_dialog = page.get_by_role("dialog", name="System prompt")
                 await system_dialog.wait_for(state="visible")
                 await system_dialog.get_by_text("Prompt line 12", exact=False).first.wait_for()
-                assert await system_dialog.locator(".ctx-system .context-markdown").count() == 1
+                assert await system_dialog.locator(".ctx-system").count() == 1
+                assert await system_dialog.locator(".ctx-system .context-markdown").count() == 0
                 await page.keyboard.press("Escape")
                 await header.locator(".context-block").nth(3).click()
                 await page.locator("#text-overlay").wait_for(state="visible")
@@ -1532,7 +1557,12 @@ async def main() -> None:
                 assert await page.get_by_text("Result for read-1", exact=True).count() == 0
                 # Edit and Patch rows carry their diff inline, like textual-diff-view in the TUI.
                 edit_diff = page.locator('#timeline .tool-card[data-call-id="edit-1"] .tool-inline-diff')
+                assert "Result for read-1" not in await tool_rows.nth(0).inner_text()
                 assert await edit_diff.count() == 1
+                original_size = page.viewport_size
+                await page.set_viewport_size({"width": 700, "height": 900})
+                assert await edit_diff.locator(".split-diff").evaluate("e=>getComputedStyle(e).gridTemplateColumns.split(' ').length") == 2
+                await page.set_viewport_size(original_size)
                 assert "src/a.py (+1, -1)" in await edit_diff.locator(".diff-title").inner_text()
                 assert await edit_diff.locator(".split-cell.removed .split-text").inner_text() == "old"
                 assert await edit_diff.locator(".split-cell.added .split-text").inner_text() == "new"
@@ -1672,6 +1702,14 @@ async def main() -> None:
                 assert "Explore" in task_text and "Summarize the related implementation briefly" in task_text, task_text
                 assert "Child description fallback" not in task_text and "Child agent found the concise answer." not in task_text
                 assert await task_row.locator(".task-summary-metrics").inner_text() == "3 tool calls · 3.3s"
+                aligned = await task_row.evaluate("""tool => {
+                  const header = tool.querySelector('.card-head');
+                  const metrics = tool.querySelector('.task-summary-metrics');
+                  const reply = tool.nextElementSibling;
+                  return [header, metrics, reply.querySelector('.message-body')]
+                    .map(e => e.getBoundingClientRect().left);
+                }""")
+                assert max(aligned) - min(aligned) < 1, aligned
                 reply_gap = await page.evaluate("""() => {
                   const tool = document.querySelector('#timeline .tool-card[data-call-id="task-1"]');
                   const reply = tool?.nextElementSibling;
@@ -1752,11 +1790,14 @@ async def main() -> None:
                 assert await agent_modal.locator(".tool-card").count() == 1
                 assert await agent_modal.locator(".tool-hint").count() == 0
                 await page.evaluate("""() => { const s=window.__nexusEventSources.at(-1); s.dispatchEvent(new MessageEvent('view',{data:JSON.stringify({schema_version:1,session:'ui-fixture-a',seq:23,ops:[{op:'replace',path:'/agents/0/body/turns/0/tools/0/display',value:'Live child update'}]})})); }""")
-                await agent_modal.get_by_text("Live child update").first.wait_for(timeout=5_000)
-                await page.wait_for_timeout(300)
+                # Compact Read headers omit result text; inspect the live details instead.
+                await agent_modal.locator(".tool-card").click()
+                await page.get_by_text("Live child update", exact=True).first.wait_for(timeout=5_000)
                 await page.screenshot(path=str(ARTIFACTS / "agent-modal.png"))
+                # Escape returns directly to the composer, closing all layered dialogs.
                 await page.keyboard.press("Escape")
                 await agent_modal.wait_for(state="hidden", timeout=5_000)
+                await page.locator("#text-overlay").wait_for(state="hidden", timeout=5_000)
                 assert "/a/" not in page.url
                 # The ← button and browser Back return to the conversation just as Escape does.
                 await page.locator("#inspector-content .agent-row").filter(has_text="explore · completed").click()
@@ -2054,6 +2095,36 @@ async def main() -> None:
                 assert await page.locator("#settings-overlay").get_by_role("dialog").evaluate("e => e.contains(document.activeElement)")
                 await page.keyboard.press("Escape")
                 assert await page.locator("#settings-open").evaluate("e => e === document.activeElement")
+                await page.locator("#settings-open").click()
+                await page.keyboard.press("Control+c")
+                assert await page.locator("#settings-overlay").is_hidden()
+                assert await page.locator("#app").evaluate("e => !e.inert")
+                await page.locator("#context-toolbar").click()
+                await page.keyboard.press("Control+c")
+                assert await page.locator("#context-overlay").is_hidden()
+
+                cancellations = []
+
+                async def intercept_cancel(route):
+                    command = json.loads(route.request.post_data or "{}")
+                    if command.get("type") != "SessionCancel":
+                        await route.fallback()
+                        return
+                    cancellations.append(command)
+                    await route.fulfill(json={"type": "SessionCancelResult", "cancelled": True, "dropped": 2,
+                                             "returned_messages": ["message 1", "message 2"]})
+
+                await page.locator("#close-inspector").evaluate("e => e.click()")
+                await page.route("**/v1/web/command", intercept_cancel)
+                await page.locator("#composer-input").fill("unsent draft")
+                await page.keyboard.press("Escape")
+                assert not cancellations
+                await page.keyboard.press("Escape")
+                await page.wait_for_function("() => [...document.querySelectorAll('.toast')].some(e => e.textContent.includes('Stop requested'))")
+                assert len(cancellations) == 1 and cancellations[0]["return_queue"] is True
+                assert await page.locator("#composer-input").input_value() == "message 1\n\nmessage 2\n\nunsent draft"
+                assert await page.evaluate("sessionStorage.getItem(Object.keys(sessionStorage).find(key => key.startsWith('draft:') && sessionStorage.getItem(key).startsWith('message 1')))") == "message 1\n\nmessage 2\n\nunsent draft"
+                await page.unroute("**/v1/web/command", intercept_cancel)
                 before_requests = len(command_requests)
                 await page.locator("#composer-input").evaluate("el => { el.focus(); const e=new KeyboardEvent('keydown',{key:'Enter',bubbles:true,isComposing:true,keyCode:229}); el.dispatchEvent(e); }")
                 assert len(command_requests) == before_requests

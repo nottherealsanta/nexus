@@ -303,3 +303,21 @@ async def test_duplicate_request_id_is_rejected_while_request_is_active():
     engine.gate.set()
     await first
     await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_partial_preview_never_queues_behind_running_inference():
+    manager, engine = make_manager()
+    await manager.prepare()
+    preview = await manager.transcribe(silence(0.3), "p0", partial=True)
+    assert preview.text == "hello"
+    engine.gate = asyncio.Event()
+    engine.started_event.clear()
+    final = asyncio.create_task(manager.transcribe(silence(1.0), "final"))
+    await engine.started_event.wait()
+    with pytest.raises(VoiceError) as error:
+        await manager.transcribe(silence(0.3), "p1", partial=True)
+    assert error.value.code == "voice_busy"
+    engine.gate.set()
+    assert (await final).text == "hello"
+    await manager.shutdown()

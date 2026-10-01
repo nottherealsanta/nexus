@@ -32,6 +32,33 @@ def result(calls=None):
             "usage": {"input_tokens": 12, "output_tokens": 4, "cache_read_input_tokens": 7}}
 
 
+def worker_sdk(options, result_type, messages, seen=None):
+    class Assistant:
+        def __init__(self, content):
+            self.content = content
+    class Call:
+        def __init__(self, name, arguments):
+            self.name, self.input = name, arguments
+    class Client:
+        def __init__(self, **kwargs):
+            self.options = kwargs["options"]
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            if seen is not None:
+                seen["closed"] = True
+        async def query(self, prompt):
+            if seen is not None:
+                seen["prompt"] = prompt
+        async def receive_response(self):
+            async for message in messages():
+                yield message
+    return SimpleNamespace(ClaudeAgentOptions=options, ResultMessage=result_type,
+        AssistantMessage=Assistant, ToolUseBlock=Call, ClaudeSDKClient=Client,
+        tool=lambda name, description, schema: lambda handler: (name, schema, handler),
+        create_sdk_mcp_server=lambda name, tools: {"name": name, "tools": tools})
+
+
 async def test_worker_uses_official_options_without_executing_tools():
     seen = {}
     class Options:
@@ -39,29 +66,30 @@ async def test_worker_uses_official_options_without_executing_tools():
             seen.update(kwargs)
     class Result:
         is_error, subtype, structured_output, usage = False, "success", result()["output"], result()["usage"]
-    async def query(**kwargs):
-        seen["prompt"] = kwargs["prompt"]
+    async def query():
         yield SimpleNamespace(content="intermediate text must not leak")
         yield Result()
         seen["exhausted"] = True
-    sdk = SimpleNamespace(ClaudeAgentOptions=Options, ResultMessage=Result, query=query)
+    sdk = worker_sdk(Options, Result, query, seen)
     payload = request_payload(request(), "sonnet", None)
     assert await worker.run(payload, sdk) == result()
     assert seen["exhausted"] is True
-    assert seen["tools"] == [] and seen["mcp_servers"] == {} and seen["setting_sources"] == []
+    assert seen["tools"] == [] and seen["setting_sources"] == []
+    assert seen["allowed_tools"] == ["mcp__nexus__Read"]
+    assert seen["mcp_servers"]["nexus"]["tools"][0][:2] == ("Read", {"type": "object"})
     assert seen["permission_mode"] == "dontAsk"
     assert json.loads(seen["settings"])["disableAllHooks"] is True
     assert "no-session-persistence" in seen["extra_args"]
     assert "strict-mcp-config" in seen["extra_args"]
-    assert "Read" in seen["prompt"] and "Nexus system" in seen["system_prompt"]
+    assert "Read the file" in seen["prompt"] and "Nexus system" in seen["system_prompt"]
 
 
 async def test_worker_refuses_error_and_missing_result():
     class Result:
         is_error, subtype = True, "error_max_turns"
-    async def query(**kwargs):
+    async def query():
         yield Result()
-    sdk = SimpleNamespace(ClaudeAgentOptions=lambda **_: None, ResultMessage=Result, query=query)
+    sdk = worker_sdk(lambda **_: None, Result, query)
     assert await worker.run(request_payload(request(), "sonnet", None), sdk) == {"error": True}
 
 
@@ -216,10 +244,60 @@ async def test_sdk_intentions_execute_and_persist_through_nexus(tmp_path, fake_w
 async def test_pinned_sdk_accepts_worker_options():
     sdk = pytest.importorskip("claude_agent_sdk")
     seen = []
-    async def query(**kwargs):
-        seen.append(kwargs["options"])
+    async def messages():
         yield sdk.ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False,
                 num_turns=1, session_id="isolated", structured_output=result()["output"], usage={})
-    proxy = SimpleNamespace(ClaudeAgentOptions=sdk.ClaudeAgentOptions, ResultMessage=sdk.ResultMessage, query=query)
+    def options(**kwargs):
+        value = sdk.ClaudeAgentOptions(**kwargs)
+        seen.append(value)
+        return value
+    proxy = worker_sdk(options, sdk.ResultMessage, messages)
+    proxy.tool, proxy.create_sdk_mcp_server = sdk.tool, sdk.create_sdk_mcp_server
     await worker.run(request_payload(request(), "sonnet", None), proxy)
     assert seen[0].tools == []
+    assert seen[0].mcp_servers["nexus"]["type"] == "sdk"
+
+
+@pytest.mark.parametrize("name", ["mcp__nexus__Read", "bash"])
+async def test_sdk_calls_return_to_nexus_before_hidden_followup(name):
+    seen = {}
+    async def messages():
+        yield sdk.AssistantMessage([sdk.ToolUseBlock(name, {"path": "a.txt"})])
+        pytest.fail("SDK must not continue with invented tool results")
+    sdk = worker_sdk(lambda **_: None, object, messages, seen)
+    output = await worker.run(request_payload(request(), "sonnet", None), sdk)
+    assert seen["closed"]
+    if name == "bash":
+        assert output == {"error": True}
+    else:
+        events = list(response_events(output, request()))
+        assert next(event for event in events if isinstance(event, ToolCallEnd)).input == {"path": "a.txt"}
+        assert events[-1] == MessageStop("tool_use")
+
+
+async def test_sdk_structured_output_tool_is_not_a_workspace_call():
+    async def messages():
+        yield sdk.AssistantMessage([sdk.ToolUseBlock("StructuredOutput", result()["output"])])
+        yield Result()
+    class Result:
+        is_error, subtype = False, "success"
+        structured_output, usage = result()["output"], result()["usage"]
+    sdk = worker_sdk(lambda **_: None, Result, messages)
+    assert await worker.run(request_payload(request(), "sonnet", None), sdk) == result()
+
+
+async def test_sdk_mcp_handler_only_queues_intention():
+    seen = {}
+    async def messages():
+        handler = seen["mcp_servers"]["nexus"]["tools"][0][2]
+        reply = await handler({"path": "a.txt"})
+        assert "no execution has occurred" in reply["content"][0]["text"]
+        yield Result()
+    class Result:
+        is_error, subtype = True, "error_max_turns"
+        usage = {}
+    def options(**kwargs):
+        seen.update(kwargs)
+    sdk = worker_sdk(options, Result, messages)
+    value = await worker.run(request_payload(request(), "sonnet", None), sdk)
+    assert value["output"] == {"text": "", "tool_calls": [{"name": "Read", "arguments": '{"path": "a.txt"}'}]}

@@ -64,13 +64,24 @@ export function createRecorder({maxSeconds = 120, onLevel = () => {}, onLimit = 
       await flushed;
     }
     await release();
+    const merged = mergeChunks();
+    chunks = [];
+    return {wav: wavBlob(merged), duration: merged.length / TARGET_RATE, elapsed: (performance.now() - started) / 1000};
+  }
+
+  function mergeChunks() {
     const merged = new Int16Array(Math.min(samples, maxSamples));
     let offset = 0;
     for (const chunk of chunks) { const count = Math.min(chunk.length, merged.length - offset); if (count <= 0) break; merged.set(chunk.subarray(0, count), offset); offset += count; }
-    chunks = [];
-    return {wav: wavBlob(merged), duration: Math.min(maxSamples, samples) / TARGET_RATE, elapsed: (performance.now() - started) / 1000};
+    return merged;
+  }
+
+  // Everything captured so far, leaving the recording running (live previews).
+  function snapshot() {
+    const merged = mergeChunks();
+    return {wav: wavBlob(merged), duration: merged.length / TARGET_RATE};
   }
 
   async function cancel() { stopped = true; chunks = []; samples = 0; await release(); }
-  return {start, stop, cancel, get active() { return Boolean(stream) && !stopped; }};
+  return {start, stop, cancel, snapshot, get duration() { return Math.min(samples, maxSamples) / TARGET_RATE; }, get active() { return Boolean(stream) && !stopped; }};
 }

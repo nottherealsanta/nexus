@@ -34,9 +34,11 @@ export async function command(command, {signal} = {}) {
   return result;
 }
 
-export async function voice(wav, requestId, {signal} = {}) {
+// `partial` marks a live preview of a recording still in progress; the daemon
+// answers voice_busy at once rather than queueing it.
+export async function voice(wav, requestId, {signal, partial = false} = {}) {
   if (!(wav instanceof Blob) || wav.size < 44 || wav.size > 8 * 1024 * 1024) throw new Error('Voice recording is outside the allowed size');
-  const result = await json(`${API}/voice?request_id=${encodeURIComponent(requestId)}`, {
+  const result = await json(`${API}/voice?request_id=${encodeURIComponent(requestId)}${partial ? '&partial=1' : ''}`, {
     method: 'POST', headers: {'Content-Type':'audio/wav','X-CSRF-Token':csrf}, body: wav, signal,
   });
   if (result.type === 'ErrorResult') throw new Error(result.message || 'Voice transcription failed');

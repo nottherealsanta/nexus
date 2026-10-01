@@ -38,7 +38,9 @@ pip install -e '.[dev]'
 Prefer to read the script first? `curl -LsSf …/install.sh -o install.sh && less install.sh && sh install.sh`.
 Options (also as `sh -s -- --flag`): `NEXUS_VERSION`, `NEXUS_SOURCE` (`pypi`, the
 default, or `git`), `NEXUS_GIT_REF`, `NEXUS_PYTHON`, `NEXUS_EXTRAS` (e.g. `documents`),
-`NEXUS_NO_MODIFY_PATH`, `NEXUS_NO_DOCTOR`. Native Windows is not supported yet
+`NEXUS_NO_VOICE`, `NEXUS_NO_MODIFY_PATH`, `NEXUS_NO_DOCTOR`. Local dictation (the
+`voice` extra) is added by default except on musl systems such as Alpine, whose
+platform the voice runtime does not support. Native Windows is not supported yet
 (the daemon needs Unix sockets); use WSL.
 
 `nexus update` upgrades to the latest PyPI release through uv and restarts running
@@ -1033,17 +1035,17 @@ more. `nexus mock all --speed 0` runs every non-interactive scenario headlessly.
 
 ### Claude Pro/Max via the Agent SDK
 
-Install the optional official SDK integration:
+The official SDK integration is included in the standard install:
 
 ```sh
-uv tool install --force 'nexus-harness[claude-agent]'
+uv tool install --force 'nexus-harness'
 ```
 
 Sign in through Claude Code with `claude auth login` using your Claude Pro/Max
 account. If Claude Code is not installed separately, use the SDK's bundled CLI:
 
 ```sh
-uv run --no-project --with 'nexus-harness[claude-agent]' python -c 'from nexus.model.providers.claude_agent_auth import cli_path; import subprocess; subprocess.run([cli_path(), "auth", "login"], check=True)'
+uv run --no-project --with 'nexus-harness' python -c 'from nexus.model.providers.claude_agent_auth import cli_path; import subprocess; subprocess.run([cli_path(), "auth", "login"], check=True)'
 ```
 
 First-run setup in both `nexus chat` and `nexus web` detects the subscription login

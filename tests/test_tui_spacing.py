@@ -314,3 +314,23 @@ async def test_tool_diff_to_assistant_keeps_exactly_one_blank_row():
         assert assistant.region.y - diff.region.bottom == 1
         assert assistant.region.y == tool.region.bottom
         assert markdown.region.height >= 1
+
+
+@pytest.mark.asyncio
+async def test_activity_rows_share_reply_left_edge():
+    from nexus.ui.tui.timeline import TaskActivityWidget, ThoughtLine, ToolActivityWidget
+
+    app = NexusTextualApp(_client(FakeTransport()), session="s")
+    async with app.run_test(size=(80, 30)) as pilot:
+        timeline = app.query_one(ConversationTimeline)
+        tool = ToolActivityWidget(ToolCallView(call_id="read", name="Read"), classes="tool-card")
+        task = TaskActivityWidget(ToolCallView(call_id="task", name="Task"), {}, classes="tool-card task-card")
+        thought = ThoughtLine(MessageView(role="assistant", blocks=[BlockView(kind="thinking", text="Thinking")]), classes="timeline-thought")
+        reply = AssistantMessage(MessageView(role="assistant", blocks=[BlockView(text="Reply")]), classes="timeline-assistant")
+        await timeline.mount(tool, task, thought, reply)
+        await pilot.pause()
+        left = reply.content_region.x
+        assert tool.query_one("#tool-header").content_region.x == left
+        assert task.query_one("#tool-header").content_region.x == left
+        assert task.query_one("#task-metrics").content_region.x == left
+        assert thought.content_region.x == left

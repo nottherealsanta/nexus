@@ -1175,5 +1175,9 @@ def test_packaged_root_prompts_are_minimal(role):
     body = (_default_seed_source() / f"{role}.md").read_text().split("---", 2)[2].strip()
     expected = "You are an expert coding assistant operating inside Nexus, a coding agent harness. You have tools."
     if role == "orchestrator":
-        expected += " You operate by orchestrating different subagents."
+        expected += (
+            " You operate by orchestrating different subagents."
+            "\nYou DELEGATE, COORDINATE, and VERIFY."
+            "\nYou never write code yourself. You orchestrate specialists who do."
+        )
     assert body == expected

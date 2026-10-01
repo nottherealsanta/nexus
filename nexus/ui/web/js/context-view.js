@@ -297,7 +297,7 @@ export function renderCurrentContext({result, loading, error, chooseAgent, choos
     for (const [index, message] of messageRows.entries()) {
       const item = node('article', 'context-preview-item context-request-message');
       item.append(node('h4', '', `[${index + 1}] ${message.role || 'unknown'} · ~${messageEstimate(message).toLocaleString()} tokens`));
-      appendPart(item, (message.blocks || []).map(blockText).join('\n\n') || '(empty message)', {preview, openDetails});
+      appendMessageParts(item, message, {preview, openDetails});
       messages.content.append(item);
     }
     cards.append(messages.element);
@@ -354,7 +354,7 @@ export function renderCurrentContext({result, loading, error, chooseAgent, choos
   for (const [index, message] of (result.messages || []).entries()) {
     const item = node('article', 'context-item context-request-message');
     item.append(node('h4', '', `[${index + 1}] ${message.role || 'unknown'} · ~${messageEstimate(message).toLocaleString()} tokens`));
-    appendPart(item, (message.blocks || []).map(blockText).join('\n\n') || '(empty)', {preview, openDetails});
+    appendMessageParts(item, message, {preview, openDetails});
     messages.append(item);
   }
   root.append(section(`MESSAGES · ordered request.messages · ${result.messages?.length || 0}`, messages));
@@ -637,7 +637,9 @@ export function renderSystemPrompt({result}) {
   const text = headerSystemPrompt(result);
   root.append(node('p', 'context-muted', `~${compactTokens(estimateTokens(text))} tokens`));
   const body = node('div', 'ctx-body ctx-system');
-  body.append(markdown(text || '(empty)'));
+  // Prompt XML is literal model input, not HTML for Markdown to hide.
+  body.style.whiteSpace = 'pre-wrap';
+  body.textContent = text || '(empty)';
   root.append(body);
   return root;
 }
@@ -663,4 +665,55 @@ export function headerSystemPrompt(result) {
     return parts.filter(part => part.name !== 'agents_md').map(part => String(part.text || '')).join('\n\n');
   }
   return system;
+}
+
+
+// Submitted attachment metadata and payloads remain distinct from the prompt.
+export function attachmentMessage(blocks = []) {
+  const attachments = [], prose = [];
+  for (const block of blocks) {
+    const kind = block.kind || block.type;
+    const match = kind === 'text' && String(block.text || '').match(/^\n\nAttachment: ((?:image|document) [1-9][0-9]*) · ([^\n]+)\n([\s\S]*)$/);
+    if (match) attachments.push({label:match[1], metadata:match[2], text:match[3].replace(/^\n/, '')});
+    else if (kind === 'image') {
+      if (attachments.at(-1)?.label.startsWith('image ') && !attachments.at(-1).url) attachments.at(-1).url = block.image_url || '';
+      else attachments.push({label:`image ${attachments.filter(item=>item.label.startsWith('image ')).length+1}`, metadata:block.media_type || 'Attached image', url:block.image_url || ''});
+    }
+    else if (kind === 'text') prose.push(block.text || '');
+  }
+  return {text:prose.join(''), attachments};
+}
+
+export function renderAttachmentCards(attachments) {
+  const root = node('div', 'submitted-attachments');
+  for (const attachment of attachments) {
+    const card = node('details', 'submitted-attachment');
+    const summary = node('summary');
+    summary.append(node('span', 'attachment-reference', attachment.label), node('span', 'attachment-filename', attachment.metadata));
+    card.append(summary);
+    if (attachment.label.startsWith('image ')) {
+      if (/^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/=]+$/.test(attachment.url || '')) {
+        const img = node('img', 'attachment-image');
+        img.src = attachment.url; img.alt = `${attachment.label} · ${attachment.metadata}`;
+        card.append(img);
+        // Show the thumbnail immediately; opening the card shows its details.
+        card.open = true;
+      } else card.append(node('p', 'context-muted', 'Image payload included in model context; preview unavailable here.'));
+    } else {
+      const content = node('pre', 'submitted-document');
+      content.textContent = attachment.text || '(empty document)';
+      card.append(content);
+    }
+    root.append(card);
+  }
+  return root;
+}
+
+
+function appendMessageParts(parent, message, options) {
+  const parsed = attachmentMessage(message.blocks);
+  if (message.role === 'user' && parsed.attachments.length) {
+    if (parsed.text) appendPart(parent, parsed.text, options);
+    parent.append(renderAttachmentCards(parsed.attachments));
+  } else appendPart(parent, (message.blocks || []).map(blockText).join('\n\n') || '(empty)', options);
 }

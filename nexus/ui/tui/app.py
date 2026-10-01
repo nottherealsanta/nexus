@@ -33,7 +33,7 @@ from ...ui_support.tui_context_header import ContextBlock, ContextHeader, Contex
 from ...ui_support.tui_model_picker import ModelPickerScreen
 from ...ui_support.tui_panels import DetailsSidebar, SessionSidebar, TuiPreferences
 from ...ui_support.tui_setup import block_unconfigured_turn, open_first_run_setup
-from ...ui_support.tui_voice import VoiceController
+from ...ui_support.tui_voice import VoiceController, VoiceStrip
 from ..cli import commands
 from ..cli.details import detail_lines
 from ..cli.render import sanitize
@@ -164,6 +164,7 @@ class NexusTextualApp(AttachmentsMixin, ExtraCommandsMixin, PanelsMixin, App[int
                 yield ChatInput(id="chat-input")
                 yield Static("", id="leader-hint", markup=False)
                 yield ActivityProgress(id="activity-progress")
+                yield VoiceStrip(id="voice-strip")
             yield DetailsSidebar(id="details-sidebar")
             yield LogsDrawer(id="logs-drawer")
 
@@ -191,8 +192,11 @@ class NexusTextualApp(AttachmentsMixin, ExtraCommandsMixin, PanelsMixin, App[int
             self._sync_status(f"Disconnected · {exc}", error=True)
 
     async def on_event(self, event) -> None:
-        if isinstance(event, events.Key) and not event.is_forwarded and self.leader.intercept(event):
-            return
+        if isinstance(event, events.Key) and not event.is_forwarded:
+            if await self.leader.intercept_navigation(event):
+                return
+            if self.leader.intercept(event):
+                return
         await super().on_event(event)
 
     async def on_key(self, event) -> None:
@@ -1127,8 +1131,16 @@ class NexusTextualApp(AttachmentsMixin, ExtraCommandsMixin, PanelsMixin, App[int
             return
         self._last_ctrl_c = 0.0
         try:
-            cancelled, dropped = await self.controller.cancel()
-            self._sync_status(f"Cancel requested · cancelled={cancelled} · dropped={dropped}")
+            result = await self.controller.cancel()
+            editor = self.query_one("#chat-editor", TextArea)
+            restored = [text for text in result.returned_messages if text]
+            if restored:
+                editor.text = "\n\n".join([*restored, *([editor.text] if editor.text else [])])
+                editor.move_cursor(editor.document.end)
+                editor.focus()
+            self._sync_status(
+                f"Cancel requested · cancelled={result.cancelled} · returned to composer={len(restored)}"
+            )
         except ClientError as exc:
             self._sync_status(f"Cancel failed · {exc}", error=True)
 

@@ -39,11 +39,13 @@ from ...ui_support.timeline import (
     _turn_setup_failure,
     format_arguments,
     thought_title,
+    submitted_attachment_summary,
     tool_heading,
+    todo_preview,
     tool_status,
     tool_summary,
 )
-from ...ui_support.tui_context_header import ContextHeader
+from ...ui_support.tui_context_header import ContextHeader, ContextModal
 from ...ui_support.tui_diff import ToolDiff, tool_diff_signature
 from ...view import AgentView, ConversationView, MessageView, ToolCallView, TurnView
 from ..cli.render import escape_controls
@@ -141,7 +143,17 @@ class UserMessage(Static):
 
     def _content(self, message: MessageView) -> str:
         chevron = "▶" if self.collapsed else "▼"
-        return f"[$nx-border-strong]{chevron}[/]  {escape(_literal(message.text))}"
+        prompt, attachments = submitted_attachment_summary(message)
+        body = f"[$nx-border-strong]{chevron}[/]  {escape(_literal(prompt))}"
+        if attachments and not self.collapsed:
+            body += "\n\n" + "\n".join(f"  [$nx-blue]{escape(label)}[/]" for label in attachments)
+            body += "\n  [$nx-muted]Click to inspect attached context[/]"
+        return body
+
+    def on_click(self, event: Click) -> None:
+        if event.offset.x > 3 and submitted_attachment_summary(self._message)[1]:
+            event.stop()
+            self.app.push_screen(ContextModal("Attached context", self._message.text))
 
     def set_message(self, message: MessageView) -> None:
         self._message = message
@@ -244,7 +256,7 @@ class ToolActivityWidget(Widget):
         marker = tool_status(tool)
         indicator = f"{_SPINNER[self._spinner_index]} " if marker == "running" else ""
         summary = ""
-        if marker == "completed" and tool.display:
+        if marker == "completed" and tool.display and tool.name.casefold() not in {"read", "grep", "todowrite"}:
             summary = _text(tool.display.splitlines()[0], 88)
             if tool.name.casefold() == "write":
                 content = tool.input.get("content") if isinstance(tool.input, Mapping) else None
@@ -257,7 +269,13 @@ class ToolActivityWidget(Widget):
         summary = redact(summary)
         suffix = f" · {summary}" if summary else (f" · {marker}" if marker != "completed" else "")
         header = self.query_one("#tool-header", Static)
-        header.update(f"{self._gutter}{indicator}{tool_heading(tool)}{suffix}")
+        rows = todo_preview(tool)
+        heading = "☐ Todo " + rows[0] if rows else tool_heading(tool)
+        text = f"{self._gutter}{indicator}{heading}{suffix}"
+        if rows:
+            text += "".join(f"\n{self._gutter}  {row}" for row in rows[1:])
+        header.styles.height = max(1, len(rows))
+        header.update(text)
         self._style_header()
 
     def _style_header(self) -> None:
