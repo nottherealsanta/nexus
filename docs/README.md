@@ -29,6 +29,7 @@ agent can see is hidden from the user. Keep this in mind for every change.
 | Add a CLI subcommand or a chat slash command | [cli.md](cli.md) | `nexus/cli.py`, `nexus/ui/cli/` |
 | Something every client must do the same way | [surfaces.md](surfaces.md) | `nexus/ui_support/` |
 | Work on `nexus chat` | [textual.md](textual.md) | `nexus/ui/tui/` |
+| Assess a Rust/Ratatui TUI migration | [ratatui-feasibility.md](ratatui-feasibility.md) | Proposal; no implementation |
 | Work on `nexus web` | [web.md](web.md) | `nexus/ui/web/`, `nexus/host/web.py` |
 | Local dictation | [voice.md](voice.md) | `nexus/voice/` |
 | Network, credentials, sandboxing, trust boundaries | [security.md](security.md) | |

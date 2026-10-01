@@ -6,6 +6,10 @@ it renders the reduced `ConversationView`. It never reads session files.
 Behavior shared with the browser is in [surfaces.md](surfaces.md); host contract
 in [host.md](host.md).
 
+A proposed Rust/Ratatui replacement with a Python adapter and maturin packaging
+is assessed in [ratatui-feasibility.md](ratatui-feasibility.md). It is a feasibility
+report, not an implemented or approved backend change.
+
 ## Launch path
 
 `nexus chat` → `cli.py:_chat_entry` / `_chat` → a UDS host client
