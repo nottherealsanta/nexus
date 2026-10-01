@@ -599,6 +599,13 @@ class MCPManager:
         for name, raw in items:
             try:
                 definition = self._coerce_definition(name, raw)
+                if self._workspace is not None and definition.config.transport == "stdio":
+                    cwd = Path(definition.config.cwd) if definition.config.cwd else Path(".")
+                    if not cwd.is_absolute():
+                        cwd = self._workspace.resolve() / cwd
+                    definition = replace(
+                        definition, config=replace(definition.config, cwd=str(cwd))
+                    )
             except Exception as exc:  # noqa: BLE001 - one bad def is not fatal
                 failures.append(
                     ApplyFailure(

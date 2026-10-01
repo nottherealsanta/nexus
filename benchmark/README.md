@@ -5,6 +5,13 @@ provider. Run every command below from the repository root.
 
 ## Prerequisites
 
+For an offline skills/MCP loading check, run
+`.venv/bin/python -m pytest -q tests/test_mcp_integration.py -k benchmark_skill`
+from the repository root. The test copies this folder's `.agents/mcp.json`,
+`benchmark-echo` skill, and small `mcp_echo.py` stdio server to a temporary
+workspace, verifies that both are advertised, invokes the skill, and checks
+that its MCP call returns `benchmark-mcp-ok`. No provider credentials are needed.
+
 - Python 3.13 or newer and the Nexus project dependencies installed (for
   example, `pip install -e .` in the project environment).
 - A repository or `~/.nexus/config.toml` Nexus config with a default model and a

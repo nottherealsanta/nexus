@@ -125,6 +125,10 @@ emitted, the rest are untouched. Config: `.agents/mcp.json` (JSONC) `servers` (o
 unknown keys are errors; only `${env:VAR}` interpolates. `[mcp]`:
 `connect_timeout_s` 20, `restart_max` 5. A corrupt file keeps the previous set.
 Stderr goes to `~/.nexus/projects/<hash>/logs/mcp/`, never into context.
+Stdio servers default to the selected workspace as their working directory;
+an explicit relative `cwd` is resolved against that workspace, and an absolute
+`cwd` is preserved. Relative script arguments therefore work regardless of the
+daemon's launch directory.
 **Everything an MCP server says is untrusted data:** sanitised of control/bidi
 characters, bounded, wrapped in `<untrusted-mcp-data>` with a no-authority
 notice; the permission engine remains the boundary. Events: `mcp.connected`,
