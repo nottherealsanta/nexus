@@ -619,7 +619,7 @@ async def test_new_workspace_context_includes_packaged_build_prompt(tmp_path):
         assert isinstance(result, p.ContextInspectResult)
         assert result.agent["name"] == "build"
         assert result.agent["instructions_included"] is True
-        assert "You are Build, the primary coding agent" in (result.system_text or "")
+        assert "You are an expert coding assistant operating inside Nexus" in (result.system_text or "")
     finally:
         await runtime.aclose()
 
