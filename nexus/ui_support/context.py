@@ -18,6 +18,22 @@ MAX_TEXT = 1_000_000
 MAX_ROWS = 512
 
 
+def header_system_prompt(result: p.ContextInspectResult) -> str:
+    """Exclude the separately displayed AGENTS.md from a complete header snapshot.
+
+    Keep the original text when parts are missing or clipped rather than lose
+    context that cannot be reconstructed from the inspection.
+    """
+    system = result.system_text or ""
+    parts = [part for part in result.included_parts if isinstance(part, Mapping)]
+    if any(part.get("name") == "agents_md" for part in parts):
+        texts = [str(part.get("text") or "") for part in parts]
+        if "\n\n".join(texts) == system:
+            return "\n\n".join(
+                text for part, text in zip(parts, texts) if part.get("name") != "agents_md")
+    return system
+
+
 def _plain(value: object, limit: int | None = MAX_TEXT) -> str:
     if isinstance(value, (dict, list, tuple)):
         try:

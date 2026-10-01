@@ -169,3 +169,33 @@ async def test_context_header_has_agents_block_between_tools_and_skills():
         header = app.query_one(ContextHeader)
         ids = [child.id for child in header.children]
         assert ids.index("context-tools") < ids.index("context-agents") < ids.index("context-skills")
+
+@pytest.mark.asyncio
+async def test_prompt_dialog_excludes_separately_displayed_agents_md():
+    from nexus.host.protocol import ContextInspectResult
+    from nexus.ui_support.tui_context_header import ContextBlock
+
+    app = NexusTextualApp(_client(FakeTransport()))
+    async with app.run_test(size=(100, 35)) as pilot:
+        await pilot.pause()
+        result = ContextInspectResult(
+            session="s", system_text="Coding assistant\n\nProject rules\n\nMemory",
+            included_parts=[{"name": "soul", "text": "Coding assistant"},
+                            {"name": "agents_md", "text": "Project rules"},
+                            {"name": "memory", "text": "Memory"}],
+        )
+        app.query_one(ContextHeader).set_data(result)
+        assert app.query_one("#context-agents", ContextBlock).detail == "Project rules"
+        await pilot.click("#context-prompt")
+        await pilot.pause()
+        assert app.screen.query_one("#context-modal-body").source == "Coding assistant\n\nMemory"
+
+
+def test_header_prompt_preserves_incomplete_snapshots_and_overrides():
+    from nexus.host.protocol import ContextInspectResult
+    from nexus.ui_support.context import header_system_prompt
+
+    for parts in ([], [{"name": "system_override", "text": "Full prompt"}],
+                  [{"name": "agents_md", "text": "Clipped rules"}]):
+        assert header_system_prompt(ContextInspectResult(
+            session="s", system_text="Full prompt", included_parts=parts)) == "Full prompt"

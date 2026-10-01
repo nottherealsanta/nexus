@@ -39,6 +39,10 @@ workspaces; editing one in Settings writes an override to `~/.nexus/agents/`.
 marker). Legacy names: `general` → `task` (`build` as a root); `explore`,
 `plan`, `planner` → read-only `advisor`.
 
+The packaged root prompts contain only the coding-assistant identity, Nexus
+harness context and tool availability; orchestrator additionally states that it
+works by orchestrating subagents.
+
 **Precedence** (low → high): packaged < `~/.nexus/agents/` < `<workspace>/.nexus/agents/`
 (legacy) < `<workspace>/.agents/agents/`. Lookups are case-insensitive;
 deleting an override resurfaces the lower one. Every skip, shadow, collision and

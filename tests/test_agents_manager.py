@@ -1169,3 +1169,11 @@ def test_builtin_build_prompt_names_no_optional_tools_or_roles() -> None:
         "skill", "subagent", "subagent_type", "advisor", "task", "quick",
     ):
         assert f"`{name}`" not in body and f"**{name}**" not in body, name
+
+@pytest.mark.parametrize("role", ["build", "orchestrator"])
+def test_packaged_root_prompts_are_minimal(role):
+    body = (_default_seed_source() / f"{role}.md").read_text().split("---", 2)[2].strip()
+    expected = "You are an expert coding assistant operating inside Nexus, a coding agent harness. You have tools."
+    if role == "orchestrator":
+        expected += " You operate by orchestrating different subagents."
+    assert body == expected
