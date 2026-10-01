@@ -41,16 +41,31 @@ Pure presentation helpers, importable by all surfaces. The TUI-only widgets
 
 ## Layout (both surfaces)
 
-- One-row **top bar**: `▌` toggles the sessions sidebar (`Ctrl+B`), the session
-  title (`New session` before the first message), status, `+` new session, `▐`
-  toggles the details sidebar (`Ctrl+L`). Toggles are accent-colored while open.
-- **Sessions sidebar** (34 cells / 272px): one line per session (glyph, title,
-  status or age, `×`), grouped by day like `/sessions`, archived last. Glyphs:
-  `●` current, braille spinner while working, `✓` done, `·` idle, `◇` archived.
+- Two-row **top bar**. Row 1, **session tabs**: `▌` toggles the sessions
+  sidebar (`Ctrl+B`), then one tab per active session (status glyph, the
+  title's first 36 characters, `×`), `+` new session, `▐` toggles the details
+  sidebar (`Ctrl+L`). Tabs hold the current session, any opened in this window,
+  and any session that is working, needs input or finished unseen; `×` only
+  hides a tab (the session keeps running) and a closed tab returns when its
+  status changes. Closing the current tab opens its neighbour. Row 2,
+  **breadcrumb**: the workspace directory (`~/…`) `›` linked worktree `›` `⎇`
+  branch (from the Doctor report's `git`), and the status in words on the right
+  (`Idle`, `Working`, `Needs input`); the glyph is on the tab. Toggles are
+  accent-colored while open. The web keeps its Context/Logs/Export buttons on
+  row 2.
+- **Sessions sidebar** (34 cells / 272px): `+ New session`, a filter, then a
+  two-line card per session (glyph and title; status in words or the message
+  count, then age; `×`), grouped by day, archived last. The current session has
+  a left accent bar. Glyphs: braille spinner while working, `●` needs input,
+  `✓` done, `·` idle, `◇` archived.
 - **Conversation:** the **context header** opens every conversation (System
   prompt, Tools, AGENTS.md, Skills, MCP), then the timeline.
-- **Composer:** editor, then `Agent  model provider  effort`, then context
-  `3k (2%)`; the activity bar under it.
+- **Composer:** editor (no border, no key-hint row), then
+  `Agent  model provider  effort`, then context `3k (2%)` (plus `price ↑ at
+  272K` for a tiered model); the activity bar under it marks the price-tier
+  threshold (`┃`).
+- **Empty session:** a few grey tips (keys and what they do, `hints.py`, picked
+  per session) sit in the middle of the timeline and hide while you type.
 - **Details sidebar** (42 cells / 336px): `SESSION` rows (Status, Agent, Model,
   Effort, Turns, Tool calls, Tokens, Context), `MODIFIED FILES`, `MCP SERVERS`.
 - Panels dock while there is room and otherwise open over the conversation.
@@ -62,30 +77,52 @@ Pure presentation helpers, importable by all surfaces. The TUI-only widgets
 Tool headers, subagent metrics, thought headings, assistant prose and turn
 footers share the same left inset in both surfaces.
 
-- `▼`/chevron user blocks fold a completed turn; thinking shows as `Thought:`
-  lines (expandable); provider thinking summaries are never invented.
+- User blocks: `▼`/chevron folds a completed turn; the turn number (`#3`) sits
+  right-aligned and highlighted on the first row; attachments are highlighted
+  chips (`image 1 · shot.png`, `document 1 · spec.pdf · 12.4 KB`: images drop
+  their byte size, documents keep the size of their text).
+- Thinking is one headline row, `◇ first sentence ▸` (expand for the full
+  text); a provider that reasons without sharing it shows `◇ Thought · not
+  shared by the provider`. Provider thinking summaries are never invented.
+- The first reply of a turn sits under its agent label (`◆ Build`, agent
+  color), indented two cells.
 - Ordinary tool calls are one muted, clipped summary line, consecutive calls
   tightly stacked; calls in one model iteration share batch glyphs (`⎾ │ ⎿`).
   Read and Grep show arguments without appending a repeated result summary.
   Todo shows up to five item rows; longer lists show the first four and `X more`.
   Activating a call opens its full parameters/result in a modal, never inline.
+  A **running shell** (Bash) additionally shows its latest four output lines
+  under the call (`⎿`) with the earlier lines counted, until it completes.
 - **Subagent calls** use two lines: type and description, then recent tool calls
   while running, or tool count and elapsed time when finished. Clicking opens the
   child's page, laid out like the root (its own context header showing the request
   it actually sent, a grey Task block, a read-only composer, details panel); Esc
   returns. All subagent activity stays inline at the initiating call.
 - Completed Edit/Patch rows show a diff per file (original on the left, updated on the right at every width), from the durable `ToolCallView.diff` only.
-- Errors are plain red lines; each finished turn has a footer
-  `AGENT · model · 1.2s`. Agent color: the host's `color`, else a name hash.
+- Errors are plain red lines; each finished turn has a right-aligned footer
+  `model · 1.2s · ↑64K ↓3.1K · 81% cached · 800 reasoning` (parts with no data
+  are left out; `(not shown)` marks reasoning the provider hid). Agent color:
+  the host's `color`, else a name hash.
 
 ## Context presentation
 
-- The context header blocks open grouped, collapsed dialogs with token estimates
-  (~4 chars/token, `estimate_tokens`). The System prompt opens as Markdown, excluding AGENTS.md because it has its
-  own block (the full request inspection still shows the exact assembled text).
-  Incomplete or clipped snapshots retain the original text to avoid losing context. The
-  Tools block lists one collapsed row per tool (`tool_groups`: by `group`, then a
-  group per MCP server).
+- Context header blocks are left-aligned label chips with their token estimate
+  in grey (~4 chars/token, `estimate_tokens`). The System prompt and AGENTS.md
+  preview one line (the rest counted). The System prompt dialog is the literal
+  prompt without AGENTS.md (it has its own block) and shows its token count.
+  Incomplete or clipped snapshots retain the original text to avoid losing
+  context.
+- The **Tools** dialog is a table: `BUILT-IN TOOLS`, then `MCP`, one row per
+  family (swatch, name, every tool name, tokens). A row expands to its tools
+  (name, parameter count and summary, tokens); a tool opens its description,
+  parameters and schema.
+- The **Skills** dialog has a sidebar of skills (`●` on / `○` off, scope) and
+  the selected skill's SKILL.md rendered as Markdown (read with
+  `SettingsRead`; the index description stands in, labelled, when it cannot be
+  read), with its On/Off switch. MCP keeps the On/Off list.
+- The **Context** dialog (Ctrl+I) opens with a recorded **usage by turn** table
+  (context size, input, cache read/write, output, reasoning, time, total), then
+  the estimated next request. For a tiered model it notes the price per tier.
 - **Skill and MCP controls.** Those two blocks show `Project N | Global N`
   counts of discovered entries (including ones switched off). Clicking opens
   individual On/Off controls with their scope. Choices are saved for the session
@@ -94,7 +131,9 @@ footers share the same left inset in both surfaces.
   agent picking/cycling follows the same rule. Subagent headers are read-only.
 - The meter shows the provider's measured prompt size whenever one exists
   (`context_measure`), else the estimate, never inventing a number. The latest
-  thinking heading appears beside it while a model thinks.
+  thinking heading appears beside it while a model thinks. When the model's
+  price rises with prompt size (models.dev `cost.tiers`, carried in the request
+  context as `pricing`), the meter marks each threshold.
 
 ## Messages during a turn
 

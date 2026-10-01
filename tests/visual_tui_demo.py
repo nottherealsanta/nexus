@@ -57,6 +57,8 @@ def _seed_events(state: str) -> list[Event]:
             _event("model.started", 4, {"provider": "openai", "model": "gpt-5.6-luna"}),
             _event("turn.failed", 5, {"error": "HTTP 400: invalid request"}),
         ]
+    if state == "design":
+        return _design_events()
     if state == "reference":
         first = "reference-1"
         second = "reference-2"
@@ -102,6 +104,51 @@ def _seed_events(state: str) -> list[Event]:
         _event("tool.completed", 10, {"call_id": "edit-1", "tool": "Edit", "duration_ms": 38, "result": {"display": "updated", "diff": {"path": FIXTURE_PATH, "added_lines": 3, "removed_lines": 2, "hunk": f"--- a/{FIXTURE_PATH}\n+++ b/{FIXTURE_PATH}\n@@ -1,2 +1,3 @@\n-Screen {{\n+Screen {{\n+    background: #0c0b0b;\n     color: #d6d3d1;"}}}),
         _event("text", 11, {"text": "The diff preview remains bounded, and the composer stays ready for the next turn."}),
         _event("turn.completed", 12, {"stop_reason": "end_turn"}),
+    ]
+
+
+def _design_events() -> list[Event]:
+    """Every timeline row the redesign touches: numbered prompt with image and
+    document chips, a thought headline, tool rows, an inline diff, the agent
+    label over the reply, the right-aligned footer, and a live shell tail."""
+    one, two = "design-1", "design-2"
+
+    def event(kind: str, seq: int, data: dict | None = None, *, turn: str = one, ts: float = 1_759_000_000.0) -> Event:
+        return Event(type=kind, data=data or {}, seq=seq, session="visual", turn=turn, ts=ts)
+
+    prompt = [
+        {"text": "Fix the token refresh race in image 1 and follow document 1."},
+        {"text": "\n\nAttachment: image 1 · idp-rate-limits.png · image/png · 412000 bytes\n"},
+        {"text": "\n\nAttachment: document 1 · refresh-spec.md\n\n" + "Spec line.\n" * 400},
+    ]
+    hunk = (
+        "--- a/src/auth/refresh.py\n+++ b/src/auth/refresh.py\n@@ -10,3 +10,5 @@\n"
+        " def refresh(token):\n-    if token.expired:\n+    with _lock:\n+        if token.expired:\n"
+        "-        return exchange(token)\n+            return exchange(token)\n     return token"
+    )
+    return [
+        event("input.queued", 1, {"queued_id": "q1", "content": prompt}),
+        event("turn.started", 2, {"agent": {"name": "build"}}),
+        event("input.consumed", 3, {"queued_id": "q1", "turn": one}),
+        event("model.started", 4, {"provider": "anthropic", "model": "claude-opus-5-5", "streaming": True}),
+        event("thinking", 5, {"text": "The symptom is a thundering herd on expiry. Every request that sees the expired token starts its own exchange."}),
+        event("tool.requested", 6, {"call_id": "r1", "tool": "Read", "input": {"path": "src/auth/refresh.py"}}),
+        event("tool.completed", 7, {"call_id": "r1", "tool": "Read", "duration_ms": 12, "result": {"display": "212 lines"}}),
+        event("tool.requested", 8, {"call_id": "g1", "tool": "Grep", "input": {"pattern": "refresh(", "path": "src/"}}),
+        event("tool.completed", 9, {"call_id": "g1", "tool": "Grep", "duration_ms": 30, "result": {"display": "37 matches"}}),
+        event("tool.requested", 10, {"call_id": "e1", "tool": "Edit", "input": {"path": "src/auth/refresh.py"}}),
+        event("tool.completed", 11, {"call_id": "e1", "tool": "Edit", "duration_ms": 20, "result": {"display": "updated", "diff": {"path": "src/auth/refresh.py", "added_lines": 3, "removed_lines": 2, "hunk": hunk}}}),
+        event("text", 12, {"text": "## Why it refreshed five times\n\n`refresh()` checked `expires_at` with no lock, so every request that saw the expired token started its own exchange.\n\n- added a module lock\n- re-check expiry inside it"}),
+        event("model.usage", 13, {"input": 12400, "output": 3100, "cache_read": 52000, "reasoning": 800}),
+        event("turn.completed", 14, {"stop_reason": "end_turn"}, ts=1_759_000_041.7),
+        event("input.queued", 15, {"queued_id": "q2", "content": [{"text": "Run the auth tests"}]}, turn=two, ts=1_759_000_100.0),
+        event("turn.started", 16, {"agent": {"name": "build"}}, turn=two, ts=1_759_000_100.1),
+        event("input.consumed", 17, {"queued_id": "q2", "turn": two}, turn=two, ts=1_759_000_100.2),
+        event("model.started", 18, {"provider": "anthropic", "model": "claude-opus-5-5", "streaming": True}, turn=two, ts=1_759_000_100.3),
+        event("thinking.end", 19, {"signature": "hidden"}, turn=two, ts=1_759_000_100.5),
+        event("tool.requested", 20, {"call_id": "b1", "tool": "Bash", "input": {"command": "pytest -q tests/auth"}}, turn=two, ts=1_759_000_101.0),
+        event("tool.started", 21, {"call_id": "b1", "tool": "Bash"}, turn=two, ts=1_759_000_101.1),
+        event("tool.progress", 22, {"call_id": "b1", "text": "".join(f"tests/auth/test_{name}.py ....\n" for name in ("login", "logout", "refresh", "jobs", "tokens", "scopes"))}, turn=two, ts=1_759_000_102.0),
     ]
 
 
@@ -350,7 +397,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Serve a deterministic Nexus Textual visual fixture")
     parser.add_argument(
         "--state",
-        choices=("empty", "transcript", "permission", "picker", "functional", "reference", "first_message", "slash_menu"),
+        choices=("empty", "transcript", "permission", "picker", "functional", "reference", "first_message", "slash_menu", "design"),
         default="empty",
     )
     args = parser.parse_args()

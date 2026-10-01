@@ -166,3 +166,32 @@ async def test_ctrl_r_refreshes_catalogue_in_place():
         assert calls == [1]
         assert sorted(r["id"] for r in screen._visible_rows if r) == ["new", "old"]
         assert app.screen is screen
+
+
+@pytest.mark.asyncio
+async def test_search_is_fuzzy_ranks_best_first_and_highlights_matches():
+    from textual.widgets import Input, OptionList
+
+    transport = ModelPickerTransport()
+    transport.models = [
+        {"provider": "openai", "id": "gpt-6-luna", "name": "GPT-6 Luna"},
+        {"provider": "anthropic", "id": "claude-opus-5-5", "name": "Claude Opus 5.5"},
+        {"provider": "anthropic", "id": "claude-sonnet-5-5", "name": "Claude Sonnet 5.5"},
+    ]
+    app = NexusTextualApp(Client(transport), session="fuzzy")
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause()
+        await app._push_model_picker()
+        await pilot.pause()
+        picker = app.screen
+        picker.query_one("#model-picker-search", Input).value = "cop55"
+        await pilot.pause()
+        options = picker.query_one(OptionList)
+        prompts = [options.get_option_at_index(i).prompt for i in range(options.option_count)]
+        assert str(prompts[0]).startswith("Best matches · ")
+        assert "Claude Opus 5.5" in str(prompts[1]) and "GPT-6" not in " ".join(map(str, prompts))
+        # Matched letters are styled in the label.
+        assert any("underline" in str(span.style) for span in prompts[1].spans)
+        picker.query_one("#model-picker-search", Input).value = "zzz"
+        await pilot.pause()
+        assert str(options.get_option_at_index(0).prompt) == "No matching models"

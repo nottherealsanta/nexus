@@ -31,6 +31,7 @@ from .context import (
     ContextGroup,
     _compact_tokens,
     context_detail_usage,
+    context_turn_usage,
     context_groups,
     context_summary,
     context_usage,
@@ -363,9 +364,6 @@ class ChatInput(Vertical):
         pending = Static("", id="input-queue-preview", markup=False)
         pending.display = False
         yield pending
-        hint = Static("Enter queue · Ctrl+Enter steer · Alt+Enter interrupt", id="message-send-hint", markup=False)
-        hint.display = False
-        yield hint
         files = Static("", id="file-attachments", markup=False)
         files.display = False
         yield files
@@ -947,6 +945,7 @@ class ActivityProgress(Static):
     def __init__(self, **kwargs) -> None:
         super().__init__("", markup=True, **kwargs)
         self._fraction = 0.0
+        self._marks: tuple[float, ...] = ()
         self._running = False
         self._loading = False
         self._color = "$nx-accent"
@@ -954,8 +953,11 @@ class ActivityProgress(Static):
         self._timer = None
 
     def set_state(self, *, used: int = 0, budget: int = 0, running: bool = False,
-                  loading: bool = False, color: str = "$nx-accent") -> None:
+                  loading: bool = False, color: str = "$nx-accent", marks: tuple[int, ...] = ()) -> None:
+        """``marks`` are prompt sizes where the model's price rises; the idle
+        meter draws a ``┃`` at each one inside the window."""
         self._fraction = max(0.0, min(1.0, used / budget)) if budget > 0 else 0.0
+        self._marks = tuple(mark / budget for mark in marks if budget > 0 and 0 < mark < budget)
         self._running, self._loading, self._color = running, loading, color
         if running or loading:
             if self._timer is None and self.is_mounted:
@@ -966,8 +968,9 @@ class ActivityProgress(Static):
         self._draw()
 
     def on_mount(self) -> None:
+        marks = tuple(round(mark * 1000) for mark in self._marks)
         self.set_state(used=int(self._fraction * 1000), budget=1000,
-                       running=self._running, loading=self._loading, color=self._color)
+                       running=self._running, loading=self._loading, color=self._color, marks=marks)
 
     def on_resize(self, _event) -> None:
         self._draw()
@@ -995,7 +998,13 @@ class ActivityProgress(Static):
         else:
             color = "$nx-success" if self._fraction < 0.5 else "$nx-warning" if self._fraction < 0.75 else "$nx-error"
             filled = round(width * self._fraction)
-            segments = [(filled, color), (width - filled, "$nx-border")]
+            cells = [color] * filled + ["$nx-border"] * (width - filled)
+            glyphs = ["━"] * width
+            for mark in self._marks:
+                at = min(width - 1, round(width * mark))
+                cells[at], glyphs[at] = "$nx-warning", "┃"
+            self.update("".join(f"[{c}]{g}[/]" for c, g in zip(cells, glyphs, strict=True)))
+            return
         self.update("".join(f"[{color}]{'━' * count}[/]" for count, color in segments if count))
 
 
@@ -1178,18 +1187,25 @@ class ContextDetailsScreen(ModalScreen[None]):
         *,
         error: str | None = None,
         session: str = "",
+        turn_usage: str = "",
     ) -> None:
         super().__init__()
         self.inspection = inspection
         self.usage = usage
         self.error = error
         self.session = session
+        #: Recorded usage per turn (``context_turn_usage``), shown above the request.
+        self.turn_usage = turn_usage
 
     def compose(self) -> ComposeResult:
         with Vertical(id="context-dialog"):
             yield Static(f"Context · {sanitize(self.session, 80)}" if self.session else "Context", id="context-title", markup=False)
             yield Static(context_summary(self.inspection, self.usage, error=self.error), id="context-details", markup=False)
             with VerticalScroll(id="context-scroll"):
+                if self.turn_usage:
+                    yield Static("USAGE BY TURN · recorded", classes="context-section-title", markup=False)
+                    yield Static(self.turn_usage, id="context-turn-usage", markup=False)
+                    yield Static("NEXT REQUEST · estimated", classes="context-section-title", markup=False)
                 if self.inspection is not None and not self.error:
                     yield from context_group_widgets(context_groups(self.inspection))
             yield Static(
@@ -1308,23 +1324,75 @@ class LogsDrawer(Vertical):
         summary = sanitize(str(getattr(entry, "summary", "")), 140)
         return f"{stamp} [{level}] {kind} · {summary}"
 
+    #: Problems (warnings and errors) are always shown first; the remaining
+    #: info/debug lines stay folded behind a counted toggle until clicked.
+    show_all = False
+    PROBLEM_LEVELS = frozenset({"warn", "warning", "error", "critical", "fatal"})
+    LEVEL_COLORS: ClassVar[dict[str, str]] = {"warn": "#f5a742", "warning": "#f5a742"}
+
+    @classmethod
+    def _is_problem(cls, entry) -> bool:
+        return str(getattr(entry, "level", "info")).casefold() in cls.PROBLEM_LEVELS
+
     def refresh_content(self) -> None:
         if not self.is_mounted:
             return
         content = Text()
         if self.poll_error:
             content.append(f"Read error · {self.poll_error}\n\n", style="#d77b72")
-        self._append_section(
-            content, f"DAEMON · {len(self.daemon_entries)} shown", self.daemon_entries,
-            self.daemon_truncated, self.daemon_has_more,
-        )
+        sources = (("daemon", self.daemon_entries), ("session", self.session_entries))
+        problems = [(source, row) for source, rows in sources for row in rows if self._is_problem(row)]
+        content.append("PROBLEMS ", style="bold")
+        content.append(str(len(problems)), style="bold #e06c75" if problems else "#7fd88f")
+        if not problems:
+            content.append("\nNo warnings or errors", style="#777777")
+        for source, row in problems:
+            level = str(getattr(row, "level", "")).casefold()
+            content.append("\n▌", style=self.LEVEL_COLORS.get(level, "#e06c75"))
+            content.append(f" {sanitize(str(getattr(row, 'level', '')).upper(), 8)} {source} · "
+                           f"{sanitize(str(getattr(row, 'kind', 'event')), 36)}: ", style="bold")
+            content.append(sanitize(str(getattr(row, "summary", "")), 140))
+            content.append(f"  {self._stamp(row)}", style="#777777")
+        quiet = sum(1 for _, rows in sources for row in rows if not self._is_problem(row))
         content.append("\n\n")
-        self._append_section(
-            content,
-            f"SESSION ID · {sanitize(self.session_name or 'none', 80)} · {len(self.session_entries)} shown",
-            self.session_entries, self.session_truncated, self.session_has_more,
-        )
+        content.append(("▾ " if self.show_all else "▸ ") + f"{quiet} info/debug line{'' if quiet == 1 else 's'}",
+                       style="#a3a3a3")
+        content.append(" · click to " + ("fold" if self.show_all else "show"), style="#777777")
+        if self.show_all:
+            content.append("\n\n")
+            self._append_section(
+                content, f"DAEMON · {len(self.daemon_entries)} shown", self.daemon_entries,
+                self.daemon_truncated, self.daemon_has_more,
+            )
+            content.append("\n\n")
+            self._append_section(
+                content,
+                f"SESSION ID · {sanitize(self.session_name or 'none', 80)} · {len(self.session_entries)} shown",
+                self.session_entries, self.session_truncated, self.session_has_more,
+            )
+        else:
+            for label, truncated, more in (("daemon", self.daemon_truncated, self.daemon_has_more),
+                                           ("session", self.session_truncated, self.session_has_more)):
+                if truncated:
+                    content.append(f"\nEarlier {label} entries unavailable · log may have restarted", style="#d18a38")
+                if more:
+                    content.append(f"\nMore {label} entries available", style="#d18a38")
+            content.append(f"\nSESSION ID · {sanitize(self.session_name or 'none', 80)} · "
+                           f"{len(self.session_entries)} shown", style="#777777")
         self.query_one("#logs-content", Static).update(content)
+
+    def on_click(self, event) -> None:
+        if getattr(event.widget, "id", None) == "logs-content":
+            event.stop()
+            self.show_all = not self.show_all
+            self.refresh_content()
+
+    @staticmethod
+    def _stamp(entry) -> str:
+        try:
+            return datetime.fromtimestamp(float(entry.ts)).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        except (ValueError, TypeError, OverflowError, OSError):
+            return "unknown time"
 
     @classmethod
     def _append_section(cls, content: Text, heading: str, entries, truncated: bool, has_more: bool) -> None:
@@ -1906,5 +1974,6 @@ __all__ = [
     "WorktreeConfirmScreen",
     "WorktreesScreen",
     "context_detail_usage",
+    "context_turn_usage",
     "context_usage",
 ]

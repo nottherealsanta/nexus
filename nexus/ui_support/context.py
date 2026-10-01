@@ -589,12 +589,94 @@ def context_detail_usage(view: ConversationView) -> str:
     else:
         context = f"{used:,} context tokens used ({source})"
     usage = view.usage
+    pricing = context_pricing_note(view)
     return (
         f"Context: {context}\n"
+        + (f"{pricing}\n" if pricing else "") +
         f"Recorded usage: {usage.input_tokens:,} input · {usage.output_tokens:,} output · "
         f"{usage.cache_read_tokens:,} cache read · {usage.cache_write_tokens:,} cache write · "
         f"{usage.reasoning_tokens:,} reasoning tokens"
     )
+
+
+TURN_USAGE_LIMIT = 200
+
+
+def _turn_context_tokens(turn: object) -> int | None:
+    """The prompt size the turn's last request was assembled at (estimate)."""
+    for item in reversed(list(getattr(turn, "context", ()) or ())):
+        data = getattr(item, "data", None) or {}
+        data = data.get("context", data) if isinstance(data, Mapping) else {}
+        for key in ("measured_prompt", "measured_tokens", "used_tokens"):
+            value = data.get(key) if isinstance(data, Mapping) else None
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                return value
+    return None
+
+
+def context_turn_usage(view: ConversationView) -> str:
+    """Token usage per turn, as recorded: prompt size, input, cache, output,
+    reasoning and duration, then the session total. Clipping is announced."""
+    turns = list(getattr(view, "turns", ()) or ())
+    if not turns:
+        return "No turns yet."
+    header = ("TURN", "CONTEXT", "INPUT", "CACHE READ", "CACHE WRITE", "OUTPUT", "REASONING", "TIME")
+    rows: list[tuple[str, ...]] = []
+    shown = turns[-TURN_USAGE_LIMIT:]
+    for number, turn in enumerate(shown, len(turns) - len(shown) + 1):
+        usage = turn.usage
+        context = _turn_context_tokens(turn)
+        elapsed = getattr(turn, "elapsed_ms", None)
+        rows.append((
+            f"#{number}", _compact_tokens(context) if context is not None else "–",
+            _compact_tokens(usage.input_tokens), _compact_tokens(usage.cache_read_tokens),
+            _compact_tokens(usage.cache_write_tokens), _compact_tokens(usage.output_tokens),
+            _compact_tokens(usage.reasoning_tokens),
+            f"{elapsed / 1000:.1f}s" if isinstance(elapsed, int) and elapsed >= 0 else "–",
+        ))
+    total = view.usage
+    rows.append(("Total", "", _compact_tokens(total.input_tokens), _compact_tokens(total.cache_read_tokens),
+                 _compact_tokens(total.cache_write_tokens), _compact_tokens(total.output_tokens),
+                 _compact_tokens(total.reasoning_tokens), ""))
+    widths = [max(len(row[i]) for row in (header, *rows)) for i in range(len(header))]
+    lines = ["  ".join(cell.ljust(widths[i]) if i == 0 else cell.rjust(widths[i]) for i, cell in enumerate(row)).rstrip()
+             for row in (header, *rows)]
+    if len(shown) < len(turns):
+        lines.insert(1, f"… {len(turns) - len(shown)} earlier turns not shown")
+    return "\n".join(lines)
+
+
+def context_pricing_note(view: ConversationView) -> str:
+    """Where the model's price rises with prompt size, from the request's
+    ``pricing`` metadata (models.dev ``cost.tiers``); empty when flat or unknown."""
+    data = view.context if isinstance(view.context, dict) else {}
+    data = data.get("context", data)
+    pricing = data.get("pricing") if isinstance(data, Mapping) else None
+    tiers = pricing.get("tiers") if isinstance(pricing, Mapping) else None
+    if not isinstance(tiers, list) or not tiers:
+        return ""
+    notes = []
+    for tier in tiers[:8]:
+        if not isinstance(tier, Mapping) or not isinstance(tier.get("context"), int):
+            continue
+        rate = f"${tier.get('input', 0):g}/${tier.get('output', 0):g}"
+        notes.append(f"above {_compact_tokens(tier['context'])}: {rate}")
+    if not notes:
+        return ""
+    base = f"${pricing.get('input', 0):g}/${pricing.get('output', 0):g}"
+    return f"Tiered price (input/output per M): {base} · " + " · ".join(notes)
+
+
+def price_tier_thresholds(view: ConversationView) -> list[int]:
+    """Prompt sizes where the price rises (for the context meter's marks)."""
+    data = view.context if isinstance(view.context, dict) else {}
+    data = data.get("context", data)
+    pricing = data.get("pricing") if isinstance(data, Mapping) else None
+    tiers = pricing.get("tiers") if isinstance(pricing, Mapping) else None
+    if not isinstance(tiers, list):
+        return []
+    return sorted({tier["context"] for tier in tiers[:8]
+                   if isinstance(tier, Mapping) and isinstance(tier.get("context"), int) and tier["context"] > 0})
 
 
 def thinking_status(view: ConversationView) -> str:
@@ -618,6 +700,9 @@ __all__ = [
     "ContextEntry",
     "ContextGroup",
     "context_detail_usage",
+    "context_pricing_note",
+    "context_turn_usage",
+    "price_tier_thresholds",
     "context_details_renderable",
     "context_groups",
     "context_measure",

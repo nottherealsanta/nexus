@@ -57,6 +57,7 @@ __all__ = [
     "CatalogueModel",
     "CatalogueProvider",
     "Cost",
+    "CostTier",
     "HttpxCatalogueFetcher",
     "ModelInfo",
     "ModelRegistry",
@@ -176,13 +177,47 @@ class CatalogueError(ModelRegistryError):
     """Catalogue data is malformed, oversized, or unreachable."""
 
 
+class CostTier(msgspec.Struct, frozen=True):
+    """Rates (USD / Mtok) that apply once the prompt exceeds ``context`` tokens."""
+
+    context: int
+    input: float = 0.0
+    output: float = 0.0
+    cache_read: float = 0.0
+    cache_write: float = 0.0
+
+
 class Cost(msgspec.Struct, frozen=True):
-    """Per-million-token pricing, as models.dev reports it (USD / Mtok)."""
+    """Per-million-token pricing, as models.dev reports it (USD / Mtok).
+
+    ``tiers`` (ascending by ``context``) carry context-size dependent rates; the
+    top-level rates apply to prompts at or below the first tier's threshold.
+    """
 
     input: float = 0.0
     output: float = 0.0
     cache_read: float = 0.0
     cache_write: float = 0.0
+    tiers: tuple[CostTier, ...] = ()
+
+    def pricing(self) -> dict[str, object]:
+        """JSON-ready pricing dict (what UIs and the context metadata show)."""
+        return {
+            "input": self.input,
+            "output": self.output,
+            "cache_read": self.cache_read,
+            "cache_write": self.cache_write,
+            "tiers": [
+                {
+                    "context": t.context,
+                    "input": t.input,
+                    "output": t.output,
+                    "cache_read": t.cache_read,
+                    "cache_write": t.cache_write,
+                }
+                for t in self.tiers
+            ],
+        }
 
 
 class ModelInfo(msgspec.Struct, frozen=True):
@@ -233,6 +268,9 @@ class ModelInfo(msgspec.Struct, frozen=True):
             max_context_tokens=self.context,
             max_output_tokens=self.max_output,
             max_input_tokens=self.max_input,
+            # Carried so the context manager can publish it per request without
+            # importing the registry (model-layer data, not a provider claim).
+            pricing=self.cost.pricing() if self.cost is not None else None,
         )
 
 
@@ -384,6 +422,9 @@ def _opt_number(entry: Mapping[str, object], key: str) -> float:
     return number
 
 
+_MAX_COST_TIERS = 8
+
+
 def _parse_cost(value: object) -> Cost | None:
     if value is None:
         return None
@@ -393,7 +434,53 @@ def _parse_cost(value: object) -> Cost | None:
         output=_opt_number(entry, "output"),
         cache_read=_opt_number(entry, "cache_read"),
         cache_write=_opt_number(entry, "cache_write"),
+        tiers=_parse_cost_tiers(entry),
     )
+
+
+def _parse_cost_tiers(entry: dict) -> tuple[CostTier, ...]:
+    """Context-size tiers: ``cost.tiers`` (type ``context``), else legacy ``context_over_200k``.
+
+    Tolerant by design: a malformed or non-context tier is skipped so one odd
+    entry never fails the whole catalogue. At most ``_MAX_COST_TIERS`` are kept.
+    """
+    raw = entry.get("tiers")
+    tiers: list[CostTier] = []
+    if isinstance(raw, list):
+        for item in raw[:_MAX_COST_TIERS * 2]:
+            if not isinstance(item, dict):
+                continue
+            marker = item.get("tier")
+            if not isinstance(marker, dict) or marker.get("type") != "context":
+                continue
+            size = marker.get("size")
+            if type(size) is not int or size <= 0:
+                continue
+            try:
+                tiers.append(CostTier(
+                    context=size,
+                    input=_opt_number(item, "input"),
+                    output=_opt_number(item, "output"),
+                    cache_read=_opt_number(item, "cache_read"),
+                    cache_write=_opt_number(item, "cache_write"),
+                ))
+            except CatalogueError:
+                continue
+    elif raw is None:
+        legacy = entry.get("context_over_200k")
+        if isinstance(legacy, dict):
+            try:
+                tiers.append(CostTier(
+                    context=200_000,
+                    input=_opt_number(legacy, "input"),
+                    output=_opt_number(legacy, "output"),
+                    cache_read=_opt_number(legacy, "cache_read"),
+                    cache_write=_opt_number(legacy, "cache_write"),
+                ))
+            except CatalogueError:
+                pass
+    tiers.sort(key=lambda t: t.context)
+    return tuple(tiers[:_MAX_COST_TIERS])
 
 
 def _parse_modalities(value: object) -> tuple[tuple[str, ...], tuple[str, ...]]:

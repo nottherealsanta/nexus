@@ -2088,15 +2088,16 @@ async def test_ad_hoc_child_hook_modifies_its_input(tmp_path):
 class _PricingRegistry:
     """A minimal registry: legacy routing plus a fixed model price."""
 
-    def __init__(self, *, input_rate=0.0, output_rate=0.0) -> None:
+    def __init__(self, *, input_rate=0.0, output_rate=0.0, tiers=()) -> None:
         self._input = input_rate
         self._output = output_rate
+        self._tiers = tiers
 
     def get(self, ref):
         return None  # keep the router on the legacy provider path
 
     def model_cost(self, provider, model):
-        return Cost(input=self._input, output=self._output)
+        return Cost(input=self._input, output=self._output, tiers=self._tiers)
 
 
 def _write_concrete_agent(tmp_path: Path, name: str, model: str) -> None:
@@ -2135,6 +2136,27 @@ async def test_child_cost_is_computed_from_registry_pricing(tmp_path):
         (1000 * 1.0 + 2000 * 2.0) / 1_000_000
     )
     await runtime.aclose()
+
+
+def test_child_cost_uses_tier_above_threshold_and_base_below(tmp_path):
+    from types import SimpleNamespace
+
+    from nexus.model.registry import CostTier
+
+    tiers = (CostTier(context=1000, input=10.0, output=20.0, cache_read=1.0, cache_write=2.0),)
+    runtime = SimpleNamespace(_registry=_PricingRegistry(input_rate=1.0, output_rate=2.0, tiers=tiers))
+    session = SimpleNamespace(events=[SimpleNamespace(type="model.started", data={"provider": "p", "model": "m"})])
+
+    def cost(**usage):
+        outcome = SimpleNamespace(usage=SimpleNamespace(**usage))
+        return Runtime._child_cost(runtime, session, outcome)
+
+    # prompt = 1000 (not above the threshold): base rates.
+    assert cost(input_tokens=1000, output_tokens=100) == pytest.approx((1000 * 1.0 + 100 * 2.0) / 1e6)
+    # prompt = 900 + 100 cache_read + 1 cache_write > 1000: tier rates for everything.
+    assert cost(input_tokens=900, output_tokens=100, cache_read_tokens=100, cache_write_tokens=1) == pytest.approx(
+        (900 * 10.0 + 100 * 20.0 + 100 * 1.0 + 1 * 2.0) / 1e6
+    )
 
 
 async def test_cost_budget_exhausts_after_a_priced_child(tmp_path):

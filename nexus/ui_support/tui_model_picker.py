@@ -16,6 +16,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, OptionList, Static
 from textual.widgets.option_list import Option
 
+from .fuzzy import fuzzy_match, highlight_spans
 from .text import sanitize
 
 
@@ -106,16 +107,34 @@ class ModelPickerScreen(ModalScreen[tuple[str, str | None, bool] | None]):
         self.query_one(Input).focus()
 
     def _render_models(self, *, selected_ref: str | None = None) -> None:
-        query = self.query_one(Input).value.casefold().strip()
-        matching = sort_models([row for row in self.rows if query in (
-            f"{row.get('name', '')} {row.get('provider', '')} {row.get('id', '')}"
-        ).casefold()], by=self.sort_mode)
+        query = self.query_one(Input).value.strip()
+        # Fuzzy: best match first, matched letters highlighted in the name.
+        self._highlights: dict[str, tuple[int, ...]] = {}
+        if query:
+            scored = []
+            for index, row in enumerate(self.rows):
+                name = str(row.get("name") or row.get("id") or "")
+                provider = str(row.get("provider", ""))
+                candidates = (name, _ref(row), f"{provider} {name}", f"{name} {provider} {row.get('id', '')}")
+                hits = [hit for hit in map(lambda text: fuzzy_match(query, text), candidates) if hit]
+                if not hits:
+                    continue
+                best = max(hits, key=lambda hit: hit[0])
+                scored.append((-best[0], index, row))
+                name_hit = fuzzy_match(query, name)
+                if name_hit:
+                    self._highlights[_ref(row)] = name_hit[1]
+            matching = [row for _, _, row in sorted(scored, key=lambda item: item[:2])]
+        else:
+            matching = sort_models(list(self.rows), by=self.sort_mode)
         by_ref = {_ref(row): row for row in matching}
         groups: list[tuple[str, list[dict]]] = []
         if not query:
             groups.extend((title, [by_ref[ref] for ref in refs if ref in by_ref])
                           for title, refs in (("Favorites", self.favorites), ("Recent", self.recent)))
-        if self.sort_mode == "updated":
+        if query:
+            groups.append((f"Best matches · {len(matching)}", matching))
+        elif self.sort_mode == "updated":
             groups.append(("Recently updated", matching))
         else:
             providers = sorted({str(row["provider"]) for row in matching}, key=str.casefold)
@@ -137,7 +156,10 @@ class ModelPickerScreen(ModalScreen[tuple[str, str | None, bool] | None]):
                 ref = _ref(row)
                 seen.add(ref)
                 label = Text("  ")
-                label.append(sanitize(str(row.get("name") or row["id"]), 70), style="bold")
+                name = Text(sanitize(str(row.get("name") or row["id"]), 70), style="bold")
+                for start, end in highlight_spans(self._highlights.get(ref, ())):
+                    name.stylize("bold underline #fab283", start, end)
+                label.append_text(name)
                 if ref in self.favorites:
                     label.append("  ★", style="yellow")
                 if ref == self.current:

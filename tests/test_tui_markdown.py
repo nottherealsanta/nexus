@@ -117,14 +117,24 @@ async def test_root_thought_only_message_is_markdown_and_signature_is_private():
     turn = TurnView(id="turn", messages=[thought])
     async with _TurnApp(turn).run_test() as pilot:
         await pilot.pause()
-        # Thinking collapses to one "Thought:" line; the signature stays private.
+        # Thinking collapses to one headline row; the signature stays private.
         assert not pilot.app.query(AssistantMessage)
         widget = pilot.app.query_one(ThoughtLine)
-        assert str(widget.render()) == "Thought: Checking the request"
+        assert str(widget.render()) == "◇ Checking the request  ▸"
         widget.expanded = True
         widget.set_message(thought)
         assert "**Checking** the request" in str(widget.render())
         assert "provider-secret-signature" not in str(widget.render())
+
+
+async def test_reasoning_the_provider_did_not_share_is_labelled():
+    hidden = MessageView(id="hidden", role="assistant",
+                         blocks=[BlockView(kind="thinking", text="", signature="encrypted")])
+    async with _TurnApp(TurnView(id="turn", messages=[hidden])).run_test() as pilot:
+        await pilot.pause()
+        widget = pilot.app.query_one(ThoughtLine)
+        assert str(widget.render()) == "◇ Thought  · not shared by the provider"
+        assert widget.has_class("-hidden") and "encrypted" not in str(widget.render())
 
 
 async def test_nested_inspector_renders_message_markdown_with_safe_links():

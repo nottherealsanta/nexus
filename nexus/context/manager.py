@@ -1474,6 +1474,9 @@ class ContextManager:
                 # The whole window (before the output reserve and safety
                 # margin): what a UI shows usage against.
                 "context_window": inputs.context_window,
+                # Registry rates and context tiers (USD/Mtok), or None when the
+                # model's price is unknown; UIs mark where the price rises.
+                "pricing": getattr(env.capabilities, "pricing", None),
                 "effective_max_output_tokens": inputs.effective_max_output_tokens,
                 "safety_margin_tokens": inputs.safety_margin_tokens,
                 "history_budget": plan.history_budget,

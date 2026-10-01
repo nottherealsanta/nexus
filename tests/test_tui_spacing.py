@@ -329,7 +329,9 @@ async def test_activity_rows_share_reply_left_edge():
         reply = AssistantMessage(MessageView(role="assistant", blocks=[BlockView(text="Reply")]), classes="timeline-assistant")
         await timeline.mount(tool, task, thought, reply)
         await pilot.pause()
-        left = reply.content_region.x
+        # The reply is indented two cells under its agent label; activity rows
+        # share the label's edge.
+        left = reply.content_region.x - 2
         assert tool.query_one("#tool-header").content_region.x == left
         assert task.query_one("#tool-header").content_region.x == left
         assert task.query_one("#task-metrics").content_region.x == left

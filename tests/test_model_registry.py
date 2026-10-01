@@ -25,6 +25,7 @@ from nexus.model.registry import (
     OPENAI_COMPATIBLE,
     CatalogueError,
     Cost,
+    CostTier,
     HttpxCatalogueFetcher,
     ModelInfo,
     ModelRegistry,
@@ -1486,3 +1487,55 @@ def test_constructor_error_does_not_leak_userinfo():
             catalogue_url="http://alice:supersecret@[::1",
         )
     assert "supersecret" not in str(excinfo.value)
+
+
+# --------------------------------------------------------------------------
+# Tiered (context-size dependent) pricing
+# --------------------------------------------------------------------------
+
+
+def _cost_of(cost: dict) -> Cost:
+    raw = json.dumps(
+        {"pa": {"env": ["PA_KEY"], "models": {"m": {"modalities": {"output": ["text"]}, "cost": cost}}}}
+    ).encode()
+    return make_registry(raw=raw, env={"PA_KEY": "1"}).get("pa/m").cost
+
+
+def test_cost_tiers_parse_sorted_and_bounded():
+    tier = lambda size, inp: {"input": inp, "output": 2 * inp, "cache_read": 0.1, "cache_write": 0.2,
+                              "tier": {"type": "context", "size": size}}
+    cost = _cost_of({"input": 0.1, "output": 0.5, "tiers": [tier(272_000, 0.2), tier(100_000, 0.15)]})
+    assert [t.context for t in cost.tiers] == [100_000, 272_000]
+    assert cost.tiers[1] == CostTier(context=272_000, input=0.2, output=0.4, cache_read=0.1, cache_write=0.2)
+    many = _cost_of({"input": 1, "tiers": [tier(1000 * (i + 1), 1) for i in range(20)]})
+    assert len(many.tiers) == 8
+
+
+def test_cost_tiers_legacy_context_over_200k_only_without_tiers():
+    legacy = {"input": 3, "output": 15, "context_over_200k": {"input": 6, "output": 22.5}}
+    assert _cost_of(legacy).tiers == (CostTier(context=200_000, input=6.0, output=22.5),)
+    both = dict(legacy, tiers=[{"input": 9, "output": 9, "tier": {"type": "context", "size": 300_000}}])
+    assert [t.context for t in _cost_of(both).tiers] == [300_000]
+
+
+def test_cost_tiers_skip_malformed_and_other_types():
+    cost = _cost_of({"input": 1, "output": 2, "tiers": [
+        {"input": 5, "tier": {"type": "time", "size": 10}},
+        {"input": 5, "tier": {"type": "context", "size": "big"}},
+        {"input": -1, "tier": {"type": "context", "size": 5000}},
+        "junk",
+        {"input": 7, "tier": {"type": "context", "size": 9000}},
+    ]})
+    assert cost.tiers == (CostTier(context=9000, input=7.0),)
+    assert _cost_of({"input": 1}).tiers == ()
+
+
+def test_cost_pricing_dict_includes_tiers():
+    cost = Cost(input=0.1, output=0.5, tiers=(CostTier(context=272_000, input=0.2, output=0.75),))
+    assert cost.pricing()["tiers"] == [
+        {"context": 272_000, "input": 0.2, "output": 0.75, "cache_read": 0.0, "cache_write": 0.0}
+    ]
+    info = make_registry(raw=json.dumps({"pa": {"env": ["PA_KEY"], "models": {"m": {
+        "modalities": {"output": ["text"]}, "cost": {"input": 1, "tiers": [
+            {"input": 2, "tier": {"type": "context", "size": 10}}]}}}}}).encode(), env={"PA_KEY": "1"}).get("pa/m")
+    assert info.capabilities().pricing["tiers"][0]["context"] == 10

@@ -10,6 +10,7 @@ from nexus.ui_support.tui_context_header import (
     ContextHeader,
     format_schema_type,
     group_tools,
+    one_line_preview,
     prompt_preview,
     render_columns,
     schema_param_rows,
@@ -26,6 +27,9 @@ def test_context_summary_helpers_group_and_bound_data():
     assert list(groups) == ["bash", "read"]
     assert len(groups["bash"]) == 2
     assert list(mcp) == ["docs"]
+    assert one_line_preview("first\n\nsecond\nthird") == "first  … +2 more lines"
+    assert one_line_preview("x" * 200).endswith("…") and len(one_line_preview("x" * 200)) == 100
+    assert one_line_preview("  \n") == ""
     assert render_columns(["bash(2)", "read", "write", "edit"]).splitlines()[1].strip() == "edit"
     assert prompt_preview("\n".join(str(n) for n in range(7))) == "0\n1\n2\n3\n4\n… +2 more lines"
     assembled = (
@@ -77,7 +81,9 @@ async def test_context_blocks_align_rows_and_grey_out_empty_parts():
         await pilot.pause()
         text = app.query_one("#context-tools", ContextBlock).render().plain.splitlines()
         assert text[1].startswith("  apply_patch") and text[2].startswith("  glob")
-        assert app.query_one("#context-prompt", ContextBlock).render().plain.splitlines()[1:] == ["  one", "  two"]
+        prompt = app.query_one("#context-prompt", ContextBlock).render().plain.splitlines()
+        # One preview line; the token estimate sits beside the label in grey.
+        assert prompt == [" System prompt  ~2 tokens", "  one  … +1 more line"]
         for slug in ("skills", "mcp"):
             block = app.query_one(f"#context-{slug}", ContextBlock)
             assert "Project 0 | Global 0" in block.render().plain
@@ -150,14 +156,23 @@ async def test_tools_block_opens_grouped_tools_dialog():
         screen = app.screen
         assert isinstance(screen, ToolsModal)
         assert screen.query_one("#context-modal-title").render().plain.startswith("Tools · 4 definitions · ~")
-        # Only a family of several tools gets a header; a family of one is just its row.
-        groups = [str(group._title.label).split("  ")[0] for group in screen.query("Collapsible.context-group")]
-        assert groups == ["bash"]
-        assert not any(group.collapsed for group in screen.query("Collapsible.context-group"))
-        rows = list(screen.query("Collapsible.context-entry"))
-        assert [str(row._title.label).split("  ")[0] for row in rows] == ["Bash", "BashOutput", "Read", "mcp__docs__search"]
-        assert all(row.collapsed for row in rows)
-        assert "1 param · Read a file." in str(rows[2]._title.label)
+        # A table of families: built-in first, then one row per MCP server.
+        from nexus.ui_support.tui_context_header import ToolGroupRow, ToolRow
+        sections = [str(row.render()) for row in screen.query(".tools-section")]
+        assert sections[0].startswith("BUILT-IN TOOLS  3 tools") and sections[1].startswith("MCP  1 tool")
+        groups = list(screen.query(ToolGroupRow))
+        assert [group.group.key for group in groups] == ["tools:bash", "tools:read", "mcp:docs"]
+        assert "Bash  BashOutput" in str(groups[0].query_one(".tool-group-tools").render())
+        rows = list(screen.query(ToolRow))
+        assert not any(row.display for row in rows)
+        await pilot.click(groups[1])
+        await pilot.pause()
+        read = next(row for row in rows if row.entry.title == "Read")
+        assert read.display and "1 param · Read a file." in str(read.query_one(".tool-row-text").render())
+        await pilot.click(read)
+        await pilot.pause()
+        assert app.screen.query_one("#context-modal-title").render().plain.startswith("Tool · Read · ~")
+        assert "**Parameters**" in app.screen.query_one("#context-modal-body").source
         await pilot.press("escape")
         await pilot.pause()
         assert app.screen is app.screen_stack[0]
@@ -201,3 +216,89 @@ def test_header_prompt_preserves_incomplete_snapshots_and_overrides():
                   [{"name": "agents_md", "text": "Clipped rules"}]):
         assert header_system_prompt(ContextInspectResult(
             session="s", system_text="Full prompt", included_parts=parts)) == "Full prompt"
+
+
+@pytest.mark.asyncio
+async def test_skills_dialog_lists_skills_and_renders_skill_markdown():
+    from nexus.host import protocol as p
+    from nexus.ui_support.tui_context_header import SkillsModal
+    from textual.widgets import Markdown, OptionList
+
+    class Transport(FakeTransport):
+        async def request(self, command):
+            if isinstance(command, p.SettingsRead):
+                assert command.category == "skills"
+                if command.id == "broken":
+                    raise RuntimeError("unreadable")
+                return p.SettingsReadResult(body=f"# {command.id}\n\nUse **{command.id}** wisely.",
+                                            rel_path=f"skills/{command.id}/SKILL.md", builtin=False, sha256="x")
+            return await super().request(command)
+
+    app = NexusTextualApp(_client(Transport()))
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        result = p.ContextInspectResult(session=app.controller.session, skills_index=[
+            {"name": "review", "scope": "project", "description": "Review diffs", "enabled": True},
+            {"name": "broken", "scope": "global", "description": "Fallback text", "enabled": False},
+        ])
+        app.query_one(ContextHeader).set_data(result)
+        await pilot.click("#context-skills")
+        await pilot.pause(1.0)
+        screen = app.screen
+        assert isinstance(screen, SkillsModal)
+        options = screen.query_one("#skills-list", OptionList)
+        assert [str(options.get_option_at_index(i).prompt) for i in range(2)] == [
+            "● review  · project", "○ broken  · global"]
+        assert "Use **review** wisely." in screen.query_one("#context-modal-body", Markdown).source
+        options.highlighted = 1
+        await pilot.pause(0.3)
+        body = screen.query_one("#context-modal-body", Markdown).source
+        assert body.startswith("Fallback text") and "could not be read" in body
+        assert str(screen.query_one("#extension-1").label).startswith("Off")
+
+
+def test_turn_usage_table_and_price_tiers_come_from_the_view():
+    from nexus.ui_support.context import (
+        context_detail_usage,
+        context_pricing_note,
+        context_turn_usage,
+        price_tier_thresholds,
+    )
+    from nexus.view.model import ContextView, ConversationView, TurnView, UsageTotals
+
+    view = ConversationView(
+        turns=[
+            TurnView(id="t1", usage=UsageTotals(input_tokens=1200, output_tokens=300, cache_read_tokens=5000),
+                     context=[ContextView(data={"context": {"used_tokens": 6400}})], elapsed_ms=4200),
+            TurnView(id="t2", usage=UsageTotals(input_tokens=800, output_tokens=90, reasoning_tokens=40)),
+        ],
+        context={"context": {"used_tokens": 7000, "context_window": 400_000, "pricing": {
+            "input": 0.1, "output": 0.5, "tiers": [{"context": 272_000, "input": 0.2, "output": 0.75}]}}},
+    )
+    table = context_turn_usage(view).splitlines()
+    assert table[0].split() == ["TURN", "CONTEXT", "INPUT", "CACHE", "READ", "CACHE", "WRITE", "OUTPUT", "REASONING", "TIME"]
+    assert table[1].split() == ["#1", "6.4K", "1.2K", "5K", "0", "300", "0", "4.2s"]
+    assert table[2].split() == ["#2", "–", "800", "0", "0", "90", "40", "–"]
+    assert table[3].split()[0] == "Total" and "2K" in table[3]
+    assert price_tier_thresholds(view) == [272_000]
+    assert context_pricing_note(view) == "Tiered price (input/output per M): $0.1/$0.5 · above 272K: $0.2/$0.75"
+    assert "Tiered price" in context_detail_usage(view)
+    assert context_turn_usage(ConversationView()) == "No turns yet."
+    assert price_tier_thresholds(ConversationView()) == [] and context_pricing_note(ConversationView()) == ""
+
+
+@pytest.mark.asyncio
+async def test_context_meter_marks_where_the_price_rises():
+    from nexus.ui_support.tui_widgets import ActivityProgress
+
+    app = NexusTextualApp(_client(FakeTransport()))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        meter = app.query_one(ActivityProgress)
+        meter.set_state(used=100_000, budget=400_000, marks=(272_000, 500_000))
+        await pilot.pause()
+        bar = meter.render().plain
+        width = len(bar)
+        assert bar.count("┃") == 1 and bar.index("┃") == min(width - 1, round(width * 0.68))
+        meter.set_state(used=100_000, budget=400_000)
+        assert "┃" not in meter.render().plain

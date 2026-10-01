@@ -5081,7 +5081,10 @@ class Runtime:
         local/open-weight) returns ``None``, so the aggregate ``spent_cost``
         counts only priced models: a ``cost_budget`` is therefore a bound over
         priced models only, and ``token_budget`` is the universal bound. This is
-        documented rather than guessed.
+        documented rather than guessed. Tiered pricing applies per child turn:
+        the highest ``Cost.tiers`` entry whose ``context`` is below the turn's
+        prompt size (input + cache read + cache write tokens) replaces the base
+        rates for all of that turn's tokens.
         """
         registry = self._registry
         if registry is None:
@@ -5110,15 +5113,23 @@ class Runtime:
         usage = getattr(outcome, "usage", None)
         if usage is None:
             return None
-        input_rate = float(getattr(pricing, "input", 0.0) or 0.0)
-        output_rate = float(getattr(pricing, "output", 0.0) or 0.0)
+        input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+        cache_read_tokens = int(getattr(usage, "cache_read_tokens", 0) or 0)
+        cache_write_tokens = int(getattr(usage, "cache_write_tokens", 0) or 0)
+        # Tiered pricing: the highest tier whose threshold is below the prompt
+        # size (input + cache read + cache write) replaces the base rates.
+        rates = pricing
+        prompt_tokens = input_tokens + cache_read_tokens + cache_write_tokens
+        for tier in getattr(pricing, "tiers", None) or ():
+            if prompt_tokens > int(getattr(tier, "context", 0) or 0):
+                rates = tier
+        input_rate = float(getattr(rates, "input", 0.0) or 0.0)
+        output_rate = float(getattr(rates, "output", 0.0) or 0.0)
         total = (
-            int(getattr(usage, "input_tokens", 0) or 0) * input_rate
+            input_tokens * input_rate
             + int(getattr(usage, "output_tokens", 0) or 0) * output_rate
-            + int(getattr(usage, "cache_read_tokens", 0) or 0)
-            * float(getattr(pricing, "cache_read", 0.0) or 0.0)
-            + int(getattr(usage, "cache_write_tokens", 0) or 0)
-            * float(getattr(pricing, "cache_write", 0.0) or 0.0)
+            + cache_read_tokens * float(getattr(rates, "cache_read", 0.0) or 0.0)
+            + cache_write_tokens * float(getattr(rates, "cache_write", 0.0) or 0.0)
             # Reasoning is priced at the output rate; where a provider already
             # folds reasoning into output this over-counts, the conservative
             # direction for a budget.

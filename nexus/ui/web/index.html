@@ -33,17 +33,22 @@
   </svg>
   <div class="app-shell" id="app">
     <header class="topbar">
-      <button class="topbar-glyph" id="sidebar-toggle" type="button" aria-label="Toggle sessions sidebar" title="Toggle sessions sidebar"><svg aria-hidden="true"><use href="#i-sidebar"/></svg></button>
-      <button class="icon-button mobile-nav" id="mobile-nav" title="Sessions" aria-label="Open sessions"><svg><use href="#i-menu"/></svg></button>
-      <div class="topbar-title"><h1 id="session-title">New Session</h1><div class="session-meta sr-only"><span id="workspace-name">Nexus</span><span class="meta-separator">/</span><span id="session-id">Ready when you are</span></div></div>
-      <div class="topbar-actions">
-        <button class="topbar-text context-toolbar" id="context-toolbar" type="button" aria-haspopup="dialog" title="Inspect the next request">Context</button>
-        <button class="topbar-text logs-toggle" id="logs-toggle" title="Open logs (Ctrl+E)" aria-label="Open logs">Logs</button>
-        <button class="topbar-text" id="session-menu" title="Export session as Markdown" aria-label="Export session as Markdown">Export</button>
-        <span class="update-notice" id="update-notice" role="status" hidden></span>
-        <span class="live-state" id="live-state"><i></i> <span>Idle</span></span>
+      <div class="topbar-tabs">
+        <button class="topbar-glyph" id="sidebar-toggle" type="button" aria-label="Toggle sessions sidebar" title="Toggle sessions sidebar"><svg aria-hidden="true"><use href="#i-sidebar"/></svg></button>
+        <button class="icon-button mobile-nav" id="mobile-nav" title="Sessions" aria-label="Open sessions"><svg><use href="#i-menu"/></svg></button>
+        <nav class="session-tabs" id="session-tabs" aria-label="Open sessions"></nav>
         <button class="topbar-glyph" id="topbar-new" type="button" title="New session (⌘N)" aria-label="New session"><svg aria-hidden="true"><use href="#i-plus"/></svg></button>
         <button class="topbar-glyph inspector-toggle" id="inspector-toggle" title="Toggle details panel" aria-label="Open details"><svg aria-hidden="true"><use href="#i-panel"/></svg></button>
+      </div>
+      <div class="topbar-crumbs">
+        <div class="topbar-title"><nav class="crumb" id="crumb" aria-label="Where this session works"></nav><h1 id="session-title">New Session</h1><div class="session-meta sr-only"><span id="workspace-name">Nexus</span><span class="meta-separator">/</span><span id="session-id">Ready when you are</span></div></div>
+        <div class="topbar-actions">
+          <button class="topbar-text context-toolbar" id="context-toolbar" type="button" aria-haspopup="dialog" title="Inspect the next request">Context</button>
+          <button class="topbar-text logs-toggle" id="logs-toggle" title="Open logs (Ctrl+E)" aria-label="Open logs">Logs</button>
+          <button class="topbar-text" id="session-menu" title="Export session as Markdown" aria-label="Export session as Markdown">Export</button>
+          <span class="update-notice" id="update-notice" role="status" hidden></span>
+          <span class="live-state" id="live-state"><i></i> <span>Idle</span></span>
+        </div>
       </div>
     </header>
     <aside class="sidebar" id="sidebar" aria-label="Sessions">

@@ -443,8 +443,8 @@ export function renderCurrentContext({result, loading, error, chooseAgent, choos
 // ---------------------------------------------------------------------------
 
 const MAX_ROWS = 512;
-const estimateTokens = text => Math.ceil(String(text || '').length / 4);
-const compactTokens = value => value >= 1e6 ? `${(value / 1e6).toFixed(1).replace(/\.0$/, '')}M` : value >= 1e3 ? `${(value / 1e3).toFixed(1).replace(/\.0$/, '')}K` : String(value);
+export const estimateTokens = text => Math.ceil(String(text || '').length / 4);
+export const compactTokens = value => value >= 1e6 ? `${(value / 1e6).toFixed(1).replace(/\.0$/, '')}M` : value >= 1e3 ? `${(value / 1e3).toFixed(1).replace(/\.0$/, '')}K` : String(value);
 const entry = (title, body, tokens = 0, detail = '', error = false) => ({title, body, tokens, detail, error});
 const group = (key, title, entries, detail = '', total = null) => ({key, title, entries, detail, tokens: total ?? entries.reduce((sum, row) => sum + row.tokens, 0)});
 
@@ -644,18 +644,58 @@ export function renderSystemPrompt({result}) {
   return root;
 }
 
+// Tools dialog (twin of tui_context_header.ToolsModal): built-in tools then MCP servers, one
+// row per family with every tool name and its tokens; a row expands to its tools, a tool to
+// everything the model is given for it.
 export function renderToolsReport({result}) {
-  const root = node('div', 'context-request-tree ctx-report');
+  const root = node('div', 'context-request-tree ctx-report tools-table');
   const groups = toolGroups(result.tools);
   const count = groups.reduce((sum, row) => sum + row.entries.length, 0);
-  const header = node('div', 'ctx-toolbar');
-  const list = renderGroups(groups, () => true, true);
-  header.append(node('p', 'context-muted', `${count} definition${count === 1 ? '' : 's'} · ~${compactTokens(groups.reduce((sum, row) => sum + row.tokens, 0))} tokens`), expandAll(list));
-  root.append(header);
+  root.append(node('p', 'context-muted', `${count} definition${count === 1 ? '' : 's'} · ~${compactTokens(groups.reduce((sum, row) => sum + row.tokens, 0))} tokens · click a row for its tools`));
   if (result.tools_supported === false) root.append(node('p', 'context-muted', 'The selected model does not support tools; none are sent.'));
   if (!groups.length) root.append(node('p', 'context-muted', '(none)'));
-  root.append(list);
+  let swatch = 0;
+  for (const [label, rows] of [['Built-in tools', groups.filter(row => !row.key.startsWith('mcp:'))], ['MCP', groups.filter(row => row.key.startsWith('mcp:'))]]) {
+    if (!rows.length) continue;
+    const n = rows.reduce((sum, row) => sum + row.entries.length, 0);
+    const heading = node('h3', 'tools-section');
+    heading.append(node('span', '', label), node('span', 'context-muted', ` ${n} tool${n === 1 ? '' : 's'} · ~${compactTokens(rows.reduce((sum, row) => sum + row.tokens, 0))} tokens`));
+    const head = node('div', 'tools-row tools-head');
+    head.append(node('span', '', 'Group'), node('span', '', 'Tools'), node('span', 'tools-tokens', 'Tokens'));
+    root.append(heading, head);
+    for (const item of rows) {
+      const details = node('details', 'tools-group');
+      details.dataset.key = item.key;
+      const summary = node('summary', 'tools-row');
+      const name = node('span', 'tools-name');
+      const mark = node('span', 'tools-swatch');
+      mark.dataset.swatch = String(swatch++ % 6);
+      name.append(mark, node('strong', '', item.title.replace(/^MCP · /, '')));
+      summary.append(name, node('span', 'tools-names', item.entries.map(row => row.title).join('  ')), node('span', 'tools-tokens', `~${compactTokens(item.tokens)}`));
+      details.append(summary);
+      for (const row of item.entries) {
+        const tool = node('details', 'tools-tool');
+        const line = node('summary', 'tools-tool-row');
+        line.append(node('strong', '', row.title), node('span', 'context-muted', row.detail), node('span', 'tools-tokens', `~${compactTokens(row.tokens)}`));
+        const body = node('div', 'ctx-body');
+        body.append(markdown(row.body || '(empty)'));
+        tool.append(line, body);
+        details.append(tool);
+      }
+      root.append(details);
+    }
+  }
   return root;
+}
+
+// Twin of tui_context_header.one_line_preview: the first non-empty line, the rest counted.
+export function oneLinePreview(text, limit = 100) {
+  const lines = String(text || '').split('\n').filter(line => line.trim());
+  if (!lines.length) return '';
+  let first = lines[0].trim();
+  if (first.length > limit) first = `${first.slice(0, limit - 1).trimEnd()}…`;
+  const rest = lines.length - 1;
+  return rest ? `${first}  … +${rest} more line${rest === 1 ? '' : 's'}` : first;
 }
 
 export function headerSystemPrompt(result) {
@@ -668,13 +708,21 @@ export function headerSystemPrompt(result) {
 }
 
 
+const byteSize = count => count < 1024 ? `${count} B` : count < 1048576 ? `${(count / 1024).toFixed(1)} KB` : `${(count / 1048576).toFixed(1)} MB`;
+
 // Submitted attachment metadata and payloads remain distinct from the prompt.
 export function attachmentMessage(blocks = []) {
   const attachments = [], prose = [];
   for (const block of blocks) {
     const kind = block.kind || block.type;
     const match = kind === 'text' && String(block.text || '').match(/^\n\nAttachment: ((?:image|document) [1-9][0-9]*) · ([^\n]+)\n([\s\S]*)$/);
-    if (match) attachments.push({label:match[1], metadata:match[2], text:match[3].replace(/^\n/, '')});
+    if (match) {
+      // Twin of timeline.submitted_attachment_summary: images drop their byte size and
+      // media type; documents show the size of the text the model receives.
+      const text = match[3].replace(/^\n/, '');
+      const metadata = match[1].startsWith('image ') ? match[2].replace(/ · \d+ bytes$/, '').replace(/ · image\/[\w.+-]+$/, '') : `${match[2]} · ${byteSize(new TextEncoder().encode(text).length)}`;
+      attachments.push({label:match[1], metadata, text});
+    }
     else if (kind === 'image') {
       if (attachments.at(-1)?.label.startsWith('image ') && !attachments.at(-1).url) attachments.at(-1).url = block.image_url || '';
       else attachments.push({label:`image ${attachments.filter(item=>item.label.startsWith('image ')).length+1}`, metadata:block.media_type || 'Attached image', url:block.image_url || ''});

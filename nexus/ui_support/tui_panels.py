@@ -20,7 +20,7 @@ from typing import Any, ClassVar
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Horizontal, HorizontalScroll, Vertical, VerticalScroll
 from textual.content import Content
 from textual.markup import escape
 from textual.message import Message
@@ -207,8 +207,171 @@ class TuiPreferences:
 
 # ---------------------------------------------------------------- top bar
 
+TAB_TITLE_LIMIT = 36
+_TAB_GLYPHS = {"working": "", "input": "●", "done": "✓", "idle": "·"}
+
+
+def tab_title(title: str) -> str:
+    """A tab label: the session title's first 36 characters, ellipsis announced."""
+    text = sanitize(title or "New Session", 200)
+    return text if len(text) <= TAB_TITLE_LIMIT else text[:TAB_TITLE_LIMIT - 1].rstrip() + "…"
+
+
+def breadcrumb(workspace: str, git: Mapping[str, Any] | None, home: str | None = None) -> str:
+    """``~/repos/nexus › ⎇ main`` (plus ``› worktree name`` in a linked worktree)."""
+    path = str(workspace or "")
+    home = home if home is not None else str(Path.home())
+    if home and (path == home or path.startswith(home.rstrip("/") + "/")):
+        path = "~" + path[len(home.rstrip("/")):]
+    parts = [sanitize(path, 120)] if path else []
+    git = git or {}
+    if git.get("worktree") and git.get("worktree_name"):
+        parts.append(f"worktree {sanitize(str(git['worktree_name']), 60)}")
+    if git.get("branch"):
+        parts.append(("◇ " if git.get("detached") else "⎇ ") + sanitize(str(git["branch"]), 80))
+    return "  ›  ".join(parts)
+
+
+class SessionTab(Horizontal):
+    """One open session: status glyph, title (first 36 chars) and a close ×."""
+
+    def __init__(self, session_id: str) -> None:
+        super().__init__(classes="session-tab")
+        self.session_id = session_id
+        self.status = "idle"
+        self.title_text = ""
+        self.active = False
+        self._frame = 0
+        self._timer = None
+
+    def compose(self) -> ComposeResult:
+        yield Static("·", classes="tab-glyph", markup=False)
+        yield Static("", classes="tab-title", markup=False)
+        close = Static("×", classes="tab-close", markup=False)
+        close.tooltip = "Close tab · the session keeps running"
+        yield close
+
+    def update_tab(self, title: str, status: str, *, active: bool) -> None:
+        self.title_text, self.status, self.active = title, status, active
+        if self.is_mounted:
+            self._apply()
+
+    def on_mount(self) -> None:
+        self._apply()
+
+    def _apply(self) -> None:
+        status = self.status
+        if status == "working" and self._timer is None:
+            self._timer = self.set_interval(0.12, self._spin)
+        elif status != "working" and self._timer is not None:
+            self._timer.stop()
+            self._timer = None
+        self.query_one(".tab-title", Static).update(tab_title(self.title_text))
+        self.tooltip = f"{sanitize(self.title_text or 'New Session', 200)}\n{self.session_id}"
+        for name in ("working", "input", "done", "idle"):
+            self.set_class(status == name, f"-{name}")
+        self.set_class(self.active, "-active")
+        self._paint()
+
+    def _spin(self) -> None:
+        self._frame = (self._frame + 1) % len(_SPINNER)
+        self._paint()
+
+    def _paint(self) -> None:
+        glyph = _SPINNER[self._frame] if self.status == "working" else _TAB_GLYPHS.get(self.status, "·")
+        self.query_one(".tab-glyph", Static).update(glyph)
+
+    def on_unmount(self) -> None:
+        if self._timer is not None:
+            self._timer.stop()
+            self._timer = None
+
+    def on_click(self, event) -> None:
+        event.stop()
+        close = self.query_one(".tab-close", Static)
+        target = SessionTabs.CloseRequested if event.widget is close else SessionTabs.OpenRequested
+        self.post_message(target(self.session_id))
+
+
+class SessionTabs(Horizontal):
+    """The first top-bar row: sessions sidebar toggle, one tab per open session
+    (status glyph, title, ×), new session, details toggle.
+
+    Which sessions are open is the app's decision (``set_tabs``); this widget
+    only renders and posts messages.
+    """
+
+    class OpenRequested(Message):
+        def __init__(self, session: str) -> None:
+            super().__init__()
+            self.session = session
+
+    class CloseRequested(Message):
+        def __init__(self, session: str) -> None:
+            super().__init__()
+            self.session = session
+
+    _TARGETS: ClassVar[dict[str, str]] = {
+        "topbar-sidebar-toggle": "SidebarToggled",
+        "topbar-details-toggle": "DetailsToggled",
+        "topbar-new": "NewRequested",
+    }
+
+    def compose(self) -> ComposeResult:
+        toggle = Static("▌", id="topbar-sidebar-toggle", classes="topbar-button", markup=False)
+        toggle.tooltip = "Toggle sessions sidebar · ctrl+b"
+        yield toggle
+        yield HorizontalScroll(id="session-tab-list")
+        new = Static("+", id="topbar-new", classes="topbar-button", markup=False)
+        new.tooltip = "New session · ctrl+n"
+        yield new
+        details = Static("▐", id="topbar-details-toggle", classes="topbar-button", markup=False)
+        details.tooltip = "Toggle details sidebar · ctrl+l"
+        yield details
+
+    def set_tabs(self, tabs: list[tuple[str, str, str]], current: str) -> None:
+        """``tabs`` is ``(session id, title, status)`` in display order."""
+        strip = self.query_one("#session-tab-list", HorizontalScroll)
+        existing = {tab.session_id: tab for tab in strip.query(SessionTab)}
+        wanted = [session for session, _, _ in tabs]
+        for session, tab in existing.items():
+            if session not in wanted:
+                tab.remove()
+        order = [existing.get(session) or SessionTab(session) for session in wanted]
+        fresh = [tab for tab in order if tab.session_id not in existing]
+        if fresh:
+            strip.mount_all(fresh)
+
+        for (session, title, status), tab in zip(tabs, order, strict=True):
+            tab.update_tab(title, status, active=session == current)
+
+        def arrange() -> None:
+            # Re-read the strip: a later ``set_tabs`` may have replaced tabs since.
+            mounted = {tab.session_id: tab for tab in strip.children if isinstance(tab, SessionTab)}
+            ordered = [mounted[session] for session in wanted if session in mounted]
+            if list(mounted.values()) != ordered:
+                for index, tab in enumerate(ordered):
+                    strip.move_child(tab, before=index)
+            if current in mounted:
+                strip.scroll_to_widget(mounted[current], animate=False)
+
+        self.call_after_refresh(arrange)
+
+    def set_toggles(self, *, sessions: bool, details: bool) -> None:
+        self.query_one("#topbar-sidebar-toggle").set_class(sessions, "-on")
+        self.query_one("#topbar-details-toggle").set_class(details, "-on")
+
+    def on_click(self, event) -> None:
+        name = self._TARGETS.get(getattr(event.widget, "id", None) or "")
+        if name:
+            event.stop()
+            self.post_message(getattr(TopBar, name)())
+
+
 class TopBar(Horizontal):
-    """The shell's one-row nav bar: sidebar toggle, breadcrumb, status, actions.
+    """The second top-bar row: a breadcrumb of where the session works
+    (directory › worktree › branch) on the left, its status in words on the
+    right. The status glyph lives on the session's tab above.
 
     Pure presentation; it posts messages and the app owns every action.
     """
@@ -222,47 +385,59 @@ class TopBar(Horizontal):
     class NewRequested(Message):
         pass
 
-    _TARGETS: ClassVar[dict[str, str]] = {
-        "topbar-sidebar-toggle": "SidebarToggled",
-        "topbar-details-toggle": "DetailsToggled",
-        "topbar-new": "NewRequested",
-    }
+    def __init__(self, *, details_toggle: bool = False, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._details_toggle = details_toggle
 
     def compose(self) -> ComposeResult:
-        toggle = Static("▌", id="topbar-sidebar-toggle", classes="topbar-button", markup=False)
-        toggle.tooltip = "Toggle sessions sidebar · ctrl+b"
-        yield toggle
         yield Static("", id="topbar-crumb", markup=False)
         yield Static("", id="topbar-status", markup=False)
-        new = Static("+", id="topbar-new", classes="topbar-button", markup=False)
-        new.tooltip = "New session · ctrl+n"
-        yield new
-        details = Static("▐", id="topbar-details-toggle", classes="topbar-button", markup=False)
-        details.tooltip = "Toggle details sidebar · ctrl+l"
-        yield details
+        if self._details_toggle:
+            details = Static("▐", id="topbar-details-toggle", classes="topbar-button", markup=False)
+            details.tooltip = "Toggle details sidebar · ctrl+l"
+            yield details
+
+    def set_location(self, text: str) -> None:
+        self.query_one("#topbar-crumb", Static).update(text)
 
     def set_session(self, title: str, status: str) -> None:
-        self.query_one("#topbar-crumb", Static).update(sanitize(title or "New Session", 120))
-        glyph = {"working": "◌ ", "input": "● ", "done": "✓ "}.get(status, "")
-        self.query_one("#topbar-status", Static).update(f"{glyph}{STATUS_LABELS.get(status) or 'Idle'}")
+        """Sub-agent pages: the title stands in for the breadcrumb."""
+        self.set_location(sanitize(title or "New Session", 120))
+        self.set_status(status)
+
+    def set_status(self, status: str) -> None:
+        self.query_one("#topbar-status", Static).update(STATUS_LABELS.get(status) or "Idle")
         for name in ("working", "input", "done"):
             self.set_class(status == name, f"-{name}")
 
     def set_toggles(self, *, sessions: bool, details: bool) -> None:
-        self.query_one("#topbar-sidebar-toggle").set_class(sessions, "-on")
-        self.query_one("#topbar-details-toggle").set_class(details, "-on")
+        for toggle in self.query("#topbar-details-toggle"):
+            toggle.set_class(details, "-on")
 
     def on_click(self, event) -> None:
-        name = self._TARGETS.get(getattr(event.widget, "id", None) or "")
-        if name:
+        if getattr(event.widget, "id", None) == "topbar-details-toggle":
             event.stop()
-            self.post_message(getattr(self, name)())
+            self.post_message(self.DetailsToggled())
 
 
 # ---------------------------------------------------------------- session sidebar
 
+SESSION_WORDS = {"working": "working now", "input": "needs input", "done": "finished", "archived": "archived"}
+
+
+def session_subline(summary: Any, status: str, now: float | None = None) -> str:
+    """The card's second line: status in words (or the message count), then age."""
+    words = SESSION_WORDS.get(status)
+    if words is None:
+        count = _int(getattr(summary, "message_count", 0))
+        words = f"{count} message{'' if count == 1 else 's'}" if count else "no messages"
+    age = relative_time(getattr(summary, "last_activity", 0.0), now)
+    return f"{words} · {age}" if age else words
+
+
 class SessionRow(Horizontal):
-    """One session line: status glyph, title, status or age, and delete target."""
+    """One session as a two-line card: status glyph and title, then the status
+    in words (or message count) and age; the current session has a left bar."""
 
     can_focus = True
 
@@ -275,11 +450,28 @@ class SessionRow(Horizontal):
 
     def compose(self) -> ComposeResult:
         yield Static("·", classes="session-glyph", markup=False)
-        yield Static("", classes="session-title", markup=False)
-        yield Static("", classes="session-sub", markup=False)
+        with Vertical(classes="session-text"):
+            yield Static("", classes="session-title", markup=False)
+            yield Static("", classes="session-sub", markup=False)
         yield Static("×", classes="session-delete", markup=False)
 
     def update_row(self, summary: Any, status: str, *, active: bool) -> None:
+        # The title lives in a nested container that composes after this row
+        # mounts; keep the latest values and apply them once it exists.
+        self._pending = (summary, status, active)
+        self.status = status
+        self.set_class(active, "-active")
+        if self.query(".session-title"):
+            self._apply_row()
+
+    def on_mount(self) -> None:
+        self.call_after_refresh(self._apply_row)
+
+    def _apply_row(self) -> None:
+        pending = getattr(self, "_pending", None)
+        if pending is None or not self.query(".session-title"):
+            return
+        summary, status, active = pending
         self.status = status
         if status == "working" and self._timer is None:
             self._timer = self.set_interval(0.12, self._spin)
@@ -287,9 +479,8 @@ class SessionRow(Horizontal):
             self._timer.stop()
             self._timer = None
         title = sanitize(summary.title or "Untitled session", 80)
-        sub = STATUS_LABELS[status] if status != "archived" else ""
         self.query_one(".session-title", Static).update(title)
-        self.query_one(".session-sub", Static).update(sub or relative_time(summary.last_activity))
+        self.query_one(".session-sub", Static).update(session_subline(summary, status))
         self.tooltip = f"{title}\n{summary.id}"
         for name in ("working", "input", "done", "idle", "archived"):
             self.set_class(status == name, f"-{name}")
@@ -308,8 +499,6 @@ class SessionRow(Horizontal):
 
     def _paint_glyph(self) -> None:
         glyph = {"working": _SPINNER[self._frame], "input": "●", "done": "✓", "archived": "◇"}.get(self.status, "·")
-        if self.has_class("-active") and self.status in {"idle", "done"}:
-            glyph = "●"
         self.query_one(".session-glyph", Static).update(glyph)
 
     def on_click(self, event) -> None:

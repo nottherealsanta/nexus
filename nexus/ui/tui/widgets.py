@@ -21,6 +21,7 @@ from ...ui_support.tui_widgets import (
     WorktreesScreen,
     agent_color,
     context_detail_usage,
+    context_turn_usage,
     context_usage,
     is_large_paste,
 )
@@ -46,6 +47,7 @@ __all__ = [
     "WorktreesScreen",
     "agent_color",
     "context_detail_usage",
+    "context_turn_usage",
     "context_usage",
     "is_large_paste",
 ]

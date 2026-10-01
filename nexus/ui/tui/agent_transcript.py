@@ -59,7 +59,7 @@ class AgentTranscriptScreen(Screen[None]):
     ]
 
     def compose(self) -> ComposeResult:
-        yield TopBar(id="top-bar")
+        yield TopBar(id="top-bar", details_toggle=True)
         with Horizontal(id="main-layout"):
             with Vertical(id="main-column"):
                 yield Static("", id="agent-inspector-heading", markup=False)
