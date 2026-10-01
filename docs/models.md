@@ -87,6 +87,10 @@ are durable (`model.selected`, `reasoning_effort.selected`).
   **the catalogue can never redirect a request or supply a credential.** `env`
   is a name, never read as a value. A catalogue marked `_license: "pending"` sets
   `license_pending` rather than being trusted.
+- Host model list, detail and tier reads initialize the catalogue automatically,
+  using the same cache-first, single-flight load as turns. Enabled Claude Agent
+  models are available after daemon restarts without repeating `nexus claude init`;
+  initialization does not change the default model or start a sign-in.
 - **Tiered pricing.** `Cost` carries `tiers: tuple[CostTier, ...]` (ascending by
   `context`, max 8) from models.dev `cost.tiers` entries of `tier.type ==
   "context"`; a tier's rates apply when the prompt exceeds its `context` size

@@ -1483,6 +1483,9 @@ class HostFacade:
         if isinstance(command, p.SetupSave):
             return p.SetupSaveResult(**await setup_save(self.runtime, command.provider, command.model, reload=not self.supervisor.running))
         if isinstance(command, p.ModelsList):
+            initializer = getattr(self.runtime, "ensure_models", None)
+            if callable(initializer):
+                await initializer()
             models = self.list_models(
                 provider=command.provider,
                 tier=command.tier,
@@ -1497,11 +1500,17 @@ class HostFacade:
                 ],
             )
         if isinstance(command, p.ModelShow):
+            initializer = getattr(self.runtime, "ensure_models", None)
+            if callable(initializer):
+                await initializer()
             model = self.model_info(command.ref)
             return p.ModelShowResult(
                 ref=command.ref, found=model is not None, model=model
             )
         if isinstance(command, p.ModelTiers):
+            initializer = getattr(self.runtime, "ensure_models", None)
+            if callable(initializer):
+                await initializer()
             tiers = self.model_tiers()
             return p.ModelTiersResult(
                 order=tiers["order"],

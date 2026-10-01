@@ -301,3 +301,33 @@ async def test_sdk_mcp_handler_only_queues_intention():
     sdk = worker_sdk(options, Result, messages)
     value = await worker.run(request_payload(request(), "sonnet", None), sdk)
     assert value["output"] == {"text": "", "tool_calls": [{"name": "Read", "arguments": '{"path": "a.txt"}'}]}
+
+
+async def test_enabled_claude_catalogue_initializes_on_model_reads_after_restart(tmp_path):
+    from nexus.host import HostFacade
+    from nexus.host import protocol as p
+
+    home = tmp_path / "home"
+    (home / ".nexus").mkdir(parents=True)
+    (home / ".nexus" / "config.toml").write_text(
+        'config_version = 2\n[models]\ndefault = "claude-agent/claude-test"\n'
+        'offline = true\n[providers.claude-agent]\nkind = "claude-agent"\n'
+    )
+    cache = home / ".nexus" / "cache" / "models.dev.json"
+    cache.parent.mkdir()
+    cache.write_text(json.dumps({"anthropic": {"npm": "@ai-sdk/anthropic", "models": {
+        "claude-test": {"tool_call": True, "modalities": {"input": ["text"], "output": ["text"]}}
+    }}}))
+    for _ in range(2):
+        runtime = Runtime(tmp_path / "workspace", home=home, environ={})
+        host = HostFacade(runtime)
+        try:
+            assert not runtime.registry.loaded
+            detail = await host.handle(p.ModelShow(ref="claude-agent/claude-test"))
+            assert detail.found
+            result = await host.handle(p.ModelsList(provider="claude-agent", selectable_only=True))
+            assert [row["id"] for row in result.models] == ["claude-test"]
+            assert runtime.router.default == "claude-agent/claude-test"
+        finally:
+            await host.shutdown()
+            await runtime.aclose()

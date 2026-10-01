@@ -2479,6 +2479,14 @@ class Runtime:
         else:
             self._publish_registry_event("registry.refreshed", data)
 
+    async def ensure_models(self) -> None:
+        """Initialize configured model catalogues once, without forcing a refresh.
+
+        Host model reads need the same catalogue as turn resolution, including
+        configured subscription aliases such as Claude (plan section 15.3).
+        """
+        await self._ensure_registry()
+
     async def refresh_models(self) -> Any:
         """Force a catalogue refresh, publishing ``registry.*`` events.
 
