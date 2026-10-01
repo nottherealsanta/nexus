@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.15](https://github.com/nottherealsanta/nexus/compare/v0.2.14...v0.2.15) (2026-10-01)
+
+
+### Bug fixes
+
+* initialize enabled model catalogues and repair diff preview interactions ([#46](https://github.com/nottherealsanta/nexus/issues/46)) ([ad536ab](https://github.com/nottherealsanta/nexus/commit/ad536abbafb1b933faa1222b94fb02f4ce9aa64e))
+
 ## [0.2.14](https://github.com/nottherealsanta/nexus/compare/v0.2.13...v0.2.14) (2026-10-01)
 
 
