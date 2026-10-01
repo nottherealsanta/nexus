@@ -614,7 +614,6 @@ async def main() -> None:
                 await page.wait_for_timeout(450)
                 await page.keyboard.press("Control+Space")
                 await assert_recording_dot(False)
-                assert "transcrib" not in (await page.locator("#app").inner_text()).lower()
                 try:
                     await page.wait_for_function("() => document.querySelector('#composer-input').value.includes('dictated words')", timeout=10_000)
                 except Exception as exc:
@@ -635,6 +634,25 @@ async def main() -> None:
                 await assert_recording_dot(False)
                 await page.wait_for_function("() => document.querySelector('#composer-input').value.includes('dictated words')", timeout=10_000)
                 assert "lead" in await editor.input_value() and not (await editor.input_value()).endswith("a"), await editor.input_value()
+                # Live dictation: while recording, growing snapshots go up as partial
+                # previews and their text shows in the floating strip without moving the composer.
+                await editor.fill("")
+                await editor.focus()
+                uploads_before = len(voice_uploads)
+                await page.keyboard.press("Control+Space")
+                await page.wait_for_function("() => document.querySelector('#composer-status').classList.contains('is-recording')", timeout=5_000)
+                strip = page.locator("#voice-strip")
+                await strip.wait_for(state="visible", timeout=5_000)
+                assert await strip.get_attribute("data-phase") == "recording"
+                await page.wait_for_function("() => document.querySelector('#voice-strip [data-voice-text]').textContent.includes('dictated words')", timeout=10_000)
+                assert any(rid.endswith(("-p1", "-p2")) for rid in voice_request_ids[uploads_before:]), voice_request_ids
+                await assert_recording_dot(True)
+                strip_box, composer_box = await strip.bounding_box(), await page.locator("#composer-form").bounding_box()
+                assert strip_box["y"] + strip_box["height"] <= composer_box["y"], (strip_box, composer_box)
+                await page.screenshot(path=str(ARTIFACTS / "web-voice-live.png"))
+                await page.keyboard.press("Control+Space")
+                await page.wait_for_function("() => document.querySelector('#composer-input').value.includes('dictated words')", timeout=10_000)
+                await strip.wait_for(state="hidden", timeout=5_000)
                 await editor.fill("before dictated words after")
                 assert await page.evaluate("navigator.mediaDevices.getUserMedia !== undefined")
                 # If the composer loses focus during dictation, discard the
@@ -649,13 +667,15 @@ async def main() -> None:
                 starts_before_blur = voice_state["session_starts"]
                 await page.keyboard.press("Control+Space")
                 await assert_recording_dot(False)
-                assert "transcrib" not in (await page.locator("#app").inner_text()).lower()
                 await asyncio.wait_for(delayed_voice["entered"].wait(), timeout=10)
-                assert "transcrib" not in (await page.locator("#app").inner_text()).lower()
+                # The live strip stays up, animating, while the final transcript runs.
+                assert await page.locator("#voice-strip").get_attribute("data-phase") == "transcribing"
+                assert await page.locator("#voice-strip").is_visible()
                 await page.locator("#session-filter").focus()
                 delayed_voice["release"].set()
                 await page.wait_for_timeout(250)
                 await assert_recording_dot(False)
+                assert await page.locator("#voice-strip").is_hidden()
                 assert await editor.input_value() == "before dictated words after"
                 assert voice_state["session_starts"] == starts_before_blur
                 delayed_voice["hold"] = False
@@ -1770,11 +1790,14 @@ async def main() -> None:
                 assert await agent_modal.locator(".tool-card").count() == 1
                 assert await agent_modal.locator(".tool-hint").count() == 0
                 await page.evaluate("""() => { const s=window.__nexusEventSources.at(-1); s.dispatchEvent(new MessageEvent('view',{data:JSON.stringify({schema_version:1,session:'ui-fixture-a',seq:23,ops:[{op:'replace',path:'/agents/0/body/turns/0/tools/0/display',value:'Live child update'}]})})); }""")
-                await agent_modal.get_by_text("Live child update").first.wait_for(timeout=5_000)
-                await page.wait_for_timeout(300)
+                # Compact Read headers omit result text; inspect the live details instead.
+                await agent_modal.locator(".tool-card").click()
+                await page.get_by_text("Live child update", exact=True).first.wait_for(timeout=5_000)
                 await page.screenshot(path=str(ARTIFACTS / "agent-modal.png"))
+                # Escape returns directly to the composer, closing all layered dialogs.
                 await page.keyboard.press("Escape")
                 await agent_modal.wait_for(state="hidden", timeout=5_000)
+                await page.locator("#text-overlay").wait_for(state="hidden", timeout=5_000)
                 assert "/a/" not in page.url
                 # The ← button and browser Back return to the conversation just as Escape does.
                 await page.locator("#inspector-content .agent-row").filter(has_text="explore · completed").click()

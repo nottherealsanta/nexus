@@ -157,7 +157,7 @@ async def main():
                 context_cards = await page.evaluate("""async()=>{
                     const api=await import('/js/api.js');
                     const ui=await import('/js/context-view.js');
-                    const result=await api.command({type:'ContextInspect',session:decodeURIComponent(location.pathname.split('/s/')[1])});
+                    const result=await api.command({type:'ContextInspect',session:history.state.session});
                     const rendered=ui.renderCurrentContext({result});
                     return [...rendered.querySelectorAll('.attachment-reference')].map(n=>n.textContent);
                 }""")
