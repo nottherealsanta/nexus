@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.9](https://github.com/nottherealsanta/nexus/compare/v0.2.8...v0.2.9) (2026-10-01)
+
+
+### Bug fixes
+
+* restructure docs into per-subsystem pages with a task index ([#30](https://github.com/nottherealsanta/nexus/issues/30)) ([4080500](https://github.com/nottherealsanta/nexus/commit/4080500c86960e20c830201074b52c0d483de283))
+* simplify root prompts and deduplicate AGENTS.md display ([#33](https://github.com/nottherealsanta/nexus/issues/33)) ([129255c](https://github.com/nottherealsanta/nexus/commit/129255cde6e9413703b118fe89451889dd969663))
+* support clipboard image paste in terminal composer ([#32](https://github.com/nottherealsanta/nexus/issues/32)) ([85ad5fe](https://github.com/nottherealsanta/nexus/commit/85ad5feb160ae00942e21dee9c7ef15d0926b673))
+* update build prompt test for simplified root prompts ([#34](https://github.com/nottherealsanta/nexus/issues/34)) ([251a7c1](https://github.com/nottherealsanta/nexus/commit/251a7c1b8f04cdf80883577f2bc2ae82b2f3d948))
+
 ## [0.2.8](https://github.com/nottherealsanta/nexus/compare/v0.2.7...v0.2.8) (2026-09-30)
 
 
