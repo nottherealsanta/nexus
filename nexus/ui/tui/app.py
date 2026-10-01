@@ -723,7 +723,11 @@ class NexusTextualApp(AttachmentsMixin, ExtraCommandsMixin, PanelsMixin, App[int
                     self.screen.dismiss(None)
         if event.type in {"turn.completed", "turn.failed", "turn.cancelled"}:
             self.post_message(TurnFinished(event))
-        if changed:
+        if changed and event.type.startswith("presence."):
+            # Viewer presence never changes the transcript; a full timeline
+            # sync per presence event delayed a submitted prompt by ~0.1s each.
+            self._sync_topbar()
+        elif changed:
             if event.type != "error":
                 self._sync_status()
             await self._sync_timeline()
@@ -1257,8 +1261,11 @@ class NexusTextualApp(AttachmentsMixin, ExtraCommandsMixin, PanelsMixin, App[int
     def _sync_activity(self) -> None:
         if not self.is_mounted:
             return
+        meter = next(iter(self.query(ActivityProgress)), None)
+        if meter is None:  # shutting down, or a screen without the meter
+            return
         used, window, _measured = context_measure(self.controller.view)
-        self.query_one(ActivityProgress).set_state(
+        meter.set_state(
             used=used or 0,
             budget=window or 0,
             # The durable view is authoritative: once it has no active turn

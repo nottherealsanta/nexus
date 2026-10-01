@@ -508,6 +508,8 @@ class TurnWidget(Widget):
         self.agent_colors: Mapping[str, str] = {}
         #: 1-based position in the conversation, shown on the prompt.
         self.number = 0
+        #: What the last reconcile rendered; an identical request is a no-op.
+        self._rendered_key: tuple | None = None
 
     def render(self) -> str:
         """Never let Textual's default childless-widget label reach the screen."""
@@ -527,12 +529,19 @@ class TurnWidget(Widget):
         async with self._set_turn_lock:
             if not self.is_attached:
                 return
+            # The reducer shares unchanged turns structurally: the same turn,
+            # agents and flags render exactly as they already do.
+            key = (id(turn), id(agents), hide_setup_error, hide_greeting_key, self.number, self.collapsed,
+                   tuple(sorted(self.agent_colors.items())))
+            if key == self._rendered_key and turn is self.turn and agents is self.agents:
+                return
             await self._reconcile_turn(
                 turn,
                 agents,
                 hide_setup_error=hide_setup_error,
                 hide_greeting_key=hide_greeting_key,
             )
+            self._rendered_key = key
 
     async def _reconcile_turn(
         self,
@@ -855,6 +864,8 @@ class ConversationTimeline(VerticalScroll):
                 widget = None
             if widget is None:
                 widget = TurnWidget(turn, view.agents, classes="turn")
+                widget.number = number  # before mount, so its first render is final
+                widget.agent_colors = self.agent_colors
                 try:
                     await self.mount(widget)
                 except asyncio.CancelledError:

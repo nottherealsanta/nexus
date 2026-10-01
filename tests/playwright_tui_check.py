@@ -522,6 +522,10 @@ def _check_slash_new_visible(playwright, browser: Browser, port: int, command_lo
     page.on("websocket", lambda ws: ws.on("framereceived", lambda payload: received.append(payload)))
     try:
         _wait_ready(page, port, server)
+        box = page.get_by_role("textbox", name="Terminal input")
+        box.click()
+        # Typing hides the empty-session hints; measure the baseline with them hidden.
+        page.keyboard.type("x")
         page.wait_for_timeout(500)
         text_layer = page.locator("canvas.xterm-text-layer").first
         baseline_lit = text_layer.evaluate(
@@ -534,8 +538,7 @@ def _check_slash_new_visible(playwright, browser: Browser, port: int, command_lo
               return lit;
             }"""
         )
-        box = page.get_by_role("textbox", name="Terminal input")
-        box.click()
+        page.keyboard.press("Backspace")
         page.keyboard.type("/n", delay=60)
         page.wait_for_timeout(600)
         suggestion = _shot(page, "functional-slash-new-suggestion.png")

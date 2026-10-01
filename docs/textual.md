@@ -97,6 +97,11 @@ literal system-prompt text, so terminal escape sequences cannot affect display.
 - **Side-panel polling must never break the shell:** failures render as
   "unavailable". Test fakes reject unknown commands, so a new host call needs a
   fake response (`tests/test_tui_panels.py:PanelTransport`).
+- **Keep event handling cheap.** `presence.*` events update only the top bar,
+  and `TurnWidget.set_turn` returns early for a turn the reducer shared
+  unchanged (same object, agents, flags). Before this, every presence event on
+  stream attach re-reconciled every turn, delaying a submitted prompt by up to
+  ~0.6s in long sessions (`tests/test_tui_submit_latency.py`).
 - **Race hygiene:** async work re-checks `self.controller.session` and
   `_agent_metadata_revision` before applying results
   (`tests/test_tui_session_switch_race.py`).

@@ -456,6 +456,22 @@ class SessionRow(Horizontal):
         yield Static("×", classes="session-delete", markup=False)
 
     def update_row(self, summary: Any, status: str, *, active: bool) -> None:
+        # The title lives in a nested container that composes after this row
+        # mounts; keep the latest values and apply them once it exists.
+        self._pending = (summary, status, active)
+        self.status = status
+        self.set_class(active, "-active")
+        if self.query(".session-title"):
+            self._apply_row()
+
+    def on_mount(self) -> None:
+        self.call_after_refresh(self._apply_row)
+
+    def _apply_row(self) -> None:
+        pending = getattr(self, "_pending", None)
+        if pending is None or not self.query(".session-title"):
+            return
+        summary, status, active = pending
         self.status = status
         if status == "working" and self._timer is None:
             self._timer = self.set_interval(0.12, self._spin)
