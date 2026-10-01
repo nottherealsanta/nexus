@@ -120,6 +120,14 @@ import Textual besides `ui/tui/`):
 attachments). The browser also has an Attach file button and accepts image/file
 paste and drag/drop in the composer. Expand an attachment to inspect it before
 sending; the TUI opens converted documents in a scrollable Markdown preview.
+Ctrl+V in the terminal editor reads a local clipboard image on macOS, or on
+Linux with `wl-paste` (Wayland) or `xclip` (X11), and shows a pending
+`clipboard.png` attachment. Text paste retains its existing behavior. This
+requires the terminal to pass Ctrl+V to Nexus; terminal-managed paste shortcuts
+only send text. Remote SSH clipboard images and Windows are not supported; use
+`/attach <path>` there. Native macOS pasteboard access was verified; clipboard image conversion is
+covered with fakes and has not been verified with a live image.
+
 Enter submits attachments even without prompt text; queue, steer, and interrupt
 use the same attachment path. Switching sessions clears pending attachments.
 
