@@ -1033,17 +1033,17 @@ more. `nexus mock all --speed 0` runs every non-interactive scenario headlessly.
 
 ### Claude Pro/Max via the Agent SDK
 
-Install the optional official SDK integration:
+The official SDK integration is included in the standard install:
 
 ```sh
-uv tool install --force 'nexus-harness[claude-agent]'
+uv tool install --force 'nexus-harness'
 ```
 
 Sign in through Claude Code with `claude auth login` using your Claude Pro/Max
 account. If Claude Code is not installed separately, use the SDK's bundled CLI:
 
 ```sh
-uv run --no-project --with 'nexus-harness[claude-agent]' python -c 'from nexus.model.providers.claude_agent_auth import cli_path; import subprocess; subprocess.run([cli_path(), "auth", "login"], check=True)'
+uv run --no-project --with 'nexus-harness' python -c 'from nexus.model.providers.claude_agent_auth import cli_path; import subprocess; subprocess.run([cli_path(), "auth", "login"], check=True)'
 ```
 
 First-run setup in both `nexus chat` and `nexus web` detects the subscription login

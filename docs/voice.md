@@ -18,7 +18,8 @@ model cache. Plans and spike notes: `plans/VOICE_PLAN.md`, `plans/VOICE_SPIKE.md
 
 ## Flow
 
-1. **Install:** `uv sync --extra voice` (`moondream==2.4.0`, `sounddevice`). The
+1. **Install:** normal Nexus installation includes `moondream==2.4.0` and
+   `sounddevice`; source checkouts use `uv sync`. The
    model (~179 MB) is **not** bundled.
 2. **Consent:** the first use shows a confirmation dialog in the TUI and web;
    `nexus voice download` is itself an explicit action. `VoicePrepare` carries no
@@ -53,3 +54,8 @@ Implement the `Engine` protocol (`load`, `transcribe(bytes)`, `close`) in
 serialized worker, model-store and host-command boundaries, and cover it with a
 fake-engine unit test. No UI may import the inference library or read the cache.
 Tests: `tests/test_voice_*.py`, `test_tui_voice.py`.
+
+The Textual voice dialog shows only the actions for its current phase. Runtime
+errors and unsupported installations show the host's message and Retry, even
+before preparation is requested; a loaded model offers Start dictation and
+replaces the download invitation.

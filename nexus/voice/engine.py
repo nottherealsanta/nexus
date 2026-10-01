@@ -80,7 +80,7 @@ class KestrelEngine:
 
     @staticmethod
     def available() -> bool:
-        """Return whether the optional local inference runtime is installed."""
+        """Return whether the local inference runtime is installed."""
         try:
             return find_spec("kestrel") is not None
         except (ImportError, ValueError):

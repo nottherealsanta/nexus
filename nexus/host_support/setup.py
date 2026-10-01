@@ -42,7 +42,7 @@ _PROVIDER_INFO = {
     ),
     "opencode-go": ("OpenCode Go", "Paste your OpenCode Go API key in Settings → Providers."),
     "openai": ("OpenAI", "Set OPENAI_API_KEY in the daemon environment."),
-    "claude-agent": ("Claude Pro/Max", "Install nexus-harness[claude-agent], then run claude auth login with your Claude subscription."),
+    "claude-agent": ("Claude Pro/Max", "Run claude auth login with your Claude subscription."),
     "anthropic": ("Anthropic", "Set ANTHROPIC_API_KEY in the daemon environment."),
     "google": (
         "Google Gemini",

@@ -170,7 +170,7 @@ class VoiceManager:
                     if callable(availability) and not availability():
                         self._state = self._new_state(
                             "unsupported",
-                            message="Voice runtime is not installed. Install the voice extra (uv sync --extra voice) and restart the daemon.",
+                            message="Voice runtime is not installed. Reinstall Nexus (uv sync for source checkouts) and restart the daemon.",
                         )
                         return self._state
                 path = await self.store.ensure(
