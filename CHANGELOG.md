@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.10](https://github.com/nottherealsanta/nexus/compare/v0.2.9...v0.2.10) (2026-10-01)
+
+
+### Bug fixes
+
+* live dictation previews, timeline polish, and bundled dependencies ([#35](https://github.com/nottherealsanta/nexus/issues/35)) ([9f8f4e9](https://github.com/nottherealsanta/nexus/commit/9f8f4e99e5b8313c49c55e8ba79576de4fda5d7c))
+
 ## [0.2.9](https://github.com/nottherealsanta/nexus/compare/v0.2.8...v0.2.9) (2026-10-01)
 
 
