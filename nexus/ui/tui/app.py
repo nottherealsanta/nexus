@@ -33,7 +33,7 @@ from ...ui_support.tui_context_header import ContextBlock, ContextHeader, Contex
 from ...ui_support.tui_model_picker import ModelPickerScreen
 from ...ui_support.tui_panels import DetailsSidebar, SessionSidebar, TuiPreferences
 from ...ui_support.tui_setup import block_unconfigured_turn, open_first_run_setup
-from ...ui_support.tui_voice import VoiceController
+from ...ui_support.tui_voice import VoiceController, VoiceStrip
 from ..cli import commands
 from ..cli.details import detail_lines
 from ..cli.render import sanitize
@@ -164,6 +164,7 @@ class NexusTextualApp(AttachmentsMixin, ExtraCommandsMixin, PanelsMixin, App[int
                 yield ChatInput(id="chat-input")
                 yield Static("", id="leader-hint", markup=False)
                 yield ActivityProgress(id="activity-progress")
+                yield VoiceStrip(id="voice-strip")
             yield DetailsSidebar(id="details-sidebar")
             yield LogsDrawer(id="logs-drawer")
 

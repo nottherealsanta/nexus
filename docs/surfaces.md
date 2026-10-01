@@ -156,8 +156,14 @@ commands ([extensions.md](extensions.md#settings-files-host)).
 `Ctrl+Space` toggles bounded dictation, `/voice status|download|on|off` and
 Settings → Voice manage it. First use asks before downloading the model;
 preparation is silent. An orange dot at the far left of the context-size row shows
-only while recording, without shifting layout. Any key stops and transcribes (the
-key is swallowed); `Esc` discards. The transcript is inserted as editable composer
+only while recording, without shifting layout. A live strip floats just above the
+composer (an overlay, so nothing moves): a pulsing dot, the elapsed time and an
+audio-reactive waveform (newest sample on the right), then the running preview
+transcript in up to three rows, newly heard words highlighted as they arrive and
+the oldest words replaced by "…" when it is clipped. After stop, the strip switches
+to "transcribing" (the waveform settles into a ripple and a glow sweeps the
+words) until the final text lands. Any key stops and transcribes (the key is
+swallowed); `Esc` discards. The final transcript is inserted as editable composer
 text. Details: [voice.md](voice.md).
 
 ## Dev mode

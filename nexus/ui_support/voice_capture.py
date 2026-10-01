@@ -62,6 +62,21 @@ class Recorder:
             raise VoiceCaptureError("voice_no_input", "No microphone input device is available") from exc
 
     @property
+    def duration(self) -> float:
+        """Seconds of audio captured so far."""
+        with self._lock:
+            return self._size / (SAMPLE_RATE * 2)
+
+    def snapshot(self) -> bytes:
+        """A WAV of everything captured so far, leaving the recording running.
+
+        Live previews re-send the growing recording (bounded by ``max_seconds``).
+        """
+        with self._lock:
+            pcm = b"".join(self._chunks)
+        return self._wav(pcm)
+
+    @property
     def full(self) -> bool:
         with self._lock:
             return self._size >= self._limit

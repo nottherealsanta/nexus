@@ -59,9 +59,12 @@ import Textual besides `ui/tui/`):
 | `tui_archived.py` | archived-session search/preview/resume dialog |
 | `tui_diff.py` | `ToolDiff`: one `textual_diff_view.DiffView` per file (split view: original left, updated right; plain filename titles) |
 | `tui_history.py` | bounded per-user prompt history |
-| `tui_voice.py`, `voice_capture.py` | `VoiceController`; bounded `sounddevice` capture |
+| `tui_voice.py`, `voice_capture.py` | `VoiceController`, the floating live `VoiceStrip` (`#voice-strip` in `#main-column`'s overlay layer); bounded `sounddevice` capture with `snapshot()` |
 
 ## Terminal-specific behavior
+
+Context detail bodies escape control characters before rendering, including
+literal system-prompt text, so terminal escape sequences cannot affect display.
 
 - Sidebars dock at ≥ 110 columns (170 with both open); otherwise the toggle opens an
   overlay closed by Escape or picking a session, without changing the saved preference.

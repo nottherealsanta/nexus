@@ -452,9 +452,12 @@ class VoiceTranscribe(msgspec.Struct, tag=True, frozen=True, repr_omit_defaults=
     audio: bytes
     request_id: str
     session: str = ""
+    #: A live preview of a recording still in progress. The daemon answers
+    #: ``voice_busy`` at once instead of queueing it behind other inference.
+    partial: bool = False
 
     def __repr__(self) -> str:
-        return f"VoiceTranscribe(request_id={self.request_id!r}, audio=<redacted>)"
+        return f"VoiceTranscribe(request_id={self.request_id!r}, partial={self.partial!r}, audio=<redacted>)"
 
 
 class VoiceCancel(msgspec.Struct, tag=True, frozen=True):

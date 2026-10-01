@@ -421,6 +421,26 @@ body { font-size: 13px; line-height: var(--row); }
 .composer-wrap[data-phase=working] .activity-bar i, .composer-wrap[data-phase=input] .activity-bar i { width: 18%; background: var(--accent); animation: sweep 1.4s steps(14, end) infinite; }
 .composer-wrap[data-phase=input] .activity-bar i { background: var(--warning); }
 @keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(560%); } }
+/* Live dictation (js/voice-strip.js): floats above the composer, never shifts layout. */
+.voice-strip { position: absolute; z-index: 5; bottom: calc(100% + 8px); left: max(16px, calc((100% - var(--column)) / 2)); right: max(16px, calc((100% - var(--column)) / 2)); padding: 10px 14px 12px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); border-radius: var(--radius); background: color-mix(in srgb, var(--elevated) 92%, transparent); backdrop-filter: blur(10px); box-shadow: 0 10px 30px -12px var(--drop), 0 0 0 4px color-mix(in srgb, var(--accent) 8%, transparent); animation: voice-in 220ms var(--ease); }
+.voice-strip[hidden] { display: none; }
+.voice-strip-head { display: flex; align-items: center; gap: 10px; height: 28px; }
+.voice-strip-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 60%, transparent); animation: voice-pulse 1.4s ease-out infinite; }
+.voice-strip[data-phase=transcribing] .voice-strip-dot { border-radius: 2px; animation: rotate 1s linear infinite; }
+.voice-strip-state { flex: none; min-width: 34px; color: var(--muted); font: 12px/1 var(--font-mono); font-variant-numeric: tabular-nums; }
+.voice-strip-wave { flex: 1; min-width: 0; height: 28px; }
+.voice-strip-text { max-height: 66px; margin: 6px 0 0; overflow: hidden; color: var(--text); font: 14px/22px var(--font-sans); }
+.voice-ellipsis { color: var(--muted); }
+.voice-word[hidden], .voice-ellipsis[hidden] { display: none; }
+.voice-strip-hint { margin: 6px 0 0; color: var(--quiet); font-size: 12px; font-style: italic; }
+.voice-strip.has-text .voice-strip-hint { display: none; }
+.voice-word.is-fresh { animation: voice-word 420ms var(--ease) both; animation-delay: var(--delay, 0ms); }
+.voice-word { display: inline-block; vertical-align: top; white-space: pre; }
+.voice-strip[data-phase=transcribing] .voice-word { animation: voice-glow 1.8s ease-in-out infinite; animation-delay: calc(var(--i, 0) * 70ms - 1.8s); }
+@keyframes voice-in { from { opacity: 0; transform: translateY(8px) scale(.98); } }
+@keyframes voice-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent); } 100% { box-shadow: 0 0 0 9px transparent; } }
+@keyframes voice-word { from { opacity: 0; filter: blur(4px); transform: translateY(4px); color: var(--accent); } 60% { color: var(--accent); } }
+@keyframes voice-glow { 0%, 30%, 100% { color: var(--text); } 15% { color: var(--accent); text-shadow: 0 0 12px color-mix(in srgb, var(--accent) 60%, transparent); } }
 
 /* slash menu: ListPanel — dim rows, grey selection */
 .slash-menu { max-height: 240px; margin: 0 max(16px, calc((100% - var(--column)) / 2)) 8px; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius); overflow-y: auto; background: var(--list); scrollbar-color: var(--accent) transparent; }

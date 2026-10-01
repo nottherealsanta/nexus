@@ -193,3 +193,81 @@ async def test_voice_dialog_shows_failure_without_download_prompt(state):
         assert app.screen.query_one("#voice-retry").display
         assert not app.screen.query_one("#voice-ready").display
         assert transport.prepare_calls == 0
+
+
+class LiveVoiceTransport(VoiceTransport):
+    def __init__(self) -> None:
+        super().__init__()
+        self.voice_state = "ready"
+        self.partials: list[str] = []
+
+    async def request(self, command):
+        if isinstance(command, p.VoiceTranscribe) and command.partial:
+            self.partials.append(command.request_id)
+            return p.VoiceTranscribeResult(
+                request_id=command.request_id, text="hello there", duration_s=1, elapsed_s=0.05
+            )
+        return await super().request(command)
+
+
+@pytest.mark.asyncio
+async def test_live_dictation_streams_previews_into_a_floating_strip(monkeypatch):
+    from nexus.ui_support.tui_voice import VoiceStrip
+
+    transport = LiveVoiceTransport()
+    app = NexusTextualApp(_client(transport), session="voice-live")
+
+    class GrowingRecorder:
+        full = False
+
+        def __init__(self, *_args, on_level=None, **_kwargs):
+            self.on_level = on_level
+            self.duration = 0.0
+
+        def start(self):
+            pass
+
+        def snapshot(self):
+            return b"partial-wav"
+
+        def stop(self):
+            return b"wav"
+
+    monkeypatch.setattr("nexus.ui_support.tui_voice.Recorder", GrowingRecorder)
+    monkeypatch.setattr("nexus.ui_support.tui_voice._PREVIEW_MIN_INTERVAL", 0.0)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        composer = app.query_one("#chat-input")
+        before = composer.region
+        await app.voice.start_or_confirm()
+        await pilot.pause()
+        strip = app.query_one("#voice-strip", VoiceStrip)
+        assert strip.display and app.query_one("#chat-input").region == before
+        app.voice.recorder.on_level(0.2)
+        app.voice.recorder.duration = 1.2
+        await pilot.pause(0.3)
+        assert transport.partials and all(rid.startswith(app.voice.request_id) for rid in transport.partials)
+        rendered = strip.render().plain
+        assert "hello there" in rendered and "0:0" in rendered
+        assert strip.region.y + strip.region.height <= composer.region.y
+        await app.voice.stop()
+        await pilot.pause()
+        assert not strip.display
+        assert "spoken words" in app.query_one("#chat-editor").text
+
+
+def test_voice_strip_frame_highlights_only_new_words_and_announces_clipping():
+    from nexus.ui_support.tui_voice import common_prefix, render_voice_strip
+
+    assert common_prefix("hello wor", "hello world") == 9
+    frame = render_voice_strip(
+        phase="recording", levels=[0.1, 0.9], text="one two three " * 20, fresh_from=270,
+        fresh_age=0.0, elapsed=65, frame=1, width=60, colors={},
+    )
+    status, transcript = frame.plain.split("\n", 1)
+    assert status.startswith("● 1:05 ") and len(status) <= 60
+    assert transcript.startswith("…") and len(transcript) <= 60 * 3
+    idle = render_voice_strip(
+        phase="transcribing", levels=[], text="", fresh_from=0, fresh_age=9, elapsed=0, frame=0, width=60, colors={},
+    )
+    assert "transcribing" in idle.plain

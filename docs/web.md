@@ -63,7 +63,7 @@ browser route:
 | `GET /v1/web/bootstrap` | CSRF token + workspace path |
 | `POST /v1/web/command` | any host command as JSON `{type:'SessionList', …}` except `Shutdown` and `WebLaunch`; requires an exact `Origin` and `X-CSRF-Token` |
 | `POST /v1/web/attachment` | JSON `AttachmentPrepare` only; same cookie/Origin/CSRF checks before buffering, 12 MiB request cap. Enqueue commands carry small draft IDs. |
-| `POST /v1/web/voice?request_id=…` | raw mono 16 kHz PCM16 WAV for transcription; same auth checks; 8 MiB cap (commands cap at 1 MiB) |
+| `POST /v1/web/voice?request_id=…[&partial=1]` | raw mono 16 kHz PCM16 WAV for transcription (`partial=1`: a live preview, see [voice.md](voice.md#flow)); same auth checks; 8 MiB cap (commands cap at 1 MiB) |
 | `GET /v1/web/session-view?session=` | versioned snapshot (`schema_version: 1`, `seq`, `view`) from `HostFacade.web_snapshot` |
 | `GET /v1/web/session-events?session=&from_seq=` | SSE `view` frames of JSON-Pointer ops (`add`/`replace`/`remove`/`append`) or `resync: true` |
 | `GET /v1/web/workspace-events` | SSE `workspace` frames with the session list (polled every 0.5s) |
@@ -84,14 +84,15 @@ Packaged files are listed in `pyproject.toml` (`"nexus.ui.web" = ["index.html",
 | --- | --- |
 | `index.html` | the whole DOM: SVG icon sprite (`#i-*`), `.app-shell` grid (`top`/`side`/`main`/`insp`) with the full-width `.topbar` (`▌` `#sidebar-toggle`, title, Context/Logs/Export, `#live-state`, `+` `#topbar-new`, `▐` `#inspector-toggle`), `#sidebar`, `.main-pane` (`#conversation`, `#timeline`, `#empty-state`, `.composer-wrap` with `#approval-strip`, `#slash-menu`, `#composer-form`, `#activity-bar`), `#inspector`, and overlays `#overlay`, `#settings-overlay`, `#context-overlay`, `#worktree-confirm-overlay`, `#voice-overlay`, `#setup-overlay`, `#agent-overlay`, `#toast-region` |
 | `js/app.js` | all behavior; dense one-function-per-line style, so search by function name |
-| `js/api.js` | `bootstrap()`, `command(cmd)`, `voice(wav, requestId)`, `snapshot(session)`, `eventUrl(session, seq)`, `exportSession` |
+| `js/api.js` | `bootstrap()`, `command(cmd)`, `voice(wav, requestId, {partial})`, `snapshot(session)`, `eventUrl(session, seq)`, `exportSession` |
 | `js/projection.js` | `applyOperations(root, ops)`: validates and applies patches on a detached copy (atomic) |
 | `js/preferences.js` | localStorage detail level (session → workspace → browser precedence) and theme |
 | `js/tool-details.js` | `toolDetailSections`/`renderToolDetails`: port of `ui_support/tool_details.py` |
 | `js/context-view.js` | port of `ui_support/context.py`: `renderContextGroups`, `renderToolsReport`, `renderCurrentContext` |
 | `js/settings-files.js` | Agents/Tools/MCP/Skills/Hooks/Config/Soul editors over `Settings*` (700 ms autosave, agent model/fallback form); port of `tui_settings.py` |
 | `js/providers.js` | `createProviders({api, el, $, listId, isOpen})`: Settings → Providers cards, also used by first-run setup |
-| `js/voice.js`, `voice-worklet.js` | microphone capture, resample to mono 16 kHz PCM16 WAV, bounded buffers; first use needs explicit confirmation |
+| `js/voice.js`, `voice-worklet.js` | microphone capture, resample to mono 16 kHz PCM16 WAV, bounded buffers, `snapshot()` for live previews; first use needs explicit confirmation |
+| `js/voice-strip.js` | `#voice-strip`: the live dictation card above the composer (canvas waveform, fading-in preview words, "Transcribing" glow); twin of the TUI `VoiceStrip` |
 | `js/mock.js` | dev-mode `/mock` and the `DEV` badge |
 | `styles/tokens.css` | font-face, color tokens, radii, shadows, `--cell`/`--row` |
 | `styles/app.css` | all layout and component CSS, sectioned by region, responsive rules last |

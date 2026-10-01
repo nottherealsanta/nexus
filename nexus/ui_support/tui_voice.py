@@ -1,13 +1,25 @@
-"""Textual dictation controls and consent flow (VOICE_PLAN.md §8.2)."""
+"""Textual dictation controls and consent flow (VOICE_PLAN.md §8.2).
+
+While recording, the controller sends growing snapshots of the audio as
+``partial`` transcriptions (at most one in flight, paced by how long the last
+one took) and shows the running transcript in :class:`VoiceStrip`, a floating
+row above the composer with a live waveform. The final transcript of the whole
+recording is still what gets inserted into the composer.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import json
+import math
 import re
 import time
 import uuid
+from collections import deque
 from typing import Any, ClassVar
+
+from rich.color import Color, blend_rgb
+from rich.text import Text
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
@@ -116,6 +128,119 @@ class VoiceConsentScreen(ModalScreen[bool]):
             self._poll_task = None
 
 
+WAVE_BARS = 96
+TRANSCRIPT_ROWS = 3
+_BAR_GLYPHS = "▁▂▃▄▅▆▇█"
+_FRESH_SECONDS = 0.9
+_PREVIEW_MIN_INTERVAL = 0.7
+_PREVIEW_MIN_GROWTH = 0.4
+
+
+def level_height(rms: float) -> float:
+    """Map microphone RMS (speech is roughly 0.01–0.2) to a 0–1 bar height."""
+    return max(0.0, min(1.0, (max(0.0, rms) * 9) ** 0.6))
+
+
+def common_prefix(old: str, new: str) -> int:
+    """Length of the shared prefix, so only newly heard text is highlighted."""
+    limit = min(len(old), len(new))
+    index = 0
+    while index < limit and old[index] == new[index]:
+        index += 1
+    return index
+
+
+def render_voice_strip(
+    *,
+    phase: str,
+    levels: list[float],
+    text: str,
+    fresh_from: int,
+    fresh_age: float,
+    elapsed: float,
+    frame: int,
+    width: int,
+    colors: dict[str, str],
+) -> Text:
+    """One frame of the dictation strip.
+
+    Row one is the status and a full-width waveform (newest sample on the
+    right); below it the transcript wraps to at most three rows, its head
+    replaced by "…" when clipped. Pure so it can be tested; ``frame`` drives
+    the pulse, the idle ripple and the "transcribing" sweep.
+    """
+    accent = Color.parse(colors.get("accent", "#fab283"))
+    quiet = Color.parse(colors.get("quiet", "#6f6f6f"))
+    body = Color.parse(colors.get("text", "#eeeeee"))
+    muted = colors.get("muted", "#a3a3a3")
+
+    def mix(low: Color, high: Color, amount: float) -> str:
+        blended = blend_rgb(low.get_truecolor(), high.get_truecolor(), max(0.0, min(1.0, amount)))
+        return Color.from_triplet(blended).name
+
+    width = max(24, width)
+    line = Text(overflow="fold")
+    recording = phase == "recording"
+    if recording:
+        line.append("● ", style=f"bold {mix(quiet, accent, 0.55 + 0.45 * math.sin(frame * 0.35))}")
+        minutes, seconds = divmod(int(elapsed), 60)
+        line.append(f"{minutes}:{seconds:02d}  ", style=muted)
+    else:
+        line.append(f"{'◐◓◑◒'[frame // 2 % 4]} ", style=f"bold {accent.name}")
+        line.append("transcribing  ", style=muted)
+    bars = max(8, min(WAVE_BARS, width - line.cell_len))
+    samples = list(levels[-bars:])
+    samples = [0.0] * (bars - len(samples)) + samples
+    for index, value in enumerate(samples):
+        # A slow travelling ripple keeps the wave alive through silence.
+        ripple = 0.07 + 0.05 * math.sin(frame * 0.4 - index * 0.35)
+        height = max(ripple, value) if recording else ripple * (1 + math.sin(frame * 0.5 + index * 0.3))
+        glyph = _BAR_GLYPHS[min(len(_BAR_GLYPHS) - 1, int(height * len(_BAR_GLYPHS)))]
+        line.append(glyph, style=mix(quiet, accent, 0.25 + height))
+    line.append("\n")
+    words = " ".join(text.split())
+    if not words:
+        hint = "Listening… any key stops · Esc discards" if recording else "Finishing the transcript…"
+        line.append(hint[:width], style=f"italic {muted}")
+        return line
+    room = width * TRANSCRIPT_ROWS - 2
+    start = 0
+    if len(words) > room:
+        start = len(words) - (room - 1)
+        line.append("…", style=muted)
+    fresh = max(0.0, 1 - fresh_age / _FRESH_SECONDS)
+    sweep = (frame * 2) % max(1, len(words) - start + 12) + start - 6
+    for index in range(start, len(words)):
+        if not recording and abs(index - sweep) <= 3:
+            style = f"bold {mix(body, accent, 1 - abs(index - sweep) / 4)}"
+        elif index >= fresh_from and fresh > 0:
+            style = f"bold {mix(body, accent, fresh)}"
+        else:
+            style = body.name
+        line.append(words[index], style=style)
+    if recording and frame // 4 % 2 == 0:
+        line.append("▍", style=accent.name)
+    return line
+
+
+class VoiceStrip(Static):
+    """Floating live-dictation row above the composer; it never shifts layout."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__("", markup=False, **kwargs)
+        self.display = False
+
+    def place(self) -> None:
+        """Sit just above the composer inside ``#main-column``."""
+        try:
+            composer = self.app.query_one("#chat-input")
+            column = self.app.query_one("#main-column")
+        except NoMatches:
+            return
+        height = self.outer_size.height or 3
+        self.styles.offset = (0, max(0, composer.region.y - column.region.y - height))
+
+
 class VoiceController:
     """Coordinate capture, host inference, and safe insertion into the composer."""
 
@@ -132,6 +257,19 @@ class VoiceController:
         self._active_request_id: str | None = None
         self._last_status = None
         self._status_poll_deadline = time.monotonic() + 5
+        # Live preview state (reset per recording).
+        self._levels: deque[float] = deque(maxlen=WAVE_BARS)
+        self._peak = 0.0
+        self._frame = 0
+        self._phase = "recording"
+        self._preview_text = ""
+        self._fresh_from = 0
+        self._fresh_at = 0.0
+        self._preview_task: asyncio.Task | None = None
+        self._preview_count = 0
+        self._preview_request_id: str | None = None
+        self._preview_audio = 0.0
+        self._next_preview = 0.0
 
     @property
     def recording(self) -> bool:
@@ -241,7 +379,14 @@ class VoiceController:
         self.session = self.app.controller.session
         self.request_id = uuid.uuid4().hex
         self.started = time.monotonic()
-        self.recorder = Recorder(self.max_seconds)
+        self._levels.clear()
+        self._peak = 0.0
+        self._preview_text = ""
+        self._fresh_from = 0
+        self._preview_count = 0
+        self._preview_audio = 0.0
+        self._next_preview = self.started + _PREVIEW_MIN_INTERVAL
+        self.recorder = Recorder(self.max_seconds, on_level=self._on_level)
         try:
             self.recorder.start()
         except VoiceCaptureError as exc:
@@ -250,14 +395,116 @@ class VoiceController:
             self._show_error(sanitize(str(exc), 140))
             return
         self._set_recording_dot(True)
-        self._timer = self.app.set_interval(0.25, self._tick)
+        self._show_strip("recording")
+        self._timer = self.app.set_interval(1 / 12, self._tick)
+
+    def _on_level(self, level: float) -> None:
+        # Called from the audio thread; the animation samples the peak per frame.
+        self._peak = max(self._peak, level)
 
     def _tick(self) -> None:
         if not self.recorder:
+            self._paint_strip()
             return
+        peak, self._peak = self._peak, 0.0
+        self._levels.append(level_height(peak))
+        self._paint_strip()
         elapsed = time.monotonic() - self.started
         if elapsed >= self.max_seconds or self.recorder.full:
             self.app.run_worker(self.stop(), group="voice-transcribe", exclusive=True)
+            return
+        self._maybe_preview()
+
+    def _maybe_preview(self) -> None:
+        recorder, request_id = self.recorder, self.request_id
+        if recorder is None or request_id is None or self._preview_task is not None:
+            return
+        duration = getattr(recorder, "duration", 0.0)
+        if time.monotonic() < self._next_preview or duration - self._preview_audio < _PREVIEW_MIN_GROWTH or duration < 0.5:
+            return
+        self._preview_count += 1
+        self._preview_audio = duration
+        preview_id = f"{request_id}-p{self._preview_count}"
+        self._preview_request_id = preview_id
+        self._preview_task = asyncio.create_task(self._preview(recorder.snapshot(), request_id, preview_id))
+
+    async def _preview(self, wav: bytes, request_id: str, preview_id: str) -> None:
+        started = time.monotonic()
+        try:
+            result = await self.app.controller.client.voice_transcribe(
+                wav, preview_id, session=self.session or "", partial=True
+            )
+        except (ClientError, asyncio.CancelledError):
+            # Busy or failed previews are skipped; the final transcript reports errors.
+            return
+        finally:
+            took = time.monotonic() - started
+            self._next_preview = time.monotonic() + max(_PREVIEW_MIN_INTERVAL, took * 1.5)
+            if self._preview_request_id == preview_id:
+                self._preview_task = None
+                self._preview_request_id = None
+        if self.request_id != request_id or result.request_id != preview_id:
+            return
+        self._set_preview(sanitize(result.text, 100_000))
+
+    def _set_preview(self, text: str) -> None:
+        text = " ".join(text.split())
+        if text == self._preview_text:
+            return
+        self._fresh_from = common_prefix(self._preview_text, text)
+        self._fresh_at = time.monotonic()
+        self._preview_text = text
+
+    async def _stop_preview(self) -> None:
+        task, preview_id = self._preview_task, self._preview_request_id
+        self._preview_task = None
+        self._preview_request_id = None
+        if task is not None and not task.done():
+            task.cancel()
+            if preview_id:
+                try:
+                    await self.app.controller.client.voice_cancel(preview_id)
+                except ClientError:
+                    pass
+
+    def _show_strip(self, phase: str) -> None:
+        self._phase = phase
+        strip = self._strip()
+        if strip is None:
+            return
+        strip.display = True
+        self._paint_strip()
+        strip.call_after_refresh(strip.place)
+
+    def _hide_strip(self) -> None:
+        strip = self._strip()
+        if strip is not None:
+            strip.display = False
+            strip.update("")
+
+    def _strip(self) -> VoiceStrip | None:
+        if not self.app.is_mounted:
+            return None
+        try:
+            return self.app.query_one("#voice-strip", VoiceStrip)
+        except NoMatches:
+            return None
+
+    def _paint_strip(self) -> None:
+        strip = self._strip()
+        if strip is None or not strip.display:
+            return
+        self._frame += 1
+        variables = self.app.theme_variables
+        colors = {name: str(variables.get(f"nx-{name}", "")) or default for name, default in (
+            ("accent", "#fab283"), ("quiet", "#6f6f6f"), ("text", "#eeeeee"), ("muted", "#a3a3a3"))}
+        width = strip.content_region.width or strip.size.width or 80
+        strip.update(render_voice_strip(
+            phase=self._phase, levels=list(self._levels), text=self._preview_text,
+            fresh_from=self._fresh_from, fresh_age=time.monotonic() - self._fresh_at,
+            elapsed=time.monotonic() - self.started, frame=self._frame, width=width, colors=colors,
+        ))
+        strip.place()
 
     async def stop(self) -> None:
         recorder, request_id, session = self.recorder, self.request_id, self.session
@@ -266,14 +513,14 @@ class VoiceController:
         self.recorder = None
         self.request_id = None
         self._set_recording_dot(False)
-        if self._timer:
-            self._timer.stop()
-            self._timer = None
         try:
             wav = recorder.stop()
         except Exception:
+            self._end_animation()
             self._show_error("Microphone could not stop")
             return
+        await self._stop_preview()
+        self._show_strip("transcribing")
         editor = self.app.query_one("#chat-editor")
         editor.focus()
         self._active_request_id = request_id
@@ -287,6 +534,7 @@ class VoiceController:
         finally:
             self._transcribe_task = None
             self._active_request_id = None
+            self._end_animation()
         if (result is None or self.session != self.app.controller.session or editor is not self.app.query_one("#chat-editor")
                 or self.app.focused is not editor or request_id != result.request_id):
             self._show_error("Dictation result discarded because the conversation or focus changed")
@@ -311,9 +559,8 @@ class VoiceController:
         self.request_id = None
         self.recorder = None
         self._set_recording_dot(False)
-        if self._timer:
-            self._timer.stop()
-            self._timer = None
+        self._end_animation()
+        await self._stop_preview()
         if recorder is not None:
             recorder.stop()
         if self._transcribe_task is not None and not self._transcribe_task.done():
@@ -326,6 +573,12 @@ class VoiceController:
 
     async def close(self) -> None:
         await self.cancel()
+
+    def _end_animation(self) -> None:
+        if self._timer:
+            self._timer.stop()
+            self._timer = None
+        self._hide_strip()
 
     def _set_recording_dot(self, recording: bool) -> None:
         if not self.app.is_mounted:
@@ -383,4 +636,4 @@ def _set_toml_voice_value(body: str, key: str, value: object) -> str:
     return "\n".join(lines) + "\n"
 
 
-__all__ = ["VoiceConsentScreen", "VoiceController", "_set_toml_voice_value", "set_voice_config"]
+__all__ = ["VoiceConsentScreen", "VoiceController", "VoiceStrip", "common_prefix", "level_height", "render_voice_strip", "_set_toml_voice_value", "set_voice_config"]

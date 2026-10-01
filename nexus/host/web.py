@@ -184,7 +184,10 @@ class BrowserRoutes:
                     await server._write_response(writer, 400, self._json({"error": "invalid request id"}), headers=common)
                     return True
                 try:
-                    result = await self.facade.handle(p.VoiceTranscribe(audio=request.body, request_id=request_id))
+                    partial = parse_qs(request.query).get("partial", [""])[0] == "1"
+                    result = await self.facade.handle(
+                        p.VoiceTranscribe(audio=request.body, request_id=request_id, partial=partial)
+                    )
                     data = p.encode_result(result)
                 except Exception:  # noqa: BLE001 - never expose audio or facade details
                     await server._write_response(writer, 500, self._json({"error": "voice request failed"}), headers=common)

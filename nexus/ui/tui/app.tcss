@@ -37,6 +37,21 @@ CommandPalette #--results {
     width: 1fr;
     height: 1fr;
     layout: vertical;
+    layers: base overlay;
+}
+
+/* Live dictation: floats above the composer (offset set by VoiceStrip.place). */
+#voice-strip {
+    layer: overlay;
+    position: absolute;
+    width: 100%;
+    height: auto;
+    max-height: 6;
+    margin: 0 1;
+    padding: 0 1;
+    border: round $nx-accent;
+    border-title-color: $nx-accent;
+    background: $nx-panel;
 }
 
 #logs-drawer {

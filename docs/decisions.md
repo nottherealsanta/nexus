@@ -82,6 +82,7 @@ this page and the code win.
 | **Claude subscription via the official Agent SDK in an isolated worker,** SDK tools/hooks/settings/persistence disabled; text-only, buffered. | Nexus keeps logging, permissions and execution. | `model/providers/claude_agent.py` |
 | **Thinking summaries are provider-supplied and never invented;** no duration is fabricated. | Honest presentation. | [loop.md](loop.md#thinking) |
 | **Voice uses Kestrel's internal Parakeet runtime, not Photon** (telemetry, no opt-out). Model download is consent-gated and never implicit. | Privacy. Real inference is unverified. | [voice.md](voice.md) |
+| **Live dictation re-transcribes the growing recording as non-queueing `partial` previews; the final transcript still comes from one pass over the whole recording.** | Parakeet TDT here is offline, not streaming; whole-recording passes avoid word-boundary seams between chunks, and previews can never delay or replace the final text. Cost grows with length, bounded by `max_seconds`. | [voice.md](voice.md#flow) |
 
 ## Web
 
