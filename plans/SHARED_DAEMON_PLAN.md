@@ -13,8 +13,8 @@ Implementation branch: `feat/shared-daemon` in its own worktree (§8).
 
 Today every workspace gets its own `python -m nexus.host.daemon` process.
 With five projects open you have five interpreters, five copies of every
-import, five keychain caches, five voice models when voice is on, and five idle
-timers. The goal is **one daemon per Nexus home** that hosts many workspaces:
+import, five voice models when voice is on, five turn caps that add up to 20
+running turns, and five idle timers. The goal is **one daemon per Nexus home** that hosts many workspaces:
 
 1. `nexus chat` / `nexus run` / `nexus web` in any project attach to the same
    daemon process. The first one starts it.
@@ -41,6 +41,7 @@ storage format; SQLite is already shared across projects.
 | Idle | exit after 300 s with no viewer, no running and no queued turn | `host/daemon.py:769` |
 | Web | one loopback HTTP listener per daemon, random port; `BrowserRoutes(workspace=...)`; cookie `nexus_web`, `Path=/` | `host/web.py`, `transports/http_sse.py:311` |
 | Hygiene | `nexus update` lists `~/.nexus/daemon/*.sock` and stops every daemon; warns on version skew per daemon | `host_support/install.py` |
+| Credentials | one private file `~/.nexus/credentials.json` (no keychain), re-read on every access; writes take a non-blocking `flock` on `credentials.lock` inside `asyncio.to_thread`; per-profile OAuth refresh locks in `~/.nexus/locks/` | `auth/store.py` |
 | Storage | one shared `~/.nexus/nexus.db` (WAL, `BEGIN IMMEDIATE`), already built for many daemons | `session/db.py`, `docs/sessions.md` |
 | Dev mode | separate `NEXUS_HOME` → separate daemon dir | `cli.py:128` |
 
@@ -69,10 +70,10 @@ and the fix. **Blocker** means the shared daemon is incorrect without the fix.
 
 | # | Consequence | Recommendation |
 | --- | --- | --- |
-| C1 | **Turn cap becomes machine-wide.** `max_concurrent=4` per daemon was effectively 4 × N projects. Shared, five projects compete for 4 slots. | Keep one global cap; the "fork bomb" rationale is per machine. Raise the default to 8 and make it a user-scope setting (`[daemon] max_concurrent_turns`). Round-robin fairness goes two levels deep (workspace, then session) so one busy project cannot starve another. Show queued-for-capacity turns in the status line (`waiting for a slot`). |
+| C1 | **Turn cap becomes machine-wide.** `max_concurrent=4` per daemon was effectively 4 × N projects. Shared, five projects would compete for 4 slots, and a turn that only streams text holds a slot as firmly as one running 8 `bash` jobs and 16 subagents. | **Replace the turn cap with limits on the costly resources** (§4.1): a machine-wide limit on running child processes (bash jobs, grep workers, worktree subprocesses; MCP servers bounded separately) and a per-provider limit on in-flight model requests. Turns themselves are effectively unbounded (a safety ceiling of 32 remains). Both limits are user-scope settings under `[daemon]`. Waiting is fair two levels deep (workspace, then session), so one busy project cannot starve another. A waiting tool or request shows as `waiting for a process slot` / `waiting for <provider>`. |
 | C2 | **Lifecycle commands hit every project.** `nexus daemon stop` / `restart` / `nexus update` now interrupt turns in other projects. | `nexus daemon stop --workspace` (the default, run in a project) **unloads that workspace's runtime only**. `nexus daemon stop --all` stops the process. `restart` and `update` list every workspace with a running or queued turn and refuse without `--force`. |
 | C3 | **Blast radius.** A crash, `MemoryError`, or a blocking call on the event loop (an `async` extension tool that does sync I/O, a slow `flock` in a thread) stalls **every** project instead of one. Running turns in all projects die with the process. | Accept, and reduce it. Add a loop-lag watchdog (log and Doctor when the loop stalls > 1 s, naming the workspace whose task was running). Keep `NEXUS_DAEMON=per-workspace` as a supported escape hatch for one release after the default flips (§7). Recovery already exists: turns are durable and replay reproduces state. |
-| C4 | **Trust boundary widens.** A cloned repo's `.agents/tools/*.py`, hooks or providers run in-process with every other project's in-memory state: permission engines, open sessions, cached keychain secrets. Today it shares a process with only its own project. | It already runs as the same uid with full file access, so this is a modest increase. Document it in `docs/security.md`. Keep quarantine as is. Treat B3's per-runtime module namespace as hygiene, not isolation. Long term: run project extensions out of process (§9). |
+| C4 | **Trust boundary widens.** A cloned repo's `.agents/tools/*.py`, hooks or providers run in-process with every other project's in-memory state: permission engines, open sessions, and provider credentials held in memory after reading `credentials.json`. Today it shares a process with only its own project. | It already runs as the same uid with full file access, so this is a modest increase. Document it in `docs/security.md`. Keep quarantine as is. Treat B3's per-runtime module namespace as hygiene, not isolation. Long term: run project extensions out of process (§9). |
 | C5 | **Logs mix projects.** One `.log` file and one in-memory diagnostics ring (`observability/daemon.py`, ≤ 512 entries) now cover all workspaces. `LogsRead` in project A could show B's lines, and B's noise could evict A's. | Tag every log line and diagnostic entry with `project_key`. `LogsRead` and `nexus daemon logs` filter to the bound workspace by default (`--all` for everything). Keep one ring per workspace with the same bounds, plus a small daemon-level ring. |
 | C6 | **Idle shutdown semantics.** One busy project keeps the daemon alive. Idle projects keep MCP servers, file watchers (500 ms polling) and voice models resident. | Two timers. Per-workspace runtime eviction after `idle_timeout` with no viewer and no turn: close MCP, watchers and voice; drop the runtime. Daemon exit when no runtime is loaded for `idle_timeout`. |
 | C7 | **Env is captured once per workspace.** With B1 the runtime keeps the env of the first client that attached; a later `export FOO=…` in another terminal is not seen. Today the same is true per daemon. | Same as today, but visible: Doctor shows "environment captured from <client> at <time>". `nexus daemon reload` (per workspace) re-creates the runtime with the caller's env when no turn is running. |
@@ -98,9 +99,16 @@ and the fix. **Blocker** means the shared daemon is incorrect without the fix.
   The process-wide defaults in `_jobs.py`/`todo.py`/`skill.py` are only
   fallbacks. Add a test that `Runtime.aclose` never calls
   `close_default_registry()` or `set_default_*`.
-- **Keychain cache** (`auth/store.py` `_CACHE`) keys by item and is
-  invalidated by a stamp file. Sharing it is a **benefit**: fewer macOS
-  keychain prompts.
+- **Credentials** (`auth/store.py`) are a private file,
+  `~/.nexus/credentials.json`, with no keychain and no per-process cache:
+  every read goes to the file, so a login in one project is seen by the next
+  request in every other project, as it is across daemons today. Reads and
+  writes run in `asyncio.to_thread`, so the write lock's retry loop
+  (`time.sleep(0.05)`, bounded at 5 s) never blocks the event loop. The
+  `flock` on `credentials.lock` and the per-profile OAuth refresh locks use
+  separate file descriptors, so two runtimes in one process still exclude each
+  other, and two projects refreshing the same OAuth profile are serialized
+  exactly as two daemons are now. Not verified with a test; add one (§6).
 - **Signals.** Only the daemon installs SIGINT/SIGTERM handlers.
 - **Permissions and path guards** are per-runtime (`PermissionEngine(workspace=…)`),
   and `nexus.db` stays tool-inaccessible.
@@ -111,9 +119,9 @@ and the fix. **Blocker** means the shared daemon is incorrect without the fix.
 ### 3.4 Benefits
 
 One interpreter and import set. A new project attaches in milliseconds instead
-of a spawn plus imports (~1–2 s, not measured). One keychain cache, one update
-check, one HTTP port for the browser, a machine-wide turn cap that actually
-bounds the machine, and one place to see everything running (`nexus daemon status`).
+of a spawn plus imports (~1–2 s, not measured). One update check, one HTTP
+port for the browser, process and request limits that actually bound the
+machine, and one place to see everything running (`nexus daemon status`).
 
 ## 4. Design
 
@@ -123,7 +131,8 @@ client (cwd=/p/b) ──Hello{v4, workspace=/p/b, env}──┤
 browser /w/<key_b>/… ──HTTP(ticket→key_b)───────────┤
                                                     ▼
                          Daemon (one per NEXUS_HOME + install)
-                         ├─ Supervisor (global cap, fair by workspace→session)
+                         ├─ Supervisor (scheduling, fair by workspace→session)
+                         ├─ ResourceLimits (process slots, per-provider request slots)
                          ├─ WorkspaceHost registry  {project_key → WorkspaceHost}
                          │    WorkspaceHost = Runtime(workspace, environ) + HostFacade
                          │                    + Presence + idle timer + log ring
@@ -143,7 +152,9 @@ browser /w/<key_b>/… ──HTTP(ticket→key_b)──────────�
   process. `Doctor` and `LogsRead` answer for the bound workspace.
 - **`Supervisor`** moves from `HostFacade.__init__` to the daemon and is
   injected into each facade (`HostFacade(runtime, supervisor=…)`). Its queues
-  are keyed `(project_key, session_id)`.
+  are keyed `(project_key, session_id)`. It keeps per-session FIFO order,
+  `queue`/`steer`/`interrupt` and cancellation, but its turn cap becomes only
+  a safety ceiling (32); the real limits move to `ResourceLimits` (§4.1).
 - **Health** gains `workspaces: [{workspace, project_key, viewers, running,
   queued, loaded_at, last_activity, env_from}]`, bounded to 64 entries.
 - **Discovery files:** `shared-v4-<install>.sock`, `.pid`, `.lock`, `.log`,
@@ -159,20 +170,49 @@ browser /w/<key_b>/… ──HTTP(ticket→key_b)──────────�
   sends an env; a browser can only open a workspace that already has a loaded
   runtime or that `nexus web` (a UDS client) named in its ticket.
 
+### 4.1 Resource limits instead of a turn cap
+
+Why a limit exists at all: one turn fans out into up to 8 parallel tools
+(`[tools] max_parallel`), each `bash` call a process group that can live
+for an hour, plus subagents (`[agents] max_concurrent` 4, `max_fanout` 16,
+`max_depth` 3) that are turns with their own tools. Without a bound, ten busy
+sessions mean hundreds of processes and a burst of rate-limited model calls.
+Counting *turns* bounds this only indirectly, so the shared daemon counts the
+costly things directly:
+
+- **Process slots** (`[daemon] max_processes`, default 16): taken by the job
+  registry before spawning a `bash` job or grep worker, and by worktree
+  subprocesses; released on exit. A tool waiting for a slot is still running
+  from the loop's point of view; its row says `waiting for a process slot`,
+  and time spent waiting does not count against `bash_timeout_s`. Long-lived
+  MCP servers are not counted; per-workspace eviction bounds them (C6).
+- **Request slots per provider** (`[daemon] max_requests_per_provider`,
+  default 6, overridable per provider): taken around each model request and
+  released when the stream ends, so a turn that only streams text holds one
+  request slot and no process slot. A 429 halves that provider's effective
+  limit for 60 s.
+- **Fairness:** both pools hand out slots round-robin by workspace, then by
+  session, so a project with 10 sessions cannot take every slot from a
+  project with 1.
+- **Ceiling:** the `Supervisor` keeps a turn ceiling of 32 only as a guard
+  against runaway queues; it should not bind in normal use.
+- Subagents draw from the same pools, so the `[agents]` limits stay as
+  per-turn shape limits, not machine limits.
+
 ## 5. CLI and surface changes
 
 | Command | New behavior |
 | --- | --- |
-| `nexus daemon status` | process line (pid, version, uptime, turn cap usage) and then one row per loaded workspace; `--workspace` narrows |
+| `nexus daemon status` | process line (pid, version, uptime, process and request slot usage) and then one row per loaded workspace; `--workspace` narrows |
 | `nexus daemon stop` | unloads the current workspace's runtime (refuses with a running turn unless `--force`); `--all` stops the process |
 | `nexus daemon restart` | restarts the process; lists other workspaces with running or queued turns and needs `--force` |
 | `nexus daemon reload` (new) | re-creates the current workspace's runtime with the caller's env |
 | `nexus daemon logs` | filters to the current workspace; `--all` |
 | `nexus update` | stops the shared daemon(s); same `--force` rule |
 | `nexus web` | `WebLaunch` returns `http://127.0.0.1:<port>/w/<project_key>/#ticket=…` |
-| TUI and web top bar | unchanged; the workspace shown is the bound one. Status may say `waiting for a slot` (C1) on both surfaces |
+| TUI and web top bar | unchanged; the workspace shown is the bound one. A tool row may say `waiting for a process slot` and the status line `waiting for <provider>` (C1), on both surfaces |
 
-`docs/surfaces.md` parity: the slot-wait status and the Doctor "environment
+`docs/surfaces.md` parity: the slot-wait wording and the Doctor "environment
 captured" row land in both the TUI and the web client in the same change.
 
 ## 6. Tests
@@ -190,8 +230,14 @@ New or changed, next to their peers:
 - Module namespacing: the same `~/.nexus/tools/x.py` and the same provider
   file load in two runtimes, hot-reload independently, and unload without
   breaking the other (B3).
-- Supervisor fairness across workspaces; global cap; queued turns survive the
-  other workspace's cancel (C1).
+- Resource limits (C1, §4.1): process slots are never exceeded across
+  workspaces and subagents; a waiting `bash` job's timeout starts when it
+  gets a slot; request slots release when a stream ends or is cancelled; a
+  429 lowers the limit; slots go round-robin by workspace then session;
+  queued turns survive the other workspace's cancel.
+- Credentials: a login written by runtime A is read by runtime B's next
+  request; two runtimes refreshing one OAuth profile serialize on the
+  profile lock without blocking the event loop.
 - Per-workspace eviction and daemon idle exit; never evict with a turn in
   flight or a viewer attached (C6).
 - `nexus daemon stop` / `--all` / `--force` semantics (C2).
@@ -223,8 +269,8 @@ behind the flag), with green tests and updated docs.
    Shared socket naming (B5), `ensure_daemon` targets the shared socket in
    shared mode, spawn with `cwd=nexus_home()`.
 3. **Lifecycle.** Lazy creation with readiness bounds (C10), per-workspace
-   eviction and daemon idle (C6), the LRU cap of 32, two-level fairness and the
-   configurable cap (C1), loop-lag watchdog (C3).
+   eviction and daemon idle (C6), the LRU cap of 32, `ResourceLimits` with
+   two-level fairness replacing the turn cap (C1, §4.1), loop-lag watchdog (C3).
 4. **CLI, Doctor, install.** §5 commands, Health/Doctor rows, `nexus update`
    hygiene for both socket kinds, `nexus daemon reload` (C7).
 5. **Web.** `/w/<project_key>/` routing, per-workspace cookie and ticket (B6),
@@ -272,7 +318,8 @@ git config core.hooksPath scripts/hooks
 
 ## 10. Open questions
 
-1. Default turn cap: 8 machine-wide, or `4 × min(loaded workspaces, 2)`?
+1. Resource limit defaults: 16 processes and 6 requests per provider, or
+   scale processes with the machine (`max(8, os.cpu_count())`)?
 2. Should `nexus daemon stop` with no flags unload one workspace (proposed)
    or keep today's "stop the process" meaning, with `unload` as a new verb?
 3. Env refresh: is "first client wins, `reload` to refresh" (today's
