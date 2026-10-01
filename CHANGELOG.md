@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.12](https://github.com/nottherealsanta/nexus/compare/v0.2.11...v0.2.12) (2026-10-01)
+
+
+### Bug fixes
+
+* resolve MCP server working directories from the workspace ([#39](https://github.com/nottherealsanta/nexus/issues/39)) ([9c0ad5c](https://github.com/nottherealsanta/nexus/commit/9c0ad5ceb390dc0d4e8652f143d34f21932ea267))
+
 ## [0.2.11](https://github.com/nottherealsanta/nexus/compare/v0.2.10...v0.2.11) (2026-10-01)
 
 
