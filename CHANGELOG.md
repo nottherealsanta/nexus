@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.11](https://github.com/nottherealsanta/nexus/compare/v0.2.10...v0.2.11) (2026-10-01)
+
+
+### Features
+
+* provider usage modal (Ctrl+U) and Claude sign-in in Settings ([#37](https://github.com/nottherealsanta/nexus/issues/37)) ([b5fa4aa](https://github.com/nottherealsanta/nexus/commit/b5fa4aacd3488f75d17d27171c2e014db8b9846d))
+
 ## [0.2.10](https://github.com/nottherealsanta/nexus/compare/v0.2.9...v0.2.10) (2026-10-01)
 
 
