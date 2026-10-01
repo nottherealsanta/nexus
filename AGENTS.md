@@ -10,21 +10,42 @@ agents.** Keep this in mind for every change: show everything that matters
 (every parameter, every output), labelled and readable, never a raw JSON dump,
 and never hide information from the user that the agent can see.
 
-Start here, then open the doc for the area you are changing:
+**`docs/` is the source of truth** for how Nexus is built and why: architecture,
+every subsystem, and the design decisions. Start at [docs/README.md](docs/README.md)
+(a "find it by task" index), then open the doc for the area you are changing.
+Update the matching doc in the same change as the code.
 
 | You are working on… | Read |
 | --- | --- |
-| Loop, providers, tools, context, sessions, managers, runtime, host/daemon, protocol, reducer | [docs/core.md](docs/core.md) |
+| Layers, the five contracts, request path, invariants | [docs/architecture.md](docs/architecture.md) |
+| Why something is the way it is; known gaps | [docs/decisions.md](docs/decisions.md) |
+| Config keys, defaults, env vars, on-disk layout | [docs/config.md](docs/config.md) |
+| Events, the reducer, `ConversationView` | [docs/events-and-view.md](docs/events-and-view.md) |
+| Providers, routing, registry, tiers, sign-in | [docs/models.md](docs/models.md), [docs/provider-onboarding.md](docs/provider-onboarding.md) |
+| The loop, turns, limits, failure handling | [docs/loop.md](docs/loop.md) |
+| Prompt assembly, budget, compaction, caching | [docs/context.md](docs/context.md) |
+| Sessions, SQLite storage, locks, export | [docs/sessions.md](docs/sessions.md) |
+| Tools, permissions, bundles, shell jobs | [docs/tools.md](docs/tools.md) |
+| Subagents, agent definitions, worktrees | [docs/agents.md](docs/agents.md) |
+| Hot reload, skills, hooks, MCP, Settings files | [docs/extensions.md](docs/extensions.md), [docs/extending.md](docs/extending.md) |
+| Host commands, daemon, transports, presence | [docs/host.md](docs/host.md) |
+| CLI subcommands and chat slash commands | [docs/cli.md](docs/cli.md) |
+| Anything both UIs must do the same way | [docs/surfaces.md](docs/surfaces.md) |
 | `nexus chat`, the Textual shell (`nexus/ui/tui/`, `nexus/ui_support/`) | [docs/textual.md](docs/textual.md) |
 | `nexus web`, the browser client (`nexus/ui/web/`, `nexus/host/web.py`) | [docs/web.md](docs/web.md) |
+| Local dictation | [docs/voice.md](docs/voice.md) |
+| Trust boundaries, network, credentials | [docs/security.md](docs/security.md) |
+| Tests, fakes, browser checks | [docs/testing.md](docs/testing.md) |
+| Dev mode, mock scenarios, benchmark, examples | [docs/devtools.md](docs/devtools.md) |
 | Releases, versioning, CI, publishing, `nexus update` | [docs/release.md](docs/release.md) |
+| Finding the file for a module | [docs/module-map.md](docs/module-map.md) |
 
-The longer reference docs at the root are background. Search them; don't read them end to end:
-`ARCHITECTURE.md` (layers, five contracts, security), `EXTENDING.md` (add a
-tool/provider/skill/agent/hook/MCP server), `README.md` (user-facing behavior and
-commands), `PLAN.md` (the historical phase ledger; docstrings cite it as "plan
-section X.Y"), `webplan.md` and `design.md` (browser plan and visual spec),
-`IMPROVEMENT_PLAN.md` and `TOOLS_PLAN.md` (forward-looking plans).
+Root files are background; search them, don't read them end to end: `README.md`
+(user-facing behavior and commands), `ARCHITECTURE.md` and `design.md` (older
+architecture and visual notes; `docs/` supersedes them), `CHANGELOG.md`
+(generated). `plans/` holds the historical plan ledgers that docstrings cite as
+"plan section X.Y" (`STATE_PLAN`, `MOCK_PLAN`, `VOICE_PLAN`, `webplan.md`, …).
+Where a plan and the code disagree, the code wins, then `docs/`.
 
 ## Setup and commands
 
@@ -91,6 +112,12 @@ Tests need no network or credentials. They use temporary workspaces,
 - **Present context clearly.** Tool calls, results, context blocks and errors
   render as labelled, structured rows that miss nothing (`ui_support/tool_details.py`
   and its web port `ui/web/js/tool-details.js`); clipping is always announced.
+
+- **Docs travel with code.** A behavior or design change updates the matching
+  `docs/` page in the same commit; a new module gets a row in
+  [docs/module-map.md](docs/module-map.md) (`tests/test_docs.py` fails otherwise);
+  a design choice worth remembering goes in [docs/decisions.md](docs/decisions.md).
+  Write the contract and the reason, briefly; say "not verified" where it is not.
 
 - Match the surrounding style: module docstrings state the contract and cite the
   plan section. Structs are frozen `msgspec` or dataclasses. Errors are redacted
