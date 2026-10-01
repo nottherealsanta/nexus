@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.16](https://github.com/nottherealsanta/nexus/compare/v0.2.15...v0.2.16) (2026-10-01)
+
+
+### Bug fixes
+
+* store credentials locally and improve voice commands ([#48](https://github.com/nottherealsanta/nexus/issues/48)) ([0beee57](https://github.com/nottherealsanta/nexus/commit/0beee57607c950bcc899b423fd4e1c7fde33049c))
+
 ## [0.2.15](https://github.com/nottherealsanta/nexus/compare/v0.2.14...v0.2.15) (2026-10-01)
 
 
