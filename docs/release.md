@@ -27,6 +27,41 @@ release PR "chore(main): release 0.2.0"                       ▼
 
 ## Raising a PR and bumping the version
 
+### Release helper
+
+`scripts/release.py` automates a prepared patch release using `git`, authenticated
+`gh`, and Python 3.13+. Run it from this checkout; it operates on the checkout's
+GitHub repository. It leaves local files and branches unchanged.
+
+```sh
+.venv/bin/python scripts/release.py                       # read-only inspection
+.venv/bin/python scripts/release.py --change-pr 48         # inspect a prepared fix PR
+.venv/bin/python scripts/release.py --change-pr 48 --execute
+.venv/bin/python scripts/release.py --execute             # existing release PR
+.venv/bin/python scripts/release.py --verify 0.2.16 --execute  # resume verification after tagging
+```
+
+Prepare, commit, test, push and open the change PR first. The helper requires a
+clean worktree for release execution and a `fix:` change title. It waits for
+`ci-ok`, `pr-title`, all other pending checks and clean mergeability, then squash
+merges using the reviewed head commit. Failed checks stop execution; rerunning
+CI remains a deliberate manual action.
+
+The helper prints the complete generated release diff and requires exactly the
+four release files, matching next-patch versions, preserved previous changelog
+entries, and no non-version TOML/manifest changes. A stale release PR waits for
+release-please to catch up with `main`. A changed PR head stops execution.
+Release-please owns all version edits, tagging and publication. The helper checks
+the publishing workflow, GitHub installers/checksums/distribution assets and the
+exact version and distributions on PyPI before reporting completion.
+
+Waiting is bounded to 30 minutes by default (`--timeout` seconds, `--interval`
+1–60 seconds). Re-run with the same change PR after an interrupted pre-tag run;
+use `--verify VERSION --execute` once the tag exists. The helper does not create
+empty trigger commits, override minor bumps, repair CI, or automatically retry
+failed publishing. Offline tests and read-only GitHub inspection are verified;
+end-to-end automated merging has not been live-tested.
+
 **Never edit the version by hand.** Not in `pyproject.toml`, `uv.lock`,
 `.release-please-manifest.json` or `CHANGELOG.md`. The manifest must hold the last
 *released* version, the one that has a git tag. Setting it to a version that has no

@@ -1,4 +1,4 @@
-"""Pasted provider API keys kept in the secure native keychain (OpenCode Go).
+"""Pasted provider API keys kept in the private credential file (OpenCode Go).
 
 A key is written once by the host (``ProviderKeySet``) and read by the
 adapter on each request, so a replaced or removed key applies without a
@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from ..errors import ProviderError
-from .store import KeyringSecretStore, SecretStore, validate_profile
+from .store import FileSecretStore, SecretStore, validate_profile
 
 _MIN_KEY, _MAX_KEY = 8, 512
 
@@ -26,7 +26,7 @@ class StoredKeyAuth:
     def __init__(self, provider: str, *, profile: str = "default", store: SecretStore | None = None) -> None:
         self.provider = provider
         self.profile = validate_profile(profile)
-        self._store = store or KeyringSecretStore()
+        self._store = store or FileSecretStore()
 
     @property
     def account(self) -> str:

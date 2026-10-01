@@ -6,6 +6,8 @@ from .copilot import CopilotAuthManager, CopilotHeaders
 from .store import (
     CredentialRecord,
     CredentialStore,
+    FileCredentialStore,
+    FileSecretStore,
     KeyringCredentialStore,
     KeyringSecretStore,
     SecretStore,
@@ -19,6 +21,8 @@ __all__ = [
     "CopilotHeaders",
     "CredentialRecord",
     "CredentialStore",
+    "FileCredentialStore",
+    "FileSecretStore",
     "KeyringCredentialStore",
     "KeyringSecretStore",
     "SecretStore",

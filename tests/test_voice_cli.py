@@ -16,6 +16,7 @@ from nexus.voice.audio import silence
 
 def test_voice_parser_actions_and_file_argument() -> None:
     parser = cli.build_parser()
+    assert parser.parse_args(["voice"]).voice_action == "status"
     parsed = [
         parser.parse_args(["voice", action])
         for action in ("status", "download", "remove")
@@ -253,3 +254,18 @@ def test_voice_error_redacts_paths_and_doctor_prints_voice_status() -> None:
     assert "voice: state=error enabled=yes progress=50%" in out.getvalue()
     assert "failed at [path]" in out.getvalue()
     assert "/private/user/model" not in out.getvalue()
+
+
+def test_voice_download_preserves_host_install_guidance_once() -> None:
+    message = (
+        "Voice runtime is not installed. Install the voice extra "
+        "(nexus-harness[voice]; uv sync --extra voice) and restart the daemon."
+    )
+    out, err = io.StringIO(), io.StringIO()
+    result = asyncio.run(cli._wait_voice_download(
+        _VoiceClient(),
+        VoiceStatusResult(state="unsupported", enabled=True, message=message),
+        out, err,
+    ))
+    assert result == 1
+    assert err.getvalue() == f"Error: {message}\n"

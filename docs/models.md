@@ -2,7 +2,7 @@
 
 `nexus/model/` (L1) is provider-neutral: message IR, the `Provider` protocol,
 adapters, the router, the models.dev registry and tiers. `nexus/auth/` holds
-keychain-backed sign-in. To add or change a wire dialect, follow
+file-backed sign-in. To add or change a wire dialect, follow
 [provider-onboarding.md](provider-onboarding.md) as well.
 
 ## Files
@@ -115,12 +115,12 @@ are durable (`model.selected`, `reasoning_effort.selected`).
 | Route | Code | Storage |
 | --- | --- | --- |
 | API key (`${env:NAME}` reference) | adapter at request time | never stored by Nexus |
-| ChatGPT / Codex OAuth (`auth = "chatgpt_oauth"`) | `auth/codex.py`: browser PKCE or device code; protocol pinned to a cited OpenCode commit (see `auth/NOTICE`) | rotating refresh token + routing metadata in the native keychain; access/ID tokens never persisted |
-| GitHub Copilot (`auth = "github_copilot"`) | `auth/copilot.py`: GitHub.com device flow using OpenCode's OAuth app id (`CLIENT_ID`); the GitHub token is the Copilot API bearer (no `copilot_internal` exchange), verified against `/models` at login | keychain |
-| Pasted key (`auth = "keychain"`, e.g. OpenCode Go) | `auth/api_key.py` | keychain |
+| ChatGPT / Codex OAuth (`auth = "chatgpt_oauth"`) | `auth/codex.py`: browser PKCE or device code; protocol pinned to a cited OpenCode commit (see `auth/NOTICE`) | rotating refresh token + routing metadata in the private credential file; access/ID tokens never persisted |
+| GitHub Copilot (`auth = "github_copilot"`) | `auth/copilot.py`: GitHub.com device flow using OpenCode's OAuth app id (`CLIENT_ID`); the GitHub token is the Copilot API bearer (no `copilot_internal` exchange), verified against `/models` at login | private credential file |
+| Pasted key (`auth = "keychain"`, e.g. OpenCode Go) | `auth/api_key.py` | private credential file |
 | Claude subscription (`kind = "claude-agent"`) | `model/providers/claude_agent_auth.py:ClaudeCliAuth`: runs `claude auth login --claudeai` headless (`BROWSER` is a no-op), returns the printed URL, then pipes the code the user pastes (`ProviderLoginCode`) to the CLI | the Claude CLI's own store, shared with Claude Code; Nexus never reads it and never signs it out |
 
-`auth/store.py` is keyring-only (`KeyringSecretStore`); profile names match
+`auth/store.py` is file-backed (`FileSecretStore`); profile names match
 `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. Host flow: `ProvidersStatus`, `ProviderLogin`
 + `ProviderLoginPoll`/`Cancel`, `ProviderKeySet` (the only inward credential
 command), `ProviderLogout` in `host_support/provider_auth.py`; a sign-in is a
@@ -171,3 +171,8 @@ than disappearing into final prose. The SDK's `StructuredOutput` formatting tool
 is permitted internally. Early handoffs have no final SDK usage report, so usage
 for those requests is unavailable (reported as zero). Offline handoff and schema
 tests are verified; live subscription inference is not verified.
+
+Credentials are plaintext in `~/.nexus/credentials.json` (`0600`, directory
+`0700`), or `$NEXUS_HOME/credentials.json`. No keychain fallback or automatic
+migration is performed: sign in again after upgrading. The legacy
+`auth = "keychain"` spelling still selects pasted API keys.

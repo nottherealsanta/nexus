@@ -66,10 +66,10 @@ here, so add a row when you add a file.
 | File | Purpose |
 | --- | --- |
 | `__init__.py` | Local-only provider credentials: ChatGPT OAuth, GitHub Copilot, stored API keys |
-| `api_key.py` | Pasted provider API keys kept in the secure native keychain (OpenCode Go) |
+| `api_key.py` | Pasted provider API keys kept in the private credential file (OpenCode Go) |
 | `codex.py` | Experimental ChatGPT OAuth support for the private Codex Responses endpoint |
 | `copilot.py` | GitHub.com device OAuth and short-lived GitHub Copilot credentials |
-| `store.py` | Secure, bounded credential persistence for provider sign-in |
+| `store.py` | Owner-only file-backed provider credentials, atomic writes and bounded locks |
 
 ### `nexus/client/`
 

@@ -90,3 +90,6 @@ composer. Escape discards capture and cancels inference.
 
 The browser renders the same preview phases with a canvas waveform. Real-
 microphone latency and inference on supported hardware are **not verified**.
+
+`nexus voice` defaults to status. Missing-runtime download failures preserve the
+host installation guidance once, without appending a second installation recipe.

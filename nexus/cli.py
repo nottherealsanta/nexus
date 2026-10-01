@@ -884,7 +884,9 @@ async def _wait_voice_download(
     if result.state == "unsupported":
         detail = _voice_error_text(result.message) if result.message else "Voice runtime is unavailable."
         stderr.write(
-            f"Error: {detail} Install the voice extra "
+            f"Error: {detail}\n"
+            if result.message and "Install the voice extra" in result.message
+            else f"Error: {detail} Install the voice extra "
             "(`uv tool install --force 'nexus-harness[voice]'`). If Nexus was installed "
             "while the daemon was already running, restart it with `nexus daemon restart`.\n"
         )
@@ -1518,7 +1520,8 @@ def build_parser() -> argparse.ArgumentParser:
     tools_sub.add_parser("list", help="List available tools")
 
     voice = sub.add_parser("voice", help="Manage local voice transcription")
-    voice_sub = voice.add_subparsers(dest="voice_action", required=True)
+    voice_sub = voice.add_subparsers(dest="voice_action")
+    voice.set_defaults(voice_action="status")
     voice_sub.add_parser("status", help="Show local voice model status")
     voice_sub.add_parser("download", help="Download and prepare the local voice model")
     voice_sub.add_parser("remove", help="Remove the cached local voice model")

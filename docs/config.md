@@ -34,7 +34,7 @@ start with `config_version = 2`.
 underscore per nesting level (lower-cased), e.g. `NEXUS_PERMISSIONS__MODE=ask`.
 `NEXUS_VOICE=off` disables voice. Legacy v1 names (`NEXUS_MODEL`, …) still map.
 
-**Secrets are references, never values:** `${env:VAR}` (and keychain references)
+**Secrets are references, never values:** `${env:VAR}`
 are opaque strings resolved by the adapter at request time. Logs, reprs and
 errors redact them and any URL userinfo (`util.redact_secrets`).
 
@@ -74,6 +74,7 @@ outbound transport repeats the address check at connect time
 | --- | --- |
 | `~/.nexus/` (`$NEXUS_HOME`) | machine and user state root |
 | `~/.nexus/nexus.db` | shared SQLite state: every project's sessions ([sessions.md](sessions.md)); file `0600`, dir `0700` |
+| `~/.nexus/credentials.json` | provider secrets and OAuth refresh records; plaintext, owner-only `0600`, parent `0700` |
 | `~/.nexus/config.toml` | user config; Settings → Providers/Setup write `[providers.*]` and `[models].default` here |
 | `~/.nexus/{agents,skills,tools,providers}/`, `mcp.json`, `hooks.toml`, `SOUL.md` | user-scope extensions |
 | `~/.nexus/daemon/<hash>.sock` (+ pid, lock, log, http discovery) | one daemon per workspace ([host.md](host.md)); falls back to a private short dir when the path is too long |

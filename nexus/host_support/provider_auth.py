@@ -12,7 +12,7 @@ Four providers connect from any surface:
   shows (``ProviderLoginCode``). The login belongs to the Claude CLI and is
   shared with Claude Code, so Nexus never signs it out.
 
-Credentials live in the secure native keychain of the daemon's machine. OAuth
+Credentials live in the private credential file of the daemon's machine. OAuth
 tokens never cross the wire; a pasted API key crosses **inward only**
 (``ProviderKeySet``, and a Claude sign-in code through ``ProviderLoginCode``)
 and is never echoed, logged, or written to config. A
@@ -136,7 +136,7 @@ def _manager(runtime: object, provider: str) -> Any:
 
 
 def _safe(exc: BaseException) -> str:
-    """A bounded, redacted message; a keychain or HTTP error never leaks a value."""
+    """A bounded, redacted message; a credential-storage or HTTP error never leaks a value."""
     text = str(exc) if isinstance(exc, (ConfigError, ValueError)) or type(exc).__name__.endswith("Error") else ""
     return redact_secrets(text or "sign-in failed")[:240]
 
@@ -150,10 +150,10 @@ async def copilot_domain(runtime: object) -> str | None:
 
 
 async def connected(runtime: object, provider: str) -> bool:
-    """Whether the keychain holds a credential for ``provider`` (never the value)."""
+    """Whether the private credential file holds a credential for ``provider`` (never the value)."""
     try:
         return bool(await _manager(runtime, provider).status())
-    except Exception:  # noqa: BLE001 - an unavailable keychain reads as not connected
+    except Exception:  # noqa: BLE001 - an unavailable credential file reads as not connected
         return False
 
 
@@ -404,7 +404,7 @@ async def provider_key_set(
         await _api_key(runtime, provider).save(validate_api_key(key))
     except ValueError as exc:
         raise ConfigError(str(exc)) from None
-    except Exception as exc:  # noqa: BLE001 - keychain failures, never the key
+    except Exception as exc:  # noqa: BLE001 - credential-storage failures, never the key
         raise ConfigError(f"could not store the key: {_safe(exc)}") from None
     message = await _finish_route(runtime, provider, None, idle)
     return {"provider": provider, "connected": True, "message": message}
@@ -420,9 +420,9 @@ async def provider_logout(runtime: object, provider: str) -> dict[str, Any]:
             await provider_login_cancel(runtime, login.id)
     try:
         await _manager(runtime, provider).logout()
-    except Exception as exc:  # noqa: BLE001 - keychain failures
+    except Exception as exc:  # noqa: BLE001 - credential-storage failures
         raise ConfigError(f"could not remove the credential: {_safe(exc)}") from None
-    return {"provider": provider, "connected": False, "message": "Disconnected. The credential was removed from the keychain."}
+    return {"provider": provider, "connected": False, "message": "Disconnected. The credential was removed from the private credential file."}
 
 
 async def dispatch_providers(

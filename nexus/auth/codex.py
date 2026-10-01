@@ -28,7 +28,7 @@ from ..errors import ProviderError
 from .store import (
     CredentialRecord,
     CredentialStore,
-    KeyringCredentialStore,
+    FileCredentialStore,
     validate_profile,
 )
 
@@ -100,7 +100,7 @@ class _Access:
 class CodexOAuthManager:
     def __init__(self, *, profile: str = "default", store: CredentialStore | None = None, client: Any | None = None, now=time.time) -> None:
         self.profile = validate_profile(profile)
-        self._store = store or KeyringCredentialStore()
+        self._store = store or FileCredentialStore()
         self._client = client
         self._now = now
         self._access: _Access | None = None
