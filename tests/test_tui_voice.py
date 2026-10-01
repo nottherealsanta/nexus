@@ -77,6 +77,9 @@ async def test_first_voice_use_waits_for_confirmation_and_ready_ack(monkeypatch)
         await pilot.pause()
         assert isinstance(app.screen, VoiceConsentScreen)
         assert not app.query_one("#root-agent-recording").display
+        assert app.screen.query_one("#voice-confirm").display
+        assert not app.screen.query_one("#voice-retry").display
+        assert not app.screen.query_one("#voice-ready").display
         assert transport.prepare_calls == 0
         await pilot.click("#voice-confirm")
         await pilot.pause()
@@ -85,8 +88,10 @@ async def test_first_voice_use_waits_for_confirmation_and_ready_ack(monkeypatch)
         assert "loading" not in app.screen.query_one("#voice-status").render().plain.lower()
         transport.voice_state = "ready"
         await pilot.pause(1.1)
-        assert "Download a local speech model" in app.screen.query_one("#voice-status").render().plain
-        assert "ready" not in app.screen.query_one("#voice-status").render().plain.lower()
+        assert "local voice model is available" in app.screen.query_one("#voice-status").render().plain
+        assert not app.screen.query_one("#voice-confirm").display
+        assert not app.screen.query_one("#voice-retry").display
+        assert app.screen.query_one("#voice-ready").display
         name = app.query_one("#root-agent-name")
         model = app.query_one("#root-model")
         composer = app.query_one("#chat-input")
@@ -171,3 +176,20 @@ async def test_voice_slash_status_and_draft_insertion(monkeypatch):
         assert editor.text == "hello spoken words"
         assert transport.last_input is None
         assert "/voice" in {spec.name for spec in __import__("nexus.ui.cli.commands", fromlist=["SPECS"]).SPECS}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["error", "unsupported"])
+async def test_voice_dialog_shows_failure_without_download_prompt(state):
+    transport = VoiceTransport()
+    transport.voice_state = state
+    app = NexusTextualApp(_client(transport), session="voice-failure")
+    async with app.run_test(size=(100, 30)) as pilot:
+        await app.voice.start_or_confirm()
+        await pilot.pause()
+        assert isinstance(app.screen, VoiceConsentScreen)
+        assert "could not be loaded" in app.screen.query_one("#voice-status").render().plain
+        assert not app.screen.query_one("#voice-actions").display
+        assert app.screen.query_one("#voice-retry").display
+        assert not app.screen.query_one("#voice-ready").display
+        assert transport.prepare_calls == 0

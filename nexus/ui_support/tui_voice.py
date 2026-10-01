@@ -47,8 +47,6 @@ class VoiceConsentScreen(ModalScreen[bool]):
         self._poll_task = asyncio.create_task(self._poll_loop())
 
     def _controls(self, mode: str) -> None:
-        if not self.is_mounted:
-            return
         self.query_one("#voice-actions").display = mode == "confirm"
         self.query_one("#voice-confirm", Button).display = mode == "confirm"
         self.query_one("#voice-retry", Button).display = mode == "retry"
@@ -81,13 +79,14 @@ class VoiceConsentScreen(ModalScreen[bool]):
                     self.waiting = False
             else:
                 if result.state == "ready":
+                    self.query_one("#voice-status", Static).update("The local voice model is available. Start dictation when you are ready.")
                     self._controls("ready")
                     self.waiting = False
-                elif result.state == "error":
+                elif result.state in {"error", "unsupported"}:
                     self.query_one("#voice-status", Static).update(sanitize(result.message or "Voice model could not be loaded.", 180))
                     self._controls("retry")
                     self.waiting = False
-                elif result.state in {"absent", "disabled", "unsupported"} and self.waiting:
+                elif result.state in {"absent", "disabled"} and self.waiting:
                     self.query_one("#voice-status", Static).update(
                         sanitize(result.message, 180) if result.state == "unsupported" and result.message
                         else "Voice model is not available yet. Retry to download it."

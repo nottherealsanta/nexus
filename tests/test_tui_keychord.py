@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from nexus.host import protocol as p
 from nexus.ui.tui.app import NexusTextualApp
 from nexus.ui_support.tui_command_palette import KEYBOARD_SHORTCUTS, LEADER_SHORTCUTS
 from nexus.ui_support.tui_model_picker import ModelPickerScreen
@@ -92,3 +93,70 @@ async def test_unbound_leader_key_is_swallowed(monkeypatch):
         await pilot.press("ctrl+x", "b")
         await pilot.pause()
         assert not app.leader.armed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["escape", "ctrl+c"])
+async def test_navigation_returns_from_nested_settings(monkeypatch, key):
+    from textual.screen import ModalScreen
+
+    _, app = _app(monkeypatch)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        app.action_open_settings()
+        await pilot.pause()
+        app.push_screen(ModalScreen())
+        await pilot.pause()
+        await pilot.press(key)
+        await pilot.pause()
+        assert app._is_main_screen()
+        assert app.focused is app.query_one("#chat-editor")
+        assert not app._last_ctrl_c
+
+
+@pytest.mark.asyncio
+async def test_double_escape_cancels_work_but_single_escape_does_not(monkeypatch):
+    _, app = _app(monkeypatch)
+    calls = []
+
+    async def cancel():
+        calls.append(True)
+        return p.SessionCancelResult(session="leader", cancelled=True, dropped=2,
+                                     returned_messages=["message 1", "message 2"])
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        monkeypatch.setattr(app.controller, "cancel", cancel)
+        app.controller.running = True
+        editor = app.query_one("#chat-editor")
+        editor.text = "unsent draft"
+        await pilot.press("escape")
+        assert not calls
+        await pilot.press("escape")
+        assert calls == [True]
+        assert editor.text == "message 1\n\nmessage 2\n\nunsent draft"
+        app.controller.running = False
+
+
+@pytest.mark.asyncio
+async def test_escape_pair_expires_and_other_keys_reset_it(monkeypatch):
+    _, app = _app(monkeypatch)
+    calls = []
+
+    async def cancel():
+        calls.append(True)
+        return p.SessionCancelResult(session="leader", cancelled=True)
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        monkeypatch.setattr(app.controller, "cancel", cancel)
+        app.controller.running = True
+        await pilot.press("escape")
+        app.leader._last_escape -= 2
+        await pilot.press("escape")
+        assert not calls
+        await pilot.press("a", "escape")
+        assert not calls
+        await pilot.press("escape")
+        assert calls == [True]
+        app.controller.running = False

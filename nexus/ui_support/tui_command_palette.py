@@ -30,10 +30,11 @@ SHORTCUTS: tuple[tuple[str, str | None, str], ...] = (
     ("ctrl+e", None, "Toggle the Logs drawer"),
     ("a", None, "Open the root-agent picker"),
     ("shift+tab", None, "Cycle root agent"),
-    ("ctrl+c", "cancel_turn", "Cancel the active turn"),
+    ("ctrl+c", "cancel_turn", "Return to conversation or cancel the active turn"),
     ("ctrl+r", "reconnect", "Reconnect"),
     ("ctrl+q", "quit_shell", "Quit"),
-    ("escape", None, "Back from an agent transcript"),
+    ("escape", None, "Return to conversation"),
+    ("escape twice", None, "Stop the active turn (within 1.5 seconds)"),
 )
 
 

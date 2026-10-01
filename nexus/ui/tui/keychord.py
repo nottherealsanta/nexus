@@ -1,6 +1,7 @@
-"""Ctrl+X leader keys and the "any key stops dictation" rule for the Textual shell.
+"""Navigation, Ctrl+X leader keys, and dictation keys for the Textual shell.
 
-Contract: :meth:`LeaderKeys.intercept` sees every key before bindings or widgets.
+Contract: navigation and leader interception see keys before bindings or widgets.
+Escape/Ctrl+C return from pushed screens; double Escape cancels active work.
 While recording, Esc discards and any other key stops and transcribes (the key is
 swallowed). Otherwise Ctrl+X on the main screen arms the leader for a short
 window and the next key runs its row of ``LEADER_SHORTCUTS``.
@@ -8,6 +9,7 @@ window and the next key runs its row of ``LEADER_SHORTCUTS``.
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING
 
 from textual.css.query import NoMatches
@@ -28,6 +30,8 @@ class LeaderKeys:
     def __init__(self, app: NexusTextualApp) -> None:
         self.app = app
         self.armed = False
+        self._last_escape = 0.0
+        self._escape_session = None
         self._timer: Timer | None = None
 
     def intercept(self, event) -> bool:
@@ -59,6 +63,53 @@ class LeaderKeys:
             self.arm()
             return True
         return False
+
+    async def intercept_navigation(self, event) -> bool:
+        """Dismiss pushed screens first; two Escapes within 1.5s stop work."""
+        key = event.key
+        if key not in {"escape", "ctrl+c"}:
+            self._last_escape = 0.0
+            return False
+        app = self.app
+        if len(app.screen_stack) > 1:
+            self._consume(event)
+            self.disarm()
+            self._last_escape = 0.0
+            app._last_ctrl_c = 0.0
+            while len(app.screen_stack) > 1:
+                await app.screen.dismiss(None)
+            if app.focused is None:
+                app.query_one("#chat-editor").focus()
+            return True
+        if app._logs_open or app._sessions_overlay:
+            self._consume(event)
+            self._last_escape = 0.0
+            if app._logs_open:
+                app.action_close_logs()
+            app._close_sessions_overlay()
+            return True
+        if app._inline_picker_kind is not None:
+            self._consume(event)
+            self._last_escape = 0.0
+            app._close_inline_picker()
+            return True
+        if app.voice.recording or app.voice.transcribing or self.armed:
+            self._last_escape = 0.0
+            return False
+        if key != "escape" or not app.controller.running:
+            self._last_escape = 0.0
+            return False
+        self._consume(event)
+        now = time.monotonic()
+        session = app.controller.session
+        if self._escape_session == session and self._last_escape and now - self._last_escape <= 1.5:
+            self._last_escape = 0.0
+            await app.action_cancel_turn()
+        else:
+            self._last_escape = now
+            self._escape_session = session
+            app._sync_status("Press Escape again to stop")
+        return True
 
     def arm(self) -> None:
         self.disarm()

@@ -38,6 +38,11 @@ use `nexus run` or JSONL. Textual is pinned (`textual==8.2.8`,
 | `ui/tui/run.py` | entry; preferences at `$XDG_CONFIG_HOME/nexus/tui.json` (theme, panels, context preview) |
 | `ui/tui/widgets.py` | re-exports `ui_support/tui_widgets.py` |
 
+The system-prompt modal renders literal, wrapping text rather than Markdown,
+matching the browser client. XML-style blocks such as `<environment>` and their
+workspace/platform/profile contents remain visible; prompt syntax is not interpreted
+as HTML or Rich markup.
+
 Textual-dependent support modules in `ui_support/` (the only ones allowed to
 import Textual besides `ui/tui/`):
 
@@ -52,7 +57,7 @@ import Textual besides `ui/tui/`):
 | `tui_settings.py` | full-screen Settings page over `Settings*` commands |
 | `tui_setup.py`, `tui_providers.py` | first-run setup; Providers pane |
 | `tui_archived.py` | archived-session search/preview/resume dialog |
-| `tui_diff.py` | `ToolDiff`: one `textual_diff_view.DiffView` per file (unified, auto-split when it fits) |
+| `tui_diff.py` | `ToolDiff`: one `textual_diff_view.DiffView` per file (split view: original left, updated right; plain filename titles) |
 | `tui_history.py` | bounded per-user prompt history |
 | `tui_voice.py`, `voice_capture.py` | `VoiceController`; bounded `sounddevice` capture |
 
@@ -67,7 +72,7 @@ import Textual besides `ui/tui/`):
 - The activity bar shows context fill when idle and motion during a turn or
   reconnect. Thinking expands inline.
 - Ctrl+X no longer cuts in the composer on the main screen.
-- Dictation needs `uv sync --extra voice` ([voice.md](voice.md)).
+- Dictation runtime is included in the standard install ([voice.md](voice.md)).
 
 ## Common changes
 
@@ -142,3 +147,23 @@ drafts expire after one hour; submitted content stays in the durable log.
 
 Validation: `tests/test_attachments.py`, `tests/test_tui_attachments.py`,
 `tests/playwright_attachments_check.py`.
+
+Escape and Ctrl+C dismiss open dialogs and Settings (including nested screens)
+and restore focus on the main conversation. On the main conversation, two Escape
+presses within 1.5 seconds cancel the active turn and return pending queued messages to the composer via
+`SessionCancel(return_queue=True)`. Messages keep queue order, separated by blank
+lines, followed by any existing unsent draft; they no longer run automatically.
+A single Escape shows a stop hint. Ctrl+C retains immediate
+turn cancellation on the main conversation.
+
+Attachments insert editable `image 1`, `image 2`, or `document 1`,
+`document 2` references at the composer cursor (each kind is numbered separately
+within a draft). Preview rows show the same reference and filename. Removing a
+browser attachment does not renumber remaining references. Submitted attachment
+metadata carries the same labels beside the image bytes or complete document text
+in the durable user message, so references in sentences stay meaningful on replay.
+
+Submitted messages separate the prompt sentence from numbered attachment rows.
+The browser shows labelled image thumbnails and expandable full document cards,
+also in request-context messages. The terminal shows compact labelled rows;
+clicking the message body opens the complete attached text and image metadata.
