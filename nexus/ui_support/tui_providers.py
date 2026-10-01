@@ -2,7 +2,7 @@
 
 Every action is a host command (``ProvidersStatus``, ``ProviderLogin`` +
 ``ProviderLoginPoll``, ``ProviderLoginCode``, ``ProviderKeySet``,
-``ProviderLogout``); the daemon keeps credentials in the system keychain (Claude's
+``ProviderLogout``); the daemon keeps credentials in the private credential file (Claude's
 stay with the Claude CLI). A ``code_entry`` sign-in (Claude) shows a field for the
 code its page displays. A browser or device sign-in shows its URL
 and code here and opens the URL; the pane polls until the daemon reports the
@@ -55,7 +55,7 @@ class ProvidersPane(VerticalScroll):
         if self._heading:
             yield Static("Providers", classes="settings-heading", markup=False)
             yield Static(
-                "Sign in to model providers. Credentials stay in this machine's keychain.",
+                "Sign in to model providers. Credentials stay in ~/.nexus/credentials.json.",
                 classes="settings-help", markup=False,
             )
         for provider, label, actions in PROVIDERS:
@@ -224,7 +224,7 @@ class ProvidersPane(VerticalScroll):
     async def _logout(self, provider: str) -> None:
         try:
             result = await self._client.provider_logout(provider)
-        except Exception as exc:  # noqa: BLE001 - keychain error
+        except Exception as exc:  # noqa: BLE001 - credential-storage error
             self._flow(provider, sanitize(str(exc), 200))
             return
         self._flow(provider, sanitize(str(_field(result, "message", "")), 240))

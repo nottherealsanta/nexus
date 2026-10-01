@@ -1,6 +1,6 @@
 """GitHub.com device OAuth and short-lived GitHub Copilot credentials.
 
-The GitHub OAuth token stays in the native keychain and is the bearer for the
+The GitHub OAuth token stays in the private credential file and is the bearer for the
 Copilot API directly; there is no ``copilot_internal`` token exchange. Sign-in
 is verified against the models endpoint before anything is saved. See plan
 section 3.4.
@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from ..errors import ProviderError
-from .store import KeyringSecretStore, SecretStore, validate_profile
+from .store import FileSecretStore, SecretStore, validate_profile
 
 DEFAULT_DOMAIN = "github.com"
 DEFAULT_BASE_URL = "https://api.githubcopilot.com"
@@ -77,7 +77,7 @@ class CopilotAuthManager:
         sleep: Callable[..., Any] | None = None,
     ) -> None:
         self.profile = validate_profile(profile)
-        self._store = store or KeyringSecretStore()
+        self._store = store or FileSecretStore()
         self._client = client
         self._now = now or time.time
         self._sleep = sleep or asyncio.sleep
@@ -195,7 +195,7 @@ class CopilotAuthManager:
                 await client.aclose()
 
     async def headers(self) -> dict[str, str]:
-        """Request headers for the stored GitHub token, re-read from the keychain each time."""
+        """Request headers for the stored GitHub token, re-read from the private credential file each time."""
         operation_generation = self._generation
         record = await self._record()
         if operation_generation != self._generation or record is None:

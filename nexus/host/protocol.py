@@ -10,7 +10,7 @@ The protocol deliberately carries no credential, environment, or configuration
 value back to a client: the verb list is exactly the PLAN §14.4 surface plus
 host queries, owned-worktree review/mutation commands, and provider sign-in.
 ``ProviderKeySet`` and ``ProviderLoginCode`` are the inward-only exceptions (a
-pasted API key goes to the daemon's keychain, a one-time sign-in code to the
+pasted API key goes to the daemon's private credential file, a one-time sign-in code to the
 Claude CLI; neither is ever returned). Streaming is the one verb a
 request/response pair cannot model, so ``SessionSubscribe`` names the stream and
 the transport attaches through :meth:`HostFacade.subscribe`.
@@ -118,7 +118,7 @@ class ProviderLoginCancel(msgspec.Struct, tag=True, frozen=True):
 
 
 class ProviderKeySet(msgspec.Struct, tag=True, frozen=True, repr_omit_defaults=True):
-    """Store a pasted API key in the daemon's keychain.
+    """Store a pasted API key in the daemon's private credential file.
 
     The one command that carries a credential, and only inward: the key is
     never echoed in a result, an error, a log, or config.
@@ -132,7 +132,7 @@ class ProviderKeySet(msgspec.Struct, tag=True, frozen=True, repr_omit_defaults=T
 
 
 class ProviderLogout(msgspec.Struct, tag=True, frozen=True):
-    """Remove one provider's credential from the keychain."""
+    """Remove one provider's credential from the private credential file."""
 
     provider: str
 

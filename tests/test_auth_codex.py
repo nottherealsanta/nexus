@@ -214,19 +214,3 @@ async def test_browser_denial_resolves_promptly_without_reflecting_provider_valu
     manager = CodexOAuthManager(store=MemoryStore())
     with pytest.raises(ProviderError, match="denied"):
         await manager.browser_login(browser_open=browser_open)
-
-
-def test_keyring_chain_requires_only_secure_native_backends():
-    Mac = type("Keyring", (), {"priority": 1})
-    Mac.__module__ = "keyring.backends.macos"
-    File = type("Keyring", (), {"priority": 1})
-    File.__module__ = "keyring.backends.file"
-    Chain = type("ChainerBackend", (), {"priority": 1})
-    Chain.__module__ = "keyring.backends.chainer"
-    assert KeyringCredentialStore._secure_backend(Chain()) is False
-    secure_chain = Chain()
-    secure_chain.backends = [Mac()]
-    assert KeyringCredentialStore._secure_backend(secure_chain) is True
-    mixed_chain = Chain()
-    mixed_chain.backends = [Mac(), File()]
-    assert KeyringCredentialStore._secure_backend(mixed_chain) is False

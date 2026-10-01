@@ -77,7 +77,7 @@ Details: [models.md](models.md), [tools.md](tools.md), [events-and-view.md](even
 | `config/` | v2 layered config, path and state-dir resolution | [config.md](config.md) |
 | `events.py`, `view/` | event catalogue; pure reducer and view model | [events-and-view.md](events-and-view.md) |
 | `model/` | IR, providers, router, registry (models.dev), tiers, tokenizer | [models.md](models.md) |
-| `auth/` | keychain-backed provider sign-in (Codex, Copilot, API keys) | [models.md](models.md#authentication) |
+| `auth/` | file-backed provider sign-in (Codex, Copilot, API keys) | [models.md](models.md#authentication) |
 | `core/` | the agentic loop, turn state, bus, cancellation, registries, watcher | [loop.md](loop.md) |
 | `context/` | parts, budget, compaction, token counting, prompt-cache boundaries | [context.md](context.md) |
 | `session/` | SQLite records, handle, locks, snapshots, export, archive/trash | [sessions.md](sessions.md) |

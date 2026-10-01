@@ -24,7 +24,7 @@ from . import provider_auth, settings_inventory
 from .settings_scope import settings_target
 
 _PROVIDERS = ("codex", "github-copilot", "opencode-go", "openai", "anthropic", "claude-agent", "google", "ollama")
-#: Signed in from Settings → Providers; credentials live in the keychain.
+#: Signed in from Settings → Providers; credentials live in the private credential file.
 _SIGNED_IN = ("codex", "github-copilot", "opencode-go")
 _ENV_NAMES = {
     "openai": ("OPENAI_API_KEY",),

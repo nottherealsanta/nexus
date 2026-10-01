@@ -12,7 +12,6 @@ dependencies = [
     "httpcore==1.0.9",
     "msgspec>=0.18",
     "mcp>=1.2,<2",
-    "keyring>=24",
     "firecrawl-anydoc==0.2.4",
     "claude-agent-sdk==0.2.162",
     "sounddevice>=0.5,<1",

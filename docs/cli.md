@@ -6,7 +6,7 @@ a **pure client**: every subcommand except a few local ones (`init`, `auth`,
 Unix socket, and the daemon auto-starts. Global flags: `--workspace PATH`
 (default cwd), `--version` (reads the cached update notice, never the network),
 `--dev` ([devtools.md](devtools.md)), `--session ID` (reopen in chat).
-With no subcommand, `nexus` opens `chat`.
+With no subcommand, `nexus` opens `chat`. Bare `nexus voice` shows voice status.
 
 ## Subcommands
 

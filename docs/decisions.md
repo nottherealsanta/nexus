@@ -43,8 +43,7 @@ this page and the code win.
 | **Snapshots are derived caches validated against the log; compaction never deletes history.** | Fast resume without risking loss; "omission from the prompt does not delete history". | `session/snapshot.py`, [context.md](context.md) |
 | **Project extensions and settings live in `<workspace>/.agents/`; legacy `.nexus/` is a read-only lower-precedence fallback.** Machine state is under `~/.nexus/`. | A conventional, tool-neutral project dir; writes have one home. | [config.md](config.md) |
 | **Config: layered, `msgspec`, unknown keys are errors; lists append; flat v1 bridges into v2.** | Typos must fail loudly; old configs keep working. | `config/` |
-| **Secrets are references (`${env:…}`/keychain)**, resolved at use. | Nothing secret in files, logs or events. | [security.md](security.md) |
-| **Keychain reads are cached per process, invalidated by a non-secret stamp file** (`~/.nexus/locks/credential-<sha256>.stamp`, replaced on every Nexus write or delete). Replaced a keychain read on every model request and status check. | macOS asks to allow access each time an executable outside an item's access list reads it (a second Python install, an upgrade, a Codex refresh rewriting the item), so per-request reads caused repeated prompts. Nexus logins and logouts in other processes are still seen on the next request; edits made in Keychain Access are seen after a daemon restart. | `auth/store.py` |
+| **Secrets are references (`${env:…}`/credential store)**, resolved at use. | Nothing secret in config, logs or events; private credential storage is separate. | [security.md](security.md) |
 | **Python ≥ 3.13.** | `object.__setattr__` on msgspec Structs, used across the codebase, fails on 3.12 and older. | `pyproject.toml` |
 
 ## Tools, permissions, extensions
@@ -77,7 +76,7 @@ this page and the code win.
 | **Any OpenAI-compatible vendor is a config block, not code** (and must state a `base_url`). | No silent default to `api.openai.com`. | `runtime.py:_adapter_kind` |
 | **The models.dev catalogue supplies descriptions only,** never endpoints or credentials; vendored snapshot with MIT attribution; offline mode. | A third-party catalogue must not redirect requests. | `model/registry.py` |
 | **Tiers resolve deterministically** (user pin → curated → cost → `low`) and only clamp downward. | Predictable routing and spend. | `model/tiers.py` |
-| **Codex models go through the OpenAI adapter's Responses dialect** (ChatGPT OAuth, experimental, private endpoint), not a Codex CLI subprocess. | One adapter, tokens in the keychain only. | `auth/codex.py` |
+| **Codex models go through the OpenAI adapter's Responses dialect** (ChatGPT OAuth, experimental, private endpoint), not a Codex CLI subprocess. | One adapter, refresh tokens in the private credential file only. | `auth/codex.py` |
 | **GitHub Copilot uses GitHub.com device sign-in with OpenCode's OAuth app id;** the GitHub token is the Copilot bearer (no `copilot_internal` exchange). | Simple, verified against `/models`. The device flow itself was not live-tested. The root `README.md` still says Copilot is omitted; it predates this. | `auth/copilot.py` |
 | **OpenCode is integrated over ACP only;** Nexus never reads its credential store; ACP tool calls stay inside that agent. | Clear trust boundary. | `model/providers/opencode.py` |
 | **Claude subscription via the official Agent SDK in an isolated worker,** SDK tools/hooks/settings/persistence disabled; text-only, buffered. | Nexus keeps logging, permissions and execution. | `model/providers/claude_agent.py` |
@@ -166,3 +165,11 @@ Notable choices and why:
 - **Fuzzy search** (`ui_support/fuzzy.py` + `js/fuzzy.js`, same constants) for the
   model picker and web palette; the Textual palette already uses Textual's fuzzy
   matcher.
+
+Provider credentials use `~/.nexus/credentials.json` instead of the OS keychain to
+avoid backend errors and access prompts. The file is plaintext with owner-only
+permissions, atomic replacement and bounded cross-process locking. Keychain
+records are not read or migrated automatically; existing users sign in again.
+The legacy `auth = "keychain"` configuration spelling remains compatible and
+now selects the file-backed pasted-key flow. Claude CLI credentials remain
+owned by Claude.

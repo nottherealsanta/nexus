@@ -339,7 +339,7 @@ class HooksSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
 #: ``[providers.*] auth`` values: ChatGPT OAuth (codex only), GitHub Copilot
 #: device-flow sign-in, or an API key pasted into Settings and kept in the
-#: system keychain.
+#: private credential file.
 PROVIDER_AUTH_MODES = ("chatgpt_oauth", "github_copilot", "keychain")
 
 
@@ -381,9 +381,9 @@ class ProviderSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
             if self.kind not in (None, "openai", "codex"):
                 raise ValueError("chatgpt_oauth is supported only by the codex/OpenAI provider")
         if self.auth in ("github_copilot", "keychain"):
-            # Credentials come from the keychain (plan section 7), never config.
+            # Credentials come from the private credential file (plan section 7), never config.
             if self.api_key is not None:
-                raise ValueError(f"{self.auth} providers read their credential from the keychain; remove api_key")
+                raise ValueError(f"{self.auth} providers read their credential from the private credential file; remove api_key")
             if any(value is not None for value in (self.executable, self.command, self.args, self.env, self.inherit_env, self.permission_policy)):
                 raise ValueError(f"{self.auth} cannot be combined with executable or agent fields")
             if self.kind not in (None, "openai_compatible", "openai-compatible", "compatible"):
