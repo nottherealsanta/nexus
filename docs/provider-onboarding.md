@@ -1,7 +1,7 @@
 # Provider and model stream onboarding
 
 Use this checklist when adding a provider, enabling a new model, or changing its
-wire API. Read [core.md](core.md) first. Provider adapters normalize output into
+wire API. Read [models.md](models.md) and [loop.md](loop.md) first. Provider adapters normalize output into
 `nexus/model/stream.py`; the loop records durable events and both clients consume
 the reduced view. Keep provider-specific parsing in the adapter. A model name is
 not a reliable substitute for inspecting the endpoint's actual stream.

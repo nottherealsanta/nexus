@@ -1,233 +1,206 @@
 # Web app (`nexus web`)
 
-A framework-free browser client (plain HTML, CSS and ES modules; no build step)
-for the same per-workspace daemon.
+A framework-free browser client (plain HTML, CSS and ES modules; **no build
+step**) for the same per-workspace daemon. It mirrors the Textual shell: same
+functionality, everything in the same place ([surfaces.md](surfaces.md)). Product
+intent is in `plans/webplan.md`; the visual history is in root `design.md`
+(its "Signal" finish is superseded by the browser-native finish below). The host
+side is in [host.md](host.md).
 
 ## Parity with the TUI
 
-The web app shares the Textual shell’s ([textual.md](textual.md)) functionality
-and information layout: **everything stays in the same place** so users can
-switch surfaces easily. Typography, icons, corners and depth are browser-native
-and can evolve independently. Shared actions, wording and keyboard shortcuts
-remain consistent.
+Layout, color roles, conversation rendering, composer, context dialogs, settings,
+slash commands, shortcuts, the Ctrl+X leader, model picker, voice and agent color
+are specified once in [surfaces.md](surfaces.md). The web implementation of each
+is named in the `app.js` map below; the shared logic has JS ports
+(`tool-details.js`, `context-view.js`, `settings-files.js`, `providers.js`).
 
-| Same as `nexus chat` | Where |
-| --- | --- |
-| Layout: top bar `▌` title … status `+` `▐`; sessions sidebar (34 cells, 272px); conversation; details sidebar (42 cells, 336px); composer with the activity bar under it | `index.html`, `app.css` "shell" |
-| Color roles: `tokens.css` maps `ui/tui/theme.py` (`_DARK`/`_LIGHT`) role for role (`nx-accent` → `--accent`, `nx-blue` → `--info`, …); the values are the web's Signal palette ([design.md](../design.md)) | `tokens.css` |
-| Conversation: the four-block context header first (`tui_context_header.py`), `▼` user blocks that fold a turn, `Thought:` lines, one-line muted ordinary tool call summaries (consecutive calls tightly stacked), two-line subagent calls (type and description; recent tool calls while running, count and elapsed time when finished), side-by-side diffs under completed Edit/Patch rows (one per file, unified below 760px, like `tui_diff.py`), tool details in a modal on click/keyboard activation, `AGENT · model · 1.2s` footers, red error lines | `renderContextHeader`, `renderMessage`, `renderTool` (`inlineDiffs`, `diffFiles`, `splitDiff`), `renderFooter` |
-| Session rows: glyph (`●` current, braille spinner, `✓`, `·`, `◇`), title, status or age, `×` | `renderSessions` |
-| Composer: editor, then `Agent  model provider  effort`, then context `3k (2%)` (`ui_support/context.py:context_usage` / `context_measure`) | `renderHeader`, `renderContextMeter`, `contextUsage` |
-| Context and Tools dialogs: the groups from `ui_support/context.py` (`context_groups`, `tool_groups`, `context_summary`), collapsed rows with token estimates | `context-view.js`: `renderContextGroups`, `renderToolsReport` |
-| Settings → Agents: "New sessions start with" (`AgentDefaultSet`, global or project scope) | `loadDefaultAgent`, `saveDefaultAgent` |
-| Details: `SESSION` rows (Status, Agent, Model, Effort, Turns, Tool calls, Tokens, Context), `MODIFIED FILES`, `MCP SERVERS`; Tools rows open the tool detail modal | `renderOverview`, `renderDetails` |
-| Chat commands: every `SPECS` entry in `ui/cli/commands.py`, same names, usage, summaries and hidden aliases | `SLASH_COMMANDS`, `parseSlash` |
-| Keys: `ui/tui/app.py:SHORTCUTS` (Ctrl+P/N/O/F/G/B/L/S/I/T/E/C/R, Shift+Tab, `a`, Esc). ⌘K and ⌘N also work. | global `keydown` handler, `SHORTCUTS` |
-| Ctrl+X leader (`leaderKey`, `LEADER`): `M` model, `V` dictate (any key stops, Esc discards), plus N/O/F/G/B/L/S/I/E/T/R/`?`. | `LEADER`, `#leader-hint` |
-| Model picker: small refresh button at the top right of the model dialog (`#palette-refresh`) sends `ModelsRefresh` and reloads the list in place; mirrors `↻`/`Ctrl+R` in the TUI | `app.js` `refreshModels` |
-| Voice dictation: Ctrl+Space, `/voice status|download|on|off`, Settings → Voice; first-use confirmation before model download, silent preparation, and an orange dot at the far left of the context-size row only while recording, without shifting the line | `voice.js`, `VoicePrepare` host command, `#voice-overlay` |
-| Agent color: the host's `color` first, else the TUI's name hash (`agent_color`) | `agentColor` |
+## Visual system
 
-Project-scoped settings and extensions are written under `<workspace>/.agents/`;
-existing `.nexus/` project extensions and settings remain readable as a
-lower-precedence fallback. Session records for all workspaces are stored in the
-shared `~/.nexus/nexus.db` database, while caches and logs are machine state
-under `~/.nexus/`.
+Browser-native while keeping the TUI's regions and button placement. One design
+system applies everywhere (`tokens.css`, `app.css`).
 
-The browser uses system sans-serif for interface text and conversation prose,
-Monaspace Argon for code and diagnostics, rounded controls, and soft dialog
-shadows. One design system applies everywhere (`tokens.css`, `app.css`):
-radii come from three tokens (`--radius` 12px for cards, dialogs and the
-composer; `--radius-sm` 8px for controls, rows and code blocks; `--radius-xs`
-5px for tags, chips and keys; status dots are round), nothing is square and
-nothing has a hard offset shadow. Floating layers use `--shadow`/`--shadow-sm`.
-All status labels share the `.tag` shape (11px, semibold, capitals). Sidebar,
-details and logs section labels share one style. Selected rows (sessions,
-palette, slash menu, settings nav) are a tinted or neutral fill with no side
-bar. Markdown renders as web prose (semibold headings, dot bullets, inline
-code chips). On wide screens the conversation, composer, slash menu and
-approvals share one centered column (`--column`, 860px) and the timeline stays
-pinned to the newest message while the layout reflows. Stroke SVG icons replace terminal panel glyphs in the same top-bar
-positions. Semantic color roles remain shared. The browser-only details tabs
-(Tools, Agents, Trees, Logs), Context/Logs/Export buttons and Settings dialog
-keep their existing positions.
-
-When the TUI changes (`app.tcss`, `theme.py`, `ui/cli/commands.py`,
-`ui/tui/app.py:SHORTCUTS`, `ui_support/timeline.py`, `tui_panels.py`,
-`tui_context_header.py`), change the web client to match, and the other way
-round.
-
-### Font
-
-The UI font is **Monaspace Argon** (Latin, 400; fontsource
-`monaspace-argon@5.3.0`, SIL OFL 1.1). The CSP allows no external hosts, so the
-files are vendored as `ui/web/assets/monaspace-argon-latin-400.woff2` and `.woff`
-and declared with `@font-face` at the top of `tokens.css`. It is first in
-`--font-mono`, for code and technical data. Interface text uses `--font-sans`, a local system
-font stack that needs no download. To add weights or scripts,
-download more fontsource files into `assets/`. Never link the CDN. A turn started in the terminal is live in
-the browser and vice versa, and closing a view never stops work. Product intent
-is in `webplan.md`; the visual spec is in `design.md`. The host side is in
-[core.md](core.md).
+- **Type:** system sans-serif for interface text and conversation prose
+  (`--font-sans`); Monaspace Argon for code and diagnostics (`--font-mono`).
+  The CSP allows no external hosts, so the font is vendored
+  (`assets/monaspace-argon-latin-400.woff2/.woff`, fontsource
+  `monaspace-argon@5.3.0`, SIL OFL 1.1) and declared at the top of `tokens.css`.
+  To add weights or scripts, download more fontsource files into `assets/`; never
+  link a CDN.
+- **Shape:** three radius tokens: `--radius` 12px (cards, dialogs, composer),
+  `--radius-sm` 8px (controls, rows, code blocks), `--radius-xs` 5px (tags, chips,
+  keys); status dots are round. Use the tokens, never a literal `0` or `999px`
+  (except dots and progress bars). No hard offset shadows; floating layers use
+  `--shadow` / `--shadow-sm`.
+- **Color:** `tokens.css` maps `ui/tui/theme.py` (`_DARK`/`_LIGHT`) role for role
+  (`nx-accent` → `--accent`, `nx-blue` → `--info`, …); `data-theme` is `dark`,
+  `light` or `system`. Preserve the shared semantic roles.
+- **Components:** all status labels share the `.tag` shape (11px, semibold,
+  capitals); section labels share one style; selected rows are a tinted or
+  neutral fill with no side bar; Markdown renders as web prose (semibold
+  headings, dot bullets, inline code chips); stroke SVG icons replace terminal
+  glyphs in the same top-bar positions. `--cell` (8px) and `--row` (20px) keep
+  the terminal grid relationship (at 1600px wide, one terminal column = one web
+  cell); `--control-h` 28px is the common control height.
+- **Layout:** on wide screens the conversation, composer, slash menu and approvals
+  share one centered column (`--column`, 860px) and the timeline stays pinned to
+  the newest message while the layout reflows.
+- Verify any visual change with Playwright screenshots (dark and light at 1440,
+  1024 and 400px) before calling it done ([testing.md](testing.md)).
 
 ## How it is served
 
-`nexus web` (`cli.py:_web`) asks the running daemon over UDS for `WebLaunch`.
-`Daemon.web_launch()` (`host/daemon.py`) starts a loopback HTTP listener
-(`host/transports/http_sse.py`) and returns `http://127.0.0.1:<port>/#ticket=…`.
-`host/web.py` owns every browser route:
+`nexus web` (`cli.py:_web`) sends `WebLaunch` over UDS. `Daemon.web_launch()`
+starts a loopback HTTP listener (`host/transports/http_sse.py`) and returns
+`http://127.0.0.1:<port>/#ticket=…`. `host/web.py` (`BrowserRoutes`) owns every
+browser route:
 
 | Route | Purpose |
 | --- | --- |
 | `/`, `/s/<session>` | `index.html` (deep links are client-routed) |
-| `/styles/*`, `/js/*`, `/assets/*` | static files from `nexus/ui/web/`, read on each request (reload the browser to see edits; no daemon restart) |
-| `POST /v1/web/ticket/redeem` | one-use, 60-second ticket → `HttpOnly; SameSite=Strict` cookie + CSRF token |
+| `/styles/*`, `/js/*`, `/assets/*` | static files from `nexus/ui/web/`, read on each request (reload to see edits; no daemon restart) |
+| `POST /v1/web/ticket/redeem` | one-use, 60-second ticket → `HttpOnly; SameSite=Strict` cookie (12h) + CSRF token |
 | `GET /v1/web/bootstrap` | CSRF token + workspace path |
-| `POST /v1/web/command` | any host protocol command as JSON `{type:'SessionList', …}`, except `Shutdown` and `WebLaunch`. Requires an exact `Origin` and `X-CSRF-Token`. |
-| `POST /v1/web/attachment` | JSON `AttachmentPrepare` only, with the same cookie/Origin/CSRF checks before buffering and a 12 MiB request cap for base64-encoded files. Enqueue commands carry small draft IDs. |
-| `POST /v1/web/voice?request_id=…` | Raw mono 16 kHz PCM16 WAV for host transcription; same cookie/Origin/CSRF checks, with an 8 MiB route-specific cap (the normal command cap remains 1 MiB). |
-| `GET /v1/web/session-view?session=` | versioned snapshot (`schema_version: 1`, `seq`, `view`) from `HostFacade.web_snapshot` / `host_support/browser_view.py` |
-| `GET /v1/web/session-events?session=&from_seq=` | SSE `view` frames carrying JSON-Pointer ops (`add`/`replace`/`remove`/`append`), or `resync: true` |
-| `GET /v1/web/workspace-events` | SSE `workspace` frames with the session list (`HostFacade.subscribe_workspace`, polled every 0.5s) |
+| `POST /v1/web/command` | any host command as JSON `{type:'SessionList', …}` except `Shutdown` and `WebLaunch`; requires an exact `Origin` and `X-CSRF-Token` |
+| `POST /v1/web/attachment` | JSON `AttachmentPrepare` only; same cookie/Origin/CSRF checks before buffering, 12 MiB request cap. Enqueue commands carry small draft IDs. |
+| `POST /v1/web/voice?request_id=…` | raw mono 16 kHz PCM16 WAV for transcription; same auth checks; 8 MiB cap (commands cap at 1 MiB) |
+| `GET /v1/web/session-view?session=` | versioned snapshot (`schema_version: 1`, `seq`, `view`) from `HostFacade.web_snapshot` |
+| `GET /v1/web/session-events?session=&from_seq=` | SSE `view` frames of JSON-Pointer ops (`add`/`replace`/`remove`/`append`) or `resync: true` |
+| `GET /v1/web/workspace-events` | SSE `workspace` frames with the session list (polled every 0.5s) |
 | `POST /v1/web/logout` | drop the cookie session |
 
-The CSP is `default-src 'self'; script-src 'self'; style-src 'self'; …`. **No
-inline `<script>`, no `style="…"` attributes, and no external hosts.** Setting
-styles through the CSSOM from JS (`el.style.setProperty`) is fine. Packaged
-files are listed in `pyproject.toml` (`"nexus.ui.web" = ["index.html", "styles/*.css", "js/*.js", "assets/*"]`).
+CSP: `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:;
+connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none';
+frame-ancestors 'none'`, plus `no-store`, `nosniff`, `no-referrer`,
+`X-Frame-Options: DENY`, and a `Host` check. **No inline `<script>`, no
+`style="…"` attributes, no external hosts.** Setting styles via the CSSOM from JS
+(`el.style.setProperty`) is fine. Tickets and cookie sessions die with the daemon.
+Packaged files are listed in `pyproject.toml` (`"nexus.ui.web" = ["index.html",
+"styles/*.css", "js/*.js", "assets/*"]`).
 
 ## File map
 
 | File | Contents |
 | --- | --- |
-| `ui/web/index.html` | The whole DOM: SVG icon sprite (`#i-*`), `.app-shell` grid (areas `top`/`side`/`main`/`insp`) with the full-width `.topbar` (`▌` `#sidebar-toggle`, title, Context/Logs/Export, `#live-state`, `+` `#topbar-new`, `▐` `#inspector-toggle`), `#sidebar`, `.main-pane` (`#conversation` holding the hidden legacy `#context-preview`, `#timeline` and `#empty-state`, then `.composer-wrap` holding `#approval-strip`, `#slash-menu`, `#composer-form` and `#activity-bar`), `#inspector`, and the overlays `#overlay` (palette/picker), `#settings-overlay`, `#context-overlay`, `#worktree-confirm-overlay`, `#voice-overlay`, `#toast-region`. |
-| `ui/web/js/app.js` | All behavior. Dense one-function-per-line style, so search by function name. |
-| `#setup-overlay` | First-run setup, mirroring `ui_support/tui_setup.py`: a second `createProviders` instance (`#setup-provider-list`) plus the env-key providers (`#setup-env`). `pollSetup` polls `SetupStatus`; the first connected provider marked `auto` goes to `completeSetup` → `SetupSave` without a model (the host picks the newest and reloads routes), then the dialog closes into chat. It transmits no credentials. |
-| `ui/web/js/api.js` | `bootstrap()`, `command(cmd)`, `voice(wav, requestId)` for the bounded `/v1/web/voice` route, `snapshot(session)`, `eventUrl(session, seq)`, `exportSession`. |
-| `ui/web/js/voice.js`, `voice-worklet.js` | Browser microphone capture, resampling to mono 16 kHz PCM16 WAV, and bounded recording buffers. First use requires explicit confirmation; the model is not downloaded by page or daemon startup. |
-| `ui/web/js/projection.js` | `applyOperations(root, ops)`: validates and applies patches on a detached copy (atomic). |
-| `ui/web/js/preferences.js` | localStorage detail level (session → workspace → browser precedence) and theme. |
-| `ui/web/js/providers.js` | `createProviders({api, el, $, listId, isOpen})`: Settings → Providers cards (also rendered by first-run setup), mirroring `ui_support/tui_providers.py` (sign-in link and code, `ProviderLoginPoll` polling, password field for the OpenCode Go key). |
-| `ui/web/js/context-view.js` | `renderCurrentContext(…)` for the inline context preview and the context dialog. |
-| `ui/web/styles/tokens.css` | System sans-serif and the Monaspace Argon `@font-face`; color tokens copied from `ui/tui/theme.py` (`_DARK`/`_LIGHT`); `--cell` (8px column) and `--row` (20px line); radii and the dialog shadow. `data-theme` = `dark`, `light` or `system`. Preserve the shared semantic color roles. |
-| `ui/web/assets/` | Vendored font files (`monaspace-argon-latin-400.woff2`/`.woff`). |
-| `ui/web/styles/app.css` | All layout and component CSS, sectioned by region, with responsive rules at the end. |
-| `ui/web/styles/context-preview.css` | Context preview cards (line clamps are asserted by tests). |
+| `index.html` | the whole DOM: SVG icon sprite (`#i-*`), `.app-shell` grid (`top`/`side`/`main`/`insp`) with the full-width `.topbar` (`▌` `#sidebar-toggle`, title, Context/Logs/Export, `#live-state`, `+` `#topbar-new`, `▐` `#inspector-toggle`), `#sidebar`, `.main-pane` (`#conversation`, `#timeline`, `#empty-state`, `.composer-wrap` with `#approval-strip`, `#slash-menu`, `#composer-form`, `#activity-bar`), `#inspector`, and overlays `#overlay`, `#settings-overlay`, `#context-overlay`, `#worktree-confirm-overlay`, `#voice-overlay`, `#setup-overlay`, `#agent-overlay`, `#toast-region` |
+| `js/app.js` | all behavior; dense one-function-per-line style, so search by function name |
+| `js/api.js` | `bootstrap()`, `command(cmd)`, `voice(wav, requestId)`, `snapshot(session)`, `eventUrl(session, seq)`, `exportSession` |
+| `js/projection.js` | `applyOperations(root, ops)`: validates and applies patches on a detached copy (atomic) |
+| `js/preferences.js` | localStorage detail level (session → workspace → browser precedence) and theme |
+| `js/tool-details.js` | `toolDetailSections`/`renderToolDetails`: port of `ui_support/tool_details.py` |
+| `js/context-view.js` | port of `ui_support/context.py`: `renderContextGroups`, `renderToolsReport`, `renderCurrentContext` |
+| `js/settings-files.js` | Agents/Tools/MCP/Skills/Hooks/Config/Soul editors over `Settings*` (700 ms autosave, agent model/fallback form); port of `tui_settings.py` |
+| `js/providers.js` | `createProviders({api, el, $, listId, isOpen})`: Settings → Providers cards, also used by first-run setup |
+| `js/voice.js`, `voice-worklet.js` | microphone capture, resample to mono 16 kHz PCM16 WAV, bounded buffers; first use needs explicit confirmation |
+| `js/mock.js` | dev-mode `/mock` and the `DEV` badge |
+| `styles/tokens.css` | font-face, color tokens, radii, shadows, `--cell`/`--row` |
+| `styles/app.css` | all layout and component CSS, sectioned by region, responsive rules last |
+| `styles/context-preview.css` | context preview cards (line clamps are asserted by tests) |
 
 ### `app.js` map (search these names)
 
 | Area | Functions / state |
 | --- | --- |
-| State | the `state` object at the top (session, view, seq, sessions, tab, detail, theme, context, worktrees, logs, openFiles, health); `nodes` = keyed DOM cache for the timeline |
-| Boot and routing | `start`, `autoPanel` (right panel opens by default ≥1280px unless closed; localStorage `nexus-web-panel`), `openSession`, `connectSession` (snapshot → SSE → `applyOperations` → `queuePaint`), `startWorkspaceStream`, `popstate` handler |
-| Left sidebar | `renderSessions` lists current and archived sessions as one-line `SessionRow`s (glyph from `data-glyph`: `●` current, braille spinner via the `spin` keyframes while working, `✓` done, `·` idle, `◇` archived; title; status or age; `×`). Every row has a visible Delete button (`SessionDelete` to restorable trash). `archiveSession` uses `SessionArchive`; both actions offer Undo. `#session-filter` searches both sections. `toggleSidebar`/`syncSidebarToggle` hide the docked sidebar (localStorage `nexus-web-sidebar`) or open it as an overlay below 960px. |
-| Header and composer | `renderHeader` (title, plain-text status, agent/model/effort labels, agent color `--agent-color` on `#app`, `↵`/`■ stop`), `renderContextMeter` (`usageText`, same format as `ui_support/context.py:context_usage`) and the activity bar, `sendMessage`, `stopTurn`, drafts (`saveDraft`/`loadDraft` in sessionStorage) |
-| Chat commands | `SLASH_COMMANDS` (mirrors `ui/cli/commands.py:SPECS`), `SLASH_ALIASES`, `parseSlash` (a typed `/cmd args` runs on Enter), `renderSlash`, `runSlash` (capture-phase keydown on the composer); `showText`/`closeText` is the text dialog for `/help`, `/hotkeys`, `/diff`, `/mcp` and `/skills` |
-| Timeline | `renderTimeline` → `renderContextHeader` (first child; the five `System prompt`/`Tools`/`AGENTS.md`/`Skills`/`MCP` blocks from the last good `ContextInspect` in `state.header`, ported from `ui_support/tui_context_header.py`) → `entities` (messages, tools, boundaries, and a `footer` per finished turn) → `renderMessage` (`renderUserChrome` adds the `▼` fold toggle; thinking renders as the `Thought:` line), `renderTool` (one-line glyph + call arguments + first result summary; activation opens the call modal: `tool-details.js` `toolDetailSections`/`renderToolDetails`, the port of `ui_support/tool_details.py`, as labelled rows), `renderBoundary`, `renderFooter` (`AGENT · model · 1.2s`); `markdown`/`updateMarkdown` (escaping mini-Markdown) |
-| Approvals and questions | `renderApprovals` (approval and question cards as `.slash-item` lists; keys `y/a/n/d` or `1-3`), `approvalChoices` (mirrors `ui_support/prompts.py`), `resolvePermission`, `pendingQuestions`, `answerQuestion` (`QuestionAnswer` by `call_id`), `permissionTargetsUnavailable` (the background goes inert while an approval is pending) |
-| Subagent page | `openAgent`/`closeAgent`/`renderAgentModal`: `#agent-overlay` is a second `app-shell` over the root at `/s/<session>/a/<agent>` (deep-linkable; Back, `←` and Esc return to the parent). Clicking a Task card opens it directly (`openToolDetails` skips the details dialog when a child exists). It has the root's top bar, a context header built by `headerBlocks` from the request the child actually sent plus a grey Task block after the System prompt (`agentTaskPrompt`: the recorded prompt, else the Task call's input) (`AgentTranscript` → `context`, fetched by `fetchAgentContext`), `agent.body` rendered with the root renderers (`renderMessage`, `renderTool`, `renderFooter`, `renderAgentCards`) by swapping `nodes` for `agentNodes` and `state.view` for the body, a read-only composer row and a details panel. Re-rendered from `renderTimeline` on every patch, so a running child is live. Context blocks open the root context dialog on `state.context.agentResult` (never refreshed). |
-| Right panel | `renderDetails(force)` dispatches by `state.tab`; `renderOverview` (session summary, `modifiedFiles` + `diffRows`, `mcpSectionBody`); `overviewSignature` decides when to re-render; `loadWorkspaceHealth` (`Doctor`, 20s cache); tools/agents tabs inline; `renderWorktrees*`; `renderLogs`/`readLogs` (polling) |
-| Pickers and palette | `showPalette`, `renderPalette`, `chooseFromList`, `chooseModel`/`commitModel` (Left/Right adjusts effort), `chooseAgent`, `cycleReasoningEffort` (Ctrl+T), `effortCommand`/`selectEffort` (`/effort`) |
-| Settings (one page per section like the terminal: Appearance, Layout, Conversation detail, Keyboard, Workspace; Providers, Voice, and the file areas Agents, Tools, MCP servers, Skills, Hooks, Config, Soul sharing a global/project scope, list, editor with 700 ms autosave and the agent model/fallback form: `js/settings-files.js`, port of `ui_support/tui_settings.py` over `SettingsInventory/Read/Write/Delete/Reset`) | `selectSettingsPane`, `syncLayoutSettings`, `openSettings`, `renderSettings`, `installSettingGroups`, `installSettingsNav`/`syncSettingsNav`, `renderSettingsWorkspace` |
-| Context | `refreshContextPreview` (also feeds the header), `renderContextInline` (the legacy inline preview; kept hidden, as the terminal's preview is off by default), `openContextDialog(mode)` (Context button, `/context`, or a header block; the System prompt block opens `mode='system'` (Markdown), the Tools block `mode='tools'`), `renderContextReport` (grouped context or tools list, with Expand all) |
+| State | the `state` object (session, view, seq, sessions, tab, detail, theme, context, worktrees, logs, openFiles, health); `nodes` = keyed DOM cache for the timeline |
+| Boot and routing | `start`, `autoPanel` (details panel opens by default ≥ 1280px unless closed; localStorage `nexus-web-panel`), `openSession`, `connectSession` (snapshot → SSE → `applyOperations` → `queuePaint`), `startWorkspaceStream`, `popstate` |
+| Sessions sidebar | `renderSessions` (current and archived as one-line rows; visible Delete → `SessionDelete` to restorable trash), `archiveSession` (`SessionArchive`; both offer Undo), `#session-filter`, `toggleSidebar`/`syncSidebarToggle` (localStorage `nexus-web-sidebar`; overlay below 960px) |
+| Header and composer | `renderHeader` (title, status, agent/model/effort, `--agent-color` on `#app`, `↵`/`■ stop`), `renderContextMeter` (`usageText`, same format as `context_usage`), `sendMessage`, `stopTurn`, drafts (`saveDraft`/`loadDraft` in sessionStorage) |
+| Chat commands | `SLASH_COMMANDS` (mirrors `commands.SPECS`), `SLASH_ALIASES`, `parseSlash`, `renderSlash`, `runSlash`; `showText`/`closeText` for `/help`, `/hotkeys`, `/diff`, `/mcp`, `/skills` |
+| Timeline | `renderTimeline` → `renderContextHeader` → `entities` → `renderMessage` (`renderUserChrome`), `renderTool`, `renderBoundary`, `renderFooter`; `markdown`/`updateMarkdown` (escaping mini-Markdown) |
+| Approvals | `renderApprovals`, `approvalChoices`, `resolvePermission`, `pendingQuestions`, `answerQuestion` (`QuestionAnswer` by `call_id`), `permissionTargetsUnavailable` |
+| Subagent page | `openAgent`/`closeAgent`/`renderAgentModal`: `#agent-overlay` at `/s/<session>/a/<agent>` (deep-linkable; Back, `←`, Esc return); `headerBlocks`, `agentTaskPrompt`, `fetchAgentContext`; swaps `nodes` for `agentNodes` and renders the child's body with the root renderers; re-rendered on every patch so a running child is live |
+| Right panel | `renderDetails(force)` by `state.tab`; `renderOverview` (`modifiedFiles`, `diffRows`, `mcpSectionBody`), `overviewSignature`, `loadWorkspaceHealth` (`Doctor`, 20s cache), tools/agents tabs, `renderWorktrees*`, `renderLogs`/`readLogs` |
+| Pickers | `showPalette`, `renderPalette`, `chooseFromList`, `chooseModel`/`commitModel` (Left/Right adjusts effort; `#palette-refresh` sends `ModelsRefresh` like `↻`/Ctrl+R in the TUI), `chooseAgent`, `cycleReasoningEffort` (Ctrl+T), `refreshModels` (`#palette-refresh`) |
+| Settings | `selectSettingsPane`, `syncLayoutSettings`, `openSettings`, `renderSettings`, `installSettingGroups`, `installSettingsNav`, `renderSettingsWorkspace` |
+| Context | `refreshContextPreview`, `openContextDialog(mode)` (`'system'` Markdown, `'tools'`), `renderContextReport` (Expand all); the legacy inline preview stays hidden |
+| Setup | `pollSetup`, `completeSetup` (`SetupStatus` / `SetupSave` without a model; no credentials transmitted) |
 
-### Responsive contract (asserted in `tests/playwright_web_check.py`)
+Details-panel tabs (Tools, Agents, Trees, Logs), Context/Logs/Export buttons and
+the Settings dialog are browser-only and keep their positions.
 
-Like the terminal, panels dock while there is room and otherwise open over the
-chat column. The sessions sidebar is **272px (34 cells)**: docked from **960px**,
-an overlay opened by `▌` below that. The details panel is **336px (42 cells)**:
-docked from **1280px**, an overlay below that. Below 700px the top bar keeps
-only Logs. The page must never scroll horizontally. Reduced motion disables
-transitions.
+## Responsive contract (asserted in `tests/playwright_web_check.py`)
 
-## Working on it
+The sessions sidebar is **272px**: docked from 960px, an overlay opened by `▌`
+below. The details panel is **336px**: docked from 1280px, an overlay below.
+Below 700px the top bar keeps only Logs. The page must never scroll horizontally.
+Reduced motion disables transitions.
 
-Dev loop against a real daemon with a scripted model (no API key):
+## Rules
 
-1. Write a small script modeled on `tests/playwright_web_check.py:main()`: build a `ScriptedProvider(...)`, then `Runtime(path, config=Config(...), providers={"scripted": provider})`, then `Daemon(workspace, socket_path=Path("d.sock"), runtime_factory=...)`. Keep the socket path short, because macOS caps UDS paths at about 104 bytes. Print `await daemon.web_launch()`.
-2. Pre-create sessions with `daemon.facade.open_session(id, create=True, recover=True)` + `await daemon.facade.start_turn(id, prompt)`. Add `.agents/mcp.json` (`{"servers": {...}}`; `tests/fixtures/mcp/fs_server.py` is a working stdio server) to exercise the MCP panel.
-3. Tickets are one-use. Mint more from the daemon, or over UDS with `UDSClient.connect(sock).call(p.WebLaunch())`.
-4. Permission prompts only wait while a viewer is attached. With no viewer, `on_unattended` (default `deny`) applies.
-5. Screenshot with Python Playwright (`.venv`) at 1440, 1024 and 400px, in dark and light.
-6. To compare with the terminal, render the Textual shell against the same daemon: `open_client(workspace, socket_path=…, spawn=False)`, `NexusTextualApp(client, session=…).run_test(size=(200, 55))`, `export_screenshot()`. At 1600px wide, one terminal column equals one 8px web cell.
+- Parity with the TUI ([surfaces.md](surfaces.md)). When `app.tcss`, `theme.py`,
+  `commands.py`, `app.py:SHORTCUTS`, `ui_support/timeline.py`, `tui_panels.py` or
+  `tui_context_header.py` change, change the web to match, and the reverse.
+- New data or actions are host commands; never compute server state in JS from
+  files.
+- Keep IDs stable: the Playwright check selects `#composer-input`,
+  `#composer-model`, `#composer-agent`, `#reasoning-effort`, `#inspector`,
+  `#inspector-toggle`, `#close-inspector`, `#tab-*`, `#logs-toggle`,
+  `#settings-open`, `#settings-overlay`, `#settings-effective`,
+  `input[name=theme|session-detail|workspace-detail|browser-detail]`,
+  `#context-*`, `#timeline`, `.tool-card`, `.tool-status-text`, `.permission-card`,
+  `.logs-source`, `.log-entry`, `.worktree-*`, `.sidebar`, `.palette-item`.
+- Stale async results: compare `session` and request ids (`state.selectionRequest`,
+  `state.context.requestId`, `state.logs.requestId`) before applying.
+- Host text is untrusted: build DOM with `el(tag, cls, text)`/`textContent`;
+  `markdown()` escapes before formatting; never `innerHTML` a server string.
+- Overlays set `#app` `inert` and trap Tab; Escape or a backdrop click closes the
+  top-most layer; dialogs focus themselves on open. Follow the existing
+  open/close helpers.
+- Dictation: the optional `voice` extra and a separate model download are
+  required; the confirmation dialog precedes any download and stays open during
+  preparation until the user acknowledges readiness. Real-model inference and
+  network behavior are not verified; do not claim proven offline operation.
 
-Rules of thumb:
+## Dev loop
 
-- Keep parity with the Textual shell (see "Parity with the TUI" above). New functionality lands in both surfaces, in the same place.
+With a real daemon and a scripted model (no API key):
 
-- Voice needs the optional package extra (`uv sync --extra voice`) and a separate
-  model download. The confirmation dialog must precede any missing-model
-  download; keep it open during preparation and until the user acknowledges
-  readiness, without automatic progress/loading/ready labels. Browser capture is local, but real-model inference/network behavior
-  has not yet been verified; do not claim proven offline operation.
-
-- New data or actions go through a host command (see [core.md](core.md)). Never compute server state in JS from files.
-- Keep IDs stable. The Playwright check selects on `#composer-input`, `#composer-model`, `#composer-agent`, `#reasoning-effort`, `#inspector`, `#inspector-toggle`, `#close-inspector`, `#tab-*`, `#logs-toggle`, `#settings-open`, `#settings-overlay`, `#settings-effective`, `input[name=theme|session-detail|workspace-detail|browser-detail]`, `#context-*`, `#timeline`, `.tool-card`, `.tool-status-text`, `.permission-card`, `.logs-source`, `.log-entry`, `.worktree-*`, `.sidebar`, `.palette-item`.
-- Every render path must tolerate stale async results. Compare `session` and request IDs (`state.selectionRequest`, `state.context.requestId`, `state.logs.requestId`) before applying.
-- Everything from the host is untrusted text. Build DOM with `el(tag, cls, text)` / `textContent`. `markdown()` escapes before formatting. Never `innerHTML` a server string.
-- Overlays set `#app` `inert` and trap Tab. Escape, or a click on the backdrop outside the dialog, closes the top-most layer; dialogs have no Close button and focus the dialog itself on open. Follow the existing open/close helpers.
+1. Write a script modeled on `tests/playwright_web_check.py:main()`:
+   `ScriptedProvider(...)` → `Runtime(path, config=Config(...), providers={"scripted": provider})`
+   → `Daemon(workspace, socket_path=Path("d.sock"), runtime_factory=...)`; print
+   `await daemon.web_launch()`. Keep the socket path short (macOS caps UDS paths
+   near 104 bytes).
+2. Pre-create sessions with `daemon.facade.open_session(id, create=True, recover=True)`
+   and `await daemon.facade.start_turn(id, prompt)`. Add `.agents/mcp.json` (see
+   `tests/fixtures/mcp/fs_server.py`) to exercise the MCP panel.
+3. Tickets are one-use; mint more from the daemon, or over UDS with
+   `UDSClient.connect(sock).call(p.WebLaunch())`.
+4. Permission prompts wait only while a viewer is attached; otherwise
+   `on_unattended` (default `deny`) applies.
+5. Screenshot with Python Playwright (`.venv`). To compare with the terminal,
+   render the Textual shell against the same daemon:
+   `NexusTextualApp(client, session=…).run_test(size=(200, 55))` → `export_screenshot()`.
 
 ## Testing
 
-- `.venv/bin/python tests/playwright_web_check.py`: the end-to-end browser check (handoff between terminal and browser, streaming, approvals, detail levels, settings, logs, worktrees, breakpoints, reduced motion, XSS probes). It writes screenshots to `artifacts/web-e2e/` and takes a few minutes. It seeds localStorage `nexus-web-panel=closed` so its panel toggles start closed.
-- `tests/test_web_transport.py`: routes, auth, CSRF, CSP and snapshot/patch transport. `tests/test_browser_serve.py` covers the Textual browser bridge, not this app.
-- Host projection: `tests/test_host_facade.py` (web snapshot and patches), `tests/test_host_logs_read.py`, `tests/test_client_context_inspect.py`.
+- `.venv/bin/python tests/playwright_web_check.py`: end-to-end (terminal/browser
+  handoff, streaming, approvals, detail levels, settings, logs, worktrees,
+  breakpoints, reduced motion, XSS probes); writes `artifacts/web-e2e/`; takes a
+  few minutes; seeds `nexus-web-panel=closed`.
+- `tests/playwright_context_web_check.py`, `playwright_message_check.py`: context
+  and queued-message flows.
+- `tests/test_web_transport.py`: routes, auth, CSRF, CSP, snapshot/patch transport.
+  (`tests/test_browser_serve.py` covers the Textual browser bridge, not this app.)
+- Host projection: `tests/test_host_facade.py`, `test_host_logs_read.py`,
+  `test_client_context_inspect.py`.
 
-## Dev mode and `/mock`
+## File and image input
 
-In dev mode (`nexus --dev web`) the browser mirrors the TUI: `js/mock.js`
-asks the daemon for `Health.dev` after login and, when true, registers `/mock`
-with the same arguments as the terminal and shows a `DEV` badge in the top bar.
-Outside dev mode the command does not exist.
-
-## Settings saving and reset
-
-Settings changes save automatically. In the terminal file editor, edits save
-700 ms after typing stops and flush before changing item, page or scope or
-closing Settings. Validation and disk conflicts leave the edit unsaved with
-an error; leaving then asks whether to discard invalid changes. Built-in agent
-edits create scoped overrides, and new items save their template on naming.
-
-GENERAL and CONFIGURE separate the sidebar groups. Page headings offer a
-confirmed Reset to default where settings exist: appearance, terminal layout,
-voice, agents, and terminal file categories. Agents reset only built-in overrides
-and the scoped default-agent choice; custom agents stay. Tools and Skills reset
-all custom items in the selected scope and list them before confirmation.
-Removed files and previous config values move to settings trash. Keyboard,
-Workspace and Providers have no reset. Browser conversation detail resets the
-current session, workspace and browser preferences together; appearance resets
-to System. Full-size controls share a common height.
-
-The Skills and MCP header blocks mirror the terminal's `Project N | Global N` counts and individual session controls. Choices are available before the first turn and locked afterward to preserve the prompt cache, alongside agent selection.
-
-### Messages during a turn
-
-Enter queues a message for a new turn. Ctrl+Enter steers the active turn at
-the next model step, after its current operation finishes. Alt+Enter interrupts
-the active turn and sends the message first, preserving other queued messages.
-Shift+Enter and Ctrl+J insert a newline in the terminal; Shift+Enter does so in
-the browser. Pending input is durable and visible after reconnecting.
-
-### File and image input
-
-Use `/attach <path>` to attach a local file (`/attach clear` removes pending
+`/attach <path>` attaches a local file (`/attach clear` removes pending
 attachments). The browser also has an Attach file button and accepts image/file
 paste and drag/drop in the composer. Expand an attachment to inspect it before
 sending; the TUI opens converted documents in a scrollable Markdown preview.
 Enter submits attachments even without prompt text; queue, steer, and interrupt
 use the same attachment path. Switching sessions clears pending attachments.
 
-PNG, JPEG, GIF, and WebP inputs remain image blocks for vision-capable models.
-Images have labelled metadata in the terminal and visible previews in the browser,
-including after reconnect. AnyDoc converts PDF, Word, PowerPoint, Excel,
-OpenDocument, RTF, EPUB, and CSV to Markdown automatically and is installed by
-default. Text/source files are included directly, including Unicode BOM encodings.
-Unsupported binary files, malformed documents, and scanned PDFs requiring hosted
-OCR produce a visible error; hosted OCR is disabled. Files are limited to 8 MiB,
-eight per message, with a 12 MiB encoded combined-input limit. Prepared drafts
-expire after one hour; submitted content is retained in the durable session log.
+PNG, JPEG, GIF, and WebP stay image blocks for vision-capable models (labelled
+metadata in the terminal, visible previews in the browser, also after
+reconnect). AnyDoc converts PDF, Word, PowerPoint, Excel, OpenDocument, RTF, EPUB
+and CSV to Markdown and is installed by default. Text/source files are included
+directly, including Unicode BOM encodings. Unsupported binaries, malformed
+documents and scanned PDFs needing hosted OCR (disabled) give a visible error.
+Limits: 8 MiB per file, eight per message, 12 MiB encoded combined. Prepared
+drafts expire after one hour; submitted content stays in the durable log.
 
-Validation: `tests/test_attachments.py`, `tests/test_tui_attachments.py`, and
-`.venv/bin/python tests/playwright_attachments_check.py` exercise real conversion,
-provider image payloads, replay, TUI submit modes, browser upload/paste/drop,
-previews, removal, large files, authentication, reconnect, and responsive layout.
+Validation: `tests/test_attachments.py`, `tests/test_tui_attachments.py`,
+`tests/playwright_attachments_check.py`.
