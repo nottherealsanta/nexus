@@ -15,6 +15,7 @@ from textual.widgets import Button, Markdown, Static
 
 from ..host.protocol import ContextInspectResult
 from .context import _compact_tokens, header_system_prompt, tool_groups
+from .text import escape_controls
 from .tui_widgets import agent_color, context_group_widgets
 
 
@@ -92,9 +93,9 @@ class ContextModal(Screen):
 
     def __init__(self, title: str, body: str, *, category: str = "", markdown: bool = False) -> None:
         super().__init__()
-        self.title_text, self.body_text = title, body
+        self.title_text, self.body_text = title, escape_controls(body)
         self.category = category
-        #: The system prompt is Markdown; diffs and indexes stay plain text.
+        #: Explicit Markdown bodies opt in; context text remains literal and safe.
         self.markdown = markdown
 
     def compose(self) -> ComposeResult:
