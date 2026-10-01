@@ -9,8 +9,9 @@ a command is JSON-encoded, decoded by kind, dispatched through
 The protocol deliberately carries no credential, environment, or configuration
 value back to a client: the verb list is exactly the PLAN §14.4 surface plus
 host queries, owned-worktree review/mutation commands, and provider sign-in.
-``ProviderKeySet`` is the single inward-only exception (a pasted API key goes to
-the daemon's keychain and is never returned). Streaming is the one verb a
+``ProviderKeySet`` and ``ProviderLoginCode`` are the inward-only exceptions (a
+pasted API key goes to the daemon's keychain, a one-time sign-in code to the
+Claude CLI; neither is ever returned). Streaming is the one verb a
 request/response pair cannot model, so ``SessionSubscribe`` names the stream and
 the transport attaches through :meth:`HostFacade.subscribe`.
 """
@@ -134,6 +135,23 @@ class ProviderLogout(msgspec.Struct, tag=True, frozen=True):
     """Remove one provider's credential from the keychain."""
 
     provider: str
+
+
+class ProviderLoginCode(msgspec.Struct, tag=True, frozen=True, repr_omit_defaults=True):
+    """Paste the one-time code a ``code_entry`` sign-in page shows (Claude).
+
+    Inward only, like ``ProviderKeySet``: never echoed, logged or stored.
+    """
+
+    login_id: str
+    code: str
+
+    def __repr__(self) -> str:
+        return f"ProviderLoginCode(login_id={self.login_id!r}, code='***')"
+
+
+class ProvidersUsage(msgspec.Struct, tag=True, frozen=True):
+    """Plan limits (5-hour, weekly, monthly…) for every connected provider."""
 
 
 class SessionOpen(msgspec.Struct, tag=True, frozen=True):
@@ -534,6 +552,8 @@ Command = (
     | ProviderLoginCancel
     | ProviderKeySet
     | ProviderLogout
+    | ProviderLoginCode
+    | ProvidersUsage
     | SessionArchive
     | SessionUnarchive
     | SessionListArchived
@@ -610,6 +630,8 @@ COMMANDS: tuple[type, ...] = (
     ProviderLoginCancel,
     ProviderKeySet,
     ProviderLogout,
+    ProviderLoginCode,
+    ProvidersUsage,
     SessionArchive,
     SessionUnarchive,
     SessionListArchived,
@@ -756,6 +778,21 @@ class ProviderLoginResult(msgspec.Struct, tag=True, frozen=True):
     url: str = ""
     user_code: str = ""
     message: str = ""
+    #: The page shows a code the user pastes back with ``ProviderLoginCode``.
+    code_entry: bool = False
+
+
+class ProvidersUsageResult(msgspec.Struct, tag=True, frozen=True):
+    """Rows: ``id``, ``label``, ``plan``, ``source``, ``windows``, ``notes``, ``error``.
+
+    A window is ``label``, ``used_percent`` (0-100 or ``None``), ``resets_at``
+    (epoch seconds or ``None``), ``reset_text`` and ``detail``.
+    ``not_connected`` names the providers that were skipped.
+    """
+
+    providers: list[dict[str, Any]] = msgspec.field(default_factory=list)
+    not_connected: list[str] = msgspec.field(default_factory=list)
+    fetched_at: float = 0.0
 
 
 class ProviderAuthResult(msgspec.Struct, tag=True, frozen=True):
@@ -1221,6 +1258,7 @@ Result = (
     | ProvidersStatusResult
     | ProviderLoginResult
     | ProviderAuthResult
+    | ProvidersUsageResult
     | SessionListResult
     | SessionArchiveResult
     | SessionUnarchiveResult
@@ -1290,6 +1328,7 @@ RESULTS: tuple[type, ...] = (
     ProvidersStatusResult,
     ProviderLoginResult,
     ProviderAuthResult,
+    ProvidersUsageResult,
     SessionListResult,
     SessionArchiveResult,
     SessionUnarchiveResult,
@@ -1445,11 +1484,14 @@ __all__ = [
     "ProviderKeySet",
     "ProviderLogin",
     "ProviderLoginCancel",
+    "ProviderLoginCode",
     "ProviderLoginPoll",
     "ProviderLoginResult",
     "ProviderLogout",
     "ProvidersStatus",
     "ProvidersStatusResult",
+    "ProvidersUsage",
+    "ProvidersUsageResult",
     "QuestionAnswer",
     "QuestionAnswerResult",
     "ReasoningEffortSelect",

@@ -22,7 +22,8 @@ may use it and nothing else** (`nexus.host`, plus the pure `view`, `events`,
 ## Commands
 
 The protocol carries no credential, environment value or raw config back to a
-client. `ProviderKeySet` is the single inward-only exception. Errors are
+client. `ProviderKeySet` and `ProviderLoginCode` (a Claude sign-in code) are the
+inward-only exceptions. Errors are
 `ErrorResult(kind, message)` with the message redacted. Groups (full list in
 `protocol.py`):
 
@@ -35,7 +36,7 @@ client. `ProviderKeySet` is the single inward-only exception. Errors are
 | Context and tools | `ContextInspect` `ContextExtensionSelect` `ToolsList` |
 | Extensions | `ExtensionsReload` `ExtensionsList` `ExtensionsValidate` `ExtensionsTrash` |
 | Settings and setup | `SettingsInventory` `SettingsRead` `SettingsWrite` `SettingsReset` `SettingsDelete` `SetupStatus` `SetupSave` |
-| Providers | `ProvidersStatus` `ProviderLogin` `ProviderLoginPoll` `ProviderLoginCancel` `ProviderKeySet` `ProviderLogout` |
+| Providers | `ProvidersStatus` `ProviderLogin` `ProviderLoginPoll` `ProviderLoginCode` `ProviderLoginCancel` `ProviderKeySet` `ProviderLogout` `ProvidersUsage` |
 | Worktrees | `WorktreeList` `WorktreeInspect` `WorktreeReview` `WorktreeAcknowledge` `WorktreeIntegrate` `WorktreeDiscard` |
 | Workspace | `FileSearch` `GitDiff` `LogsRead` |
 | Voice | `VoiceStatus` `VoicePrepare` `VoiceTranscribe` `VoiceCancel` `VoiceRemove` |

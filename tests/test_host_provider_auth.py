@@ -58,6 +58,29 @@ class FakeDevice:
         self.signed_in = True
 
 
+class FakeClaude:
+    """The ClaudeCliAuth shape; the test pastes the code and decides the outcome."""
+
+    def __init__(self, connected=False, fail=False):
+        self.connected, self.fail, self.code = connected, fail, None
+
+    async def status(self):
+        return self.connected
+
+    async def plan(self):
+        return "max"
+
+    async def browser_login(self, *, on_url, code, cancel):
+        on_url("https://claude.com/cai/oauth/authorize?code=true&state=x")
+        self.code = await code()
+        if self.fail:
+            raise RuntimeError("Claude sign-in did not complete; check the code and try again")
+        self.connected = True
+
+    async def logout(self):
+        raise RuntimeError("never called")
+
+
 class FakeBrowser(FakeDevice):
     async def browser_login(self, *, notify, browser_open):
         browser_open("https://auth.openai.com/oauth/authorize?state=x")
@@ -65,9 +88,11 @@ class FakeBrowser(FakeDevice):
         self.signed_in = True
 
 
-def _runtime(home: Path, copilot=None, codex=None, secrets=None):
+def _runtime(home: Path, copilot=None, codex=None, secrets=None, claude=None):
     secrets = secrets or MemorySecrets()
+    claude = claude or FakeClaude()
     return SimpleNamespace(
+        _claude_auth_factory=lambda **_: claude,
         workspace=home / "workspace", _home=home, _environ={},
         _codex_auth_factory=lambda **_: codex or FakeBrowser(),
         _copilot_auth_factory=lambda **_: copilot or FakeDevice(),
@@ -87,12 +112,50 @@ def _config(home: Path) -> dict:
     return tomllib.loads((home / ".nexus" / "config.toml").read_text(encoding="utf-8"))
 
 
-async def test_status_lists_the_three_providers_without_credentials(home):
+async def test_status_lists_the_four_providers_without_credentials(home):
     runtime, _ = _runtime(home)
     rows = (await provider_auth.providers_status(runtime))["providers"]
-    assert [row["id"] for row in rows] == ["codex", "github-copilot", "opencode-go"]
-    assert [row["methods"] for row in rows] == [["browser", "device"], ["device"], ["api_key"]]
+    assert [row["id"] for row in rows] == ["codex", "github-copilot", "opencode-go", "claude-agent"]
+    assert [row["methods"] for row in rows] == [["browser", "device"], ["device"], ["api_key"], ["browser"]]
+    assert [row["can_logout"] for row in rows] == [True, True, True, False]
     assert not any(row["connected"] for row in rows)
+
+
+async def test_claude_sign_in_takes_a_pasted_code_and_saves_the_route(home):
+    claude = FakeClaude()
+    runtime, _ = _runtime(home, claude=claude)
+    started = await provider_auth.provider_login(runtime, "claude-agent")
+    assert started["status"] == "pending" and started["code_entry"] is True
+    assert started["url"].startswith("https://claude.com/cai/oauth/authorize")
+    with pytest.raises(Exception, match="whole code"):
+        await provider_auth.provider_login_code(runtime, started["login_id"], "a b")
+    sent = await provider_auth.provider_login_code(runtime, started["login_id"], "  abc123#state  ")
+    assert sent["message"].startswith("Code sent") and "abc123" not in str(sent)
+    await runtime._provider_logins[started["login_id"]].task
+    assert claude.code == "abc123#state"
+    done = await provider_auth.provider_login_poll(runtime, started["login_id"])
+    assert done["status"] == "connected"
+    assert _config(home)["providers"]["claude-agent"] == {"kind": "claude-agent"}
+    rows = {row["id"]: row for row in (await provider_auth.providers_status(runtime))["providers"]}
+    assert rows["claude-agent"]["connected"] and rows["claude-agent"]["detail"] == "Max"
+
+
+async def test_claude_sign_in_failure_and_logout_are_reported(home):
+    runtime, _ = _runtime(home, claude=FakeClaude(fail=True))
+    started = await provider_auth.provider_login(runtime, "claude-agent")
+    await provider_auth.provider_login_code(runtime, started["login_id"], "wrong-code")
+    await runtime._provider_logins[started["login_id"]].task
+    failed = await provider_auth.provider_login_poll(runtime, started["login_id"])
+    assert failed["status"] == "failed" and "did not complete" in failed["message"]
+    with pytest.raises(Exception, match="not waiting for a code"):
+        await provider_auth.provider_login_code(runtime, started["login_id"], "another")
+    with pytest.raises(Exception, match="claude auth logout"):
+        await provider_auth.provider_logout(runtime, "claude-agent")
+
+
+def test_login_code_never_appears_in_repr():
+    command = p.ProviderLoginCode(login_id="l", code="secret-code-123")
+    assert "secret-code-123" not in repr(command)
 
 
 async def test_copilot_sign_in_pending_then_connected_saves_pinned_github_route(home):

@@ -1,16 +1,21 @@
 """Provider sign-in behind the host boundary: Settings → Providers (plan section 7).
 
-Three providers connect from any surface:
+Four providers connect from any surface:
 
 * ``codex`` — ChatGPT sign-in in the browser (PKCE, local callback on port
   1455) or with a device code.
 * ``github-copilot`` — GitHub.com device sign-in with Nexus's first-party OAuth
   app. GitHub Enterprise is not supported yet.
 * ``opencode-go`` — an OpenCode Go API key pasted once.
+* ``claude-agent`` — the official ``claude auth login`` run headless: the
+  client opens the printed URL and pastes back the one-time code the page
+  shows (``ProviderLoginCode``). The login belongs to the Claude CLI and is
+  shared with Claude Code, so Nexus never signs it out.
 
 Credentials live in the secure native keychain of the daemon's machine. OAuth
 tokens never cross the wire; a pasted API key crosses **inward only**
-(``ProviderKeySet``) and is never echoed, logged, or written to config. A
+(``ProviderKeySet``, and a Claude sign-in code through ``ProviderLoginCode``)
+and is never echoed, logged, or written to config. A
 sign-in URL and a short user code are returned so a client can show or open
 them. Each flow runs as a bounded daemon task that clients poll by an opaque
 ``login_id``. A successful connection also writes the provider's
@@ -27,13 +32,14 @@ import hashlib
 import secrets
 import time
 import tomllib
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 from ..auth.api_key import StoredKeyAuth, validate_api_key
 from ..auth.codex import CodexOAuthManager
 from ..auth.copilot import CopilotAuthManager, api_base_url, normalize_domain
+from ..model.providers.claude_agent_auth import ClaudeCliAuth
 from ..errors import ConfigError
 from ..util import redact_secrets
 from . import settings_inventory
@@ -55,7 +61,14 @@ PROVIDERS: dict[str, tuple[str, tuple[str, ...], str]] = {
         "OpenCode Go", ("api_key",),
         "Paste the API key from your OpenCode Go subscription (opencode.ai/auth).",
     ),
+    "claude-agent": (
+        "Claude (Pro/Max)", ("browser",),
+        "Sign in with your Claude subscription through the Claude CLI, then paste the code the page shows. "
+        "The login is shared with Claude Code; sign out with `claude auth logout`.",
+    ),
 }
+#: Providers whose credential Nexus may remove from Settings.
+_LOGOUT = frozenset({"codex", "github-copilot", "opencode-go"})
 _LOGIN_TTL = 900.0
 _MAX_LOGINS = 8
 _READY_TIMEOUT = 15.0
@@ -71,6 +84,8 @@ class _Login:
     url: str = ""
     user_code: str = ""
     message: str = ""
+    code_entry: bool = False
+    code: asyncio.Future | None = None
     ready: asyncio.Event = field(default_factory=asyncio.Event)
     cancel: asyncio.Event = field(default_factory=asyncio.Event)
     task: asyncio.Task | None = None
@@ -79,7 +94,7 @@ class _Login:
         return {
             "login_id": self.id, "provider": self.provider, "method": self.method,
             "status": self.status, "url": self.url, "user_code": self.user_code,
-            "message": self.message,
+            "message": self.message, "code_entry": self.code_entry,
         }
 
 
@@ -99,6 +114,15 @@ def _api_key(runtime: object, provider: str) -> Any:
     return _factory(runtime, "_api_key_auth_factory", StoredKeyAuth)(provider, profile="default")
 
 
+def _claude(runtime: object) -> Any:
+    from .setup import _load_config
+
+    section = getattr(getattr(_load_config(runtime), "v2", None), "providers", {}).get("claude-agent")
+    environ = getattr(runtime, "_environ", None)
+    return _factory(runtime, "_claude_auth_factory", ClaudeCliAuth)(
+        executable=getattr(section, "executable", None), environ=environ if isinstance(environ, Mapping) else None)
+
+
 def _manager(runtime: object, provider: str) -> Any:
     if provider == "codex":
         return _codex(runtime)
@@ -106,6 +130,8 @@ def _manager(runtime: object, provider: str) -> Any:
         return _copilot(runtime)
     if provider == "opencode-go":
         return _api_key(runtime, provider)
+    if provider == "claude-agent":
+        return _claude(runtime)
     raise ConfigError("unknown provider")
 
 
@@ -148,6 +174,8 @@ def _route(provider: str, domain: str | None = None) -> tuple[tuple[str, str], .
         return (("auth", "chatgpt_oauth"), ("profile", "default"), ("api", "responses"))
     if provider == "github-copilot":
         return (("auth", "github_copilot"), ("base_url", api_base_url(domain)), ("api", "chat"))
+    if provider == "claude-agent":
+        return (("kind", "claude-agent"),)
     return (("auth", "keychain"), ("base_url", OPENCODE_GO_BASE_URL), ("api", "chat"))
 
 
@@ -221,12 +249,20 @@ async def providers_status(runtime: object) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     logins = _logins(runtime)
     for provider, (label, methods, help_text) in PROVIDERS.items():
-        detail = (await copilot_domain(runtime) or "") if provider == "github-copilot" else ""
+        is_connected = await connected(runtime, provider)
+        detail = ""
+        if provider == "github-copilot":
+            detail = await copilot_domain(runtime) or ""
+        elif provider == "claude-agent" and is_connected:
+            try:
+                detail = (await _claude(runtime).plan()).title()
+            except Exception:  # noqa: BLE001 - the plan label is best-effort
+                detail = ""
         active = next((login for login in logins.values()
                        if login.provider == provider and login.status == "pending"), None)
         rows.append({
             "id": provider, "label": label, "methods": list(methods), "help": help_text,
-            "connected": await connected(runtime, provider), "detail": detail,
+            "connected": is_connected, "detail": detail, "can_logout": provider in _LOGOUT,
             "login": active.view() if active else None,
         })
     return {"providers": rows}
@@ -259,7 +295,9 @@ async def provider_login(
             login.task.cancel()
     if sum(1 for login in logins.values() if login.task is not None and not login.task.done()) >= _MAX_LOGINS:
         raise ConfigError("too many sign-ins in progress")
-    login = _Login(id=secrets.token_urlsafe(16), provider=provider, method=method, started=time.monotonic())
+    login = _Login(id=secrets.token_urlsafe(16), provider=provider, method=method, started=time.monotonic(),
+                   code_entry=provider == "claude-agent")
+    login.code = asyncio.get_running_loop().create_future()
     logins[login.id] = login
 
     def show(url: str, code: str = "") -> bool:
@@ -278,6 +316,8 @@ async def provider_login(
                     await manager.device_login(on_code=show, cancel=login.cancel)
                 elif provider == "github-copilot":
                     await manager.device_login(domain=host, on_code=show, cancel=login.cancel)
+                elif provider == "claude-agent":
+                    await manager.browser_login(on_url=show, code=lambda: asyncio.shield(login.code), cancel=login.cancel)
         except asyncio.CancelledError:
             login.status, login.message = "cancelled", "Sign-in cancelled."
         except TimeoutError:
@@ -300,6 +340,8 @@ async def provider_login(
             login.message = await _finish_route(runtime, provider, host, idle)
         finally:
             login.url = login.url if login.status == "pending" else ""
+            if login.code is not None and not login.code.done():
+                login.code.cancel()
             login.ready.set()
 
     login.task = asyncio.create_task(run())
@@ -318,6 +360,23 @@ async def provider_login_poll(runtime: object, login_id: str) -> dict[str, Any]:
     login = _logins(runtime).get(login_id)
     if login is None:
         raise ConfigError("unknown or expired sign-in")
+    return login.view()
+
+
+async def provider_login_code(runtime: object, login_id: str, code: str) -> dict[str, Any]:
+    """Hand a pasted one-time sign-in code to a pending flow; never echoed."""
+    login = _logins(runtime).get(login_id)
+    if login is None:
+        raise ConfigError("unknown or expired sign-in")
+    if not login.code_entry or login.code is None or login.status != "pending":
+        raise ConfigError("this sign-in is not waiting for a code")
+    value = code.strip() if isinstance(code, str) else ""
+    if not 4 <= len(value) <= 2048 or not all(33 <= ord(char) <= 126 for char in value):
+        raise ConfigError("paste the whole code shown after signing in")
+    if login.code.done():
+        raise ConfigError("a code was already submitted; wait for the result")
+    login.code.set_result(value)
+    login.message = "Code sent. Finishing sign-in…"
     return login.view()
 
 
@@ -354,6 +413,8 @@ async def provider_key_set(
 async def provider_logout(runtime: object, provider: str) -> dict[str, Any]:
     if provider not in PROVIDERS:
         raise ConfigError("unknown provider")
+    if provider not in _LOGOUT:
+        raise ConfigError("Claude's login is shared with Claude Code; run `claude auth logout` in a terminal to sign out")
     for login in list(_logins(runtime).values()):
         if login.provider == provider and login.task is not None and not login.task.done():
             await provider_login_cancel(runtime, login.id)
@@ -379,6 +440,11 @@ async def dispatch_providers(
         return p.ProviderLoginResult(**await provider_login(runtime, command.provider, command.method, command.domain, idle))
     if isinstance(command, p.ProviderLoginPoll):
         return p.ProviderLoginResult(**await provider_login_poll(runtime, command.login_id))
+    if isinstance(command, p.ProviderLoginCode):
+        return p.ProviderLoginResult(**await provider_login_code(runtime, command.login_id, command.code))
+    if isinstance(command, p.ProvidersUsage):
+        from .provider_usage import providers_usage
+        return p.ProvidersUsageResult(**await providers_usage(runtime))
     if isinstance(command, p.ProviderLoginCancel):
         return p.ProviderLoginResult(**await provider_login_cancel(runtime, command.login_id))
     if isinstance(command, p.ProviderKeySet):
@@ -397,6 +463,7 @@ __all__ = [
     "provider_key_set",
     "provider_login",
     "provider_login_cancel",
+    "provider_login_code",
     "provider_login_poll",
     "provider_logout",
     "provider_route",

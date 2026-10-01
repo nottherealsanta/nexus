@@ -80,6 +80,7 @@ names, usage, summaries, aliases). `parse` resolves aliases to the canonical nam
 | `/copy` | | | copy assembled context as JSON |
 | `/diff` | `[--staged] [ref]` | | workspace Git diff |
 | `/cost` | | | token usage and available cost estimate |
+| `/usage` | | | plan usage and limits for connected providers (also `Ctrl+U`) |
 | `/theme` | `[dark\|light]` | | switch theme |
 | `/settings` | | | open Settings |
 | `/verbose` | | | toggle full tool output previews |

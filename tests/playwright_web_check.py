@@ -1589,8 +1589,11 @@ async def main() -> None:
 
                 command_requests: list[str] = []
                 page.on("request", lambda request: command_requests.append(request.url) if request.url.endswith("/v1/web/command") else None)
-                provider_state = {"codex": True, "github-copilot": False, "opencode-go": False}
+                provider_state = {"codex": True, "github-copilot": False, "opencode-go": False, "claude-agent": True}
                 provider_keys: list[int] = []
+                provider_codes: list[tuple[str, int]] = []
+                usage_calls: list[int] = []
+                usage_now = time.time()
 
                 async def route_provider_command(route) -> None:
                     command = json.loads(route.request.post_data or "{}")
@@ -1598,8 +1601,33 @@ async def main() -> None:
                     if kind == "ProvidersStatus":
                         result = {"type": "ProvidersStatusResult", "providers": [
                             {"id": key, "label": key, "methods": [], "help": f"Help for {key}.",
-                             "connected": value, "detail": "company.ghe.com" if key == "github-copilot" and value else "",
-                             "login": None} for key, value in provider_state.items()]}
+                             "connected": value, "detail": {"github-copilot": "company.ghe.com", "claude-agent": "Max"}.get(key, "") if value else "",
+                             "can_logout": key != "claude-agent", "login": None} for key, value in provider_state.items()]}
+                    elif kind == "ProviderLogin" and command.get("provider") == "claude-agent":
+                        result = {"type": "ProviderLoginResult", "login_id": "C1", "provider": "claude-agent",
+                                  "method": "browser", "status": "pending", "url": "https://claude.com/cai/oauth/authorize?code=true",
+                                  "user_code": "", "message": "", "code_entry": True}
+                    elif kind == "ProviderLoginCode":
+                        provider_codes.append((command.get("login_id", ""), len(command.get("code", ""))))
+                        result = {"type": "ProviderLoginResult", "login_id": "C1", "provider": "claude-agent", "method": "browser",
+                                  "status": "pending", "url": "", "user_code": "", "message": "Code sent. Finishing sign-in…", "code_entry": True}
+                    elif kind == "ProviderLoginPoll" and command.get("login_id") == "C1":
+                        result = {"type": "ProviderLoginResult", "login_id": "C1", "provider": "claude-agent", "method": "browser",
+                                  "status": "pending", "url": "", "user_code": "", "message": "", "code_entry": True}
+                    elif kind == "ProvidersUsage":
+                        usage_calls.append(1)
+                        result = {"type": "ProvidersUsageResult", "fetched_at": usage_now, "not_connected": ["OpenCode Go"], "providers": [
+                            {"id": "codex", "label": "ChatGPT (Codex)", "plan": "Plus", "source": "chatgpt.com · wham/usage", "error": "",
+                             "notes": ["Limit reached: new requests wait for the next reset"],
+                             "windows": [{"label": "5-hour", "used_percent": 100, "resets_at": usage_now + 2564, "reset_text": "", "detail": ""},
+                                         {"label": "Weekly", "used_percent": 41, "resets_at": usage_now + 536762, "reset_text": "", "detail": ""}]},
+                            {"id": "claude-agent", "label": "Claude", "plan": "Max", "source": "claude CLI · /usage", "error": "", "notes": [],
+                             "windows": [{"label": "5-hour session", "used_percent": 59, "resets_at": None, "reset_text": "Oct 1 at 12:19pm (Asia/Calcutta)", "detail": ""},
+                                         {"label": "Weekly (all models)", "used_percent": 85, "resets_at": None, "reset_text": "Oct 1 at 8:29pm (Asia/Calcutta)", "detail": ""}]},
+                            {"id": "github-copilot", "label": "GitHub Copilot", "plan": "Business", "source": "api.github.com · copilot_internal/user", "error": "",
+                             "notes": ["Chat: unlimited"], "windows": [{"label": "Premium requests (monthly)", "used_percent": 0.2,
+                                                                        "resets_at": usage_now + 2_600_000, "reset_text": "", "detail": "14,979 of 15,000 left"}]},
+                        ]}
                     elif kind == "ProviderLogin":
                         assert command.get("provider") == "codex", command
                         result = {"type": "ProviderLoginResult", "login_id": "L1", "provider": "codex",
@@ -1643,6 +1671,20 @@ async def main() -> None:
                 await key_field.press("Enter")
                 await go.get_by_text("Restart the daemon").wait_for()
                 assert provider_keys == [16] and await key_field.input_value() == ""
+                claude = providers.locator('[data-provider="claude-agent"]')
+                assert await claude.locator(".provider-state").inner_text() == "Connected · Max"
+                assert await claude.get_by_role("button", name="Disconnect").is_hidden()
+                code_field = claude.get_by_label("Claude sign-in code")
+                assert await code_field.is_hidden()
+                await claude.get_by_role("button", name="Sign in with browser").click()
+                await code_field.wait_for()
+                assert await code_field.get_attribute("type") == "password"
+                assert await claude.get_by_role("link", name="Open sign-in page").get_attribute("href") == "https://claude.com/cai/oauth/authorize?code=true"
+                await page.screenshot(path=str(ARTIFACTS / "settings-providers-claude-dark.png"))
+                await code_field.fill("code#state")
+                await code_field.press("Enter")
+                await claude.get_by_text("Code sent").wait_for()
+                assert provider_codes == [("C1", 10)] and await code_field.input_value() == ""
                 await page.screenshot(path=str(ARTIFACTS / "settings-providers-dark.png"))
                 await settings.get_by_role("link", name="Appearance").click()
                 await settings.get_by_role("link", name="Soul").click()
@@ -1660,6 +1702,32 @@ async def main() -> None:
                 assert await page.locator("html").get_attribute("data-detail") == "focused"
                 await page.keyboard.press("Escape")
                 assert len(command_requests) == preference_command_baseline, command_requests
+                await page.locator("#composer-input").focus()
+                await page.keyboard.press("Control+u")
+                usage_dialog = page.get_by_role("dialog", name="Provider usage and limits")
+                await usage_dialog.locator(".usage-provider").first.wait_for()
+                assert await usage_dialog.locator(".usage-provider-name").all_text_contents() == [
+                    "ChatGPT (Codex) · Plus", "Claude · Max", "GitHub Copilot · Business"]
+                assert await usage_dialog.locator(".usage-window.critical").count() == 1
+                assert await usage_dialog.locator(".usage-window.warn").count() == 1
+                assert await usage_dialog.locator('[role="meter"][aria-valuenow="41"]').count() == 1
+                usage_text = await usage_dialog.inner_text()
+                for expected in ("100% used · 0% left · resets in 42m", "resets Oct 1 at 12:19pm (Asia/Calcutta)",
+                                 "0.2% used · 99.8% left", "14,979 of 15,000 left", "Source: claude CLI · /usage",
+                                 "Not connected: OpenCode Go"):
+                    assert expected in usage_text, (expected, usage_text)
+                await page.wait_for_timeout(400)  # the dialog fades in
+                await page.screenshot(path=str(ARTIFACTS / "usage-dark.png"))
+                await usage_dialog.get_by_role("button", name="Refresh").click()
+                await page.wait_for_timeout(200)
+                assert len(usage_calls) == 2
+                await page.keyboard.press("Escape")
+                await usage_dialog.wait_for(state="hidden")
+                await page.keyboard.press("Control+x")
+                await page.keyboard.press("u")
+                await usage_dialog.locator(".usage-provider").first.wait_for()
+                await page.keyboard.press("Escape")
+                await usage_dialog.wait_for(state="hidden")
                 assert await page.locator(".message-disclosure").count() == 1
                 expanded_preview = page.locator(".message-disclosure")
                 await expanded_preview.locator("summary").click()

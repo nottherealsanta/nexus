@@ -2,17 +2,20 @@
 // Every action is a host command; the daemon keeps credentials in its keychain.
 // A browser or device sign-in shows a link and code here, then this page polls
 // ProviderLoginPoll until the daemon reports the outcome. First-run setup
-// renders a second instance into its own list (listId), like the TUI.
+// renders a second instance into its own list (listId), like the TUI. A
+// code_entry sign-in (Claude) shows a field for the code its page displays,
+// sent inward with ProviderLoginCode.
 
 export const PROVIDERS = [
   {id: 'codex', label: 'ChatGPT (Codex)', actions: [['browser', 'Sign in with browser'], ['device', 'Use a device code']]},
   {id: 'github-copilot', label: 'GitHub Copilot', actions: [['device', 'Use a device code']]},
   {id: 'opencode-go', label: 'OpenCode Go', actions: [['api_key', 'Save key']], key: true},
+  {id: 'claude-agent', label: 'Claude (Pro/Max)', actions: [['browser', 'Sign in with browser']], code: true},
 ];
 const POLL_MS = 1500, POLL_LIMIT = 600;
 
 export function createProviders({api, el, $, listId = 'provider-list', isOpen = () => !$('settings-overlay').hidden}) {
-  const polling = new Set(), logins = {};
+  const polling = new Set(), logins = {}, codeEntry = {};
   let request = 0;
 
   function card(id) { return $(listId).querySelector(`[data-provider="${id}"]`); }
@@ -34,6 +37,7 @@ export function createProviders({api, el, $, listId = 'provider-list', isOpen = 
     node.classList.toggle('pending', on);
     for (const button of node.querySelectorAll('.provider-action')) button.hidden = on;
     node.querySelector('.provider-cancel').hidden = !on;
+    for (const item of node.querySelectorAll('.provider-code')) item.hidden = !(on && codeEntry[id]);
   }
 
   function build() {
@@ -50,6 +54,15 @@ export function createProviders({api, el, $, listId = 'provider-list', isOpen = 
         input.autocomplete = 'off'; input.setAttribute('aria-label', 'OpenCode Go API key');
         input.addEventListener('keydown', e => { if (e.key === 'Enter') saveKey(provider.id); });
         actions.append(input);
+      }
+      if (provider.code) {
+        const field = el('input', 'provider-input provider-code');
+        field.type = 'password'; field.placeholder = 'Paste the code from the sign-in page';
+        field.autocomplete = 'off'; field.setAttribute('aria-label', 'Claude sign-in code'); field.hidden = true;
+        field.addEventListener('keydown', e => { if (e.key === 'Enter') sendCode(provider.id); });
+        const submit = el('button', 'toolbar-button provider-code', 'Submit code');
+        submit.type = 'button'; submit.hidden = true; submit.onclick = () => sendCode(provider.id);
+        actions.append(field, submit);
       }
       for (const [method, text] of provider.actions) {
         const button = el('button', 'toolbar-button provider-action', text);
@@ -83,14 +96,16 @@ export function createProviders({api, el, $, listId = 'provider-list', isOpen = 
       node.classList.toggle('connected', connected);
       node.querySelector('.provider-state').textContent = connected ? `Connected${row.detail ? ` · ${row.detail}` : ''}` : 'Not connected';
       node.querySelector('.provider-help').textContent = row.help || '';
-      node.querySelector('.provider-logout').hidden = !connected;
+      node.querySelector('.provider-logout').hidden = !connected || row.can_logout === false;
       if (row.login?.status === 'pending') { show(row.id, row.login); watch(row.id, row.login.login_id); }
     }
   }
 
   function show(id, login) {
     logins[id] = login.login_id;
-    const text = login.user_code ? `Enter code ${login.user_code}, then approve access. Waiting…` : 'Finish signing in, then return here. Waiting…';
+    codeEntry[id] = login.code_entry === true;
+    const text = login.user_code ? `Enter code ${login.user_code}, then approve access. Waiting…`
+      : codeEntry[id] ? 'Sign in, then paste the code the page shows below. Waiting…' : 'Finish signing in, then return here. Waiting…';
     flow(id, text, String(login.url || '').startsWith('https://') ? login.url : '');
     pending(id, true);
   }
@@ -125,6 +140,16 @@ export function createProviders({api, el, $, listId = 'provider-list', isOpen = 
   async function cancelLogin(id) {
     if (!logins[id]) return;
     try { await api.command({type: 'ProviderLoginCancel', login_id: logins[id]}); }
+    catch (error) { flow(id, error.message); }
+  }
+
+  async function sendCode(id) {
+    const field = card(id)?.querySelector('input.provider-code');
+    if (!field) return;
+    const code = field.value;
+    field.value = '';
+    if (!code.trim() || !logins[id]) { flow(id, 'Paste the code shown after signing in first.'); return; }
+    try { const login = await api.command({type: 'ProviderLoginCode', login_id: logins[id], code}); flow(id, login.message || ''); }
     catch (error) { flow(id, error.message); }
   }
 

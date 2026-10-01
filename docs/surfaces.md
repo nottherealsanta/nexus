@@ -36,6 +36,7 @@ Pure presentation helpers, importable by all surfaces. The TUI-only widgets
 | `prompts.py` | `approval_choices` (four decisions, unavailable ones disabled), pending questions | `approvalChoices` |
 | `text.py` | control-safe, redacted text | `el(tag, cls, text)` |
 | `agent_frontmatter.py` | read/rewrite agent frontmatter lines for the Settings form | `settings-files.js` |
+| `usage.py` | provider usage wording: `bar`, `tone` (ok < 70 % ≤ warn < 90 % ≤ critical), `summary` (`41% used · 59% left · resets in 6d 5h (Wed Oct 7 17:05)`), `heading` | `ui/web/js/usage.js` |
 | `ui/cli/commands.py` | slash commands | `SLASH_COMMANDS` |
 
 ## Layout (both surfaces)
@@ -106,8 +107,11 @@ input is durable and visible after reconnecting ([loop.md](loop.md#steering-queu
 ## Keyboard
 
 The source is `SHORTCUTS` in `ui/tui/app.py` / `tui_command_palette.py`:
-`Ctrl+P/N/O/F/G/B/L/S/I/T/E/C/R`, `Shift+Tab`, `a`, `Esc`; `Ctrl+Space` toggles
-dictation. **`Ctrl+X` is a leader**: then `M` (model picker), `V` (dictation), or
+`Ctrl+P/N/O/F/G/B/L/S/I/T/E/U/C/R`, `Shift+Tab`, `a`, `Esc`; `Ctrl+Space` toggles
+dictation. `Ctrl+U` (also `Ctrl+X U` and `/usage`) opens the provider usage modal:
+one section per connected provider with a bar per limit window, its reset,
+notes and source, plus who is not connected; `r`/Refresh re-reads it. In the
+TUI it takes precedence over the composer's delete-to-line-start. **`Ctrl+X` is a leader**: then `M` (model picker), `V` (dictation), or
 an alias from `LEADER_SHORTCUTS` (`?` lists them). The model picker is one
 searchable modal with provider groups, favorites (`Ctrl+F`), recents, sort
 (`Ctrl+S`), a `↻`/`Ctrl+R` catalogue refresh (`ModelsRefresh`) and optional effort
@@ -146,7 +150,10 @@ commands ([extensions.md](extensions.md#settings-files-host)).
   row and an ordered Fallbacks list above the prompt editor, each opening the
   shared model picker (provider, model and effort together).
 - **Providers:** cards for Codex (browser or device code), GitHub Copilot (device
-  code) and OpenCode Go (password field); polls `ProviderLoginPoll`.
+  code), OpenCode Go (password field) and Claude (browser, then a password field
+  for the code the sign-in page shows, sent with `ProviderLoginCode`); polls
+  `ProviderLoginPoll`. Claude has no Disconnect (`can_logout: false`): its login is
+  shared with Claude Code.
 - **First-run setup:** only asks to connect a provider; the first connected one
   is saved with its newest model via `SetupSave` and the screen closes into chat
   (a restart is asked for only while turns run). Never required in dev mode.
