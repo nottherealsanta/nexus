@@ -13,7 +13,7 @@ Do not weaken any boundary below to make a feature easier.
 | Peer authentication | bearer token (constant-time compare) on the peer API; one-use 60s ticket → `HttpOnly; SameSite=Strict` cookie + CSRF token for the browser; exact `Origin` (missing `Origin` refused) | `host/web.py`, `http_sse.py` |
 | Browser hardening | strict CSP (no inline script/style, no external hosts), `nosniff`, `no-referrer`, `X-Frame-Options: DENY`, `Host` check | `host/web.py` |
 | Credentials never cross the host | no command returns a key, token, env value or raw config; `ProviderKeySet` is inward-only and never echoed, logged or written to config; errors pass `redact_secrets` | `host/protocol.py`, `util.py`, `auth/` |
-| Secrets are references | `${env:VAR}`/keychain references resolved only at request time; native keychain for OAuth/keys | `config/`, `auth/store.py` |
+| Secrets are references | `${env:VAR}`/keychain references resolved only at request time; native keychain for OAuth/keys, read once per process and re-read only when a Nexus write or delete replaces the credential's non-secret stamp file | `config/`, `auth/store.py` |
 | Permissions | `deny` absolute and daemon-side; `PathGuard` canonicalises before any allow; write roots and read-deny roots are hard; shared `nexus.db` is never tool-accessible | `tools/permissions.py` |
 | Approvals never broaden | `*_always` persists an exact-action rule; unattended policy defaults to deny | `tools/permissions.py`, `session/session.py` |
 | Child processes | command hooks and MCP children get a fixed safe environment plus explicitly configured names; shells are argv, not strings, unless opted in | `hooks/`, `mcp/client.py` |

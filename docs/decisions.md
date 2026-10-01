@@ -44,6 +44,7 @@ this page and the code win.
 | **Project extensions and settings live in `<workspace>/.agents/`; legacy `.nexus/` is a read-only lower-precedence fallback.** Machine state is under `~/.nexus/`. | A conventional, tool-neutral project dir; writes have one home. | [config.md](config.md) |
 | **Config: layered, `msgspec`, unknown keys are errors; lists append; flat v1 bridges into v2.** | Typos must fail loudly; old configs keep working. | `config/` |
 | **Secrets are references (`${env:…}`/keychain)**, resolved at use. | Nothing secret in files, logs or events. | [security.md](security.md) |
+| **Keychain reads are cached per process, invalidated by a non-secret stamp file** (`~/.nexus/locks/credential-<sha256>.stamp`, replaced on every Nexus write or delete). Replaced a keychain read on every model request and status check. | macOS asks to allow access each time an executable outside an item's access list reads it (a second Python install, an upgrade, a Codex refresh rewriting the item), so per-request reads caused repeated prompts. Nexus logins and logouts in other processes are still seen on the next request; edits made in Keychain Access are seen after a daemon restart. | `auth/store.py` |
 | **Python ≥ 3.13.** | `object.__setattr__` on msgspec Structs, used across the codebase, fails on 3.12 and older. | `pyproject.toml` |
 
 ## Tools, permissions, extensions

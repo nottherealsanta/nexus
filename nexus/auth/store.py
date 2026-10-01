@@ -4,6 +4,15 @@ For ChatGPT OAuth only a rotating refresh token and routing metadata are
 persisted; access and ID tokens deliberately never cross this boundary. Other
 providers (GitHub Copilot, OpenCode Go) keep one opaque secret per
 ``<provider>:<profile>`` account in the same secure native keychain.
+
+Keychain reads are cached per process. macOS asks the user to allow access
+whenever an executable not on an item's access list reads it (a different
+Python, or one changed by an upgrade), so reading on every model request
+prompted over and over. Each write or delete made through this module also
+replaces a small, non-secret stamp file next to the profile locks. A cached
+value is trusted while that stamp is unchanged, so a login or logout in
+another Nexus process (the CLI, a second daemon) is still seen on the next
+request. A change made outside Nexus (Keychain Access) is seen after a restart.
 """
 from __future__ import annotations
 
@@ -13,7 +22,9 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import stat
+import threading
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -78,6 +89,14 @@ class CredentialStore(Protocol):
     async def lock(self, profile: str): ...
 
 
+_MAX_STAMP_BYTES = 64
+_MAX_CACHED_ITEMS = 64
+#: ``(lock dir, service, account) -> (stamp, value)``, shared by every store in
+#: the process so short-lived managers (status checks) reuse it too.
+_CACHE: dict[tuple[str, str, str], tuple[bytes, str | None]] = {}
+_CACHE_LOCK = threading.Lock()
+
+
 class KeyringCredentialStore:
     """A keyring adapter that refuses keyring's null, plaintext, and fail backends."""
 
@@ -111,22 +130,77 @@ class KeyringCredentialStore:
             raise ProviderError("ChatGPT OAuth requires a secure native keychain (macOS Keychain or Secret Service); insecure keyring backends are refused")
         return self._keyring
 
+    def _stamp_path(self, service: str, account: str) -> Path:
+        name = hashlib.sha256(f"{service}\0{account}".encode()).hexdigest()
+        return self._lock_dir / f"credential-{name}.stamp"
+
+    def _read_stamp(self, path: Path) -> bytes:
+        try:
+            with open(path, "rb") as handle:
+                return handle.read(_MAX_STAMP_BYTES)
+        except FileNotFoundError:
+            return b""
+
+    def _bump_stamp(self, path: Path) -> bytes:
+        """Replace the stamp atomically; it holds a random token, never a secret."""
+        self._lock_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        stamp = secrets.token_hex(16).encode()
+        temporary = path.with_name(f"{path.name}.{secrets.token_hex(4)}.tmp")
+        try:
+            fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(stamp)
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return stamp
+
+    def _key(self, service: str, account: str) -> tuple[str, str, str]:
+        return (str(self._lock_dir), service, account)
+
+    def _cached_get(self, service: str, account: str) -> str | None:
+        """One keychain read per process until a Nexus write changes the stamp."""
+        key = self._key(service, account)
+        stamp = self._read_stamp(self._stamp_path(service, account))
+        with _CACHE_LOCK:
+            hit = _CACHE.get(key)
+        if hit is not None and hit[0] == stamp:
+            return hit[1]
+        value = self._backend().get_password(service, account)
+        self._remember(key, stamp, value)
+        return value
+
+    def _cached_set(self, service: str, account: str, value: str) -> None:
+        self._backend().set_password(service, account, value)
+        self._remember(self._key(service, account), self._bump_stamp(self._stamp_path(service, account)), value)
+
+    def _cached_delete(self, service: str, account: str) -> None:
+        keyring = self._backend()
+        try:
+            keyring.delete_password(service, account)
+        except keyring.errors.PasswordDeleteError:
+            pass
+        self._remember(self._key(service, account), self._bump_stamp(self._stamp_path(service, account)), None)
+
+    @staticmethod
+    def _remember(key: tuple[str, str, str], stamp: bytes, value: str | None) -> None:
+        with _CACHE_LOCK:
+            if key not in _CACHE and len(_CACHE) >= _MAX_CACHED_ITEMS:
+                _CACHE.pop(next(iter(_CACHE)))
+            _CACHE[key] = (stamp, value)
+
     async def read(self, profile: str) -> CredentialRecord | None:
         validate_profile(profile)
-        value = await asyncio.to_thread(self._backend().get_password, SERVICE, f"codex:{profile}")
+        value = await asyncio.to_thread(self._cached_get, SERVICE, f"codex:{profile}")
         return CredentialRecord.parse(value) if value else None
 
     async def write(self, profile: str, record: CredentialRecord) -> None:
         validate_profile(profile)
-        await asyncio.to_thread(self._backend().set_password, SERVICE, f"codex:{profile}", record.serialize())
+        await asyncio.to_thread(self._cached_set, SERVICE, f"codex:{profile}", record.serialize())
 
     async def delete(self, profile: str) -> None:
         validate_profile(profile)
-        keyring = self._backend()
-        try:
-            await asyncio.to_thread(keyring.delete_password, SERVICE, f"codex:{profile}")
-        except keyring.errors.PasswordDeleteError:
-            pass
+        await asyncio.to_thread(self._cached_delete, SERVICE, f"codex:{profile}")
 
     @asynccontextmanager
     async def lock(self, profile: str):
@@ -194,7 +268,7 @@ class KeyringSecretStore(KeyringCredentialStore):
 
     async def read_secret(self, account: str) -> str | None:
         validate_account(account)
-        value = await asyncio.to_thread(self._backend().get_password, SECRET_SERVICE, account)
+        value = await asyncio.to_thread(self._cached_get, SECRET_SERVICE, account)
         if value is not None and (not isinstance(value, str) or len(value.encode()) > _MAX_SECRET_BYTES):
             raise ProviderError("stored provider credential is invalid; sign in again")
         return value or None
@@ -203,12 +277,8 @@ class KeyringSecretStore(KeyringCredentialStore):
         validate_account(account)
         if not isinstance(value, str) or not value or len(value.encode()) > _MAX_SECRET_BYTES:
             raise ValueError("provider credential must be a nonempty string under 8 KiB")
-        await asyncio.to_thread(self._backend().set_password, SECRET_SERVICE, account, value)
+        await asyncio.to_thread(self._cached_set, SECRET_SERVICE, account, value)
 
     async def delete_secret(self, account: str) -> None:
         validate_account(account)
-        keyring = self._backend()
-        try:
-            await asyncio.to_thread(keyring.delete_password, SECRET_SERVICE, account)
-        except keyring.errors.PasswordDeleteError:
-            pass
+        await asyncio.to_thread(self._cached_delete, SECRET_SERVICE, account)
