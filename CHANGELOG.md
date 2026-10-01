@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.13](https://github.com/nottherealsanta/nexus/compare/v0.2.12...v0.2.13) (2026-10-01)
+
+
+* release 0.2.13 as a patch ([#43](https://github.com/nottherealsanta/nexus/issues/43)) ([ad64d8f](https://github.com/nottherealsanta/nexus/commit/ad64d8f9459d7cbd1d7713b4e845325348eae16d))
+
+
+### Features
+
+* UI redesign from the design mock-ups (TUI + web) ([#41](https://github.com/nottherealsanta/nexus/issues/41)) ([c78b8cf](https://github.com/nottherealsanta/nexus/commit/c78b8cf444b89998095a4dc28ccc83b8c0a9609d))
+
 ## [0.2.12](https://github.com/nottherealsanta/nexus/compare/v0.2.11...v0.2.12) (2026-10-01)
 
 
