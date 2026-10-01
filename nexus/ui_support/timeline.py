@@ -122,6 +122,23 @@ def tool_heading(tool: ToolCallView) -> str:
     return f"{verb} {args}".rstrip()
 
 
+def todo_preview(tool: ToolCallView) -> list[str]:
+    """Five item rows, or four items and a remaining count."""
+    if tool.name.casefold() != "todowrite" or tool_status(tool) == "failed":
+        return []
+    args = tool.input if isinstance(tool.input, Mapping) else {}
+    todos = tool.metrics.get("todos", args.get("todos")) if isinstance(tool.metrics, Mapping) else args.get("todos")
+    if not isinstance(todos, (list, tuple)):
+        return []
+    glyphs = {"pending": "☐", "in_progress": "◐", "completed": "✓", "cancelled": "✗"}
+    shown = todos[:4] if len(todos) > 5 else todos
+    rows = [f"{glyphs.get(str(item.get('status')), '☐')} {redact(_first_line(_text(item.get('content', ''), 180)))}"
+            for item in shown if isinstance(item, Mapping)]
+    if len(todos) > 5:
+        rows.append(f"{len(todos) - 4} more")
+    return rows
+
+
 def tool_output(tool: ToolCallView) -> str:
     """The body a tool block shows: raw output for shells and searches."""
     if tool.error:
@@ -529,3 +546,17 @@ __all__ = [
     "tool_status",
     "tool_summary",
 ]
+
+
+def submitted_attachment_summary(message: MessageView) -> tuple[str, list[str]]:
+    """Separate numbered attachment payloads from the literal prompt (PLAN §14.4)."""
+    prompt, labels = [], []
+    for block in message.blocks:
+        if block.kind != "text":
+            continue
+        match = re.match(r"^\n\nAttachment: ((?:image|document) [1-9][0-9]*) · ([^\n]+)\n", block.text)
+        if match:
+            labels.append(f"{match[1]} · {match[2]}")
+        else:
+            prompt.append(block.text)
+    return "".join(prompt), labels

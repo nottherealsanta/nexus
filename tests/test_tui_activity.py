@@ -515,6 +515,36 @@ async def test_patch_row_names_its_files_and_shows_each_file_diff_inline():
         await pilot.pause()
         views = list(widget.query(DiffView))
         assert [(view.path_modified, view.code_modified) for view in views] == [("a.py", "y"), ("b.py", "z")]
+        assert all(view.split and not view.auto_split for view in views)
+        assert all("📄" not in view.get_title().plain for view in views)
+        await pilot.resize_terminal(60, 24)
+        assert all(view.split for view in views)
         # An unchanged artifact keeps the mounted views.
         await widget.set_tool(tool)
         assert list(widget.query(DiffView)) == views
+
+
+async def test_read_grep_and_todo_compact_previews():
+    from nexus.ui_support.timeline import todo_preview
+
+    for name in ("Read", "Grep"):
+        tool = ToolCallView(call_id=name, name=name, status="completed",
+                            input={"path": "example.py", "offset": 2, "limit": 10},
+                            display=f"{name} example.py: repeated output")
+        async with _ActivityApp(tool).run_test() as pilot:
+            header = pilot.app.query_one("#tool-header", Static)
+            assert "example.py" in str(header.render())
+            assert "repeated output" not in str(header.render())
+
+    for count in (3, 5, 7):
+        items = [{"content": f"Task {i}", "status": "pending"} for i in range(count)]
+        tool = ToolCallView(call_id="todo", name="TodoWrite", status="completed", input={"todos": items})
+        rows = todo_preview(tool)
+        assert len(rows) == min(count, 5)
+        if count > 5:
+            assert rows[-1] == "3 more"
+            assert "Task 4" not in "\n".join(rows)
+        async with _ActivityApp(tool).run_test() as pilot:
+            header = pilot.app.query_one("#tool-header", Static)
+            assert header.styles.height.value == len(rows)
+            assert all(row in str(header.render()) for row in rows)

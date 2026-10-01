@@ -119,3 +119,11 @@ Stated so nobody builds on a false assumption.
   unverified. **Copilot** device sign-in is not live-tested.
 - **Not done:** completion notifications for background shell jobs still running
   at turn end; `nexus ext restore`.
+
+## Standard installation includes Claude Agent and voice
+
+Claude Agent SDK and the local voice runtime are required package dependencies so
+normal installs and subsequent `uv sync` runs retain both features. The old
+`claude-agent` and `voice` extras remain compatibility aliases. Claude login and
+the consent-gated voice model download remain separate setup steps. Voice runtime
+platform support remains not verified (see [voice.md](voice.md)).

@@ -247,7 +247,7 @@ class ContextBlock(Static):
             return
         category = {"Tools": "tools", "Skills": "skills", "MCP": "mcp"}.get(self.label, "")
         self.app.push_screen(ContextModal(
-            self.label, self.detail, category=category, markdown=self.label == "System prompt" and bool(self.body)))
+            self.label, self.detail, category=category))
 
 
 class ContextHeader(Vertical):

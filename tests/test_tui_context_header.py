@@ -49,10 +49,12 @@ async def test_context_header_is_first_and_opens_prompt_modal():
         timeline = app.query_one("#conversation")
         assert isinstance(timeline.children[0], ContextHeader)
         assert "Selected system prompt" in app.query_one("#context-prompt").render().plain
+        prompt = "Selected system prompt\n\n<environment>\nworkspace: /tmp/project\nplatform: darwin\nprofile: coding\n</environment>\n[literal] **prompt**"
+        app.query_one("#context-prompt").detail = prompt
         await pilot.click("#context-prompt")
         await pilot.pause()
-        # The system prompt renders as Markdown.
-        assert app.screen.query_one("#context-modal-body").source == "Selected system prompt"
+        # The system prompt is literal text, including XML environment tags.
+        assert app.screen.query_one("#context-modal-body").render().plain == prompt
         await pilot.press("escape")
         await pilot.pause()
         assert app.screen is app.screen_stack[0]
@@ -188,7 +190,7 @@ async def test_prompt_dialog_excludes_separately_displayed_agents_md():
         assert app.query_one("#context-agents", ContextBlock).detail == "Project rules"
         await pilot.click("#context-prompt")
         await pilot.pause()
-        assert app.screen.query_one("#context-modal-body").source == "Coding assistant\n\nMemory"
+        assert app.screen.query_one("#context-modal-body").render().plain == "Coding assistant\n\nMemory"
 
 
 def test_header_prompt_preserves_incomplete_snapshots_and_overrides():

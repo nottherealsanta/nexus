@@ -58,18 +58,22 @@ Pure presentation helpers, importable by all surfaces. The TUI-only widgets
 
 ## Conversation rendering
 
+Tool headers, subagent metrics, thought headings, assistant prose and turn
+footers share the same left inset in both surfaces.
+
 - `▼`/chevron user blocks fold a completed turn; thinking shows as `Thought:`
   lines (expandable); provider thinking summaries are never invented.
 - Ordinary tool calls are one muted, clipped summary line, consecutive calls
   tightly stacked; calls in one model iteration share batch glyphs (`⎾ │ ⎿`).
+  Read and Grep show arguments without appending a repeated result summary.
+  Todo shows up to five item rows; longer lists show the first four and `X more`.
   Activating a call opens its full parameters/result in a modal, never inline.
 - **Subagent calls** use two lines: type and description, then recent tool calls
   while running, or tool count and elapsed time when finished. Clicking opens the
   child's page, laid out like the root (its own context header showing the request
   it actually sent, a grey Task block, a read-only composer, details panel); Esc
   returns. All subagent activity stays inline at the initiating call.
-- Completed Edit/Patch rows show a diff per file (side by side when wide, unified
-  when narrow), from the durable `ToolCallView.diff` only.
+- Completed Edit/Patch rows show a diff per file (original on the left, updated on the right at every width), from the durable `ToolCallView.diff` only.
 - Errors are plain red lines; each finished turn has a footer
   `AGENT · model · 1.2s`. Agent color: the host's `color`, else a name hash.
 
@@ -169,3 +173,23 @@ the web shows a `DEV` badge (from `Health.dev`). See [devtools.md](devtools.md).
    web (`ui/web/js/`) in the same place.
 3. A check in each: a Textual pilot test and `tests/playwright_web_check.py`
    ([testing.md](testing.md)).
+
+Escape and Ctrl+C dismiss open dialogs and Settings (including nested screens)
+and restore focus on the main conversation. On the main conversation, two Escape
+presses within 1.5 seconds cancel the active turn and return pending queued messages to the composer via
+`SessionCancel(return_queue=True)`. Messages keep queue order, separated by blank
+lines, followed by any existing unsent draft; they no longer run automatically.
+A single Escape shows a stop hint. Ctrl+C retains immediate
+turn cancellation on the main conversation.
+
+Attachments insert editable `image 1`, `image 2`, or `document 1`,
+`document 2` references at the composer cursor (each kind is numbered separately
+within a draft). Preview rows show the same reference and filename. Removing a
+browser attachment does not renumber remaining references. Submitted attachment
+metadata carries the same labels beside the image bytes or complete document text
+in the durable user message, so references in sentences stay meaningful on replay.
+
+Submitted messages separate the prompt sentence from numbered attachment rows.
+The browser shows labelled image thumbnails and expandable full document cards,
+also in request-context messages. The terminal shows compact labelled rows;
+clicking the message body opens the complete attached text and image metadata.

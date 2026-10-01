@@ -112,7 +112,7 @@ Packaged files are listed in `pyproject.toml` (`"nexus.ui.web" = ["index.html",
 | Right panel | `renderDetails(force)` by `state.tab`; `renderOverview` (`modifiedFiles`, `diffRows`, `mcpSectionBody`), `overviewSignature`, `loadWorkspaceHealth` (`Doctor`, 20s cache), tools/agents tabs, `renderWorktrees*`, `renderLogs`/`readLogs` |
 | Pickers | `showPalette`, `renderPalette`, `chooseFromList`, `chooseModel`/`commitModel` (Left/Right adjusts effort; `#palette-refresh` sends `ModelsRefresh` like `↻`/Ctrl+R in the TUI), `chooseAgent`, `cycleReasoningEffort` (Ctrl+T), `refreshModels` (`#palette-refresh`) |
 | Settings | `selectSettingsPane`, `syncLayoutSettings`, `openSettings`, `renderSettings`, `installSettingGroups`, `installSettingsNav`, `renderSettingsWorkspace` |
-| Context | `refreshContextPreview`, `openContextDialog(mode)` (`'system'` Markdown, `'tools'`), `renderContextReport` (Expand all); the legacy inline preview stays hidden |
+| Context | `refreshContextPreview`, `openContextDialog(mode)` (`'system'` literal text, `'tools'`), `renderContextReport` (Expand all); the legacy inline preview stays hidden |
 | Setup | `pollSetup`, `completeSetup` (`SetupStatus` / `SetupSave` without a model; no credentials transmitted) |
 
 Details-panel tabs (Tools, Agents, Trees, Logs), Context/Logs/Export buttons and
@@ -146,7 +146,7 @@ Reduced motion disables transitions.
 - Overlays set `#app` `inert` and trap Tab; Escape or a backdrop click closes the
   top-most layer; dialogs focus themselves on open. Follow the existing
   open/close helpers.
-- Dictation: the optional `voice` extra and a separate model download are
+- Dictation: the runtime is included in the standard install; a separate model download is
   required; the confirmation dialog precedes any download and stays open during
   preparation until the user acknowledges readiness. Real-model inference and
   network behavior are not verified; do not claim proven offline operation.
@@ -204,3 +204,26 @@ drafts expire after one hour; submitted content stays in the durable log.
 
 Validation: `tests/test_attachments.py`, `tests/test_tui_attachments.py`,
 `tests/playwright_attachments_check.py`.
+
+Escape and Ctrl+C dismiss open dialogs and Settings (including nested screens)
+and restore focus on the main conversation. On the main conversation, two Escape
+presses within 1.5 seconds cancel the active turn and return pending queued messages to the composer via
+`SessionCancel(return_queue=True)`. Messages keep queue order, separated by blank
+lines, followed by any existing unsent draft; they no longer run automatically.
+A single Escape shows a stop hint. Ctrl+C retains immediate
+turn cancellation on the main conversation.
+
+Attachments insert editable `image 1`, `image 2`, or `document 1`,
+`document 2` references at the composer cursor (each kind is numbered separately
+within a draft). Preview rows show the same reference and filename. Removing a
+browser attachment does not renumber remaining references. Submitted attachment
+metadata carries the same labels beside the image bytes or complete document text
+in the durable user message, so references in sentences stay meaningful on replay.
+
+Submitted messages separate the prompt sentence from numbered attachment rows.
+The browser shows labelled image thumbnails and expandable full document cards,
+also in request-context messages. The terminal shows compact labelled rows;
+clicking the message body opens the complete attached text and image metadata.
+
+Inline Edit/Patch diffs stay in two columns at every width: original on the left,
+updated on the right. Long lines wrap within their column.
