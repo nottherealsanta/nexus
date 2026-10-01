@@ -195,6 +195,7 @@ here, so add a row when you add a file.
 
 | File | Purpose |
 | --- | --- |
+| `attachments.py` | Prepare and validate image and document prompt attachments |
 | `__init__.py` | Implementation helpers for host-facing read-only projections |
 | `agent_context.py` | The request context one subagent actually sent, shaped for the context header |
 | `approval.py` | Bounded permission-request projection shared by attended host clients |
@@ -377,6 +378,7 @@ here, so add a row when you add a file.
 
 | File | Purpose |
 | --- | --- |
+| `attachments.py` | Pending file and clipboard image attachments, previews, and submission |
 | `__init__.py` | Optional Textual shell for the daemon-backed Nexus client |
 | `attachments.py` | TUI attachment preparation and Markdown preview through the host |
 | `agent_picker.py` | Searchable picker for root agents and selectable models |
@@ -410,6 +412,7 @@ here, so add a row when you add a file.
 | --- | --- |
 | `__init__.py` | Pure presentation helpers shared by terminal surfaces |
 | `agent_frontmatter.py` | Read and rewrite the simple `key: value` frontmatter of an agent `*.md` |
+| `clipboard.py` | Bounded local system clipboard image reading for terminal attachment uploads |
 | `context.py` | Pure display projections for context preview and session usage |
 | `mock_args.py` | Shared `/mock` argument handling for the chat surfaces |
 | `mock_cli.py` | `nexus mock list\|run\|clean` (dev mode only) |

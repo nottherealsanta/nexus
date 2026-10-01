@@ -1,5 +1,9 @@
 """TUI file attachment preparation and preview through the host (PLAN §14.4)."""
 
+import asyncio
+
+from ...ui_support.clipboard import read_clipboard_image
+
 from textual.containers import VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Markdown, Static, TextArea
@@ -31,6 +35,35 @@ class AttachmentsMixin:
         widget.update("")
         widget.display = False
 
+    async def paste_clipboard_image(self):
+        """Upload local clipboard bytes through the host attachment contract."""
+        session = self.controller.session
+        try:
+            data = await asyncio.to_thread(read_clipboard_image)
+            if data is None:
+                return False
+            if session != self.controller.session:
+                return True
+            if len(getattr(self, "_attachments", [])) >= 8:
+                raise ValueError("At most 8 attachments per message")
+            item = await self.controller.client.prepare_attachment(name="clipboard.png", data=data)
+            if session == self.controller.session:
+                if len(getattr(self, "_attachments", [])) >= 8:
+                    raise ValueError("At most 8 attachments per message")
+                self._attachments = [*getattr(self, "_attachments", []), item]
+                self._render_attachments()
+        except (ClientError, ValueError, OSError, TimeoutError) as exc:
+            self._sync_status(str(exc), error=True)
+        return True
+
+    def _render_attachments(self):
+        widget = self.query_one("#file-attachments", Static)
+        widget.update("\n".join(
+            f"Attachment: {value.name} · {value.kind} · /attach clear to remove"
+            for value in self._attachments
+        ))
+        widget.display = bool(self._attachments)
+
     async def attach_file(self, raw):
         path = raw.partition(" ")[2].strip().strip("\"'")
         if path == "clear":
@@ -48,14 +81,7 @@ class AttachmentsMixin:
         if session != self.controller.session:
             return
         self._attachments = [*items, item]
-        widget = self.query_one("#file-attachments", Static)
-        widget.update(
-            "\n".join(
-                f"Attachment: {value.name} · {value.kind} · /attach clear to remove"
-                for value in self._attachments
-            )
-        )
-        widget.display = True
+        self._render_attachments()
         if item.kind == "markdown":
             await self.push_screen(AttachmentPreview(item))
 

@@ -176,8 +176,9 @@ class Client:
     async def open_session(self, session: str, *, create: bool = True, recover: bool = True) -> Any:
         return (await self._request(p.SessionOpen(session=session, create=create, recover=recover))).session  # type: ignore[union-attr]
 
-    async def prepare_attachment(self, path: str) -> p.AttachmentPrepareResult:
-        return await self._request(p.AttachmentPrepare(path=path))  # type: ignore[return-value]
+    async def prepare_attachment(self, path: str = "", *, name: str = "",
+                                 data: bytes = b"") -> p.AttachmentPrepareResult:
+        return await self._request(p.AttachmentPrepare(path=path, name=name, data=data))  # type: ignore[return-value]
 
     async def start_turn(self, session: str, content: str) -> str:
         return (await self._request(p.SessionStart(session=session, content=content))).turn_id  # type: ignore[union-attr]
