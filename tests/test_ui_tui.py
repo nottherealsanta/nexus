@@ -406,8 +406,17 @@ async def test_fresh_session_is_empty_and_editor_focused_without_agent_panel():
     async with app.run_test(size=(48, 24)) as pilot:
         await pilot.pause()
         timeline = app.query_one("#conversation", ConversationTimeline)
-        assert [child.id for child in timeline.children] == ["context-header"]
+        assert [child.id for child in timeline.children] == ["context-header", "empty-hints"]
+        hints = app.query_one("#empty-hints")
+        assert hints.display and hints.visible and hints.render().plain.strip()
         assert app.focused is app.query_one("#chat-editor", TextArea)
+        # Typing hides the hints; clearing the draft brings them back.
+        app.query_one("#chat-editor", TextArea).text = "hello"
+        await pilot.pause()
+        assert not hints.visible
+        app.query_one("#chat-editor", TextArea).text = ""
+        await pilot.pause()
+        assert hints.visible
         assert not app.query("#agent-tracker")
         assert not app.query_one("#context-preview").display
         await pilot.pause()
@@ -489,9 +498,9 @@ async def test_empty_context_preview_shows_ten_lines_then_full_details_with_safe
     async with app.run_test(size=(100, 38)) as pilot:
         await pilot.pause()
         preview = app.query_one("#context-prompt").render().plain
-        assert "first" in preview and "fifth" in preview
-        assert "+6 more lines" in preview
-        assert "sixth" not in preview
+        # One preview line, the rest counted; the token estimate beside the label.
+        assert preview.splitlines()[1] == "  first  … +10 more lines"
+        assert "~" in preview.splitlines()[0] and "second" not in preview
         assert "Read" in app.query_one("#context-tools").render().plain
         assert "active-skill" in app.query_one("#context-skills").render().plain
         assert "available-skill" in app.query_one("#context-skills").render().plain
@@ -499,7 +508,7 @@ async def test_empty_context_preview_shows_ten_lines_then_full_details_with_safe
 
         await pilot.click("#context-prompt")
         await pilot.pause()
-        assert app.screen.query_one("#context-modal-title").render().plain == "System prompt"
+        assert app.screen.query_one("#context-modal-title").render().plain == "System prompt · ~21 tokens"
         body = app.screen.query_one("#context-modal-body").render().plain
         assert "eleventh" in body
         assert "\x1b" not in body
@@ -876,8 +885,10 @@ async def test_superseded_setup_errors_and_pre_prompt_greetings_are_hidden_only_
         assert "Hi! How can I help?" not in rendered
         assert "I’m Nexus, your assistant. I found the requested note." in rendered
         assert "I’m Nexus, ready to help" in rendered
+        # Prompts wrap beside their right-aligned turn number (#n).
+        flat = " ".join(word for word in rendered.split() if not word[1:].isdigit() or word[0] != "#")
         for prompt in failed_prompts.values():
-            assert prompt in rendered
+            assert prompt in flat
         for turn_id in ("config", "provider"):
             tool = timeline._turns[turn_id]._items[f"tool:preview-{turn_id}"]
             assert tool.query_one("#tool-header").render().plain == "→ Read notes.txt"
@@ -2551,6 +2562,14 @@ async def test_logs_pages_render_separately_and_bound_rows_and_statuses():
             session_more=True,
         ))
         rendered = app.query_one("#logs-content").render().plain
+        # Problems first: warnings and errors as cards, the rest folded.
+        assert rendered.startswith("PROBLEMS 2")
+        assert "WARNING daemon · daemon.started: daemon note" in rendered
+        assert "ERROR session · turn.failed: session note" in rendered
+        assert "▸ 0 info/debug lines" in rendered and "DAEMON ·" not in rendered
+        drawer.show_all = True
+        drawer.refresh_content()
+        rendered = app.query_one("#logs-content").render().plain
         assert "DAEMON" in rendered and "SESSION ID · s" in rendered
         assert "WARNING" in rendered and "ERROR" in rendered
         assert "daemon note" in rendered and "session note" in rendered
@@ -2594,6 +2613,10 @@ async def test_truncated_daemon_page_replaces_old_generation_only():
         ))
 
         rendered = app.query_one("#logs-content").render().plain
+        assert "▸ 2 info/debug lines" in rendered and "keep session" not in rendered
+        drawer.show_all = True
+        drawer.refresh_content()
+        rendered = app.query_one("#logs-content").render().plain
         assert [row.summary for row in drawer.daemon_entries] == ["new generation"]
         assert [row.summary for row in drawer.session_entries] == ["keep session"]
         assert "old generation" not in rendered and "new generation" in rendered
@@ -2622,6 +2645,7 @@ async def test_transient_logs_poll_error_keeps_rows_and_clears_after_recovery():
     async with app.run_test() as pilot:
         await pilot.pause()
         drawer = app.query_one(LogsDrawer)
+        drawer.show_all = True  # these rows are info level, folded by default
         drawer.set_session("s")
         drawer.add_page(_logs_result(
             daemon=[_log_entry("daemon", 1, summary="retained daemon row")],
@@ -2745,6 +2769,8 @@ async def test_cancelled_late_logs_read_cannot_block_or_overwrite_reopened_drawe
         await pilot.pause(0.05)
 
         drawer = app.query_one(LogsDrawer)
+        drawer.show_all = True  # these rows are info level, folded by default
+        drawer.refresh_content()
         rendered = app.query_one("#logs-content").render().plain
         assert calls >= 2
         assert "fresh result" in rendered

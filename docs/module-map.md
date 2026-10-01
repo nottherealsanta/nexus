@@ -204,6 +204,7 @@ here, so add a row when you add a file.
 | `browser_view.py` | Browser-safe reducer projection and compact structural JSON patches |
 | `context_preview.py` | Privacy projection for a read-only, next-turn context preview |
 | `doctor.py` | Bounded, redacted health projections for doctor |
+| `git_head.py` | Subprocess-free, bounded read of the workspace's Git branch / detached HEAD / linked worktree for the Doctor `git` field |
 | `git_diff.py` | Bounded, read-only Git diff projection for the host |
 | `install.py` | Install, upgrade, and daemon-hygiene helpers |
 | `mock.py` | Host dispatch for the dev-mode `Mock*` commands |
@@ -407,6 +408,7 @@ here, so add a row when you add a file.
 | File | Purpose |
 | --- | --- |
 | `__init__.py` | Static browser client for the Nexus daemon |
+| `js/fuzzy.js` | Fuzzy matcher for the palette and model picker (port of `ui_support/fuzzy.py`) |
 | `js/voice-strip.js` | Floating dictation waveform and bounded live transcript preview |
 
 ### `nexus/ui_support/`
@@ -417,6 +419,8 @@ here, so add a row when you add a file.
 | `agent_frontmatter.py` | Read and rewrite the simple `key: value` frontmatter of an agent `*.md` |
 | `clipboard.py` | Bounded local system clipboard image reading for terminal attachment uploads |
 | `context.py` | Pure display projections for context preview and session usage |
+| `hints.py` | Randomized tips shown in the middle of an empty session (mirrored in `js/hints.js`) |
+| `fuzzy.py` | Shared fuzzy matcher (score and match positions) for the command palette and model picker |
 | `mock_args.py` | Shared `/mock` argument handling for the chat surfaces |
 | `mock_cli.py` | `nexus mock list\|run\|clean` (dev mode only) |
 | `prompts.py` | UI-neutral choices for operator prompts: approvals and agent questions |

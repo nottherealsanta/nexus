@@ -188,6 +188,8 @@ def test_submitted_attachment_rows_keep_prompt_readable():
     rendered = widget._content(message)
     assert "Use image 1 with document 1" in rendered
     assert "image 1 · photo.png" in rendered
-    assert "document 1 · report.txt" in rendered
+    # Images drop their byte size; documents keep the size of their text.
+    assert "42 bytes" not in rendered and "image/png" not in rendered
+    assert "document 1 · report.txt · 18 B" in rendered
     assert "Full document body" not in rendered
     assert "Click to inspect" in rendered

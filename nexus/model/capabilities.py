@@ -82,6 +82,9 @@ class Capabilities(msgspec.Struct, frozen=True):
     default_max_output_tokens: int = 0
     #: The provider's prompt cap when it is below ``context - output``.
     max_input_tokens: int = 0
+    #: Registry pricing (``Cost.pricing()``: rates plus context tiers, USD/Mtok),
+    #: ``None`` when unknown. Informational: published in the context metadata.
+    pricing: dict[str, object] | None = None
     degradation: dict[str, DegradationPolicy] = msgspec.field(default_factory=dict)
 
     @classmethod
@@ -103,6 +106,8 @@ class Capabilities(msgspec.Struct, frozen=True):
             value = getattr(registry, name)
             if value:
                 updates[name] = value
+        if registry.pricing is not None:
+            updates["pricing"] = registry.pricing
         return msgspec.structs.replace(self, **updates)
 
     def disabled(self, feature: str) -> Capabilities:

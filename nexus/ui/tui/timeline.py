@@ -13,6 +13,8 @@ from textual.markup import escape
 from textual.widget import Widget
 from textual.widgets import Button, Markdown, Static
 
+from ...ui_support.context import _compact_tokens
+from ...ui_support.hints import pick_hints
 from ...ui_support.text import redact
 from ...ui_support.timeline import (
     BATCH_GLYPHS,
@@ -38,6 +40,7 @@ from ...ui_support.timeline import (
     _turn_models,
     _turn_setup_failure,
     format_arguments,
+    running_output_tail,
     thought_title,
     submitted_attachment_summary,
     tool_heading,
@@ -69,14 +72,36 @@ def _agent_key(turn: TurnView) -> str:
 
 
 def _turn_footer(turn: TurnView) -> str:
-    """Model and elapsed time for a completed turn (the agent shows elsewhere)."""
+    """Right-aligned stats for a completed turn: model, elapsed time, tokens
+    in/out, cache share, and reasoning the provider did not show. The agent
+    labels the reply itself."""
     model = _turn_models(turn).split(", ")[0].rsplit("/", 1)[-1]
+    usage = turn.usage
+    prompt = usage.input_tokens + usage.cache_read_tokens + usage.cache_write_tokens
+    tokens = f"↑{_compact_tokens(prompt)} ↓{_compact_tokens(usage.output_tokens)}" if prompt or usage.output_tokens else ""
+    cached = f"{round(usage.cache_read_tokens / prompt * 100)}% cached" if prompt and usage.cache_read_tokens else ""
+    shown = any(block.kind == "thinking" and block.text.strip() for message in turn.messages for block in message.blocks)
+    reasoning = (f"{_compact_tokens(usage.reasoning_tokens)} reasoning" + ("" if shown else " (not shown)")
+                 if usage.reasoning_tokens else "")
     parts = [
         escape(part)
-        for part in (model if model != "unknown" else "", _turn_duration(turn) or "")
+        for part in (model if model != "unknown" else "", _turn_duration(turn) or "", tokens, cached, reasoning)
         if part
     ]
     return f"[$nx-quiet]{' · '.join(parts)}[/]" if parts else ""
+
+
+def _agent_label(turn: TurnView, colors: Mapping[str, str]) -> str:
+    """``◆ Build`` above the turn's reply, in the agent's color."""
+    agent = turn.agent if isinstance(turn.agent, Mapping) else {}
+    name = agent.get("name") if isinstance(agent.get("name"), str) else ""
+    if not name.strip():
+        return ""
+    color = colors.get(name.casefold()) or (agent.get("color") if isinstance(agent.get("color"), str) else "") or _FALLBACK_AGENT_COLOR
+    label = name.strip()[0].upper() + name.strip()[1:]
+    return f"[{color}]◆[/] [bold {color}]{escape(_literal(label, 60))}[/]"
+
+
 class AssistantMessage(Markdown):
     """One stable streamed Markdown message, updating only its appended suffix."""
 
@@ -132,23 +157,50 @@ class AssistantMessage(Markdown):
 
 
 class UserMessage(Static):
-    """The prompt block, with no metadata inside the body."""
+    """The prompt block: chevron and literal prompt, the turn number
+    right-aligned and highlighted on the first row, and attachments as
+    highlighted chips. No other metadata sits inside the body."""
 
-    def __init__(self, message: MessageView, ts: float | None = None, **kwargs: Any) -> None:
+    def __init__(self, message: MessageView, ts: float | None = None, *, number: int = 0, **kwargs: Any) -> None:
         self.message_id = message.id
         self._message = message
         self._ts = message.ts or ts
         self.collapsed = False
+        #: 1-based turn number shown at the right of the first row (0 hides it).
+        self.number = number
         super().__init__(self._content(message), **kwargs)
 
-    def _content(self, message: MessageView) -> str:
+    def _content(self, message: MessageView, width: int | None = None) -> str:
         chevron = "▶" if self.collapsed else "▼"
         prompt, attachments = submitted_attachment_summary(message)
-        body = f"[$nx-border-strong]{chevron}[/]  {escape(_literal(prompt))}"
+        text = _literal(prompt)
+        tag = f" #{self.number} " if self.number else ""
+        first, _, rest = text.partition("\n")
+        if self.collapsed and rest:
+            first, rest = first + " …", ""
+        if tag and width:
+            room = max(8, width - 3 - len(tag) - 1)
+            if len(first) > room:
+                cut = first.rfind(" ", 0, room + 1)
+                cut = cut if cut > room // 2 else room
+                first, rest = first[:cut].rstrip(), first[cut:].lstrip() + ("\n" + rest if rest else "")
+            first = first.ljust(room)
+        body = f"[$nx-border-strong]{chevron}[/]  {escape(first)}"
+        if tag:
+            body += f" [bold $nx-accent on $nx-element-hi]{tag}[/]"
+        if rest:
+            body += "\n" + escape(rest)
         if attachments and not self.collapsed:
-            body += "\n\n" + "\n".join(f"  [$nx-blue]{escape(label)}[/]" for label in attachments)
-            body += "\n  [$nx-muted]Click to inspect attached context[/]"
+            chips = "  ".join(f"[bold $nx-blue on $nx-element-hi] ▣ {escape(label)} [/]" for label in attachments)
+            body += f"\n\n   {chips}\n   [$nx-quiet]Click to inspect attached context[/]"
         return body
+
+    def _refresh(self) -> None:
+        width = self.content_size.width if self.is_mounted and self.content_size.width else None
+        self.update(self._content(self._message, width))
+
+    def on_resize(self, _event: object) -> None:
+        self._refresh()
 
     def on_click(self, event: Click) -> None:
         if event.offset.x > 3 and submitted_attachment_summary(self._message)[1]:
@@ -158,15 +210,25 @@ class UserMessage(Static):
     def set_message(self, message: MessageView) -> None:
         self._message = message
         self._ts = message.ts or self._ts
-        self.update(self._content(message))
+        self._refresh()
+
+    def set_number(self, number: int) -> None:
+        if number != self.number:
+            self.number = number
+            self._refresh()
 
     def set_collapsed(self, collapsed: bool) -> None:
         self.collapsed = collapsed
-        self.update(self._content(self._message))
+        self._refresh()
 
 
 class ThoughtLine(Static):
-    """Provider thinking collapsed to ``Thought: title``; Enter or click expands."""
+    """Provider thinking as one headline row: ``◇ first sentence ▸``.
+
+    Enter or click shows the full text. A provider that reasons without
+    sharing the text (an empty, signed thinking block) gets a labelled row
+    saying so rather than nothing.
+    """
 
     can_focus = True
 
@@ -179,13 +241,24 @@ class ThoughtLine(Static):
     def set_message(self, message: MessageView) -> None:
         self.message = message
         text = message.thinking
-        head = f"Thought: {escape(thought_title(text))}"
+        if not text.strip():
+            self.set_class(True, "-hidden")
+            self.update("[$nx-purple]◇[/] [i]Thought[/]  [$nx-quiet]· not shared by the provider[/]")
+            return
+        self.set_class(False, "-hidden")
+        lines = len([line for line in text.splitlines() if line.strip()])
+        more = "▾" if self.expanded else "▸"
+        head = f"[$nx-purple]◇[/] [i]{escape(thought_title(text))}[/]  [$nx-quiet]{more}[/]"
+        if not self.expanded and lines > 1:
+            head = head[:-len(f"[$nx-quiet]{more}[/]")] + f"[$nx-quiet]{lines} lines {more}[/]"
         if self.expanded:
             head += f"\n\n[$nx-muted]{escape(_literal(text))}[/]"
         self.update(head)
 
     def on_click(self, event: Click) -> None:
         event.stop()
+        if not self.message.thinking.strip():
+            return
         self.expanded = not self.expanded
         self.set_message(self.message)
 
@@ -274,6 +347,16 @@ class ToolActivityWidget(Widget):
         text = f"{self._gutter}{indicator}{heading}{suffix}"
         if rows:
             text += "".join(f"\n{self._gutter}  {row}" for row in rows[1:])
+        live = running_output_tail(tool) if marker == "running" else None
+        if live is not None:
+            # A running shell shows its latest output under the call (⎿), with
+            # the lines above it counted, until it completes.
+            tail, hidden = live
+            text += f"\n{self._gutter}  ⎿  " + (tail[0] if tail else "running…")
+            text += "".join(f"\n{self._gutter}     {line}" for line in tail[1:])
+            if hidden:
+                text += f"\n{self._gutter}     … {hidden} earlier line{'s' if hidden != 1 else ''} · enter for full output"
+            rows = [""] * (1 + max(1, len(tail)) + (1 if hidden else 0))
         header.styles.height = max(1, len(rows))
         header.update(text)
         self._style_header()
@@ -423,6 +506,8 @@ class TurnWidget(Widget):
         self.collapsed = False
         #: Host-reported agent colors by lowercase name (set by the timeline).
         self.agent_colors: Mapping[str, str] = {}
+        #: 1-based position in the conversation, shown on the prompt.
+        self.number = 0
 
     def render(self) -> str:
         """Never let Textual's default childless-widget label reach the screen."""
@@ -465,10 +550,14 @@ class TurnWidget(Widget):
         for index, message in enumerate(turn.messages):
             if f"{self.turn_id}:message:{message.id or index}" == hide_greeting_key:
                 continue
-            if message.role == "assistant" and message.thinking:
+            if message.role == "assistant" and any(block.kind == "thinking" for block in message.blocks):
                 entries.append((message.event_seq, f"message-thought:{message.id or index}", ("thought", message)))
             if message.text if message.role == "assistant" else _has_message_content(message):
                 entries.append((message.event_seq, f"message:{message.id or index}", message))
+        first_reply = next((entry for entry in entries if isinstance(entry[2], MessageView) and entry[2].role == "assistant"), None)
+        label = _agent_label(turn, self.agent_colors)
+        if first_reply is not None and label:
+            entries.append((first_reply[0], "message-agent-label", ("label", label)))
         entries.extend(
             (tool.event_seq, f"tool:{tool.call_id}", tool) for tool in turn.tools
         )
@@ -489,10 +578,12 @@ class TurnWidget(Widget):
                     turn.error,
                 )
             )
+        # Same event: thought, then the agent label, then the reply, then tools.
+        rank = {"message-thought": 0, "message-agent-label": 1}
         entries.sort(
             key=lambda entry: (
                 entry[0],
-                0 if entry[1].startswith("message") else 1,
+                rank.get(entry[1].split(":")[0], 2) if entry[1].startswith("message") else 3,
                 entry[1],
             )
         )
@@ -513,7 +604,15 @@ class TurnWidget(Widget):
             if widget is not None and not widget.is_attached:
                 del self._items[key]
                 widget = None
-            if isinstance(value, tuple):
+            if isinstance(value, tuple) and value[0] == "label":
+                if widget is None:
+                    widget = Static(value[1], classes="timeline-agent")
+                    if not await self._mount_item(widget):
+                        return
+                    self._items[key] = widget
+                elif isinstance(widget, Static):
+                    widget.update(value[1])
+            elif isinstance(value, tuple):
                 if widget is None:
                     widget = ThoughtLine(value[1], classes="timeline-thought")
                     if not await self._mount_item(widget):
@@ -524,7 +623,7 @@ class TurnWidget(Widget):
             elif isinstance(value, MessageView):
                 if widget is None:
                     widget = (
-                        UserMessage(value, turn.user_ts, classes="timeline-user")
+                        UserMessage(value, turn.user_ts, number=self.number, classes="timeline-user")
                         if value.role == "user"
                         else AssistantMessage(value, classes="timeline-assistant")
                     )
@@ -585,6 +684,7 @@ class TurnWidget(Widget):
 
         for item in self._items.values():
             if isinstance(item, UserMessage):
+                item.set_number(self.number)
                 item.set_collapsed(self.collapsed)
         if self.collapsed:
             reply = next((message.text.splitlines()[0] for message in turn.messages if message.role == "assistant" and message.text), "")
@@ -648,6 +748,32 @@ class TurnWidget(Widget):
         await self.set_turn(self.turn, self.agents)
 
 
+class EmptyHints(Static):
+    """Grey tips in the middle of an empty session; gone once you type."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__("", **kwargs)
+        self.seed: object = None
+        self.empty = True
+        self.typing = False
+
+    def set_state(self, *, seed: object = None, empty: bool | None = None, typing: bool | None = None) -> None:
+        if seed is not None and seed != self.seed:
+            self.seed = seed
+            rows = pick_hints(seed)
+            width = max(len(keys) for keys, _ in rows)
+            # Equal-width lines keep the two columns aligned once centred.
+            tail = max(len(text) for _, text in rows)
+            self.update("\n".join(f"[bold $nx-muted]{escape(keys.rjust(width))}[/]  {escape(text.ljust(tail))}" for keys, text in rows))
+        if empty is not None:
+            self.empty = empty
+        if typing is not None:
+            self.typing = typing
+        # Typing only hides the text (no layout jump); turns remove it.
+        self.display = self.empty
+        self.visible = not self.typing
+
+
 class ConversationTimeline(VerticalScroll):
     """Single-column reducer projection with tail-follow only when pinned."""
 
@@ -663,6 +789,11 @@ class ConversationTimeline(VerticalScroll):
     def compose(self) -> ComposeResult:
         if self._header:
             yield ContextHeader(id="context-header")
+            yield EmptyHints(id="empty-hints")
+
+    def set_typing(self, typing: bool) -> None:
+        for hints in self.query(EmptyHints):
+            hints.set_state(typing=typing)
 
     @property
     def at_bottom(self) -> bool:
@@ -675,6 +806,8 @@ class ConversationTimeline(VerticalScroll):
 
     async def _reconcile_view(self, view: ConversationView) -> None:
         follow = self.at_bottom
+        for hints in self.query(EmptyHints):
+            hints.set_state(seed=view.session_id or "session", empty=not view.turns)
         first_user_seq = min(
             (
                 message.event_seq
@@ -713,7 +846,7 @@ class ConversationTimeline(VerticalScroll):
             if turn_id not in wanted:
                 await widget.remove()
                 del self._turns[turn_id]
-        for turn in view.turns:
+        for number, turn in enumerate(view.turns, 1):
             if not self.is_attached:
                 return
             widget = self._turns.get(turn.id)
@@ -737,6 +870,7 @@ class ConversationTimeline(VerticalScroll):
                 del self._turns[turn.id]
                 continue
             widget.agent_colors = self.agent_colors
+            widget.number = number
             await widget.set_turn(
                 turn,
                 view.agents,
@@ -750,6 +884,7 @@ class ConversationTimeline(VerticalScroll):
 
 __all__ = [
     "ConversationTimeline",
+    "EmptyHints",
     "TaskActivityWidget",
     "ThoughtLine",
     "ToolActivityWidget",

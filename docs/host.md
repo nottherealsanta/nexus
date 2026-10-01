@@ -73,7 +73,9 @@ names it and the transport attaches through `HostFacade.subscribe`.
   JSON-Pointer patches (`host_support/browser_view.py`).
 - `delete` moves a session to trash and never cancels a running turn.
 - `doctor` is a redacted report over config, providers, registry, extensions and
-  MCP; it performs no model request.
+  MCP; it performs no model request. It also carries `git` (`root`, `branch`,
+  `detached`, `worktree`, `worktree_name`; `{}` outside a repository), read
+  without subprocesses by `host_support/git_head.py`, for the top-bar breadcrumb.
 
 ## Supervisor and presence
 

@@ -116,3 +116,19 @@ def test_assembled_metadata_has_budget_and_cache_accounting(tmp_path):
     assert "cache" in request.metadata
     # No content leaks into accounting metadata.
     assert "current" not in str(context)
+
+
+def test_context_metadata_carries_pricing_with_tiers(tmp_path):
+    from nexus.model.capabilities import Capabilities
+    from nexus.model.registry import Cost, CostTier
+
+    cost = Cost(input=0.1, output=0.5, tiers=(CostTier(context=272_000, input=0.2, output=0.75),))
+    caps = Capabilities(pricing=cost.pricing())
+    manager = ContextManager(tmp_path, config=_config(), counter=len, capabilities=caps)
+    context = manager.assemble(Session(_history())).metadata["context"]
+    assert context["pricing"]["input"] == 0.1
+    assert context["pricing"]["tiers"] == [
+        {"context": 272_000, "input": 0.2, "output": 0.75, "cache_read": 0.0, "cache_write": 0.0}
+    ]
+    unpriced = ContextManager(tmp_path, config=_config(), counter=len)
+    assert unpriced.assemble(Session(_history())).metadata["context"]["pricing"] is None

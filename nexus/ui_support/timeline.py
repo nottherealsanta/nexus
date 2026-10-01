@@ -513,6 +513,7 @@ def _turn_summary(turn: TurnView) -> str:
 
 
 __all__ = [
+    "running_output_tail",
     "BATCH_GLYPHS",
     "tool_batches",
     "DIFF_TOOLS",
@@ -548,15 +549,52 @@ __all__ = [
 ]
 
 
+def _byte_size(count: int) -> str:
+    if count < 1024:
+        return f"{count} B"
+    if count < 1024 * 1024:
+        return f"{count / 1024:.1f} KB"
+    return f"{count / 1024 / 1024:.1f} MB"
+
+
+LIVE_TAIL_LINES = 4
+_LIVE_OUTPUT_TOOLS = frozenset({"bash", "bashoutput", "shell"})
+
+
+def running_output_tail(tool: ToolCallView, lines: int = LIVE_TAIL_LINES) -> tuple[list[str], int] | None:
+    """A running shell's latest output lines and how many came before them.
+
+    ``None`` for tools that are not long-running shells; clipping is counted so
+    the row can announce it.
+    """
+    if tool.name.casefold() not in _LIVE_OUTPUT_TOOLS:
+        return None
+    output = redact("".join(tool.progress[-200:]))
+    rows = [_text(line, 160) for line in output.splitlines() if line.strip()]
+    return rows[-lines:], max(0, len(rows) - lines)
+
+
 def submitted_attachment_summary(message: MessageView) -> tuple[str, list[str]]:
-    """Separate numbered attachment payloads from the literal prompt (PLAN §14.4)."""
+    """Separate numbered attachment payloads from the literal prompt (PLAN §14.4).
+
+    Labels read ``image 1 · photo.png`` (the image itself is the content, so its
+    byte size is left out) and ``document 1 · report.pdf · 12.4 KB`` (the size
+    of the converted text the model receives).
+    """
     prompt, labels = [], []
     for block in message.blocks:
         if block.kind != "text":
             continue
         match = re.match(r"^\n\nAttachment: ((?:image|document) [1-9][0-9]*) · ([^\n]+)\n", block.text)
         if match:
-            labels.append(f"{match[1]} · {match[2]}")
+            name = match[2]
+            if match[1].startswith("image"):
+                name = re.sub(r" · \d+ bytes$", "", name)
+                name = re.sub(r" · image/[\w.+-]+$", "", name)
+                labels.append(f"{match[1]} · {name}")
+            else:
+                body = block.text[match.end():].lstrip("\n")
+                labels.append(f"{match[1]} · {name} · {_byte_size(len(body.encode('utf-8')))}")
         else:
             prompt.append(block.text)
     return "".join(prompt), labels

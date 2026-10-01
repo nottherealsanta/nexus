@@ -19,11 +19,14 @@ from ...client.protocol import ClientError
 from ...ui_support.text import sanitize
 from ...ui_support.tui_archived import ArchivedSessionsScreen
 from ...ui_support.tui_panels import (
+    session_status,
     DetailsSidebar,
     SessionSidebar,
     SessionsScreen,
+    SessionTabs,
     SettingsScreen,
     TopBar,
+    breadcrumb,
 )
 from ...ui_support.tui_settings import SettingsConsole
 from .agent_picker import _display_name
@@ -74,7 +77,7 @@ class PanelsMixin:
         sidebar.display = bool(self.prefs["sessions_sidebar"]) if docked else self._sessions_overlay
         sidebar.set_class(not docked, "-overlay")
         self.query_one("#context-header").display = bool(self.prefs["context_preview"])
-        self.query_one(TopBar).set_toggles(sessions=sidebar.display, details=details)
+        self.query_one(SessionTabs).set_toggles(sessions=sidebar.display, details=details)
 
     #: Narrow widths show the sessions sidebar as a transient overlay instead.
     _sessions_overlay = False
@@ -89,10 +92,71 @@ class PanelsMixin:
         sidebar = self.query_one(SessionSidebar)
         session = self.controller.session
         summary = sidebar.current_summary(session)
-        title = getattr(summary, "title", "") or "New Session"
         running = self.controller.view.phase == "running"
         status = sidebar.current_status() if summary is not None and session == sidebar._current else "idle"
-        self.query_one(TopBar).set_session(title, "working" if running else status)
+        status = "working" if running else status
+        health = self._health or {}
+        bar = self.query_one(TopBar)
+        bar.set_location(breadcrumb(str(health.get("workspace") or Path.cwd()), health.get("git")))
+        bar.set_status(status)
+        self._sync_tabs(status)
+
+    #: Sessions open as tabs, in the order they were opened (see ``_sync_tabs``).
+    _tabs: list[str]
+    #: Tabs the user closed, with the status they had then; a closed session
+    #: comes back on its own only when its status changes (e.g. it needs input).
+    _closed_tabs: dict[str, str]
+
+    def _sync_tabs(self, current_status: str | None = None) -> None:
+        """Tabs show every active session: the current one, any you opened, and
+        any that is working, waiting for input, or finished unseen."""
+        if not hasattr(self, "_tabs"):
+            self._tabs, self._closed_tabs = [], {}
+        sidebar = self.query_one(SessionSidebar)
+        current = self.controller.session
+        statuses: dict[str, str] = {}
+        titles: dict[str, str] = {}
+        for summary in sidebar._summaries:
+            titles[summary.id] = summary.title
+            statuses[summary.id] = session_status(summary, sidebar.seen, current)
+        if current_status is not None:
+            statuses[current] = current_status
+        for session, status in statuses.items():
+            closed = self._closed_tabs.get(session)
+            if closed is not None and closed != status and status != "idle":
+                del self._closed_tabs[session]
+            if status in {"working", "input", "done"} and session not in self._tabs and session not in self._closed_tabs:
+                self._tabs.append(session)
+        self._closed_tabs.pop(current, None)
+        if current not in self._tabs:
+            self._tabs.append(current)
+        known = set(titles) | {current}
+        self._tabs = [session for session in self._tabs if session in known][:50]
+        self.query_one(SessionTabs).set_tabs(
+            [(session, titles.get(session, ""), statuses.get(session, "idle")) for session in self._tabs], current
+        )
+
+    async def on_session_tabs_open_requested(self, message: SessionTabs.OpenRequested) -> None:
+        if message.session != self.controller.session:
+            await self._switch_session(message.session)
+            await self._poll_sessions()
+
+    async def on_session_tabs_close_requested(self, message: SessionTabs.CloseRequested) -> None:
+        """Closing a tab only hides it; the session keeps running on the daemon."""
+        if not hasattr(self, "_tabs"):
+            self._tabs, self._closed_tabs = [], {}
+        session = message.session
+        sidebar = self.query_one(SessionSidebar)
+        summary = sidebar.current_summary(session)
+        self._closed_tabs[session] = session_status(summary, sidebar.seen, self.controller.session) if summary else "idle"
+        index = self._tabs.index(session) if session in self._tabs else 0
+        self._tabs = [tab for tab in self._tabs if tab != session]
+        if session == self.controller.session:
+            following = self._tabs[min(index, len(self._tabs) - 1)] if self._tabs else f"session-{uuid.uuid4().hex[:8]}"
+            await self._switch_session(following)
+            self._closed_tabs[session] = self._closed_tabs.get(session, "idle")
+        await self._poll_sessions()
+        self._sync_topbar()
 
     def _close_sessions_overlay(self) -> None:
         if self._sessions_overlay:
@@ -165,6 +229,7 @@ class PanelsMixin:
         if not self.is_mounted:
             return
         self._sync_status()
+        self._sync_topbar()
         self.query_one(DetailsSidebar).set_mcp(self._health, error=self._health_error)
         if isinstance(self.screen, SettingsScreen):
             self.screen.set_health(self._health, error=self._health_error)

@@ -123,6 +123,15 @@ CommandPalette #--results {
     margin: 0 1 1 1;
 }
 
+/* An empty session: grey tips in the middle; hidden once you type. */
+#empty-hints {
+    width: 100%;
+    height: auto;
+    margin: 4 0 0 0;
+    color: $nx-quiet;
+    text-align: center;
+}
+
 .context-block {
     width: 100%;
     height: auto;
@@ -149,7 +158,7 @@ CommandPalette #--results {
     color: $nx-text;
 }
 
-ContextModal, ExtensionsModal {
+ContextModal, ExtensionsModal, SkillsModal {
     align: center middle;
     background: $nx-scrim;
 }
@@ -192,6 +201,96 @@ ToolsModal {
 #context-modal-actions Button {
     width: auto;
     margin: 1 1 0 0;
+}
+
+/* Skills: a sidebar of skills, the selected SKILL.md as Markdown. */
+#skills-body {
+    height: 1fr;
+    margin: 1 0 0 0;
+}
+
+#skills-list {
+    width: 32;
+    height: 1fr;
+    border: none;
+    border-right: solid $nx-border;
+    background: transparent;
+}
+
+#skills-main {
+    width: 1fr;
+    height: 1fr;
+    padding: 0 0 0 2;
+}
+
+#skills-head {
+    height: auto;
+}
+
+#skills-title {
+    width: 1fr;
+    height: auto;
+}
+
+#skills-head Button {
+    width: auto;
+}
+
+.context-section-title {
+    height: 1;
+    margin: 0 0 1 0;
+    color: $nx-quiet;
+    text-style: bold;
+}
+
+#context-turn-usage {
+    height: auto;
+    margin: 0 0 1 0;
+    color: $nx-text;
+}
+
+.tools-section {
+    height: 2;
+    margin: 1 0 0 0;
+    border-bottom: solid $nx-border;
+}
+
+.tool-table-head {
+    height: 1;
+    padding: 0 1;
+    color: $nx-quiet;
+    text-style: bold;
+}
+
+.tool-group-row, .tool-row {
+    height: auto;
+    padding: 0 1;
+    color: $nx-text;
+}
+
+.tool-row {
+    padding: 0 1 0 6;
+}
+
+.tool-group-name {
+    height: auto;
+}
+
+.tool-group-tools, .tool-row-text {
+    width: 1fr;
+    height: auto;
+    color: $nx-muted;
+}
+
+.tool-group-tokens {
+    width: 9;
+    height: 1;
+    color: $nx-quiet;
+    text-align: right;
+}
+
+.tool-group-row:hover, .tool-group-row:focus, .tool-row:hover, .tool-row:focus {
+    background: $nx-element-hi;
 }
 
 #tools-modal-note {
@@ -348,12 +447,23 @@ ArchivedSessionsScreen {
     color: $nx-text;
 }
 
+/* The reply sits under its agent label (◆ Build), indented two cells. */
 .timeline-assistant {
     width: 100%;
     height: auto;
     margin: 0;
-    padding: 0 2;
+    padding: 0 2 0 4;
     color: $nx-text;
+}
+
+.timeline-agent {
+    width: 100%;
+    height: 1;
+    padding: 0 2;
+}
+
+.timeline-agent.timeline-after-tool {
+    margin-top: 1;
 }
 
 .turn .timeline-after-user {
@@ -374,6 +484,7 @@ ArchivedSessionsScreen {
     margin: 1 0 0 0;
     padding: 0 2;
     color: $nx-quiet;
+    text-align: right;
 }
 
 .timeline-summary-after-assistant {
@@ -441,10 +552,8 @@ ArchivedSessionsScreen {
 }
 
 /* The subagent page reuses the root ids (#top-bar, #main-layout,
-   #details-sidebar); session-level top bar buttons do not apply there. */
-.agent-page #topbar-new, .agent-page #topbar-sidebar-toggle {
-    display: none;
-}
+   #details-sidebar) without the session tabs; its top bar carries its own
+   details toggle. */
 
 /* The top bar carries the sub agent's name and status; the Task block its task. */
 #agent-inspector-heading {
@@ -1274,8 +1383,10 @@ OptionList > .option-list--option-highlighted {
     text-style: bold;
 }
 
+/* Two-line cards: glyph + title, then status words (or message count) · age. */
 .session-row {
-    height: 1;
+    height: 2;
+    margin: 0 0 1 0;
     padding: 0 0 0 1;
     background: $nx-panel;
 }
@@ -1288,8 +1399,10 @@ OptionList > .option-list--option-highlighted {
     background: $nx-element-hi;
 }
 
+/* The current session: a left accent bar (outline: a border breaks wrapping). */
 .session-row.-active {
-    background: $nx-element-hi;
+    background: $nx-element;
+    outline-left: tall $nx-accent;
 }
 
 .session-glyph {
@@ -1298,8 +1411,9 @@ OptionList > .option-list--option-highlighted {
     color: $nx-quiet;
 }
 
-.session-row.-active .session-glyph {
-    color: $nx-accent;
+.session-text {
+    width: 1fr;
+    height: 2;
 }
 
 .session-row.-working .session-glyph, .session-row.-working .session-sub {
@@ -1328,10 +1442,8 @@ OptionList > .option-list--option-highlighted {
 }
 
 .session-sub {
-    width: auto;
-    max-width: 12;
+    width: 1fr;
     height: 1;
-    padding: 0 0 0 1;
     color: $nx-quiet;
     text-overflow: ellipsis;
     text-wrap: nowrap;
@@ -1372,6 +1484,77 @@ OptionList > .option-list--option-highlighted {
 }
 
 /* ---------------------------------------------------------------- top bar */
+/* Two rows: session tabs, then the breadcrumb (directory › worktree › branch)
+   with the status in words on the right. */
+#session-tabs {
+    height: 1;
+    width: 100%;
+    background: $nx-bg;
+}
+
+#session-tab-list {
+    width: 1fr;
+    height: 1;
+    scrollbar-size-horizontal: 0;
+}
+
+.session-tab {
+    width: auto;
+    height: 1;
+    padding: 0 0 0 1;
+    background: $nx-bg;
+    color: $nx-quiet;
+}
+
+.session-tab:hover {
+    background: $nx-element;
+}
+
+.session-tab.-active {
+    background: $nx-panel;
+}
+
+.tab-glyph {
+    width: 2;
+    height: 1;
+    color: $nx-quiet;
+}
+
+.tab-title {
+    width: auto;
+    height: 1;
+    color: $nx-muted;
+    text-wrap: nowrap;
+}
+
+.session-tab.-active .tab-title {
+    color: $nx-text;
+    text-style: bold;
+}
+
+.session-tab.-working .tab-glyph {
+    color: $nx-accent;
+}
+
+.session-tab.-input .tab-glyph {
+    color: $nx-warning;
+}
+
+.session-tab.-done .tab-glyph {
+    color: $nx-success;
+}
+
+.tab-close {
+    width: 3;
+    height: 1;
+    content-align: center middle;
+    color: $nx-quiet;
+}
+
+.tab-close:hover {
+    color: $nx-error;
+}
+
 #top-bar {
     height: 2;
     width: 100%;
@@ -1398,9 +1581,8 @@ OptionList > .option-list--option-highlighted {
 #topbar-crumb {
     width: 1fr;
     height: 1;
-    padding: 0 0 0 1;
-    color: $nx-text;
-    text-style: bold;
+    padding: 0 0 0 2;
+    color: $nx-muted;
     text-overflow: ellipsis;
     text-wrap: nowrap;
 }
@@ -1956,11 +2138,12 @@ ConfirmSettingsAction {
     height: auto;
     margin: 0 0 1 0;
     padding: 0 2;
-    color: $nx-accent 70%;
+    color: $nx-muted;
 }
 
 .timeline-thought:hover, .timeline-thought:focus {
-    color: $nx-accent;
+    color: $nx-text;
+    background: $nx-element;
 }
 
 .tool-card.-failed #tool-header {
@@ -2201,7 +2384,7 @@ SetupScreen {
 }
 
 
-#input-queue-preview, #message-send-hint {
+#input-queue-preview {
     height: auto;
     color: $nx-muted;
     padding: 0 2;

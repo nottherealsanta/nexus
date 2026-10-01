@@ -87,6 +87,16 @@ are durable (`model.selected`, `reasoning_effort.selected`).
   **the catalogue can never redirect a request or supply a credential.** `env`
   is a name, never read as a value. A catalogue marked `_license: "pending"` sets
   `license_pending` rather than being trusted.
+- **Tiered pricing.** `Cost` carries `tiers: tuple[CostTier, ...]` (ascending by
+  `context`, max 8) from models.dev `cost.tiers` entries of `tier.type ==
+  "context"`; a tier's rates apply when the prompt exceeds its `context` size
+  (the highest such tier wins, else the base rates). The legacy
+  `context_over_200k` key becomes a tier at 200000 only when `tiers` is absent.
+  Malformed or non-context tiers are skipped, never failing the catalogue.
+  Runtime cost accounting (`Runtime._child_cost`) prices a turn by prompt size
+  = input + cache read + cache write tokens. `Cost.pricing()` is the JSON form
+  and reaches the context manager as `Capabilities.pricing` (informational, not
+  a provider claim; the registry value overrides the adapter's when present).
 - The registry is authoritative for capabilities it describes (`tools`,
   `thinking`, `json_schema_strict`, `vision`, `documents`, limits);
   transport-only fields (`parallel_tool_calls`, `prompt_caching`, `streaming`)

@@ -115,3 +115,13 @@ next-turn preview (no provider count calls, no summarizer) for `ContextInspect`;
 User file attachments are part of message history, rather than the system
 `attachments` placeholder. Numbered image/document references are paired with
 labelled payloads in the user message and retained during replay.
+
+## Pricing in the context metadata
+
+`metadata["context"]["pricing"]` is `None` when the model's price is unknown, else
+`{"input", "output", "cache_read", "cache_write", "tiers": [{"context", "input",
+"output", "cache_read", "cache_write"}]}` (USD per Mtok; tiers ascending, a tier
+applies when the prompt exceeds its `context` tokens). It comes from
+`Capabilities.pricing` (the registry's `Cost.pricing()`), so the context manager
+never imports the registry. Both UIs use it to mark where the price rises on the
+context meter. See [models.md](models.md).

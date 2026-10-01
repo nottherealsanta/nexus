@@ -19,7 +19,7 @@ from textual.widgets import Button, Input, OptionList, Static, TextArea
 from ...client.protocol import Client, ClientError
 from ...events import Event
 from ...host import protocol as p
-from ...ui_support.context import context_measure, thinking_status
+from ...ui_support.context import _compact_tokens, context_measure, price_tier_thresholds, thinking_status
 from ...ui_support.tui_command_palette import (
     KEYBOARD_SHORTCUTS,
     SHORTCUTS,
@@ -55,7 +55,7 @@ from .messages import (
 from .keychord import LeaderKeys
 from .attachments import AttachmentsMixin
 from .new_session import apply_agent_choice, open_new_session_picker
-from .panels import MainLayout, PanelsMixin, TopBar
+from .panels import MainLayout, PanelsMixin, SessionTabs, TopBar
 from .permission import ListPrompt, PermissionScreen, ask_pending_question
 from .theme import NEXUS_THEMES
 from .timeline import ConversationTimeline
@@ -69,6 +69,7 @@ from .widgets import (
     RootAgentBar,
     WorktreesScreen,
     context_detail_usage,
+    context_turn_usage,
     context_usage,
 )
 
@@ -153,6 +154,7 @@ class NexusTextualApp(AttachmentsMixin, ExtraCommandsMixin, PanelsMixin, App[int
     def compose(self) -> ComposeResult:
         from textual.containers import Vertical
 
+        yield SessionTabs(id="session-tabs")
         yield TopBar(id="top-bar")
         with MainLayout(id="main-layout"):
             yield SessionSidebar(id="session-sidebar")
@@ -190,6 +192,10 @@ class NexusTextualApp(AttachmentsMixin, ExtraCommandsMixin, PanelsMixin, App[int
             await self.voice.refresh_status()
         except ClientError as exc:
             self._sync_status(f"Disconnected · {exc}", error=True)
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        if event.text_area.id == "chat-editor":
+            self.query_one("#conversation", ConversationTimeline).set_typing(bool(event.text_area.text))
 
     async def on_event(self, event) -> None:
         if isinstance(event, events.Key) and not event.is_forwarded:
@@ -742,9 +748,12 @@ class NexusTextualApp(AttachmentsMixin, ExtraCommandsMixin, PanelsMixin, App[int
         self.query_one(SessionSidebar).set_current_running(self.controller.view.phase == "running")
         self._sync_topbar()
         usage = context_usage(self.controller.view)
+        tiers = price_tier_thresholds(self.controller.view)
+        # Tiered models cost more past a prompt size; the meter marks it too.
+        price = f"price ↑ at {_compact_tokens(tiers[0])}" if tiers else ""
         thinking = thinking_status(self.controller.view)
         self.query_one("#context-usage", Static).update(
-            " · ".join(filter(None, (usage, thinking)))
+            " · ".join(filter(None, (usage, price, thinking)))
         )
 
         queue = self.controller.view.input_queue
@@ -755,7 +764,6 @@ class NexusTextualApp(AttachmentsMixin, ExtraCommandsMixin, PanelsMixin, App[int
             sanitize("".join(block.get("text", "") for block in item.content if isinstance(block, dict)), 160)
             for item in queue[:3]
         ) + (f"\n+{len(queue) - 3} more queued" if len(queue) > 3 else ""))
-        self.query_one("#message-send-hint", Static).display = self.controller.running
 
         self._sync_activity()
         if self.controller.session and self._context_preview_session != self.controller.session:
@@ -852,6 +860,7 @@ class NexusTextualApp(AttachmentsMixin, ExtraCommandsMixin, PanelsMixin, App[int
                     self._context_preview,
                     context_detail_usage(self.controller.view),
                     session=session,
+                    turn_usage=context_turn_usage(self.controller.view),
                 ))
                 return
             inspect = getattr(self.controller.client, "inspect_context", None)
@@ -867,6 +876,7 @@ class NexusTextualApp(AttachmentsMixin, ExtraCommandsMixin, PanelsMixin, App[int
                     result,
                     context_detail_usage(self.controller.view),
                     session=session,
+                    turn_usage=context_turn_usage(self.controller.view),
                 )
             )
         except asyncio.CancelledError:
@@ -880,6 +890,7 @@ class NexusTextualApp(AttachmentsMixin, ExtraCommandsMixin, PanelsMixin, App[int
                     context_detail_usage(self.controller.view),
                     error=sanitize(str(exc), 1000),
                     session=session,
+                    turn_usage=context_turn_usage(self.controller.view),
                 )
             )
 
@@ -1256,6 +1267,7 @@ class NexusTextualApp(AttachmentsMixin, ExtraCommandsMixin, PanelsMixin, App[int
             running=self.controller.running and self.controller.view.active_turn is not None,
             loading=self._status_text.startswith(("Connecting", "Reconnecting")),
             color=self.controller.agent_color or "$nx-accent",
+            marks=tuple(price_tier_thresholds(self.controller.view)),
         )
 
     async def _cycle_root_agent(self) -> None:

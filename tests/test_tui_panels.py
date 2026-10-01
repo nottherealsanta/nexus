@@ -19,7 +19,11 @@ from nexus.ui_support.tui_panels import (
     SessionSidebar,
     SessionsScreen,
     SettingsScreen,
+    SessionTab,
+    SessionTabs,
     TopBar,
+    breadcrumb,
+    tab_title,
     TuiPreferences,
     mcp_markup,
     modified_files,
@@ -116,6 +120,7 @@ class PanelTransport(FakeTransport):
             self.trace.append("Doctor")
             return p.DoctorResult(report={
                 "workspace": "/work/demo",
+                "git": {"branch": "feat/tabs", "detached": False, "worktree": False, "worktree_name": ""},
                 "providers": [{"name": "scripted"}],
                 "mcp": {"servers": [
                     {"name": "filesystem", "health": "ready", "enabled": True, "connected": True, "tool_count": 4},
@@ -280,7 +285,7 @@ async def test_sidebar_groups_sessions_by_day_like_the_sessions_dialog():
                  for child in container.children]
         assert order == ["Today", "s", "busy", "asks", "Archived", "old"]
         rows = {row.session_id: row for row in container.query(SessionRow)}
-        assert rows["asks"].query_one(".session-sub").render().plain == "Needs input"
+        assert rows["asks"].query_one(".session-sub").render().plain.startswith("needs input · ")
         assert rows["s"].has_class("-active") and rows["old"].status == "archived"
         await app._poll_sessions()
         await pilot.pause(0.3)
@@ -293,11 +298,19 @@ async def test_top_bar_shows_session_and_toggles_panels():
     app = NexusTextualApp(_client(transport), session="s")
     async with app.run_test(size=(200, 50)) as pilot:
         await pilot.pause(0.3)
+        await app._poll_health()
+        await pilot.pause()
         bar = app.query_one(TopBar)
-        assert bar.query_one("#topbar-crumb").render().plain == "Current work"
-        assert "nexus" not in " ".join(str(child.render()) for child in bar.query(Static))
+        tabs = app.query_one(SessionTabs)
+
+        def tab_titles() -> dict[str, str]:
+            return {tab.session_id: tab.query_one(".tab-title").render().plain for tab in tabs.query(SessionTab)}
+
+        # Row 1: one tab per active session; row 2: directory › branch and the status in words.
+        assert tab_titles()["s"] == "Current work"
+        assert bar.query_one("#topbar-crumb").render().plain == "/work/demo  ›  ⎇ feat/tabs"
         assert bar.query_one("#topbar-status").render().plain == "Idle"
-        toggle = bar.query_one("#topbar-sidebar-toggle")
+        toggle = tabs.query_one("#topbar-sidebar-toggle")
         assert toggle.has_class("-on")
         await pilot.click("#topbar-sidebar-toggle")
         await pilot.pause()
@@ -311,18 +324,37 @@ async def test_top_bar_shows_session_and_toggles_panels():
         assert not app.query_one(DetailsSidebar).display and app.prefs["details_sidebar"] is False
         app.controller.view = ConversationView(phase="running")
         await app._sync_timeline()
-        assert "Working" in bar.query_one("#topbar-status").render().plain and bar.has_class("-working")
+        assert bar.query_one("#topbar-status").render().plain == "Working" and bar.has_class("-working")
         app.controller.view = ConversationView()
         await app._sync_timeline()
         await app._switch_session("old")
-        await pilot.pause()
-        assert bar.query_one("#topbar-crumb").render().plain == "Yesterday"
+        await pilot.pause(0.2)
+        assert tab_titles()["old"] == "Yesterday" and "s" in tab_titles()
+        active = [tab.session_id for tab in tabs.query(SessionTab) if tab.has_class("-active")]
+        assert active == ["old"]
+        # Closing the current tab moves to its neighbour; the session is not deleted.
+        old_tab = next(tab for tab in tabs.query(SessionTab) if tab.session_id == "old")
+        await pilot.click(old_tab.query_one(".tab-close"))
+        await pilot.pause(0.3)
+        # Working and needs-input sessions open as tabs on their own.
+        assert set(tab_titles()) == {"s", "busy", "asks"}
+        assert app.controller.session == "asks"
         await pilot.click("#topbar-new")
         await pilot.pause(0.3)
         await pilot.press("enter")
         await pilot.pause(0.3)
         assert app.controller.session not in {"s", "old"}
-        assert bar.query_one("#topbar-crumb").render().plain == "New Session"
+        await pilot.pause(0.2)
+        assert tab_titles()[app.controller.session] == "New Session"
+
+
+def test_tab_titles_and_breadcrumb_are_bounded():
+    assert tab_title("x" * 80) == "x" * 35 + "…" and len(tab_title("x" * 80)) == 36
+    assert tab_title("short") == "short" and tab_title("") == "New Session"
+    git = {"branch": "main", "worktree": True, "worktree_name": "feat"}
+    assert breadcrumb("/home/me/repo", git, home="/home/me") == "~/repo  ›  worktree feat  ›  ⎇ main"
+    assert breadcrumb("/srv/repo", {"branch": "abc1234", "detached": True}, home="/home/me") == "/srv/repo  ›  ◇ abc1234"
+    assert breadcrumb("/srv/repo", None, home="/home/me") == "/srv/repo"
 
 
 @pytest.mark.asyncio
