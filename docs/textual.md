@@ -75,7 +75,7 @@ literal system-prompt text, so terminal escape sequences cannot affect display.
 - The activity bar shows context fill when idle and motion during a turn or
   reconnect. Thinking expands inline.
 - Ctrl+X no longer cuts in the composer on the main screen.
-- Dictation runtime is included in the standard install ([voice.md](voice.md)).
+- Dictation runtime comes from the `voice` extra, which the installer adds except on musl ([voice.md](voice.md)).
 
 ## Common changes
 

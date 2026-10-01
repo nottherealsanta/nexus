@@ -140,7 +140,7 @@ def test_voice_download_unsupported_is_actionable_and_fails(
     assert client.calls == ["prepare", "status"]
     assert "state: unsupported" in out.getvalue()
     assert "Runtime unavailable" in err.getvalue()
-    assert "uv pip install --reinstall nexus-harness" in err.getvalue()
+    assert "nexus-harness[voice]" in err.getvalue()
     assert "nexus daemon restart" in err.getvalue()
 
 

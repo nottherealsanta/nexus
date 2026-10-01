@@ -19,8 +19,10 @@ model cache. Plans and spike notes: `plans/VOICE_PLAN.md`, `plans/VOICE_SPIKE.md
 
 ## Flow
 
-1. **Install:** normal Nexus installation includes `moondream==2.4.0` and
-   `sounddevice`; source checkouts use `uv sync`. The
+1. **Install:** `install.sh` adds the `voice` extra (`moondream==2.4.0`) by
+   default, except on musl systems such as Alpine (no `kestrel-native` wheels) or
+   with `--no-voice`; `sounddevice` is always installed. Plain `uv tool install`
+   needs `nexus-harness[voice]`; source checkouts use `uv sync --extra voice`. The
    model (~179 MB) is **not** bundled.
 2. **Consent:** the first use shows a confirmation dialog in the TUI and web;
    `nexus voice download` is itself an explicit action. `VoicePrepare` carries no

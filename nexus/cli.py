@@ -884,8 +884,8 @@ async def _wait_voice_download(
     if result.state == "unsupported":
         detail = _voice_error_text(result.message) if result.message else "Voice runtime is unavailable."
         stderr.write(
-            f"Error: {detail} Reinstall Nexus "
-            "(`uv pip install --reinstall nexus-harness`). If Nexus was installed "
+            f"Error: {detail} Install the voice extra "
+            "(`uv tool install --force 'nexus-harness[voice]'`). If Nexus was installed "
             "while the daemon was already running, restart it with `nexus daemon restart`.\n"
         )
         return 1

@@ -147,7 +147,7 @@ Reduced motion disables transitions.
 - Overlays set `#app` `inert` and trap Tab; Escape or a backdrop click closes the
   top-most layer; dialogs focus themselves on open. Follow the existing
   open/close helpers.
-- Dictation: the runtime is included in the standard install; a separate model download is
+- Dictation: the installer includes the runtime (`voice` extra, not on musl); a separate model download is
   required; the confirmation dialog precedes any download and stays open during
   preparation until the user acknowledges readiness. Real-model inference and
   network behavior are not verified; do not claim proven offline operation.
