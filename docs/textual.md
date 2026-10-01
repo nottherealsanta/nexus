@@ -55,7 +55,7 @@ import Textual besides `ui/tui/`):
 | `tui_model_picker.py` | searchable, grouped `/model` modal with favorites, recents, sort, `↻`/Ctrl+R refresh (`ModelsRefresh`) |
 | `tui_command_palette.py` | palette entries and the `SHORTCUTS`/`LEADER_SHORTCUTS` reference |
 | `tui_settings.py` | full-screen Settings page over `Settings*` commands |
-| `tui_setup.py`, `tui_providers.py` | first-run setup; Providers pane |
+| `tui_setup.py`, `tui_providers.py` | first-run setup; Providers pane (Claude card takes a pasted sign-in code) |
 | `tui_archived.py` | archived-session search/preview/resume dialog |
 | `tui_diff.py` | `ToolDiff`: one `textual_diff_view.DiffView` per file (split view: original left, updated right; plain filename titles) |
 | `tui_history.py` | bounded per-user prompt history |

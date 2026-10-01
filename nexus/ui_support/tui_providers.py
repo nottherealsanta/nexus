@@ -1,8 +1,10 @@
-"""Settings → Providers pane: sign in to Codex, GitHub Copilot and OpenCode Go (plan section 7).
+"""Settings → Providers pane: sign in to Codex, GitHub Copilot, OpenCode Go and Claude (plan section 7).
 
 Every action is a host command (``ProvidersStatus``, ``ProviderLogin`` +
-``ProviderLoginPoll``, ``ProviderKeySet``, ``ProviderLogout``); the daemon keeps
-credentials in the system keychain. A browser or device sign-in shows its URL
+``ProviderLoginPoll``, ``ProviderLoginCode``, ``ProviderKeySet``,
+``ProviderLogout``); the daemon keeps credentials in the system keychain (Claude's
+stay with the Claude CLI). A ``code_entry`` sign-in (Claude) shows a field for the
+code its page displays. A browser or device sign-in shows its URL
 and code here and opens the URL; the pane polls until the daemon reports the
 result. Closing Settings leaves a device sign-in running; reopening resumes it.
 """
@@ -14,6 +16,7 @@ from typing import Any
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.widgets import Button, Input, Static
 
 from .text import sanitize
@@ -23,6 +26,7 @@ PROVIDERS: tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...] = (
     ("codex", "ChatGPT (Codex)", (("browser", "Sign in with browser"), ("device", "Use a device code"))),
     ("github-copilot", "GitHub Copilot", (("device", "Use a device code"),)),
     ("opencode-go", "OpenCode Go", (("api_key", "Save key"),)),
+    ("claude-agent", "Claude (Pro/Max)", (("browser", "Sign in with browser"),)),
 )
 _POLL_SECONDS = 1.5
 _POLL_LIMIT = 600
@@ -45,6 +49,7 @@ class ProvidersPane(VerticalScroll):
         self._heading = heading
         self._polling: set[str] = set()
         self._login_ids: dict[str, str] = {}
+        self._code_entry: dict[str, bool] = {}
 
     def compose(self) -> ComposeResult:
         if self._heading:
@@ -65,13 +70,17 @@ class ProvidersPane(VerticalScroll):
                                     classes="provider-input")
                     for method, text in actions:
                         yield Button(text, name=f"{provider}|{method}", classes="provider-action")
+                    if provider == "claude-agent":
+                        yield Input(placeholder="Paste the code from the sign-in page", password=True,
+                                    id="provider-claude-code", classes="provider-input provider-code")
+                        yield Button("Submit code", name=f"{provider}|code", classes="provider-code")
                     yield Button("Cancel", name=f"{provider}|cancel", classes="provider-cancel")
                     yield Button("Disconnect", name=f"{provider}|logout", classes="provider-logout")
                 yield Static("", classes="provider-flow", markup=False)
 
     def on_mount(self) -> None:
-        for button in self.query(".provider-cancel"):
-            button.display = False
+        for widget in self.query(".provider-cancel, .provider-code"):
+            widget.display = False
         self.reload()
 
     def reload(self) -> None:
@@ -90,6 +99,8 @@ class ProvidersPane(VerticalScroll):
         for button in card.query(".provider-action"):
             button.display = not pending
         card.query_one(".provider-cancel", Button).display = pending
+        for widget in card.query(".provider-code"):
+            widget.display = pending and self._code_entry.get(provider, False)
 
     async def _load(self) -> None:
         if self._client is None:
@@ -113,7 +124,7 @@ class ProvidersPane(VerticalScroll):
             card.query_one(".provider-state", Static).update(state)
             card.set_class(connected, "-connected")
             card.query_one(".provider-help", Static).update(sanitize(str(_field(row, "help", "")), 200))
-            card.query_one(".provider-logout", Button).display = connected
+            card.query_one(".provider-logout", Button).display = connected and _field(row, "can_logout", True) is not False
             login = _field(row, "login")
             if login and _field(login, "status") == "pending":
                 self._show_login(provider, login)
@@ -122,10 +133,17 @@ class ProvidersPane(VerticalScroll):
     def _show_login(self, provider: str, login: Any) -> None:
         url = sanitize(str(_field(login, "url", "")), 400)
         code = sanitize(str(_field(login, "user_code", "")), 32)
-        text = f"Enter code {code} at {url}" if code else f"Finish signing in at {url}"
+        entry = _field(login, "code_entry") is True
+        self._code_entry[provider] = entry
+        if code:
+            text = f"Enter code {code} at {url}"
+        elif entry:
+            text = f"Sign in at {url}\nthen paste the code the page shows below."
+        else:
+            text = f"Finish signing in at {url}"
         self._flow(provider, f"{text}\nWaiting for approval…")
-        self._pending(provider, True)
         self._login_ids[provider] = str(_field(login, "login_id", ""))
+        self._pending(provider, True)
 
     async def _sign_in(self, provider: str, method: str) -> None:
         domain = ""
@@ -161,7 +179,10 @@ class ProvidersPane(VerticalScroll):
         finally:
             self._polling.discard(login_id)
             if self.is_mounted:
-                self._pending(provider, False)
+                try:
+                    self._pending(provider, False)
+                except NoMatches:  # Settings closed mid-poll; the daemon keeps the sign-in
+                    return
                 await self._load()
 
     async def _cancel(self, provider: str) -> None:
@@ -171,6 +192,20 @@ class ProvidersPane(VerticalScroll):
                 await self._client.provider_login_cancel(login_id)
             except Exception as exc:  # noqa: BLE001 - already finished
                 self._flow(provider, sanitize(str(exc), 200))
+
+    async def _send_code(self, provider: str) -> None:
+        field = self.query_one("#provider-claude-code", Input)
+        code, field.value = field.value, ""
+        login_id = self._login_ids.get(provider, "")
+        if not code.strip() or not login_id:
+            self._flow(provider, "Paste the code shown after signing in first.")
+            return
+        try:
+            login = await self._client.provider_login_code(login_id, code)
+        except Exception as exc:  # noqa: BLE001 - validation error (never echoes the code)
+            self._flow(provider, sanitize(str(exc), 200))
+            return
+        self._flow(provider, sanitize(str(_field(login, "message", "")), 240))
 
     async def _save_key(self, provider: str) -> None:
         field = self.query_one("#provider-go-key", Input)
@@ -199,6 +234,9 @@ class ProvidersPane(VerticalScroll):
         if event.input.id == "provider-go-key":
             event.stop()
             self.run_worker(self._save_key("opencode-go"), group="provider-key", exclusive=True)
+        elif event.input.id == "provider-claude-code":
+            event.stop()
+            self.run_worker(self._send_code("claude-agent"), group="provider-code", exclusive=True)
     def on_button_pressed(self, event: Button.Pressed) -> None:
         provider, _, action = (event.button.name or "").partition("|")
         if not provider or self._client is None:
@@ -210,6 +248,8 @@ class ProvidersPane(VerticalScroll):
             work = self._cancel(provider)
         elif action == "api_key":
             work = self._save_key(provider)
+        elif action == "code":
+            work = self._send_code(provider)
         else:
             work = self._sign_in(provider, action)
         self.run_worker(work, group=f"provider-{provider}", exclusive=True)

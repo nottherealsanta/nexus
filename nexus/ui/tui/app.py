@@ -197,6 +197,12 @@ class NexusTextualApp(AttachmentsMixin, ExtraCommandsMixin, PanelsMixin, App[int
                 return
             if self.leader.intercept(event):
                 return
+            if event.key == "ctrl+u" and self._is_main_screen():
+                # Ahead of the composer's own Ctrl+U (delete to line start).
+                event.stop()
+                event.prevent_default()
+                self.action_show_usage()
+                return
         await super().on_event(event)
 
     async def on_key(self, event) -> None:
@@ -385,6 +391,12 @@ class NexusTextualApp(AttachmentsMixin, ExtraCommandsMixin, PanelsMixin, App[int
         if self._is_main_screen() and not self.voice.recording:
             await self.voice.start_or_confirm()
 
+    def action_show_usage(self) -> None:
+        from .usage import UsageScreen
+
+        if not isinstance(self.screen, UsageScreen):
+            self.push_screen(UsageScreen(self.controller.client))
+
     def action_show_shortcuts(self) -> None:
         self.push_screen(ShortcutsScreen(KEYBOARD_SHORTCUTS))
 
@@ -439,6 +451,8 @@ class NexusTextualApp(AttachmentsMixin, ExtraCommandsMixin, PanelsMixin, App[int
                 await self.action_reconnect()
             elif parsed.name == "/new":
                 await open_new_session_picker(self, args[0] if args else f"session-{uuid.uuid4().hex[:8]}")
+            elif parsed.name == "/usage":
+                self.action_show_usage()
             elif parsed.name == "/hotkeys":
                 self.push_screen(ShortcutsScreen(KEYBOARD_SHORTCUTS))
             elif parsed.name == "/theme":

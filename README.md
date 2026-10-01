@@ -92,7 +92,8 @@ local and needs no daemon. `run` takes a prompt, or `-` to read the prompt from
 stdin. `chat` is the full-screen Textual shell; `Ctrl+P` opens chat commands,
 `Ctrl+N` starts a session, `Ctrl+O` opens the Sessions dialog, `Ctrl+F` forks,
 `Ctrl+B` / `Ctrl+L` toggle the sessions and details sidebars, `Ctrl+S` opens
-Settings, and `Shift+Tab` cycles root agents. `Ctrl+X` is a leader key: `Ctrl+X M`
+Settings, `Ctrl+U` shows plan usage and limits (5-hour, weekly, monthly) for every
+connected provider, and `Shift+Tab` cycles root agents. `Ctrl+X` is a leader key: `Ctrl+X M`
 opens the model picker, `Ctrl+X V` starts dictation (any key then stops it, `Esc`
 discards), and `Ctrl+X ?` lists the rest. `Enter` queues a prompt while the agent works. `Ctrl+Enter` steers at the next
 model step; `Alt+Enter` interrupts and sends first, preserving queued messages.
@@ -220,7 +221,7 @@ restorable from the CLI.
 
 `/new` (`/clear`), `/sessions`, `/archived` (`/resume`), `/model`, `/effort`
 (`/reasoning`), `/agent`, `/tools`, `/skills`, `/mcp`, `/settings`, `/details`, `/cost`,
-`/copy`, `/diff`, `/theme`, `/verbose`, `/hotkeys`, `/reload`, `/review`, `/commit`,
+`/copy`, `/diff`, `/theme`, `/verbose`, `/hotkeys`, `/usage`, `/reload`, `/review`, `/commit`,
 `/reconnect`, `/cancel`, `/fork`, `/export`, `/help`, `/exit` (`/quit`). Aliases in
 parentheses run the same command. `/effort` opens the reasoning-effort picker
 (`/effort LEVEL` sets it directly); `Ctrl+T` cycles the supported levels in place.

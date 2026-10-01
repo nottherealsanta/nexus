@@ -171,7 +171,7 @@ def test_own_state_never_shadows_textual_internals(cls):
 
 
 @pytest.mark.asyncio
-async def test_claude_subscription_instructions_render_from_shared_host_data():
+async def test_claude_signs_in_from_its_setup_card_not_the_env_list():
     class ClaudeSetupTransport(SetupTransport):
         async def request(self, command):
             result = await super().request(command)
@@ -184,5 +184,7 @@ async def test_claude_subscription_instructions_render_from_shared_host_data():
     async with app.run_test(size=(110, 42)) as pilot:
         await pilot.pause(0.2)
         assert isinstance(app.screen, SetupScreen)
+        # Claude signs in from its own card now, so it is not an environment row.
+        assert app.screen.query_one("#provider-claude-agent")
         text = app.screen.query_one("#setup-env", Static).render().plain
-        assert "Claude Pro/Max" in text and "claude auth login" in text
+        assert "Claude Pro/Max" not in text

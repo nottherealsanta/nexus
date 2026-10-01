@@ -28,6 +28,7 @@ SHORTCUTS: tuple[tuple[str, str | None, str], ...] = (
     ("ctrl+t", None, "Cycle root reasoning effort"),
     ("ctrl+space", "toggle_voice", "Dictate (voice input)"),
     ("ctrl+e", None, "Toggle the Logs drawer"),
+    ("ctrl+u", "show_usage", "Provider usage and limits"),
     ("a", None, "Open the root-agent picker"),
     ("shift+tab", None, "Cycle root agent"),
     ("ctrl+c", "cancel_turn", "Return to conversation or cancel the active turn"),
@@ -53,6 +54,7 @@ LEADER_SHORTCUTS: tuple[tuple[str, str, str], ...] = (
     ("i", "open_context", "Inspect context preview and usage"),
     ("e", "toggle_logs", "Toggle the Logs drawer"),
     ("t", "cycle_reasoning_effort", "Cycle root reasoning effort"),
+    ("u", "show_usage", "Provider usage and limits"),
     ("r", "reconnect", "Reconnect"),
     ("?", "show_shortcuts", "Show keyboard shortcuts"),
 )

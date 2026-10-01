@@ -67,6 +67,7 @@ SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("/copy", "Copy assembled context as JSON"),
     CommandSpec("/diff", "Show workspace Git diff", "[--staged] [ref]"),
     CommandSpec("/cost", "Show token usage and available cost estimate"),
+    CommandSpec("/usage", "Show plan usage and limits for connected providers"),
     CommandSpec("/theme", "Switch between dark and light themes", "[dark|light]"),
     CommandSpec("/settings", "Open Settings"),
     CommandSpec("/verbose", "Toggle full tool output previews"),

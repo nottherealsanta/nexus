@@ -208,6 +208,7 @@ here, so add a row when you add a file.
 | `install.py` | Install, upgrade, and daemon-hygiene helpers |
 | `mock.py` | Host dispatch for the dev-mode `Mock*` commands |
 | `provider_auth.py` | Provider sign-in behind the host boundary: Settings → Providers |
+| `provider_usage.py` | Plan usage and limits for every connected provider (`ProvidersUsage`) |
 | `searchserver.py` | Start the loopback-only search service using packaged Compose assets |
 | `session_archive.py` | Bounded host projections for durable session archive metadata |
 | `settings_inventory.py` | Bounded Settings console inventory, validation and safe file mutations |
@@ -255,7 +256,7 @@ here, so add a row when you add a file.
 | `_claude_agent_worker.py` | Isolated official SDK call; private bounded JSON worker |
 | `anthropic.py` | Anthropic Messages streaming adapter |
 | `claude_agent.py` | Claude subscription provider through the official Agent SDK |
-| `claude_agent_auth.py` | Bounded official CLI subscription status, never token files |
+| `claude_agent_auth.py` | Bounded official CLI subscription status, usage and sign-in, never token files |
 | `discovery.py` | File-loaded providers: `.agents/providers/*.py` |
 | `gemini.py` | Google Gemini `generateContent` streaming adapter |
 | `ollama.py` | Ollama / llama.cpp local adapter |
@@ -398,6 +399,7 @@ here, so add a row when you add a file.
 | `theme.py` | Nexus Textual themes: an opencode-style dark workbench and its light twin |
 | `timeline.py` | Reducer-backed conversation timeline and compact tool activity rows |
 | `tool_details.py` | Modal inspection for a single reducer-backed tool call |
+| `usage.py` | Provider usage modal: plan limits for every connected provider (Ctrl+U, `/usage`) |
 | `widgets.py` | Compatibility exports for the Textual widget toolkit |
 
 ### `nexus/ui/web/`
@@ -421,6 +423,7 @@ here, so add a row when you add a file.
 | `text.py` | Control-safe, credential-redacted text for terminal presentation |
 | `timeline.py` | Pure formatting and filtering for reducer-backed conversation timelines |
 | `tool_details.py` | Presentable tool call details: every parameter and output, none of the JSON |
+| `usage.py` | Provider usage formatting shared by surfaces (`ProvidersUsageResult`) |
 | `tui_archived.py` | Search and resume durable archived sessions through host callbacks |
 | `tui_command_palette.py` | Textual command-palette entries and the keyboard shortcut reference |
 | `tui_context_header.py` | Scrollable request-context header and read-only detail dialogs |

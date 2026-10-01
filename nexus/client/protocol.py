@@ -317,6 +317,12 @@ class Client:
     async def provider_logout(self, provider: str) -> p.ProviderAuthResult:
         return await self._request(p.ProviderLogout(provider=provider))  # type: ignore[return-value]
 
+    async def provider_login_code(self, login_id: str, code: str) -> p.ProviderLoginResult:
+        return await self._request(p.ProviderLoginCode(login_id=login_id, code=code))  # type: ignore[return-value]
+
+    async def providers_usage(self) -> p.ProvidersUsageResult:
+        return await self._request(p.ProvidersUsage())  # type: ignore[return-value]
+
     async def list_agents(self) -> list[dict[str, Any]]: return list((await self._request(p.AgentsList())).agents)  # type: ignore[union-attr]
 
     async def default_agent(self) -> str: return str((await self._request(p.AgentsList())).default)  # type: ignore[union-attr]

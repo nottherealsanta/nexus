@@ -104,6 +104,7 @@ are durable (`model.selected`, `reasoning_effort.selected`).
 | ChatGPT / Codex OAuth (`auth = "chatgpt_oauth"`) | `auth/codex.py`: browser PKCE or device code; protocol pinned to a cited OpenCode commit (see `auth/NOTICE`) | rotating refresh token + routing metadata in the native keychain; access/ID tokens never persisted |
 | GitHub Copilot (`auth = "github_copilot"`) | `auth/copilot.py`: GitHub.com device flow using OpenCode's OAuth app id (`CLIENT_ID`); the GitHub token is the Copilot API bearer (no `copilot_internal` exchange), verified against `/models` at login | keychain |
 | Pasted key (`auth = "keychain"`, e.g. OpenCode Go) | `auth/api_key.py` | keychain |
+| Claude subscription (`kind = "claude-agent"`) | `model/providers/claude_agent_auth.py:ClaudeCliAuth`: runs `claude auth login --claudeai` headless (`BROWSER` is a no-op), returns the printed URL, then pipes the code the user pastes (`ProviderLoginCode`) to the CLI | the Claude CLI's own store, shared with Claude Code; Nexus never reads it and never signs it out |
 
 `auth/store.py` is keyring-only (`KeyringSecretStore`); profile names match
 `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. Host flow: `ProvidersStatus`, `ProviderLogin`
@@ -116,6 +117,27 @@ GitHub.com-only; expiring GitHub OAuth tokens require another sign-in. GPT-6
 Luna on `/responses` is learned after Copilot rejects `/chat/completions`.
 Live `/models` and Luna inference were verified; the device sign-in flow was not
 live-tested. CLI: `nexus auth codex login|status|logout`, `nexus claude init`.
+Claude sign-in from Settings was verified up to the printed URL and the code
+prompt; completing it with a real code was not live-tested (it would replace the
+machine's Claude Code login).
+
+### Plan usage and limits (`ProvidersUsage`)
+
+`host_support/provider_usage.py` reads every connected provider concurrently
+(40 s cap each, 512 KiB bodies) and returns rows of labelled windows
+(`used_percent`, `resets_at` or the provider's `reset_text`, `detail`), notes,
+plan and source. Endpoints and field mappings follow CodexBar
+(github.com/steipete/CodexBar):
+
+| Provider | Source | Windows |
+| --- | --- | --- |
+| `codex` | `GET chatgpt.com/backend-api/wham/usage` with the ChatGPT OAuth headers | `rate_limit.primary/secondary_window` (5-hour, weekly by `limit_window_seconds`), `additional_rate_limits[]`, credits and reset-credit notes |
+| `claude-agent` | the CLI's `claude -p /usage` (local command, no model request, no tokens read) | `Current session` → 5-hour session, `Current week (…)` → Weekly (…); reset is the CLI's own text |
+| `github-copilot` | `GET api.github.com/copilot_internal/user` with the stored GitHub token | monthly `quota_snapshots` (premium requests; chat/completions when metered), reset `quota_reset_date_utc` |
+| `opencode-go` | `GET opencode.ai/zen/go/v1/usage` with the stored key | `usage.rolling/weekly/monthly` (`usagePercent`, `resetInSec`) — not verified against a live account |
+
+A provider that fails becomes that row's redacted `error`; the others still
+render. Codex, Claude and Copilot were verified live on 2026-10-01.
 
 First run: `SetupStatus` offers packaged candidate models; `SetupSave` writes
 `[providers.*]` and `[models].default` to `~/.nexus/config.toml` (blank model

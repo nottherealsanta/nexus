@@ -90,7 +90,8 @@ Packaged files are listed in `pyproject.toml` (`"nexus.ui.web" = ["index.html",
 | `js/tool-details.js` | `toolDetailSections`/`renderToolDetails`: port of `ui_support/tool_details.py` |
 | `js/context-view.js` | port of `ui_support/context.py`: `renderContextGroups`, `renderToolsReport`, `renderCurrentContext` |
 | `js/settings-files.js` | Agents/Tools/MCP/Skills/Hooks/Config/Soul editors over `Settings*` (700 ms autosave, agent model/fallback form); port of `tui_settings.py` |
-| `js/providers.js` | `createProviders({api, el, $, listId, isOpen})`: Settings → Providers cards, also used by first-run setup |
+| `js/providers.js` | `createProviders({api, el, $, listId, isOpen})`: Settings → Providers cards (Claude: code field + `ProviderLoginCode`), also used by first-run setup |
+| `js/usage.js` | `renderUsage(result, el)`: the Ctrl+U / `/usage` provider usage modal body (shown in `#text-overlay` by `openUsage`); port of `ui_support/usage.py` + `ui/tui/usage.py` |
 | `js/voice.js`, `voice-worklet.js` | microphone capture, resample to mono 16 kHz PCM16 WAV, bounded buffers, `snapshot()` for live previews; first use needs explicit confirmation |
 | `js/voice-strip.js` | `#voice-strip`: the live dictation card above the composer (canvas waveform, fading-in preview words, "Transcribing" glow); twin of the TUI `VoiceStrip` |
 | `js/mock.js` | dev-mode `/mock` and the `DEV` badge |
