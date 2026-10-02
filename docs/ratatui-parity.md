@@ -195,6 +195,11 @@ Labelled panels read as dim `label: ` then value. `/usage` renders per-provider
 limit bars coloured by tone (`ui_support/usage.usage_lines`, the same wording as
 Textual's modal). `/settings` opens on Appearance, like Textual.
 
+Dictation shows a strip above the composer like `VoiceStrip`: `● Recording m:ss`,
+a level wave of the last 28 samples (kept in Rust from the `voice_level` field of
+each snapshot), the live partial text and the cancel hint. Not exercised with real
+audio hardware.
+
 Context chips say "unavailable while a turn is running" instead of failing when the
 host has no preview. Rows are menu lines, so there are no swatch colours or aligned
 token column yet.

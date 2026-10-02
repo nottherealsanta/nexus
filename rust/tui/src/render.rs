@@ -111,6 +111,9 @@ pub struct Cache {
     /// Sessions sidebar filter text and whether it is being edited.
     pub filter: String,
     pub filtering: bool,
+    /// Recent microphone levels (0..1) and seconds since recording began, for the voice strip.
+    pub voice_levels: Vec<f32>,
+    pub voice_elapsed: u64,
     /// Mouse selection in transcript coordinates: (line, column) start and end.
     pub selection: Option<((usize, usize), (usize, usize))>,
 }
@@ -840,15 +843,30 @@ pub fn draw(
         frame.render_widget(Paragraph::new(lines).style(Style::default().bg(p.panel)), choices_area);
     }
     if s.voice_phase != "idle" && !s.voice_phase.is_empty() {
+        // A floating row above the composer, like Textual's `VoiceStrip`: state, elapsed time,
+        // a level wave while recording, the live partial text, and the keys that end it.
+        let strip = Rect { x: composer[1].x, y: composer[1].y.saturating_sub(0), width: composer[1].width, height: 1 };
+        let wave: String = cache
+            .voice_levels
+            .iter()
+            .map(|level| ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"][((level.clamp(0.0, 1.0) * 7.0).round() as usize).min(7)])
+            .collect();
+        let (label, hint) = match s.voice_phase.as_str() {
+            "recording" => ("● Recording", "Esc cancel · any key stops"),
+            "transcribing" => ("◌ Transcribing", "Esc cancel"),
+            other => (other, ""),
+        };
+        let mut text = format!("{label} {}:{:02}  {wave}  ", cache.voice_elapsed / 60, cache.voice_elapsed % 60);
+        text.push_str(&crate::transcript::truncate(&s.voice_preview, usize::from(strip.width).saturating_sub(text.chars().count() + hint.chars().count() + 4)));
+        let pad = usize::from(strip.width).saturating_sub(text.chars().count() + hint.chars().count() + 1);
+        frame.render_widget(Clear, strip);
         frame.render_widget(
-            Paragraph::new(format!(
-                "● {} {} · {}",
-                s.voice_phase,
-                "▂".repeat((s.voice_level * 20.0) as usize),
-                s.voice_preview
-            ))
-            .style(Style::default().fg(p.accent)),
-            composer[1],
+            Paragraph::new(Line::from(vec![
+                Span::styled(text, Style::default().fg(p.accent).bg(p.element).add_modifier(Modifier::BOLD)),
+                Span::styled(" ".repeat(pad), Style::default().bg(p.element)),
+                Span::styled(format!("{hint} "), Style::default().fg(p.quiet).bg(p.element)),
+            ])),
+            strip,
         );
     }
     r
@@ -1086,6 +1104,22 @@ mod tests {
                 }
             }
         }
+    }
+    #[test]
+    fn voice_strip_shows_state_time_wave_and_partial_text() {
+        let mut s = Snapshot::default();
+        s.voice_phase = "recording".into();
+        s.voice_preview = "hello wor".into();
+        let mut cache = Cache::default();
+        cache.voice_levels = vec![0.0, 0.5, 1.0];
+        cache.voice_elapsed = 65;
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|frame| {
+            draw(frame, &s, &Editor::default(), &Editor::default(), &Editor::default(), "", 0, 0, 0, &mut cache, true, false, false, false, 0, 0, 0);
+        }).unwrap();
+        let screen: String = (0..24u16).map(|y| (0..100u16).map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string()).collect::<String>() + "\n").collect();
+        assert!(screen.contains("● Recording 1:05"), "{screen}");
+        assert!(screen.contains("▁▅█") && screen.contains("hello wor") && screen.contains("Esc cancel"));
     }
     #[test]
     fn running_slot_is_replaced_per_frame() {

@@ -90,7 +90,7 @@ Composer and input
       already ranks), Ctrl+S sort toggle, effort step styling (`tui_model_picker.py`).
 - [ ] Agent picker as the inline `AgentPickerPanel`, new-session picker
       (`new_session.py`), sessions dialog, archived dialog (`tui_archived.py`).
-- [ ] Voice: floating `VoiceStrip` overlay above the composer, level meter, partial
+- [x] Strip done (state, time, wave, partial text; Rust test; no real hardware, cancel races unverified). Voice: floating `VoiceStrip` overlay above the composer, level meter, partial
       preview, recording marker in the runtime row; verify cancel races.
 - [x] Docked right at 36 columns with a title bar (checked live; mouse close on the title bar not wired). Logs drawer: Textual docks it right (36 cols); native uses the lower half of
       the transcript. Match placement, title bar and close button.

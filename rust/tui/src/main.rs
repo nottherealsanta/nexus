@@ -92,6 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut dirty = true;
     let spin_clock = Instant::now();
     let mut nav: Option<usize> = None;
+    let mut recording_since: Option<Instant> = None;
     let mut press: Option<(usize, usize)> = None;
     let mut typed = (String::new(), 0usize);
     let mut complete_due: Option<Instant> = None;
@@ -202,6 +203,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 draft.history = next.history.clone();
                 draft.history_index = draft.history.len();
                 history_loaded = true;
+            }
+            if next.voice_phase == "recording" {
+                let began = *recording_since.get_or_insert_with(Instant::now);
+                cache.voice_elapsed = began.elapsed().as_secs();
+                cache.voice_levels.push(next.voice_level as f32);
+                let excess = cache.voice_levels.len().saturating_sub(28);
+                cache.voice_levels.drain(..excess);
+            } else if next.voice_phase != "transcribing" {
+                recording_since = None;
+                cache.voice_levels.clear();
+                cache.voice_elapsed = 0;
             }
             s = next;
             dirty = true;
