@@ -102,6 +102,9 @@ fallback dir when the path exceeds the ~104-byte UDS limit on macOS).
 - **Handshake:** `Hello` → `Welcome`; a client built for another
   `PROTOCOL_VERSION` is rejected (`VersionMismatch`), never retried.
 - **Auto-start:** `ensure_daemon` spawns one and waits for readiness (10s).
+- Each runtime captures its supplied environment (or the process environment)
+  at construction. Later caller mapping or process-environment changes do not
+  alter its configuration/provider inputs or shell job inheritance.
 - **Idle shutdown:** exit after 300s with no viewers, no running and no queued
   turn; never with a turn in flight.
 - SIGINT/SIGTERM stop the accept loop and close every session through the facade.

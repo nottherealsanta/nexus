@@ -135,6 +135,12 @@ off and no HTTPS instance is configured, or fetching is disabled
 `bash` (`action` run/status/wait/stop) uses `builtin/_jobs.py` (`JobRegistry`):
 per-session job partitions (a tool can only reach its own session's jobs),
 process-group lifecycle, output cap 1 MiB per job, SIGTERM then SIGKILL.
+The runtime-owned registry inherits a copy of that runtime's captured environment.
+A per-call `env` overlays only that job; it cannot mutate later jobs or another
+runtime. An explicitly empty environment never inherits daemon variables.
+Standalone registries capture the process environment at construction.
+The inherited environment snapshot is never added to job results, progress
+events, or reprs; a command can still explicitly print its own environment.
 
 - Foreground runs block until exit, the yield window (`tools.bash_yield_s`,
   default 120s) or cancel. At the window a running command becomes a background

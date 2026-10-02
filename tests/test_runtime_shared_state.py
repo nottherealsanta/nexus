@@ -287,3 +287,43 @@ async def test_send_early_close_cancels_and_frees_the_lock(tmp_path):
     events = [event async for event in session.send("two")]
     assert events[-1].type == "turn.completed"
     await runtime.aclose()
+
+
+async def test_two_runtimes_execute_bash_with_isolated_environments(tmp_path, monkeypatch):
+    """SHARED_DAEMON_PLAN B1: actual tool turns must use each owner's snapshot."""
+    monkeypatch.setenv("NEXUS_TEST_VALUE", "daemon")
+    command = 'printf "%s" "$NEXUS_TEST_VALUE" > value.txt'
+    runtimes = []
+    try:
+        for name in ("a", "b"):
+            workspace = tmp_path / name
+            workspace.mkdir()
+            environment = {"PATH": "/usr/bin:/bin", "NEXUS_TEST_VALUE": name}
+            provider = ScriptedProvider(
+                tool_response(("shell", "bash", {"command": command})),
+                text_response("done"),
+            )
+            runtime = Runtime(
+                workspace, config=make_config(), environ=environment,
+                providers={"scripted": provider},
+            )
+            runtimes.append(runtime)
+            # Changing the caller's mapping cannot change shell job inheritance.
+            environment["NEXUS_TEST_VALUE"] = "mutated"
+
+        async def run(runtime):
+            return [event async for event in runtime.session("same-id").send("run bash")]
+
+        await asyncio.gather(*(run(runtime) for runtime in runtimes))
+        for name in ("a", "b"):
+            assert (tmp_path / name / "value.txt").read_text() == name
+
+        await runtimes[0].aclose()
+        assert not runtimes[1].job_registry.closed
+        job = await runtimes[1].job_registry.spawn(
+            command, cwd=tmp_path / "b", session_id="after-close"
+        )
+        await asyncio.wait_for(job.wait(), 3)
+        assert (tmp_path / "b" / "value.txt").read_text() == "b"
+    finally:
+        await asyncio.gather(*(runtime.aclose() for runtime in runtimes))

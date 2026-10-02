@@ -57,7 +57,7 @@ import secrets
 import signal
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
@@ -224,6 +224,7 @@ class ShellJob:
         shell: str | None = None,
         *,
         cwd_check: Callable[[], Path] | None = None,
+        base_env: Mapping[str, str] | None = None,
         output_limit: int = DEFAULT_OUTPUT_LIMIT,
         grace_s: float = DEFAULT_GRACE_S,
         kill_wait_s: float = DEFAULT_KILL_WAIT_S,
@@ -243,7 +244,8 @@ class ShellJob:
         self.finished_at: float | None = None
         self.stdout = OutputBuffer(output_limit)
         self.stderr = OutputBuffer(output_limit)
-        self._env = env
+        self._base_env = dict(os.environ if base_env is None else base_env)
+        self._env = None if env is None else dict(env)
         self._grace_s = grace_s
         self._kill_wait_s = kill_wait_s
         self._on_finish = on_finish
@@ -287,10 +289,9 @@ class ShellJob:
             # released while the registry was still between insert and start).
             # Never spawn a process that nothing tracks.
             return
-        # Always inherit the harness's environment; an explicit overlay adds to
-        # (and may override) it. Never fall back to only the overlay, which
-        # would drop PATH and every other inherited variable.
-        process_env = os.environ.copy()
+        # Inherit the owning runtime's captured environment, never the
+        # daemon's current environment. Per-call overrides stay local to this job.
+        process_env = self._base_env.copy()
         if self._env:
             process_env.update(self._env)
         if self._cwd_check is not None:
@@ -489,6 +490,7 @@ class JobRegistry:
         output_limit: int = DEFAULT_OUTPUT_LIMIT,
         grace_s: float = DEFAULT_GRACE_S,
         kill_wait_s: float = DEFAULT_KILL_WAIT_S,
+        environ: Mapping[str, str] | None = None,
         max_completed_jobs: int = DEFAULT_MAX_COMPLETED_JOBS,
         max_retained_bytes: int = DEFAULT_MAX_RETAINED_BYTES,
         max_total_completed_jobs: int = DEFAULT_MAX_TOTAL_COMPLETED_JOBS,
@@ -500,6 +502,8 @@ class JobRegistry:
         ):
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ValueError(f"{name} must be a positive integer")
+        # Copy even an empty explicit mapping: it must not inherit host secrets.
+        self._environ = dict(os.environ if environ is None else environ)
         self._partitions: dict[str, _Partition] = {}
         #: ``(session_id, job_id)`` in completion order across all sessions.
         self._completed_global: deque[tuple[str, str]] = deque()
@@ -612,6 +616,7 @@ class JobRegistry:
             env,
             shell,
             cwd_check=cwd_check,
+            base_env=self._environ,
             output_limit=(
                 self.output_limit if output_limit is None else output_limit
             ),

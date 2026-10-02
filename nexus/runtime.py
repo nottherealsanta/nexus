@@ -2007,6 +2007,9 @@ class Runtime:
     ) -> None:
         self.workspace = Path(workspace).resolve()
         self._home = Path(home) if home is not None else None
+        # SHARED_DAEMON_PLAN §3 B1: capture once at the ownership boundary.
+        # An explicit empty mapping must not fall back to the daemon environment.
+        environ = dict(os.environ if environ is None else environ)
         self._environ = environ
         self._config = config
         self._config_loader = config_loader
@@ -2049,7 +2052,7 @@ class Runtime:
             self._owned_tools.append(tools)
         if tools is None and tool_factory is None:
             if self._job_registry is None:
-                self._job_registry = JobRegistry()
+                self._job_registry = JobRegistry(environ=self._environ)
                 self._owns_job_registry = True
             if self._todo_store is None:
                 self._todo_store = TodoStore()
