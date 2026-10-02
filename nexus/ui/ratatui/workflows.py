@@ -94,6 +94,8 @@ class Workflows:
         return f"Settings · {scope} · {category or 'sections'}", rows, [inventory.root_display, *([help_text] if help_text else [])]
 
     async def settings(self, scope="global", category=""):
+        self.shell.settings_nav = category
+        self.settings_scope = scope
         title, rows, lines = await self.settings_menu(scope, category)
         self.menu(title, rows, lines)
 
@@ -121,8 +123,31 @@ class Workflows:
         self.menu("Providers", [(row.get("label", row["id"]) + (" · connected" if row.get("connected") else ""),
             {"kind": "provider", "id": row["id"]}) for row in result.providers])
 
+    #: Operation kinds that open or navigate Settings pages, and the area each selects.
+    NAV_AREAS = {"appearance": "appearance", "layout": "layout", "keyboard": "keys", "workspace": "workspace",
+                 "providers": "providers", "voice": "voice"}
+    NAV_KEEP = ("settings", "provider", "voice", "toggle_pref", "reset_prefs", "theme", "default_agent",
+                "confirm", "back", "discard_form", "setup")
+
+    async def settings_area(self, key):
+        """Switch Settings to ``key`` (the left list): a fresh page with Escape closing Settings."""
+        self.stack.clear()
+        self.shell.panel_title = ""
+        operation = {"keys": {"kind": "keyboard"}, "providers": {"kind": "providers"}, "voice": {"kind": "voice"}}.get(
+            key, {"kind": key} if key in ("appearance", "layout", "workspace") else {"kind": "settings", "scope": self.settings_scope, "category": key})
+        await self.operate(operation)
+
+    settings_scope = "global"
+
     async def operate(self, operation):
         kind = operation["kind"]
+        if kind in self.NAV_AREAS:
+            self.shell.settings_nav = self.NAV_AREAS[kind]
+        elif kind == "settings":
+            self.settings_scope = operation.get("scope", "global")
+            self.shell.settings_nav = operation.get("category", "")
+        elif not kind.startswith(self.NAV_KEEP):
+            self.shell.settings_nav = None
         if kind == "back":
             self.back()
         elif kind == "discard_form":

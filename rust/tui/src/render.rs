@@ -667,7 +667,28 @@ pub fn draw(
         }
     }
     if !s.panel_title.is_empty() {
-        let inner = dialog_frame(frame, r.transcript, &s.panel_title, &p);
+        let mut inner = dialog_frame(frame, r.transcript, &s.panel_title, &p);
+        if let Some(nav) = &s.nav {
+            let list = nav_rect(r.transcript);
+            let lines: Vec<Line<'static>> = nav
+                .items
+                .iter()
+                .enumerate()
+                .take(list.height as usize)
+                .map(|(i, (label, _, heading))| {
+                    if *heading {
+                        Line::styled(label.clone(), Style::default().fg(p.quiet).bg(p.dialog).add_modifier(Modifier::BOLD))
+                    } else if i as i64 == nav.selected {
+                        Line::styled(format!("{:<w$}", format!("▸ {label}"), w = usize::from(list.width)), Style::default().fg(p.accent).bg(p.element_hi).add_modifier(Modifier::BOLD))
+                    } else {
+                        Line::styled(format!("  {label}"), Style::default().fg(p.muted).bg(p.dialog))
+                    }
+                })
+                .collect();
+            frame.render_widget(Paragraph::new(lines).style(Style::default().bg(p.dialog)), list);
+            let taken = list.width + 2;
+            inner = Rect { x: inner.x + taken, width: inner.width.saturating_sub(taken), ..inner };
+        }
         if let Some(f) = &s.form {
             let areas = Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).split(inner);
             frame.render_widget(
@@ -690,11 +711,18 @@ pub fn draw(
                 .iter()
                 .filter(|item| item.label.to_lowercase().contains(&needle))
                 .collect();
-            let mut lines = vec![Line::from(vec![
+            // Settings pages: the scope path and the area's help sit above the list.
+            let mut lines: Vec<Line<'static>> = Vec::new();
+            if s.nav.is_some() {
+                for text in s.panel_lines.iter().take(2) {
+                    lines.push(Line::styled(crate::transcript::truncate(text, usize::from(inner.width)), Style::default().fg(p.quiet).bg(p.dialog)));
+                }
+            }
+            lines.push(Line::from(vec![
                 Span::styled("Filter ", Style::default().fg(p.quiet)),
                 Span::styled(format!("{filter}▏"), Style::default().fg(p.text)),
                 Span::styled("   Tab inspect details", Style::default().fg(p.quiet)),
-            ])];
+            ]));
             lines.push(Line::default());
             // Group headings sit above the first item of each group; selection counts items only.
             let mut body: Vec<Line<'static>> = Vec::new();
@@ -718,7 +746,7 @@ pub fn draw(
                 }
                 body.push(Line::styled(format!("{text}{}", " ".repeat(pad)), style));
             }
-            let room = inner.height.saturating_sub(2) as usize;
+            let room = inner.height.saturating_sub(lines.len() as u16) as usize;
             let start = (selected_line + 1).saturating_sub(room.max(1));
             lines.extend(body.into_iter().skip(start).take(room));
             frame.render_widget(Paragraph::new(lines).style(Style::default().bg(p.dialog)), inner);
@@ -986,6 +1014,28 @@ mod tests {
         assert!(at("Favorites") < at(" a") && at(" a") < at("Recent") && at("Recent") < at(" b"));
         assert!(screen[at(" c")].contains("▸"), "selection 2 is the third item, not the third line");
         assert_eq!(screen.iter().filter(|row| row.contains("Recent")).count(), 1, "one heading per group");
+    }
+    #[test]
+    fn settings_area_list_steps_over_headings_and_draws_beside_the_page() {
+        use crate::bridge::Nav;
+        let nav = Nav { items: vec![("GENERAL".into(), "".into(), true), ("Appearance".into(), "appearance".into(), false), ("Layout".into(), "layout".into(), false),
+                                    ("CONFIGURE".into(), "".into(), true), ("Providers".into(), "providers".into(), false)], selected: 2 };
+        assert_eq!(nav_step(&nav, true), Some(4), "the CONFIGURE heading is skipped");
+        assert_eq!(nav_step(&nav, false), Some(1));
+        assert_eq!(nav_step(&Nav { selected: 1, ..Nav { items: nav.items.clone(), selected: 0 } }, false), None);
+        let mut s = Snapshot::default();
+        s.panel_title = "Layout".into();
+        s.panel_lines = vec!["Panels hide automatically".into()];
+        s.nav = Some(nav);
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        let mut cache = Cache::default();
+        terminal.draw(|frame| {
+            draw(frame, &s, &Editor::default(), &Editor::default(), &Editor::default(), "", 0, 0, 0, &mut cache, true, false, false, false, 0, 0, 0);
+        }).unwrap();
+        let row_of = |needle: &str| (0..30u16).find(|y| (0..100u16).map(|x| terminal.backend().buffer()[(x, *y)].symbol().to_string()).collect::<String>().contains(needle)).unwrap_or_else(|| panic!("{needle} missing"));
+        let col_of = |needle: &str| { let y = row_of(needle); let line: String = (0..100u16).map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string()).collect(); line.find(needle).unwrap() };
+        assert!(row_of("▸ Layout") > row_of("GENERAL") && row_of("Providers") > row_of("CONFIGURE"));
+        assert!(col_of("Panels hide") > col_of("Providers"), "the page sits to the right of the list");
     }
     #[test]
     fn running_slot_is_replaced_per_frame() {
@@ -1276,6 +1326,26 @@ pub fn toned_lines(lines: &[String], tones: &[String], width: u16, p: &Palette) 
     out
 }
 
+/// The Settings area list inside the dialog (left 24 columns), when a page has one.
+pub fn nav_rect(transcript: Rect) -> Rect {
+    let inner = dialog_inner(transcript);
+    Rect { width: 24.min(inner.width), ..inner }
+}
+/// Step to the next/previous selectable area (headings are skipped).
+pub fn nav_step(nav: &crate::bridge::Nav, forward: bool) -> Option<usize> {
+    let count = nav.items.len() as i64;
+    let mut at = nav.selected;
+    for _ in 0..count {
+        at += if forward { 1 } else { -1 };
+        if at < 0 || at >= count {
+            return None;
+        }
+        if !nav.items[at as usize].2 {
+            return Some(at as usize);
+        }
+    }
+    None
+}
 pub fn dialog_inner(area: Rect) -> Rect {
     Rect {
         x: area.x + 2,

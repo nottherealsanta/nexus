@@ -651,6 +651,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         dirty = true;
                         continue;
                     }
+                    // Settings area list: Left/Right switch areas (not while editing a form).
+                    if s.form.is_none() && filter.is_empty() && matches!(key.code, KeyCode::Left | KeyCode::Right) {
+                        if let Some(index) = s.nav.as_ref().and_then(|nav| render::nav_step(nav, key.code == KeyCode::Right)) {
+                            send(json!({"type":"nav_select","text":index.to_string(),"generation":s.generation}))?;
+                            dirty = true;
+                            continue;
+                        }
+                    }
                     if key.code == KeyCode::Esc
                         || key.code == KeyCode::Char('c')
                             && key.modifiers.contains(KeyModifiers::CONTROL)
@@ -1025,6 +1033,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     MouseEventKind::Down(event::MouseButton::Left) => {
+                        if !s.panel_title.is_empty() {
+                            if let Some(nav) = &s.nav {
+                                let list = render::nav_rect(r.transcript);
+                                if list.contains((mouse.column, mouse.row).into()) {
+                                    let index = usize::from(mouse.row - list.y);
+                                    if nav.items.get(index).is_some_and(|item| !item.2) {
+                                        send(json!({"type":"nav_select","text":index.to_string(),"generation":s.generation}))?;
+                                    }
+                                    dirty = true;
+                                    continue;
+                                }
+                            }
+                        }
                         if let Some(prompt) = &s.prompt {
                             let (_, choices) = render::prompt_regions(
                                 render::prompt_area(r.transcript, prompt),

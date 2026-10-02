@@ -35,6 +35,8 @@ pub struct Snapshot {
     /// Queued, steering and interrupt messages waiting for the running turn.
     pub queue_lines: Vec<String>,
     pub update_notice: String,
+    /// Settings area list: (label, key, is heading), and the selected index (-1 = none).
+    pub nav: Option<Nav>,
     pub sessions: Vec<Session>,
     pub tabs: Vec<Session>,
     pub archived_label: String,
@@ -137,6 +139,12 @@ pub struct Content {
     pub color: String,
 }
 
+#[derive(Default, Deserialize)]
+#[serde(default)]
+pub struct Nav {
+    pub items: Vec<(String, String, bool)>,
+    pub selected: i64,
+}
 #[derive(Default, Deserialize)]
 #[serde(default)]
 pub struct DetailsPanel {

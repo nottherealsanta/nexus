@@ -103,7 +103,7 @@ Dialogs and screens (all currently generic panels/menus)
       "Edit <category>…" button, Tools modal (grouped families, token column,
       swatches), Skills/MCP extension modals (toggle, lock, counts),
       shortcuts screen.
-- [~] Per-area help, Layout labels and Appearance/Layout reset-to-default done as menu rows; the two-pane full-page layout and agent form fields are still open. Settings console: full-page two-pane layout (areas on the left, editor on the
+- [~] Two-pane layout (area list + page), per-area help and Appearance/Layout reset done (fixture `ratatui-settings` checked); agent form fields still open. Settings console: full-page two-pane layout (areas on the left, editor on the
       right), Appearance and Layout panes with reset buttons, agent editor form
       fields (model, fallbacks) instead of a raw file, validation display. Workflow
       logic is verified; presentation is not.

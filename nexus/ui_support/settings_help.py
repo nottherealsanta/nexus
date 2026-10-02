@@ -12,3 +12,13 @@ SETTINGS_HELP: dict[str, str] = {
     "config": "Nexus configuration: models, fallbacks, permissions, context and more.",
     "soul": "Instructions added to every conversation (SOUL.md).",
 }
+
+#: Settings areas in Textual's order: ``(key, label)``; a ``None`` key is a heading.
+SETTINGS_SECTIONS: tuple[tuple[str | None, str], ...] = (
+    (None, "GENERAL"),
+    ("appearance", "Appearance"), ("layout", "Layout"), ("keys", "Keyboard"), ("workspace", "Workspace"),
+    (None, ""),
+    (None, "CONFIGURE"),
+    ("providers", "Providers"), ("voice", "Voice"), ("agents", "Agents"), ("tools", "Tools"),
+    ("mcp", "MCP servers"), ("skills", "Skills"), ("hooks", "Hooks"), ("config", "Config"), ("soul", "Soul"),
+)

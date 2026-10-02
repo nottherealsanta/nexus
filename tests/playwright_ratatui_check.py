@@ -26,7 +26,7 @@ def main():
             for name, command, state in (("textual", "tests/visual_tui_demo.py --state reference", ""), ("ratatui", "tests/ratatui_browser_demo.py", ""),
                                          ("textual-permission", "tests/visual_tui_demo.py --state permission", ""), ("ratatui-permission", "tests/ratatui_browser_demo.py", "permission"),
                                          ("textual-picker", "tests/visual_tui_demo.py --state picker", ""), ("ratatui-picker", "tests/ratatui_browser_demo.py", "picker"),
-                                         ("ratatui-panel", "tests/ratatui_browser_demo.py", "panel"), ("ratatui-light", "tests/ratatui_browser_demo.py", "light"), ("ratatui-diff", "tests/ratatui_browser_demo.py", "diff"), ("ratatui-tool", "tests/ratatui_browser_demo.py", "tool")):
+                                         ("ratatui-panel", "tests/ratatui_browser_demo.py", "panel"), ("ratatui-light", "tests/ratatui_browser_demo.py", "light"), ("ratatui-diff", "tests/ratatui_browser_demo.py", "diff"), ("ratatui-tool", "tests/ratatui_browser_demo.py", "tool"), ("ratatui-settings", "tests/ratatui_browser_demo.py", "settings")):
                 with socket.socket() as sock:
                     sock.bind(("127.0.0.1", 0))
                     port = sock.getsockname()[1]

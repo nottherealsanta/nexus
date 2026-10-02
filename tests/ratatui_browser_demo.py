@@ -66,6 +66,13 @@ async def fixture():
                             diff={"path": "src/util.py", "hunk": "--- a/src/util.py\n+++ b/src/util.py\n@@ -9,2 +9,2 @@\n def total(values):\n-    return sum(values)\n+    return int(sum(values))"})
         snapshot["panel_title"] = "Edit"
         snapshot["panel_lines"], snapshot["panel_tones"] = styled_lines(tool_detail_sections(tool))
+    elif state == "settings":
+        from nexus.ui_support.settings_help import SETTINGS_SECTIONS
+        snapshot["panel_title"] = "Settings · global · agents"
+        snapshot["panel_lines"] = ["~/.nexus", "Build is the default root agent; advisor, task and quick are subagents."]
+        snapshot["items"] = [{"label": label, "command": "", "operation": {"kind": "noop"}} for label in (
+            "New sessions start with…", "build · built-in", "advisor · built-in", "quick · built-in", "task · built-in", "New file", "Reset category…")]
+        snapshot["nav"] = {"items": [[label, key or "", key is None] for key, label in SETTINGS_SECTIONS], "selected": 9}
     elif state == "light":
         snapshot["theme"] = "nexus-light"
     elif state == "panel":

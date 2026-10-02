@@ -148,8 +148,12 @@ family and MCP server with its tool names and token estimate; a row expands to i
 tools, a tool opens its description and schema, and `Edit tools…` opens Settings.
 Settings pages show each area's help line (`ui_support/settings_help.py`, shared with
 Textual); Appearance and Layout use Textual's labels and end with `Reset to default`.
-The two-pane full-page Settings layout is not built: Settings is still a stack of
-menus.
+Settings has Textual's two-pane shape: a left list of areas (GENERAL: Appearance,
+Layout, Keyboard, Workspace; CONFIGURE: Providers, Voice, Agents, Tools, MCP servers,
+Skills, Hooks, Config, Soul) beside the current page, with the scope path and help
+above the list. Left/Right or a click switch areas (not while editing a file); Escape
+still steps back and then closes. The pages themselves are still menus, and the
+agent editor is a raw file, not form fields.
 
 Keyboard focus over the transcript: with an empty draft, Tab focuses the last
 clickable block (tool row, thought, prompt card, agent card, diff); Up/Down, Tab,

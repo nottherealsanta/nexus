@@ -59,6 +59,7 @@ class ShellActions:
         self.workspace = ""
         self.tabs = []
         self.breadcrumb = ""
+        self.settings_nav: str | None = None  # selected Settings area while Settings is open
         self.model_sort = "updated"  # model picker order: updated|name (Ctrl+S)
         self.update_notice = ""  # "<version> available: <command>" shown in the footer
         self.sessions_truncated = False  # the host list hit its cap

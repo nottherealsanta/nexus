@@ -184,6 +184,19 @@ SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 SPINNER_SLOT = "\ue000"  # private-use placeholder; Rust draws the current frame here
 
 
+def _settings_nav(shell):
+    """The Settings area list (left pane) while a Settings page is open; ``None`` otherwise."""
+    from ...ui_support.settings_help import SETTINGS_SECTIONS
+    if not shell:
+        return None
+    if not shell.panel_title:
+        shell.settings_nav = None  # the panel closed: the list goes with it
+    if shell.settings_nav is None:
+        return None
+    selected = next((i for i, (key, _) in enumerate(SETTINGS_SECTIONS) if key == shell.settings_nav), -1)
+    return {"items": [[label, key or "", key is None] for key, label in SETTINGS_SECTIONS], "selected": selected}
+
+
 def _meter_extras(view):
     """Price-tier warning and the live thinking summary, appended to the usage meter as Textual does."""
     from ...ui_support.context import _compact_tokens, price_tier_thresholds, thinking_status
@@ -309,6 +322,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "context_lines": [redact(escape_controls(line)) for line in context_lines],
             "context_usage": " · ".join(filter(None, (context_usage(view), *_meter_extras(view)))),
             "queue_lines": _queue_lines(view),
+            "nav": _settings_nav(shell),
             "update_notice": redact(escape_controls(shell.update_notice)) if shell else "",
             "provider": getattr(controller, "provider", None) or "",
             "effort": getattr(controller, "reasoning_effort", None) or "default",
@@ -611,6 +625,11 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     query = shell.completion_query = action["text"]
                     shell.completions = await complete(
                         shell.client, action.get("prefix", query), query, efforts=controller.supported_levels)
+                elif action["type"] == "nav_select":
+                    from ...ui_support.settings_help import SETTINGS_SECTIONS
+                    index = int(action["text"])
+                    if 0 <= index < len(SETTINGS_SECTIONS) and SETTINGS_SECTIONS[index][0]:
+                        await shell.workflows.settings_area(SETTINGS_SECTIONS[index][0])
                 elif action["type"] == "model_sort":
                     shell.model_sort = "name" if shell.model_sort == "updated" else "updated"
                     await shell.command("/model", ())

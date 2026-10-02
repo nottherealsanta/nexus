@@ -262,3 +262,25 @@ async def test_layout_and_appearance_toggle_and_reset_to_defaults(shell):
     assert shell.panel_title == "Appearance" and shell.items[1]["label"] == "Light · selected"
     await shell.workflows.operate(shell.items[-1]["operation"])
     assert shell.preferences.values["theme"] == "nexus-dark"
+
+
+@pytest.mark.asyncio
+async def test_settings_pages_carry_the_area_list_and_switching_replaces_the_page(shell):
+    from nexus.ui.ratatui.prototype import _settings_nav
+
+    shell.client.settings_inventory = AsyncMock(return_value=p.SettingsInventoryResult(scope="global", categories=[], items=[], root_display="~/.nexus"))
+    assert _settings_nav(shell) is None
+    await shell.workflows.operate({"kind": "layout"})
+    nav = _settings_nav(shell)
+    labels = [item[0] for item in nav["items"]]
+    assert labels[:3] == ["GENERAL", "Appearance", "Layout"] and nav["items"][nav["selected"]][1] == "layout"
+    assert nav["items"][0][2] is True  # a heading
+    await shell.workflows.settings_area("appearance")
+    assert shell.panel_title == "Appearance" and _settings_nav(shell)["items"][_settings_nav(shell)["selected"]][1] == "appearance"
+    assert shell.workflows.stack == []
+    await shell.workflows.settings_area("tools")
+    assert shell.panel_title == "Settings · global · tools" and _settings_nav(shell)["items"][_settings_nav(shell)["selected"]][1] == "tools"
+    shell.refresh_preview = AsyncMock(return_value=True)
+    shell.preview = SimpleNamespace(system_text="prompt")
+    await shell.workflows.operate({"kind": "context_show", "key": "system"})
+    assert _settings_nav(shell) is None  # a non-Settings panel does not keep the area list
