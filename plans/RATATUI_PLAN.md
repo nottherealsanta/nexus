@@ -15,7 +15,7 @@ How to work: use the project skill `.agents/skills/nexus-ratatui/SKILL.md` (and
 its `reference/`). Textual is the reference; match it, and put shared pure logic
 in `nexus/ui_support/` so both clients use it.
 
-Last verified (2026-10-02, after the P0 pass): full offline suite 4,980 passed / 312 skipped / 4 deselected; Rust 11 tests pass; Ruff clean. Earlier record: Rust 11 tests pass; Ruff clean; full offline suite
+Last verified (2026-10-02, after the P1 batch: tabs, sessions sidebar, Markdown, diffs, completion): full offline suite 4,988 passed / 312 skipped / 4 deselected; Rust 23 tests pass; Ruff clean. (A Textual teardown prints a `#logs-content` NoMatches traceback to stderr during the run; tests still pass; not investigated.) Earlier record: Rust 11 tests pass; Ruff clean; full offline suite
 4,974 passed / 312 skipped, with 3 failures that were fixed or were timing-flaky
 (see "Aggregate regression" below); Playwright captures of reference, permission,
 picker, panel, light and narrow screens complete. Not rerun after the last small
