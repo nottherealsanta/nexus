@@ -245,6 +245,8 @@ pub struct Regions {
     pub details: Rect,
     pub tabs: Rect,
     pub context: Rect,
+    /// The docked Logs drawer (36 columns on the right); empty when closed or too narrow.
+    pub logs: Rect,
 }
 /// Composer height: the editor grows with its wrapped content up to Textual's
 /// `max-height: 22` (never below the 8-row resting layout), leaving the
@@ -255,19 +257,26 @@ pub fn composer_height(area: Rect, draft: &Editor) -> u16 {
     let wanted = 5 + rows.clamp(3, 22) as u16;
     wanted.min(area.height.saturating_sub(3 + 4)).max(8)
 }
-pub fn regions(area: Rect, s: &Snapshot, composer_height: u16) -> Regions {
+pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, logs_open: bool) -> Regions {
     let main = Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(3),
         Constraint::Length(composer_height),
     ])
     .split(area);
-    let left = if s.sessions_sidebar && area.width >= 110 {
+    let docked = logs_open && area.width >= 100;
+    let (middle, logs) = if docked {
+        let split = Layout::horizontal([Constraint::Min(10), Constraint::Length(36)]).split(main[1]);
+        (split[0], split[1])
+    } else {
+        (main[1], Rect::new(main[1].x, main[1].y, 0, main[1].height))
+    };
+    let left = if s.sessions_sidebar && middle.width >= 110 {
         30
     } else {
         0
     };
-    let right = if s.details_sidebar && area.width >= if left > 0 { 170 } else { 110 } {
+    let right = if s.details_sidebar && middle.width >= if left > 0 { 170 } else { 110 } {
         40
     } else {
         0
@@ -277,7 +286,7 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16) -> Regions {
         Constraint::Min(10),
         Constraint::Length(right),
     ])
-    .split(main[1]);
+    .split(middle);
     let center = Layout::vertical([Constraint::Length(0), Constraint::Min(1)]).split(columns[1]);
     Regions {
         tabs: main[0],
@@ -286,6 +295,7 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16) -> Regions {
         context: center[0],
         transcript: center[1],
         composer: main[2],
+        logs,
     }
 }
 pub fn editor_text(editor: &Editor, secret: bool, palette: &Palette) -> Vec<Line<'static>> {
@@ -354,7 +364,7 @@ pub fn draw(
         Block::default().style(Style::default().bg(p.background).fg(p.text)),
         frame.area(),
     );
-    let r = regions(frame.area(), s, composer_height(frame.area(), draft));
+    let r = regions(frame.area(), s, composer_height(frame.area(), draft), logs_open);
     draw_top_bar(frame, s, r.tabs, &p, cache.spin);
     if r.sessions.width > 0 {
         let inner = usize::from(r.sessions.width.saturating_sub(3));
@@ -505,26 +515,56 @@ pub fn draw(
     }
     let composer = [rows[1], inset(rows[0], 2, 2)];
     if logs_open {
-        let area = logs_region(r.transcript);
+        let area = logs_region(&r);
         frame.render_widget(Clear, area);
-        frame.render_widget(
-            Paragraph::new(
-                s.logs
-                    .iter()
-                    .skip(logs_scroll)
-                    .take(area.height.saturating_sub(2) as usize)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            )
-            .wrap(ratatui::widgets::Wrap { trim: false })
-            .block(
+        if r.logs.width > 0 {
+            // Docked on the right like Textual's `#logs-drawer`: panel colour, a strong left
+            // border, a title bar with the close hint, then the log rows.
+            frame.render_widget(
                 Block::default()
-                    .title("Logs · Ctrl+E close")
-                    .borders(Borders::ALL),
-            ),
-            area,
-        );
+                    .borders(Borders::LEFT)
+                    .border_style(Style::default().fg(p.border_strong))
+                    .padding(ratatui::widgets::Padding::new(1, 1, 0, 0))
+                    .style(Style::default().bg(p.panel).fg(p.text)),
+                area,
+            );
+            let inner = Rect { x: area.x + 2, y: area.y, width: area.width.saturating_sub(3), height: area.height };
+            let parts = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).split(inner);
+            let gap = usize::from(parts[0].width).saturating_sub("Logs".len() + "ctrl+e ×".chars().count());
+            frame.render_widget(
+                Paragraph::new(vec![
+                    Line::from(vec![
+                        Span::styled("Logs", Style::default().fg(p.accent).add_modifier(Modifier::BOLD)),
+                        Span::raw(" ".repeat(gap)),
+                        Span::styled("ctrl+e ×", Style::default().fg(p.quiet)),
+                    ]),
+                    Line::styled("─".repeat(usize::from(parts[0].width)), Style::default().fg(p.border)),
+                ])
+                .style(Style::default().bg(p.panel)),
+                parts[0],
+            );
+            frame.render_widget(
+                Paragraph::new(s.logs.iter().skip(logs_scroll).cloned().collect::<Vec<_>>().join("\n"))
+                    .wrap(ratatui::widgets::Wrap { trim: false })
+                    .style(Style::default().bg(p.panel).fg(p.muted)),
+                parts[1],
+            );
+        } else {
+            frame.render_widget(
+                Paragraph::new(
+                    s.logs
+                        .iter()
+                        .skip(logs_scroll)
+                        .take(area.height.saturating_sub(2) as usize)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                )
+                .wrap(ratatui::widgets::Wrap { trim: false })
+                .block(Block::default().title("Logs · Ctrl+E close").borders(Borders::ALL)),
+                area,
+            );
+        }
     }
     if !s.panel_title.is_empty() {
         let inner = dialog_frame(frame, r.transcript, &s.panel_title, &p);
@@ -788,6 +828,17 @@ mod tests {
         cache.operations = vec![None, op("a"), op("a"), None, op("b"), op("c"), op("c"), None];
         assert_eq!(targets(&cache), vec![(1, 2), (4, 4), (5, 6)]);
         assert!(targets(&Cache::default()).is_empty());
+    }
+    #[test]
+    fn logs_dock_on_the_right_when_wide_and_fall_back_when_narrow() {
+        let s = Snapshot::default();
+        let wide = regions(Rect::new(0, 0, 120, 40), &s, 8, true);
+        assert_eq!((wide.logs.width, wide.logs.x), (36, 84));
+        assert!(wide.transcript.x + wide.transcript.width <= 84);
+        assert_eq!(regions(Rect::new(0, 0, 120, 40), &s, 8, false).logs.width, 0);
+        let narrow = regions(Rect::new(0, 0, 90, 40), &s, 8, true);
+        assert_eq!(narrow.logs.width, 0);
+        assert_eq!(logs_region(&narrow).y, narrow.transcript.y + narrow.transcript.height / 2);
     }
     #[test]
     fn running_slot_is_replaced_per_frame() {
@@ -1086,7 +1137,11 @@ pub fn prompt_regions(area: Rect, count: usize) -> (Rect, Rect) {
     (areas[0], areas[1])
 }
 
-pub fn logs_region(transcript: Rect) -> Rect {
+pub fn logs_region(r: &Regions) -> Rect {
+    if r.logs.width > 0 {
+        return r.logs;
+    }
+    let transcript = r.transcript;
     Rect::new(
         transcript.x,
         transcript.y + transcript.height / 2,

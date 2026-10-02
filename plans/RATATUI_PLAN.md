@@ -92,7 +92,7 @@ Composer and input
       (`new_session.py`), sessions dialog, archived dialog (`tui_archived.py`).
 - [ ] Voice: floating `VoiceStrip` overlay above the composer, level meter, partial
       preview, recording marker in the runtime row; verify cancel races.
-- [ ] Logs drawer: Textual docks it right (36 cols); native uses the lower half of
+- [x] Docked right at 36 columns with a title bar (checked live; mouse close on the title bar not wired). Logs drawer: Textual docks it right (36 cols); native uses the lower half of
       the transcript. Match placement, title bar and close button.
 - [ ] Leader (Ctrl+X) hint line styling and timeout behaviour.
 - [ ] Ctrl+P: Textual opens a command palette widget; native opens a `/help` menu.

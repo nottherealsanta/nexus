@@ -415,7 +415,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         nav = Some(next);
                         let size = terminal.size()?;
                         let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
-                        let height = render::regions(area, &s, render::composer_height(area, &draft)).transcript.height as usize;
+                        let height = render::regions(area, &s, render::composer_height(area, &draft), logs_open).transcript.height as usize;
                         let (first, end) = blocks[next];
                         if follow {
                             scroll = cache.lines.len().saturating_sub(height);
@@ -886,11 +886,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ratatui::layout::Rect::new(0, 0, size.width, size.height),
                     &s,
                     render::composer_height(ratatui::layout::Rect::new(0, 0, size.width, size.height), &draft),
+                    logs_open,
                 );
                 match mouse.kind {
                     MouseEventKind::ScrollUp => {
                         if logs_open
-                            && render::logs_region(r.transcript)
+                            && render::logs_region(&r)
                                 .contains((mouse.column, mouse.row).into())
                         {
                             logs_scroll = logs_scroll.saturating_sub(3);
@@ -922,7 +923,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     MouseEventKind::ScrollDown => {
                         if logs_open
-                            && render::logs_region(r.transcript)
+                            && render::logs_region(&r)
                                 .contains((mouse.column, mouse.row).into())
                         {
                             logs_scroll = (logs_scroll + 3).min(s.logs.len().saturating_sub(1));

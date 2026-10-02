@@ -156,6 +156,11 @@ Shift+Tab or j/k move, Enter or Space open what a click would, and Escape or any
 other key returns to the composer. The focused block gets the raised background
 and the view scrolls to keep it visible (`render::targets`; the PTY test drives it).
 
+The Logs drawer (Ctrl+E) docks on the right, 36 columns wide like Textual's
+`#logs-drawer`, with a `Logs … ctrl+e ×` title bar and a strong left border; the
+transcript and sidebars shrink to make room (`Regions.logs`). Below 100 columns it
+falls back to the lower half of the transcript.
+
 Context chips say "unavailable while a turn is running" instead of failing when the
 host has no preview. Rows are menu lines, so there are no swatch colours or aligned
 token column yet.
