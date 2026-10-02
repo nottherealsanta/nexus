@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/nottherealsanta/nexus/compare/v0.3.0...v0.3.1) (2026-10-02)
+
+
+### Bug fixes
+
+* refine native terminal layout and preserve agent recovery context ([#56](https://github.com/nottherealsanta/nexus/issues/56)) ([35c63b7](https://github.com/nottherealsanta/nexus/commit/35c63b7455be9beb98b823ac993dad96732e5923))
+
 ## [0.3.0](https://github.com/nottherealsanta/nexus/compare/v0.2.17...v0.3.0) (2026-10-02)
 
 
