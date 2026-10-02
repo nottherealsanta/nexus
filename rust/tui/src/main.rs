@@ -988,31 +988,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         } else if r.tabs.contains((mouse.column, mouse.row).into())
                             && mouse.row == r.tabs.y
                         {
-                            let mut x = r.tabs.x + 2;
-                            let mut hit = false;
-                            for row in s.tabs.iter().take(8) {
-                                let title: String = row.title.chars().take(24).collect();
-                                let width = unicode_width::UnicodeWidthStr::width(title.as_str())
-                                    as u16
-                                    + 4;
-                                if mouse.column >= x && mouse.column < x + width {
-                                    let kind = if mouse.column == x + width - 1 {
-                                        "tab_close"
-                                    } else {
-                                        "session_open"
-                                    };
-                                    send(
-                                        json!({"type":kind,"workspace":row.workspace,"text":row.id,"generation":s.generation}),
-                                    )?;
-                                    hit = true;
-                                    break;
+                            let column = usize::from(mouse.column.saturating_sub(r.tabs.x));
+                            let hit = render::tab_cells(&s, usize::from(r.tabs.width))
+                                .into_iter()
+                                .find(|cell| column >= cell.start && column < cell.end.max(cell.start + 1));
+                            match hit.map(|cell| (cell.kind, cell.end)) {
+                                Some((render::TabHit::Tab(index), end)) => {
+                                    let row = &s.tabs[index];
+                                    let kind = if column + 3 >= end { "tab_close" } else { "session_open" };
+                                    send(json!({"type":kind,"workspace":row.workspace,"text":row.id,"generation":s.generation}))?;
                                 }
-                                x += width + 2;
-                            }
-                            let plus = r.tabs.x + r.tabs.width.saturating_sub(4);
-                            let _ = x;
-                            if !hit && mouse.column >= plus && mouse.column < plus + 3 {
-                                action("command", "/new")?;
+                                Some((render::TabHit::New, _)) => action("command", "/new")?,
+                                Some((render::TabHit::Sessions, _)) => {
+                                    if r.tabs.width < 110 {
+                                        action("command", "/sessions")?;
+                                    } else {
+                                        send(json!({"type":"toggle","key":"sessions_sidebar"}))?;
+                                    }
+                                }
+                                Some((render::TabHit::Details, _)) => {
+                                    if r.tabs.width < (if s.sessions_sidebar { 170 } else { 110 }) {
+                                        action("command", "/details")?;
+                                    } else {
+                                        send(json!({"type":"toggle","key":"details_sidebar"}))?;
+                                    }
+                                }
+                                None => {}
                             }
                         }
                     }

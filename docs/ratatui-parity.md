@@ -122,3 +122,9 @@ on the raised background, fences and quotes on the panel colour (fences show
 their language label, quotes a `▌` bar), nested ordered/bullet lists with
 hanging indent, task markers, strikethrough and column-aligned tables. HTML stays
 literal and link targets stay visible. Fence syntax highlighting is not done.
+
+The tab row follows `SessionTabs`: sessions toggle, one tab per open session
+(status glyph, title up to 24 columns, `×`; the current tab on the panel colour),
+`+`, details toggle. Overflow scrolls the leftmost tabs out so the current one
+stays visible. Drawing and mouse hit-testing both use `render::tab_cells`; the
+toggles and `×` are clickable. The current tab reads "working" while its turn runs.

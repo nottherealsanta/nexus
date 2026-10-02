@@ -77,7 +77,7 @@ Details and sessions sidebars
 - [x] Cards, heading count, New button, status words, ages and current bar done; filter, archive/delete rows and first-1000 notice still open. Sessions sidebar to match `SessionSidebar` (`tui_panels.py`): `SESSIONS N`,
       status words (working now / needs input / finished), relative times, archive
       action, project and day grouping, first-1000 truncation notice, scroll.
-- [ ] Session tabs to match `SessionTabs`: verify look, close button, overflow,
+- [x] Tabs rebuilt (status glyph, close, overflow, toggles, one layout function; not checked by eye with several tabs). Session tabs to match `SessionTabs`: verify look, close button, overflow,
       active styling, status dot; currently approximated.
 
 Composer and input
@@ -158,7 +158,7 @@ Dialogs and screens (all currently generic panels/menus)
       chrome into `chrome.rs` / `dialogs.rs`.
 - [ ] Replace string matching on snapshot lines in the coalescing code with a typed
       `one_shot` flag in the snapshot.
-- [ ] Hit-testing duplicates layout arithmetic; derive both from one function.
+- [ ] (tab row done via `tab_cells`; sidebars, composer and prompts remain) Hit-testing duplicates layout arithmetic; derive both from one function.
 - [ ] Keep `docs/ratatui-parity.md`, `docs/module-map.md`, `docs/decisions.md` and
       this plan current with every change; web docs when behaviour is user-visible.
 

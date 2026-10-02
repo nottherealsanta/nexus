@@ -181,6 +181,20 @@ SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 SPINNER_SLOT = "\ue000"  # private-use placeholder; Rust draws the current frame here
 
 
+def _tab_rows(controller, shell):
+    """Tabs with the current one marked; the current tab reads "working" while its turn runs."""
+    rows = []
+    for tab in shell.tabs:
+        current = tab["id"] == controller.session and tab.get("workspace") == shell.workspace
+        status = tab.get("status", "")
+        if current and getattr(controller, "running", False):
+            status = "working"
+        elif current:
+            status = status if status == "input" else ""
+        rows.append({**tab, "active": current, "status": status})
+    return rows
+
+
 def _guarded(failures: list[str], label: str, build, fallback):
     """Run one projection section; a failure becomes a labelled notice, not a dead UI."""
     try:
@@ -280,7 +294,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "details_sidebar": shell.preferences.values["details_sidebar"] if shell else True,
             "context_preview": shell.preferences.values["context_preview"] if shell else True,
             "sessions": shell.sessions if shell else [],
-            "tabs": shell.tabs if shell else [],
+            "tabs": _tab_rows(controller, shell) if shell else [],
             "breadcrumb": redact(escape_controls(shell.breadcrumb)) if shell else "",
             "details_panel": details_panel,
             "logs": shell.logs.lines() if shell else [],

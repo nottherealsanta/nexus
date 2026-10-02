@@ -100,7 +100,7 @@ pub const SPINNER_SLOT: char = '\u{e000}';
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 /// Whether any block has a running-tool slot, i.e. the screen needs ~8 Hz redraws.
 pub fn animating(s: &Snapshot) -> bool {
-    s.blocks.iter().any(|block| block.text.contains(SPINNER_SLOT)) || s.sessions.iter().any(|row| row.status == "working")
+    s.blocks.iter().any(|block| block.text.contains(SPINNER_SLOT)) || s.sessions.iter().chain(s.tabs.iter()).any(|row| row.status == "working")
 }
 fn with_spinner(line: &Line<'static>, frame: usize) -> Line<'static> {
     if !line.spans.iter().any(|span| span.content.contains(SPINNER_SLOT)) {
@@ -332,7 +332,7 @@ pub fn draw(
         frame.area(),
     );
     let r = regions(frame.area(), s, composer_height(frame.area(), draft));
-    draw_top_bar(frame, s, r.tabs, &p);
+    draw_top_bar(frame, s, r.tabs, &p, cache.spin);
     if r.sessions.width > 0 {
         let inner = usize::from(r.sessions.width.saturating_sub(3));
         let height = usize::from(r.sessions.height.saturating_sub(1));
@@ -690,6 +690,23 @@ mod tests {
         assert!(text(first + 3).starts_with(" ✓ Docs"));
     }
     #[test]
+    fn tabs_scroll_to_keep_the_current_one_and_map_to_cells() {
+        use crate::bridge::Session;
+        let tab = |id: &str, active: bool| Session { id: id.into(), title: format!("session {id} title"), active, ..Default::default() };
+        let mut s = Snapshot::default();
+        s.tabs = (0..6).map(|i| tab(&i.to_string(), i == 5)).collect();
+        let cells = tab_cells(&s, 60);
+        assert_eq!(cells.first().unwrap().kind, TabHit::Sessions);
+        assert!(cells.iter().any(|c| c.kind == TabHit::Tab(5)), "the current tab stays visible");
+        assert!(!cells.iter().any(|c| c.kind == TabHit::Tab(0)), "older tabs scroll out");
+        assert_eq!(cells[cells.len() - 2].kind, TabHit::New);
+        assert!(cells.iter().all(|c| c.end <= 60));
+        s.tabs.truncate(1);
+        s.tabs[0].active = true;
+        let cells = tab_cells(&s, 120);
+        assert_eq!((cells[1].start, cells[1].end), (2, 2 + 6 + "session 0 title".len()));
+    }
+    #[test]
     fn running_slot_is_replaced_per_frame() {
         let line = Line::from(vec![Span::raw(format!("{SPINNER_SLOT} Bash · ls"))]);
         assert_eq!(with_spinner(&line, 0).spans[0].content, "⠋ Bash · ls");
@@ -992,31 +1009,89 @@ mod history_benchmark {
     }
 }
 
-fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Palette) {
+/// What a top-bar cell is, for drawing and for mouse hit-testing.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum TabHit {
+    Sessions,
+    Tab(usize),
+    New,
+    Details,
+}
+pub struct TabCell {
+    pub kind: TabHit,
+    pub start: usize,
+    pub end: usize,
+}
+/// Column layout of the tab row: toggle at 0, tabs from 2 (each ` ` + glyph + title
+/// + ` × `), then `+` and the details toggle at the right. When tabs do not fit,
+/// the leftmost ones scroll out so the current tab stays visible.
+pub fn tab_cells(s: &Snapshot, width: usize) -> Vec<TabCell> {
+    let mut cells = vec![TabCell { kind: TabHit::Sessions, start: 0, end: 1 }];
+    let avail = width.saturating_sub(2 + 5);
+    let sizes: Vec<usize> = s.tabs.iter().map(|row| 6 + crate::transcript::truncate(&row.title, 24).width()).collect();
+    let current = s.tabs.iter().position(|row| row.active).unwrap_or(0);
+    let mut first = 0;
+    while first < current && sizes[first..=current.min(sizes.len() - 1)].iter().sum::<usize>() > avail {
+        first += 1;
+    }
+    let mut x = 2;
+    for (index, size) in sizes.iter().enumerate().skip(first) {
+        if x + size > 2 + avail {
+            break;
+        }
+        cells.push(TabCell { kind: TabHit::Tab(index), start: x, end: x + size });
+        x += size;
+    }
+    cells.push(TabCell { kind: TabHit::New, start: width.saturating_sub(4), end: width.saturating_sub(3) });
+    cells.push(TabCell { kind: TabHit::Details, start: width.saturating_sub(2), end: width.saturating_sub(1) });
+    cells
+}
+fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Palette, spin: usize) {
     let width = usize::from(area.width);
     let background = Style::default().bg(p.panel);
-    // Row 0: session tabs. Hit-testing in main.rs mirrors this layout:
-    // x starts at 2, each tab is `title_width + 4` wide, tabs are two apart.
-    let mut tabs = vec![Span::styled("▌", background.fg(p.border_strong)), Span::styled(" ", background)];
-    let mut used = 2usize;
+    // Row 0: sessions toggle, tabs, new, details toggle (hit-testing uses the same `tab_cells`).
+    let mut tabs: Vec<Span<'static>> = Vec::new();
+    let mut at = 0usize;
+    let put = |tabs: &mut Vec<Span<'static>>, at: &mut usize, start: usize, text: String, style: Style| {
+        if start > *at {
+            tabs.push(Span::styled(" ".repeat(start - *at), background));
+            *at = start;
+        }
+        *at += text.width();
+        tabs.push(Span::styled(text, style));
+    };
     if s.tabs.is_empty() {
-        tabs.push(Span::styled(s.title.clone(), background.fg(p.text).add_modifier(Modifier::BOLD)));
-        used += s.title.width();
+        put(&mut tabs, &mut at, 2, s.title.clone(), background.fg(p.text).add_modifier(Modifier::BOLD));
     }
-    for row in s.tabs.iter().take(8) {
-        let active = s.title.ends_with(&row.id);
-        let title: String = row.title.chars().take(24).collect();
-        let title_style = if active { background.fg(p.text).add_modifier(Modifier::BOLD) } else { background.fg(p.muted) };
-        tabs.push(Span::styled(if active { "▸ " } else { "· " }, background.fg(if active { p.accent } else { p.quiet })));
-        tabs.push(Span::styled(title.clone(), title_style));
-        tabs.push(Span::styled(" ×", background.fg(p.quiet)));
-        tabs.push(Span::styled("  ", background));
-        used += title.width() + 6;
+    for cell in tab_cells(s, width) {
+        match cell.kind {
+            TabHit::Sessions => put(&mut tabs, &mut at, cell.start, "▌".into(), background.fg(if s.sessions_sidebar { p.accent } else { p.border_strong })),
+            TabHit::Details => put(&mut tabs, &mut at, cell.start, "▐".into(), background.fg(if s.details_sidebar { p.accent } else { p.border_strong })),
+            TabHit::New => put(&mut tabs, &mut at, cell.start, "+".into(), background.fg(p.muted)),
+            TabHit::Tab(index) => {
+                let row = &s.tabs[index];
+                let bg = if row.active { Style::default().bg(p.panel) } else { background };
+                let tone = match row.status.as_str() {
+                    "working" => p.accent,
+                    "input" => p.warning,
+                    "done" => p.success,
+                    _ => p.quiet,
+                };
+                let glyph = match row.status.as_str() {
+                    "working" => SPINNER[spin % SPINNER.len()],
+                    "input" => "●",
+                    "done" => "✓",
+                    _ => "·",
+                };
+                let title = crate::transcript::truncate(&row.title, 24);
+                let title_style = if row.active { bg.fg(p.text).add_modifier(Modifier::BOLD) } else { bg.fg(p.quiet) };
+                put(&mut tabs, &mut at, cell.start, " ".into(), bg);
+                put(&mut tabs, &mut at, cell.start + 1, format!("{glyph} "), bg.fg(tone));
+                put(&mut tabs, &mut at, cell.start + 3, title, title_style);
+                put(&mut tabs, &mut at, cell.end - 3, " × ".into(), bg.fg(p.quiet));
+            }
+        }
     }
-    let pad = width.saturating_sub(used + 4);
-    tabs.push(Span::styled(" ".repeat(pad), background));
-    tabs.push(Span::styled(" + ", background.fg(p.muted)));
-    tabs.push(Span::styled("▐", background.fg(p.accent)));
     // Row 1: workspace breadcrumb left, status right.
     let (word, tone) = match s.status.as_str() {
         "running" | "active" | "working" => ("Working".to_string(), p.accent),

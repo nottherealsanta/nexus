@@ -170,3 +170,19 @@ def test_session_cards_carry_status_words_age_and_the_current_marker():
     assert rows["a"]["status"] == "working" and rows["a"]["active"] is True and rows["a"]["sub"] == "working now · 5m ago"
     assert rows["b"]["status"] == "done" and rows["b"]["sub"].startswith("finished")
     assert rows["c"]["status"] == "input" and rows["c"]["sub"].startswith("needs input")
+
+
+def test_tabs_mark_the_current_session_and_its_running_turn(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    from nexus.ui.ratatui.prototype import _tab_rows
+
+    controller = SimpleNamespace(view=initial_state("s"), session="s", running=True)
+    shell = ShellActions(controller)
+    shell.workspace = "/w"
+    shell.tabs = [{"id": "s", "title": "one", "workspace": "/w"}, {"id": "t", "title": "two", "workspace": "/w", "status": "done"},
+                  {"id": "s", "title": "other project", "workspace": "/x"}]
+    rows = _tab_rows(controller, shell)
+    assert [(r["active"], r["status"]) for r in rows] == [(True, "working"), (False, "done"), (False, "")]
+    controller.running = False
+    assert _tab_rows(controller, shell)[0]["status"] == ""
