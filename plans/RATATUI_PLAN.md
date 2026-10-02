@@ -59,7 +59,7 @@ Transcript
 - [x] Done (Tab, arrows, Enter; PTY and Rust tests; not checked by eye). Keyboard focus navigation through the transcript (Tab to tool cards, thoughts,
       user cards; Enter/Space open or toggle; hover/focus highlight like
       `.tool-card:focus`).
-- [x] Empty-session hints done (`hints` block). Still open:  connection-status banner, activity progress
+- [x] Empty-session hints done (`hints` block). Queue preview, thinking/price meter and update notice done too. Still open:  connection-status banner, activity progress
       bar, update-available notice, `thinking_status` "Activity" row.
 - [x] Mouse selection and copy done (checked live; scrollbar indicator and typing-scrolls-to-bottom done too). Mouse text selection and copy in the transcript; scrollbar indicator; typing
       scrolls to bottom (`set_typing`).

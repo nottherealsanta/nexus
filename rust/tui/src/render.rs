@@ -314,10 +314,14 @@ pub struct Regions {
 /// Composer height: the editor grows with its wrapped content up to Textual's
 /// `max-height: 22` (never below the 8-row resting layout), leaving the
 /// transcript at least four rows.
-pub fn composer_height(area: Rect, draft: &Editor) -> u16 {
+/// Rows above the editor for queued messages (Textual's input-queue preview).
+pub fn queue_rows(s: &Snapshot) -> u16 {
+    s.queue_lines.len().min(4) as u16
+}
+pub fn composer_height(area: Rect, draft: &Editor, s: &Snapshot) -> u16 {
     let width = area.width.saturating_sub(9);
     let rows = editor_view(draft, false, &Palette::new(false), width, u16::MAX).len();
-    let wanted = 5 + rows.clamp(3, 22) as u16;
+    let wanted = 5 + rows.clamp(3, 22) as u16 + queue_rows(s);
     wanted.min(area.height.saturating_sub(3 + 4)).max(8)
 }
 pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, logs_open: bool) -> Regions {
@@ -427,7 +431,7 @@ pub fn draw(
         Block::default().style(Style::default().bg(p.background).fg(p.text)),
         frame.area(),
     );
-    let r = regions(frame.area(), s, composer_height(frame.area(), draft), logs_open);
+    let r = regions(frame.area(), s, composer_height(frame.area(), draft, s), logs_open);
     draw_top_bar(frame, s, r.tabs, &p, cache.spin);
     if r.sessions.width > 0 {
         let inner = usize::from(r.sessions.width.saturating_sub(3));
@@ -520,7 +524,7 @@ pub fn draw(
         );
     }
     let rows = Layout::vertical([
-        Constraint::Length(1),
+        Constraint::Length(1 + queue_rows(s)),
         Constraint::Min(4),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -553,7 +557,11 @@ pub fn draw(
         editor_area,
     );
     frame.render_widget(
-        Paragraph::new(s.attachment_lines.join(" · ")).style(Style::default().fg(p.accent)),
+        Paragraph::new({
+            let mut lines: Vec<Line<'static>> = s.queue_lines.iter().take(4).map(|row| Line::styled(row.clone(), Style::default().fg(p.quiet))).collect();
+            lines.push(Line::styled(s.attachment_lines.join(" · "), Style::default().fg(p.accent)));
+            lines
+        }),
         inset(rows[0], 2, 2),
     );
     let sep = || Span::styled(" · ", Style::default().fg(p.quiet).bg(p.panel));
@@ -584,11 +592,16 @@ pub fn draw(
     let right = format!("{usage}  {hint}");
     let width = usize::from(rows[3].width);
     let cwd: String = s.breadcrumb.chars().take(width.saturating_sub(right.width() + 6)).collect();
-    let gap = width.saturating_sub(2 + cwd.width() + right.width() + 2);
+    let left_width = if s.update_notice.is_empty() { cwd.width() } else { s.update_notice.width().min(width.saturating_sub(right.width() + 6)) };
+    let gap = width.saturating_sub(2 + left_width + right.width() + 2);
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::raw("  "),
-            Span::styled(cwd, Style::default().fg(p.quiet)),
+            if s.update_notice.is_empty() {
+                Span::styled(cwd, Style::default().fg(p.quiet))
+            } else {
+                Span::styled(s.update_notice.chars().take(width.saturating_sub(right.width() + 6)).collect::<String>(), Style::default().fg(p.accent))
+            },
             Span::raw(" ".repeat(gap)),
             Span::styled(right, Style::default().fg(p.quiet)),
         ])),
@@ -961,12 +974,15 @@ mod tests {
     fn composer_grows_with_content_and_is_capped() {
         let area = Rect::new(0, 0, 80, 60);
         let mut draft = Editor::default();
-        assert_eq!(composer_height(area, &draft), 8);
+        assert_eq!(composer_height(area, &draft, &Snapshot::default()), 8);
         draft.insert(&"line\n".repeat(9));
-        assert_eq!(composer_height(area, &draft), 5 + 10);
+        assert_eq!(composer_height(area, &draft, &Snapshot::default()), 5 + 10);
         draft.insert(&"line\n".repeat(60));
-        assert_eq!(composer_height(area, &draft), 5 + 22);
-        assert_eq!(composer_height(Rect::new(0, 0, 80, 14), &draft), 8, "the transcript keeps its rows");
+        assert_eq!(composer_height(area, &draft, &Snapshot::default()), 5 + 22);
+        assert_eq!(composer_height(Rect::new(0, 0, 80, 14), &draft, &Snapshot::default()), 8, "the transcript keeps its rows");
+        let mut queued = Snapshot::default();
+        queued.queue_lines = vec!["Queued · a".into(), "Steering · b".into()];
+        assert_eq!(composer_height(Rect::new(0, 0, 80, 60), &Editor::default(), &queued), 10, "queued messages get rows above the editor");
     }
     #[test]
     fn narrow_layout_and_safe_wrap() {

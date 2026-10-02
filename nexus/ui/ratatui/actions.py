@@ -59,6 +59,7 @@ class ShellActions:
         self.workspace = ""
         self.tabs = []
         self.breadcrumb = ""
+        self.update_notice = ""  # "<version> available: <command>" shown in the footer
         self.sessions_truncated = False  # the host list hit its cap
         self.archived_label = ""  # "Archived · N" under the sessions list, "" when none
         self.seen_seq: dict[str, int] = {}  # last sequence viewed per session, for "finished" status

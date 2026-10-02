@@ -20,7 +20,7 @@ from ...ui_support.hints import pick_hints
 from ...ui_support.tui_history import load_history
 from ...ui_support.clipboard import read_clipboard_image
 from .controller import NativeController as TuiController
-from ...ui_support.text import escape_controls, redact
+from ...ui_support.text import escape_controls, redact, sanitize
 from ...ui_support.tool_details import sections_to_text, tool_detail_sections
 
 
@@ -184,6 +184,24 @@ SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 SPINNER_SLOT = "\ue000"  # private-use placeholder; Rust draws the current frame here
 
 
+def _meter_extras(view):
+    """Price-tier warning and the live thinking summary, appended to the usage meter as Textual does."""
+    from ...ui_support.context import _compact_tokens, price_tier_thresholds, thinking_status
+    tiers = price_tier_thresholds(view)
+    return (f"price ↑ at {_compact_tokens(tiers[0])}" if tiers else "", thinking_status(view))
+
+
+def _queue_lines(view):
+    """Messages waiting for the running turn, like Textual's input-queue preview."""
+    from ...ui_support.text import sanitize
+    queue = list(view.input_queue)
+    rows = [f"{'Queued' if item.mode == 'queue' else item.mode.title()} · " + sanitize("".join(
+        block.get("text", "") for block in item.content if isinstance(block, dict)), 160) for item in queue[:3]]
+    if len(queue) > 3:
+        rows.append(f"+{len(queue) - 3} more queued")
+    return [redact(escape_controls(row)) for row in rows]
+
+
 def _tab_rows(controller, shell):
     """Tabs with the current one marked; the current tab reads "working" while its turn runs."""
     rows = []
@@ -289,7 +307,9 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "status": view.phase,
             "blocks": blocks,
             "context_lines": [redact(escape_controls(line)) for line in context_lines],
-            "context_usage": context_usage(view),
+            "context_usage": " · ".join(filter(None, (context_usage(view), *_meter_extras(view)))),
+            "queue_lines": _queue_lines(view),
+            "update_notice": redact(escape_controls(shell.update_notice)) if shell else "",
             "provider": getattr(controller, "provider", None) or "",
             "effort": getattr(controller, "reasoning_effort", None) or "default",
             "theme": shell.preferences.values["theme"] if shell else "nexus-dark",
@@ -412,6 +432,11 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     shell.mcp_report, shell.mcp_error = dict(getattr(result, "report", {}) or {}), None
                 except Exception as exc:  # health is advisory; the sidebar names the failure
                     shell.mcp_error = str(exc)
+                try:
+                    update = await shell.client.update_status()
+                    shell.update_notice = f"{sanitize(str(update.available), 80)} available: {sanitize(str(update.command), 120)}" if update.available else ""
+                except Exception:  # noqa: BLE001 - the notice is advisory
+                    shell.update_notice = ""
             async def context():
                 nonlocal preview_cursor
                 if controller.cursor == preview_cursor:

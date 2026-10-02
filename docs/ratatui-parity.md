@@ -172,6 +172,14 @@ selection. Only the transcript can be selected; sidebars and dialogs cannot.
 The transcript shows a thin scrollbar on its right edge when it overflows, and
 typing returns the view to the live end.
 
+The runtime row's usage meter carries Textual's extras (`price ↑ at N` for tiered
+models and the live `Thinking · …` summary). Queued, steering and interrupt
+messages show above the editor like Textual's input-queue preview (three rows plus
+`+N more queued`); the composer grows to fit them. A release notice
+(`<version> available: <command>`) replaces the working directory in the footer.
+There is no separate connection-status row or activity progress bar: disconnects
+and errors appear as labelled notices in the transcript.
+
 Context chips say "unavailable while a turn is running" instead of failing when the
 host has no preview. Rows are menu lines, so there are no swatch colours or aligned
 token column yet.

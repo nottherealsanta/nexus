@@ -217,3 +217,13 @@ def test_tool_detail_tones_mirror_the_plain_text_and_the_textual_modal():
     lines, tones = styled_lines(sections)
     assert "\n".join(lines) == sections_to_text(sections)
     assert tones == ["title", "kv", "header", "label", "", "", "", "title", "label", "hunk", "del", "add", ""]
+
+
+def test_queue_lines_and_meter_extras_follow_the_textual_status_row(tmp_path, monkeypatch):
+    from nexus.ui.ratatui.prototype import _queue_lines
+    from nexus.view.model import QueuedInputView
+
+    view = initial_state("s")
+    view.input_queue = [QueuedInputView(queued_id=str(i), mode=mode, content=[{"type": "text", "text": f"msg {i}"}])
+                        for i, mode in enumerate(["queue", "steer", "interrupt", "queue", "queue"])]
+    assert _queue_lines(view) == ["Queued · msg 0", "Steer · msg 1", "Interrupt · msg 2", "+2 more queued"]

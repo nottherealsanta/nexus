@@ -438,7 +438,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         nav = Some(next);
                         let size = terminal.size()?;
                         let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
-                        let height = render::regions(area, &s, render::composer_height(area, &draft), logs_open).transcript.height as usize;
+                        let height = render::regions(area, &s, render::composer_height(area, &draft, &s), logs_open).transcript.height as usize;
                         let (first, end) = blocks[next];
                         if follow {
                             scroll = cache.lines.len().saturating_sub(height);
@@ -908,7 +908,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let r = render::regions(
                     ratatui::layout::Rect::new(0, 0, size.width, size.height),
                     &s,
-                    render::composer_height(ratatui::layout::Rect::new(0, 0, size.width, size.height), &draft),
+                    render::composer_height(ratatui::layout::Rect::new(0, 0, size.width, size.height), &draft, &s),
                     logs_open,
                 );
                 match mouse.kind {

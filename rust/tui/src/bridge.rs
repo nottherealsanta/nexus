@@ -32,6 +32,9 @@ pub struct Snapshot {
     pub context_usage: String,
     pub attachments: usize,
     pub attachment_lines: Vec<String>,
+    /// Queued, steering and interrupt messages waiting for the running turn.
+    pub queue_lines: Vec<String>,
+    pub update_notice: String,
     pub sessions: Vec<Session>,
     pub tabs: Vec<Session>,
     pub archived_label: String,
