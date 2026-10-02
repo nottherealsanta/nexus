@@ -90,3 +90,6 @@ select = ["E4", "E9", "F", "E713"]
 target = "nexus-ratatui"
 path = "rust/tui/Cargo.toml"
 cargo-manifest-args = ["--locked"]
+# Platforms without a Rust toolchain still install: `nexus chat` then falls back to Textual.
+# The wheel CI test (`nexus-ratatui --version`) fails if a supported platform loses the binary.
+optional = true

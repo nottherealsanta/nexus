@@ -59,3 +59,11 @@ def test_newest_source_build_wins_over_a_stale_one(tmp_path, monkeypatch):
     debug = root / "rust/tui/target/debug/nexus-ratatui"
     os.utime(debug, None)
     assert "debug" in str(binary_path())
+
+
+def test_native_binary_build_is_optional_so_toolchainless_platforms_still_install():
+    import tomllib
+
+    config = tomllib.loads((Path(__file__).resolve().parents[1] / "pyproject.toml").read_text())
+    (native,) = config["tool"]["setuptools-rust"]["bins"]
+    assert native["target"] == "nexus-ratatui" and native["optional"] is True

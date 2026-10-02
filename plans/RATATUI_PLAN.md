@@ -136,7 +136,7 @@ Dialogs and screens (all currently generic panels/menus)
 
 ### P3: distribution and replacement gates
 
-- [ ] No pure-Python fallback wheel: platforms outside the native matrix (Windows,
+- [x] Decided and verified locally: `optional = true` on the Rust bin (toolchainless build produces a binary-less wheel; Textual stays the fallback). Original: No pure-Python fallback wheel: platforms outside the native matrix (Windows,
       others) need Rust to build from source. Decide: keep Textual as fallback
       (current `auto`), publish a binary-less wheel, or mark the Rust bin optional.
 - [~] Done in workflow text, not run on hosted CI: wheel test asserts the native import leaves `textual` out of `sys.modules`; macOS Rust pinned to 1.88; matrix path-gated. Still unverified: cp314 and musllinux jobs, the `macos-15-intel` label, rustup in containers. CI: add a check that native launches with Textual uninstalled (current

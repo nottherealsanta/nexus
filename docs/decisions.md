@@ -210,3 +210,11 @@ verified on hosted runners (not verified); removing it earlier would break those
 installs. Both clients read the same host contract and share the pure helpers in
 `ui_support/` (timeline rows, details, context header, completion, model choice),
 so a wording or layout change lands in both.
+
+The Rust binary build is `optional = true` in `pyproject.toml`: a platform with no
+Rust toolchain (for example Windows installing from the sdist) still gets a working
+wheel without the binary, and `auto` then picks Textual (checked locally by building
+a wheel with no `cargo` on `PATH`: it succeeds and contains no `nexus-ratatui`). The
+reason for not publishing a separate pure wheel is that one source tree builds both
+shapes. The cost is that a broken Rust build on a supported platform no longer fails
+the build by itself; the wheel CI test (`nexus-ratatui --version`) catches that.
