@@ -95,3 +95,8 @@ cancellation at each await point (`test_core_loop.py`, `test_session_send.py`).
 - Live tests are opt-in (`-m live`, credentials in the environment); never commit
   credentials, headers, encrypted reasoning or private output in fixtures.
 - Never weaken, skip or delete a test to make it pass.
+
+`tests/playwright_project_sessions_check.py` starts two offline workspace daemons
+sharing an isolated home. It checks duplicate project/session names, date groups,
+path filtering, opening the owning project, reconnect, and light/dark screenshots
+at 1440, 1024 and 400px (`artifacts/project-sessions/`).

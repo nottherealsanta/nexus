@@ -15,6 +15,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, ClassVar
 
 from textual import on
@@ -481,7 +482,9 @@ class SessionRow(Horizontal):
         title = sanitize(summary.title or "Untitled session", 80)
         self.query_one(".session-title", Static).update(title)
         self.query_one(".session-sub", Static).update(session_subline(summary, status))
-        self.tooltip = f"{title}\n{summary.id}"
+        project = getattr(self.parent.parent, "project_rows", {}).get(self.session_id) if self.parent else None
+        self.tooltip = f"{title}\n{project.workspace if project else summary.id}"
+        self.query_one(".session-delete", Static).display = project is None
         for name in ("working", "input", "done", "idle", "archived"):
             self.set_class(status == name, f"-{name}")
         self.set_class(active, "-active")
@@ -556,6 +559,9 @@ class SessionSidebar(Vertical):
         self._summaries: list[Any] = []
         self._archived: list[Any] = []
         self._current = ""
+        self.project_rows: dict[str, Any] = {}
+        self.workspace = ""
+        self.projects_truncated = False
         self._current_running = False
         self._layout: tuple[tuple[str, tuple[str, ...]], ...] | None = None
         #: last_seq observed per session; a later seq on an idle session is "done".
@@ -577,6 +583,16 @@ class SessionSidebar(Vertical):
         for summary in summaries:
             if summary.id not in self.seen or summary.id == current:
                 self.seen[summary.id] = max(self.seen.get(summary.id, 0), summary.last_seq)
+        self._render_rows()
+
+    def set_projects(self, rows: list[Any], workspace: str, *, truncated: bool = False) -> None:
+        self.workspace = workspace
+        self.projects_truncated = truncated
+        self.project_rows = {}
+        for row in rows:
+            if row.workspace != workspace:
+                key = f"{row.project_id}:{row.session.id}"
+                self.project_rows[key] = row
         self._render_rows()
 
     def current_summary(self, session: str | None = None) -> Any | None:
@@ -612,14 +628,12 @@ class SessionSidebar(Vertical):
     def _groups(self) -> list[tuple[str, list[Any]]]:
         """Filtered rows grouped exactly as ``SessionsScreen`` groups them."""
         query = self.query_one("#session-filter", Input).value.strip().casefold()
-        groups: list[tuple[str, list[Any]]] = []
-        for summary in self._summaries:
-            if query and query not in f"{summary.title} {summary.id}".casefold():
-                continue
-            day = _day_label(summary.last_activity)
-            if not groups or groups[-1][0] != day:
-                groups.append((day, []))
-            groups[-1][1].append(summary)
+        rows = [(self.workspace, summary) for summary in self._summaries]
+        for key, row in self.project_rows.items():
+            fields = {field: getattr(row.session, field) for field in row.session.__struct_fields__}
+            fields["id"] = key
+            rows.append((row.workspace, SimpleNamespace(**fields)))
+        groups = _session_groups(rows, query)
         archived = [s for s in self._archived if not query or query in f"{s.title} {s.id}".casefold()]
         if archived:
             groups.append(("Archived", archived))
@@ -634,23 +648,28 @@ class SessionSidebar(Vertical):
         relayout, self._layout = layout != self._layout, layout
         container = self.query_one("#session-list", VerticalScroll)
         if relayout:
-            container.query(".session-day").remove()
+            container.query(".session-day, .session-project").remove()
         existing = {row.session_id: row for row in container.query(SessionRow)}
         for session_id, row in existing.items():
             if session_id not in wanted:
                 row.remove()
         new_rows = [SessionRow(session_id) for session_id in wanted if session_id not in existing]
-        if new_rows:
-            container.mount_all(new_rows)
-        self.call_after_refresh(self._finish_render, groups, relayout)
+        mounted = container.mount_all(new_rows) if new_rows else None
+        async def finish() -> None:
+            if mounted is not None:
+                await mounted
+            if layout == self._layout and self.is_mounted:
+                self._finish_render(groups, relayout)
+        self.call_after_refresh(finish)
         self.query_one("#sessions-heading", Static).update(
-            f"SESSIONS  {len(self._summaries)}" if self._summaries else "SESSIONS"
+            f"SESSIONS  {len(self._summaries) + len(self.project_rows)}" + (" · first 1000" if self.projects_truncated else "")
         )
 
     def _finish_render(self, groups: list[tuple[str, list[Any]]], relayout: bool = True) -> None:
         container = self.query_one("#session-list", VerticalScroll)
         by_id = {row.session_id: row for row in container.query(SessionRow) if row.is_mounted}
         previous = None
+        last_project = None
         for day, rows in groups:
             first = True
             for summary in rows:
@@ -668,7 +687,12 @@ class SessionSidebar(Vertical):
                 elif container.children and container.children[0] is not row:
                     container.move_child(row, before=0)
                 if first:
-                    container.mount(Static(day, classes="session-day", markup=False), before=row)
+                    project, separator, date_label = day.rpartition(" · ")
+                    if separator and project != last_project:
+                        heading = Static(sanitize(project), classes="session-project", markup=False)
+                        container.mount(heading, before=row)
+                        last_project = project
+                    container.mount(Static(date_label if separator else day, classes="session-day", markup=False), before=row)
                     first = False
                 previous = row
 
@@ -1010,6 +1034,26 @@ def _day_label(ts: float | None, today: date | None = None) -> str:
     return day.strftime("%a %b %-d %Y")
 
 
+def _session_groups(rows: list[tuple[str, Any]], query: str) -> list[tuple[str, list[Any]]]:
+    """Group filtered project identities by latest activity, then local date."""
+    groups: list[tuple[str, list[Any]]] = []
+    projects: dict[str, list[Any]] = {}
+    for workspace, summary in sorted(rows, key=lambda pair: pair[1].last_activity or 0, reverse=True):
+        if query and query not in f"{summary.title} {summary.id} {workspace}".casefold():
+            continue
+        projects.setdefault(workspace, []).append(summary)
+    names = [Path(workspace).name for workspace in projects]
+    for workspace, summaries in projects.items():
+        for summary in summaries:
+            day = _day_label(summary.last_activity)
+            name = workspace if names.count(Path(workspace).name) > 1 else Path(workspace).name or workspace
+            label = f"{name} · {day}" if workspace else day
+            if not groups or groups[-1][0] != label:
+                groups.append((label, []))
+            groups[-1][1].append(summary)
+    return groups
+
+
 class SessionsScreen(ModalScreen[str | None]):
     """Searchable sessions grouped by day, with status and archive."""
 
@@ -1029,10 +1073,14 @@ class SessionsScreen(ModalScreen[str | None]):
         restore: Callable[[], Awaitable[None]],
         current: str,
         seen: Mapping[str, int],
+        load_projects: Callable[[], Awaitable[Any]] | None = None,
     ) -> None:
         super().__init__()
         self._load, self._archive, self._restore = load, archive, restore
         self._current, self._seen = current, seen
+        self._load_projects = load_projects
+        self._workspace = ""
+        self.project_rows: dict[str, Any] = {}
         self._summaries: list[Any] = []
 
     def compose(self) -> ComposeResult:
@@ -1054,18 +1102,32 @@ class SessionsScreen(ModalScreen[str | None]):
 
     async def reload(self) -> None:
         self._summaries = await self._load()
+        if self._load_projects is not None:
+            try:
+                result = await self._load_projects()
+                self._workspace = result.workspace
+                self.project_rows = {f"{row.project_id}:{row.session.id}": row for row in result.sessions if row.workspace != result.workspace}
+            except Exception:
+                pass
         self._render_options()
 
     def _render_options(self) -> None:
         options = self.query_one("#sessions-options", OptionList)
         query = self.query_one("#sessions-search", Input).value.strip().casefold()
-        rows = [s for s in self._summaries if not query or query in f"{s.title} {s.id}".casefold()]
+        source = [(self._workspace, row) for row in self._summaries]
+        for key, row in self.project_rows.items():
+            fields = {field: getattr(row.session, field) for field in row.session.__struct_fields__}
+            fields["id"] = key
+            source.append((row.workspace, SimpleNamespace(**fields)))
+        groups = _session_groups(source, query)
+        rows = [row for _, group in groups for row in group]
+        labels = {row.id: label for label, group in groups for row in group}
         highlighted = options.highlighted_option.id if options.highlighted_option else self._current
         options.clear_options()
         items: list[Option] = []
         last_day = None
         for summary in rows:
-            day = _day_label(summary.last_activity)
+            day = labels[summary.id]
             if day != last_day:
                 if last_day is not None:
                     items.append(Option(Content(""), disabled=True))
@@ -1112,7 +1174,7 @@ class SessionsScreen(ModalScreen[str | None]):
 
     async def action_archive(self) -> None:
         option = self.query_one("#sessions-options", OptionList).highlighted_option
-        if option is not None and option.id and await self._archive(option.id):
+        if option is not None and option.id and option.id not in self.project_rows and await self._archive(option.id):
             await self.reload()
 
     async def action_restore(self) -> None:

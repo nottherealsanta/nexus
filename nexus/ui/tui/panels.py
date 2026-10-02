@@ -207,6 +207,12 @@ class PanelsMixin:
             return
         if self.is_mounted:
             sidebar = self.query_one(SessionSidebar)
+            try:
+                projects = await self.controller.client.project_sessions()
+                workspace = projects.workspace
+                sidebar.set_projects(projects.sessions, workspace, truncated=projects.truncated)
+            except Exception:  # older test transports may not expose the project index
+                pass
             sidebar.set_sessions(summaries, self.controller.session, archived)
             sidebar.set_archived_count(archived_count)
             self._sync_topbar()
@@ -305,6 +311,26 @@ class PanelsMixin:
 
     async def on_session_sidebar_open_requested(self, message: SessionSidebar.OpenRequested) -> None:
         self._close_sessions_overlay()
+        project = self.query_one(SessionSidebar).project_rows.get(message.session)
+        if project is not None:
+            try:
+                from ..cli.uds import open_client
+                result = await self.controller.client.open_project_session(project.workspace, project.session.id)
+                client = await open_client(project.workspace, socket_path=result.socket_path)
+                await self.voice.cancel()
+                await self.controller.switch_session(project.session.id)
+                previous = self.controller.replace_client(client)
+                await previous.aclose()
+                self._reconnect_factory = lambda: open_client(project.workspace, socket_path=result.socket_path)
+                self._tabs, self._closed_tabs = [], {}
+                self._sidebar_archived_rows = []
+                self._health = None
+                await self._switch_session(project.session.id)
+                await self._poll_health()
+                await self._poll_sessions()
+            except (ClientError, OSError) as exc:
+                self.notify(f"Could not open project · {sanitize(str(exc), 160)}", severity="error")
+            return
         if message.session != self.controller.session:
             if message.session in {row.id for row in getattr(self, "_sidebar_archived_rows", ())}:
                 try:
@@ -321,7 +347,8 @@ class PanelsMixin:
         await self._poll_sessions()
 
     async def on_session_sidebar_delete_requested(self, message: SessionSidebar.DeleteRequested) -> None:
-        await self._delete_session(message.session)
+        if message.session not in self.query_one(SessionSidebar).project_rows:
+            await self._delete_session(message.session)
 
     async def _delete_session(self, session: str) -> bool:
         try:
@@ -364,19 +391,22 @@ class PanelsMixin:
             if session == "":
                 await self.action_new_session()
             elif session and session != self.controller.session:
-                await self._switch_session(session)
+                if session in dialog.project_rows:
+                    self.query_one(SessionSidebar).project_rows.update(dialog.project_rows)
+                    await self.on_session_sidebar_open_requested(SessionSidebar.OpenRequested(session))
+                else:
+                    await self._switch_session(session)
             await self._poll_sessions()
 
-        self.push_screen(
-            SessionsScreen(
+        dialog = SessionsScreen(
                 load=self.controller.client.list_sessions,
                 archive=self._archive_session,
                 restore=self.action_restore_archived,
                 current=self.controller.session,
                 seen=self.query_one(SessionSidebar).seen,
-            ),
-            callback=lambda session: self.run_worker(picked(session), group="sessions-pick"),
-        )
+                load_projects=self.controller.client.project_sessions,
+            )
+        self.push_screen(dialog, callback=lambda session: self.run_worker(picked(session), group="sessions-pick"))
 
     async def on_session_sidebar_restore_requested(self, _: SessionSidebar.RestoreRequested) -> None:
         await self.action_restore_archived()

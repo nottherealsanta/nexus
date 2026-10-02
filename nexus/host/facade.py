@@ -1259,6 +1259,37 @@ class HostFacade:
             p.SessionPreview, p.SessionSearch,
         )):
             return dispatch_archive_command(command, self.runtime.sessions, self.supervisor)
+        if isinstance(command, p.ProjectSessionsList):
+            rows = self.runtime.sessions.store.db.project_sessions(limit=1001)
+            local = {row.id: row for row in self.list_sessions()}
+            return p.ProjectSessionsListResult(workspace=str(self.runtime.workspace), sessions=[p.ProjectSession(
+                workspace=row["workspace"], project_id=row["project_id"],
+                session=local[row["id"]] if row["workspace"] == str(self.runtime.workspace) and row["id"] in local else SessionSummary(
+                    id=row["id"], title=row["title"], last_activity=row["last_activity"],
+                    last_seq=row["last_seq"], message_count=row["message_count"],
+                    created_at=row["created_at"], parent_id=row["parent_id"], fork_seq=row["fork_seq"],
+                ),
+            ) for row in rows[:1000]], truncated=len(rows) > 1000)
+        if isinstance(command, p.ProjectSessionOpen):
+            # Only recorded project/session pairs may start another workspace host.
+            rows = self.runtime.sessions.store.db.project_sessions(limit=10_000)
+            if not any(row["workspace"] == command.workspace and row["id"] == command.session for row in rows):
+                raise ValueError("Project session is no longer available")
+            from .daemon import ensure_daemon, default_socket_path
+            client = await ensure_daemon(command.workspace, home=self.runtime._home)
+            try:
+                await client.call(p.SessionOpen(session=command.session, create=False, recover=True))
+                url = ""
+                if command.browser:
+                    launch = await client.call(p.WebLaunch())
+                    url = launch.url
+                    base, ticket = url.split("/#", 1)
+                    url = f"{base}/s/{command.session}#{ticket}"
+                return p.ProjectSessionOpenResult(
+                    socket_path=str(default_socket_path(command.workspace, home=self.runtime._home)), url=url,
+                )
+            finally:
+                await client.close()
         if isinstance(command, p.SessionList):
             return p.SessionListResult(
                 sessions=self.list_sessions(),

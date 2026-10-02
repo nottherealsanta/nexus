@@ -761,3 +761,68 @@ async def test_context_meter_and_details_show_live_thinking_and_clear_it():
         await app._sync_timeline()
         assert "Thinking" not in app.query_one("#context-usage", Static).render().plain
         assert "Thinking" not in app.query_one("#details-session", Static).render().plain
+
+
+@pytest.mark.asyncio
+async def test_sidebar_groups_projects_then_dates_and_filters_paths():
+    transport = PanelTransport()
+    app = NexusTextualApp(_client(transport), session="s")
+    async with app.run_test(size=(200, 50)) as pilot:
+        await pilot.pause()
+        sidebar = app.query_one(SessionSidebar)
+        now = time.time()
+        sidebar.set_projects([
+            p.ProjectSession(workspace="/else/demo", project_id="other", session=SessionSummary(
+                id="s", title="Other project", last_activity=now + 1,
+            )),
+            p.ProjectSession(workspace="/else/demo", project_id="other", session=SessionSummary(
+                id="older", title="Older project work", last_activity=now - 86400 * 3,
+            )),
+        ], "/work/demo")
+        await pilot.pause(0.3)
+        container = app.query_one("#session-list")
+        headings = [node.render().plain for node in container.query(".session-project")]
+        assert headings == ["/else/demo", "/work/demo"], (sidebar._groups(), [(r.session_id, r.is_mounted) for r in container.query(SessionRow)])
+        ids = [row.session_id for row in container.query(SessionRow)]
+        assert ids[:2] == ["other:s", "other:older"] and "s" in ids
+        assert not container.query(SessionRow).first().query_one(".session-delete").display
+        sidebar.query_one("#session-filter", Input).value = "/else"
+        await pilot.pause(0.3)
+        assert [row.session_id for row in container.query(SessionRow)] == ["other:s", "other:older"]
+
+
+@pytest.mark.asyncio
+async def test_sidebar_opens_same_named_session_in_owning_project(monkeypatch):
+    class ProjectTransport(PanelTransport):
+        def __init__(self, workspace):
+            super().__init__()
+            self.workspace = workspace
+            self.sessions = [SessionSummary(id="s", title=workspace, last_activity=time.time())]
+        async def request(self, command):
+            if isinstance(command, p.ProjectSessionsList):
+                return p.ProjectSessionsListResult(workspace=self.workspace, sessions=[
+                    p.ProjectSession(workspace=workspace, project_id=key, session=SessionSummary(id="s", title=workspace, last_activity=time.time()))
+                    for key, workspace in (("a", "/work/a"), ("b", "/work/b"))
+                ])
+            if isinstance(command, p.ProjectSessionOpen):
+                assert command.workspace == "/work/b" and command.session == "s"
+                return p.ProjectSessionOpenResult(socket_path="target.sock")
+            if isinstance(command, p.Doctor):
+                return p.DoctorResult(report={"workspace": self.workspace})
+            return await super().request(command)
+    first, second = _client(ProjectTransport("/work/a")), _client(ProjectTransport("/work/b"))
+    async def connect(workspace, **kwargs):
+        assert workspace == "/work/b" and kwargs["socket_path"] == "target.sock"
+        return second
+    monkeypatch.setattr("nexus.ui.cli.uds.open_client", connect)
+    app = NexusTextualApp(first, session="s")
+    async with app.run_test(size=(200, 50)) as pilot:
+        await pilot.pause(0.3)
+        assert "b:s" in app.query_one(SessionSidebar).project_rows
+        await app.on_session_sidebar_open_requested(SessionSidebar.OpenRequested("b:s"))
+        await pilot.pause(0.3)
+        assert app.controller.client is second
+        assert app.controller.session == "s"
+        assert app._health["workspace"] == "/work/b"
+        assert app.query_one(SessionSidebar).workspace == "/work/b"
+        assert await app._reconnect_factory() is second

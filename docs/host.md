@@ -29,7 +29,7 @@ inward-only exceptions. Errors are
 
 | Group | Commands |
 | --- | --- |
-| Sessions | `SessionList` `SessionOpen` `SessionStart` `SessionEnqueue` `SessionCancel` `SessionSubscribe` `SessionState` `SessionFork` `SessionDelete` `SessionRestore` `SessionExport` `SessionArchive` `SessionUnarchive` `SessionListArchived` `SessionSearch` `SessionPreview` |
+| Sessions | `SessionList` `ProjectSessionsList` `ProjectSessionOpen` `SessionOpen` `SessionStart` `SessionEnqueue` `SessionCancel` `SessionSubscribe` `SessionState` `SessionFork` `SessionDelete` `SessionRestore` `SessionExport` `SessionArchive` `SessionUnarchive` `SessionListArchived` `SessionSearch` `SessionPreview` |
 | Approvals | `PermissionResolve` `QuestionAnswer` |
 | Models | `ModelsList` `ModelShow` `ModelTiers` `ModelsRefresh` `ModelSelect` `ReasoningEffortSelect` |
 | Agents | `AgentsList` `AgentCurrent` `AgentSelect` `AgentReset` `AgentDefaultSet` `AgentTranscript` |
@@ -102,6 +102,9 @@ fallback dir when the path exceeds the ~104-byte UDS limit on macOS).
 - **Handshake:** `Hello` → `Welcome`; a client built for another
   `PROTOCOL_VERSION` is rejected (`VersionMismatch`), never retried.
 - **Auto-start:** `ensure_daemon` spawns one and waits for readiness (10s).
+- Each runtime captures its supplied environment (or the process environment)
+  at construction. Later caller mapping or process-environment changes do not
+  alter its configuration/provider inputs or shell job inheritance.
 - **Idle shutdown:** exit after 300s with no viewers, no running and no queued
   turn; never with a turn in flight.
 - SIGINT/SIGTERM stop the accept loop and close every session through the facade.
@@ -180,3 +183,14 @@ removing it from scheduling and returns `returned_messages` in queue order.
 The TUI and web Stop actions prepend these messages to the current draft.
 Consumed inputs are excluded; the original input records remain in the durable
 log. Other callers retain the existing cancellation contract by default.
+
+### Cross-project session navigation
+
+`ProjectSessionsList` reads the shared SQLite index, returning the workspace and
+project identity beside each session (up to 1,000; `truncated` is explicit). It
+excludes child, archived and trashed sessions. The active workspace retains live
+status; other workspaces expose saved activity. `ProjectSessionOpen` validates a
+recorded workspace/session pair before connecting to its owning daemon, returning
+a socket path for the terminal or a one-use browser launch URL. Each workspace
+keeps its own runtime, settings and permissions. This does not implement the
+shared-daemon plan.

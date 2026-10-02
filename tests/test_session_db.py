@@ -427,3 +427,24 @@ def test_namespaces_are_isolated_within_one_project(tmp_path):
     assert len(agents.read("dup").records) == 1
     assert main.read("dup").messages()[0].content[0].text == "main"
     assert agents.read("dup").messages()[0].content[0].text == "agents"
+
+
+def test_project_session_index_keeps_project_identity_and_excludes_hidden_rows(tmp_path):
+    db = _db(tmp_path)
+    a = SqliteSessionStore(db, "a", root="/one/demo")
+    b = SqliteSessionStore(db, "b", root="/two/demo")
+    children = SqliteSessionStore(db, "a", "agents", root="/one/demo")
+    for store in (a, b, children):
+        store.create("same")
+    a.create("archived")
+    a.archive("archived", "user")
+    b.create("trashed")
+    b.trash("trashed", reason="user", retention_seconds=60)
+    b.append_message("same", _msg("latest"))
+    rows = db.project_sessions()
+    assert [(r["project_id"], r["id"], r["workspace"]) for r in rows] == [
+        ("b", "same", "/two/demo"), ("a", "same", "/one/demo"),
+    ]
+    assert len(db.project_sessions(limit=1)) == 1
+    with pytest.raises(ValueError):
+        db.project_sessions(limit=0)

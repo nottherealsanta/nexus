@@ -42,6 +42,10 @@ One SQLite database, `~/.nexus/nexus.db`, shared by every project and daemon.
   envelope by `SESSION_LOG_VERSION` (1). A future runtime refuses old logs
   explicitly rather than misreading them.
 
+`StateDatabase.project_sessions` supplies a bounded cross-project sidebar index
+by joining session metadata to recorded project roots; it excludes archive,
+trash and child namespaces and orders by newest activity.
+
 Legacy JSONL session directories are not imported. JSONL is an export format only.
 
 ## The `Session` handle

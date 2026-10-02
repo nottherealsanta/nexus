@@ -190,3 +190,7 @@ selection; text remains selectable in the details dialog. Wheel events over a
 preview scroll the surrounding conversation, including Shift/Ctrl wheel events,
 rather than the diff library's nested horizontal containers. Long lines wrap
 within the original and updated columns.
+
+The sessions sidebar groups saved sessions from all projects by directory name
+and local activity date. Opening another project replaces the host client and
+reconnect target with that workspace’s daemon; active work continues there.

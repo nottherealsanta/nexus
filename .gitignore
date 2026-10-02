@@ -7,3 +7,6 @@ dist/
 .nexus/
 artifacts/
 .playwright-mcp/
+
+# Local nested agent checkouts
+.claude/worktrees/

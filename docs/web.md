@@ -235,3 +235,7 @@ updated on the right. Long lines wrap within their column.
 
 Settings → Agents uses one shared user configuration in `~/.nexus/agents/`,
 with no global/project selector. Other file categories retain scoped editing.
+
+The sessions sidebar refreshes the cross-project index every five seconds and
+groups projects by newest activity, then dates and sessions newest first. Opening
+another project follows a one-use launch URL to its owning workspace listener.

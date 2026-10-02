@@ -251,6 +251,17 @@ class StateDatabase:
                 (project_id, root, now, now),
             )
 
+    def project_sessions(self, *, limit: int = 1000) -> list[dict[str, Any]]:
+        """Bounded cross-project sidebar index; excludes children, archive and trash."""
+        if not 1 <= limit <= _MAX_LIMIT:
+            raise ValueError("invalid project session limit")
+        return [dict(row) for row in self._connection().execute(
+            "SELECT s.*, p.root AS workspace FROM sessions s "
+            "JOIN projects p ON p.id=s.project_id "
+            "WHERE s.namespace='main' AND s.archived_at IS NULL AND s.trash_id IS NULL "
+            "ORDER BY s.last_activity DESC, s.project_id, s.id LIMIT ?", (limit,),
+        )]
+
     def close(self) -> None:
         conn = getattr(self._local, "conn", None)
         if conn is not None:
