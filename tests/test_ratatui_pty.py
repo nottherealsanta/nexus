@@ -69,7 +69,9 @@ def test_native_bridge_keyboard_and_terminal_restoration():
             time.sleep(.01)
         os.write(master, b"hello\r")
         assert read_action() == {"type": "submit", "text": "hello", "mode": "queue", "generation": 0}
-        os.write(master, b"/m\t")
+        os.write(master, b"/m")  # no Tab: completion is requested after a short pause
+        assert read_action() == {"type": "complete", "text": "/m", "prefix": "/m", "generation": 0}
+        os.write(master, b"\t")
         assert read_action() == {"type": "complete", "text": "/m", "prefix": "/m", "generation": 0}
         process.stdin.write((json.dumps({"schema": 1, "revision": 2, "title": "Nexus PTY", "status": "idle",
             "completion_query": "/m", "completions": ["/model", "/mcp"]}) + "\n").encode())

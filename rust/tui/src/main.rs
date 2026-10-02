@@ -189,6 +189,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut completion_hidden = "\0".to_string();
     let mut dirty = true;
     let spin_clock = Instant::now();
+    let mut typed = (String::new(), 0usize);
+    let mut complete_due: Option<Instant> = None;
+    let mut asked = String::new();
     let mut follow = true;
     let mut cache = render::Cache::default();
     let mut logs_open = false;
@@ -341,6 +344,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             })?;
             dirty = false;
+        }
+        // As-you-type completion (Textual `refresh_completion`): a `/command`,
+        // an `@file`, or a command argument asks the host after a 120 ms pause.
+        if typed != (draft.text.clone(), draft.cursor) {
+            typed = (draft.text.clone(), draft.cursor);
+            let query = draft.text[..draft.cursor].rsplit(char::is_whitespace).next().unwrap_or("");
+            let argument = draft.text.starts_with('/') && draft.text[..draft.cursor].contains(' ');
+            let triggers = s.panel_title.is_empty()
+                && s.prompt.is_none()
+                && (query.starts_with('/') || query.starts_with('@') || argument);
+            if !triggers {
+                asked.clear();
+            }
+            complete_due = (triggers && asked != draft.text[..draft.cursor])
+                .then(|| Instant::now() + Duration::from_millis(120));
+            completion_index = 0;
+        }
+        if complete_due.is_some_and(|due| Instant::now() >= due) {
+            complete_due = None;
+            let prefix = draft.text[..draft.cursor].to_string();
+            let query = prefix.rsplit(char::is_whitespace).next().unwrap_or("").to_string();
+            asked = prefix.clone();
+            send(json!({"type":"complete","text":query,"prefix":prefix,"generation":s.generation}))?;
         }
         if !event::poll(Duration::from_millis(16))? {
             if render::animating(&s) {
@@ -759,6 +785,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .unwrap_or("");
                         completion_hidden = "\0".to_string();
                         completion_index = 0;
+                        complete_due = None;
+                        asked = draft.text[..draft.cursor].to_string();
                         send(
                             json!({"type":"complete","text":query,"prefix":draft.text[..draft.cursor],"generation":s.generation}),
                         )?;

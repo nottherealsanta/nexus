@@ -90,3 +90,9 @@ Running tool rows animate: Python puts the private-use slot `U+E000` where the
 spinner glyph goes, and Rust draws the current braille frame there and redraws
 at ~8 Hz only while some block holds a slot. Cached wrapped rows keep the slot,
 so animation costs no re-wrap and sends no snapshots.
+
+Completion is requested as you type, not only on Tab: when the token at the
+cursor starts with `/` or `@`, or the draft is a slash command with an argument,
+Rust sends one `complete` action after a 120 ms pause (the same trigger as
+Textual's `refresh_completion`). Tab still forces a request. Escape hides the
+list for that token until it changes. The popup styling is still approximate.
