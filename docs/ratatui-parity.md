@@ -141,6 +141,13 @@ joined it equals `sections_to_text`), Rust colours and wraps them
 (`render::toned_lines`). Other panels stay plain. It is a panel over the
 transcript, not a floating modal.
 
+The Tools dialog (click the Tools chip) mirrors `ToolsModal`: one row per tool
+family and MCP server with its tool names and token estimate; a row expands to its
+tools, a tool opens its description and schema, and `Edit tools…` opens Settings.
+Context chips say "unavailable while a turn is running" instead of failing when the
+host has no preview. Rows are menu lines, so there are no swatch colours or aligned
+token column yet.
+
 The tab row follows `SessionTabs`: sessions toggle, one tab per open session
 (status glyph, title up to 24 columns, `×`; the current tab on the panel colour),
 `+`, details toggle. Overflow scrolls the leftmost tabs out so the current one

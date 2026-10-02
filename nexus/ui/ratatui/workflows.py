@@ -250,7 +250,9 @@ class Workflows:
             self.shell.preferences.set("theme", operation["value"])
             self.shell.notice = "Theme saved"
         elif kind == "context_show":
-            self.shell.preview = await self.client.inspect_context(self.shell.controller.session)
+            if not await self.shell.refresh_preview():
+                self.shell.notice = "Context details are unavailable while a turn is running"
+                return
             preview = self.shell.preview
             key = operation["key"]
             if key == "system":
@@ -258,11 +260,20 @@ class Workflows:
             elif key == "agents":
                 self.shell.show("AGENTS.md", [part for part in preview.included_parts if part.get("name") == "agents_md"] or preview.system_files)
             elif key == "tools":
-                self.shell.show("Tool definitions", preview.tools)
+                self.tools_expanded = set()
+                self.tools_modal()
             elif key in {"skills", "mcp"}:
                 await self.context_extensions(key)
             else:
                 self.shell.show("Current request", preview)
+        elif kind == "tools_toggle":
+            self.tools_expanded ^= {operation["key"]}
+            self.tools_modal()
+        elif kind == "tool_definition":
+            from ...ui_support.context import _compact_tokens, tool_groups
+            group = next(g for g in tool_groups(list(self.shell.preview.tools)) if g.key == operation["group"])
+            entry = group.entries[operation["index"]]
+            self.menu(f"Tool · {entry.title} · ~{_compact_tokens(entry.tokens)} tokens", [("Back", {"kind": "back"})], entry.body.splitlines())
         elif kind == "context_toggle":
             self.shell.preview = await self.client.select_context_extension(self.shell.controller.session,
                 operation["category"], operation["name"], operation["enabled"])
@@ -535,6 +546,35 @@ class Workflows:
             self.shell.panel_title = ""
             await self.login_screen()
             self.shell.panel_lines.insert(0, str(field(result, "message", "")))
+
+    tools_expanded: set = set()
+
+    def tools_modal(self):
+        """The Tools dialog: families (and MCP servers) with their tools and token estimates.
+
+        A family row expands to its tools; a tool row opens everything the model is
+        given for it (Textual's ``ToolsModal``).
+        """
+        from ...ui_support.context import _compact_tokens, tool_groups
+        preview = self.shell.preview
+        groups = tool_groups(list(preview.tools))
+        count = sum(len(group.entries) for group in groups)
+        tokens = sum(group.tokens for group in groups)
+        names = [group.title.removeprefix("MCP · ") for group in groups]
+        width = min(max((len(name) for name in names), default=8), 24)
+        rows = []
+        for group, name in zip(groups, names):
+            mark = "▾" if group.key in self.tools_expanded else "▸"
+            tools = "  ".join(entry.title for entry in group.entries)
+            rows.append((f"{mark} ■ {name[:width]:<{width}}  {tools[:70]}  ~{_compact_tokens(group.tokens)}", {"kind": "tools_toggle", "key": group.key}))
+            if group.key in self.tools_expanded:
+                for index, entry in enumerate(group.entries):
+                    rows.append((f"      {entry.title}  {entry.detail[:60]}  ~{_compact_tokens(entry.tokens)}",
+                                 {"kind": "tool_definition", "group": group.key, "index": index}))
+        rows.append(("Edit tools…", {"kind": "settings", "scope": "global", "category": "tools"}))
+        note = [] if getattr(preview, "tools_supported", True) is not False else ["The selected model does not support tools; none are sent."]
+        self.menu(f"Tools · {count} definition{'s' if count != 1 else ''} · ~{_compact_tokens(tokens)} tokens", rows,
+                  note + ([] if groups else ["(none)"]))
 
     async def context_extensions(self, category):
         self.shell.preview = await self.client.inspect_context(self.shell.controller.session)

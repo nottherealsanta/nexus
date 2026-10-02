@@ -221,3 +221,29 @@ async def test_voice_config_retries_a_host_hash_conflict(shell):
     assert args[-1] == "new"
     assert "auto_send = true" in args[3]
     assert "enabled = true" in args[3]
+
+
+@pytest.mark.asyncio
+async def test_tools_dialog_groups_expands_and_opens_a_definition(shell):
+    tools = [{"name": "read", "group": "files", "description": "Read a file", "parameters": {"type": "object"}},
+             {"name": "write", "group": "files", "description": "Write a file", "parameters": {"type": "object"}},
+             {"name": "mcp__fs__list", "description": "List", "parameters": {"type": "object"}}]
+    shell.preview = SimpleNamespace(tools=tools, tools_supported=True)
+    shell.refresh_preview = AsyncMock(return_value=True)
+    await shell.workflows.operate({"kind": "context_show", "key": "tools"})
+    labels = [item["label"] for item in shell.items]
+    assert shell.panel_title.startswith("Tools · 3 definitions · ~")
+    assert labels[0].startswith("▸ ■ files") and "read  write" in labels[0] and labels[1].startswith("▸ ■ fs")
+    assert labels[-1] == "Edit tools…"
+    await shell.workflows.operate(shell.items[0]["operation"])
+    labels = [item["label"] for item in shell.items]
+    assert labels[0].startswith("▾ ■ files") and labels[1].strip().startswith("read")
+    await shell.workflows.operate(shell.items[1]["operation"])
+    assert shell.panel_title.startswith("Tool · read · ~") and "Read a file" in "\n".join(shell.panel_lines)
+
+
+@pytest.mark.asyncio
+async def test_context_click_while_a_turn_runs_says_so(shell):
+    shell.refresh_preview = AsyncMock(return_value=False)
+    await shell.workflows.operate({"kind": "context_show", "key": "tools"})
+    assert "unavailable while a turn is running" in shell.notice
