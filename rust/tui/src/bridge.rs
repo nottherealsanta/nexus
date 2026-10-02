@@ -14,6 +14,8 @@ pub struct Snapshot {
     pub context_lines: Vec<String>,
     pub panel_title: String,
     pub panel_lines: Vec<String>,
+    /// One tone per panel line (`title`, `header`, `label`, `kv`, `add`, `del`, `hunk`); empty = plain.
+    pub panel_tones: Vec<String>,
     pub items: Vec<Item>,
     pub prompt: Option<Prompt>,
     pub form: Option<Form>,

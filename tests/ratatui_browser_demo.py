@@ -59,6 +59,13 @@ async def fixture():
                 "@@ -40,3 +41,4 @@\n def slug(text):\n     text = text.strip()\n+    text = text.lower()\n     return text")
         snapshot["blocks"].append({"id": "d", "kind": "diff", "title": "src/util.py", "added": 5, "removed": 2,
             "diff_rows": [list(row) for row in diff_split_rows(hunk)], "operation": {"kind": "noop"}})
+    elif state == "tool":
+        from nexus.ui_support.tool_details import styled_lines, tool_detail_sections
+        from nexus.view.model import ToolCallView
+        tool = ToolCallView(call_id="c", name="Edit", event_seq=2, status="completed", input={"path": "src/util.py", "old": "return sum(values)", "new": "return int(sum(values))"},
+                            diff={"path": "src/util.py", "hunk": "--- a/src/util.py\n+++ b/src/util.py\n@@ -9,2 +9,2 @@\n def total(values):\n-    return sum(values)\n+    return int(sum(values))"})
+        snapshot["panel_title"] = "Edit"
+        snapshot["panel_lines"], snapshot["panel_tones"] = styled_lines(tool_detail_sections(tool))
     elif state == "light":
         snapshot["theme"] = "nexus-light"
     elif state == "panel":

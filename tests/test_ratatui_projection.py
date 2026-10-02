@@ -206,3 +206,14 @@ def test_diff_blocks_send_rows_and_counts(tmp_path, monkeypatch):
     diff = next(b for b in _snapshot(tmp_path, monkeypatch, [replace(_turn(), tools=[edit])])["blocks"] if b["kind"] == "diff")
     assert diff["title"] == "a.py" and (diff["added"], diff["removed"]) == (1, 1)
     assert diff["diff_rows"] == [[1, "old", 1, "new", "change"]]
+
+
+def test_tool_detail_tones_mirror_the_plain_text_and_the_textual_modal():
+    from nexus.ui_support.tool_details import DetailRow, DetailSection, sections_to_text, styled_lines
+
+    sections = [DetailSection("Parameters", (DetailRow("path", "a.py"), DetailRow("edits[0]", "", header=True, indent=0),
+                                             DetailRow("old", "x\ny", block=True, indent=1))),
+                DetailSection("Diff", (DetailRow("hunk", "@@ -1 +1 @@\n-a\n+b\n c", block=True),), kind="diff")]
+    lines, tones = styled_lines(sections)
+    assert "\n".join(lines) == sections_to_text(sections)
+    assert tones == ["title", "kv", "header", "label", "", "", "", "title", "label", "hunk", "del", "add", ""]

@@ -292,9 +292,9 @@ class Workflows:
             else:
                 self.shell.collapsed_turns.add(operation["id"])
         elif kind == "tool_page":
-            from ...ui_support.tool_details import sections_to_text, tool_detail_sections
+            from ...ui_support.tool_details import styled_lines, tool_detail_sections
             tool = next(tool for tool in self.shell.controller.view.tools if tool.call_id == operation["id"])
-            self.shell.show(tool.name, sections_to_text(tool_detail_sections(tool)))
+            self.shell.show_styled(tool.name, *styled_lines(tool_detail_sections(tool)))
         elif kind == "session_open":
             await self.shell.switch_project(operation["workspace"], operation["id"])
         elif kind == "session_archive":

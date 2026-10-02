@@ -36,6 +36,7 @@ class ShellActions:
         self.controller = controller
         self.panel_title = ""
         self.panel_lines = []
+        self.panel_tones = []
         self.attachments = []
         self.attachment_labels = {}
         self.generation = 0
@@ -79,7 +80,13 @@ class ShellActions:
         if hasattr(self, "workflows"):
             self.workflows.form = None
         self.panel_title = title
+        self.panel_tones = []
         self.panel_lines = value.splitlines() if isinstance(value, str) else labelled(value)
+
+    def show_styled(self, title, lines, tones):
+        """A panel whose lines carry tones (``ui_support.tool_details.styled_lines``)."""
+        self.show(title, "")
+        self.panel_lines, self.panel_tones = list(lines), list(tones)
 
     def picker(self, title, rows, command, key):
         self.show(title, rows)

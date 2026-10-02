@@ -315,6 +315,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "generation": shell.generation if shell else 0,
             "panel_title": redact(escape_controls(shell.panel_title)) if shell else "",
             "panel_lines": [redact(escape_controls(line)) for line in shell.panel_lines] if shell else [],
+            "panel_tones": list(shell.panel_tones) if shell else [],
             "items": [{**item, "label": redact(escape_controls(item["label"]))} for item in shell.items] if shell else [],
             "prompt": prompt,
             "restore": shell.composer_restore if shell else "",

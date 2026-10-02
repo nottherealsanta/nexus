@@ -545,7 +545,11 @@ pub fn draw(
             frame.render_widget(Paragraph::new(lines).style(Style::default().bg(p.dialog)), inner);
         } else {
             let mut panel = Cache::default();
-            panel.update(&s.panel_lines, inner.width, &p);
+            if s.panel_tones.len() == s.panel_lines.len() && !s.panel_tones.is_empty() {
+                panel.lines = toned_lines(&s.panel_lines, &s.panel_tones, inner.width, &p);
+            } else {
+                panel.update(&s.panel_lines, inner.width, &p);
+            }
             frame.render_widget(
                 Paragraph::new(
                     panel
@@ -730,6 +734,18 @@ mod tests {
         assert!(rows[2].0.spans.iter().any(|s| s.style.bg == Some(p.diff_add)));
         assert_eq!(text(3), "  ⋯");
         assert!(text(4).contains("40 tail"));
+    }
+    #[test]
+    fn tool_detail_lines_are_toned_and_wrapped_inside_the_dialog() {
+        let p = Palette::new(false);
+        let lines = vec!["PARAMETERS".to_string(), "  path: src/a.py".into(), "  +added line that is rather long indeed".into()];
+        let tones = vec!["title".to_string(), "kv".into(), "add".into()];
+        let rows = toned_lines(&lines, &tones, 20, &p);
+        assert!(rows[0].spans.iter().any(|s| s.style.add_modifier.contains(Modifier::BOLD)));
+        assert_eq!(rows[1].spans.iter().map(|s| s.content.as_ref()).collect::<String>(), "  path: src/a.py");
+        assert_eq!(rows[1].spans[1].style.fg, Some(p.quiet), "the label is dim");
+        assert!(rows.len() > 3, "the long added line wrapped");
+        assert!(rows.iter().all(|r| r.spans.iter().map(|s| s.content.chars().count()).sum::<usize>() <= 20));
     }
     #[test]
     fn running_slot_is_replaced_per_frame() {
@@ -957,6 +973,41 @@ pub fn dialog_frame(frame: &mut Frame, area: Rect, title: &str, p: &Palette) -> 
         Rect { x: area.x + 2, y: area.y + 1, width: area.width.saturating_sub(4), height: 2.min(area.height) },
     );
     dialog_inner(area)
+}
+
+/// Panel lines coloured by tone like the Textual tool-details modal: bold section
+/// titles, dim labels (`label: ` before a value), green/red/magenta diff lines.
+/// Wrapped rows keep the line's leading indent plus two columns.
+pub fn toned_lines(lines: &[String], tones: &[String], width: u16, p: &Palette) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    for (text, tone) in lines.iter().zip(tones) {
+        let indent = text.len() - text.trim_start().len();
+        let body = &text[indent..];
+        let style = |color: Color| Style::default().fg(color);
+        let bold = style(p.text).add_modifier(Modifier::BOLD);
+        let spans: Vec<Span<'static>> = match tone.as_str() {
+            "title" | "header" => vec![Span::styled(body.to_string(), bold)],
+            "label" => vec![Span::styled(body.to_string(), style(p.quiet))],
+            "add" => vec![Span::styled(body.to_string(), style(p.success))],
+            "del" => vec![Span::styled(body.to_string(), style(p.error))],
+            "hunk" => vec![Span::styled(body.to_string(), style(p.purple))],
+            "kv" => match body.split_once(": ") {
+                Some((label, value)) => vec![
+                    Span::styled(format!("{label}: "), style(p.quiet)),
+                    Span::styled(value.to_string(), style(p.text)),
+                ],
+                None => vec![Span::styled(body.to_string(), style(p.text))],
+            },
+            _ => vec![Span::styled(body.to_string(), style(p.muted))],
+        };
+        let indent = indent.min(usize::from(width) / 2);
+        let room = usize::from(width).saturating_sub(indent + 2).max(4);
+        for (i, cells) in crate::transcript::wrap(&spans, room).into_iter().enumerate() {
+            let pad = if i == 0 { indent } else { indent + 2 };
+            out.push(crate::transcript::line(vec![Span::raw(" ".repeat(pad))], cells, None, Style::default()));
+        }
+    }
+    out
 }
 
 pub fn dialog_inner(area: Rect) -> Rect {

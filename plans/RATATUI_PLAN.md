@@ -99,7 +99,7 @@ Composer and input
       Port palette behaviour (fuzzy search over commands and shortcuts).
 
 Dialogs and screens (all currently generic panels/menus)
-- [ ] Tool details modal (`ui/tui/tool_details.py`), Context modal with the
+- [x] Tool details toned (not floating; fixture `ratatui-tool` checked). Remaining here: Tool details modal (`ui/tui/tool_details.py`), Context modal with the
       "Edit <category>…" button, Tools modal (grouped families, token column,
       swatches), Skills/MCP extension modals (toggle, lock, counts),
       shortcuts screen.

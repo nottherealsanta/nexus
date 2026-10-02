@@ -134,6 +134,13 @@ clipping row after 400 rows. Python sends the rows
 (`ui_support/timeline.diff_split_rows`); the old before/after text is gone.
 Syntax highlighting inside diffs is not done.
 
+The tool details panel is toned like Textual's `ToolDetailsScreen`: bold section
+titles, dim `label: ` before each value, dim block labels and green/red/purple
+diff lines. Python sends one tone per line (`ui_support/tool_details.styled_lines`,
+joined it equals `sections_to_text`), Rust colours and wraps them
+(`render::toned_lines`). Other panels stay plain. It is a panel over the
+transcript, not a floating modal.
+
 The tab row follows `SessionTabs`: sessions toggle, one tab per open session
 (status glyph, title up to 24 columns, `×`; the current tab on the panel colour),
 `+`, details toggle. Overflow scrolls the leftmost tabs out so the current one
