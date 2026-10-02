@@ -101,3 +101,9 @@ Empty sessions show the same grey tips as Textual's `EmptyHints`
 (`ui_support/hints.pick_hints`, seeded by session id): Python sends a `hints`
 block (`keys\ttext` rows padded to equal widths) and Rust centres it. Typing
 blanks the rows without moving the layout; the first turn removes the block.
+
+Modified-file rows in the details sidebar expand on click: Rust sends
+`file_toggle` with the path, Python keeps `open_files` (bounded to 256) and then
+sends that file's diff lines (`ui_support/details.diff_preview_lines`, headers
+removed, 60 lines then a clipping notice); Rust colours `+`/`-`/`@@` rows. The
+sidebar scrolls with the wheel. Keyboard expansion is not implemented yet.

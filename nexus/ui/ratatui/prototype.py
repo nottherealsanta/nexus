@@ -160,7 +160,7 @@ def _context_blocks(shell, view):
 
 def _details_panel(controller, view, shell):
     """The Textual details sidebar (SESSION, MODIFIED FILES, MCP SERVERS) as data."""
-    from ...ui_support.details import mcp_rows, modified_files, session_rows
+    from ...ui_support.details import diff_preview_lines, mcp_rows, modified_files, session_rows
     rows = session_rows(view, phase=view.phase, agent=getattr(controller, "agent_name", "build"),
                         model=getattr(controller, "model", None) or "default",
                         effort=getattr(controller, "reasoning_effort", None))
@@ -168,7 +168,9 @@ def _details_panel(controller, view, shell):
     added, removed = sum(f.added for f in files), sum(f.removed for f in files)
     return {
         "session": [[label, redact(escape_controls(value))] for label, value in rows],
-        "files": [{"path": redact(escape_controls(f.path)), "added": f.added, "removed": f.removed, "created": f.created} for f in files],
+        "files": [{"path": redact(escape_controls(f.path)), "added": f.added, "removed": f.removed, "created": f.created,
+                   "open": (is_open := bool(shell and f.path in shell.open_files)),
+                   "diff": [redact(escape_controls(line)) for line in diff_preview_lines(f.hunks)] if is_open else []} for f in files],
         "files_summary": f"+{added} -{removed} across {len(files)} file{'s' if len(files) != 1 else ''}" if files else "",
         "mcp": [[tone, redact(escape_controls(text)), redact(escape_controls(note))]
                 for tone, text, note in mcp_rows(getattr(shell, "mcp_report", None), error=getattr(shell, "mcp_error", None))],
@@ -518,6 +520,12 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     key = action.get("key")
                     if key in {"sessions_sidebar", "details_sidebar", "context_preview"}:
                         shell.preferences.set(key, not shell.preferences.values[key])
+                elif action["type"] == "file_toggle":
+                    path = action["text"]
+                    if path in shell.open_files:
+                        shell.open_files.discard(path)
+                    elif len(shell.open_files) < 256:
+                        shell.open_files.add(path)
                 elif action["type"] == "logs":
                     shell.logs.open = bool(action.get("open", True))
                     if shell.logs.open:

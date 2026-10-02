@@ -324,6 +324,7 @@ pub fn draw(
     panel_detail: bool,
     sessions_scroll: usize,
     logs_scroll: usize,
+    details_scroll: usize,
 ) -> Regions {
     let p = Palette::new(s.theme == "nexus-light");
     frame.render_widget(
@@ -357,7 +358,7 @@ pub fn draw(
     }
     if r.details.width > 0 {
         frame.render_widget(
-            Paragraph::new(details_lines(s, &p, r.details.width.saturating_sub(5)))
+            Paragraph::new(details_rows(s, &p, r.details.width.saturating_sub(5)).0.into_iter().skip(details_scroll).collect::<Vec<_>>())
                 .block(Block::default().borders(Borders::LEFT).border_style(Style::default().fg(p.border)).padding(ratatui::widgets::Padding::new(2, 2, 1, 0)))
                 .style(Style::default().bg(p.panel).fg(p.text)),
             r.details,
@@ -657,6 +658,24 @@ mod tests {
         assert!(!cache.lines[4].spans.iter().any(|span| span.content.contains("stop")));
     }
     #[test]
+    fn modified_file_rows_expand_with_a_colored_diff_and_map_to_files() {
+        use crate::bridge::FileChange;
+        let mut s = Snapshot::default();
+        s.details_panel.files = vec![
+            FileChange { path: "src/a.rs".into(), added: 1, removed: 1, open: true, diff: vec!["@@ -1 +1 @@".into(), "-old".into(), "+new".into()], ..Default::default() },
+            FileChange { path: "b.rs".into(), created: true, ..Default::default() },
+        ];
+        let (lines, files) = details_rows(&s, &Palette::new(false), 40);
+        assert_eq!(lines.len(), files.len());
+        let first = files.iter().position(|f| *f == Some(0)).unwrap();
+        let text: String = lines[first].spans.iter().map(|span| span.content.as_ref()).collect();
+        assert!(text.starts_with("▾ M ") && text.contains("a.rs"));
+        assert_eq!(lines[first + 2].spans[0].content, "  -old");
+        assert_eq!(files[first + 1], None, "diff rows do not toggle");
+        let second: String = lines[files.iter().position(|f| *f == Some(1)).unwrap()].spans.iter().map(|span| span.content.as_ref()).collect();
+        assert!(second.starts_with("▸ A "));
+    }
+    #[test]
     fn running_slot_is_replaced_per_frame() {
         let line = Line::from(vec![Span::raw(format!("{SPINNER_SLOT} Bash · ls"))]);
         assert_eq!(with_spinner(&line, 0).spans[0].content, "⠋ Bash · ls");
@@ -702,6 +721,7 @@ mod tests {
                     false,
                     false,
                     false,
+                    0,
                     0,
                     0,
                 );
@@ -963,7 +983,8 @@ fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Palette) {
     frame.render_widget(Paragraph::new(vec![Line::from(tabs), row1, rule]), area);
 }
 
-fn details_lines(s: &Snapshot, p: &Palette, width: u16) -> Vec<Line<'static>> {
+/// Details sidebar rows, and for each row the modified file it toggles (if any).
+pub fn details_rows(s: &Snapshot, p: &Palette, width: u16) -> (Vec<Line<'static>>, Vec<Option<usize>>) {
     let title = |text: &str| Line::styled(text.to_string(), Style::default().fg(p.quiet).add_modifier(Modifier::BOLD));
     let quiet = |text: &str| Line::styled(text.to_string(), Style::default().fg(p.quiet));
     let d = &s.details_panel;
@@ -975,15 +996,17 @@ fn details_lines(s: &Snapshot, p: &Palette, width: u16) -> Vec<Line<'static>> {
         ]));
     }
     out.push(Line::default());
+    let mut file_rows: Vec<Option<usize>> = vec![None; out.len()];
     out.push(title(&if d.files.is_empty() { "MODIFIED FILES".to_string() } else { format!("MODIFIED FILES  {}", d.files.len()) }));
     out.push(Line::default());
     if d.files.is_empty() {
         out.push(quiet("No files changed yet."));
     }
-    for file in &d.files {
+    file_rows.resize(out.len(), None);
+    for (index, file) in d.files.iter().enumerate() {
         let (head, base) = file.path.rsplit_once('/').map_or(("", file.path.as_str()), |(h, b)| (h, b));
         let mut spans = vec![
-            Span::styled("▸ ", Style::default().fg(p.quiet)),
+            Span::styled(if file.open { "▾ " } else { "▸ " }, Style::default().fg(p.quiet)),
             Span::styled(if file.created { "A " } else { "M " }, Style::default().fg(if file.created { p.success } else { p.warning })),
         ];
         if !head.is_empty() {
@@ -997,8 +1020,25 @@ fn details_lines(s: &Snapshot, p: &Palette, width: u16) -> Vec<Line<'static>> {
         } else if file.created {
             spans.push(Span::styled("new", Style::default().fg(p.success)));
         }
+        file_rows.resize(out.len(), None);
         out.push(Line::from(spans));
+        file_rows.push(Some(index));
+        if file.open {
+            for row in &file.diff {
+                let tone = match row.chars().next() {
+                    Some('+') => p.success,
+                    Some('-') => p.error,
+                    Some('@') | Some('…') => p.quiet,
+                    _ => p.muted,
+                };
+                out.push(Line::styled(format!("  {row}"), Style::default().fg(tone)));
+            }
+            if file.diff.is_empty() {
+                out.push(quiet(if file.created { "  New file; no diff preview reported." } else { "  No diff preview reported." }));
+            }
+        }
     }
+    file_rows.resize(out.len(), None);
     if !d.files_summary.is_empty() {
         out.push(quiet(&d.files_summary));
     }
@@ -1022,5 +1062,6 @@ fn details_lines(s: &Snapshot, p: &Palette, width: u16) -> Vec<Line<'static>> {
             ]));
         }
     }
-    out
+    file_rows.resize(out.len(), None);
+    (out, file_rows)
 }

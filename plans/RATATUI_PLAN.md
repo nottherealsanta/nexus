@@ -70,7 +70,7 @@ Transcript
       that clicking opens "Attached context".
 
 Details and sessions sidebars
-- [ ] Modified-files rows: expand/collapse with diff preview, click and keyboard,
+- [x] Click expand/collapse and wheel scroll done; keyboard still open. Original: Modified-files rows: expand/collapse with diff preview, click and keyboard,
       "+a -r across N files" (data is already projected; add `expanded` state and an
       operation).
 - [ ] MCP refresh control (`↻`) and live doctor refresh; update notice.

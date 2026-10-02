@@ -58,6 +58,7 @@ class ShellActions:
         self.workspace = ""
         self.tabs = []
         self.breadcrumb = ""
+        self.open_files: set[str] = set()  # modified files expanded in the details sidebar
         self.reconnect = None
         from .preferences import Preferences
         from .workflows import Workflows

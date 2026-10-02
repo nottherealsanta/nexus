@@ -26,6 +26,19 @@ class FileChange:
     hunks: tuple[str, ...] = ()
 
 
+def diff_preview_lines(hunks: Iterable[str], limit: int = 60) -> list[str]:
+    """A file's diff lines without ``---``/``+++`` headers, clipped with a notice.
+
+    Plain text (the first character carries add/remove/hunk meaning), so each
+    shell colours it its own way; the same rules as the Textual sidebar.
+    """
+    lines = [sanitize(line, 200) for hunk in hunks for line in hunk.splitlines()
+             if not line.startswith(("---", "+++"))]
+    if len(lines) > limit:
+        lines = [*lines[:limit], f"… {len(lines) - limit} more lines"]
+    return lines
+
+
 def modified_files(view: Any) -> list[FileChange]:
     """Aggregate successful file edits across the session and its subagents."""
     files: dict[str, FileChange] = {}

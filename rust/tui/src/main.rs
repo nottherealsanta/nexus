@@ -182,6 +182,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut scroll = 0usize;
     let mut panel_scroll = 0usize;
     let mut sessions_scroll = 0usize;
+    let mut details_scroll = 0usize;
     let mut panel_detail = false;
     let mut selection = 0usize;
     let mut filter = String::new();
@@ -234,6 +235,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 draft = Editor::default();
                 follow = true;
                 scroll = 0;
+                details_scroll = 0;
             }
             if next.theme != s.theme {
                 cache.reset();
@@ -329,6 +331,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     panel_detail,
                     sessions_scroll,
                     logs_scroll,
+                    details_scroll,
                 );
                 let query = draft.text[..draft.cursor]
                     .rsplit(char::is_whitespace)
@@ -834,6 +837,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             dirty = true;
                             continue;
                         }
+                        if r.details.contains((mouse.column, mouse.row).into()) {
+                            details_scroll = details_scroll.saturating_sub(3);
+                            dirty = true;
+                            continue;
+                        }
                         if r.sessions.contains((mouse.column, mouse.row).into()) {
                             sessions_scroll = sessions_scroll.saturating_sub(3);
                             dirty = true;
@@ -858,6 +866,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .contains((mouse.column, mouse.row).into())
                         {
                             logs_scroll = (logs_scroll + 3).min(s.logs.len().saturating_sub(1));
+                            dirty = true;
+                            continue;
+                        }
+                        if r.details.contains((mouse.column, mouse.row).into()) {
+                            let palette = render::Palette::new(s.theme == "nexus-light");
+                            let rows = render::details_rows(&s, &palette, r.details.width.saturating_sub(5)).0.len();
+                            details_scroll = (details_scroll + 3).min(rows.saturating_sub(r.details.height.saturating_sub(1) as usize));
                             dirty = true;
                             continue;
                         }
@@ -916,7 +931,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             dirty = true;
                             continue;
                         }
-                        if r.sessions.contains((mouse.column, mouse.row).into()) {
+                        if r.details.contains((mouse.column, mouse.row).into()) {
+                            let palette = render::Palette::new(s.theme == "nexus-light");
+                            let (_, files) = render::details_rows(&s, &palette, r.details.width.saturating_sub(5));
+                            let row = details_scroll + (mouse.row - r.details.y).saturating_sub(1) as usize;
+                            if let Some(file) = files.get(row).copied().flatten().and_then(|i| s.details_panel.files.get(i)) {
+                                send(json!({"type":"file_toggle","text":file.path,"generation":s.generation}))?;
+                            }
+                        } else if r.sessions.contains((mouse.column, mouse.row).into()) {
                             if let Some(row) = render::session_rows(&s)
                                 .get(sessions_scroll + (mouse.row - r.sessions.y) as usize)
                                 .and_then(|(_, index)| {

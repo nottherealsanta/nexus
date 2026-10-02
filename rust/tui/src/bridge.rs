@@ -134,4 +134,6 @@ pub struct FileChange {
     pub added: u64,
     pub removed: u64,
     pub created: bool,
+    pub open: bool,
+    pub diff: Vec<String>,
 }

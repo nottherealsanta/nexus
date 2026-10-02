@@ -144,3 +144,13 @@ def test_empty_session_hints_are_aligned_and_vanish_with_the_first_turn(tmp_path
     assert hints["kind"] == "hints" and hints["gap"] == 4 and len(rows) == 4
     assert len({len(keys) for keys, _ in rows}) == 1 and len({len(text) for _, text in rows}) == 1
     assert not any(block["kind"] == "hints" for block in _snapshot(tmp_path, monkeypatch, [_turn()])["blocks"])
+
+
+def test_modified_file_diff_is_sent_only_while_expanded(tmp_path, monkeypatch):
+    edit = ToolCallView(call_id="e", name="Edit", event_seq=2, status="completed",
+                        input={"path": "a.py"}, diff={"path": "a.py", "hunk": "--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new"})
+    turn = replace(_turn(), tools=[edit])
+    closed = _snapshot(tmp_path, monkeypatch, [turn])["details_panel"]["files"][0]
+    assert closed["open"] is False and closed["diff"] == []
+    opened = _snapshot(tmp_path, monkeypatch, [turn], open_files={"a.py"})["details_panel"]["files"][0]
+    assert opened["open"] is True and opened["diff"] == ["@@ -1 +1 @@", "-old", "+new"]
