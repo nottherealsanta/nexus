@@ -570,6 +570,14 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     if image:
                         shell.attachments.append(await shell.client.prepare_attachment(name="clipboard.png", data=image))
                         shell.composer_insert = shell.attachment_label(len(shell.attachments)-1)
+                elif action["type"] == "copy_selection":
+                    from .desktop import copy_text
+                    text = str(action["text"])[:1_000_000]
+                    try:
+                        await copy_text(text)
+                        shell.notice = f"Copied {len(text)} characters"
+                    except ValueError as exc:  # e.g. over SSH: the terminal's OSC 52 copy already ran
+                        shell.notice = f"Copied {len(text)} characters via the terminal ({exc})"
                 elif action["type"] == "copy_text":
                     from .desktop import copy_text
                     await copy_text(action["text"])

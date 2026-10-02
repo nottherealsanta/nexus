@@ -2,7 +2,7 @@
 
     PYTHONPATH=. python tests/playwright_ratatui_live.py "/mock hello" "/mock question" "blue wins"
 
-Each argument is typed and submitted in turn (or `click:X,Y` / `key:Control+p` / `type:text` (no Enter)); a screenshot follows each under
+Each argument is typed and submitted in turn (or `click:X,Y` / `key:Control+p` / `type:text` (no Enter) / `drag:X1,Y1,X2,Y2`); a screenshot follows each under
 artifacts/ratatui-live/. Needs cargo build first. Dev mode isolates state
 in ~/.nexus/dev; no provider credentials or network are used.
 """
@@ -39,6 +39,10 @@ with sync_playwright() as pw:
             if text.startswith("click:"):  # click:X,Y in page pixels
                 x, y = (float(v) for v in text[6:].split(","))
                 page.mouse.click(x, y); page.wait_for_timeout(1500)
+            elif text.startswith("drag:"):  # drag:X1,Y1,X2,Y2 with the left button
+                x1, y1, x2, y2 = (float(v) for v in text[5:].split(","))
+                page.mouse.move(x1, y1); page.mouse.down(); page.mouse.move((x1 + x2) / 2, (y1 + y2) / 2); page.mouse.move(x2, y2)
+                page.wait_for_timeout(300); page.screenshot(path=str(OUT / f"{step}-held.png")); page.mouse.up(); page.wait_for_timeout(1500)
             elif text.startswith("type:"):  # type without pressing Enter
                 page.keyboard.type(text[5:]); page.wait_for_timeout(1500)
             elif text.startswith("key:"):  # key:Control+p

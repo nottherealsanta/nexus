@@ -162,6 +162,13 @@ The Logs drawer (Ctrl+E) docks on the right, 36 columns wide like Textual's
 transcript and sidebars shrink to make room (`Regions.logs`). Below 100 columns it
 falls back to the lower half of the transcript.
 
+Mouse selection in the transcript: press and drag highlights rows by column
+(reversed colours); releasing copies the text through OSC 52 (reaches the terminal
+clipboard even over SSH) and through the daemon-side desktop clipboard
+(`copy_selection` action; its failure over SSH is reported, not hidden). A press
+that is released without dragging is still a click on the block. Any key clears the
+selection. Only the transcript can be selected; sidebars and dialogs cannot.
+
 Context chips say "unavailable while a turn is running" instead of failing when the
 host has no preview. Rows are menu lines, so there are no swatch colours or aligned
 token column yet.

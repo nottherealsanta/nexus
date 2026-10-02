@@ -191,6 +191,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut dirty = true;
     let spin_clock = Instant::now();
     let mut nav: Option<usize> = None;
+    let mut press: Option<(usize, usize)> = None;
     let mut typed = (String::new(), 0usize);
     let mut complete_due: Option<Instant> = None;
     let mut asked = String::new();
@@ -398,6 +399,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     action("quit", "")?;
                     break;
                 }
+                cache.selection = None;
                 // Sessions filter (click the box): typing edits it, Enter keeps it, Escape clears it.
                 if cache.filtering {
                     match key.code {
@@ -991,6 +993,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
+                    MouseEventKind::Drag(event::MouseButton::Left) => {
+                        if let Some(start) = press {
+                            let offset = if follow { cache.lines.len().saturating_sub(r.transcript.height as usize) } else { scroll };
+                            let row = usize::from(mouse.row.clamp(r.transcript.y, r.transcript.y + r.transcript.height.saturating_sub(1)) - r.transcript.y);
+                            let column = usize::from(mouse.column.saturating_sub(r.transcript.x));
+                            cache.selection = Some((start, (offset + row, column + 1)));
+                        }
+                    }
+                    MouseEventKind::Up(event::MouseButton::Left) => {
+                        if let Some((line, _)) = press.take() {
+                            let text = if cache.selection.is_some_and(|(a, b)| a.0 != b.0 || a.1.abs_diff(b.1) > 1) { render::selected_text(&cache) } else { String::new() };
+                            if text.is_empty() {
+                                cache.selection = None;
+                                if let Some(Some(operation)) = cache.operations.get(line) {
+                                    send(json!({"type":"operation","operation":operation,"generation":s.generation}))?;
+                                }
+                            } else {
+                                // OSC 52 reaches the user's terminal even over SSH; Python also tries the desktop clipboard.
+                                let mut tty = io::stderr();
+                                write!(tty, "\x1b]52;c;{}\x07", base64(text.as_bytes()))?;
+                                tty.flush()?;
+                                send(json!({"type":"copy_selection","text":text,"generation":s.generation}))?;
+                            }
+                        }
+                    }
                     MouseEventKind::Down(event::MouseButton::Left) => {
                         if let Some(prompt) = &s.prompt {
                             let (_, choices) = render::prompt_regions(
@@ -1051,14 +1078,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             } else {
                                 scroll
                             };
-                            if let Some(Some(operation)) = cache
-                                .operations
-                                .get(offset + (mouse.row - r.transcript.y) as usize)
-                            {
-                                send(
-                                    json!({"type":"operation","operation":operation,"generation":s.generation}),
-                                )?;
-                            }
+                            // Press only starts a selection; releasing without dragging is a click.
+                            cache.selection = None;
+                            press = Some((
+                                offset + (mouse.row - r.transcript.y) as usize,
+                                usize::from(mouse.column.saturating_sub(r.transcript.x)),
+                            ));
                         } else if r.context.contains((mouse.column, mouse.row).into()) {
                             let index = usize::from(
                                 (mouse.column - r.context.x) * 5 / r.context.width.max(1),
@@ -1120,5 +1145,29 @@ mod tests {
         .unwrap();
         assert_eq!(s.schema, 1);
         assert_eq!(s.lines[0], "User: hello");
+    }
+}
+
+fn base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = (u32::from(chunk[0]) << 16) | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8) | u32::from(*chunk.get(2).unwrap_or(&0));
+        out.push(TABLE[(n >> 18) as usize & 63] as char);
+        out.push(TABLE[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+#[cfg(test)]
+mod base64_tests {
+    #[test]
+    fn matches_the_standard_alphabet_with_padding() {
+        assert_eq!(super::base64(b""), "");
+        assert_eq!(super::base64(b"f"), "Zg==");
+        assert_eq!(super::base64(b"fo"), "Zm8=");
+        assert_eq!(super::base64(b"foo"), "Zm9v");
+        assert_eq!(super::base64("héllo".as_bytes()), "aMOpbGxv");
     }
 }

@@ -106,6 +106,66 @@ pub struct Cache {
     /// Sessions sidebar filter text and whether it is being edited.
     pub filter: String,
     pub filtering: bool,
+    /// Mouse selection in transcript coordinates: (line, column) start and end.
+    pub selection: Option<((usize, usize), (usize, usize))>,
+}
+/// Order two (line, column) points.
+pub fn ordered(a: (usize, usize), b: (usize, usize)) -> ((usize, usize), (usize, usize)) {
+    if a <= b { (a, b) } else { (b, a) }
+}
+/// Plain text of the selected transcript rows (trailing spaces trimmed per row).
+pub fn selected_text(cache: &Cache) -> String {
+    let Some((a, b)) = cache.selection else { return String::new() };
+    let ((first, from), (last, to)) = ordered(a, b);
+    let mut out = Vec::new();
+    for index in first..=last.min(cache.lines.len().saturating_sub(1)) {
+        let Some(line) = cache.lines.get(index) else { break };
+        let mut column = 0usize;
+        let mut text = String::new();
+        for span in &line.spans {
+            for g in span.content.graphemes(true) {
+                let width = g.width();
+                let start = if index == first { from } else { 0 };
+                let end = if index == last { to } else { usize::MAX };
+                if column + width > start && column < end {
+                    text.push_str(g);
+                }
+                column += width;
+            }
+        }
+        out.push(text.trim_end().to_string());
+    }
+    out.join("\n")
+}
+/// Reverse the columns `from..to` of a line (a selection highlight).
+fn highlight(line: Line<'static>, from: usize, to: usize) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut column = 0usize;
+    for span in line.spans {
+        let mut plain = String::new();
+        let mut marked = String::new();
+        let flush = |plain: &mut String, marked: &mut String, spans: &mut Vec<Span<'static>>, style: Style| {
+            if !plain.is_empty() {
+                spans.push(Span::styled(std::mem::take(plain), style));
+            }
+            if !marked.is_empty() {
+                spans.push(Span::styled(std::mem::take(marked), style.add_modifier(Modifier::REVERSED)));
+            }
+        };
+        let mut in_range = false;
+        for g in span.content.graphemes(true) {
+            let width = g.width();
+            let inside = column + width > from && column < to;
+            if inside != in_range {
+                flush(&mut plain, &mut marked, &mut spans, span.style);
+                in_range = inside;
+            }
+            if inside { marked.push_str(g) } else { plain.push_str(g) }
+            column += width;
+        }
+        flush(&mut plain, &mut marked, &mut spans, span.style);
+    }
+    Line::from(spans)
 }
 /// Keyboard-focusable transcript blocks: runs of consecutive lines that open the
 /// same operation (what a click on them would do), as `(first line, last line)`.
@@ -418,7 +478,16 @@ pub fn draw(
                 .take(r.transcript.height as usize)
                 .enumerate()
                 .map(|(row, line)| {
-                    let line = with_spinner(line, cache.spin);
+                    let mut line = with_spinner(line, cache.spin);
+                    if let Some((a, b)) = cache.selection {
+                        let ((first, from), (last, to)) = ordered(a, b);
+                        let at = offset + row;
+                        if (first..=last).contains(&at) {
+                            let start = if at == first { from } else { 0 };
+                            let end = if at == last { to } else { usize::MAX };
+                            line = highlight(line, start, end);
+                        }
+                    }
                     match cache.focus {
                         Some((first, last)) if (first..=last).contains(&(offset + row)) => {
                             let mut line = line;
@@ -849,6 +918,21 @@ mod tests {
         let narrow = regions(Rect::new(0, 0, 90, 40), &s, 8, true);
         assert_eq!(narrow.logs.width, 0);
         assert_eq!(logs_region(&narrow).y, narrow.transcript.y + narrow.transcript.height / 2);
+    }
+    #[test]
+    fn selection_extracts_text_by_columns_and_reverses_the_highlight() {
+        let mut cache = Cache::default();
+        cache.lines = vec![Line::from("hello world"), Line::from("  second line  "), Line::from("third")];
+        cache.selection = Some(((0, 6), (2, 3)));
+        assert_eq!(selected_text(&cache), "world\n  second line\nthi");
+        cache.selection = Some(((1, 8), (1, 2))); // reversed drag
+        assert_eq!(selected_text(&cache), "second");
+    }
+    #[test]
+    fn highlight_splits_spans_at_the_selected_columns() {
+        let line = highlight(Line::from("abcdef"), 2, 4);
+        let parts: Vec<(String, bool)> = line.spans.iter().map(|s| (s.content.to_string(), s.style.add_modifier.contains(Modifier::REVERSED))).collect();
+        assert_eq!(parts, vec![("ab".to_string(), false), ("cd".to_string(), true), ("ef".to_string(), false)]);
     }
     #[test]
     fn running_slot_is_replaced_per_frame() {
