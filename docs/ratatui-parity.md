@@ -150,6 +150,12 @@ Textual); Appearance and Layout use Textual's labels and end with `Reset to defa
 The two-pane full-page Settings layout is not built: Settings is still a stack of
 menus.
 
+Keyboard focus over the transcript: with an empty draft, Tab focuses the last
+clickable block (tool row, thought, prompt card, agent card, diff); Up/Down, Tab,
+Shift+Tab or j/k move, Enter or Space open what a click would, and Escape or any
+other key returns to the composer. The focused block gets the raised background
+and the view scrolls to keep it visible (`render::targets`; the PTY test drives it).
+
 Context chips say "unavailable while a turn is running" instead of failing when the
 host has no preview. Rows are menu lines, so there are no swatch colours or aligned
 token column yet.

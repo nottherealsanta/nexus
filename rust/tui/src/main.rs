@@ -190,6 +190,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut completion_hidden = "\0".to_string();
     let mut dirty = true;
     let spin_clock = Instant::now();
+    let mut nav: Option<usize> = None;
     let mut typed = (String::new(), 0usize);
     let mut complete_due: Option<Instant> = None;
     let mut asked = String::new();
@@ -236,6 +237,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 follow = true;
                 scroll = 0;
                 details_scroll = 0;
+                nav = None;
             }
             if next.theme != s.theme {
                 cache.reset();
@@ -313,6 +315,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             form_changed = None;
         }
         if dirty {
+            cache.focus = nav.and_then(|index| render::targets(&cache).get(index).copied());
             terminal.draw(|frame| {
                 render::draw(
                     frame,
@@ -394,6 +397,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL) {
                     action("quit", "")?;
                     break;
+                }
+                // Keyboard focus over clickable transcript blocks: Tab (empty draft) enters,
+                // arrows/Tab move, Enter or Space opens what a click would, Escape or any
+                // other key leaves.
+                if let Some(index) = nav {
+                    let blocks = render::targets(&cache);
+                    let last = blocks.len().saturating_sub(1);
+                    let next = match key.code {
+                        KeyCode::Up | KeyCode::BackTab | KeyCode::Char('k') => Some(index.saturating_sub(1).min(last)),
+                        KeyCode::Down | KeyCode::Tab | KeyCode::Char('j') => Some((index + 1).min(last)),
+                        KeyCode::Home => Some(0),
+                        KeyCode::End => Some(last),
+                        _ => None,
+                    };
+                    if let Some(next) = next.filter(|_| !blocks.is_empty()) {
+                        nav = Some(next);
+                        let size = terminal.size()?;
+                        let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
+                        let height = render::regions(area, &s, render::composer_height(area, &draft)).transcript.height as usize;
+                        let (first, end) = blocks[next];
+                        if follow {
+                            scroll = cache.lines.len().saturating_sub(height);
+                        }
+                        follow = false;
+                        if first < scroll || end + 1 - first > height {
+                            scroll = first;
+                        } else if end >= scroll + height {
+                            scroll = end + 1 - height;
+                        }
+                        dirty = true;
+                        continue;
+                    }
+                    nav = None;
+                    dirty = true;
+                    match key.code {
+                        KeyCode::Enter | KeyCode::Char(' ') => {
+                            if let Some(Some(operation)) = blocks.get(index).and_then(|(first, _)| cache.operations.get(*first)) {
+                                send(json!({"type":"operation","operation":operation,"generation":s.generation}))?;
+                            }
+                            continue;
+                        }
+                        KeyCode::Esc => continue,
+                        _ => {}
+                    }
                 }
                 if key.code == KeyCode::Char('x') && key.modifiers.contains(KeyModifiers::CONTROL) {
                     leader = Some(Instant::now());
@@ -791,6 +838,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     KeyCode::Up if !draft.text.contains('\n') => draft.history(true),
                     KeyCode::Down if !draft.text.contains('\n') => draft.history(false),
                     KeyCode::BackTab => action("cycle_agent", "")?,
+                    KeyCode::Tab if draft.text.is_empty() && s.panel_title.is_empty() && s.prompt.is_none() && !render::targets(&cache).is_empty() => {
+                        nav = Some(render::targets(&cache).len() - 1);
+                    }
                     KeyCode::Tab => {
                         let query = draft.text[..draft.cursor]
                             .rsplit(char::is_whitespace)

@@ -101,6 +101,23 @@ pub struct Cache {
     /// The draft is non-empty: empty-session hints keep their rows but go blank.
     pub typing: bool,
     built_typing: bool,
+    /// Line range of the transcript block focused with the keyboard (highlighted).
+    pub focus: Option<(usize, usize)>,
+}
+/// Keyboard-focusable transcript blocks: runs of consecutive lines that open the
+/// same operation (what a click on them would do), as `(first line, last line)`.
+pub fn targets(cache: &Cache) -> Vec<(usize, usize)> {
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    let mut previous: Option<&serde_json::Value> = None;
+    for (index, operation) in cache.operations.iter().enumerate() {
+        match operation {
+            Some(op) if previous == Some(op) => out.last_mut().unwrap().1 = index,
+            Some(_) => out.push((index, index)),
+            None => {}
+        }
+        previous = operation.as_ref();
+    }
+    out
 }
 pub const SPINNER_SLOT: char = '\u{e000}';
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -386,7 +403,21 @@ pub fn draw(
                 .iter()
                 .skip(offset)
                 .take(r.transcript.height as usize)
-                .map(|line| with_spinner(line, cache.spin))
+                .enumerate()
+                .map(|(row, line)| {
+                    let line = with_spinner(line, cache.spin);
+                    match cache.focus {
+                        Some((first, last)) if (first..=last).contains(&(offset + row)) => {
+                            let mut line = line;
+                            for span in &mut line.spans {
+                                span.style = span.style.bg(p.element_hi);
+                            }
+                            line.style = line.style.bg(p.element_hi);
+                            line
+                        }
+                        _ => line,
+                    }
+                })
                 .collect::<Vec<_>>(),
         ),
         r.transcript,
@@ -749,6 +780,14 @@ mod tests {
         assert_eq!(rows[1].spans[1].style.fg, Some(p.quiet), "the label is dim");
         assert!(rows.len() > 3, "the long added line wrapped");
         assert!(rows.iter().all(|r| r.spans.iter().map(|s| s.content.chars().count()).sum::<usize>() <= 20));
+    }
+    #[test]
+    fn keyboard_targets_are_runs_of_lines_with_the_same_operation() {
+        let op = |id: &str| Some(serde_json::json!({"kind": "tool_page", "id": id}));
+        let mut cache = Cache::default();
+        cache.operations = vec![None, op("a"), op("a"), None, op("b"), op("c"), op("c"), None];
+        assert_eq!(targets(&cache), vec![(1, 2), (4, 4), (5, 6)]);
+        assert!(targets(&Cache::default()).is_empty());
     }
     #[test]
     fn running_slot_is_replaced_per_frame() {

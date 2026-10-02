@@ -56,7 +56,7 @@ Transcript
 - [x] Spinner done (slot `U+E000`, Rust animates; live tail already streams in snapshots). Original note: Running-tool spinner and live tail animation (rows are static between
       snapshots; add a tick or a `spinner` frame sent by Python at ~8 Hz only while
       a tool runs).
-- [ ] Keyboard focus navigation through the transcript (Tab to tool cards, thoughts,
+- [x] Done (Tab, arrows, Enter; PTY and Rust tests; not checked by eye). Keyboard focus navigation through the transcript (Tab to tool cards, thoughts,
       user cards; Enter/Space open or toggle; hover/focus highlight like
       `.tool-card:focus`).
 - [x] Empty-session hints done (`hints` block). Still open:  connection-status banner, activity progress

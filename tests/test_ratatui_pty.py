@@ -79,6 +79,14 @@ def test_native_bridge_keyboard_and_terminal_restoration():
         time.sleep(.1)
         os.write(master, b"\x1b[B\r")  # Enter on a standalone /command runs the highlighted one, like Textual
         assert read_action() == {"type": "submit", "text": "/mcp", "mode": "queue", "generation": 0}
+        # Keyboard focus: Tab on an empty draft focuses the last clickable block; Enter opens it.
+        process.stdin.write((json.dumps({"schema": 1, "revision": 3, "title": "Nexus PTY", "status": "idle",
+            "blocks": [{"id": "t1", "kind": "tool", "text": "Read a.py", "operation": {"kind": "tool_page", "id": "t1"}},
+                       {"id": "t2", "kind": "tool", "text": "Read b.py", "operation": {"kind": "tool_page", "id": "t2"}}]}) + "\n").encode())
+        process.stdin.flush()
+        time.sleep(.2)
+        os.write(master, b"\t\x1b[A\r")
+        assert read_action() == {"type": "operation", "operation": {"kind": "tool_page", "id": "t1"}, "generation": 0}
         process.stdin.write((json.dumps({"schema": 1, "revision": 3,
             "title": "Nexus PTY", "status": "awaiting_permission", "lines": [],
             "prompt": {"kind": "permission", "id": "permission-1", "lines": ["Run shell?"],
