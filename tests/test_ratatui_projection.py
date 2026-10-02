@@ -125,3 +125,14 @@ def test_failing_section_becomes_a_notice_and_other_sections_render(tmp_path, mo
     notice = next(block for block in snapshot["blocks"] if block["id"] == "notice")["text"]
     assert "Turn bad could not be shown" in notice and "Details sidebar could not be shown" in notice
     assert snapshot["details_panel"] == {}
+
+
+def test_running_tool_carries_the_animation_slot_and_finished_does_not(tmp_path, monkeypatch):
+    from nexus.ui.ratatui.prototype import SPINNER_FRAMES, SPINNER_SLOT
+
+    running = replace(_turn(phase="running"), tools=[ToolCallView(call_id="c", name="Bash", event_seq=2, status="running", input={"command": "ls"})])
+    blocks = _snapshot(tmp_path, monkeypatch, [running])["blocks"]
+    tool = next(block for block in blocks if block["kind"] == "tool")
+    assert SPINNER_SLOT in tool["text"] and not any(frame in tool["text"] for frame in SPINNER_FRAMES)
+    done = next(block for block in _snapshot(tmp_path, monkeypatch, [_turn()])["blocks"] if block["kind"] == "tool")
+    assert SPINNER_SLOT not in done["text"]

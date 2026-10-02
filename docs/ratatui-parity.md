@@ -85,3 +85,8 @@ one-shot composer effect.
 The composer grows with its wrapped content from the 8-row resting layout up to
 Textual's `max-height: 22` editor rows, always leaving the transcript four rows
 (`render::composer_height`; mouse hit-testing uses the same height).
+
+Running tool rows animate: Python puts the private-use slot `U+E000` where the
+spinner glyph goes, and Rust draws the current braille frame there and redraws
+at ~8 Hz only while some block holds a slot. Cached wrapped rows keep the slot,
+so animation costs no re-wrap and sends no snapshots.

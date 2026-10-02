@@ -53,7 +53,7 @@ Transcript
 - [ ] Inline diff under Edit/Patch rows with Textual's line numbers, hunks, context
       and "clipped" notice (`ui_support/tui_diff.py`); native shows a plain
       before/after split.
-- [ ] Running-tool spinner and live tail animation (rows are static between
+- [x] Spinner done (slot `U+E000`, Rust animates; live tail already streams in snapshots). Original note: Running-tool spinner and live tail animation (rows are static between
       snapshots; add a tick or a `spinner` frame sent by Python at ~8 Hz only while
       a tool runs).
 - [ ] Keyboard focus navigation through the transcript (Tab to tool cards, thoughts,

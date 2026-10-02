@@ -188,6 +188,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut completion_index = 0usize;
     let mut completion_hidden = "\0".to_string();
     let mut dirty = true;
+    let spin_clock = Instant::now();
     let mut follow = true;
     let mut cache = render::Cache::default();
     let mut logs_open = false;
@@ -342,6 +343,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             dirty = false;
         }
         if !event::poll(Duration::from_millis(16))? {
+            if render::animating(&s) {
+                let frame = (spin_clock.elapsed().as_millis() / 125) as usize;
+                if frame != cache.spin {
+                    cache.spin = frame;
+                    dirty = true;
+                }
+            }
             continue;
         }
         match event::read()? {

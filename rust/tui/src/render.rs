@@ -90,6 +90,27 @@ pub struct Cache {
     source: Vec<String>,
     width: u16,
     pub lines: Vec<Line<'static>>,
+    /// Animation frame for the running-tool slot (`SPINNER_SLOT`).
+    pub spin: usize,
+}
+pub const SPINNER_SLOT: char = '\u{e000}';
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+/// Whether any block has a running-tool slot, i.e. the screen needs ~8 Hz redraws.
+pub fn animating(s: &Snapshot) -> bool {
+    s.blocks.iter().any(|block| block.text.contains(SPINNER_SLOT))
+}
+fn with_spinner(line: &Line<'static>, frame: usize) -> Line<'static> {
+    if !line.spans.iter().any(|span| span.content.contains(SPINNER_SLOT)) {
+        return line.clone();
+    }
+    let glyph = SPINNER[frame % SPINNER.len()];
+    let mut line = line.clone();
+    for span in &mut line.spans {
+        if span.content.contains(SPINNER_SLOT) {
+            span.content = span.content.replace(SPINNER_SLOT, glyph).into();
+        }
+    }
+    line
 }
 impl Cache {
     pub fn update(&mut self, source: &[String], width: u16, palette: &Palette) {
@@ -351,7 +372,7 @@ pub fn draw(
                 .iter()
                 .skip(offset)
                 .take(r.transcript.height as usize)
-                .cloned()
+                .map(|line| with_spinner(line, cache.spin))
                 .collect::<Vec<_>>(),
         ),
         r.transcript,
@@ -606,6 +627,14 @@ pub fn draw(
 mod tests {
     use super::*;
     use ratatui::{backend::TestBackend, Terminal};
+    #[test]
+    fn running_slot_is_replaced_per_frame() {
+        let line = Line::from(vec![Span::raw(format!("{SPINNER_SLOT} Bash · ls"))]);
+        assert_eq!(with_spinner(&line, 0).spans[0].content, "⠋ Bash · ls");
+        assert_eq!(with_spinner(&line, 11).spans[0].content, "⠙ Bash · ls");
+        let s = Snapshot::default();
+        assert!(!animating(&s));
+    }
     #[test]
     fn composer_grows_with_content_and_is_capped() {
         let area = Rect::new(0, 0, 80, 60);

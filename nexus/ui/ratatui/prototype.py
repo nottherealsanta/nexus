@@ -97,6 +97,8 @@ def _project_turn(turn, shell, agents=None):
                 operation = {"kind": "agent_page", "id": child.id}
         else:
             text = tool_row_text(tool, 0, gutter)
+        if tool_status(tool) == "running":  # the native client animates this slot (docs/ratatui-parity.md)
+            text = text.replace(SPINNER_FRAMES[0], SPINNER_SLOT, 1)
         block = {"id": tool.call_id, "kind": "tool", "status": tool_status(tool), "text": text,
                  "detail": body if shell and shell.verbose else "", "operation": operation}
         entries.append((tool.event_seq, 3, block, 0, 0, "tool"))
@@ -170,6 +172,10 @@ def _details_panel(controller, view, shell):
         "mcp": [[tone, redact(escape_controls(text)), redact(escape_controls(note))]
                 for tone, text, note in mcp_rows(getattr(shell, "mcp_report", None), error=getattr(shell, "mcp_error", None))],
     }
+
+
+SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+SPINNER_SLOT = "\ue000"  # private-use placeholder; Rust draws the current frame here
 
 
 def _guarded(failures: list[str], label: str, build, fallback):
