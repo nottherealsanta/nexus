@@ -10,7 +10,7 @@ State: a broad native client that matches Textual in the transcript, composer, t
 both sidebars, Markdown, inline diffs, prompts, pickers, Settings (two-pane, agent
 form rows), tools/usage/logs panels, mouse selection and keyboard focus. It has been
 **driven live** against a real daemon with the dev-mode mock provider
-(`tests/playwright_ratatui_live.py`), not only through tests. **`nexus chat` now defaults to the native client** (`--renderer ratatui`; if the binary is
+(`tests/playwright_ratatui_live.py`), not only through tests. **Merged to `main` as #52 (squash `1a5b693`).** **`nexus chat` now defaults to the native client** (`--renderer ratatui`; if the binary is
 missing it prints a note and uses Textual; `auto` is an alias). The switch and the merge to
 `main` were done on 2026-10-02 at the owner's explicit request, before the open gates below
 were closed.
@@ -25,8 +25,11 @@ wheel installs in a clean venv, runs `nexus-ratatui --version`, and the native i
 leaves `textual` out of `sys.modules` (also with Textual uninstalled).
 
 **Gates that block "native only / remove Textual" and that I could not close locally:**
-- Hosted wheel matrix (Linux/macOS x86-64/arm64, cp313/cp314, musllinux), installer and
-  `nexus update` behaviour: workflow written, never run on GitHub.
+- Hosted wheel matrix: **ran on PR #52 and passed** on ubuntu-24.04, ubuntu-24.04-arm, macos-15 and
+  macos-15-intel (cp313 and cp314, each wheel launched `nexus-ratatui --version` and the native
+  import left `textual` out), plus the install jobs on macOS/Ubuntu and the Alpine/Debian
+  containers. Still unverified: musllinux wheels, Windows, `nexus update` with a native binary,
+  and publication (no release was cut).
 - A run with a **real provider** and hand-driven permission/approval prompts (only the
   dev-mode mock provider and real Claude CLI usage were exercised).
 - Real-audio dictation and its cancel races (UI strip is tested, hardware is not).
@@ -35,6 +38,18 @@ leaves `textual` out of `sys.modules` (also with Textual uninstalled).
 - `main()` in `rust/tui/src/main.rs` is still one ~900-line loop (needs a state struct).
 - Per-turn patch protocol (schema 2) not built; measured cost was ~9 ms per token at
   1,000 turns, so it is deferred, not needed yet.
+
+### After the merge (2026-10-02)
+
+- #52 was squash-merged to `main` (`1a5b693`); the native client is the default renderer, Textual
+  the printed-note fallback and still a runtime dependency. Hosted CI for #52 was green.
+- No release was cut and no version was bumped. release-please will propose the next version from
+  the `feat:` commit; publishing the native wheels has therefore not been exercised.
+- Follow-up docs PR #53 (this plan update) is docs-only, so `ci.yml` skips it; check that the
+  required `ci-ok` status does not block it before merging.
+- Still unverified: musllinux wheels, Windows, `nexus update` with a native binary, real-provider
+  runs and hand-driven permission prompts, real-audio dictation, the full screenshot review, and
+  splitting the long `main()` loop. Removing Textual stays blocked on these.
 
 ### P0: correctness and trust (do first)
 
