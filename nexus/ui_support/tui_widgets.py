@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import re
 import uuid
 from datetime import datetime
@@ -38,27 +37,12 @@ from .context import (
     render_context_summary,
 )
 from .text import escape_controls, redact, sanitize
+from .context_header import agent_color as agent_color
 from .tui_history import append_history, load_history
 from .tui_list import ListItem, ListPanel
 
 _WORKTREE_REVIEW_ID = re.compile(r"^[0-9a-f]{32}$")
 _WORKTREE_DIGEST = re.compile(r"^[0-9a-f]{64}$")
-
-
-_AGENT_COLORS = (
-    "#a78bfa",  # violet
-    "#69b7d5",  # blue
-    "#86b97a",  # green
-    "#d18a38",  # amber
-    "#dc8295",  # rose
-    "#55b9a5",  # teal
-)
-
-
-def agent_color(name: str) -> str:
-    """Return a stable readable identity color when the host has none yet."""
-    digest = hashlib.sha256(name.casefold().encode("utf-8")).digest()
-    return _AGENT_COLORS[int.from_bytes(digest[:4], "big") % len(_AGENT_COLORS)]
 
 
 def _model_display_name(model: str | None) -> str:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections import defaultdict
 from collections.abc import Mapping
 from typing import ClassVar
 
@@ -15,7 +14,12 @@ from textual.screen import Screen
 from textual.widgets import Button, Markdown, OptionList, Static
 
 from ..host.protocol import ContextInspectResult
-from .context import ContextEntry, ContextGroup, _compact_tokens, estimate_tokens, header_system_prompt, tool_entry, tool_groups
+from .context_header import (
+    NEUTRAL as NEUTRAL, format_schema_type as format_schema_type, group_tools as group_tools,
+    header_blocks, one_line_preview as one_line_preview, render_columns as render_columns,
+    schema_param_rows as schema_param_rows, scope_counts as scope_counts, tool_detail_lines as tool_detail_lines,
+)
+from .context import ContextEntry, ContextGroup, _compact_tokens, estimate_tokens, tool_groups
 from .text import escape_controls
 from .tui_widgets import agent_color
 
@@ -31,72 +35,6 @@ def prompt_preview(text: str, lines: int = 5) -> str:
     if len(parts) > lines:
         shown.append(f"… +{len(parts) - lines} more lines")
     return "\n".join(shown) or "(empty)"
-
-
-def one_line_preview(text: str, limit: int = 100) -> str:
-    """The header's preview: the first non-empty line, the rest counted."""
-    lines = [line for line in text.splitlines() if line.strip()]
-    if not lines:
-        return ""
-    first = lines[0].strip()
-    if len(first) > limit:
-        first = first[:limit - 1].rstrip() + "…"
-    rest = len(lines) - 1
-    return first + (f"  … +{rest} more line{'s' if rest != 1 else ''}" if rest else "")
-
-
-def render_columns(labels: list[str], columns: int = 3) -> str:
-    if not labels:
-        return ""
-    width = max(len(label) for label in labels) + 2
-    return "\n".join(
-        "".join(label.ljust(width) for label in labels[start:start + columns]).rstrip()
-        for start in range(0, len(labels), columns)
-    )
-
-
-def group_tools(tools: list[dict]) -> tuple[dict[str, list[dict]], dict[str, list[dict]]]:
-    groups: dict[str, list[dict]] = defaultdict(list)
-    mcp: dict[str, list[dict]] = defaultdict(list)
-    for tool in tools:
-        if not isinstance(tool, dict):
-            continue
-        name = str(tool.get("name", ""))
-        group = str(tool.get("group") or name)
-        if name.startswith("mcp__"):
-            mcp[name.split("__", 2)[1]].append(tool)
-        elif group.startswith("mcp:"):
-            mcp[group[4:]].append(tool)
-        else:
-            groups[group].append(tool)
-    return dict(sorted(groups.items())), dict(sorted(mcp.items()))
-
-
-def format_schema_type(prop: Mapping) -> str:
-    kind = prop.get("type", "any")
-    if isinstance(kind, list):
-        return " | ".join(map(str, kind))
-    if kind == "array":
-        return f"array<{format_schema_type(prop.get('items', {}))}>"
-    if "enum" in prop and isinstance(prop["enum"], list):
-        return " | ".join(map(str, prop["enum"][:8]))
-    return str(kind)
-
-
-def schema_param_rows(schema: Mapping) -> list[str]:
-    properties = schema.get("properties", {})
-    required = set(schema.get("required", ()))
-    if not isinstance(properties, Mapping):
-        return []
-    rows = []
-    for name, prop in list(properties.items())[:64]:
-        if not isinstance(prop, Mapping):
-            continue
-        marker = "*" if name in required else " "
-        description = str(prop.get("description", ""))[:300]
-        default = f" (default: {prop['default']})" if "default" in prop else ""
-        rows.append(f"{marker} {name}  {format_schema_type(prop)}  — {description}{default}")
-    return rows
 
 
 class ContextModal(Screen):
@@ -265,11 +203,6 @@ class ToolsModal(Screen):
         if event.button.id == "context-modal-edit":
             self.dismiss()
             self.app.call_after_refresh(lambda: self.app.action_open_settings(category="tools"))
-
-
-def scope_counts(rows: list[dict]) -> str:
-    project = sum(row.get("scope") == "project" for row in rows)
-    return f"Project {project} | Global {len(rows) - project}"
 
 
 class ExtensionsModal(Screen):
@@ -510,53 +443,10 @@ class ContextHeader(Vertical):
         name = str(result.agent.get("name") or "build")
         host_color = result.agent.get("color")
         color = color or (host_color if isinstance(host_color, str) and host_color else agent_color(name))
-        prompt = header_system_prompt(result)
-        self.query_one("#context-prompt", ContextBlock).set_data(
-            one_line_preview(prompt), prompt or "(empty)", color=color, tokens=estimate_tokens(prompt))
-        groups, mcp_tools = group_tools(result.tools)
-        labels = [f"{group}({len(rows)})" if len(rows) > 1 else group for group, rows in groups.items()]
-        tool_details = []
-        for group, rows in groups.items():
-            if len(rows) > 1:
-                tool_details.append(f"▾ {group}  ({len(rows)})")
-            for row in rows:
-                tool_details.append(f"{row.get('name', '?')} — {row.get('description', '')}")
-                tool_details.extend("  " + line for line in schema_param_rows(row.get("input_schema") or {}))
-                tool_details.append("")
-        tools_block = self.query_one("#context-tools", ContextBlock)
-        tools_block.result = result
-        builtin = [tool for rows in groups.values() for tool in rows]
-        tools_block.set_data(render_columns(labels), "\n".join(tool_details) or "(none)", color=color,
-                             tokens=sum(tool_entry(tool).tokens for tool in builtin))
-        agents = next(
-            (str(part.get("text") or "") for part in result.included_parts
-             if isinstance(part, Mapping) and part.get("name") == "agents_md"), "")
-        self.query_one("#context-agents", ContextBlock).set_data(
-            one_line_preview(agents), agents or "(none)", color=color, tokens=estimate_tokens(agents))
-        skills = [row for row in result.skills_index if isinstance(row, dict)]
-        skill_names = [str(row.get("name", "")) + (" (off)" if row.get("enabled") is False else "") for row in skills if row.get("name")]
-        skill_details = [f"{row.get('name', '?')} · {row.get('scope', '')} · {row.get('origin', '')}\n{row.get('description', '')}" for row in skills]
-        skill_tokens = estimate_tokens("\n".join(f"{row.get('name', '')}: {row.get('description', '')}"
-                                                for row in skills if row.get("enabled") is not False))
-        self.query_one("#context-skills", ContextBlock).set_data(
-            scope_counts(skills) + ("\n" + render_columns(skill_names) if skills else ""), "\n\n".join(skill_details) or "(none)",
-            color=color, tokens=skill_tokens)
-        self.query_one("#context-skills", ContextBlock).result = result
-        self.query_one("#context-mcp", ContextBlock).result = result
-        if not skills:
-            block = self.query_one("#context-skills", ContextBlock)
-            block.set_data(scope_counts(skills), block.detail, color="$nx-label-neutral")
-            block.add_class("-empty")
-        servers = list(getattr(result, "mcp_servers", ()) or ())
-        if servers:
-            mcp_labels = [f"{row.get('name')}({row.get('tool_count', 0)})" + (" (off)" if row.get("enabled") is False else "") for row in servers]
-            mcp_detail = "\n".join(f"{row.get('name')} · {row.get('status')}\n  " + ", ".join(row.get("tools", ())) for row in servers)
-        else:
-            mcp_labels = [f"{name}({len(rows)})" for name, rows in mcp_tools.items()]
-            mcp_detail = result.mcp_index or "(none)"
-        mcp_tokens = sum(tool_entry(tool).tokens for rows in mcp_tools.values() for tool in rows)
-        self.query_one("#context-mcp", ContextBlock).set_data(
-            scope_counts(servers) + ("\n" + render_columns(mcp_labels) if mcp_labels else ""), mcp_detail,
-            color=color if servers or mcp_labels else "$nx-label-neutral", tokens=mcp_tokens)
-        if not servers and not mcp_labels:
-            self.query_one("#context-mcp", ContextBlock).add_class("-empty")
+        slugs = {"system": "prompt", "tools": "tools", "agents": "agents", "skills": "skills", "mcp": "mcp"}
+        for block in header_blocks(result, color):
+            widget = self.query_one(f"#context-{slugs[block.key]}", ContextBlock)
+            widget.result = result if block.key in {"tools", "skills", "mcp"} else widget.result
+            widget.set_data(block.body, block.detail, color=block.color, tokens=block.tokens)
+            widget.set_class(block.color == NEUTRAL, "-empty")
+

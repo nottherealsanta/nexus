@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import re
-from calendar import monthrange
 from collections.abc import Awaitable, Callable
-from datetime import UTC, date, datetime
 
 from rich.text import Text
 from textual import on
@@ -16,59 +13,10 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, OptionList, Static
 from textual.widgets.option_list import Option
 
-from .fuzzy import fuzzy_match, highlight_spans
+from .fuzzy import highlight_spans
+from .model_choice import _ref, model_groups, preselected_effort, recent_models, selection_effort
+from .model_choice import sort_models as sort_models  # noqa: F401 - re-exported
 from .text import sanitize
-
-
-def _natural(text: str) -> tuple[tuple[int, str | int], ...]:
-    return tuple((1, int(part)) if part.isdigit() else (0, part.casefold())
-                 for part in re.split(r"(\d+)", text))
-
-
-def _date(row: dict, field: str) -> tuple[int, int, int]:
-    value = row.get(field)
-    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
-        return (0, 0, 0)
-    return tuple(-int(part) for part in value.split("-"))
-
-
-def sort_models(rows: list[dict], *, by: str = "updated") -> list[dict]:
-    """Order by update/release date (default), or natural alphanumeric name."""
-    def key(row: dict):
-        name = _natural(str(row.get("name") or row.get("id") or ""))
-        ref = _natural(str(row.get("provider") or "") + "/" + str(row.get("id") or ""))
-        if by == "name":
-            return (name, ref)
-        return (
-            _date(row, "last_updated") if row.get("last_updated") else _date(row, "release_date"),
-            _date(row, "release_date"),
-            name, ref,
-        )
-    return sorted(rows, key=key)
-
-
-def recent_models(rows: list[dict], *, today: date | None = None) -> list[dict]:
-    """Exclude known stale entries; undated models cannot be classified as old."""
-    today = today or datetime.now(UTC).date()
-    month = today.month - 6
-    year = today.year
-    if month <= 0:
-        month += 12
-        year -= 1
-    cutoff = date(year, month, min(today.day, monthrange(year, month)[1]))
-    def fresh(row: dict) -> bool:
-        stamp = row.get("last_updated") or row.get("release_date")
-        if not isinstance(stamp, str):
-            return True
-        try:
-            return date.fromisoformat(stamp) >= cutoff
-        except ValueError:
-            return True
-    return [row for row in rows if fresh(row)]
-
-
-def _ref(row: dict) -> str:
-    return f"{row['provider']}/{row['id']}"
 
 
 class ModelPickerScreen(ModalScreen[tuple[str, str | None, bool] | None]):
@@ -108,53 +56,18 @@ class ModelPickerScreen(ModalScreen[tuple[str, str | None, bool] | None]):
 
     def _render_models(self, *, selected_ref: str | None = None) -> None:
         query = self.query_one(Input).value.strip()
-        # Fuzzy: best match first, matched letters highlighted in the name.
-        self._highlights: dict[str, tuple[int, ...]] = {}
-        if query:
-            scored = []
-            for index, row in enumerate(self.rows):
-                name = str(row.get("name") or row.get("id") or "")
-                provider = str(row.get("provider", ""))
-                candidates = (name, _ref(row), f"{provider} {name}", f"{name} {provider} {row.get('id', '')}")
-                hits = [hit for hit in map(lambda text: fuzzy_match(query, text), candidates) if hit]
-                if not hits:
-                    continue
-                best = max(hits, key=lambda hit: hit[0])
-                scored.append((-best[0], index, row))
-                name_hit = fuzzy_match(query, name)
-                if name_hit:
-                    self._highlights[_ref(row)] = name_hit[1]
-            matching = [row for _, _, row in sorted(scored, key=lambda item: item[:2])]
-        else:
-            matching = sort_models(list(self.rows), by=self.sort_mode)
-        by_ref = {_ref(row): row for row in matching}
-        groups: list[tuple[str, list[dict]]] = []
-        if not query:
-            groups.extend((title, [by_ref[ref] for ref in refs if ref in by_ref])
-                          for title, refs in (("Favorites", self.favorites), ("Recent", self.recent)))
-        if query:
-            groups.append((f"Best matches · {len(matching)}", matching))
-        elif self.sort_mode == "updated":
-            groups.append(("Recently updated", matching))
-        else:
-            providers = sorted({str(row["provider"]) for row in matching}, key=str.casefold)
-            groups.extend((provider, [row for row in matching if row["provider"] == provider])
-                          for provider in providers)
+        groups, self._highlights = model_groups(
+            self.rows, query=query, sort_mode=self.sort_mode, favorites=self.favorites, recent=self.recent)
         self.query_one("#model-picker-title", Static).update(
             f"Select model · {'Updated ↓' if self.sort_mode == 'updated' else 'Name A–Z'}"
         )
         options: list[Option] = []
         self._visible_rows = []
-        seen: set[str] = set()
-        for title, rows in groups:
-            unique = [row for row in rows if _ref(row) not in seen]
-            if not unique:
-                continue
+        for title, unique in groups:
             options.append(Option(Text(sanitize(title, 64), style="bold #ad83d8"), disabled=True))
             self._visible_rows.append(None)
             for row in unique:
                 ref = _ref(row)
-                seen.add(ref)
                 label = Text("  ")
                 name = Text(sanitize(str(row.get("name") or row["id"]), 70), style="bold")
                 for start, end in highlight_spans(self._highlights.get(ref, ())):
@@ -194,11 +107,9 @@ class ModelPickerScreen(ModalScreen[tuple[str, str | None, bool] | None]):
         row = self._selected_row()
         if row is None:
             return
-        levels = row.get("supported_efforts") or ()
         if not self._effort_touched:
-            self._pending_effort = (self.stored_override if self.stored_override in levels else
-                                    self.current_effort if _ref(row) == self.current
-                                    and self.current_effort in levels else None)
+            self._pending_effort = preselected_effort(
+                row, current=self.current, current_effort=self.current_effort, stored_override=self.stored_override)
 
     async def _refresh_catalogue(self) -> None:
         """Re-fetch models.dev through the host, then rebuild the list in place."""
@@ -245,12 +156,10 @@ class ModelPickerScreen(ModalScreen[tuple[str, str | None, bool] | None]):
         if row is None:
             return
         ref = _ref(row)
-        preserve_agent = (ref == self.current and self.effort_source == "agent"
-                          and self.stored_override is None and self.current_effort in
-                          (row.get("supported_efforts") or ()))
-        commit = self._effort_touched or preserve_agent
-        self.dismiss((ref, (self._pending_effort if self._effort_touched else self.current_effort)
-                      if commit else None, commit))
+        effort, commit = selection_effort(
+            row, current=self.current, current_effort=self.current_effort, stored_override=self.stored_override,
+            effort_source=self.effort_source, pending=self._pending_effort, touched=self._effort_touched)
+        self.dismiss((ref, effort, commit))
 
     def on_key(self, event: Key) -> None:
         if event.key == "escape":

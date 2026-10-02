@@ -1436,7 +1436,7 @@ def test_cli_chat_reports_missing_textual_clearly(monkeypatch):
     monkeypatch.setattr(cli_module.sys, "stderr", err)
     monkeypatch.setenv("TERM", "xterm-256color")
     monkeypatch.setattr(cli_module.importlib.util, "find_spec", lambda name: None)
-    assert cli_module.main(["chat"]) == 1
+    assert cli_module.main(["chat", "--renderer", "textual"]) == 1
     assert "Textual is required" in err.getvalue()
 
 
@@ -1453,7 +1453,7 @@ def test_cli_chat_tty_launch_returns_textual_exit_status(monkeypatch):
     monkeypatch.setattr(cli_module.importlib.util, "find_spec", lambda name: object())
     seen = []
     monkeypatch.setattr(cli_module, "_chat_entry", lambda workspace, *, session: seen.append((workspace, session)) or 0)
-    assert cli_module.main(["chat", "--session", "work"]) == 0
+    assert cli_module.main(["chat", "--renderer", "textual", "--session", "work"]) == 0
     assert seen and seen[0][1] == "work"
 
 

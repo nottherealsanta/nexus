@@ -9,11 +9,11 @@ only; the app owns every host call.
 
 from __future__ import annotations
 
+from .session_groups import _day_label as _day_label, _session_groups
+
 import json
 import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping
-from dataclasses import dataclass
-from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, ClassVar
@@ -38,9 +38,8 @@ from textual.widgets import (
 )
 from textual.widgets.option_list import Option
 
-from .context import context_usage, thinking_status
 from .text import sanitize
-from .timeline import split_diff_files
+from .details import FileChange as FileChange, _int as _int, modified_files as modified_files, session_rows
 
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _EDIT_TOOLS = frozenset({"edit", "multiedit", "write", "apply_patch", "patch"})
@@ -48,64 +47,6 @@ STATUS_LABELS = {"working": "Working", "input": "Needs input", "done": "Done", "
 
 
 # ---------------------------------------------------------------- pure helpers
-
-@dataclass(frozen=True)
-class FileChange:
-    path: str
-    added: int = 0
-    removed: int = 0
-    created: bool = False
-    hunks: tuple[str, ...] = ()
-
-
-def modified_files(view: Any) -> list[FileChange]:
-    """Aggregate successful file edits across the session and its subagents."""
-    files: dict[str, FileChange] = {}
-
-    def visit(turns: Iterable[Any]) -> None:
-        for turn in turns or ():
-            for tool in getattr(turn, "tools", ()) or ():
-                if str(tool.name).casefold() not in _EDIT_TOOLS or tool.status != "completed":
-                    continue
-                if tool.is_error or tool.error:
-                    continue
-                diff = tool.diff if isinstance(tool.diff, Mapping) else {}
-                inputs = tool.input if isinstance(tool.input, Mapping) else {}
-                metrics = tool.metrics if isinstance(tool.metrics, Mapping) else {}
-                parts = split_diff_files(diff)
-                if len(parts) > 1:
-                    # A multi-file patch: attribute each file's own lines.
-                    for path, hunk in parts:
-                        prior = files.get(path, FileChange(path))
-                        added = sum(1 for line in hunk.splitlines() if line.startswith("+"))
-                        removed = sum(1 for line in hunk.splitlines() if line.startswith("-"))
-                        files[path] = FileChange(
-                            path, prior.added + added, prior.removed + removed,
-                            prior.created, prior.hunks + (hunk,),
-                        )
-                    continue
-                path = diff.get("path") or inputs.get("path") or inputs.get("file_path")
-                if not isinstance(path, str) or not path:
-                    continue
-                prior = files.get(path, FileChange(path))
-                hunk = diff.get("hunk")
-                files[path] = FileChange(
-                    path,
-                    prior.added + _int(diff.get("added_lines")),
-                    prior.removed + _int(diff.get("removed_lines")),
-                    prior.created or bool(metrics.get("created")),
-                    prior.hunks + ((hunk,) if isinstance(hunk, str) and hunk else ()),
-                )
-
-    visit(getattr(view, "turns", ()))
-    for agent in (getattr(view, "agents", {}) or {}).values():
-        visit(getattr(agent.body, "turns", ()))
-    return list(files.values())
-
-
-def _int(value: object) -> int:
-    return value if isinstance(value, int) and not isinstance(value, bool) else 0
-
 
 def session_status(summary: Any, seen: Mapping[str, int], current: str) -> str:
     """``working``, ``input``, ``done`` (finished since last viewed), or ``idle``."""
@@ -809,24 +750,7 @@ class DetailsSidebar(VerticalScroll):
     def set_view(self, view: Any, *, phase: str, agent: str, model: str, effort: str | None) -> None:
         if not self.is_mounted:
             return
-        tools = [tool for turn in view.turns for tool in turn.tools]
-        usage = view.usage
-        rows = [
-            ("Status", phase.replace("_", " ")),
-            ("Agent", agent),
-            ("Model", model or "default"),
-            ("Effort", effort or "default"),
-            ("Turns", str(len(view.turns))),
-            ("Tool calls", str(len(tools))),
-        ]
-        if usage.input_tokens or usage.output_tokens:
-            rows.append(("Tokens", f"{usage.input_tokens:,} in · {usage.output_tokens:,} out"))
-        thinking = thinking_status(view)
-        if thinking:
-            rows.append(("Activity", thinking))
-        ctx = context_usage(view)
-        if ctx != "Preview":
-            rows.append(("Context", ctx))
+        rows = session_rows(view, phase=phase, agent=agent, model=model, effort=effort)
         self.query_one("#details-session", Static).update(
             "\n".join(f"[$nx-quiet]{label:<11}[/]{escape(sanitize(value, 60))}" for label, value in rows)
         )
@@ -1024,34 +948,6 @@ class SettingsScreen(ModalScreen[None]):
 
 # ---------------------------------------------------------------- sessions dialog
 
-def _day_label(ts: float | None, today: date | None = None) -> str:
-    if not ts:
-        return "Earlier"
-    day = datetime.fromtimestamp(ts, tz=UTC).astimezone().date()
-    today = today or datetime.now(tz=UTC).astimezone().date()
-    if day == today:
-        return "Today"
-    return day.strftime("%a %b %-d %Y")
-
-
-def _session_groups(rows: list[tuple[str, Any]], query: str) -> list[tuple[str, list[Any]]]:
-    """Group filtered project identities by latest activity, then local date."""
-    groups: list[tuple[str, list[Any]]] = []
-    projects: dict[str, list[Any]] = {}
-    for workspace, summary in sorted(rows, key=lambda pair: pair[1].last_activity or 0, reverse=True):
-        if query and query not in f"{summary.title} {summary.id} {workspace}".casefold():
-            continue
-        projects.setdefault(workspace, []).append(summary)
-    names = [Path(workspace).name for workspace in projects]
-    for workspace, summaries in projects.items():
-        for summary in summaries:
-            day = _day_label(summary.last_activity)
-            name = workspace if names.count(Path(workspace).name) > 1 else Path(workspace).name or workspace
-            label = f"{name} · {day}" if workspace else day
-            if not groups or groups[-1][0] != label:
-                groups.append((label, []))
-            groups[-1][1].append(summary)
-    return groups
 
 
 class SessionsScreen(ModalScreen[str | None]):

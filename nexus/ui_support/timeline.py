@@ -512,6 +512,66 @@ def _turn_summary(turn: TurnView) -> str:
     return "  ·  ".join(parts)
 
 
+def turn_footer_text(turn: TurnView) -> str:
+    """Plain right-aligned stats for a completed turn (model, time, tokens, cache, reasoning)."""
+    from .context import _compact_tokens
+    model = _turn_models(turn).split(", ")[0].rsplit("/", 1)[-1]
+    usage = turn.usage
+    prompt = usage.input_tokens + usage.cache_read_tokens + usage.cache_write_tokens
+    tokens = f"↑{_compact_tokens(prompt)} ↓{_compact_tokens(usage.output_tokens)}" if prompt or usage.output_tokens else ""
+    cached = f"{round(usage.cache_read_tokens / prompt * 100)}% cached" if prompt and usage.cache_read_tokens else ""
+    shown = any(block.kind == "thinking" and block.text.strip() for message in turn.messages for block in message.blocks)
+    reasoning = (f"{_compact_tokens(usage.reasoning_tokens)} reasoning" + ("" if shown else " (not shown)")
+                 if usage.reasoning_tokens else "")
+    return " · ".join(part for part in (model if model != "unknown" else "", _turn_duration(turn) or "", tokens, cached, reasoning) if part)
+
+
+def turn_agent_label(turn: TurnView) -> tuple[str, str]:
+    """``(name, color)`` of the agent that answered the turn; empty name when unknown."""
+    agent = turn.agent if isinstance(turn.agent, Mapping) else {}
+    name = agent.get("name") if isinstance(agent.get("name"), str) else ""
+    if not name.strip():
+        return "", ""
+    color = agent.get("color") if isinstance(agent.get("color"), str) else ""
+    name = name.strip()
+    return _literal(name[0].upper() + name[1:], 60), color
+
+
+_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+def tool_row_text(tool: ToolCallView, spinner_index: int = 0, gutter: str = "") -> str:
+    """The compact activity row of a tool call: heading, summary, live output tail."""
+    marker = tool_status(tool)
+    indicator = f"{_SPINNER_FRAMES[spinner_index % len(_SPINNER_FRAMES)]} " if marker == "running" else ""
+    summary = ""
+    if marker == "completed" and tool.display and tool.name.casefold() not in {"read", "grep", "todowrite"}:
+        summary = _text(tool.display.splitlines()[0], 88)
+        if tool.name.casefold() == "write":
+            content = tool.input.get("content") if isinstance(tool.input, Mapping) else None
+            lines = content.count("\n") + 1 if isinstance(content, str) and content else 0
+            summary = f"written · {lines} lines" if lines else "written"
+    elif marker == "failed" and tool.error:
+        summary = _text(tool.error.splitlines()[0], 88)
+    if summary.casefold().startswith(f"{tool.name.casefold()}:"):
+        summary = summary[len(tool.name) + 1 :].strip()
+    summary = redact(summary)
+    suffix = f" · {summary}" if summary else (f" · {marker}" if marker != "completed" else "")
+    rows = todo_preview(tool)
+    heading = "☐ Todo " + rows[0] if rows else tool_heading(tool)
+    text = f"{gutter}{indicator}{heading}{suffix}"
+    if rows:
+        text += "".join(f"\n{gutter}  {row}" for row in rows[1:])
+    live = running_output_tail(tool) if marker == "running" else None
+    if live is not None:
+        tail, hidden = live
+        text += f"\n{gutter}  ⎿  " + (tail[0] if tail else "running…")
+        text += "".join(f"\n{gutter}     {line}" for line in tail[1:])
+        if hidden:
+            text += f"\n{gutter}     … {hidden} earlier line{'s' if hidden != 1 else ''} · enter for full output"
+    return text
+
+
 __all__ = [
     "running_output_tail",
     "BATCH_GLYPHS",
@@ -545,7 +605,10 @@ __all__ = [
     "tool_heading",
     "tool_output",
     "tool_status",
+    "tool_row_text",
     "tool_summary",
+    "turn_agent_label",
+    "turn_footer_text",
 ]
 
 
