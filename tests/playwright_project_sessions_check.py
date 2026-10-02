@@ -56,14 +56,14 @@ async def main():
                     for width in (1440, 1024, 400):
                         await page.set_viewport_size({"width": width, "height": 900})
                         if width < 960:
-                            await page.wait_for_function("matchMedia('(max-width:959px)').matches")
-                            await page.keyboard.press("Control+b")
-                            await page.wait_for_function("document.querySelector('#sidebar').getBoundingClientRect().left >= 0")
+                            await page.wait_for_function("() => matchMedia('(max-width:959px)').matches")
+                            await page.locator("#sidebar-toggle").click()
+                            await page.wait_for_function("() => document.querySelector('#app').classList.contains('sidebar-open') && document.querySelector('#sidebar').getBoundingClientRect().left >= 0 && document.querySelector('#sidebar').getBoundingClientRect().width > 250")
                         await page.screenshot(path=str(artifacts / f"{theme}-{width}.png"))
                         assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth")
                         if width < 960:
-                            await page.keyboard.press("Escape")
-                            await page.wait_for_function("!document.querySelector('#app').classList.contains('sidebar-open')")
+                            await page.locator("#sidebar-toggle").click()
+                            await page.wait_for_function("() => !document.querySelector('#app').classList.contains('sidebar-open')")
                 await page.set_viewport_size({"width": 1440, "height": 900})
                 await daemons[1].web_launch()
                 await page.locator("#session-list .session-item:not(:has(.session-delete)) .session-row").click()
