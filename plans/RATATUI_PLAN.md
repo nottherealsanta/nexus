@@ -63,7 +63,7 @@ Transcript
       bar, update-available notice, `thinking_status` "Activity" row.
 - [ ] Mouse text selection and copy in the transcript; scrollbar indicator; typing
       scrolls to bottom (`set_typing`).
-- [ ] Markdown: code fence background and language label, block quote bar, headings
+- [x] Markdown rebuilt (6 Rust tests; capture checked, fence syntax highlighting still open). Original: Markdown: code fence background and language label, block quote bar, headings
       colour/levels, table layout, list hanging indent, inline code styling
       (`app.tcss` `.timeline-assistant ...`). `markdown.rs` is minimal.
 - [ ] Submitted-attachment chips: verify against Textual (`UserMessage` chips) and

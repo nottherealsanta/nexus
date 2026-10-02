@@ -285,15 +285,24 @@ pub fn build(b: &Content, width: u16, p: &Palette) -> Rows {
             }
         }
         "markdown" => {
-            let mut rows = markdown::lines(&b.text);
-            while rows.last().is_some_and(|row| row.spans.iter().all(|s| s.content.trim().is_empty())) {
-                rows.pop();
-            }
-            for row in rows {
-                if row.spans.iter().all(|s| s.content.is_empty()) {
+            let total = width.saturating_sub(2);
+            for row in markdown::lines(&b.text, p, width) {
+                if row.blank {
                     out.push((Line::default(), op.clone()));
-                } else {
-                    indented(&mut out, row.spans, 4, width, op);
+                    continue;
+                }
+                let prefix_width: usize = row.prefix.iter().map(|span| span.content.width()).sum();
+                let room = total.saturating_sub(4 + prefix_width).max(1);
+                let base = row.bg.map(|bg| Style::default().bg(bg)).unwrap_or_default();
+                for (i, cells) in wrap(&row.spans, room).into_iter().enumerate() {
+                    let mut lead = vec![Span::raw("    ")];
+                    if i == 0 {
+                        lead.extend(row.prefix.iter().cloned());
+                    } else {
+                        // Hanging indent: wrapped rows line up under the first row's text.
+                        lead.push(Span::styled(" ".repeat(prefix_width), base));
+                    }
+                    out.push((line(lead, cells, row.bg.map(|_| total), base), op.clone()));
                 }
             }
         }

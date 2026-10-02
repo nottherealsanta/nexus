@@ -115,3 +115,10 @@ The current session has a left bar; a background session that advanced since it
 was last viewed reads "finished". Status words come from
 `ui_support/session_status.py`, shared with Textual. The filter box, delete and
 Archived rows are not in the native sidebar yet.
+
+Assistant Markdown (`rust/tui/src/markdown.rs`) follows the `.timeline-assistant`
+rules: headings coloured by level (accent, purple, success, warning), inline code
+on the raised background, fences and quotes on the panel colour (fences show
+their language label, quotes a `▌` bar), nested ordered/bullet lists with
+hanging indent, task markers, strikethrough and column-aligned tables. HTML stays
+literal and link targets stay visible. Fence syntax highlighting is not done.
