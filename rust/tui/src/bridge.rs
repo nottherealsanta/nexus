@@ -101,6 +101,7 @@ impl Default for Form {
     }
 }
 #[derive(Default, Deserialize)]
+#[serde(default)]
 pub struct Session {
     #[serde(default)]
     pub group: String,

@@ -117,7 +117,7 @@ Dialogs and screens (all currently generic panels/menus)
       120 and 200 columns, saved under `artifacts/ratatui-parity/` and reviewed by
       eye. Add states to `tests/ratatui_browser_demo.py` and the check script.
 - [ ] A populated context-header screenshot (the fixture header was off-screen).
-- [ ] Add ratatui `TestBackend` buffer snapshot tests (text grids) for key screens so
+- [x] Done in part (buffer tests for picker headings, Settings list, and a rich screen at 60/120/200 columns in both themes asserting the prompt, runtime row, tabs and sidebars; no golden grids). Add ratatui `TestBackend` buffer snapshot tests (text grids) for key screens so
       layout regressions fail in CI; the Playwright check only captures PNGs and
       asserts almost nothing.
 - [ ] Full interaction audit of focus handling, small-terminal prompts, long and

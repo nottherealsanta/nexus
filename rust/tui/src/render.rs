@@ -1042,6 +1042,51 @@ mod tests {
         assert!(row_of("▸ Layout") > row_of("GENERAL") && row_of("Providers") > row_of("CONFIGURE"));
         assert!(col_of("Panels hide") > col_of("Providers"), "the page sits to the right of the list");
     }
+    fn rich_snapshot(light: bool) -> Snapshot {
+        serde_json::from_value(serde_json::json!({
+            "schema": 1, "revision": 1, "title": "Nexus · s1", "status": "running",
+            "theme": if light { "nexus-light" } else { "nexus-dark" },
+            "sessions_sidebar": true, "details_sidebar": true,
+            "breadcrumb": "/work/project › main", "agent": "build", "model": "gpt-6", "provider": "openai", "effort": "high",
+            "context_usage": "12K (4%)",
+            "tabs": [{"id": "s1", "title": "Fix the parser", "workspace": "/w", "status": "working", "active": true},
+                     {"id": "s2", "title": "Docs", "workspace": "/w", "status": "done"}],
+            "sessions": [{"group": "w · Today", "id": "s1", "title": "Fix the parser", "workspace": "/w", "state": "running", "status": "working", "sub": "working now · just now", "active": true}],
+            "blocks": [
+                {"id": "u", "kind": "user", "title": "please fix it", "number": 1, "operation": {"kind": "x"}},
+                {"id": "t", "kind": "tool", "text": "⠋ Edit src/parser.py", "status": "running"},
+                {"id": "d", "kind": "diff", "title": "src/parser.py", "added": 1, "removed": 1,
+                 "diff_rows": [[3, "old", 3, "new", "change"]]},
+                {"id": "m", "kind": "markdown", "text": "# Done\n\nUse `parse()` here.\n\n- one\n- two"}],
+            "details_panel": {"session": [["Status", "running"]], "files": [{"path": "src/parser.py", "added": 1, "removed": 1}], "files_summary": "+1 -1 across 1 file"},
+            "prompt": {"kind": "permission", "id": "p", "lines": ["Tool: Edit"], "choices": [{"label": "Allow once", "value": "allow_once", "key": "y", "disabled": false}]}
+        })).unwrap()
+    }
+    #[test]
+    fn rich_screen_draws_at_narrow_medium_and_wide_sizes_in_both_themes() {
+        for (width, height) in [(60u16, 24u16), (120, 40), (200, 50)] {
+            for light in [false, true] {
+                let s = rich_snapshot(light);
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                let mut cache = Cache::default();
+                terminal.draw(|frame| {
+                    draw(frame, &s, &Editor::default(), &Editor::default(), &Editor::default(), "", 0, 0, 0, &mut cache, true, false, false, false, 0, 0, 0);
+                }).unwrap();
+                let screen: String = (0..height).map(|y| (0..width).map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string()).collect::<String>() + "\n").collect();
+                let at = format!("{width}x{height} light={light}");
+                assert!(screen.contains("Permission requested"), "{at}: the prompt is always reachable");
+                assert!(screen.contains("Allow once"), "{at}");
+                assert!(screen.contains("Build"), "{at}: the runtime row");
+                assert!(screen.contains("Fix the parser"), "{at}: the current tab");
+                if width >= 110 {
+                    assert!(screen.contains("SESSIONS 1"), "{at}: sessions sidebar");
+                }
+                if width >= 170 {
+                    assert!(screen.contains("MODIFIED FILES") && screen.contains("src/parser.py"), "{at}: details sidebar");
+                }
+            }
+        }
+    }
     #[test]
     fn running_slot_is_replaced_per_frame() {
         let line = Line::from(vec![Span::raw(format!("{SPINNER_SLOT} Bash · ls"))]);
