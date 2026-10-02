@@ -186,3 +186,23 @@ def test_tabs_mark_the_current_session_and_its_running_turn(tmp_path, monkeypatc
     assert [(r["active"], r["status"]) for r in rows] == [(True, "working"), (False, "done"), (False, "")]
     controller.running = False
     assert _tab_rows(controller, shell)[0]["status"] == ""
+
+
+def test_diff_rows_carry_real_line_numbers_pairing_and_gaps():
+    from nexus.ui_support.timeline import diff_split_rows
+
+    hunk = "@@ -9,3 +9,3 @@\n keep\n-old\n+new\n tail\n@@ -40,1 +40,2 @@\n ctx\n+extra"
+    assert diff_split_rows(hunk) == [
+        (9, "keep", 9, "keep", "ctx"), (10, "old", 10, "new", "change"), (11, "tail", 11, "tail", "ctx"),
+        (0, "", 0, "", "sep"), (40, "ctx", 40, "ctx", "ctx"), (0, "", 41, "extra", "add"),
+    ]
+    clipped = diff_split_rows("@@ -1,5 +1,5 @@\n" + "\n".join(f" l{i}" for i in range(5)), limit=2)
+    assert clipped[-1] == (0, "… 3 more rows", 0, "", "clip") and len(clipped) == 3
+
+
+def test_diff_blocks_send_rows_and_counts(tmp_path, monkeypatch):
+    edit = ToolCallView(call_id="e", name="Edit", event_seq=2, status="completed", input={"path": "a.py"},
+                        diff={"path": "a.py", "hunk": "--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-old\n+new"})
+    diff = next(b for b in _snapshot(tmp_path, monkeypatch, [replace(_turn(), tools=[edit])])["blocks"] if b["kind"] == "diff")
+    assert diff["title"] == "a.py" and (diff["added"], diff["removed"]) == (1, 1)
+    assert diff["diff_rows"] == [[1, "old", 1, "new", "change"]]

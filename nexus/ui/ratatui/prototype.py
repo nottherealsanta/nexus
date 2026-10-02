@@ -25,7 +25,7 @@ from ...ui_support.tool_details import sections_to_text, tool_detail_sections
 
 
 def _safe_blocks(blocks):
-    return [{**block, **{key: redact(escape_controls(block[key])) for key in ("title", "text", "before", "after", "path", "detail") if key in block},
+    return [{**block, **{key: redact(escape_controls(block[key])) for key in ("title", "text", "path", "detail") if key in block},
              **({"chips": [redact(escape_controls(chip)) for chip in block["chips"]]} if block.get("chips") else {})} for block in blocks]
 
 
@@ -104,10 +104,13 @@ def _project_turn(turn, shell, agents=None):
                  "detail": body if shell and shell.verbose else "", "operation": operation}
         entries.append((tool.event_seq, 3, block, 0, 0, "tool"))
         if tool.diff:
-            from ...ui_support.timeline import diff_sections
+            from ...ui_support.timeline import diff_sections, diff_split_rows, split_diff_files
+            hunks = dict(split_diff_files(tool.diff))
             for diff in diff_sections(tool.diff):
+                rows = [[old_no, redact(escape_controls(old_text)), new_no, redact(escape_controls(new_text)), kind]
+                        for old_no, old_text, new_no, new_text, kind in diff_split_rows(hunks.get(diff.path, ""))]
                 entries.append((tool.event_seq, 3, {"id": tool.call_id + diff.path, "kind": "diff", "title": diff.path,
-                    "path": diff.path, "before": diff.before, "after": diff.after,
+                    "path": diff.path, "added": diff.added, "removed": diff.removed, "diff_rows": rows,
                     "operation": {"kind": "tool_page", "id": tool.call_id}}, 0, 0, "diff"))
     if turn.terminal and turn.error:
         entries.append((max((entry[0] for entry in entries), default=0) + 1, 4,

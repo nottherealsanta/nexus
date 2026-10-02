@@ -22,6 +22,8 @@ pub struct Palette {
     pub dialog: Color,
     pub border: Color,
     pub border_strong: Color,
+    pub diff_del: Color,
+    pub diff_add: Color,
     pub blue: Color,
     pub purple: Color,
     pub success: Color,
@@ -45,6 +47,8 @@ impl Palette {
                 dialog: rgb(255, 255, 255),
                 border: rgb(220, 220, 216),
                 border_strong: rgb(185, 185, 180),
+                diff_del: rgb(253, 226, 228),
+                diff_add: rgb(220, 245, 226),
                 blue: rgb(47, 111, 214),
                 purple: rgb(122, 82, 199),
                 success: rgb(38, 128, 68),
@@ -65,6 +69,8 @@ impl Palette {
                 dialog: rgb(13, 13, 13),
                 border: rgb(44, 44, 44),
                 border_strong: rgb(72, 72, 72),
+                diff_del: rgb(62, 27, 33),
+                diff_add: rgb(24, 56, 36),
                 blue: rgb(92, 156, 245),
                 purple: rgb(157, 124, 216),
                 success: rgb(127, 216, 143),
@@ -705,6 +711,25 @@ mod tests {
         s.tabs[0].active = true;
         let cells = tab_cells(&s, 120);
         assert_eq!((cells[1].start, cells[1].end), (2, 2 + 6 + "session 0 title".len()));
+    }
+    #[test]
+    fn inline_diff_has_counts_numbers_tints_and_hunk_gaps() {
+        let p = Palette::new(false);
+        let row = |a: u32, b: &str, c: u32, d: &str, k: &str| (a, b.to_string(), c, d.to_string(), k.to_string());
+        let block = crate::bridge::Content {
+            id: "d".into(), kind: "diff".into(), title: "src/a.py".into(), added: 1, removed: 1,
+            diff_rows: vec![row(9, "keep", 9, "keep", "ctx"), row(10, "old", 10, "new", "change"), row(0, "", 0, "", "sep"), row(40, "tail", 40, "tail", "ctx")],
+            ..Default::default()
+        };
+        let rows = crate::transcript::build(&block, 60, &p);
+        let text = |i: usize| rows[i].0.spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+        assert_eq!(text(0), "  src/a.py (+1, -1)");
+        assert!(text(1).contains(" 9 keep") && text(1).contains("│ 9 keep"), "{}", text(1));
+        assert!(text(2).contains("10 old") && text(2).contains("│10 new"), "{}", text(2));
+        assert!(rows[2].0.spans.iter().any(|s| s.style.bg == Some(p.diff_del)));
+        assert!(rows[2].0.spans.iter().any(|s| s.style.bg == Some(p.diff_add)));
+        assert_eq!(text(3), "  ⋯");
+        assert!(text(4).contains("40 tail"));
     }
     #[test]
     fn running_slot_is_replaced_per_frame() {

@@ -126,6 +126,14 @@ their language label, quotes a `▌` bar), nested ordered/bullet lists with
 hanging indent, task markers, strikethrough and column-aligned tables. HTML stays
 literal and link targets stay visible. Fence syntax highlighting is not done.
 
+Inline file diffs under Edit and Patch rows follow textual-diff-view's split
+layout: `path (+a, -r)`, real file line numbers, removed lines tinted red on the
+left and added lines green on the right (a removal and an addition pair up on one
+row), long lines wrapped inside their column, hunks separated by `⋯`, and a
+clipping row after 400 rows. Python sends the rows
+(`ui_support/timeline.diff_split_rows`); the old before/after text is gone.
+Syntax highlighting inside diffs is not done.
+
 The tab row follows `SessionTabs`: sessions toggle, one tab per open session
 (status glyph, title up to 24 columns, `×`; the current tab on the panel colour),
 `+`, details toggle. Overflow scrolls the leftmost tabs out so the current one

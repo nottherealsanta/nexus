@@ -2,7 +2,7 @@
 
     PYTHONPATH=. python tests/playwright_ratatui_live.py "/mock hello" "/mock question" "blue wins"
 
-Each argument is typed and submitted in turn (or `click:X,Y` / `key:Control+p`); a screenshot follows each under
+Each argument is typed and submitted in turn (or `click:X,Y` / `key:Control+p` / `type:text` (no Enter)); a screenshot follows each under
 artifacts/ratatui-live/. Needs cargo build first. Dev mode isolates state
 in ~/.nexus/dev; no provider credentials or network are used.
 """
@@ -32,13 +32,15 @@ with sync_playwright() as pw:
                 page.get_by_role("textbox", name="Terminal input").wait_for(timeout=2000); break
             except Exception:
                 page.wait_for_timeout(250)
-        page.wait_for_timeout(8000)
+        page.wait_for_timeout(14000)
         page.screenshot(path=str(OUT / "1-start.png"))
-        page.get_by_role("textbox", name="Terminal input").click()
+        page.evaluate("document.querySelector('.xterm-helper-textarea').focus()")  # a click would hit the terminal UI
         for step, text in enumerate(sys.argv[1:], 2):
             if text.startswith("click:"):  # click:X,Y in page pixels
                 x, y = (float(v) for v in text[6:].split(","))
                 page.mouse.click(x, y); page.wait_for_timeout(1500)
+            elif text.startswith("type:"):  # type without pressing Enter
+                page.keyboard.type(text[5:]); page.wait_for_timeout(1500)
             elif text.startswith("key:"):  # key:Control+p
                 page.keyboard.press(text[4:]); page.wait_for_timeout(1500)
             else:

@@ -286,6 +286,58 @@ def split_diff_files(diff: Mapping[str, object]) -> list[tuple[str, str]]:
     return files
 
 
+DiffRow = tuple[int, str, int, str, str]
+
+
+def diff_split_rows(hunk: str, limit: int = 400) -> list[DiffRow]:
+    """Side-by-side rows ``(old_no, old_text, new_no, new_text, kind)`` for one file's hunks.
+
+    ``kind`` is ``ctx``, ``del``, ``add``, ``change`` (a removal paired with an
+    addition), ``sep`` (a gap between hunks) or ``clip`` (``old_text`` says how many
+    rows were left out). Line numbers are real file lines; ``0`` means no line.
+    """
+    rows: list[DiffRow] = []
+    removed: list[tuple[int, str]] = []
+    added: list[tuple[int, str]] = []
+    old = new = 0
+
+    def flush() -> None:
+        for i in range(max(len(removed), len(added))):
+            left = removed[i] if i < len(removed) else (0, "")
+            right = added[i] if i < len(added) else (0, "")
+            kind = "change" if left[0] and right[0] else "del" if left[0] else "add"
+            rows.append((left[0], left[1], right[0], right[1], kind))
+        removed.clear()
+        added.clear()
+
+    started = False
+    for line in hunk.splitlines():
+        header = _HUNK_START.match(line)
+        if header:
+            flush()
+            if started:
+                rows.append((0, "", 0, "", "sep"))
+            started = True
+            old, new = int(header.group(1)), int(header.group(2))
+        elif not started or line.startswith("\\"):
+            continue
+        elif line.startswith("+"):
+            added.append((new, line[1:]))
+            new += 1
+        elif line.startswith("-"):
+            removed.append((old, line[1:]))
+            old += 1
+        else:
+            flush()
+            rows.append((old, line[1:], new, line[1:], "ctx"))
+            old += 1
+            new += 1
+    flush()
+    if len(rows) > limit:
+        rows = [*rows[:limit], (0, f"… {len(rows) - limit} more rows", 0, "", "clip")]
+    return rows
+
+
 def diff_sections(diff: Mapping[str, object]) -> list[DiffSection]:
     """Per-file before/after text for a (possibly multi-file) ``diff`` artifact."""
     sections: list[DiffSection] = []
@@ -599,6 +651,7 @@ __all__ = [
     "_turn_setup_failure",
     "_turn_summary",
     "diff_sections",
+    "diff_split_rows",
     "format_arguments",
     "split_diff_files",
     "thought_title",

@@ -199,28 +199,62 @@ fn user(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
     out.push(blank());
 }
 
+/// An inline file diff like textual-diff-view: `path (+a, -r)`, then split rows with
+/// real line numbers, removed lines tinted red on the left and added lines green on
+/// the right, long lines wrapped inside their column, hunks separated by `⋯`.
 fn diff(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
     let op = &b.operation;
-    let left: Vec<_> = b.before.lines().collect();
-    let right: Vec<_> = b.after.lines().collect();
-    indented(out, vec![Span::styled(b.title.clone(), Style::default().fg(p.muted))], 2, width, op);
-    let half = (width.saturating_sub(7) / 2).max(1);
-    for i in 0..left.len().max(right.len()) {
-        let a = wrap(&[Span::raw(left.get(i).copied().unwrap_or("").to_string())], half);
-        let c = wrap(&[Span::raw(right.get(i).copied().unwrap_or("").to_string())], half);
-        for j in 0..a.len().max(c.len()) {
-            let text = |rows: &Vec<Vec<Cell>>| rows.get(j).map(|r| r.iter().map(|c| c.g.as_str()).collect::<String>()).unwrap_or_default();
-            let (x, y) = (text(&a), text(&c));
-            let pad = " ".repeat(half.saturating_sub(x.width()));
-            out.push((
-                Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(format!("{x}{pad}"), Style::default().fg(p.error)),
-                    Span::styled(" │ ", Style::default().fg(p.border_strong)),
-                    Span::styled(y, Style::default().fg(p.success)),
-                ]),
-                op.clone(),
-            ));
+    let counts = vec![
+        Span::styled(b.title.clone(), Style::default().fg(p.muted)),
+        Span::styled(" (", Style::default().fg(p.muted)),
+        Span::styled(format!("+{}", b.added), Style::default().fg(p.success).add_modifier(Modifier::BOLD)),
+        Span::styled(", ", Style::default().fg(p.muted)),
+        Span::styled(format!("-{}", b.removed), Style::default().fg(p.error).add_modifier(Modifier::BOLD)),
+        Span::styled(")", Style::default().fg(p.muted)),
+    ];
+    indented(out, counts, 2, width, op);
+    let digits = b.diff_rows.iter().map(|r| r.0.max(r.2)).max().unwrap_or(0).to_string().len().max(2);
+    let total = width.saturating_sub(2);
+    let half = total.saturating_sub(2 * (digits + 2) + 1) / 2;
+    let half = half.max(4);
+    let number = |n: u32| if n == 0 { " ".repeat(digits) } else { format!("{n:>digits$}") };
+    for (old_no, old, new_no, new, kind) in &b.diff_rows {
+        match kind.as_str() {
+            "sep" => {
+                out.push((Line::styled(format!("  {}", "⋯"), Style::default().fg(p.quiet)), op.clone()));
+                continue;
+            }
+            "clip" => {
+                out.push((Line::styled(format!("  {old}"), Style::default().fg(p.quiet)), op.clone()));
+                continue;
+            }
+            _ => {}
+        }
+        let removed = matches!(kind.as_str(), "del" | "change");
+        let added = matches!(kind.as_str(), "add" | "change");
+        let side = |text: &str, tint: Option<Color>, fg: Color| {
+            let base = tint.map(|bg| Style::default().bg(bg)).unwrap_or_default();
+            let rows = wrap(&[Span::styled(text.to_string(), Style::default().fg(fg))], half);
+            (base, rows)
+        };
+        let (left_base, left) = side(old, removed.then_some(p.diff_del), if removed { p.text } else { p.muted });
+        let (right_base, right) = side(new, added.then_some(p.diff_add), if added { p.text } else { p.muted });
+        for i in 0..left.len().max(right.len()) {
+            let cells = |rows: &Vec<Vec<Cell>>, base: Style| {
+                let row = rows.get(i).map(|r| r.iter().map(|c| Cell { g: c.g.clone(), w: c.w, style: c.style, space: c.space }).collect()).unwrap_or_default();
+                line(vec![], row, Some(half), base)
+            };
+            let mut spans = vec![Span::raw("  ")];
+            let gutter = |n: u32, shown: bool, tint: Option<Color>| {
+                let base = Style::default().fg(p.quiet);
+                Span::styled(format!("{} ", if shown { number(n) } else { " ".repeat(digits) }), tint.map(|bg| base.bg(bg)).unwrap_or(base))
+            };
+            spans.push(gutter(*old_no, i == 0, removed.then_some(p.diff_del)));
+            spans.extend(cells(&left, left_base).spans);
+            spans.push(Span::styled("│", Style::default().fg(p.border_strong)));
+            spans.push(gutter(*new_no, i == 0, added.then_some(p.diff_add)));
+            spans.extend(cells(&right, right_base).spans);
+            out.push((Line::from(spans), op.clone()));
         }
     }
 }

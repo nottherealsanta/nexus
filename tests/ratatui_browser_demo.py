@@ -52,6 +52,13 @@ async def fixture():
         snapshot["items"] = [{"label": label, "command": "", "operation": {"kind": "noop"}} for label in (
             "★ GPT-6 Luna · openai/gpt-6-luna", "Claude Opus 5.5 · anthropic/claude-opus-5-5",
             "Claude Sonnet 5.5 · anthropic/claude-sonnet-5-5", "Haiku 4.5 · anthropic/claude-haiku-4-5")]
+    elif state == "diff":
+        from nexus.ui_support.timeline import diff_split_rows
+        hunk = ("@@ -8,7 +8,8 @@\n def total(values):\n-    return sum(values)\n+    result = sum(values)\n+    return int(result)\n \n \n"
+                " def clamp(value, low, high):\n-    return max(low, min(high, value))\n+    return min(high, max(low, value))\n"
+                "@@ -40,3 +41,4 @@\n def slug(text):\n     text = text.strip()\n+    text = text.lower()\n     return text")
+        snapshot["blocks"].append({"id": "d", "kind": "diff", "title": "src/util.py", "added": 5, "removed": 2,
+            "diff_rows": [list(row) for row in diff_split_rows(hunk)], "operation": {"kind": "noop"}})
     elif state == "light":
         snapshot["theme"] = "nexus-light"
     elif state == "panel":

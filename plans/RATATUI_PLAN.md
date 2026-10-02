@@ -50,7 +50,7 @@ fixes: the whole suite and the Textual timing-sensitive group.
 Compare each against `nexus/ui/tui/` and `ui_support/tui_*.py`.
 
 Transcript
-- [ ] Inline diff under Edit/Patch rows with Textual's line numbers, hunks, context
+- [x] Done (split rows with line numbers, tints, hunks, clip row; fixture `ratatui-diff` capture checked; no syntax highlighting; ordering vs batched tool rows not yet checked live). Inline diff under Edit/Patch rows with Textual's line numbers, hunks, context
       and "clipped" notice (`ui_support/tui_diff.py`); native shows a plain
       before/after split.
 - [x] Spinner done (slot `U+E000`, Rust animates; live tail already streams in snapshots). Original note: Running-tool spinner and live tail animation (rows are static between

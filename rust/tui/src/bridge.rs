@@ -113,8 +113,10 @@ pub struct Content {
     pub kind: String,
     pub operation: Option<Value>,
     pub path: String,
-    pub before: String,
-    pub after: String,
+    pub added: u64,
+    pub removed: u64,
+    /// Side-by-side rows: old line, old text, new line, new text, kind.
+    pub diff_rows: Vec<(u32, String, u32, String, String)>,
     pub gap: u16,
     pub number: u32,
     pub collapsed: bool,
