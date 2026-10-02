@@ -353,7 +353,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if typed != (draft.text.clone(), draft.cursor) {
             typed = (draft.text.clone(), draft.cursor);
             let query = draft.text[..draft.cursor].rsplit(char::is_whitespace).next().unwrap_or("");
-            let argument = draft.text.starts_with('/') && draft.text[..draft.cursor].contains(' ');
+            let argument = (draft.text.starts_with("/model ") || draft.text.starts_with("/agent ")) && draft.text[..draft.cursor].contains(' ');
             let triggers = s.panel_title.is_empty()
                 && s.prompt.is_none()
                 && (query.starts_with('/') || query.starts_with('@') || argument);
@@ -656,6 +656,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             dirty = true;
                             continue;
                         }
+                        // Textual: Enter on a standalone `/command` runs the highlighted
+                        // command; on an argument that is already complete it submits.
+                        KeyCode::Enter if draft.text.starts_with('/') && !draft.text.contains(char::is_whitespace) => {
+                            let value = s.completions[completion_index.min(s.completions.len() - 1)].clone();
+                            draft.take();
+                            send(json!({"type":"submit","text":value,"mode":"queue","generation":s.generation}))?;
+                            dirty = true;
+                            continue;
+                        }
+                        KeyCode::Enter if draft.text.starts_with('/') && s.completions.iter().any(|item| *item == query) => {}
                         KeyCode::Enter | KeyCode::Tab => {
                             let value =
                                 &s.completions[completion_index.min(s.completions.len() - 1)];

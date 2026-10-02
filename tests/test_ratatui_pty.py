@@ -77,8 +77,8 @@ def test_native_bridge_keyboard_and_terminal_restoration():
             "completion_query": "/m", "completions": ["/model", "/mcp"]}) + "\n").encode())
         process.stdin.flush()
         time.sleep(.1)
-        os.write(master, b"\x1b[B\r\r")
-        assert read_action() == {"type": "submit", "text": "/mcp ", "mode": "queue", "generation": 0}
+        os.write(master, b"\x1b[B\r")  # Enter on a standalone /command runs the highlighted one, like Textual
+        assert read_action() == {"type": "submit", "text": "/mcp", "mode": "queue", "generation": 0}
         process.stdin.write((json.dumps({"schema": 1, "revision": 3,
             "title": "Nexus PTY", "status": "awaiting_permission", "lines": [],
             "prompt": {"kind": "permission", "id": "permission-1", "lines": ["Run shell?"],

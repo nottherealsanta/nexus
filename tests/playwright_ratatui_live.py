@@ -19,16 +19,16 @@ OUT = ROOT / "artifacts/ratatui-live"; OUT.mkdir(exist_ok=True, parents=True)
 ws = tempfile.mkdtemp()
 with socket.socket() as s:
     s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]
-env = dict(os.environ, PYTHONPATH=str(ROOT), NEXUS_DEV="1", TERM="xterm-256color")
+env = dict(os.environ, PYTHONPATH=str(ROOT), NEXUS_DEV="1", TERM="xterm-256color", XDG_CONFIG_HOME=tempfile.mkdtemp())  # fresh preferences: both sidebars on
 env.pop("FORCE_COLOR", None)
 cmd = f"{sys.executable} tests/ratatui_browser_demo.py --bridge {sys.executable} -m nexus --dev --workspace {ws} chat --renderer ratatui"
 server = subprocess.Popen([sys.executable, "tests/browser_serve.py", "--port", str(port), "--command", cmd], cwd=ROOT, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, start_new_session=True)
 with sync_playwright() as pw:
-    b = pw.chromium.launch(); page = b.new_page(viewport={"width": 1300, "height": 850})
+    b = pw.chromium.launch(); page = b.new_page(viewport={"width": 1900, "height": 900})
     try:
         for _ in range(40):
             try:
-                page.goto(f"http://127.0.0.1:{port}?fontsize=15", timeout=2000)
+                page.goto(f"http://127.0.0.1:{port}?fontsize=14", timeout=2000)
                 page.get_by_role("textbox", name="Terminal input").wait_for(timeout=2000); break
             except Exception:
                 page.wait_for_timeout(250)

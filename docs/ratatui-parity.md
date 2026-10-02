@@ -95,7 +95,10 @@ Completion is requested as you type, not only on Tab: when the token at the
 cursor starts with `/` or `@`, or the draft is a slash command with an argument,
 Rust sends one `complete` action after a 120 ms pause (the same trigger as
 Textual's `refresh_completion`). Tab still forces a request. Escape hides the
-list for that token until it changes. The popup styling is still approximate.
+list for that token until it changes. As-you-type argument lists exist only for
+`/model` and `/agent` (Textual's set); Tab completes any command's arguments.
+Enter on a standalone `/command` runs the highlighted command (Textual's rule);
+on an argument that is already complete it submits the draft. The popup styling is still approximate.
 
 Empty sessions show the same grey tips as Textual's `EmptyHints`
 (`ui_support/hints.pick_hints`, seeded by session id): Python sends a `hints`
