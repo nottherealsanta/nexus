@@ -29,7 +29,7 @@ def _safe_blocks(blocks):
              **({"chips": [redact(escape_controls(chip)) for chip in block["chips"]]} if block.get("chips") else {})} for block in blocks]
 
 
-def _project_turn(turn, shell, agents=None):
+def _project_turn(turn, shell, agents=None, literal=True):
     """Blocks of one turn in Textual's order and spacing (ui/tui/timeline.py).
 
     Each block carries ``gap`` (blank rows before it, after margin collapsing),
@@ -40,7 +40,8 @@ def _project_turn(turn, shell, agents=None):
         thought_title, tool_batches, tool_row_text, tool_status, turn_agent_label, turn_footer_text,
         _turn_duration, _text)
     collapsed = bool(shell and turn.id in shell.collapsed_turns)
-    lines = [f"\nTurn {turn.index} · {turn.phase}"]
+    lines = [f"\nTurn {turn.index} · {turn.phase}"] if literal else []
+    emit = lines.append if literal else (lambda _line: None)
     entries = []  # (seq, rank, block, top_margin, bottom_margin)
     first_reply = None
     for index, message in enumerate(turn.messages):
@@ -50,7 +51,7 @@ def _project_turn(turn, shell, agents=None):
             prompt, chips = submitted_attachment_summary(message)
             text = _literal(prompt)
             first, _, rest = text.partition("\n")
-            lines.append(f"user · text\n{message.text}")
+            emit(f"user · text\n{message.text}")
             if collapsed and rest:
                 first, rest = first + " …", ""
             block = {"id": message.id + ":user", "kind": "user", "title": first, "text": rest,
@@ -72,11 +73,11 @@ def _project_turn(turn, shell, agents=None):
                          "text": suffix, "detail": _literal(thinking) if expanded else "",
                          "operation": {"kind": "block_toggle", "id": message.id + "thinking"}}
                 entries.append((message.event_seq, 0, block, 0, 1, "thought"))
-                lines.append(f"assistant · thinking\n{thinking}")
+                emit(f"assistant · thinking\n{thinking}")
         if message.text if message.role == "assistant" else _has_message_content(message):
             block = {"id": message.id + "text", "kind": "markdown", "text": message.text}
             entries.append((message.event_seq, 2, block, 0, 1, "assistant"))
-            lines.append(f"assistant · text\n{message.text}")
+            emit(f"assistant · text\n{message.text}")
             if first_reply is None:
                 first_reply = message.event_seq
     name, color = turn_agent_label(turn)
@@ -84,8 +85,9 @@ def _project_turn(turn, shell, agents=None):
         entries.append((first_reply, 1, {"id": turn.id + ":agent", "kind": "agent", "title": name, "color": color}, 0, 0, "agent"))
     batches = tool_batches(turn.tools)
     for tool in turn.tools:
-        body = sections_to_text(tool_detail_sections(tool))
-        lines.append(body)
+        # The full detail text is only needed for the literal projection (tests) and verbose mode.
+        body = sections_to_text(tool_detail_sections(tool)) if literal or (shell and shell.verbose) else ""
+        emit(body)
         glyph = BATCH_GLYPHS.get(batches.get(tool.call_id, ""))
         gutter = f"{glyph} " if glyph else ""
         operation = {"kind": "tool_page", "id": tool.call_id}
@@ -115,7 +117,7 @@ def _project_turn(turn, shell, agents=None):
     if turn.terminal and turn.error:
         entries.append((max((entry[0] for entry in entries), default=0) + 1, 4,
                         {"id": turn.id + ":error", "kind": "error", "text": "Error: " + _text(turn.error)}, 1, 0, "error"))
-        lines.append(f"Error: {turn.error}")
+        emit(f"Error: {turn.error}")
     entries.sort(key=lambda entry: (entry[0], entry[1]))
     if collapsed:
         entries = [entry for entry in entries if entry[5] == "user"]
@@ -238,7 +240,7 @@ def _guarded(failures: list[str], label: str, build, fallback):
         return fallback
 
 
-def project(controller: TuiController, revision: int, error: str = "", shell=None) -> dict:
+def project(controller: TuiController, revision: int, error: str = "", shell=None, literal: bool = True) -> dict:
     """Project labelled, control-safe context and transcript from canonical state.
 
     Each section is built independently: one failing section is replaced by a
@@ -251,13 +253,13 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
     context_lines = []
     if shell and shell.preferences.values["context_preview"]:
         blocks.extend(_guarded(failures, "Context header", lambda: _safe_blocks(_context_blocks(shell, view)), []))
-    flags = (bool(shell and shell.verbose), frozenset(shell.expanded) if shell else frozenset(), frozenset(shell.collapsed_turns) if shell else frozenset(), id(view.agents))
+    flags = (bool(shell and shell.verbose), frozenset(shell.expanded) if shell else frozenset(), frozenset(shell.collapsed_turns) if shell else frozenset(), id(view.agents), literal)
     for turn in view.turns:
         cached = shell.turn_cache.get(turn.id) if shell else None
         if cached and cached[0] is turn and cached[1] == flags:
             turn_lines, turn_blocks = cached[2], cached[3]
         else:
-            turn_lines, turn_blocks = _guarded(failures, f"Turn {turn.id}", lambda: _project_turn(turn, shell, view.agents),
+            turn_lines, turn_blocks = _guarded(failures, f"Turn {turn.id}", lambda: _project_turn(turn, shell, view.agents, literal),
                                                ([], [{"id": turn.id, "title": "Turn", "text": "This turn could not be rendered", "kind": "literal"}]))
             if shell and not any(f.startswith(f"Turn {turn.id} ") for f in failures):
                 if cached:
@@ -385,10 +387,9 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
             controller.ingest(event)
         revision += 1
         async with write_lock:
-            snapshot = project(controller, revision, shell=shell)
-            # Legacy literal projection is useful to tests; native typed blocks
-            # already contain the rendered transcript and full-detail actions.
-            snapshot["lines"] = []
+            # The literal `lines` projection is a test seam; the native typed blocks already
+            # carry the transcript and the full-detail actions, so it is not built here.
+            snapshot = project(controller, revision, shell=shell, literal=False)
             encoded = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
             # Poll ticks that change nothing are not resent; one-shot composer
             # fields (restore/insert) always are, since they repeat legitimately.
@@ -534,7 +535,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                             shell.items = []
                             await shell.submit(item["command"])
                 elif action["type"] == "answer":
-                    current = project(controller, revision, shell=shell)["prompt"]
+                    current = project(controller, revision, shell=shell, literal=False)["prompt"]
                     if current and current["id"] == action["text"]:
                         value = action.get("value", "")
                         allowed = [choice["value"] for choice in current["choices"] if not choice["disabled"]]
@@ -552,7 +553,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                                 shell.notice = "Question already answered by another client"
                 elif action["type"] == "operation":
                     operation = action.get("operation")
-                    allowed_operations = [item.get("operation") for item in shell.items] + [block.get("operation") for block in project(controller, revision, shell=shell)["blocks"]]
+                    allowed_operations = [item.get("operation") for item in shell.items] + [block.get("operation") for block in project(controller, revision, shell=shell, literal=False)["blocks"]]
                     if operation and operation in allowed_operations:
                         if operation["kind"] == "block_toggle":
                             if operation["id"] in shell.expanded: shell.expanded.remove(operation["id"])

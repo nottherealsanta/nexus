@@ -241,3 +241,22 @@ def test_usage_lines_bar_each_window_with_its_tone():
     assert window_tones == ["warn", "ok"] or window_tones[1] == "ok"
     assert "dim" in tones and lines[-1].startswith("Not connected")
     assert usage_lines({"providers": []})[0][0] == "No connected provider reports usage."
+
+
+def test_live_projection_skips_the_literal_lines_but_keeps_blocks(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    view = initial_state("s")
+    view.turns = [_turn()]
+    controller = SimpleNamespace(view=view, session="s")
+
+    def shell():
+        value = ShellActions(controller)
+        value.preferences.values["context_preview"] = False
+        return value
+
+    literal = project(controller, 1, shell=shell())
+    live = project(controller, 1, shell=shell(), literal=False)
+    assert "Read" in "\n".join(literal["lines"])
+    assert live["lines"] == []
+    assert [b["kind"] for b in live["blocks"]] == [b["kind"] for b in literal["blocks"]]

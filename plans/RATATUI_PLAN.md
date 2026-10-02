@@ -128,7 +128,7 @@ Dialogs and screens (all currently generic panels/menus)
 - [ ] Performance: measure end-to-end token latency with a real daemon, frame draw
       time, backpressure on a slow pipe; implement the proposed per-turn patch
       protocol (schema 2) if the 1 MiB-per-token resend matters in practice (see the
-      measurements section below). `_project_turn` still builds a legacy `lines`
+      measurements section below). (done: the live path passes `literal=False`, so the legacy `lines` text and the per-tool detail text are no longer built or cached; tests keep the literal projection by default) `_project_turn` still builds a legacy `lines`
       text that is discarded; remove it and its cache accounting.
 - [ ] Rerun the Textual timing-sensitive test group and the full suite after every
       shared-code change (`timeline.py`, `tui_panels.py`, `tui_context_header.py`,
