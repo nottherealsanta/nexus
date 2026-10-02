@@ -59,7 +59,7 @@ def test_error_only_for_terminal_turns_and_context_header_placeholders(tmp_path,
     running = _snapshot(tmp_path, monkeypatch, [_turn(error="boom", phase="active")])["blocks"]
     assert not any(block["kind"] == "error" for block in running)
     shown = _snapshot(tmp_path, monkeypatch, [])
-    assert shown["blocks"] == []
+    assert [block["kind"] for block in shown["blocks"]] == ["hints"]  # only the empty-session tips
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     view = initial_state("s")
     shell = ShellActions(SimpleNamespace(view=view, session="s"))
@@ -136,3 +136,11 @@ def test_running_tool_carries_the_animation_slot_and_finished_does_not(tmp_path,
     assert SPINNER_SLOT in tool["text"] and not any(frame in tool["text"] for frame in SPINNER_FRAMES)
     done = next(block for block in _snapshot(tmp_path, monkeypatch, [_turn()])["blocks"] if block["kind"] == "tool")
     assert SPINNER_SLOT not in done["text"]
+
+
+def test_empty_session_hints_are_aligned_and_vanish_with_the_first_turn(tmp_path, monkeypatch):
+    hints = _snapshot(tmp_path, monkeypatch, [])["blocks"][0]
+    rows = [row.split("\t") for row in hints["text"].splitlines()]
+    assert hints["kind"] == "hints" and hints["gap"] == 4 and len(rows) == 4
+    assert len({len(keys) for keys, _ in rows}) == 1 and len({len(text) for _, text in rows}) == 1
+    assert not any(block["kind"] == "hints" for block in _snapshot(tmp_path, monkeypatch, [_turn()])["blocks"])

@@ -246,6 +246,21 @@ pub fn build(b: &Content, width: u16, p: &Palette) -> Rows {
                 indented(&mut out, vec![Span::styled(text.to_string(), Style::default().fg(tone))], 4, width, op);
             }
         }
+        "hints" => {
+            // Tips for an empty session: "keys\ttext" rows, centred as one block
+            // (Python pads both columns to equal width, like Textual's EmptyHints).
+            for row in b.text.lines() {
+                let (keys, text) = row.split_once('\t').unwrap_or(("", row));
+                let used = keys.width() + 2 + text.width();
+                let spans = vec![
+                    Span::raw(" ".repeat(width.saturating_sub(used) / 2)),
+                    Span::styled(keys.to_string(), Style::default().fg(p.muted).add_modifier(Modifier::BOLD)),
+                    Span::raw("  "),
+                    Span::styled(text.to_string(), Style::default().fg(p.quiet)),
+                ];
+                out.push((Line::from(spans), None));
+            }
+        }
         "agent" => {
             let c = color(&b.color, p.blue, p);
             indented(&mut out, vec![

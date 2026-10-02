@@ -59,7 +59,7 @@ Transcript
 - [ ] Keyboard focus navigation through the transcript (Tab to tool cards, thoughts,
       user cards; Enter/Space open or toggle; hover/focus highlight like
       `.tool-card:focus`).
-- [ ] Empty-session hints (`EmptyHints`), connection-status banner, activity progress
+- [x] Empty-session hints done (`hints` block). Still open:  connection-status banner, activity progress
       bar, update-available notice, `thinking_status` "Activity" row.
 - [ ] Mouse text selection and copy in the transcript; scrollbar indicator; typing
       scrolls to bottom (`set_typing`).

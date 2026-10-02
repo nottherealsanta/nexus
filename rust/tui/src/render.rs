@@ -92,6 +92,9 @@ pub struct Cache {
     pub lines: Vec<Line<'static>>,
     /// Animation frame for the running-tool slot (`SPINNER_SLOT`).
     pub spin: usize,
+    /// The draft is non-empty: empty-session hints keep their rows but go blank.
+    pub typing: bool,
+    built_typing: bool,
 }
 pub const SPINNER_SLOT: char = '\u{e000}';
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -159,9 +162,13 @@ impl Cache {
         width: u16,
         palette: &Palette,
     ) {
-        if self.blocks == blocks && self.source == context && self.width == width {
+        if self.blocks == blocks && self.source == context && self.width == width && self.typing == self.built_typing {
             return;
         }
+        if self.typing != self.built_typing {
+            self.parts.clear();
+        }
+        self.built_typing = self.typing;
         self.lines.clear();
         self.operations.clear();
         for row in context {
@@ -181,7 +188,11 @@ impl Cache {
             {
                 part
             } else {
-                let rows = crate::transcript::build(block, width, palette);
+                let mut shown = block.clone();
+                if self.typing && shown.kind == "hints" {
+                    shown.text = shown.text.lines().map(|_| "\t").collect::<Vec<_>>().join("\n");
+                }
+                let rows = crate::transcript::build(&shown, width, palette);
                 Part {
                     block: block.clone(),
                     width,
@@ -352,6 +363,7 @@ pub fn draw(
             r.details,
         );
     }
+    cache.typing = !draft.text.is_empty();
     if s.blocks.is_empty() {
         cache.update(&s.lines, r.transcript.width, &p);
     } else {
@@ -627,6 +639,23 @@ pub fn draw(
 mod tests {
     use super::*;
     use ratatui::{backend::TestBackend, Terminal};
+    #[test]
+    fn hints_blank_while_typing_but_keep_their_rows() {
+        let palette = Palette::new(false);
+        let blocks = vec![crate::bridge::Content {
+            id: "empty-hints".into(), kind: "hints".into(), gap: 4,
+            text: "esc\tstop\n  /\tcommands".into(), ..Default::default()
+        }];
+        let mut cache = Cache::default();
+        cache.update_content(&[], &blocks, 80, &palette);
+        let shown = cache.lines.len();
+        assert_eq!(shown, 6);
+        assert!(cache.lines[4].spans.iter().any(|span| span.content.contains("stop")));
+        cache.typing = true;
+        cache.update_content(&[], &blocks, 80, &palette);
+        assert_eq!(cache.lines.len(), shown);
+        assert!(!cache.lines[4].spans.iter().any(|span| span.content.contains("stop")));
+    }
     #[test]
     fn running_slot_is_replaced_per_frame() {
         let line = Line::from(vec![Span::raw(format!("{SPINNER_SLOT} Bash · ls"))]);

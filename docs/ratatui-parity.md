@@ -96,3 +96,8 @@ cursor starts with `/` or `@`, or the draft is a slash command with an argument,
 Rust sends one `complete` action after a 120 ms pause (the same trigger as
 Textual's `refresh_completion`). Tab still forces a request. Escape hides the
 list for that token until it changes. The popup styling is still approximate.
+
+Empty sessions show the same grey tips as Textual's `EmptyHints`
+(`ui_support/hints.pick_hints`, seeded by session id): Python sends a `hints`
+block (`keys\ttext` rows padded to equal widths) and Rust centres it. Typing
+blanks the rows without moving the layout; the first turn removes the block.

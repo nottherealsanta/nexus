@@ -16,6 +16,7 @@ from ...ui.cli import open_client
 from ...ui_support.prompts import approval_choices, pending_questions
 from .actions import ShellActions, labelled
 from ...ui_support.context import context_usage
+from ...ui_support.hints import pick_hints
 from ...ui_support.tui_history import load_history
 from ...ui_support.clipboard import read_clipboard_image
 from .controller import NativeController as TuiController
@@ -222,6 +223,12 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
         if blocks and turn_blocks:  # Textual's .turn margin-bottom: one blank row between turns
             turn_blocks = [{**turn_blocks[0], "gap": max(1, turn_blocks[0].get("gap", 0))}, *turn_blocks[1:]]
         blocks.extend(turn_blocks)
+    if not view.turns:  # grey tips in an empty session; the native client blanks them while typing
+        rows = pick_hints(view.session_id or "session")
+        keys_width = max(len(keys) for keys, _ in rows)
+        tail_width = max(len(text) for _, text in rows)
+        blocks.append({"id": "empty-hints", "kind": "hints", "gap": 4,
+                       "text": "\n".join(f"{redact(escape_controls(keys.rjust(keys_width)))}\t{redact(escape_controls(text.ljust(tail_width)))}" for keys, text in rows)})
     linked = {agent_id for turn in view.turns for tool in turn.tools for agent_id in tool.child_agent_ids}
     for agent in view.agents.values():
         if agent.id in linked:  # shown by its Task card
