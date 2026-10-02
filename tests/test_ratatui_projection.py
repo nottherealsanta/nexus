@@ -154,3 +154,19 @@ def test_modified_file_diff_is_sent_only_while_expanded(tmp_path, monkeypatch):
     assert closed["open"] is False and closed["diff"] == []
     opened = _snapshot(tmp_path, monkeypatch, [turn], open_files={"a.py"})["details_panel"]["files"][0]
     assert opened["open"] is True and opened["diff"] == ["@@ -1 +1 @@", "-old", "+new"]
+
+
+def test_session_cards_carry_status_words_age_and_the_current_marker():
+    from nexus.host.protocol import ProjectSession, ProjectSessionsListResult
+    from nexus.session.manager import SessionSummary
+    from nexus.ui.ratatui.workflows import session_rows
+
+    def row(id, state, seq, title):
+        return ProjectSession("/w", "p", SessionSummary(id=id, title=title, state=state, last_activity=1000.0, last_seq=seq, message_count=3))
+
+    result = ProjectSessionsListResult(sessions=[row("a", "running", 5, "Busy"), row("b", "idle", 5, "Quiet"), row("c", "awaiting_input", 5, "Asks")])
+    seen = {"b": 2}  # b finished something since it was last viewed
+    rows = {r["id"]: r for r in session_rows(result, current="a", seen=seen, now=1000.0 + 300)}
+    assert rows["a"]["status"] == "working" and rows["a"]["active"] is True and rows["a"]["sub"] == "working now · 5m ago"
+    assert rows["b"]["status"] == "done" and rows["b"]["sub"].startswith("finished")
+    assert rows["c"]["status"] == "input" and rows["c"]["sub"].startswith("needs input")

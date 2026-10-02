@@ -12,7 +12,6 @@ from __future__ import annotations
 from .session_groups import _day_label as _day_label, _session_groups
 
 import json
-import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from pathlib import Path
 from types import SimpleNamespace
@@ -39,6 +38,7 @@ from textual.widgets import (
 from textual.widgets.option_list import Option
 
 from .text import sanitize
+from .session_status import SESSION_WORDS as SESSION_WORDS, relative_time as relative_time, session_status as session_status, session_subline as session_subline
 from .details import FileChange as FileChange, _int as _int, modified_files as modified_files, session_rows
 
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -47,32 +47,6 @@ STATUS_LABELS = {"working": "Working", "input": "Needs input", "done": "Done", "
 
 
 # ---------------------------------------------------------------- pure helpers
-
-def session_status(summary: Any, seen: Mapping[str, int], current: str) -> str:
-    """``working``, ``input``, ``done`` (finished since last viewed), or ``idle``."""
-    state = getattr(summary, "state", "idle")
-    if state == "running":
-        return "working"
-    if state in {"awaiting_permission", "awaiting_input"}:
-        return "input"
-    last_seen = seen.get(summary.id)
-    if summary.id != current and last_seen is not None and summary.last_seq > last_seen:
-        return "done"
-    return "idle"
-
-
-def relative_time(ts: float | None, now: float | None = None) -> str:
-    if not ts:
-        return ""
-    seconds = max(0.0, (now or time.time()) - float(ts))
-    if seconds < 45:
-        return "just now"
-    minutes = round(seconds / 60)
-    if minutes < 60:
-        return f"{minutes}m ago"
-    hours = round(minutes / 60)
-    return f"{hours}h ago" if hours < 24 else f"{round(hours / 24)}d ago"
-
 
 class TuiPreferences:
     """Small JSON-backed shell preferences; ``path=None`` keeps them in memory."""
@@ -363,19 +337,6 @@ class TopBar(Horizontal):
 
 
 # ---------------------------------------------------------------- session sidebar
-
-SESSION_WORDS = {"working": "working now", "input": "needs input", "done": "finished", "archived": "archived"}
-
-
-def session_subline(summary: Any, status: str, now: float | None = None) -> str:
-    """The card's second line: status in words (or the message count), then age."""
-    words = SESSION_WORDS.get(status)
-    if words is None:
-        count = _int(getattr(summary, "message_count", 0))
-        words = f"{count} message{'' if count == 1 else 's'}" if count else "no messages"
-    age = relative_time(getattr(summary, "last_activity", 0.0), now)
-    return f"{words} · {age}" if age else words
-
 
 class SessionRow(Horizontal):
     """One session as a two-line card: status glyph and title, then the status

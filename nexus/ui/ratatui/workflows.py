@@ -548,7 +548,7 @@ class Workflows:
 
     async def sessions(self):
         result = await self.client.project_sessions()
-        self.shell.sessions = session_rows(result)
+        self.shell.sessions = session_rows(result, self.shell.controller.session, self.shell.seen_seq)
         self.menu("Sessions", [(f"{row['workspace']} · {row['title']} · {row['state']}",
             {"kind": "session_open", "id": row["id"], "workspace": row["workspace"]}) for row in self.shell.sessions],
             ["[Session list truncated]"] if result.truncated else [])
@@ -579,11 +579,26 @@ def new_file_body(category, name):
     return '{"mcpServers": {}}\n' if category == "mcp" else ""
 
 
-def session_rows(result):
+def session_rows(result, current: str = "", seen: dict | None = None, now: float | None = None):
+    """Project session cards: ``status``/``sub`` come from the helpers Textual's cards use.
+
+    ``seen`` records the last sequence viewed per session so a finished background
+    session reads "finished" until it is opened (the Textual sidebar's rule).
+    """
     from ...ui_support.session_groups import _session_groups
+    from ...ui_support.session_status import session_status, session_subline
     from ...ui_support.text import escape_controls, redact
+    seen = {} if seen is None else seen
     groups = _session_groups([(row.workspace, row.session) for row in result.sessions], "")
     workspace_for = {id(row.session): row.workspace for row in result.sessions}
-    return [{"id": row.id, "title": redact(escape_controls(row.title or row.id)),
-             "workspace": workspace_for[id(row)], "state": row.state, "group": redact(escape_controls(group))}
-            for group, rows in groups for row in rows]
+    rows = []
+    for group, members in groups:
+        for row in members:
+            if row.id not in seen or row.id == current:
+                seen[row.id] = max(seen.get(row.id, 0), getattr(row, "last_seq", 0))
+            status = session_status(row, seen, current)
+            rows.append({"id": row.id, "title": redact(escape_controls(row.title or row.id)),
+                         "workspace": workspace_for[id(row)], "state": row.state, "group": redact(escape_controls(group)),
+                         "status": status, "sub": redact(escape_controls(session_subline(row, status, now))),
+                         "active": row.id == current})
+    return rows

@@ -878,9 +878,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         if r.sessions.contains((mouse.column, mouse.row).into()) {
                             sessions_scroll = (sessions_scroll + 3).min(
-                                render::session_rows(&s)
+                                render::session_sidebar(&s, &render::Palette::new(s.theme == "nexus-light"), usize::from(r.sessions.width.saturating_sub(3)), 0)
                                     .len()
-                                    .saturating_sub(r.sessions.height as usize),
+                                    .saturating_sub(r.sessions.height.saturating_sub(3) as usize),
                             );
                             dirty = true;
                             continue;
@@ -899,10 +899,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     MouseEventKind::Down(event::MouseButton::Right) => {
                         if r.sessions.contains((mouse.column, mouse.row).into()) {
-                            if let Some(row) = render::session_rows(&s)
-                                .get(sessions_scroll + (mouse.row - r.sessions.y) as usize)
-                                .and_then(|(_, index)| {
-                                    index.and_then(|index| s.sessions.get(index))
+                            if let Some(row) = render::session_sidebar(&s, &render::Palette::new(s.theme == "nexus-light"), usize::from(r.sessions.width.saturating_sub(3)), 0)
+                                .get(sessions_scroll + (mouse.row - r.sessions.y).saturating_sub(1) as usize)
+                                .and_then(|(_, hit)| match hit {
+                                    Some(render::SidebarHit::Session(index)) => s.sessions.get(*index),
+                                    _ => None,
                                 })
                             {
                                 send(
@@ -939,10 +940,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 send(json!({"type":"file_toggle","text":file.path,"generation":s.generation}))?;
                             }
                         } else if r.sessions.contains((mouse.column, mouse.row).into()) {
-                            if let Some(row) = render::session_rows(&s)
-                                .get(sessions_scroll + (mouse.row - r.sessions.y) as usize)
-                                .and_then(|(_, index)| {
-                                    index.and_then(|index| s.sessions.get(index))
+                            if render::session_sidebar(&s, &render::Palette::new(s.theme == "nexus-light"), usize::from(r.sessions.width.saturating_sub(3)), 0)
+                                .get(sessions_scroll + (mouse.row - r.sessions.y).saturating_sub(1) as usize)
+                                .is_some_and(|(_, hit)| *hit == Some(render::SidebarHit::New))
+                            {
+                                action("command", "/new")?;
+                            }
+                            if let Some(row) = render::session_sidebar(&s, &render::Palette::new(s.theme == "nexus-light"), usize::from(r.sessions.width.saturating_sub(3)), 0)
+                                .get(sessions_scroll + (mouse.row - r.sessions.y).saturating_sub(1) as usize)
+                                .and_then(|(_, hit)| match hit {
+                                    Some(render::SidebarHit::Session(index)) => s.sessions.get(*index),
+                                    _ => None,
                                 })
                             {
                                 send(

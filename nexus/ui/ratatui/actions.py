@@ -58,6 +58,7 @@ class ShellActions:
         self.workspace = ""
         self.tabs = []
         self.breadcrumb = ""
+        self.seen_seq: dict[str, int] = {}  # last sequence viewed per session, for "finished" status
         self.open_files: set[str] = set()  # modified files expanded in the details sidebar
         self.reconnect = None
         from .preferences import Preferences

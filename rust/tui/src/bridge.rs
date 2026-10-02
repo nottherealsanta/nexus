@@ -88,7 +88,7 @@ impl Default for Form {
         }
     }
 }
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 pub struct Session {
     #[serde(default)]
     pub group: String,
@@ -96,6 +96,12 @@ pub struct Session {
     pub title: String,
     pub workspace: String,
     pub state: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub sub: String,
+    #[serde(default)]
+    pub active: bool,
 }
 
 #[derive(Clone, Default, PartialEq, Deserialize)]

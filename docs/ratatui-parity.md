@@ -107,3 +107,11 @@ Modified-file rows in the details sidebar expand on click: Rust sends
 sends that file's diff lines (`ui_support/details.diff_preview_lines`, headers
 removed, 60 lines then a clipping notice); Rust colours `+`/`-`/`@@` rows. The
 sidebar scrolls with the wheel. Keyboard expansion is not implemented yet.
+
+The sessions sidebar follows Textual's `SessionSidebar`: a `+ New session`
+button, `SESSIONS N`, day/project headings and two-line cards (status glyph and
+title; "working now", "needs input", "finished" or a message count, then age).
+The current session has a left bar; a background session that advanced since it
+was last viewed reads "finished". Status words come from
+`ui_support/session_status.py`, shared with Textual. The filter box, delete and
+Archived rows are not in the native sidebar yet.

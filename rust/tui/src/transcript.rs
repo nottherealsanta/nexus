@@ -101,7 +101,7 @@ pub fn line(
     Line::from(spans)
 }
 
-fn truncate(text: &str, width: usize) -> String {
+pub fn truncate(text: &str, width: usize) -> String {
     if text.width() <= width {
         return text.to_string();
     }

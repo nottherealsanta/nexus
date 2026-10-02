@@ -417,6 +417,7 @@ here, so add a row when you add a file.
 | --- | --- |
 | `voice_settings.py` | Host-backed voice configuration shared by terminal surfaces |
 | `shortcuts.py` | Shared terminal shortcut and leader reference |
+| `session_status.py` | Shared session-card status words, relative age and sub-line |
 | `session_groups.py` | Shared project and local-date grouping for terminal session lists |
 | `session_controller.py` | Shared host-client lifecycle, selection and canonical reducer seam |
 

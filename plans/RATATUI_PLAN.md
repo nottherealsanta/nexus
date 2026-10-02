@@ -74,7 +74,7 @@ Details and sessions sidebars
       "+a -r across N files" (data is already projected; add `expanded` state and an
       operation).
 - [ ] MCP refresh control (`↻`) and live doctor refresh; update notice.
-- [ ] Sessions sidebar to match `SessionSidebar` (`tui_panels.py`): `SESSIONS N`,
+- [x] Cards, heading count, New button, status words, ages and current bar done; filter, archive/delete rows and first-1000 notice still open. Sessions sidebar to match `SessionSidebar` (`tui_panels.py`): `SESSIONS N`,
       status words (working now / needs input / finished), relative times, archive
       action, project and day grouping, first-1000 truncation notice, scroll.
 - [ ] Session tabs to match `SessionTabs`: verify look, close button, overflow,

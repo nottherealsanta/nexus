@@ -367,7 +367,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     return
                 result = await shell.client.project_sessions()
                 from .workflows import session_rows
-                shell.sessions = session_rows(result)
+                shell.sessions = session_rows(result, controller.session, shell.seen_seq)
                 for row in shell.sessions:
                     existing = next((tab for tab in shell.tabs if tab["id"] == row["id"] and tab["workspace"] == row["workspace"]), None)
                     if existing:

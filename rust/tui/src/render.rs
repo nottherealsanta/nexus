@@ -100,7 +100,7 @@ pub const SPINNER_SLOT: char = '\u{e000}';
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 /// Whether any block has a running-tool slot, i.e. the screen needs ~8 Hz redraws.
 pub fn animating(s: &Snapshot) -> bool {
-    s.blocks.iter().any(|block| block.text.contains(SPINNER_SLOT))
+    s.blocks.iter().any(|block| block.text.contains(SPINNER_SLOT)) || s.sessions.iter().any(|row| row.status == "working")
 }
 fn with_spinner(line: &Line<'static>, frame: usize) -> Line<'static> {
     if !line.spans.iter().any(|span| span.content.contains(SPINNER_SLOT)) {
@@ -334,21 +334,16 @@ pub fn draw(
     let r = regions(frame.area(), s, composer_height(frame.area(), draft));
     draw_top_bar(frame, s, r.tabs, &p);
     if r.sessions.width > 0 {
-        let mut lines = vec![Line::styled("SESSIONS", Style::default().fg(p.quiet).add_modifier(Modifier::BOLD))];
-        let rows = session_rows(s);
-        lines.extend(
-            rows.iter()
-                .skip(sessions_scroll)
-                .take(r.sessions.height.saturating_sub(1) as usize)
-                .map(|(text, index)| match index {
-                    None => Line::styled(text.clone(), Style::default().fg(p.quiet)),
-                    Some(i) if text.starts_with("  ") => Line::styled(
-                        text.clone(),
-                        Style::default().fg(if s.sessions[*i].state == "running" { p.accent } else { p.quiet }),
-                    ),
-                    Some(_) => Line::styled(text.clone(), Style::default().fg(p.text)),
-                }),
-        );
+        let inner = usize::from(r.sessions.width.saturating_sub(3));
+        let height = usize::from(r.sessions.height.saturating_sub(1));
+        let mut lines: Vec<Line<'static>> = session_sidebar(s, &p, inner, cache.spin)
+            .into_iter()
+            .skip(sessions_scroll)
+            .take(height.saturating_sub(2))
+            .map(|(line, _)| line)
+            .collect();
+        lines.resize(height.saturating_sub(1), Line::default());
+        lines.push(Line::styled("↵ open · ctrl+z undo", Style::default().fg(p.quiet)));
         frame.render_widget(
             Paragraph::new(lines)
                 .block(Block::default().borders(Borders::RIGHT).border_style(Style::default().fg(p.border)).padding(ratatui::widgets::Padding::new(1, 1, 1, 0)))
@@ -676,6 +671,25 @@ mod tests {
         assert!(second.starts_with("▸ A "));
     }
     #[test]
+    fn session_cards_show_status_words_and_map_clicks() {
+        use crate::bridge::Session;
+        let mut s = Snapshot::default();
+        s.sessions = vec![
+            Session { group: "Today".into(), id: "a".into(), title: "Fix bug".into(), status: "working".into(), sub: "working now · just now".into(), active: true, ..Default::default() },
+            Session { group: "Today".into(), id: "b".into(), title: "Docs".into(), status: "done".into(), sub: "finished · 5m ago".into(), ..Default::default() },
+        ];
+        assert!(animating(&s));
+        let rows = session_sidebar(&s, &Palette::new(false), 27, 1);
+        let text = |i: usize| rows[i].0.spans.iter().map(|span| span.content.as_ref()).collect::<String>();
+        assert!(text(0).starts_with("+ New session") && text(0).ends_with("ctrl+n"));
+        assert_eq!(rows[0].1, Some(SidebarHit::New));
+        assert_eq!(text(2), "SESSIONS 2");
+        let first = rows.iter().position(|(_, hit)| *hit == Some(SidebarHit::Session(0))).unwrap();
+        assert!(text(first).starts_with("▌⠙ Fix bug"), "{}", text(first));
+        assert!(text(first + 1).contains("working now · just now"));
+        assert!(text(first + 3).starts_with(" ✓ Docs"));
+    }
+    #[test]
     fn running_slot_is_replaced_per_frame() {
         let line = Line::from(vec![Span::raw(format!("{SPINNER_SLOT} Bash · ls"))]);
         assert_eq!(with_spinner(&line, 0).spans[0].content, "⠋ Bash · ls");
@@ -827,16 +841,62 @@ mod editor_layout_tests {
     }
 }
 
-pub fn session_rows(s: &Snapshot) -> Vec<(String, Option<usize>)> {
-    let mut rows = Vec::new();
+/// What a sidebar row opens when clicked.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum SidebarHit {
+    New,
+    Session(usize),
+}
+
+/// The sessions sidebar as styled rows, like Textual's `SessionSidebar`: a New
+/// session button, `SESSIONS N`, day/project headings and two-line cards (glyph
+/// and title; status words and age) with a left bar on the current session.
+pub fn session_sidebar(s: &Snapshot, p: &Palette, width: usize, spin: usize) -> Vec<(Line<'static>, Option<SidebarHit>)> {
+    let pad = |text: String, style: Style| {
+        let used = text.width();
+        Span::styled(format!("{text}{}", " ".repeat(width.saturating_sub(used))), style)
+    };
+    let button = "+ New session";
+    let mut rows = vec![(
+        Line::from(pad(format!("{button}{}ctrl+n", " ".repeat(width.saturating_sub(button.len() + 6).max(1))), Style::default().fg(p.text).bg(p.element))),
+        Some(SidebarHit::New),
+    )];
+    rows.push((Line::default(), None));
+    rows.push((Line::styled(format!("SESSIONS {}", s.sessions.len()), Style::default().fg(p.quiet).add_modifier(Modifier::BOLD)), None));
     let mut previous = "";
     for (i, session) in s.sessions.iter().enumerate() {
         if session.group != previous {
-            rows.push((session.group.clone(), None));
+            rows.push((Line::default(), None));
+            rows.push((Line::styled(session.group.clone(), Style::default().fg(p.purple).add_modifier(Modifier::BOLD)), None));
             previous = &session.group;
         }
-        rows.push((session.title.clone(), Some(i)));
-        rows.push((format!("  {}", session.state), Some(i)));
+        let tone = match session.status.as_str() {
+            "working" => p.accent,
+            "input" => p.warning,
+            "done" => p.success,
+            _ => p.quiet,
+        };
+        let glyph = match session.status.as_str() {
+            "working" => SPINNER[spin % SPINNER.len()],
+            "input" => "●",
+            "done" => "✓",
+            _ => "·",
+        };
+        let bg = if session.active { p.element } else { p.panel };
+        let bar = Span::styled(if session.active { "▌" } else { " " }, Style::default().fg(p.accent).bg(bg));
+        let bold = if session.status == "done" || session.active { Modifier::BOLD } else { Modifier::empty() };
+        let room = width.saturating_sub(3);
+        let title = crate::transcript::truncate(&session.title, room);
+        let sub = crate::transcript::truncate(if session.sub.is_empty() { &session.state } else { &session.sub }, room);
+        rows.push((
+            Line::from(vec![bar.clone(), Span::styled(format!("{glyph} "), Style::default().fg(tone).bg(bg)), pad(title, Style::default().fg(p.text).bg(bg).add_modifier(bold)).clone()]),
+            Some(SidebarHit::Session(i)),
+        ));
+        rows.push((
+            Line::from(vec![bar, Span::styled("  ", Style::default().bg(bg)), pad(sub, Style::default().fg(tone).bg(bg))]),
+            Some(SidebarHit::Session(i)),
+        ));
+        rows.push((Line::default(), None));
     }
     rows
 }
