@@ -1,25 +1,37 @@
 # Ratatui replacement: progress and completion plan
 
-Last updated: 2026-10-02 (Asia/Kolkata), after the visual-matching pass.
+Last updated: 2026-10-02 (Asia/Kolkata), after the long parity pass on `feat/ratatui-prototype`
+(everything committed and pushed; `main` 0.2.17 merged in).
 
 ## HANDOFF: read this first
 
-State: a broad, working native client that looks and behaves much like Textual in
-the default transcript, composer, sidebars, permission panel and pickers, but
-**many Textual features are still missing or only approximately matched**. Do not
-switch off Textual. `nexus chat` defaults to `--renderer auto` (native if its
-binary exists, else Textual). Everything is uncommitted on `feat/ratatui-prototype`
-in `/private/tmp/nexus-ratatui-prototype`.
+State: a broad native client that matches Textual in the transcript, composer, tabs,
+both sidebars, Markdown, inline diffs, prompts, pickers, Settings (two-pane, agent
+form rows), tools/usage/logs panels, mouse selection and keyboard focus. It has been
+**driven live** against a real daemon with the dev-mode mock provider
+(`tests/playwright_ratatui_live.py`), not only through tests. `nexus chat` defaults to
+`--renderer auto` (native when its binary exists, else Textual).
 
-How to work: use the project skill `.agents/skills/nexus-ratatui/SKILL.md` (and
-its `reference/`). Textual is the reference; match it, and put shared pure logic
-in `nexus/ui_support/` so both clients use it.
+**Textual is deliberately still a runtime dependency and the fallback.** The Rust bin is
+`optional = true`, so platforms without a toolchain install a binary-less wheel and need
+Textual. Removing it, or making native the only renderer, needs the gates below first.
 
-Last verified (2026-10-02, after the P1 batch and the main 0.2.17 merge): full offline suite 4,991 passed / 312 skipped / 4 deselected; Rust 23 tests pass; Ruff clean. (A Textual teardown prints a `#logs-content` NoMatches traceback to stderr during the run; tests still pass; not investigated.) Earlier record: Rust 11 tests pass; Ruff clean; full offline suite
-4,974 passed / 312 skipped, with 3 failures that were fixed or were timing-flaky
-(see "Aggregate regression" below); Playwright captures of reference, permission,
-picker, panel, light and narrow screens complete. Not rerun after the last small
-fixes: the whole suite and the Textual timing-sensitive group.
+Last verified (2026-10-02): full offline suite 4,999 passed / 312 skipped / 4 deselected;
+Rust 33 tests pass (debug and release); Ruff clean; Playwright captures complete; a local
+wheel installs in a clean venv, runs `nexus-ratatui --version`, and the native import
+leaves `textual` out of `sys.modules` (also with Textual uninstalled).
+
+**Gates that block "native only / remove Textual" and that I could not close locally:**
+- Hosted wheel matrix (Linux/macOS x86-64/arm64, cp313/cp314, musllinux), installer and
+  `nexus update` behaviour: workflow written, never run on GitHub.
+- A run with a **real provider** and hand-driven permission/approval prompts (only the
+  dev-mode mock provider and real Claude CLI usage were exercised).
+- Real-audio dictation and its cancel races (UI strip is tested, hardware is not).
+- A systematic screenshot review of every screen at 60/120/200 columns in both themes
+  (buffer tests cover one rich screen at those sizes; most screens were eyeballed once).
+- `main()` in `rust/tui/src/main.rs` is still one ~900-line loop (needs a state struct).
+- Per-turn patch protocol (schema 2) not built; measured cost was ~9 ms per token at
+  1,000 turns, so it is deferred, not needed yet.
 
 ### P0: correctness and trust (do first)
 

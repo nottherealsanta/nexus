@@ -48,7 +48,7 @@ with sync_playwright() as pw:
             elif text.startswith("key:"):  # key:Control+p
                 page.keyboard.press(text[4:]); page.wait_for_timeout(1500)
             else:
-                page.keyboard.type(text); page.keyboard.press("Enter"); page.wait_for_timeout(9000)
+                page.keyboard.type(text); page.keyboard.press("Enter"); page.wait_for_timeout(int(os.environ.get("LIVE_WAIT_MS", "9000")))
             page.screenshot(path=str(OUT / f"{step}.png"))
     finally:
         page.close(); os.killpg(server.pid, signal.SIGTERM); b.close()
