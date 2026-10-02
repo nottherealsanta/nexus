@@ -84,7 +84,7 @@ the new provider route. Noninteractive `nexus run` requires a configured model.
 nexus --workspace /path/to/project init          # create nexus.toml, SOUL.md, MEMORY.md
 nexus --workspace /path/to/project doctor        # validate config, providers, extensions, MCP
 nexus --workspace /path/to/project run "Explain this repository"
-nexus --workspace /path/to/project chat          # interactive Textual shell
+nexus --workspace /path/to/project chat          # interactive terminal client (native by default)
 ```
 
 `init` creates editable files without overwriting anything that exists; it is
@@ -190,7 +190,7 @@ nexus restart            # stop, then start a fresh daemon (picks up code/config
 | `nexus init` | Create `nexus.toml`, `SOUL.md`, `MEMORY.md` without overwriting. |
 | `nexus doctor [--explain-reload] [--json]` | Validate config, providers, registry, extensions, MCP, and state what is hot vs. restart-only. |
 | `nexus run <prompt\|->` | One turn. `--session NAME`, `--json` for headless JSONL. |
-| `nexus` / `nexus chat` | Interactive Textual shell. `--session NAME`. Requires stdin/stdout TTY. |
+| `nexus` / `nexus chat` | Interactive terminal client: the native Ratatui client by default, Textual when its executable is missing or with `--renderer textual`. `--session NAME`. Requires stdin/stdout TTY. |
 | `nexus web [--no-browser]` | Open the workspace in a local browser client served by the running daemon (one-use launch URL). |
 | `nexus replay <id> [--json]` | Re-render a session from its log (same path as `sessions replay`). |
 | `nexus daemon status\|stop\|logs` | Manage the workspace daemon. `status --json`; `logs --lines N`. |

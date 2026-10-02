@@ -1397,7 +1397,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--json", action="store_true", help="Stream JSONL event envelopes")
 
     chat = sub.add_parser("chat", help="Open the interactive Textual chat")
-    chat.add_argument("--renderer", choices=("auto", "ratatui", "textual"), default="auto", help="Terminal renderer: auto uses the native Ratatui client when its executable is installed, otherwise Textual")
+    chat.add_argument("--renderer", choices=("ratatui", "textual", "auto"), default=None, help="Terminal renderer (default: ratatui, the native client; falls back to Textual with a notice when its executable is not installed). `textual` forces the old client; `ratatui` fails instead of falling back")
     chat.add_argument(
         "--session",
         default=None,
@@ -1648,10 +1648,14 @@ def main(argv: list[str] | None = None) -> int:
                     "Use `nexus run <prompt>` for piped or non-interactive input.\n"
                 )
                 return 2
-            renderer = getattr(args, "renderer", "auto")
-            if renderer == "auto":
+            renderer = getattr(args, "renderer", None)
+            if renderer in (None, "auto"):  # the default: native, with a visible fallback
                 from .ui.ratatui.run import available as native_available
-                renderer = "ratatui" if native_available() else "textual"
+                if native_available():
+                    renderer = "ratatui"
+                else:
+                    stderr.write("Note: the native terminal client is not installed for this platform; using the Textual client.\n")
+                    renderer = "textual"
             if renderer == "textual" and importlib.util.find_spec("textual") is None:
                 stderr.write("Error: Textual is required for `nexus chat`; reinstall Nexus with its runtime dependencies.\n")
                 return 1

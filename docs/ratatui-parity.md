@@ -1,8 +1,9 @@
 # Ratatui implementation and parity ledger
 
 The native replacement is developed in the separate `feat/ratatui-prototype`
-worktree. `nexus chat --renderer ratatui` launches it; Textual remains the default
-until the migration gates below are met. This is an implementation ledger,
+worktree. `nexus chat` launches it by default (`--renderer ratatui`); Textual is the fallback when
+the native executable is missing and stays a runtime dependency until the migration
+gates below are met. This is an implementation ledger,
 not a claim of verified feature or visual parity.
 
 | Area | Implemented | Remaining verification or work |

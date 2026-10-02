@@ -199,10 +199,13 @@ cost warrants it. Rust sources and Cargo.lock are included in the sdist; release
 wheels require native platform builds. The first macOS arm64 wheel was built and
 installed locally; other targets are not verified.
 
-### Native renderer is chosen automatically
+### Native renderer is the default, Textual the fallback
 
-`nexus chat` defaults to `--renderer auto`: the Rust client when its executable
-is present, Textual otherwise. Reason: the native binary only ships in wheels for
+`nexus chat` defaults to the Rust client (`--renderer ratatui`) and falls back to
+Textual, with a printed note, when the executable is missing (`--renderer auto` is
+an alias). The default switched on 2026-10-02 at the owner's request, before the
+hosted-runner, real-provider and hardware gates were closed (see
+`plans/RATATUI_PLAN.md`); those remain open. Reason: the native binary only ships in wheels for
 the built platform matrix, and a pure-Python install (or a platform outside the
 matrix) must still get a working chat. Textual therefore stays a runtime
 dependency until a binary-less fallback wheel or a full platform matrix is

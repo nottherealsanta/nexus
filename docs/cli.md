@@ -106,10 +106,11 @@ prompt (`is_continuation`).
 
 ### Native terminal migration
 
-`nexus chat --renderer auto|ratatui|textual` chooses the terminal renderer; `auto`
-is the default and uses the native Rust client (`nexus-ratatui`) whenever its
-executable is found, otherwise Textual, so platforms without a native wheel keep
-working. `--renderer textual` forces the old client. Installed native wheels
+`nexus chat --renderer ratatui|textual` chooses the terminal renderer. The default is
+the native Rust client (`nexus-ratatui`); when its executable is not installed for
+the platform, `nexus chat` prints a one-line note and uses Textual so installs keep
+working. `--renderer ratatui` fails instead of falling back, `--renderer textual`
+forces the old client, and `auto` is accepted as an alias of the default. Installed native wheels
 include `nexus-ratatui`; source checkouts build it with
 `cargo build --manifest-path rust/tui/Cargo.toml`. `NEXUS_TUI_BINARY` explicitly
 overrides executable discovery. See [ratatui-parity.md](ratatui-parity.md).

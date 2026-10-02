@@ -1,7 +1,8 @@
 # Ratatui replacement: progress and completion plan
 
 Last updated: 2026-10-02 (Asia/Kolkata), after the long parity pass on `feat/ratatui-prototype`
-(everything committed and pushed; `main` 0.2.17 merged in).
+(everything committed and pushed; `main` 0.2.17 merged in; then merged to `main` with the
+native client as the default renderer).
 
 ## HANDOFF: read this first
 
@@ -9,8 +10,10 @@ State: a broad native client that matches Textual in the transcript, composer, t
 both sidebars, Markdown, inline diffs, prompts, pickers, Settings (two-pane, agent
 form rows), tools/usage/logs panels, mouse selection and keyboard focus. It has been
 **driven live** against a real daemon with the dev-mode mock provider
-(`tests/playwright_ratatui_live.py`), not only through tests. `nexus chat` defaults to
-`--renderer auto` (native when its binary exists, else Textual).
+(`tests/playwright_ratatui_live.py`), not only through tests. **`nexus chat` now defaults to the native client** (`--renderer ratatui`; if the binary is
+missing it prints a note and uses Textual; `auto` is an alias). The switch and the merge to
+`main` were done on 2026-10-02 at the owner's explicit request, before the open gates below
+were closed.
 
 **Textual is deliberately still a runtime dependency and the fallback.** The Rust bin is
 `optional = true`, so platforms without a toolchain install a binary-less wheel and need
@@ -158,7 +161,7 @@ Dialogs and screens (all currently generic panels/menus)
 - [x] (documented in docs/release.md; Cargo's `rust-version` already names 1.88) Missing-toolchain error should mention the minimum Rust version.
 - [ ] Installer (`install.sh`, `install.ps1`) and `nexus update` behaviour with a
       native binary; hosted wheel matrix results.
-- [ ] Only then: remove Textual/textual-diff-view from runtime dependencies, retire
+- [ ] Still pending, and not done by the default switch: remove Textual/textual-diff-view from runtime dependencies, retire
       the legacy launch path, update every user-facing doc, keep the web app and
       shared contracts in sync, and commit with a Conventional Commit subject.
 
@@ -359,7 +362,7 @@ adjusted. **Screenshots do not yet establish visual parity.**
 
 ### 4. Complete the replacement
 
-- [ ] Make Ratatui the default for `nexus chat` once the gates above pass.
+- [x] Ratatui is the default for `nexus chat` (done early on request, with a visible Textual fallback; the gates above were NOT all passed).
 - [ ] Remove Textual/textual-diff-view from runtime dependencies; retain reference-only dependencies in dev if needed.
 - [ ] Remove or explicitly retire legacy production launch paths and update all user-facing docs.
 - [ ] Preserve web behavior and shared command/context contracts.

@@ -2,7 +2,7 @@
 
 Guidance for coding agents working on **Nexus**, a provider-agnostic Python agent
 harness. A per-workspace daemon owns sessions and turns. Three surfaces are clients
-of it: a Textual chat app, a one-shot CLI and JSONL stream, and a plain HTML/CSS/JS
+of it: a terminal chat client (the native Ratatui client by default, with the Textual app as the fallback), a one-shot CLI and JSONL stream, and a plain HTML/CSS/JS
 browser app.
 
 **The idea of Nexus is that the context is clearly presented to the user and to
