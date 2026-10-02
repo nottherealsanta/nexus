@@ -30,7 +30,7 @@ fixes: the whole suite and the Textual timing-sensitive group.
       `nexus/ui/ratatui/` and `ui_support/details.py`/`context_header.py` for code
       that treats host results (`DoctorResult`, `ContextInspectResult`, `*Result`)
       as mappings.
-- [ ] Make the update loop resilient: an exception inside `project()` or `poll()`
+- [x] Make the update loop resilient (done: per-section guards in `project()`/`poll()`; failures become a labelled notice): an exception inside `project()` or `poll()`
       currently surfaces as a one-line `Error:` and may stop updates. Catch per
       section, show a labelled notice, keep the UI alive.
 - [ ] Review the three host edits made by a subagent: `nexus/host/facade.py`,
@@ -39,7 +39,7 @@ fixes: the whole suite and the Textual timing-sensitive group.
       bugs (review digest redacted to `***`; listing after discard) and also affect
       Textual. Also look at the suspected Textual paging bug in
       `tui_widgets.py` (`cursor + len(page.diff)` vs host 128 KiB pages).
-- [ ] Binary discovery prefers `rust/tui/target/debug` over `release`; a stale debug
+- [x] (fixed: newest build wins; `nexus doctor` prints `native tui:`) Binary discovery prefers `rust/tui/target/debug` over `release`; a stale debug
       build can shadow a fresh release build. Fix the order or print which binary ran
       (`nexus doctor`).
 - [ ] Rebase onto `main` (0.2.17; this branch still says 0.2.16) before any release

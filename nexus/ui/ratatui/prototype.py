@@ -172,22 +172,37 @@ def _details_panel(controller, view, shell):
     }
 
 
+def _guarded(failures: list[str], label: str, build, fallback):
+    """Run one projection section; a failure becomes a labelled notice, not a dead UI."""
+    try:
+        return build()
+    except Exception as exc:
+        failures.append(f"{label} could not be shown: {type(exc).__name__}: {exc}")
+        return fallback
+
+
 def project(controller: TuiController, revision: int, error: str = "", shell=None) -> dict:
-    """Project labelled, control-safe context and transcript from canonical state."""
+    """Project labelled, control-safe context and transcript from canonical state.
+
+    Each section is built independently: one failing section is replaced by a
+    labelled notice and the others still render.
+    """
     view = controller.view
+    failures: list[str] = []
     lines = []
     blocks = []
     context_lines = []
     if shell and shell.preferences.values["context_preview"]:
-        blocks.extend(_safe_blocks(_context_blocks(shell, view)))
+        blocks.extend(_guarded(failures, "Context header", lambda: _safe_blocks(_context_blocks(shell, view)), []))
     flags = (bool(shell and shell.verbose), frozenset(shell.expanded) if shell else frozenset(), frozenset(shell.collapsed_turns) if shell else frozenset(), id(view.agents))
     for turn in view.turns:
         cached = shell.turn_cache.get(turn.id) if shell else None
         if cached and cached[0] is turn and cached[1] == flags:
             turn_lines, turn_blocks = cached[2], cached[3]
         else:
-            turn_lines, turn_blocks = _project_turn(turn, shell, view.agents)
-            if shell:
+            turn_lines, turn_blocks = _guarded(failures, f"Turn {turn.id}", lambda: _project_turn(turn, shell, view.agents),
+                                               ([], [{"id": turn.id, "title": "Turn", "text": "This turn could not be rendered", "kind": "literal"}]))
+            if shell and not any(f.startswith(f"Turn {turn.id} ") for f in failures):
                 if cached:
                     shell.turn_cache_bytes -= cached[4]
                 size = len(json.dumps([turn_lines, turn_blocks], ensure_ascii=False).encode())
@@ -214,7 +229,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             for agent in body.agents.values():
                 pending.extend(permissions(agent.body, depth+1))
         return pending
-    pending_permissions = permissions(view)
+    pending_permissions = _guarded(failures, "Permission prompt", lambda: permissions(view), [])
     if pending_permissions:
         permission = pending_permissions[0]
         prompt = {"kind": "permission", "id": permission.id,
@@ -233,9 +248,11 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
         prompt["lines"] = [redact(escape_controls(line)) for line in prompt["lines"]]
         for choice in prompt["choices"]:
             choice["label"] = redact(escape_controls(choice["label"]))
-    if error or (shell and shell.notice):
-        lines.append(redact(escape_controls(f"Error: {error or shell.notice}")))
-        blocks.append({"id": "notice", "title": "Notice", "text": redact(escape_controls(error or shell.notice)), "kind": "literal"})
+    details_panel = _guarded(failures, "Details sidebar", lambda: _details_panel(controller, view, shell), {})
+    notice = "\n".join(part for part in [error or (shell.notice if shell else ""), *failures] if part)
+    if notice:
+        lines.append(redact(escape_controls(f"Error: {notice}")))
+        blocks.append({"id": "notice", "title": "Notice", "text": redact(escape_controls(notice)), "kind": "literal"})
     return {"schema": 1, "revision": revision, "title": f"Nexus · {view.session_id}",
             "status": view.phase,
             "blocks": blocks,
@@ -250,7 +267,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "sessions": shell.sessions if shell else [],
             "tabs": shell.tabs if shell else [],
             "breadcrumb": redact(escape_controls(shell.breadcrumb)) if shell else "",
-            "details_panel": _details_panel(controller, view, shell),
+            "details_panel": details_panel,
             "logs": shell.logs.lines() if shell else [],
             "attachment_lines": [f"{shell.attachment_label(i)}: {redact(escape_controls(item.name))}" for i,item in enumerate(shell.attachments)] if shell else [],
             "form": {**shell.workflows.form, "status": redact(escape_controls(shell.workflows.form["status"]))} if shell and shell.workflows.form else None,
@@ -322,39 +339,60 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
         preview_cursor = -1
         while True:
             await asyncio.sleep(.2 if shell.voice.phase != "idle" else 1 if shell.logs.open else 3)
-            try:
-                if shell.voice.phase == "idle":
-                    result = await shell.client.project_sessions()
-                    from .workflows import session_rows
-                    shell.sessions = session_rows(result)
-                    for row in shell.sessions:
-                        existing = next((tab for tab in shell.tabs if tab["id"] == row["id"] and tab["workspace"] == row["workspace"]), None)
-                        if existing:
-                            existing.update(row)
-                        elif row["state"] in {"running", "awaiting_input", "awaiting_permission"}:
-                            shell.tabs.append(dict(row))
-                    if shell.workflows.agent_page_id and shell.panel_title == "Agent transcript":
-                        shell.panel_lines = labelled(await shell.client.agent_transcript(controller.session, shell.workflows.agent_page_id))
+            failures = []
+            async def section(label, work):
+                try:
+                    await work()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # keep polling; name the failing section
+                    failures.append(f"{label} refresh failed: {type(exc).__name__}: {exc}")
+            async def sessions():
+                if shell.voice.phase != "idle":
+                    return
+                result = await shell.client.project_sessions()
+                from .workflows import session_rows
+                shell.sessions = session_rows(result)
+                for row in shell.sessions:
+                    existing = next((tab for tab in shell.tabs if tab["id"] == row["id"] and tab["workspace"] == row["workspace"]), None)
+                    if existing:
+                        existing.update(row)
+                    elif row["state"] in {"running", "awaiting_input", "awaiting_permission"}:
+                        shell.tabs.append(dict(row))
+                if shell.workflows.agent_page_id and shell.panel_title == "Agent transcript":
+                    shell.panel_lines = labelled(await shell.client.agent_transcript(controller.session, shell.workflows.agent_page_id))
+            async def dictation():
                 if shell.panel_title == "Local dictation":
                     await shell.voice.open()
-                if time.monotonic() >= shell.mcp_due:
-                    shell.mcp_due = time.monotonic() + 30
-                    try:
-                        result = await shell.client.doctor()
-                        shell.mcp_report, shell.mcp_error = dict(getattr(result, "report", {}) or {}), None
-                    except Exception as exc:  # health is advisory; the sidebar names the failure
-                        shell.mcp_error = str(exc)
-                if controller.cursor != preview_cursor:
-                    generation, session_id, cursor = shell.generation, controller.session, controller.cursor
-                    preview = await shell.client.inspect_context(session_id)
-                    if generation == shell.generation:
-                        shell.preview = preview
-                        preview_cursor = cursor
+            async def health():
+                if time.monotonic() < shell.mcp_due:
+                    return
+                shell.mcp_due = time.monotonic() + 30
+                try:
+                    result = await shell.client.doctor()
+                    shell.mcp_report, shell.mcp_error = dict(getattr(result, "report", {}) or {}), None
+                except Exception as exc:  # health is advisory; the sidebar names the failure
+                    shell.mcp_error = str(exc)
+            async def context():
+                nonlocal preview_cursor
+                if controller.cursor == preview_cursor:
+                    return
+                generation, session_id, cursor = shell.generation, controller.session, controller.cursor
+                preview = await shell.client.inspect_context(session_id)
+                if generation == shell.generation:
+                    shell.preview = preview
+                    preview_cursor = cursor
+            async def logs():
                 if shell.logs.open:
                     await shell.logs.poll()
+            for label, work in (("Sessions", sessions), ("Dictation", dictation), ("Health", health), ("Context", context), ("Logs", logs)):
+                await section(label, work)
+            if failures:
+                shell.notice = "; ".join(failures)
+            try:
                 await update()
-            except Exception:
-                pass
+            except Exception as exc:
+                shell.notice = f"Display update failed: {type(exc).__name__}: {exc}"
     try:
         await controller.bootstrap()
         shell.preview = await client.inspect_context(session)

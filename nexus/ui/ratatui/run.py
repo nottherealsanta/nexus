@@ -18,9 +18,10 @@ def binary_path() -> Path:
     else:
         root = Path(__file__).resolve().parents[3]
         installed = shutil.which("nexus-ratatui")
-        candidates = [Path(sys.executable).parent / "nexus-ratatui",
-                      root / "rust/tui/target/debug/nexus-ratatui",
-                      root / "rust/tui/target/release/nexus-ratatui"]
+        # A stale debug build must not shadow a newer release build (or the reverse).
+        builds = [root / f"rust/tui/target/{profile}/nexus-ratatui" for profile in ("release", "debug")]
+        builds.sort(key=lambda path: path.stat().st_mtime if path.is_file() else 0, reverse=True)
+        candidates = [Path(sys.executable).parent / "nexus-ratatui", *builds]
         if installed:
             candidates.append(Path(installed))
     for path in candidates:

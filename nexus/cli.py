@@ -732,6 +732,12 @@ async def _doctor(
         from .host_support.install import install_report
 
         report["install"] = await install_report()
+        from .ui.ratatui.run import binary_path
+
+        try:
+            report["native_tui"] = str(binary_path())
+        except RuntimeError:
+            report["native_tui"] = None
         try:
             import msgspec
 
@@ -1181,6 +1187,8 @@ def _render_view_dict(view: dict[str, Any]) -> str:
 
 def _print_doctor(report: dict[str, Any], stdout: TextIO) -> None:
     stdout.write(f"workspace: {report.get('workspace', '?')}\n")
+    native = report.get("native_tui")
+    stdout.write(f"native tui: {native or 'not installed (nexus chat uses Textual)'}\n")
     install = report.get("install")
     if isinstance(install, dict):
         stdout.write(

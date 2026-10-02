@@ -39,3 +39,23 @@ async def test_cli_launch_routes_native_without_textual(monkeypatch, tmp_path):
     assert launch.await_args.args == (client,)
     assert launch.await_args.kwargs["workspace"] == tmp_path
     client.aclose.assert_awaited_once()
+
+
+def test_newest_source_build_wins_over_a_stale_one(tmp_path, monkeypatch):
+    import nexus.ui.ratatui.run as run
+
+    root = tmp_path / "repo"
+    monkeypatch.delenv("NEXUS_TUI_BINARY", raising=False)
+    monkeypatch.setattr(run, "__file__", str(root / "nexus/ui/ratatui/run.py"))
+    monkeypatch.setattr(run.shutil, "which", lambda name: None)
+    monkeypatch.setattr(run.sys, "executable", str(tmp_path / "bin/python"))
+    for profile, age in (("debug", 100), ("release", 0)):
+        path = root / f"rust/tui/target/{profile}/nexus-ratatui"
+        path.parent.mkdir(parents=True)
+        path.write_text("#!/bin/sh\n")
+        path.chmod(0o700)
+        os.utime(path, (path.stat().st_mtime - age, path.stat().st_mtime - age))
+    assert "release" in str(binary_path())
+    debug = root / "rust/tui/target/debug/nexus-ratatui"
+    os.utime(debug, None)
+    assert "debug" in str(binary_path())

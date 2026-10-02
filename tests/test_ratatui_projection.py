@@ -107,3 +107,21 @@ def test_details_mcp_accepts_doctor_report_dict_not_struct(tmp_path, monkeypatch
     report = {"mcp": {"servers": [{"name": "cvc", "health": "failed", "tool_count": 0, "last_error": "boom"}]}}
     panel = _snapshot(tmp_path, monkeypatch, [], mcp_report=report)["details_panel"]
     assert panel["mcp"][0][:2] == ["error", "cvc"] and panel["mcp"][1][0] == "plain-error"
+
+
+def test_failing_section_becomes_a_notice_and_other_sections_render(tmp_path, monkeypatch):
+    import nexus.ui.ratatui.prototype as prototype
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(prototype, "_details_panel", broken)
+    original = prototype._project_turn
+    monkeypatch.setattr(prototype, "_project_turn",
+                        lambda turn, *rest: broken() if turn.id == "bad" else original(turn, *rest))
+    snapshot = _snapshot(tmp_path, monkeypatch, [replace(_turn(), id="bad"), replace(_turn(), id="good", index=1)])
+    ids = [block["id"] for block in snapshot["blocks"]]
+    assert "bad" in ids and any(block["kind"] == "markdown" for block in snapshot["blocks"])
+    notice = next(block for block in snapshot["blocks"] if block["id"] == "notice")["text"]
+    assert "Turn bad could not be shown" in notice and "Details sidebar could not be shown" in notice
+    assert snapshot["details_panel"] == {}
