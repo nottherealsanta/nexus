@@ -274,3 +274,60 @@ async def test_legacy_job_tools_remain_compatible(registry, ctx):
     stopped = await kill_shell.run({"job_id": job_id}, ctx)
     assert stopped.is_error is False
     assert "terminated" in body(stopped)
+
+
+async def test_registry_environment_is_captured_and_overlays_are_per_job(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUS_TEST_HOST_SECRET", "host-only")
+    source = {"PATH": "/usr/bin:/bin", "NEXUS_TEST_VALUE": "captured"}
+    registry = _jobs.JobRegistry(environ=source)
+    source["NEXUS_TEST_VALUE"] = "mutated"
+    ctx = ToolContext(
+        workspace=tmp_path, session_id="env", turn_id="turn",
+        config=Config(), job_registry=registry,
+    )
+    command = 'printf "%s|%s|%s" "$NEXUS_TEST_VALUE" "$PATH" "${NEXUS_TEST_HOST_SECRET-unset}"'
+    try:
+        overridden = await bash.run(
+            {"command": command, "env": {"NEXUS_TEST_VALUE": "overlay"}}, ctx
+        )
+        ordinary = await bash.run({"command": command}, ctx)
+        assert not overridden.is_error and not ordinary.is_error
+        assert "overlay|/usr/bin:/bin|unset" in body(overridden)
+        assert "captured|/usr/bin:/bin|unset" in body(ordinary)
+    finally:
+        await registry.aclose()
+
+
+async def test_empty_registry_environment_does_not_inherit_host(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUS_TEST_HOST_SECRET", "host-only")
+    registry = _jobs.JobRegistry(environ={})
+    ctx = ToolContext(
+        workspace=tmp_path, session_id="empty-env", turn_id="turn",
+        config=Config(), job_registry=registry,
+    )
+    try:
+        result = await bash.run(
+            {"command": 'printf "%s" "${NEXUS_TEST_HOST_SECRET-unset}"'}, ctx
+        )
+        assert not result.is_error
+        assert "unset" in body(result)
+        assert "host-only" not in body(result)
+    finally:
+        await registry.aclose()
+
+
+async def test_default_registry_captures_environment_at_construction(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUS_TEST_VALUE", "before")
+    registry = _jobs.JobRegistry()
+    monkeypatch.setenv("NEXUS_TEST_VALUE", "after")
+    ctx = ToolContext(
+        workspace=tmp_path, session_id="default-env", turn_id="turn",
+        config=Config(), job_registry=registry,
+    )
+    try:
+        result = await bash.run({"command": 'printf "%s" "$NEXUS_TEST_VALUE"'}, ctx)
+        assert not result.is_error
+        assert "before" in body(result)
+        assert "after" not in body(result)
+    finally:
+        await registry.aclose()
