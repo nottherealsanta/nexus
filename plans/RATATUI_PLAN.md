@@ -23,7 +23,7 @@ fixes: the whole suite and the Textual timing-sensitive group.
 
 ### P0: correctness and trust (do first)
 
-- [ ] Run the app interactively end to end with a real daemon and a real provider
+- [ ] (static audit done: every host result consumer in `nexus/ui/ratatui/` checked against `host/protocol.py` types, no further mapping-on-struct found; hand-driven run with a real provider still open) Run the app interactively end to end with a real daemon and a real provider
       (nobody has driven it by hand yet; all evidence is tests and browser
       terminals). Fix whatever breaks. The first manual run already found a crash
       (`DoctorResult` has no `get`), so expect more struct-vs-dict mistakes: grep
@@ -33,7 +33,7 @@ fixes: the whole suite and the Textual timing-sensitive group.
 - [x] Make the update loop resilient (done: per-section guards in `project()`/`poll()`; failures become a labelled notice): an exception inside `project()` or `poll()`
       currently surfaces as a one-line `Error:` and may stop updates. Catch per
       section, show a labelled notice, keep the UI alive.
-- [ ] Review the three host edits made by a subagent: `nexus/host/facade.py`,
+- [x] (reviewed 2026-10-02: the digest/discard edits are narrow and safe; paging note: the host exposes `has_more` but not `next_cursor`, so `cursor + len(page.diff)` can undercount if rows are dropped by the byte budget or decode errors. Not reproduced; fix by returning `next_cursor` from the host) Review the three host edits made by a subagent: `nexus/host/facade.py`,
       `nexus/host_support/worktree_projection.py` (`review_hex`), and
       `nexus/agents/worktrees.py` (`_inspect` for discarded children). They fix real
       bugs (review digest redacted to `***`; listing after discard) and also affect
