@@ -39,6 +39,18 @@ leaves `textual` out of `sys.modules` (also with Textual uninstalled).
 - Per-turn patch protocol (schema 2) not built; measured cost was ~9 ms per token at
   1,000 turns, so it is deferred, not needed yet.
 
+### After the merge (2026-10-02)
+
+- #52 was squash-merged to `main` (`1a5b693`); the native client is the default renderer, Textual
+  the printed-note fallback and still a runtime dependency. Hosted CI for #52 was green.
+- No release was cut and no version was bumped. release-please will propose the next version from
+  the `feat:` commit; publishing the native wheels has therefore not been exercised.
+- Follow-up docs PR #53 (this plan update) is docs-only, so `ci.yml` skips it; check that the
+  required `ci-ok` status does not block it before merging.
+- Still unverified: musllinux wheels, Windows, `nexus update` with a native binary, real-provider
+  runs and hand-driven permission prompts, real-audio dictation, the full screenshot review, and
+  splitting the long `main()` loop. Removing Textual stays blocked on these.
+
 ### P0: correctness and trust (do first)
 
 - [ ] (static audit done: every host result consumer in `nexus/ui/ratatui/` checked against `host/protocol.py` types, no further mapping-on-struct found; first live run done with the dev-mode mock provider via `tests/playwright_ratatui_live.py` (hello, streaming-rich, question: working; fixed the active-session preview error); a real provider and keyboard-driven checks of permissions/tools are still open) Run the app interactively end to end with a real daemon and a real provider
