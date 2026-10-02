@@ -13,9 +13,7 @@ from textual.markup import escape
 from textual.widget import Widget
 from textual.widgets import Button, Markdown, Static
 
-from ...ui_support.context import _compact_tokens
 from ...ui_support.hints import pick_hints
-from ...ui_support.text import redact
 from ...ui_support.timeline import (
     BATCH_GLYPHS,
     tool_batches,
@@ -37,7 +35,6 @@ from ...ui_support.timeline import (
     _task_short_phrase,
     _text,
     _turn_duration,
-    _turn_models,
     _turn_setup_failure,
     format_arguments,
     running_output_tail,
@@ -46,7 +43,10 @@ from ...ui_support.timeline import (
     tool_heading,
     todo_preview,
     tool_status,
+    tool_row_text,
     tool_summary,
+    turn_agent_label,
+    turn_footer_text,
 )
 from ...ui_support.tui_context_header import ContextHeader, ContextModal
 from ...ui_support.tui_diff import ToolDiff, tool_diff_signature
@@ -75,31 +75,17 @@ def _turn_footer(turn: TurnView) -> str:
     """Right-aligned stats for a completed turn: model, elapsed time, tokens
     in/out, cache share, and reasoning the provider did not show. The agent
     labels the reply itself."""
-    model = _turn_models(turn).split(", ")[0].rsplit("/", 1)[-1]
-    usage = turn.usage
-    prompt = usage.input_tokens + usage.cache_read_tokens + usage.cache_write_tokens
-    tokens = f"↑{_compact_tokens(prompt)} ↓{_compact_tokens(usage.output_tokens)}" if prompt or usage.output_tokens else ""
-    cached = f"{round(usage.cache_read_tokens / prompt * 100)}% cached" if prompt and usage.cache_read_tokens else ""
-    shown = any(block.kind == "thinking" and block.text.strip() for message in turn.messages for block in message.blocks)
-    reasoning = (f"{_compact_tokens(usage.reasoning_tokens)} reasoning" + ("" if shown else " (not shown)")
-                 if usage.reasoning_tokens else "")
-    parts = [
-        escape(part)
-        for part in (model if model != "unknown" else "", _turn_duration(turn) or "", tokens, cached, reasoning)
-        if part
-    ]
-    return f"[$nx-quiet]{' · '.join(parts)}[/]" if parts else ""
+    text = turn_footer_text(turn)
+    return f"[$nx-quiet]{escape(text)}[/]" if text else ""
 
 
 def _agent_label(turn: TurnView, colors: Mapping[str, str]) -> str:
     """``◆ Build`` above the turn's reply, in the agent's color."""
-    agent = turn.agent if isinstance(turn.agent, Mapping) else {}
-    name = agent.get("name") if isinstance(agent.get("name"), str) else ""
-    if not name.strip():
+    name, own_color = turn_agent_label(turn)
+    if not name:
         return ""
-    color = colors.get(name.casefold()) or (agent.get("color") if isinstance(agent.get("color"), str) else "") or _FALLBACK_AGENT_COLOR
-    label = name.strip()[0].upper() + name.strip()[1:]
-    return f"[{color}]◆[/] [bold {color}]{escape(_literal(label, 60))}[/]"
+    color = colors.get(name.casefold()) or own_color or _FALLBACK_AGENT_COLOR
+    return f"[{color}]◆[/] [bold {color}]{escape(name)}[/]"
 
 
 class AssistantMessage(Markdown):
@@ -327,35 +313,12 @@ class ToolActivityWidget(Widget):
     def _render_header(self) -> None:
         tool = self.tool
         marker = tool_status(tool)
-        indicator = f"{_SPINNER[self._spinner_index]} " if marker == "running" else ""
-        summary = ""
-        if marker == "completed" and tool.display and tool.name.casefold() not in {"read", "grep", "todowrite"}:
-            summary = _text(tool.display.splitlines()[0], 88)
-            if tool.name.casefold() == "write":
-                content = tool.input.get("content") if isinstance(tool.input, Mapping) else None
-                lines = content.count("\n") + 1 if isinstance(content, str) and content else 0
-                summary = f"written · {lines} lines" if lines else "written"
-        elif marker == "failed" and tool.error:
-            summary = _text(tool.error.splitlines()[0], 88)
-        if summary.casefold().startswith(f"{tool.name.casefold()}:"):
-            summary = summary[len(tool.name) + 1 :].strip()
-        summary = redact(summary)
-        suffix = f" · {summary}" if summary else (f" · {marker}" if marker != "completed" else "")
         header = self.query_one("#tool-header", Static)
         rows = todo_preview(tool)
-        heading = "☐ Todo " + rows[0] if rows else tool_heading(tool)
-        text = f"{self._gutter}{indicator}{heading}{suffix}"
-        if rows:
-            text += "".join(f"\n{self._gutter}  {row}" for row in rows[1:])
+        text = tool_row_text(tool, self._spinner_index, self._gutter)
         live = running_output_tail(tool) if marker == "running" else None
         if live is not None:
-            # A running shell shows its latest output under the call (⎿), with
-            # the lines above it counted, until it completes.
             tail, hidden = live
-            text += f"\n{self._gutter}  ⎿  " + (tail[0] if tail else "running…")
-            text += "".join(f"\n{self._gutter}     {line}" for line in tail[1:])
-            if hidden:
-                text += f"\n{self._gutter}     … {hidden} earlier line{'s' if hidden != 1 else ''} · enter for full output"
             rows = [""] * (1 + max(1, len(tail)) + (1 if hidden else 0))
         header.styles.height = max(1, len(rows))
         header.update(text)

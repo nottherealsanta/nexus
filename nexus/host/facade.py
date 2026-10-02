@@ -66,6 +66,7 @@ from ..host_support.settings_inventory import dispatch_settings
 from ..host_support.setup import setup_save, setup_status
 from ..host_support.workspace import search_files as _search_files
 from ..host_support.voice import dispatch_voice, doctor_voice
+from ..host_support.worktree_projection import review_hex
 from ..host_support.worktree_projection import (
     worktree_diff_row as _worktree_diff_row,
 )
@@ -243,8 +244,8 @@ class HostFacade:
             "diff": diff,
             "cursor": page.cursor,
             "has_more": page.next_cursor is not None,
-            "review_id": _worktree_text(page.review_id, 32),
-            "digest": _worktree_text(page.digest, 64),
+            "review_id": review_hex(page.review_id, 32),  # validated hex above; redaction would corrupt it
+            "digest": review_hex(page.digest, 64),
         }
 
     def acknowledge_worktree(

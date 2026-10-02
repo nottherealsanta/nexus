@@ -10,3 +10,6 @@ artifacts/
 
 # Local nested agent checkouts
 .claude/worktrees/
+
+# Native prototype build output
+rust/tui/target/

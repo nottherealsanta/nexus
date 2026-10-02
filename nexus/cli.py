@@ -146,16 +146,21 @@ async def _mock(workspace: Path, args: argparse.Namespace, stdout: TextIO, stder
         await client.aclose()
 
 
-async def _chat(workspace: Path, *, session: str) -> int:
+async def _chat(workspace: Path, *, session: str, renderer: str = "textual") -> int:
     """Launch the only interactive chat shell over the host client."""
     from .ui.cli import open_client
-    from .ui.tui.run import run
+    if renderer == "ratatui":
+        from .ui.ratatui.run import run
+    else:
+        from .ui.tui.run import run
 
     client = await open_client(workspace)
     try:
         async def reconnect():
             return await open_client(workspace)
 
+        if renderer == "ratatui":
+            return await run(client, session=session, reconnect=reconnect, workspace=workspace)
         return await run(client, session=session, reconnect=reconnect)
     finally:
         await client.aclose()
@@ -193,10 +198,10 @@ def _new_session_id() -> str:
     return f"session-{uuid.uuid4().hex[:8]}"
 
 
-def _chat_entry(workspace: Path, *, session: str) -> int:
+def _chat_entry(workspace: Path, *, session: str, renderer: str = "textual") -> int:
     """KeyboardInterrupt boundary for Textual's guaranteed terminal restore."""
     try:
-        return asyncio.run(_chat(workspace, session=session))
+        return asyncio.run(_chat(workspace, session=session, renderer=renderer))
     except KeyboardInterrupt:
         return 130
 
@@ -727,6 +732,12 @@ async def _doctor(
         from .host_support.install import install_report
 
         report["install"] = await install_report()
+        from .ui.ratatui.run import binary_path
+
+        try:
+            report["native_tui"] = str(binary_path())
+        except RuntimeError:
+            report["native_tui"] = None
         try:
             import msgspec
 
@@ -1176,6 +1187,8 @@ def _render_view_dict(view: dict[str, Any]) -> str:
 
 def _print_doctor(report: dict[str, Any], stdout: TextIO) -> None:
     stdout.write(f"workspace: {report.get('workspace', '?')}\n")
+    native = report.get("native_tui")
+    stdout.write(f"native tui: {native or 'not installed (nexus chat uses Textual)'}\n")
     install = report.get("install")
     if isinstance(install, dict):
         stdout.write(
@@ -1384,6 +1397,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--json", action="store_true", help="Stream JSONL event envelopes")
 
     chat = sub.add_parser("chat", help="Open the interactive Textual chat")
+    chat.add_argument("--renderer", choices=("ratatui", "textual", "auto"), default=None, help="Terminal renderer (default: ratatui, the native client; falls back to Textual with a notice when its executable is not installed). `textual` forces the old client; `ratatui` fails instead of falling back")
     chat.add_argument(
         "--session",
         default=None,
@@ -1634,10 +1648,20 @@ def main(argv: list[str] | None = None) -> int:
                     "Use `nexus run <prompt>` for piped or non-interactive input.\n"
                 )
                 return 2
-            if importlib.util.find_spec("textual") is None:
+            renderer = getattr(args, "renderer", None)
+            if renderer in (None, "auto"):  # the default: native, with a visible fallback
+                from .ui.ratatui.run import available as native_available
+                if native_available():
+                    renderer = "ratatui"
+                else:
+                    stderr.write("Note: the native terminal client is not installed for this platform; using the Textual client.\n")
+                    renderer = "textual"
+            if renderer == "textual" and importlib.util.find_spec("textual") is None:
                 stderr.write("Error: Textual is required for `nexus chat`; reinstall Nexus with its runtime dependencies.\n")
                 return 1
             try:
+                if renderer == "ratatui":
+                    return _chat_entry(workspace, session=args.session or _new_session_id(), renderer=renderer)
                 return _chat_entry(workspace, session=args.session or _new_session_id())
             except ModuleNotFoundError as exc:
                 if exc.name == "textual":

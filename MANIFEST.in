@@ -1,0 +1,4 @@
+
+include rust/tui/Cargo.toml rust/tui/Cargo.lock
+recursive-include rust/tui/src *.rs
+prune rust/tui/target

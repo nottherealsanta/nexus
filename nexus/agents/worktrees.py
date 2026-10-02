@@ -1142,6 +1142,8 @@ def _inspect(
     runtime_ownership: Callable[[str], bool | None] | None = None,
 ) -> WorktreeRecord:
     record = _get(child_id, root=root, runtime_ownership=runtime_ownership)
+    if record.lifecycle == "discarded":  # the checkout is gone; listing must keep working
+        return record
     status = _git(record.path, "status", "--porcelain", "--untracked-files=all")
     return replace(record, dirty_status=status)
 

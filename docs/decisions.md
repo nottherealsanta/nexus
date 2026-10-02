@@ -182,3 +182,42 @@ names label projects; equal names show full paths. Opening a foreign session
 connects to its owning daemon instead of running its tools in the current
 workspace. Foreign rows show saved activity until opened. The shared-daemon
 implementation remains separate from this navigation feature.
+
+## Ratatui prototype boundary
+
+The authorized terminal migration begins with an isolated experimental Rust
+subprocess and Python host adapter (`ui/ratatui/prototype.py`). This keeps the
+current install backend stable while testing presentation and input. Production
+Textual removal waits for feature parity; the subprocess is a prototype choice,
+not a final decision against the feasibility report's PyO3/maturin boundary.
+
+The native subprocess ships through `setuptools-rust` alongside the Python
+console script; the existing setuptools package-data declarations remain intact.
+This keeps crash isolation and avoids an unused PyO3 boundary. The alternative
+maturin/PyO3 design in the feasibility report remains an option if measured IPC
+cost warrants it. Rust sources and Cargo.lock are included in the sdist; release
+wheels require native platform builds. The first macOS arm64 wheel was built and
+installed locally; other targets are not verified.
+
+### Native renderer is the default, Textual the fallback
+
+`nexus chat` defaults to the Rust client (`--renderer ratatui`) and falls back to
+Textual, with a printed note, when the executable is missing (`--renderer auto` is
+an alias). The default switched on 2026-10-02 at the owner's request, before the
+hosted-runner, real-provider and hardware gates were closed (see
+`plans/RATATUI_PLAN.md`); those remain open. Reason: the native binary only ships in wheels for
+the built platform matrix, and a pure-Python install (or a platform outside the
+matrix) must still get a working chat. Textual therefore stays a runtime
+dependency until a binary-less fallback wheel or a full platform matrix is
+verified on hosted runners (not verified); removing it earlier would break those
+installs. Both clients read the same host contract and share the pure helpers in
+`ui_support/` (timeline rows, details, context header, completion, model choice),
+so a wording or layout change lands in both.
+
+The Rust binary build is `optional = true` in `pyproject.toml`: a platform with no
+Rust toolchain (for example Windows installing from the sdist) still gets a working
+wheel without the binary, and `auto` then picks Textual (checked locally by building
+a wheel with no `cargo` on `PATH`: it succeeds and contains no `nexus-ratatui`). The
+reason for not publishing a separate pure wheel is that one source tree builds both
+shapes. The cost is that a broken Rust build on a supported platform no longer fails
+the build by itself; the wheel CI test (`nexus-ratatui --version`) catches that.

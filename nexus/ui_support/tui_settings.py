@@ -29,6 +29,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, ContentSwitcher, Input, OptionList, Select, Static, Switch, TextArea
 from textual.widgets._option_list import Option
 
+from .settings_help import SETTINGS_HELP
 from .agent_frontmatter import (
     MAX_FALLBACKS,
     agent_fields,
@@ -90,17 +91,7 @@ class SettingsConsole(SettingsScreen):
     BINDINGS: ClassVar[list[tuple[str, str, str]]] = [
         ("escape", "attempt_close", "Close")
     ]
-    _HELP: ClassVar[dict[str, str]] = {
-        "agents": "Build is the default root agent; advisor, task and quick are subagents. "
-                  "Blank model fields inherit the session model. Fallbacks are tried "
-                  "in order when the model fails before replying.",
-        "tools": "Python tools loaded from <scope>/tools.",
-        "mcp": "MCP servers from mcp.json (mcpServers).",
-        "skills": "Skills from <scope>/skills/<name>/SKILL.md.",
-        "hooks": "Lifecycle hooks from hooks.toml.",
-        "config": "Nexus configuration: models, fallbacks, permissions, context and more.",
-        "soul": "Instructions added to every conversation (SOUL.md).",
-    }
+    _HELP: ClassVar[dict[str, str]] = SETTINGS_HELP
 
     def __init__(
         self,

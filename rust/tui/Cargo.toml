@@ -1,0 +1,14 @@
+[package]
+name = "nexus-ratatui"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["use-dev-tty", "libc"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+unicode-segmentation = "1"
+unicode-width = "0.2"
+pulldown-cmark = { version = "0.13", default-features = false }

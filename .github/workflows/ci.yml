@@ -19,6 +19,8 @@ jobs:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.2.0
         with: {enable-cache: true, python-version: "3.13"}
+      - run: cargo test --locked --manifest-path rust/tui/Cargo.toml
+      - run: cargo build --locked --manifest-path rust/tui/Cargo.toml
       - run: uv sync --locked --extra dev
       - run: uvx ruff check nexus tests
       # Textual pilot tests are timing/terminal sensitive and fail on the shared
@@ -37,9 +39,35 @@ jobs:
       - uses: astral-sh/setup-uv@v10.2.0
       - run: uv build
       - run: uv run --with pytest --with pytest-asyncio --with setuptools pytest -q tests/test_model_data_package.py tests/test_install_script.py
+  changes:          # the four-runner wheel matrix is slow: pull requests build it only when native inputs change
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      native: ${{ steps.filter.outputs.native }}
+    steps:
+      - uses: actions/checkout@v7
+        with: {fetch-depth: 0}
+      - id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          native=true
+          if [ "$EVENT" = pull_request ]; then
+            native=false
+            if git diff --name-only "$BASE" "$HEAD" | grep -Eq '^(rust/|pyproject\.toml$|MANIFEST\.in$|uv\.lock$|nexus/ui/ratatui/|\.github/workflows/(ci|native-wheels)\.yml$)'; then
+              native=true
+            fi
+          fi
+          echo "native=$native" >> "$GITHUB_OUTPUT"
+  native-wheels:
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
+    uses: ./.github/workflows/native-wheels.yml
   ci-ok:            # the one required status check; its name never changes with the matrix
     if: always()
-    needs: [test, build]
+    needs: [test, build, changes, native-wheels]  # a skipped matrix is not a failure
     runs-on: ubuntu-latest
     steps:
       - run: '[ "${{ contains(needs.*.result, ''failure'') || contains(needs.*.result, ''cancelled'') }}" = false ]'

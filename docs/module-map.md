@@ -415,6 +415,15 @@ here, so add a row when you add a file.
 
 | File | Purpose |
 | --- | --- |
+| `voice_settings.py` | Host-backed voice configuration shared by terminal surfaces |
+| `shortcuts.py` | Shared terminal shortcut and leader reference |
+| `settings_help.py` | One-line help per Settings area, shared by both consoles |
+| `session_status.py` | Shared session-card status words, relative age and sub-line |
+| `session_groups.py` | Shared project and local-date grouping for terminal session lists |
+| `session_controller.py` | Shared host-client lifecycle, selection and canonical reducer seam |
+
+| File | Purpose |
+| --- | --- |
 | `__init__.py` | Pure presentation helpers shared by terminal surfaces |
 | `agent_frontmatter.py` | Read and rewrite the simple `key: value` frontmatter of an agent `*.md` |
 | `clipboard.py` | Bounded local system clipboard image reading for terminal attachment uploads |
@@ -434,6 +443,10 @@ here, so add a row when you add a file.
 | `tui_diff.py` | Inline file diffs under Edit and Patch activity rows (textual-diff-view) |
 | `tui_history.py` | Bounded per-user prompt history for the terminal composer |
 | `tui_list.py` | Shared list presentation for inline completions and pickers |
+| `details.py` | Toolkit-free details sidebar data (session rows, modified files, MCP rows) shared by both shells |
+| `context_header.py` | Toolkit-free context header blocks, agent colors and tool grouping shared by both shells |
+| `completion.py` | Toolkit-free composer completion shared by the native shell |
+| `model_choice.py` | Toolkit-free model picker sort, fuzzy rank, grouping and effort rules |
 | `tui_model_picker.py` | Searchable, grouped terminal model selector |
 | `tui_panels.py` | Side panels and the Settings screen for the Textual shell |
 | `tui_providers.py` | Settings → Providers pane: sign in to Codex, GitHub Copilot and OpenCode Go |
@@ -462,4 +475,29 @@ here, so add a row when you add a file.
 | `manager.py` | Serialized voice lifecycle and inference |
 | `model.py` | Voice lifecycle and transcription values |
 | `store.py` | Pinned, bounded local voice model storage |
+
+
+### `nexus/ui/ratatui/`
+
+| Module | Responsibility |
+| --- | --- |
+| `__init__.py` | Experimental native surface package |
+| `prototype.py` | Host adapter and labelled snapshot projection |
+
+The Rust client lives in `rust/tui/src/`: `main.rs` (terminal loop, key and mouse
+handling), `input.rs` (action writers, editor keys, picking, OSC 52 base64),
+`bridge.rs` (the versioned snapshot contract), `editor.rs` (grapheme editor),
+`render.rs` (palette, layout regions, the draw pass), `render/chrome.rs` (top bar,
+tabs, sessions and details sidebars), `render/dialogs.rs` (dialog frames, toned
+panel text, Settings area list, prompt and logs regions, completion popup),
+`transcript.rs` (blocks to rows, diffs) and `markdown.rs`. `main()` is still one long
+loop over local state; splitting it further needs a state struct and is not done.
+| `actions.py` | Native shell slash dispatch, attachments and host-backed panels |
+| `controller.py` | Continuous native subscription using canonical bootstrap and reduction |
+| `preferences.py` | Textual-compatible native shell preferences |
+| `workflows.py` | Settings, provider, context, session and worktree workflows |
+| `logs.py` | Bounded paged native diagnostics with routine-entry folding |
+| `voice.py` | Bounded native dictation using shared capture and host transcription |
+| `desktop.py` | Explicit clipboard operations with byte/time bounds |
+| `run.py` | Native launch seam and binary discovery |
 

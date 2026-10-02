@@ -324,3 +324,34 @@ Config lives in `release-please-config.json`:
 - An "update available" notice (a cached, opt-out PyPI check surfaced in `nexus
   --version`, `nexus doctor` and the top bar of both surfaces, through a host
   `update_status` command) is designed but **not built**.
+
+### Native terminal packaging on the migration branch
+
+`feat/ratatui-prototype` adds a `setuptools-rust` binary build to the existing
+backend. Wheels contain the Python package/assets plus `nexus-ratatui` in the
+wheel's scripts area. The sdist contains Cargo.toml, Cargo.lock and Rust sources;
+source installs require Rust ≥1.88 and the Cargo dependencies. Native wheels are
+platform-specific. Local macOS arm64 build/install is verified; a complete wheel
+matrix and Linux portability verification are still required before publishing
+this branch. Release-please still owns the Python version.
+
+
+Native terminal wheels are built by the reusable `native-wheels.yml` workflow
+on Linux and macOS, each with x86-64 and arm64 runners, for Python 3.13 and
+3.14. Cibuildwheel repairs Linux platform tags in manylinux/musllinux containers
+and verifies the installed executable with `nexus-ratatui --version`. The release
+publisher waits for every matrix job, downloads those wheels, and builds only
+the source distribution locally. A failed platform job prevents publication.
+CI also runs locked Cargo tests and the controlling-PTY Python check. The matrix
+configuration has not yet been run on hosted CI; only the local macOS arm64
+wheel has been installed and verified. Windows remains unsupported by the
+installer.
+
+On pull requests the wheel matrix runs only when native inputs change (`rust/`,
+`pyproject.toml`, `MANIFEST.in`, `uv.lock`, `nexus/ui/ratatui/`, or the CI and
+wheel workflows), decided by the `changes` job in `ci.yml`; pushes to `main` and
+releases always run it, and a skipped matrix does not fail `ci-ok`. The wheel test also imports the native surface and asserts `textual` stays out of
+`sys.modules`, and macOS runners pin Rust 1.88. Building
+from source (no matching wheel) needs a Rust toolchain of at least 1.88
+(`rust-version` in `rust/tui/Cargo.toml`; install with rustup.rs). Without Rust,
+setuptools-rust says so; with an older compiler Cargo names the minimum. Packaging follows the [setuptools-rust wheel guidance](https://setuptools-rust.readthedocs.io/en/latest/building_wheels.html).

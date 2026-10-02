@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68", "setuptools-rust>=1.11,<2"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -36,6 +36,7 @@ dev = [
     # Builds the wheel in tests/test_model_data_package.py to prove the vendored
     # models.dev catalogue and its attribution ship in the distribution.
     "setuptools>=68",
+    "setuptools-rust>=1.11,<2",
 ]
 documents = [
     "firecrawl-anydoc==0.2.4",
@@ -83,3 +84,12 @@ extend-exclude = ["tests/fixtures", "artifacts"]
 
 [tool.ruff.lint]
 select = ["E4", "E9", "F", "E713"]
+
+# The presentation-only Rust subprocess ships beside the Python console script.
+[[tool.setuptools-rust.bins]]
+target = "nexus-ratatui"
+path = "rust/tui/Cargo.toml"
+cargo-manifest-args = ["--locked"]
+# Platforms without a Rust toolchain still install: `nexus chat` then falls back to Textual.
+# The wheel CI test (`nexus-ratatui --version`) fails if a supported platform loses the binary.
+optional = true

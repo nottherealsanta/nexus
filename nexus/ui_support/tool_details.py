@@ -212,6 +212,44 @@ def sections_to_text(sections: Sequence[DetailSection]) -> str:
     return "\n\n".join(parts)
 
 
+def styled_lines(sections: Sequence[DetailSection]) -> tuple[list[str], list[str]]:
+    """``sections`` as text lines plus one tone per line, for shells that colour them.
+
+    Tones follow the Textual modal: ``title`` (bold section name), ``header`` (bold),
+    ``label`` (dim block label), ``kv`` (dim ``label: `` then the value), ``add``,
+    ``del`` and ``hunk`` (diff blocks), and ``""`` for plain text. Joined with
+    newlines the lines equal :func:`sections_to_text`.
+    """
+    lines: list[str] = []
+    tones: list[str] = []
+
+    def put(line: str, tone: str = "") -> None:
+        lines.append(line)
+        tones.append(tone)
+
+    for index, section in enumerate(sections):
+        if index:
+            put("")
+        put(section.title.upper(), "title")
+        for row in section.rows:
+            pad = "  " * (row.indent + 1)
+            if row.header:
+                put(f"{pad}{row.label}", "header")
+            elif row.block:
+                put(f"{pad}{row.label}:", "label")
+                for line in row.value.split("\n"):
+                    tone = ""
+                    if section.kind == "diff":
+                        tone = ("add" if line.startswith("+") and not line.startswith("+++") else
+                                "del" if line.startswith("-") and not line.startswith("---") else
+                                "hunk" if line.startswith("@@") else "")
+                    put(f"{pad}  {line}", tone)
+            else:
+                put(f"{pad}{row.label}: {row.value}", "kv")
+    return lines, tones
+
+
 __all__ = [
+    "styled_lines",
     "DetailRow", "DetailSection", "flatten", "sections_to_text", "tool_detail_sections",
 ]

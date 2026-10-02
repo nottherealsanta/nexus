@@ -2,7 +2,7 @@
 
 Guidance for coding agents working on **Nexus**, a provider-agnostic Python agent
 harness. A per-workspace daemon owns sessions and turns. Three surfaces are clients
-of it: a Textual chat app, a one-shot CLI and JSONL stream, and a plain HTML/CSS/JS
+of it: a terminal chat client (the native Ratatui client by default, with the Textual app as the fallback), a one-shot CLI and JSONL stream, and a plain HTML/CSS/JS
 browser app.
 
 **The idea of Nexus is that the context is clearly presented to the user and to
@@ -34,6 +34,7 @@ Update the matching doc in the same change as the code.
 | `nexus chat`, the Textual shell (`nexus/ui/tui/`, `nexus/ui_support/`) | [docs/textual.md](docs/textual.md) |
 | Feasibility of a Rust/Ratatui TUI with Python and maturin | [docs/ratatui-feasibility.md](docs/ratatui-feasibility.md) |
 | `nexus web`, the browser client (`nexus/ui/web/`, `nexus/host/web.py`) | [docs/web.md](docs/web.md) |
+| Native Ratatui replacement and parity | [docs/ratatui-parity.md](docs/ratatui-parity.md) |
 | Local dictation | [docs/voice.md](docs/voice.md) |
 | Trust boundaries, network, credentials | [docs/security.md](docs/security.md) |
 | Tests, fakes, browser checks | [docs/testing.md](docs/testing.md) |

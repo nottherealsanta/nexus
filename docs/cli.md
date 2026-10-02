@@ -103,3 +103,14 @@ prompt (`is_continuation`).
 - **Subcommand:** add the parser in `build_parser`, call the host command through
   `Client`, render with the shared pure helpers. Tests: `tests/test_cli.py`,
   `tests/test_chat_command_aliases.py`.
+
+### Native terminal migration
+
+`nexus chat --renderer ratatui|textual` chooses the terminal renderer. The default is
+the native Rust client (`nexus-ratatui`); when its executable is not installed for
+the platform, `nexus chat` prints a one-line note and uses Textual so installs keep
+working. `--renderer ratatui` fails instead of falling back, `--renderer textual`
+forces the old client, and `auto` is accepted as an alias of the default. Installed native wheels
+include `nexus-ratatui`; source checkouts build it with
+`cargo build --manifest-path rust/tui/Cargo.toml`. `NEXUS_TUI_BINARY` explicitly
+overrides executable discovery. See [ratatui-parity.md](ratatui-parity.md).
