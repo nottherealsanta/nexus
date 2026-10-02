@@ -193,11 +193,13 @@ class Workflows:
         elif kind == "settings_read":
             result = await self.client.settings_read(operation["scope"], operation["category"], operation["id"])
             overrides = bool(getattr(result, "overrides_builtin", False))
-            self.edit(result.rel_path, result.body, {**operation, "sha256": result.sha256, "builtin": bool(result.builtin),
-                      "overrides_builtin": overrides}, autosave=True)
-            if result.builtin:
-                where = "~/.nexus" if operation["scope"] == "global" else "<project>/.agents"
-                self.form["status"] = f"Built-in default · saving writes an override to {where}"
+            target = {**operation, "sha256": result.sha256, "builtin": bool(result.builtin), "overrides_builtin": overrides}
+            if operation["category"] == "agents" and result.body.lstrip("\ufeff").startswith("---"):
+                self.agent_draft = {"target": target, "body": result.body, "path": result.rel_path}
+                self.agent_page()
+            else:
+                self.edit(result.rel_path, result.body, target, autosave=True)
+                self.builtin_note()
         elif kind == "settings_new":
             self.edit("New file name · Enter/Control+S to continue", "", operation)
         elif kind == "settings_reset":
@@ -306,6 +308,16 @@ class Workflows:
                 await self.context_extensions(key)
             else:
                 self.shell.show("Current request", preview)
+        elif kind == "agent_edit_file":
+            draft = self.agent_draft
+            self.edit(draft["path"], draft["body"], draft["target"], autosave=True)
+            self.builtin_note()
+        elif kind == "agent_pick":
+            await self.agent_model_picker(operation["field"], operation.get("index", 0))
+        elif kind == "agent_set":
+            await self.agent_write(operation["field"], operation.get("index", 0), operation["ref"])
+        elif kind == "agent_clear":
+            await self.agent_write(operation["field"], operation.get("index", 0), "")
         elif kind == "tools_toggle":
             self.tools_expanded ^= {operation["key"]}
             self.tools_modal()
@@ -588,6 +600,74 @@ class Workflows:
             self.shell.panel_lines.insert(0, str(field(result, "message", "")))
 
     tools_expanded: set = set()
+    agent_draft: dict = {}
+
+    def builtin_note(self):
+        """A built-in default says that saving writes an override."""
+        target = self.form_target or {}
+        if self.form and target.get("builtin"):
+            where = "~/.nexus" if target.get("scope") == "global" else "<project>/.agents"
+            self.form["status"] = f"Built-in default · saving writes an override to {where}"
+
+    def agent_page(self):
+        """An agent file as form rows (model and fallbacks) beside the prompt file (Textual's agent form)."""
+        from ...ui_support.agent_frontmatter import MAX_FALLBACKS, agent_fields, fallback_items
+        draft = self.agent_draft
+        fields = agent_fields(draft["body"])
+        model, fallbacks = fields.get("model", ""), fallback_items(fields.get("fallback", ""))
+        rows = [(f"Model · {model or 'inherit the session model'}", {"kind": "agent_pick", "field": "model"})]
+        if model:
+            rows.append(("  × Clear model", {"kind": "agent_clear", "field": "model"}))
+        for index, ref in enumerate(fallbacks):
+            rows.append((f"Fallback {index + 1} · {ref}", {"kind": "agent_pick", "field": "fallback", "index": index}))
+            rows.append((f"  × Remove fallback {index + 1}", {"kind": "agent_clear", "field": "fallback", "index": index}))
+        if len(fallbacks) < MAX_FALLBACKS:
+            rows.append(("+ Add fallback", {"kind": "agent_pick", "field": "fallback", "index": len(fallbacks)}))
+        rows.append(("Edit prompt file…", {"kind": "agent_edit_file"}))
+        self.menu(f"Agent · {draft['target']['id']}", rows,
+                  ["Blank model fields inherit the session model. Fallbacks are tried in order when the model fails before replying.",
+                   str(fields.get("description", ""))] if fields.get("description") else
+                  ["Blank model fields inherit the session model. Fallbacks are tried in order when the model fails before replying."])
+
+    async def agent_model_picker(self, field, index):
+        from ...ui_support.model_choice import model_groups, recent_models
+        rows = [row for row in recent_models(await self.client.list_models(selectable_only=True)) if row.get("provider") and row.get("id")]
+        groups, _ = model_groups(rows, favorites=self.shell.preferences.values["model_favorites"], recent=self.shell.preferences.values["model_recent"])
+        items = [(f"{row.get('name') or row['id']} · {row['provider']}/{row['id']}", {"kind": "agent_set", "field": field, "index": index, "ref": f"{row['provider']}/{row['id']}"}, title)
+                 for title, group in groups for row in group]
+        self.menu("Agent model" if field == "model" else f"Agent fallback {index + 1}", [(label, op) for label, op, _ in items])
+        for item, (_, _, title) in zip(self.shell.items, items):
+            item["group"] = title
+
+    async def agent_write(self, field, index, ref):
+        """Set (or clear) one agent field and save the file at once, like the Textual form."""
+        from ...ui_support.agent_frontmatter import agent_fields, fallback_items, set_agent_fields
+        draft = self.agent_draft
+        fields = agent_fields(draft["body"])
+        if field == "model":
+            updates = {"model": ref}
+        else:
+            current = fallback_items(fields.get("fallback", ""))
+            if ref:
+                current[index:index + 1] = [ref]
+            elif index < len(current):
+                del current[index]
+            updates = {"fallback": ", ".join(current)}
+        body = set_agent_fields(draft["body"], updates)
+        target = draft["target"]
+        result = await self.client.settings_write(target["scope"], target["category"], target["id"], body,
+                                                  expected_sha256=target["sha256"] or None)
+        if result.status in {"conflict", "failed", "error"}:
+            self.shell.notice = "Conflict: the agent file changed on disk. Reopen it to load the current file." if result.status == "conflict" else f"Save failed · {result.status}"
+        else:
+            draft["body"] = body
+            if result.sha256:
+                target["sha256"] = result.sha256
+            self.shell.notice = f"Saved · {len(result.loaded)} loaded · {len(result.failed)} failed"
+            await self.refresh_settings_pages(target["scope"], target["category"])
+        if self.shell.panel_title.startswith("Agent ") and self.shell.panel_title != f"Agent · {target['id']}":
+            self.back()
+        self.agent_page()
 
     def tools_modal(self):
         """The Tools dialog: families (and MCP servers) with their tools and token estimates.

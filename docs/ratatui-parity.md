@@ -152,8 +152,10 @@ Settings has Textual's two-pane shape: a left list of areas (GENERAL: Appearance
 Layout, Keyboard, Workspace; CONFIGURE: Providers, Voice, Agents, Tools, MCP servers,
 Skills, Hooks, Config, Soul) beside the current page, with the scope path and help
 above the list. Left/Right or a click switch areas (not while editing a file); Escape
-still steps back and then closes. The pages themselves are still menus, and the
-agent editor is a raw file, not form fields.
+still steps back and then closes. An agent opens as form rows (`Model`, `Fallback 1..8`, `+ Add fallback`, `× Clear`),
+each saved at once through the host with the same hash check as the editor
+(`ui_support/agent_frontmatter`); models are chosen from the grouped model list, and
+`Edit prompt file…` opens the raw file. The other pages are still menus.
 
 Keyboard focus over the transcript: with an empty draft, Tab focuses the last
 clickable block (tool row, thought, prompt card, agent card, diff); Up/Down, Tab,

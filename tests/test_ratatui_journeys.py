@@ -85,7 +85,11 @@ async def test_settings_navigation_scope_and_back_stack(settings_shell):
     assert ordered[0].startswith("build") and ordered[-1].startswith("task") or ordered[-1].startswith("quick")
     # Opening a file keeps the list reachable: Back from the editor returns to the category page.
     await flows.operate(op(shell, "build"))
+    assert shell.panel_title == "Agent · build" and labels(shell)[-1] == "Edit prompt file…"
+    await flows.operate(op(shell, "Edit prompt file…"))
     assert flows.form and flows.form["status"].startswith("Built-in default")
+    flows.back()
+    assert shell.panel_title == "Agent · build"
     flows.back()
     assert shell.panel_title == "Settings · global · agents"
     flows.back()
@@ -143,6 +147,7 @@ async def test_validation_error_from_host_keeps_draft_and_builtin_cannot_be_dele
     assert flows.form["body"] == "this is = = not toml" and not flows.form["saved"] and not flows.form["autosave"]
     await flows.operate({"kind": "settings", "scope": "global", "category": "agents"})
     await flows.operate(op(shell, "build"))
+    await flows.operate(op(shell, "Edit prompt file…"))
     assert flows.form_target["builtin"] is True
     with pytest.raises(ValueError, match="Built-in"):
         await flows.operate({"kind": "confirm", "label": "x", "next": {**flows.form_target, "kind": "settings_delete"}})
@@ -154,13 +159,16 @@ async def test_agent_override_saves_then_resets_to_builtin(settings_shell, home)
     flows = shell.workflows
     await flows.operate({"kind": "settings", "scope": "global", "category": "agents"})
     await flows.operate(op(shell, "build"))
+    await flows.operate(op(shell, "Edit prompt file…"))
     body = flows.form["body"]
     await flows.save(flows.form["id"], body + "\nExtra line.\n", 1)
     assert flows.form["status"].startswith("Saved")
     assert flows.form_target["overrides_builtin"] is True and flows.form_target["builtin"] is False
     flows.back()
+    flows.back()
     assert any(label.startswith("build") and "edited" in label for label in labels(shell))
     await flows.operate(op(shell, "build"))
+    await flows.operate(op(shell, "Edit prompt file…"))
     await flows.operate({"kind": "confirm", "label": "x", "next": {**flows.form_target, "kind": "settings_delete"}})
     assert shell.panel_title.startswith("Reset build to the built-in default")
     await flows.operate(shell.items[1]["operation"])
@@ -466,3 +474,25 @@ async def test_submitted_attachment_content_reaches_real_runtime_and_failed_conv
         assert shell.attachments == [] and shell.composer_insert == ""
     finally:
         await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_agent_page_edits_model_and_fallbacks_through_the_host(settings_shell, home):
+    shell, workspace = settings_shell
+    flows = shell.workflows
+    (home / ".nexus" / "agents").mkdir(parents=True, exist_ok=True)
+    (home / ".nexus" / "agents" / "helper.md").write_text("---\nname: helper\ndescription: test\n---\nHello.\n")
+    await flows.operate({"kind": "settings", "scope": "global", "category": "agents"})
+    await flows.operate(op(shell, "helper"))
+    assert shell.panel_title == "Agent · helper"
+    assert labels(shell)[0] == "Model · inherit the session model" and "+ Add fallback" in labels(shell)
+    await flows.operate({"kind": "agent_set", "field": "model", "index": 0, "ref": "openai/gpt-x"})
+    assert shell.panel_title == "Agent · helper" and labels(shell)[0] == "Model · openai/gpt-x" and "  × Clear model" in labels(shell)
+    await flows.operate({"kind": "agent_set", "field": "fallback", "index": 0, "ref": "anthropic/claude-y"})
+    await flows.operate({"kind": "agent_set", "field": "fallback", "index": 1, "ref": "openai/gpt-z"})
+    assert [l for l in labels(shell) if l.startswith("Fallback")] == ["Fallback 1 · anthropic/claude-y", "Fallback 2 · openai/gpt-z"]
+    saved = (home / ".nexus" / "agents" / "helper.md").read_text() if (home / ".nexus" / "agents" / "helper.md").exists() else ""
+    assert "model: openai/gpt-x" in saved and "fallback: [anthropic/claude-y, openai/gpt-z]" in saved and saved.rstrip().endswith("Hello.")
+    await flows.operate({"kind": "agent_clear", "field": "fallback", "index": 0})
+    await flows.operate({"kind": "agent_clear", "field": "model"})
+    assert labels(shell)[0] == "Model · inherit the session model" and [l for l in labels(shell) if l.startswith("Fallback")] == ["Fallback 1 · openai/gpt-z"]
