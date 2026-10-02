@@ -139,7 +139,7 @@ Dialogs and screens (all currently generic panels/menus)
 - [ ] No pure-Python fallback wheel: platforms outside the native matrix (Windows,
       others) need Rust to build from source. Decide: keep Textual as fallback
       (current `auto`), publish a binary-less wheel, or mark the Rust bin optional.
-- [ ] CI: add a check that native launches with Textual uninstalled (current
+- [~] Done in workflow text, not run on hosted CI: wheel test asserts the native import leaves `textual` out of `sys.modules`; macOS Rust pinned to 1.88; matrix path-gated. Still unverified: cp314 and musllinux jobs, the `macos-15-intel` label, rustup in containers. CI: add a check that native launches with Textual uninstalled (current
       `CIBW_TEST_COMMAND` only runs `--version`); pin Rust >= 1.88 on macOS runners;
       (path-gating done in `ci.yml` `changes` job, not run on hosted CI yet) path-gate the four-runner wheel matrix so it is not run on every PR; verify
       cp314 and musllinux jobs, the `macos-15-intel` label, rustup in containers.

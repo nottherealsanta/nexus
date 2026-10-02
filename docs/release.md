@@ -350,7 +350,8 @@ installer.
 On pull requests the wheel matrix runs only when native inputs change (`rust/`,
 `pyproject.toml`, `MANIFEST.in`, `uv.lock`, `nexus/ui/ratatui/`, or the CI and
 wheel workflows), decided by the `changes` job in `ci.yml`; pushes to `main` and
-releases always run it, and a skipped matrix does not fail `ci-ok`. Building
+releases always run it, and a skipped matrix does not fail `ci-ok`. The wheel test also imports the native surface and asserts `textual` stays out of
+`sys.modules`, and macOS runners pin Rust 1.88. Building
 from source (no matching wheel) needs a Rust toolchain of at least 1.88
 (`rust-version` in `rust/tui/Cargo.toml`; install with rustup.rs). Without Rust,
 setuptools-rust says so; with an older compiler Cargo names the minimum. Packaging follows the [setuptools-rust wheel guidance](https://setuptools-rust.readthedocs.io/en/latest/building_wheels.html).
