@@ -997,3 +997,7 @@ body { font-size: 13px; line-height: var(--row); }
 
 /* Fuzzy matches in the palette and model picker. */
 .fuzzy-label mark { padding: 0; background: transparent; color: var(--accent); font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
+
+.session-day { margin: 12px 0 4px; padding: 0 12px; color: var(--quiet); font: 600 11px/var(--row) var(--font-sans); }
+
+.session-project { margin: 16px 0 4px; padding: 0 12px; overflow-wrap: anywhere; color: var(--text); font: 600 12px/var(--row) var(--font-sans); }

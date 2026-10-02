@@ -51,6 +51,33 @@ class SessionList(msgspec.Struct, tag=True, frozen=True):
     """List every session as a transport-neutral summary."""
 
 
+class ProjectSessionsList(msgspec.Struct, tag=True, frozen=True):
+    """List saved sessions across projects in this Nexus home."""
+
+
+class ProjectSessionOpen(msgspec.Struct, tag=True, frozen=True):
+    workspace: str
+    session: str
+    browser: bool = False
+
+
+class ProjectSession(msgspec.Struct, frozen=True):
+    workspace: str
+    project_id: str
+    session: SessionSummary
+
+
+class ProjectSessionsListResult(msgspec.Struct, tag=True, frozen=True):
+    workspace: str = ""
+    sessions: list[ProjectSession] = msgspec.field(default_factory=list)
+    truncated: bool = False
+
+
+class ProjectSessionOpenResult(msgspec.Struct, tag=True, frozen=True):
+    socket_path: str = ""
+    url: str = ""
+
+
 class SettingsInventory(msgspec.Struct, tag=True, frozen=True):
     scope: Literal["global", "project"]
 
@@ -539,6 +566,8 @@ class WebLaunch(msgspec.Struct, tag=True, frozen=True):
 #: The complete command union. ``msgspec`` decodes it by the ``type`` tag.
 Command = (
     SessionList
+    | ProjectSessionsList
+    | ProjectSessionOpen
     | SettingsInventory
     | SettingsRead
     | SettingsWrite
@@ -1248,7 +1277,9 @@ class ErrorResult(msgspec.Struct, tag=True, frozen=True):
 
 #: The complete result union. ``msgspec`` decodes it by the ``type`` tag.
 Result = (
-    SettingsInventoryResult
+    ProjectSessionsListResult
+    | ProjectSessionOpenResult
+    | SettingsInventoryResult
     | SettingsReadResult
     | SettingsWriteResult
     | SettingsDeleteResult

@@ -173,3 +173,12 @@ records are not read or migrated automatically; existing users sign in again.
 The legacy `auth = "keychain"` configuration spelling remains compatible and
 now selects the file-backed pasted-key flow. Claude CLI credentials remain
 owned by Claude.
+
+## Cross-project sessions without shared hosting
+
+The sidebar uses the shared SQLite metadata index to group sessions by recorded
+project root, ordered by each project’s newest activity, then local date. Folder
+names label projects; equal names show full paths. Opening a foreign session
+connects to its owning daemon instead of running its tools in the current
+workspace. Foreign rows show saved activity until opened. The shared-daemon
+implementation remains separate from this navigation feature.

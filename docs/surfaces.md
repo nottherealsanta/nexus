@@ -55,7 +55,13 @@ Pure presentation helpers, importable by all surfaces. The TUI-only widgets
   row 2.
 - **Sessions sidebar** (34 cells / 272px): `+ New session`, a filter, then a
   two-line card per session (glyph and title; status in words or the message
-  count, then age; `×`), grouped by day, archived last. The current session has
+  count, then age; `×`), grouped by project folder, then local activity date,
+  newest project and sessions first; archived sessions for the active project
+  appear last. Equal folder names show their full paths. Filtering matches
+  titles, ids and project paths. The shared index shows up to 1,000 sessions
+  and announces truncation. Other projects show saved activity and message
+  counts; their live status is available after opening them. Opening one
+  connects to its owning workspace; delete/archive apply to the active project. The current session has
   a left accent bar. Glyphs: braille spinner while working, `●` needs input,
   `✓` done, `·` idle, `◇` archived.
 - **Conversation:** the **context header** opens every conversation (System

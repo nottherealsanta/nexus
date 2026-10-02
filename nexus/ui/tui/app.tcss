@@ -2389,3 +2389,11 @@ SetupScreen {
     color: $nx-muted;
     padding: 0 2;
 }
+
+.session-project {
+    height: auto;
+    margin: 1 0 0 0;
+    padding: 0 1;
+    color: $nx-text;
+    text-style: bold;
+}

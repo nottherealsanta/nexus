@@ -99,6 +99,12 @@ class Client:
         """Return the regular session page plus its archived count."""
         return await self._request(p.SessionList())  # type: ignore[return-value]
 
+    async def project_sessions(self) -> p.ProjectSessionsListResult:
+        return await self._request(p.ProjectSessionsList())  # type: ignore[return-value]
+
+    async def open_project_session(self, workspace: str, session: str, *, browser: bool = False) -> p.ProjectSessionOpenResult:
+        return await self._request(p.ProjectSessionOpen(workspace=workspace, session=session, browser=browser))  # type: ignore[return-value]
+
     async def archive_session(self, session: str, *, reason: str = "user") -> Any:
         return (await self._request(p.SessionArchive(session=session, reason=reason))).session  # type: ignore[union-attr]
 

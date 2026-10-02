@@ -1402,3 +1402,42 @@ async def test_cancel_returns_pending_messages_to_composer_in_order(tmp_path):
     finally:
         await facade.supervisor.aclose()
         await runtime.aclose()
+
+
+async def test_project_sessions_list_and_open_validate_recorded_workspace(tmp_path, monkeypatch):
+    from nexus.session.db import SqliteSessionStore
+    runtime = _runtime(tmp_path, ScriptedProvider(text_response("answer")))
+    facade = HostFacade(runtime)
+    facade.open_session("same")
+    other = tmp_path / "other"
+    other.mkdir()
+    store = SqliteSessionStore(runtime.sessions.store.db, "other", root=str(other))
+    store.create("same")
+    result = await facade.handle(p.ProjectSessionsList())
+    assert isinstance(result, p.ProjectSessionsListResult)
+    assert result.workspace == str(tmp_path)
+    assert {(row.workspace, row.session.id) for row in result.sessions} == {
+        (str(tmp_path), "same"), (str(other), "same"),
+    }
+    calls = []
+    class Peer:
+        async def call(self, command):
+            calls.append(command)
+            if isinstance(command, p.WebLaunch):
+                return p.WebLaunchResult(url="http://127.0.0.1:3210/#ticket=secret")
+            return SimpleNamespace()
+        async def close(self):
+            calls.append("closed")
+    async def connect(workspace, **kwargs):
+        assert workspace == str(other)
+        return Peer()
+    monkeypatch.setattr("nexus.host.daemon.ensure_daemon", connect)
+    opened = await facade.handle(p.ProjectSessionOpen(workspace=str(other), session="same", browser=True))
+    assert isinstance(opened, p.ProjectSessionOpenResult)
+    assert opened.url == "http://127.0.0.1:3210/s/same#ticket=secret"
+    assert calls[-1] == "closed"
+    calls.clear()
+    rejected = await facade.handle(p.ProjectSessionOpen(workspace="/unknown", session="same"))
+    assert isinstance(rejected, p.ErrorResult)
+    assert not calls
+    await runtime.aclose()
