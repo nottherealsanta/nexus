@@ -8,6 +8,14 @@ from ..util import redact_secrets
 from .context_preview import safe_text
 
 
+def review_hex(value: object, length: int) -> str:
+    """Pass a lowercase hex review identity through unchanged; redaction would turn a
+    64-character digest into ``***`` and make every review unacknowledgeable."""
+    if isinstance(value, str) and len(value) == length and all(char in "0123456789abcdef" for char in value):
+        return value
+    return safe_text(value, length)
+
+
 def worktree_record(record: Any) -> dict[str, Any]:
     """Project descriptive fields only; filesystem and ref internals stay private."""
     text_fields = (
@@ -20,8 +28,8 @@ def worktree_record(record: Any) -> dict[str, Any]:
     }
     values.update({
         "dirty": bool(getattr(record, "dirty", False)),
-        "review_id": safe_text(getattr(record, "current_review_id", None), 32) or None,
-        "digest": safe_text(getattr(record, "current_review_digest", None), 64) or None,
+        "review_id": review_hex(getattr(record, "current_review_id", None), 32) or None,
+        "digest": review_hex(getattr(record, "current_review_digest", None), 64) or None,
         "acknowledged": bool(getattr(record, "acknowledged_review_id", None)),
     })
     return values
