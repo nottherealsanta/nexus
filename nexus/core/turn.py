@@ -127,15 +127,15 @@ class TurnUsage(msgspec.Struct, frozen=True):
 class TurnLimits(msgspec.Struct, frozen=True):
     """Per-turn ceilings. ``exceeded`` returns a reason string or ``None``."""
 
-    max_iterations: int = 60
+    max_iterations: int = 0  # 0 = unlimited
     max_seconds: float = 1800.0
     max_input_tokens: int | None = None
     max_output_tokens: int | None = None
     max_total_tokens: int | None = None
 
     def __post_init__(self) -> None:
-        if not _is_int(self.max_iterations) or self.max_iterations < 1:
-            raise ValueError("max_iterations must be an integer >= 1")
+        if not _is_int(self.max_iterations) or self.max_iterations < 0:
+            raise ValueError("max_iterations must be an integer >= 0 (0 = unlimited)")
         if (
             type(self.max_seconds) not in (int, float)
             or not math.isfinite(self.max_seconds)
@@ -162,7 +162,7 @@ class TurnLimits(msgspec.Struct, frozen=True):
         """
         if not isinstance(usage, TurnUsage):
             raise TypeError("usage must be a TurnUsage")
-        if iterations >= self.max_iterations:
+        if self.max_iterations and iterations >= self.max_iterations:
             return "max_iterations"
         if elapsed_seconds >= self.max_seconds:
             return "max_seconds"

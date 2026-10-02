@@ -185,6 +185,10 @@ class TaskRequest:
             not isinstance(self.description, str) or not self.description.strip()
         ):
             raise SubagentError("description must be a non-empty string when given")
+        # Providers may fill an optional model override with an empty string.
+        # Treat that as omission before both permission routing and spawning.
+        if isinstance(self.model, str):
+            object.__setattr__(self, "model", self.model.strip() or None)
         if self.model is not None and (
             not isinstance(self.model, str)
             or not self.model.strip()
@@ -344,6 +348,10 @@ class SubagentOutcome:
     #: Workspace files the child changed through file-editing tools, in first-
     #: touch order. Shell side effects are not tracked; roles report those.
     files_changed: tuple[str, ...] = ()
+    #: Markdown report of a failed run's context (see ``agents.handoff``); the
+    #: inline digest is in ``handoff`` and ``handoff_path`` is where it was saved.
+    handoff: str = ""
+    handoff_path: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -366,6 +374,7 @@ class SubagentOutcome:
             "error": self.error,
             "worktree": dict(self.worktree) if self.worktree is not None else None,
             "files_changed": list(self.files_changed),
+            "handoff_path": self.handoff_path,
         }
 
     def render(self) -> str:
@@ -404,6 +413,15 @@ class SubagentOutcome:
             lines.extend(f"- {path}" for path in shown)
             if more > 0:
                 lines.append(f"- … and {more} more")
+        if self.handoff:
+            where = f"saved at {self.handoff_path}" if self.handoff_path else "not saved to disk"
+            lines.append(
+                f"[{self.agent} did not finish (stop reason: {self.stop_reason or 'error'}). "
+                f"The digest below is {where}. If the work "
+                "still matters, start a new task and put what it needs from this report "
+                "in the prompt.]"
+            )
+            lines.append(self.handoff)
         if not lines:
             lines.append(f"{label}: no report")
         return "\n".join(lines)

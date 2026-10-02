@@ -1,4 +1,4 @@
-"""Full-screen Settings page backed entirely by host inventory commands (plan §4).
+"""Large modal Settings page backed entirely by host inventory commands (plan §4).
 
 A left sidebar lists every configurable area: the shell's own preferences
 (Appearance, Layout, Keyboard, Workspace), provider sign-in (Providers, see
@@ -71,7 +71,7 @@ class ConfirmSettingsAction(ModalScreen[bool]):
 
 
 class SettingsConsole(SettingsScreen):
-    """Full-screen Settings: sidebar of areas, list + editor for file areas."""
+    """Large modal Settings: sidebar of areas, list + editor for file areas."""
 
     #: ``(key, label)``; a ``None`` key is a non-selectable group heading.
     SECTIONS = (

@@ -122,6 +122,8 @@ def test_task_spec_shape_and_bundle():
     ("data", "expected"),
     [
         ({"prompt": "x"}, "task:inherit"),
+        ({"prompt": "x", "model": " "}, "task:inherit"),
+        ({"prompt": "x", "model": " low "}, "task:low"),
         ({"prompt": "x", "subagent_type": "explore"}, "explore:inherit"),
         ({"prompt": "x", "model": "low"}, "task:low"),
         ({"prompt": "x", "model": "high"}, "task:high"),
@@ -292,7 +294,7 @@ async def test_run_reports_a_child_failure_as_an_error(tmp_path):
         {"prompt": "x", "tools": "Read"},
         {"prompt": "x", "tools": ["Read", ""]},
         {"prompt": "x", "subagent_type": ""},
-        {"prompt": "x", "model": ""},
+        {"prompt": "x", "model": 123},
     ],
 )
 async def test_run_rejects_bad_arguments(tmp_path, args):

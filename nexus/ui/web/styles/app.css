@@ -245,7 +245,8 @@ body { font-size: 13px; line-height: var(--row); }
 .task-live .tool-glyph { color: var(--accent); animation: rotate 1.2s linear infinite; transform-origin: center; }
 .card-head:hover, .card-head:focus-visible { color: var(--muted); }
 .tool-glyph { flex: none; }
-.tool-batch { position: relative; flex: none; align-self: stretch; width: 1ch; color: var(--quiet); }
+.tool-card .card-head { position: relative; overflow: visible; }
+.tool-batch { position: absolute; left: -1ch; top: 0; bottom: 0; width: 1ch; color: var(--quiet); }
 /* Drawn, not typed: the vendored Latin subset has no box glyphs, so ⎾ │ ⎿ would come from mismatched fallback fonts. */
 .tool-batch::before { content: ""; position: absolute; left: 50%; right: 0; border: 0 solid currentColor; border-left-width: 1px; }
 [data-batch="first"] .tool-batch::before { top: 50%; bottom: 0; border-top-width: 1px; }
@@ -703,7 +704,7 @@ body { font-size: 13px; line-height: var(--row); }
 
 /* settings */
 .settings-overlay { place-items: center; padding: 16px; }
-.settings-dialog { display: grid; grid-template-columns: 188px minmax(0, 1fr); width: min(980px, 100%); height: min(620px, 88dvh); overflow: hidden; }
+.settings-dialog { display: grid; grid-template-columns: 188px minmax(0, 1fr); width: min(1440px, 96vw); height: 90dvh; overflow: hidden; }
 .settings-nav { display: flex; flex-direction: column; gap: 1px; padding: 16px 10px; border-right: 1px solid var(--border); background: var(--canvas); }
 .settings-nav h2 { margin: 0 8px 12px; font-size: 14px; font-weight: 650; }
 .settings-nav a { padding: 6px 8px; border-radius: var(--radius-sm); color: var(--muted); font-size: 13px; text-decoration: none; }

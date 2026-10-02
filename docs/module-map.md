@@ -54,9 +54,11 @@ here, so add a row when you add a file.
 | File | Purpose |
 | --- | --- |
 | `__init__.py` | Agents: restricted `*.md` subagent definitions |
+| `last_choice.py` | `AgentChoiceStore`: last model and effort per root agent (`~/.nexus/agent_models.json`) |
 | `manager.py` | AgentManager: deterministic subagent discovery, seeding, and tool selection |
 | `model.py` | Subagent definitions: restricted `*.md` parsing and the immutable model |
 | `runner.py` | SubagentRunner: bounded, nested execution of subagent definitions |
+| `handoff.py` | Failure handoff: bounded markdown report of a failed child's context, saved for the root to read |
 | `worktree_integrate.py` | Apply an acknowledged, frozen worktree review to a clean parent checkout |
 | `worktree_review.py` | Immutable, read-only review snapshots for finalized agent worktrees |
 | `worktrees.py` | Safe Git worktree lifecycle management for subagents |
@@ -241,6 +243,7 @@ here, so add a row when you add a file.
 | `message.py` | Provider-neutral message IR |
 | `provider.py` | The provider protocol and the shared provider error taxonomy |
 | `reasoning_effort.py` | Durable per-session reasoning-effort selection state |
+| `effort_preferences.py` | Bounded machine-wide last reasoning effort per exact provider/model reference |
 | `registry.py` | Model registry: a bounded, filtered, cache-backed view of models.dev |
 | `request.py` | Structured model requests and sampling parameters |
 | `router.py` | Resolve a configured model reference to a provider, model, and capabilities |
@@ -500,4 +503,12 @@ loop over local state; splitting it further needs a state struct and is not done
 | `voice.py` | Bounded native dictation using shared capture and host transcription |
 | `desktop.py` | Explicit clipboard operations with byte/time bounds |
 | `run.py` | Native launch seam and binary discovery |
+
+
+| Native module | Contract |
+| --- | --- |
+| `rust/tui/src/trace.rs` | Bounded opt-in native timing samples, percentile summaries and exit report |
+
+The manual `tests/ratatui_performance_check.py` script measures controlling-PTY
+streaming, input and CPU cost.
 

@@ -339,3 +339,10 @@ def _imports(path: Path) -> set[str]:
 def test_tools_layer_does_not_import_upward(path):
     violations = sorted(m for m in _imports(path) if m.startswith(FORBIDDEN))
     assert not violations, f"{path.name} imports {violations}"
+
+
+def test_permission_key_callback_failure_becomes_a_tool_error():
+    def broken(data):
+        raise ValueError("model must be a non-empty reference without whitespace")
+    with pytest.raises(ToolSpecError, match="model must"):
+        make_spec(permission_key=broken).resolve_permission_key({"model": "bad model"})

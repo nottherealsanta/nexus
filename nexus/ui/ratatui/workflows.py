@@ -6,6 +6,8 @@ and previews come through the host; local files are used only for explicit expor
 """
 from __future__ import annotations
 
+from ...ui_support.completion import root_agents
+
 import uuid
 
 from ...ui_support.text import escape_controls, redact
@@ -26,16 +28,37 @@ class Workflows:
         self.review_files = []
         self.stack = []
         self.agent_page_id = None
+        self.agent_context = {}
+        self.agent_parents = []
 
     @property
     def client(self):
         return self.shell.client
 
+    @property
+    def selected_agent(self):
+        def locate(body, depth=0):
+            if depth > 8:
+                return None
+            for agent in body.agents.values():
+                if agent.id == self.agent_page_id:
+                    return agent
+                found = locate(agent.body, depth + 1)
+                if found is not None:
+                    return found
+            return None
+        return locate(self.shell.controller.view) if self.agent_page_id else None
+
+    @property
+    def active_view(self):
+        agent = self.selected_agent
+        return agent.body if agent is not None else self.shell.controller.view
+
     def menu(self, title, rows, lines=()):
         if self.shell.panel_title and title != self.shell.panel_title:
-            self.stack.append((self.shell.panel_title, self.shell.panel_lines, self.shell.items, self.form, self.form_target))
+            self.stack.append((self.shell.panel_title, self.shell.panel_lines, self.shell.items, self.form, self.form_target, self.shell.panel_layout, self.shell.panel_format, self.shell.panel_tones))
             self.stack = self.stack[-20:]
-        self.shell.show(title, list(lines))
+        self.shell.show(title, list(lines), layout="drawer")
         self.shell.panel_lines = list(lines)
         self.shell.panel_tones = []
         self.shell.items = [{"label": label, "command": "", "operation": operation}
@@ -45,17 +68,24 @@ class Workflows:
     def edit(self, title, body, target, *, secret=False, autosave=False, replace=False):
         """Open an editor; Escape returns to the menu that opened it (Textual keeps the list)."""
         if self.shell.panel_title and not replace:
-            self.stack.append((self.shell.panel_title, self.shell.panel_lines, self.shell.items, self.form, self.form_target))
+            self.stack.append((self.shell.panel_title, self.shell.panel_lines, self.shell.items, self.form, self.form_target, self.shell.panel_layout, self.shell.panel_format, self.shell.panel_tones))
             self.stack = self.stack[-20:]
-        self.shell.show(title, "")
+        self.shell.show(title, "", layout="page")
         self.form_target = target
         self.form = {"id": uuid.uuid4().hex, "body": body, "secret": secret,
                      "autosave": autosave, "status": "", "revision": 0, "saved": True}
 
     def back(self):
+        if not self.shell.panel_title and self.agent_page_id:
+            self.agent_page_id, self.agent_context = self.agent_parents.pop() if self.agent_parents else (None, {})
+            return
         if self.stack:
-            self.shell.panel_title, self.shell.panel_lines, self.shell.items, self.form, self.form_target = self.stack.pop()
+            self.shell.panel_title, self.shell.panel_lines, self.shell.items, self.form, self.form_target, self.shell.panel_layout, self.shell.panel_format, self.shell.panel_tones = self.stack.pop()
+            self.shell.panel_revision += 1
+            self.shell.panel_loading = False
         else:
+            self.shell.panel_revision += 1
+            self.shell.panel_loading = False
             self.shell.panel_title = ""
             self.shell.panel_lines = []
             self.shell.items = []
@@ -69,7 +99,7 @@ class Workflows:
         if not category:
             rows = [(item.label, {"kind": "settings", "scope": scope, "category": item.key})
                     for item in inventory.categories]
-            rows += [("Providers", {"kind": "providers"}), ("Voice", {"kind": "voice"}),
+            rows += [("Providers", {"kind": "providers"}), ("Voice", {"kind": "voice_settings"}),
                      ("Appearance", {"kind": "appearance"}),
                      ("Layout", {"kind": "layout"}),
                      ("Keyboard", {"kind": "keyboard"}),
@@ -109,7 +139,7 @@ class Workflows:
         for index, entry in enumerate(self.stack):
             if entry[0] == f"Settings · {scope} · {category}":
                 title, rows, lines = await self.settings_menu(scope, category)
-                self.stack[index] = (title, lines, [{"label": label, "command": "", "operation": op} for label, op in rows], None, None)
+                self.stack[index] = (title, lines, [{"label": label, "command": "", "operation": op} for label, op in rows], None, None, "page", "plain", [])
 
     async def return_to_settings(self, scope, category):
         """After a mutation, drop transient confirm/editor pages and show a fresh category list."""
@@ -123,20 +153,38 @@ class Workflows:
 
     async def providers(self):
         result = await self.client.providers_status()
-        self.menu("Providers", [(row.get("label", row["id"]) + (" · connected" if row.get("connected") else ""),
-            {"kind": "provider", "id": row["id"]}) for row in result.providers])
+        self.menu("Providers", [(row.get("label", row["id"]) + (" · connected" if row.get("connected") else " · not connected"),
+            {"kind": "provider", "id": row["id"]}) for row in result.providers], ["Choose a provider to manage its connection and sign-in options.", "Credentials stay in the daemon; connect more than one provider to switch models."])
+
+    async def voice_settings(self):
+        """Configure local transcription without starting microphone capture."""
+        status = await self.client.voice_status()
+        rows = [
+            (f"Voice input · {'on' if status.enabled else 'off'}", {"kind": "voice_setting", "key": "enabled", "value": not status.enabled}),
+            (f"Send transcript automatically · {'on' if status.auto_send else 'off'}", {"kind": "voice_setting", "key": "auto_send", "value": not status.auto_send}),
+            (f"Processing device · {status.configured_device}", {"kind": "voice_choices", "key": "device", "current": status.configured_device}),
+            (f"Recording limit · {status.max_seconds} seconds", {"kind": "voice_choices", "key": "max_seconds", "current": status.max_seconds}),
+            ("Download / prepare local model…", {"kind": "confirm", "label": "Download the local voice model (~179 MB)?", "next": {"kind": "voice_settings_prepare"}}),
+        ]
+        self.menu("Voice · local dictation", rows, [
+            f"Model: {status.state} · {status.message or 'Audio is transcribed locally.'}",
+            "Auto-send submits immediately; turn it off to review the transcript in the composer.",
+            *labelled(status),
+        ])
+        for index, item in enumerate(self.shell.items):
+            item["group"] = "Input and transcript" if index < 2 else "Local transcription" if index < 4 else "Model setup"
 
     #: Operation kinds that open or navigate Settings pages, and the area each selects.
     NAV_AREAS = {"appearance": "appearance", "layout": "layout", "keyboard": "keys", "workspace": "workspace",
-                 "providers": "providers", "voice": "voice"}
+                 "providers": "providers", "voice_settings": "voice"}
     NAV_KEEP = ("settings", "provider", "voice", "toggle_pref", "reset_prefs", "theme", "default_agent",
-                "confirm", "back", "discard_form", "setup")
+                "confirm", "back", "discard_form", "setup", "agent_", "default_agent_save")
 
     async def settings_area(self, key):
         """Switch Settings to ``key`` (the left list): a fresh page with Escape closing Settings."""
         self.stack.clear()
         self.shell.panel_title = ""
-        operation = {"keys": {"kind": "keyboard"}, "providers": {"kind": "providers"}, "voice": {"kind": "voice"}}.get(
+        operation = {"keys": {"kind": "keyboard"}, "providers": {"kind": "providers"}, "voice": {"kind": "voice_settings"}}.get(
             key, {"kind": key} if key in ("appearance", "layout", "workspace") else {"kind": "settings", "scope": self.settings_scope, "category": key})
         await self.operate(operation)
 
@@ -165,7 +213,11 @@ class Workflows:
             return await self.shell.submit(operation["command"])
         elif kind == "model_choose":
             ref, levels, selected = operation["ref"], operation["levels"], operation.get("selected")
+            if operation.get("remembered"):
+                return await self.operate({"kind": "model_commit", "ref": ref, "effort": selected})
             if not levels:
+                self.shell.panel_title = ""
+                self.shell.items = []
                 return await self.shell.submit("/model " + ref)
             mark = lambda value: " · selected" if value == selected else ""  # noqa: E731
             keep = ({"kind": "model_commit", "ref": ref, "effort": operation["keep"]} if operation.get("commit")
@@ -181,10 +233,13 @@ class Workflows:
             self.shell.preferences.set("model_recent", [operation["ref"], *[ref for ref in recent if ref != operation["ref"]]])
             self.shell.panel_title = ""
             self.shell.items = []
+        elif kind == "context_menu":
+            self.menu("Context sections", [(label, {"kind": "context_show", "key": key}) for key,label in
+                (("system","System prompt"),("tools","Tools"),("agents","AGENTS.md"),("skills","Skills"),("mcp","MCP"))])
         elif kind == "new_session":
             await self.shell.switch(operation["id"])
-            await self.shell.controller.select_agent(operation["agent"])
-            self.shell.preview = await self.client.inspect_context(operation["id"])
+            await self.shell.select_agent(operation["agent"])
+
         elif kind == "archived":
             result = await self.client.list_archived_sessions(operation.get("query", ""))
             self.menu("Archived sessions", [(str(field(row, "title") or field(row, "id")), {"kind": "archived_preview", "id": field(row, "id")}) for row in result.sessions], labelled(result))
@@ -257,7 +312,7 @@ class Workflows:
         elif kind == "default_agent":
             current = await self.client.default_agent()
             self.menu("Default root agent", [(row["name"] + (" · current" if row["name"] == current else ""),
-                {"kind": "default_agent_save", "name": row["name"]}) for row in await self.client.list_agents()])
+                {"kind": "default_agent_save", "name": row["name"]}) for row in root_agents(await self.client.list_agents())])
         elif kind == "default_agent_save":
             self.shell.show("Default agent saved", await self.client.set_default_agent(operation["name"], "global"))
         elif kind == "layout":
@@ -295,15 +350,28 @@ class Workflows:
             self.shell.notice = "Theme saved"
             await self.operate({"kind": "appearance"})
         elif kind == "context_show":
-            if not await self.shell.refresh_preview():
-                self.shell.notice = "Context details are unavailable while a turn is running"
-                return
-            preview = self.shell.preview
+            if self.agent_page_id:
+                from ...host.protocol import ContextInspectResult
+                fields = set(ContextInspectResult.__struct_fields__) - {"session"}
+                preview = ContextInspectResult(session=self.agent_page_id, **{k: v for k, v in self.agent_context.items() if k in fields})
+            else:
+                fresh = await self.shell.refresh_preview()
+                preview = self.shell.preview
+                if preview is None:
+                    self.shell.notice = "Context details are unavailable while a turn is running and no successful preview is cached"
+                    return
+                if not fresh:
+                    self.shell.notice = "Showing the last successful context preview from before the running turn"
             key = operation["key"]
             if key == "system":
                 self.shell.show("System prompt · literal", preview.system_text or "(empty)")
             elif key == "agents":
-                self.shell.show("AGENTS.md", [part for part in preview.included_parts if part.get("name") == "agents_md"] or preview.system_files)
+                parts = [part for part in preview.included_parts if part.get("name") == "agents_md"]
+                source = field(preview.system_files.get("agents", {}), "source", "AGENTS.md") or "AGENTS.md"
+                body = "\n\n---\n\n".join(str(part.get("text") or "") for part in parts)
+                if field(preview.system_files.get("agents", {}), "truncated", False):
+                    body += "\n\n---\n\nContent truncated by the host."
+                self.shell.show(f"AGENTS.md · {source}", body or "No AGENTS.md content is included in this request.", format="markdown")
             elif key == "tools":
                 self.tools_expanded = set()
                 self.tools_modal()
@@ -336,8 +404,19 @@ class Workflows:
         elif kind == "context_extensions":
             await self.context_extensions(operation["category"])
         elif kind == "agent_page":
+            session, generation = self.shell.controller.session, self.shell.generation
+            result = await self.client.agent_transcript(session, operation["id"])
+            if self.shell.controller.session != session or self.shell.generation != generation:
+                return
+            if not result.get("found"):
+                self.shell.notice = "Subagent transcript is unavailable"
+                return
+            self.agent_parents.append((self.agent_page_id, self.agent_context))
+            self.agent_parents = self.agent_parents[-8:]
             self.agent_page_id = operation["id"]
-            self.shell.show("Agent transcript", await self.client.agent_transcript(self.shell.controller.session, operation["id"]))
+            self.agent_context = result.get("context") or {}
+            self.shell.panel_title = ""
+            self.shell.items = []
         elif kind == "attachment_preview":
             item = next((item for item in self.shell.attachments if item.attachment_id == operation["id"]), None)
             if item is None:
@@ -350,7 +429,7 @@ class Workflows:
             self.stack.clear()
             await self.shell.command("/attach", ())
         elif kind == "message_page":
-            message = next(message for turn in self.shell.controller.view.turns for message in turn.messages if message.id == operation["id"])
+            message = next(message for turn in self.active_view.turns for message in turn.messages if message.id == operation["id"])
             self.shell.show("Submitted message · every content block", message.to_dict())
         elif kind == "turn_toggle":
             if operation["id"] in self.shell.collapsed_turns:
@@ -359,7 +438,7 @@ class Workflows:
                 self.shell.collapsed_turns.add(operation["id"])
         elif kind == "tool_page":
             from ...ui_support.tool_details import styled_lines, tool_detail_sections
-            tool = next(tool for tool in self.shell.controller.view.tools if tool.call_id == operation["id"])
+            tool = next(tool for tool in self.active_view.tools if tool.call_id == operation["id"])
             self.shell.show_styled(tool.name, *styled_lines(tool_detail_sections(tool)))
         elif kind == "session_open":
             await self.shell.switch_project(operation["workspace"], operation["id"])
@@ -424,6 +503,24 @@ class Workflows:
                                       proceed={**operation, "token": result.confirmation_token})
             else:
                 await self.worktree_outcome(result)
+        elif kind == "voice_settings":
+            await self.voice_settings()
+        elif kind == "voice_choices":
+            key = operation["key"]
+            values = ("auto", "cpu", "mps", "cuda") if key == "device" else (15, 30, 60, 90, 120)
+            self.menu("Processing device" if key == "device" else "Recording limit", [
+                (str(value) + (" · selected" if value == operation["current"] else ""),
+                 {"kind": "voice_setting", "key": key, "value": value}) for value in values],
+                ["Auto chooses an available accelerator; CPU works without one." if key == "device" else "Recording stops at this limit. Press any key to finish earlier."])
+        elif kind == "voice_setting":
+            from ...ui_support.voice_settings import set_voice_config
+            await set_voice_config(self.client, **{operation["key"]: operation["value"]})
+            self.stack.clear()
+            self.shell.panel_title = ""
+            await self.voice_settings()
+        elif kind == "voice_settings_prepare":
+            await self.client.voice_prepare()
+            await self.voice_settings()
         elif kind == "voice":
             await self.shell.voice.open()
         elif kind == "voice_enable":
@@ -483,7 +580,12 @@ class Workflows:
             transient = {label, "Provider sign-in", "Sign out of this provider?"}
             self.stack = [entry for entry in self.stack if entry[0] not in transient]
             self.shell.panel_title = ""
-        self.menu(provider.get("label", provider_id), rows, ([message] if message else []) + labelled(provider))
+        self.menu(provider.get("label", provider_id), rows, [
+            f"Connection: {'connected' if provider.get('connected') else 'not connected'}" + (f" · {message}" if message else ""),
+            provider.get("instruction") or "Choose a sign-in method below to manage this provider.",
+            *labelled(provider)])
+        for item in self.shell.items:
+            item["group"] = "Connection management" if item["operation"]["kind"] == "confirm" else "Sign-in options"
 
     def review_binding(self):
         r = self.review
@@ -763,6 +865,6 @@ def session_rows(result, current: str = "", seen: dict | None = None, now: float
             status = session_status(row, seen, current)
             rows.append({"id": row.id, "title": redact(escape_controls(row.title or row.id)),
                          "workspace": workspace_for[id(row)], "state": row.state, "group": redact(escape_controls(group)),
-                         "status": status, "sub": redact(escape_controls(session_subline(row, status, now))),
+                         "status": status, "sub": redact(escape_controls(session_subline(row, status, now, compact=True))),
                          "active": row.id == current})
     return rows

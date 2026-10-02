@@ -15,7 +15,7 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Static
+from textual.widgets import LoadingIndicator, Static
 
 from ...ui_support import usage
 from ...ui_support.text import sanitize
@@ -85,6 +85,9 @@ class UsageScreen(ModalScreen[None]):
         background: $panel;
         border: tall $border;
     }
+    #usage-loading {
+        height: 1;
+    }
     #usage-title {
         height: auto;
         margin-bottom: 1;
@@ -96,14 +99,17 @@ class UsageScreen(ModalScreen[None]):
     }
     """
 
-    def __init__(self, client: Any) -> None:
+    def __init__(self, client: Any, *, cached: Any = None, on_result=None) -> None:
         super().__init__()
         self._client = client
+        self._cached = cached
+        self._on_result = on_result
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="usage-dialog"):
             yield Static("Provider usage and limits", id="usage-title", markup=False)
-            yield Static("Reading usage from connected providers…", id="usage-body", markup=False)
+            yield LoadingIndicator(id="usage-loading")
+            yield Static(render_usage(self._cached) if self._cached is not None else "Reading usage from connected providers…", id="usage-body", markup=False)
 
     def on_mount(self) -> None:
         self.call_after_refresh(lambda: self.query_one("#usage-dialog", VerticalScroll).focus())
@@ -117,14 +123,23 @@ class UsageScreen(ModalScreen[None]):
 
     async def _load(self) -> None:
         body = self.query_one("#usage-body", Static)
-        body.update(Text("Reading usage from connected providers…", style="dim"))
+        loading = self.query_one("#usage-loading", LoadingIndicator)
+        loading.display = True
         try:
             result = await self._client.providers_usage()
         except Exception as exc:  # noqa: BLE001 - show the host/transport error
-            body.update(Text(f"Usage unavailable: {sanitize(str(exc), 200)}", style="red"))
+            if self.is_mounted:
+                report = render_usage(self._cached) if self._cached is not None else Text()
+                report.append(f"\nUsage unavailable: {sanitize(str(exc), 200)}", style="red")
+                body.update(report)
+                loading.display = False
             return
         if self.is_mounted:
+            self._cached = result
+            if self._on_result:
+                self._on_result(result)
             body.update(render_usage(result))
+            loading.display = False
 
 
 __all__ = ["UsageScreen", "render_usage"]

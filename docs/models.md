@@ -75,6 +75,14 @@ A tier name works anywhere a model string does. `ModelRouter.fallbacks` only
 *lists* the `model.fallback` chain; the loop decides when to try one
 ([loop.md](loop.md#failure-handling)). Per-session `/model` and effort choices
 are durable (`model.selected`, `reasoning_effort.selected`).
+Explicit effort choices (including Default) are also remembered per concrete
+provider/model in bounded, best-effort machine state at
+`~/.nexus/model_efforts.json`. Selecting that model again restores its effort
+through normal durable session events, across sessions and daemon restarts.
+Unsupported remembered efforts fall back to Default; models without a remembered
+choice retain the existing selection behavior. Selectable host model rows expose
+`remembered_effort` only when a preference exists. Native model selection skips
+the effort prompt for remembered models; `/effort` remains available to change it.
 
 ## Registry and tiers
 

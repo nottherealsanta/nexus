@@ -4,6 +4,23 @@ Last updated: 2026-10-02 (Asia/Kolkata), after the long parity pass on `feat/rat
 (everything committed and pushed; `main` 0.2.17 merged in; then merged to `main` with the
 native client as the default renderer).
 
+## UI polish implementation (2026-10-02)
+
+Parallel-tool alignment follow-up: batch markers now occupy the cell before the
+normal tool column, with unchanged text and subagent-metric alignment. Textual
+and web use the same gutter placement. Rust column checks cover narrow and wide
+widths; Python projection checks cover grouped and standalone calls.
+
+Implemented the follow-up in `RATATUI_UI_POLISH_PLAN.md`: black conversation and
+popup backgrounds; bounded command/model/context/provider modals; composer-anchored
+agent drawer; context/activity bottom line; inset user cards, thin blue rules,
+muted turn numbers and runtime padding; larger sidebar-toggle targets, denser
+session cards and the top divider; cached asynchronous usage refresh; Markdown
+for included AGENTS.md. Usage caching is mirrored in Textual and web.
+
+See `docs/ratatui-parity.md` for verification and remaining limits. Source changes
+are in the working tree; no commit, release or publication was requested.
+
 ## HANDOFF: read this first
 
 State: a broad native client that matches Textual in the transcript, composer, tabs,
@@ -118,15 +135,15 @@ Composer and input
       `ui_support/completion.py`.
 - [x] Group headings and Ctrl+S sort done (fuzzy ranking is a label substring match in Rust; effort step styling open). Model picker: group header rows, fuzzy ranking in the Rust filter (Python
       already ranks), Ctrl+S sort toggle, effort step styling (`tui_model_picker.py`).
-- [ ] Agent picker as the inline `AgentPickerPanel`, new-session picker
-      (`new_session.py`), sessions dialog, archived dialog (`tui_archived.py`).
+- [~] Agent picker now uses a composer-anchored drawer. Still compare the new-session
+      picker (`new_session.py`), sessions dialog and archived dialog (`tui_archived.py`).
 - [x] Strip done (state, time, wave, partial text; Rust test; no real hardware, cancel races unverified). Voice: floating `VoiceStrip` overlay above the composer, level meter, partial
       preview, recording marker in the runtime row; verify cancel races.
 - [x] Docked right at 36 columns with a title bar (checked live; mouse close on the title bar not wired). Logs drawer: Textual docks it right (36 cols); native uses the lower half of
       the transcript. Match placement, title bar and close button.
 - [ ] Leader (Ctrl+X) hint line styling and timeout behaviour.
-- [ ] Ctrl+P: Textual opens a command palette widget; native opens a `/help` menu.
-      Port palette behaviour (fuzzy search over commands and shortcuts).
+- [~] Ctrl+P now opens a bounded searchable command/shortcut modal.
+      Fuzzy ranking of the native filter remains unimplemented.
 
 Dialogs and screens (all currently generic panels/menus)
 - [x] Tool details toned (not floating; fixture `ratatui-tool` checked); Tools dialog done as menu rows (no swatches/columns). Remaining here: Tool details modal (`ui/tui/tool_details.py`), Context modal with the
@@ -621,3 +638,131 @@ that is too large: only do (4) and (5) plus dropping the unused `lines` field.
 
 Open from the plan's section 2/3 after this pass: hosted wheel matrix, installer/update
 behaviour, terminal-rendered frame timings, and the snapshot patching proposal.
+
+## Native UI refinement (implemented)
+
+The native header uses three gray rows with one black divider. Sessions show
+numeric message counts and compact ages, stronger boundaries and no shortcut
+footer. Sidebars retain their existing height. Root response labels and new-session
+tips are removed; child-agent identities remain visible.
+
+Composer agent, model/provider and effort controls are clickable. Agent completion,
+selection and cycling filter root-capable definitions; host validation still
+enforces the post-turn lock. Context figures are right aligned inside the composer
+as used / reported pricing boundary / capacity and percentage. The full-width
+activity meter animates without a separate status label or spinner. Pricing
+boundaries use thin ticks.
+
+Verification: 83 native Python checks, 37 Rust checks (one manual benchmark
+ignored), and the real-terminal keyboard/mouse check passed. Full-height sidebar
+reflow remains optional and was not implemented.
+
+Native Ctrl+X, V starts capture immediately when voice is enabled and its model is
+ready. Setup retains a bounded dialog when enablement or download is needed. Live
+preview words resolve changed ASCII letters over three 125 ms frames, preserving
+stable preceding words, whitespace and Unicode. Final transcription remains the
+only inserted text. The Ctrl+X leader has no visible shortcut banner. Physical
+microphone latency and real inference remain unverified.
+
+Native dictation now previews directly inside the editable composer, at the capture
+insertion position. Recording shows only a one-cell pulsing orange outline square
+below the agent control; the floating waveform/status strip is removed. Typing
+stops capture and also applies the typed key. Final text replaces the temporary
+preview at the captured position, preserving typed suffix text; Escape discards.
+The composer grows for live previews. Real microphone/model latency is unverified.
+
+The native activity meter has two-cell side margins and an independent 60 Hz
+render clock. Its moving segment eases through a six-second round trip, blending
+boundary-cell colors for motion between terminal columns. Other spinner and
+dictation animations retain their existing cadence. Actual terminal refresh rate
+depends on the terminal and rendering load.
+
+Context footer accounting now falls back to the host inspection when durable turn
+accounting has no figures (including a new conversation). Reported durable usage
+retains precedence. Missing accounting says `unavailable` rather than `?`. Opening
+context inspection refreshes the cached preview. Plain/Markdown panel rows are
+cached across frames and scrolling is clamped to the last viewport, avoiding
+repeated wrapping of large context bodies. Build and Ruff passed; the reported
+scroll crash has not been reproduced on the user's session.
+
+
+Settings opens in a large inset modal so the conversation remains visible around it.
+The native Voice section configures enabled input, auto-send, processing device
+and recording duration through host Settings commands without starting capture.
+Provider pages group sign-in options and connection management beneath a labelled
+connection status. Model downloads remain explicitly confirmed.
+
+### Subagent failure, page and overload recovery
+
+- Permission-key validation errors are model-visible tool failures; terminal
+  failure/cancellation also finishes unresolved tool rows for replay.
+- Native subagent inspection uses the child conversation, recorded context,
+  shared transcript renderer, details sidebar and a read-only footer. Escape
+  supports returning through nested children. Root drafts remain in the editor.
+- Explicit provider stream overloads retry the same request after 2/4/8 seconds,
+  with cancellation, visible attempt rows and no execution of incomplete calls.
+- Verification: 559 selected Python checks passed in the sandbox; the five
+  PTY/loopback checks blocked by sandbox permissions passed outside it. A later
+  focused run including new child-context/nested-navigation tests passed 342
+  checks. Rust: 39 passed, one manual benchmark ignored. Ruff, docs/layering
+  and diff whitespace checks passed. Native/Textual child-page screenshots:
+  `artifacts/ratatui-parity/{ratatui,textual}-subagent.png`; inspected side by
+  side. The updated native PTY check also verifies read-only keys/paste and
+  preservation of the root draft. The rebuilt binary was copied to `.venv/bin`.
+  The broad web browser check is not verified: its existing string-based
+  `wait_for_function` hits the application CSP (`unsafe-eval` forbidden).
+
+
+## Composer command choices (2026-10-02)
+
+Native slash/file completion and command choice menus use the full transcript
+width directly above the composer, without borders. Agent, model, effort and
+follow-up operation menus remain in this dock; Settings retains its navigation
+modal. Every slash argument requests completion after the existing 120 ms pause.
+A bounded 32-request cache filters matching ancestor results while replies arrive,
+including on backspace; command/token context and session generation isolate
+cached candidates. Exact host replies retain the host's search ordering/results.
+
+Verification: Rust regressions, native Python checks, controlling-PTY check and
+browser captures for completion, agent and model choices. The native captures
+were inspected. Textual/web menu placement has not been changed or verified.
+
+### Redesign verification and remaining performance gap (2026-10-02)
+
+The earlier measurements above are the baseline, before redesign implementation.
+The new wire uses schema 2 suffix patches; Rust retains revision-keyed wrapped
+parts and indexed rows, drains bounded input bursts, caches animation state and
+buffers terminal output. The optional trace records parse, content update, draw,
+flush, event handling and receive/input-to-frame latency.
+
+Optimized controlling-PTY run, 200×50 terminal, 2,000 turns/6,000 blocks, 150
+patches at 50/s, 300 wheels at 100/s, and 50 keys:
+
+| Measurement | p50 | p95 | Maximum |
+| --- | --- | --- | --- |
+| Key → frame | 0.702 ms | 0.837 ms | 14.134 ms |
+| Wheel → frame | 1.771 ms | 4.164 ms | 6.109 ms |
+| Snapshot receive → frame | 3.625 ms | 5.654 ms | 38.661 ms |
+| Draw | 0.482 ms | 3.544 ms | 22.513 ms |
+| Content update | 0.000 ms | 3.168 ms | 22.178 ms |
+| Flush | 0.370 ms | 0.561 ms | 0.694 ms |
+
+All three p95 latency budgets pass. Idle CPU was 0.00% at process-time sampling
+resolution over one second; streaming CPU was **22.98% of one core over 3.05 s**,
+which fails the 15% budget. Before buffering and animation caching these were
+4% idle and 58.41% streaming. Content-cache bookkeeping still walks the block
+list on changed snapshots; its p95 accounts for most draw time. Its exact share
+of CPU has not been profiled separately. Further CPU optimization remains open.
+The release TestBackend frame benchmark reports p95 1.287 ms; it excludes terminal
+flush and process overhead and must not substitute for the PTY measurement.
+
+46 Rust tests pass (two manual benchmarks ignored), 100 native Python checks pass
+including the controlling-PTY check, and 30 browser matrix captures were produced.
+The full offline suite reported 5,063 passed/312 skipped with three failures:
+a native notice wording failure was corrected and rerun; a timing-sensitive
+Textual inspector test passed on rerun; the existing Textual mock tool-gutter
+spacing assertion still fails independently and was left unchanged. Real-provider
+streaming and slanted bars across every terminal/font are not verified.
+
+Artifacts: `artifacts/ratatui-parity/native-2000-performance-final.txt`,
+`native-2000-trace.log`, and `redesign-*.png` (ignored).

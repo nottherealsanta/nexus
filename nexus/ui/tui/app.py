@@ -401,7 +401,10 @@ class NexusTextualApp(AttachmentsMixin, ExtraCommandsMixin, PanelsMixin, App[int
         from .usage import UsageScreen
 
         if not isinstance(self.screen, UsageScreen):
-            self.push_screen(UsageScreen(self.controller.client))
+            client = self.controller.client
+            cached_client, cached = getattr(self, "_provider_usage_cache", (None, None))
+            self.push_screen(UsageScreen(client, cached=cached if cached_client is client else None,
+                on_result=lambda result: setattr(self, "_provider_usage_cache", (client, result))))
 
     def action_show_shortcuts(self) -> None:
         self.push_screen(ShortcutsScreen(KEYBOARD_SHORTCUTS))

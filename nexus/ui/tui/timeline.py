@@ -279,7 +279,7 @@ class ToolActivityWidget(Widget):
     @property
     def _gutter(self) -> str:
         glyph = BATCH_GLYPHS.get(self.batch or "")
-        return f"{glyph} " if glyph else ""
+        return glyph or ""
 
     def compose(self) -> ComposeResult:
         yield Static("", id="tool-header", markup=False)
@@ -532,6 +532,11 @@ class TurnWidget(Widget):
             entries.append((first_reply[0], "message-agent-label", ("label", label)))
         entries.extend(
             (tool.event_seq, f"tool:{tool.call_id}", tool) for tool in turn.tools
+        )
+        entries.extend(
+            (retry.event_seq, f"retry:{retry.event_seq}", ("label",
+                f"Provider overloaded · retry {retry.attempt}/3 after {retry.delay_seconds}s"))
+            for retry in turn.retries if retry.reason == "provider_overloaded"
         )
         if hide_setup_error:
             entries = [

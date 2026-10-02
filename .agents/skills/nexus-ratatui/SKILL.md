@@ -29,7 +29,7 @@ host daemon  <->  Python (nexus/ui/ratatui/)  --JSONL snapshots-->  Rust (rust/t
   as JSON lines on stdout. It never reduces domain state or calls the host.
 - Rust must stay dumb: Python decides *what* (order, blank-row gaps, text, colours
   as tokens); Rust decides *how* (wrap, pad, paint).
-- Details: [reference/architecture.md](reference/architecture.md).
+- Details: [references/architecture.md](references/architecture.md).
 
 ## Where things live
 
@@ -105,17 +105,17 @@ two argparse help tests fail. macOS has no `timeout`; `sed -i` needs an argument
 (use Python for edits in scripts).
 
 Full verification recipe and what each check proves:
-[reference/testing-and-verification.md](reference/testing-and-verification.md).
+[references/testing-and-verification.md](references/testing-and-verification.md).
 
 ## Reference docs
 
-- [reference/architecture.md](reference/architecture.md): bridge protocol, snapshot
+- [references/architecture.md](references/architecture.md): bridge protocol, snapshot
   fields, action types, block kinds, data flow of a keypress and of a streamed token.
-- [reference/rendering.md](reference/rendering.md): layout regions, palette, row
+- [references/rendering.md](references/rendering.md): layout regions, palette, row
   building, wrapping, mouse hit-testing, Textual-to-native style mapping.
-- [reference/testing-and-verification.md](reference/testing-and-verification.md):
+- [references/testing-and-verification.md](references/testing-and-verification.md):
   tests, fixtures, screenshots, PTY, common failures.
-- [reference/parity-checklist.md](reference/parity-checklist.md): per-feature
+- [references/parity-checklist.md](references/parity-checklist.md): per-feature
   parity audit list and the definition of done for replacing Textual.
 
 ## Done means

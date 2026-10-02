@@ -121,6 +121,7 @@ class HostFacade:
         emit: Any | None = None,
     ) -> None:
         self.runtime = runtime
+        self.daemon_info: dict[str, Any] = {}
         self.attachments = AttachmentStore(runtime)
         self.presence = Presence()
         self.supervisor = Supervisor(max_concurrent=max_concurrent_turns, emit=emit)
@@ -899,6 +900,7 @@ class HostFacade:
             list_extensions=self.list_extensions,
             explain_reload=explain_reload,
         )
+        report["daemon"] = dict(self.daemon_info)
         report["voice"] = doctor_voice(self.runtime)
         return report
 
@@ -951,6 +953,10 @@ class HostFacade:
                 for value in efforts
                 if isinstance(value, str) and value in REASONING_EFFORTS
             ]
+            recall = getattr(self.runtime, "remembered_model_effort", None)
+            remembered = recall(row.get("provider"), row.get("id")) if callable(recall) else None
+            if remembered is not None:
+                row["remembered_effort"] = remembered[0] if remembered[0] in row["supported_efforts"] else None
         return row
 
     def model_info(self, ref: str) -> dict[str, Any] | None:
@@ -1578,6 +1584,12 @@ class HostFacade:
                 )
             else:
                 handle.clear_reasoning_effort()
+            remember = getattr(self.runtime, "remember_agent_choice", None)
+            if callable(remember):
+                remember(handle)
+            remember_effort = getattr(self.runtime, "remember_model_effort", None)
+            if callable(remember_effort):
+                remember_effort(handle)
             current = self._root_reasoning_effort_metadata(handle)
             return p.ReasoningEffortSelectResult(
                 session=command.session,

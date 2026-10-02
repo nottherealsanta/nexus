@@ -42,7 +42,7 @@ errors redact them and any URL userinfo (`util.redact_secrets`).
 
 | Section | Key fields (defaults) |
 | --- | --- |
-| `[agent]` | `name` build, `profile` coding, `instructions_file` SOUL.md, `memory_file` MEMORY.md, `agents_file` AGENTS.md, `max_iterations` 60, `max_turn_seconds` 1800, `sandbox` workspace-write |
+| `[agent]` | `name` build, `profile` coding, `instructions_file` SOUL.md, `memory_file` MEMORY.md, `agents_file` AGENTS.md, `max_iterations` 0 (unlimited), `max_turn_seconds` 1800, `sandbox` workspace-write |
 | `[model]` | `default`, `fast`, `plan`, `fallback` list, `params` (`temperature`, `max_output_tokens`, `thinking_budget`) |
 | `[models]` | `default`/`fast`/`plan`, `refresh_ttl_days` 7, `catalogue_url` (models.dev), `offline` false, `tiers`, `reasoning_efforts`, `fallback` |
 | `[providers.<name>]` | see [models.md](models.md#providers) |

@@ -11,8 +11,12 @@ pub struct Snapshot {
     pub status: String,
     pub lines: Vec<String>,
     pub blocks: Vec<Content>,
+    pub blocks_from: usize,
     pub context_lines: Vec<String>,
     pub panel_title: String,
+    pub panel_layout: String,
+    pub panel_format: String,
+    pub panel_loading: bool,
     pub panel_lines: Vec<String>,
     /// One tone per panel line (`title`, `header`, `label`, `kv`, `add`, `del`, `hunk`); empty = plain.
     pub panel_tones: Vec<String>,
@@ -26,10 +30,18 @@ pub struct Snapshot {
     pub insert_kind: String,
     pub history: Vec<String>,
     pub agent: String,
+    pub agent_color: String,
+    pub agent_page: String,
     pub model: String,
     pub provider: String,
     pub effort: String,
     pub context_usage: String,
+    pub context_note: String,
+    pub context_label: String,
+    pub context_used: Option<u64>,
+    pub context_window: Option<u64>,
+    pub context_marks: Vec<u64>,
+    pub context_tiers: Vec<u64>,
     pub attachments: usize,
     pub attachment_lines: Vec<String>,
     /// Queued, steering and interrupt messages waiting for the running turn.
@@ -47,12 +59,15 @@ pub struct Snapshot {
     pub theme: String,
     pub sessions_sidebar: bool,
     pub details_sidebar: bool,
+    /// Local width arbitration, preserved across Python snapshots.
+    pub last_opened: String,
     pub context_preview: bool,
     pub voice_phase: String,
     pub voice_preview: String,
     pub voice_level: f64,
     pub completions: Vec<String>,
     pub completion_query: String,
+    pub completion_prefix: String,
 }
 #[derive(Clone, Default, Deserialize)]
 #[serde(default)]
@@ -137,7 +152,14 @@ pub struct Content {
     pub chip_operation: Option<Value>,
     pub detail: String,
     pub status: String,
+    /// Parallel-call marker occupies the left gutter, never the tool text.
+    pub batch_glyph: String,
     pub color: String,
+    pub rev: String,
+    pub count: usize,
+    pub failures: usize,
+    pub members: Vec<Content>,
+    pub output_operation: Option<Value>,
 }
 
 #[derive(Default, Deserialize)]
@@ -149,6 +171,8 @@ pub struct Nav {
 #[derive(Default, Deserialize)]
 #[serde(default)]
 pub struct DetailsPanel {
+    pub tab: String,
+    pub logs_header: Vec<(String, String)>,
     pub session: Vec<(String, String)>,
     pub files: Vec<FileChange>,
     pub files_summary: String,
@@ -163,4 +187,83 @@ pub struct FileChange {
     pub created: bool,
     pub open: bool,
     pub diff: Vec<String>,
+}
+
+impl Snapshot {
+    /// Schema 2 suffixes are dependent patches; never discard an intermediate patch.
+    pub fn restore_blocks(&mut self, previous: &mut Snapshot) -> Result<(), &'static str> {
+        if self.schema != 2 {
+            return Ok(());
+        }
+        if self.blocks_from > previous.blocks.len() {
+            return Err("invalid transcript patch offset");
+        }
+        if self.blocks_from > 0
+            && (self.generation != previous.generation || self.agent_page != previous.agent_page)
+        {
+            return Err("transcript patch crosses session/page");
+        }
+        previous.blocks.truncate(self.blocks_from);
+        previous.blocks.append(&mut self.blocks);
+        self.blocks = std::mem::take(&mut previous.blocks);
+        Ok(())
+    }
+}
+#[cfg(test)]
+mod redesign_tests {
+    use super::*;
+    #[test]
+    fn suffix_patches_append_replace_truncate_and_reject_stale_page() {
+        let block = |id: &str| Content {
+            id: id.into(),
+            ..Default::default()
+        };
+        let mut previous = Snapshot {
+            blocks: vec![block("a"), block("b")],
+            ..Default::default()
+        };
+        let mut patch = Snapshot {
+            schema: 2,
+            blocks_from: 1,
+            blocks: vec![block("new")],
+            ..Default::default()
+        };
+        patch.restore_blocks(&mut previous).unwrap();
+        assert_eq!(
+            patch
+                .blocks
+                .iter()
+                .map(|b| b.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "new"]
+        );
+        let mut truncated = Snapshot {
+            schema: 2,
+            blocks_from: 1,
+            ..Default::default()
+        };
+        truncated.restore_blocks(&mut patch).unwrap();
+        assert_eq!(truncated.blocks.len(), 1);
+        let mut wrong = Snapshot {
+            schema: 2,
+            blocks_from: 1,
+            generation: 1,
+            ..Default::default()
+        };
+        assert!(wrong.restore_blocks(&mut truncated).is_err());
+        assert_eq!(truncated.blocks.len(), 1);
+        wrong.blocks_from = 3;
+        assert!(wrong.restore_blocks(&mut truncated).is_err());
+        wrong.blocks_from = 0;
+        wrong.blocks = vec![block("fresh")];
+        wrong.restore_blocks(&mut truncated).unwrap();
+        assert_eq!(wrong.blocks[0].id, "fresh");
+        let mut legacy = Snapshot {
+            schema: 1,
+            blocks: vec![block("legacy")],
+            ..Default::default()
+        };
+        legacy.restore_blocks(&mut wrong).unwrap();
+        assert_eq!(legacy.blocks[0].id, "legacy");
+    }
 }

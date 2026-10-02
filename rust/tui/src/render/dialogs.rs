@@ -2,60 +2,230 @@
 //! the completion popup (split out of `render.rs`).
 use super::*;
 
-pub fn completion(frame: &mut Frame, values: &[String], selected: usize) {
-    let height = (values.len().min(8) + 2) as u16;
-    let area = Rect {
-        x: 2,
-        y: frame.area().height.saturating_sub(8 + height),
-        width: frame.area().width.saturating_sub(4).min(70),
+/// Completion is anchored to the actual composer, including a growing editor.
+pub fn completion_area(transcript: Rect, count: usize) -> Rect {
+    let height = ((count.min(8) + 1) as u16).min(transcript.height);
+    Rect::new(
+        transcript.x,
+        transcript.bottom().saturating_sub(height),
+        transcript.width,
         height,
-    };
+    )
+}
+pub fn completion(frame: &mut Frame, s: &Snapshot, transcript: Rect, selected: usize) {
+    let p = Palette::new(s.theme == "nexus-light");
+    let area = completion_area(transcript, s.completions.len());
     let start = selected.saturating_sub(7);
-    let lines: Vec<Line> = values
+    let lines: Vec<Line> = s
+        .completions
         .iter()
         .enumerate()
         .skip(start)
         .take(8)
         .map(|(i, value)| {
+            let text = crate::transcript::truncate(
+                &format!("  {} {}", if i == selected { "▸" } else { " " }, value),
+                usize::from(area.width.saturating_sub(2)),
+            );
+            let pad = usize::from(area.width.saturating_sub(2)).saturating_sub(text.width());
             Line::styled(
-                format!("{} {}", if i == selected { "▸" } else { " " }, value),
-                if i == selected {
-                    Style::default().add_modifier(Modifier::REVERSED)
-                } else {
-                    Style::default()
-                },
+                format!("{text}{}", " ".repeat(pad)),
+                Style::default()
+                    .fg(if i == selected { p.text } else { p.muted })
+                    .bg(if i == selected {
+                        p.element_hi
+                    } else {
+                        p.dialog
+                    }),
             )
         })
         .collect();
     frame.render_widget(Clear, area);
+    let mut rows = vec![Line::styled(
+        "  ↑↓ choose · Enter select · Esc close",
+        Style::default().fg(p.quiet),
+    )];
+    rows.extend(lines);
     frame.render_widget(
-        Paragraph::new(lines).block(
-            Block::default()
-                .title("Completion · ↑↓ choose · Enter insert")
-                .borders(Borders::ALL),
-        ),
+        Paragraph::new(rows).style(Style::default().bg(p.dialog).fg(p.text)),
         area,
     );
 }
+/// A shared rectangle for painting and input; legacy snapshots retain full pages.
+pub fn panel_area(transcript: Rect, s: &Snapshot) -> Rect {
+    if s.nav.is_some() {
+        let width = transcript
+            .width
+            .saturating_sub(4)
+            .max(transcript.width.min(8));
+        let height = transcript
+            .height
+            .saturating_sub(2)
+            .max(transcript.height.min(8));
+        return Rect::new(
+            transcript.x + (transcript.width - width) / 2,
+            transcript.y + (transcript.height - height) / 2,
+            width,
+            height,
+        );
+    }
+    if s.panel_layout.is_empty() || s.panel_layout == "page" {
+        return transcript;
+    }
+    let width = if s.panel_layout == "drawer" {
+        transcript.width
+    } else {
+        transcript
+            .width
+            .saturating_sub(4)
+            .min(90)
+            .max(transcript.width.min(8))
+    };
+    let height = if s.panel_layout == "drawer" {
+        (if s.items.is_empty() {
+            s.panel_lines
+                .iter()
+                .map(|line| {
+                    line.width()
+                        .div_ceil(width.saturating_sub(4).max(1) as usize)
+                        .max(1)
+                })
+                .sum::<usize>()
+                .min(18) as u16
+                + 2
+        } else {
+            s.items.len().min(8) as u16 + 4
+        })
+        .min(transcript.height)
+    } else {
+        let content = if !s.items.is_empty() {
+            s.items.len().min(12)
+        } else {
+            s.panel_lines
+                .iter()
+                .map(|line| {
+                    line.width()
+                        .div_ceil(usize::from(width.saturating_sub(4)).max(1))
+                        .max(1)
+                })
+                .sum::<usize>()
+                .min(18)
+        };
+        (content as u16 + 8)
+            .min(transcript.height.saturating_sub(4).min(26))
+            .max(transcript.height.min(8))
+    };
+    Rect::new(
+        transcript.x + (transcript.width - width) / 2,
+        if s.panel_layout == "drawer" {
+            transcript.bottom() - height
+        } else {
+            transcript.y + (transcript.height - height) / 2
+        },
+        width,
+        height,
+    )
+}
+/// Filtered item index under the pointer, using the same grouping and scroll as drawing.
+pub fn panel_item_at(
+    s: &Snapshot,
+    area: Rect,
+    filter: &str,
+    selection: usize,
+    y: u16,
+) -> Option<usize> {
+    let mut inner = panel_inner(area, s.panel_layout == "drawer");
+    if s.nav.is_some() {
+        let taken = nav_rect(area).width + 2;
+        inner.x += taken;
+        inner.width = inner.width.saturating_sub(taken);
+    }
+    let header = 2 + if s.nav.is_some() {
+        s.panel_lines.len().min(2)
+    } else {
+        0
+    };
+    let room = usize::from(inner.height).saturating_sub(header);
+    let mut body = Vec::new();
+    let mut selected_line = 0;
+    let mut group = "";
+    for (i, item) in s
+        .items
+        .iter()
+        .filter(|item| item.label.to_lowercase().contains(&filter.to_lowercase()))
+        .enumerate()
+    {
+        if !item.group.is_empty() && item.group != group {
+            body.push(None);
+        }
+        group = &item.group;
+        if i == selection {
+            selected_line = body.len();
+        }
+        body.push(Some(i));
+    }
+    let start = (selected_line + 1).saturating_sub(room.max(1));
+    let row = usize::from(y.saturating_sub(inner.y));
+    if y < inner.y || row < header || row >= usize::from(inner.height) {
+        return None;
+    }
+    body.get(start + row - header).copied().flatten()
+}
 /// Dialog background with an accent title and a rule (Textual modal look);
 /// returns the padded content area.
-pub fn dialog_frame(frame: &mut Frame, area: Rect, title: &str, p: &Palette) -> Rect {
+pub fn dialog_frame(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    p: &Palette,
+    borderless: bool,
+) -> Rect {
     frame.render_widget(Clear, area);
-    frame.render_widget(Block::default().style(Style::default().bg(p.dialog).fg(p.text)), area);
+    frame.render_widget(
+        Block::default()
+            .borders(if borderless {
+                Borders::NONE
+            } else {
+                Borders::ALL
+            })
+            .border_style(Style::default().fg(p.border))
+            .style(Style::default().bg(p.dialog).fg(p.text)),
+        area,
+    );
     frame.render_widget(
         Paragraph::new(vec![
-            Line::styled(title.to_string(), Style::default().fg(p.accent).add_modifier(Modifier::BOLD)),
-            Line::styled("─".repeat(usize::from(area.width.saturating_sub(4))), Style::default().fg(p.border)),
+            Line::styled(
+                title.to_string(),
+                Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
+            ),
+            Line::styled(
+                if borderless {
+                    String::new()
+                } else {
+                    "─".repeat(usize::from(area.width.saturating_sub(4)))
+                },
+                Style::default().fg(p.border),
+            ),
         ])
         .style(Style::default().bg(p.dialog)),
-        Rect { x: area.x + 2, y: area.y + 1, width: area.width.saturating_sub(4), height: 2.min(area.height) },
+        Rect {
+            x: area.x + 2,
+            y: area.y + 1,
+            width: area.width.saturating_sub(4),
+            height: 2.min(area.height),
+        },
     );
-    dialog_inner(area)
+    panel_inner(area, borderless)
 }
 /// Panel lines coloured by tone like the Textual tool-details modal: bold section
 /// titles, dim labels (`label: ` before a value), green/red/magenta diff lines.
 /// Wrapped rows keep the line's leading indent plus two columns.
-pub fn toned_lines(lines: &[String], tones: &[String], width: u16, p: &Palette) -> Vec<Line<'static>> {
+pub fn toned_lines(
+    lines: &[String],
+    tones: &[String],
+    width: u16,
+    p: &Palette,
+) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     for (text, tone) in lines.iter().zip(tones) {
         let indent = text.len() - text.trim_start().len();
@@ -84,9 +254,17 @@ pub fn toned_lines(lines: &[String], tones: &[String], width: u16, p: &Palette) 
         };
         let indent = indent.min(usize::from(width) / 2);
         let room = usize::from(width).saturating_sub(indent + 2).max(4);
-        for (i, cells) in crate::transcript::wrap(&spans, room).into_iter().enumerate() {
+        for (i, cells) in crate::transcript::wrap(&spans, room)
+            .into_iter()
+            .enumerate()
+        {
             let pad = if i == 0 { indent } else { indent + 2 };
-            out.push(crate::transcript::line(vec![Span::raw(" ".repeat(pad))], cells, None, Style::default()));
+            out.push(crate::transcript::line(
+                vec![Span::raw(" ".repeat(pad))],
+                cells,
+                None,
+                Style::default(),
+            ));
         }
     }
     out
@@ -94,7 +272,10 @@ pub fn toned_lines(lines: &[String], tones: &[String], width: u16, p: &Palette) 
 /// The Settings area list inside the dialog (left 24 columns), when a page has one.
 pub fn nav_rect(transcript: Rect) -> Rect {
     let inner = dialog_inner(transcript);
-    Rect { width: 24.min(inner.width), ..inner }
+    Rect {
+        width: 24.min(inner.width),
+        ..inner
+    }
 }
 /// Step to the next/previous selectable area (headings are skipped).
 pub fn nav_step(nav: &crate::bridge::Nav, forward: bool) -> Option<usize> {
@@ -110,6 +291,17 @@ pub fn nav_step(nav: &crate::bridge::Nav, forward: bool) -> Option<usize> {
         }
     }
     None
+}
+pub fn panel_inner(area: Rect, borderless: bool) -> Rect {
+    if !borderless {
+        return dialog_inner(area);
+    }
+    Rect {
+        x: area.x + 2.min(area.width),
+        y: area.y + 2.min(area.height),
+        width: area.width.saturating_sub(4),
+        height: area.height.saturating_sub(2),
+    }
 }
 pub fn dialog_inner(area: Rect) -> Rect {
     Rect {
@@ -133,20 +325,73 @@ pub fn prompt_area(transcript: Rect, prompt: &crate::bridge::Prompt) -> Rect {
 }
 /// `(content, choices)` inside a prompt panel; the last choice row is the help line.
 pub fn prompt_regions(area: Rect, count: usize) -> (Rect, Rect) {
-    let inner = Rect { x: area.x + 2, y: area.y + 1, width: area.width.saturating_sub(4), height: area.height.saturating_sub(1) };
+    let inner = Rect {
+        x: area.x + 2,
+        y: area.y + 1,
+        width: area.width.saturating_sub(4),
+        height: area.height.saturating_sub(1),
+    };
     let height = (count + 2).min(inner.height.saturating_sub(1) as usize) as u16;
     let areas = Layout::vertical([Constraint::Min(1), Constraint::Length(height)]).split(inner);
     (areas[0], areas[1])
 }
 pub fn logs_region(r: &Regions) -> Rect {
-    if r.logs.width > 0 {
-        return r.logs;
+    r.details
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn overlays_are_bounded_and_drawer_reaches_composer() {
+        for (width, height) in [(120, 40), (60, 20), (8, 6), (1, 1)] {
+            let parent = Rect::new(5, 4, width, height);
+            let mut s = Snapshot::default();
+            s.panel_layout = "modal".into();
+            let modal = panel_area(parent, &s);
+            assert!(modal.x >= parent.x && modal.y >= parent.y);
+            assert!(modal.right() <= parent.right() && modal.bottom() <= parent.bottom());
+            if width > 8 && height > 8 {
+                assert!(modal.width < width && modal.height < height);
+            }
+            s.panel_layout = "drawer".into();
+            assert_eq!(panel_area(parent, &s).bottom(), parent.bottom());
+            assert_eq!(completion_area(parent, 30).bottom(), parent.bottom());
+            assert_eq!(completion_area(parent, 30).width, parent.width);
+            assert_eq!(panel_area(parent, &s).width, parent.width);
+        }
     }
-    let transcript = r.transcript;
-    Rect::new(
-        transcript.x,
-        transcript.y + transcript.height / 2,
-        transcript.width,
-        transcript.height - transcript.height / 2,
-    )
+    #[test]
+    fn settings_modal_is_large_and_inset_even_for_page_layout() {
+        let parent = Rect::new(5, 4, 120, 40);
+        let mut s = Snapshot::default();
+        s.panel_layout = "page".into();
+        s.nav = Some(crate::bridge::Nav::default());
+        let area = panel_area(parent, &s);
+        assert_eq!(area, Rect::new(7, 5, 116, 38));
+        assert!(nav_rect(area).right() < area.right());
+    }
+    #[test]
+    fn grouped_picker_mouse_rows_match_display_selection() {
+        use crate::bridge::Item;
+        let mut s = Snapshot::default();
+        s.items = vec![
+            Item {
+                label: "one".into(),
+                group: "First".into(),
+                ..Default::default()
+            },
+            Item {
+                label: "two".into(),
+                group: "Second".into(),
+                ..Default::default()
+            },
+        ];
+        let area = Rect::new(10, 5, 60, 20);
+        let y = dialog_inner(area).y;
+        assert_eq!(panel_item_at(&s, area, "", 0, y + 2), None);
+        assert_eq!(panel_item_at(&s, area, "", 0, y + 3), Some(0));
+        assert_eq!(panel_item_at(&s, area, "", 0, y + 5), Some(1));
+        assert_eq!(panel_item_at(&s, area, "two", 0, y + 3), Some(0));
+    }
 }

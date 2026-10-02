@@ -170,3 +170,7 @@ events, or reprs; a command can still explicitly print its own environment.
 4. Tests next to peers: `tests/test_builtin_*.py`, `test_tool*.py`.
 
 For an extension tool written by users, see [extending.md](extending.md).
+
+Permission-key callback exceptions become `ToolSpecError` and a denied,
+model-visible preparation error. Invalid subagent routing arguments must not
+abort the whole turn or bypass the permission gate.

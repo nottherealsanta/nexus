@@ -278,6 +278,19 @@ class DemoTransport:
         return None
 
 
+def subagent_fixture():
+    """Identical recorded child conversation for both terminal renderers."""
+    from nexus.view import fold
+    from nexus.view.model import AgentView
+    body = fold(_seed_events("transcript"))
+    agent = AgentView(id="visual-child", type="advisor", task="Inspect the UI", description="Inspect the UI",
+                      status="completed", model="nexus-small", body=body)
+    context = {"system_text": "You are an advisor. Inspect the UI and report what matters.",
+               "agent": {"name": "advisor", "color": "#86b97a"}, "model": "nexus-small",
+               "messages": [{"blocks": [{"text": "Inspect the UI"}]}], "tools": []}
+    return agent, context
+
+
 class VisualDemoApp(NexusTextualApp):
     """Real app shell with a fixture-only initial screen state."""
 
@@ -290,7 +303,11 @@ class VisualDemoApp(NexusTextualApp):
         self.call_after_refresh(self._present_fixture)
 
     def _present_fixture(self) -> None:
-        if self.visual_state == "permission":
+        if self.visual_state == "subagent":
+            from nexus.ui.tui.agent_transcript import AgentTranscriptScreen
+            agent, context = subagent_fixture()
+            self.push_screen(AgentTranscriptScreen(agent, context))
+        elif self.visual_state == "permission":
             self.push_screen(PermissionScreen({"tool": "Edit", "key": FIXTURE_PATH}))
         elif self.visual_state == "picker":
             self.push_screen(AgentPicker(self._agents, current=self.controller.agent_name))
@@ -397,7 +414,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Serve a deterministic Nexus Textual visual fixture")
     parser.add_argument(
         "--state",
-        choices=("empty", "transcript", "permission", "picker", "functional", "reference", "first_message", "slash_menu", "design"),
+        choices=("empty", "transcript", "permission", "picker", "functional", "reference", "first_message", "slash_menu", "design", "subagent"),
         default="empty",
     )
     args = parser.parse_args()

@@ -42,11 +42,14 @@ def relative_time(ts: float | None, now: float | None = None) -> str:
 SESSION_WORDS = {"working": "working now", "input": "needs input", "done": "finished", "archived": "archived"}
 
 
-def session_subline(summary: Any, status: str, now: float | None = None) -> str:
+def session_subline(summary: Any, status: str, now: float | None = None, *, compact: bool = False) -> str:
     """The card's second line: status in words (or the message count), then age."""
     words = SESSION_WORDS.get(status)
     if words is None:
         count = _int(getattr(summary, "message_count", 0))
         words = f"{count} message{'' if count == 1 else 's'}" if count else "no messages"
     age = relative_time(getattr(summary, "last_activity", 0.0), now)
+    if compact:
+        words = str(_int(getattr(summary, "message_count", 0)))
+        age = age.removesuffix(" ago").replace("just now", "now")
     return f"{words} · {age}" if age else words

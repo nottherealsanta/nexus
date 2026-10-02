@@ -10,7 +10,6 @@ use ratatui::{
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 /// Nexus dark/light tokens, mirroring `nexus/ui/tui/theme.py`.
-
 mod chrome;
 mod dialogs;
 pub use chrome::*;
@@ -63,7 +62,7 @@ impl Palette {
             }
         } else {
             Self {
-                background: rgb(10, 10, 10),
+                background: rgb(0, 0, 0),
                 text: rgb(238, 238, 238),
                 muted: rgb(163, 163, 163),
                 quiet: rgb(111, 111, 111),
@@ -71,7 +70,7 @@ impl Palette {
                 panel: rgb(20, 20, 20),
                 element: rgb(30, 30, 30),
                 element_hi: rgb(40, 40, 40),
-                dialog: rgb(13, 13, 13),
+                dialog: rgb(0, 0, 0),
                 border: rgb(44, 44, 44),
                 border_strong: rgb(72, 72, 72),
                 diff_del: rgb(62, 27, 33),
@@ -86,25 +85,119 @@ impl Palette {
         }
     }
 }
+/// Wrapped parts with prefix offsets: viewport lookup copies only visible rows.
+pub struct Indexed<T> {
+    parts: Vec<std::sync::Arc<Vec<T>>>,
+    offsets: Vec<usize>,
+    length: usize,
+}
+impl<T> Default for Indexed<T> {
+    fn default() -> Self {
+        Self {
+            parts: Vec::new(),
+            offsets: Vec::new(),
+            length: 0,
+        }
+    }
+}
+impl<T> Indexed<T> {
+    pub fn len(&self) -> usize {
+        self.length
+    }
+    pub fn clear(&mut self) {
+        self.parts.clear();
+        self.offsets.clear();
+        self.length = 0;
+    }
+    pub fn push(&mut self, value: T) {
+        self.offsets.push(self.length);
+        self.parts.push(std::sync::Arc::new(vec![value]));
+        self.length += 1;
+    }
+    pub fn get(&self, index: usize) -> Option<&T> {
+        if index >= self.length {
+            return None;
+        }
+        let part = self
+            .offsets
+            .partition_point(|offset| *offset <= index)
+            .saturating_sub(1);
+        self.parts[part].get(index - self.offsets[part])
+    }
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.parts.iter().flat_map(|part| part.iter())
+    }
+    pub fn range(&self, start: usize, count: usize) -> impl Iterator<Item = &T> {
+        (start..start.saturating_add(count).min(self.length)).filter_map(|index| self.get(index))
+    }
+    fn set_parts(&mut self, parts: Vec<std::sync::Arc<Vec<T>>>) {
+        let first = self
+            .parts
+            .iter()
+            .zip(&parts)
+            .take_while(|(old, new)| std::sync::Arc::ptr_eq(old, new))
+            .count();
+        self.offsets.truncate(first);
+        self.length = self.parts.iter().take(first).map(|part| part.len()).sum();
+        for part in parts.iter().skip(first) {
+            self.offsets.push(self.length);
+            self.length += part.len();
+        }
+        self.parts = parts;
+    }
+}
+impl<T> From<Vec<T>> for Indexed<T> {
+    fn from(rows: Vec<T>) -> Self {
+        let mut result = Self::default();
+        result.set_parts(vec![std::sync::Arc::new(rows)]);
+        result
+    }
+}
+impl<T> std::ops::Index<usize> for Indexed<T> {
+    type Output = T;
+    fn index(&self, index: usize) -> &T {
+        self.get(index).expect("row index")
+    }
+}
+
 #[derive(Default, Clone)]
 struct Part {
     block: crate::bridge::Content,
     width: u16,
-    lines: Vec<Line<'static>>,
-    operations: Vec<Option<serde_json::Value>>,
+    lines: std::sync::Arc<Vec<Line<'static>>>,
+    operations: std::sync::Arc<Vec<Option<serde_json::Value>>>,
 }
 #[derive(Default)]
 pub struct Cache {
-    parts: std::collections::HashMap<String, Part>,
+    parts: std::collections::HashMap<String, std::sync::Arc<Part>>,
     blocks: Vec<crate::bridge::Content>,
-    pub operations: Vec<Option<serde_json::Value>>,
+    pub operations: Indexed<Option<serde_json::Value>>,
     source: Vec<String>,
     width: u16,
-    pub lines: Vec<Line<'static>>,
+    pub lines: Indexed<Line<'static>>,
+    /// Blank rows below the content (sub-agent pages keep ~30% of the viewport free).
+    pub pad: usize,
+    /// Page whose blocks are being laid out (`""` is the conversation); parts of other
+    /// pages stay cached so Esc back to the parent does not re-wrap it.
+    pub page: String,
+    /// Largest useful scroll offset from the last draw; key and wheel handlers clamp to it.
+    pub max_scroll: usize,
     /// Animation frame for the running-tool slot (`SPINNER_SLOT`).
     pub spin: usize,
+    /// Independent 30 Hz clock for smooth activity motion.
+    pub activity_frame: usize,
     /// The draft is non-empty: empty-session hints keep their rows but go blank.
     pub typing: bool,
+    pub content_elapsed: std::time::Duration,
+    session_chrome: Option<(
+        u64,
+        u16,
+        String,
+        bool,
+        usize,
+        Vec<(Line<'static>, Option<SidebarHit>)>,
+    )>,
+    details_chrome: Option<(u64, u16, (Vec<Line<'static>>, Vec<Option<usize>>))>,
     built_typing: bool,
     /// Line range of the transcript block focused with the keyboard (highlighted).
     pub focus: Option<(usize, usize)>,
@@ -114,20 +207,33 @@ pub struct Cache {
     /// Recent microphone levels (0..1) and seconds since recording began, for the voice strip.
     pub voice_levels: Vec<f32>,
     pub voice_elapsed: u64,
+    pub voice_cursor: Option<usize>,
+    panel_body: Option<(Vec<String>, Vec<String>, String, u16, Vec<Line<'static>>)>,
+    voice_text: String,
+    voice_changed_at: usize,
+    voice_stable_prefix: usize,
     /// Mouse selection in transcript coordinates: (line, column) start and end.
     pub selection: Option<((usize, usize), (usize, usize))>,
 }
 /// Order two (line, column) points.
 pub fn ordered(a: (usize, usize), b: (usize, usize)) -> ((usize, usize), (usize, usize)) {
-    if a <= b { (a, b) } else { (b, a) }
+    if a <= b {
+        (a, b)
+    } else {
+        (b, a)
+    }
 }
 /// Plain text of the selected transcript rows (trailing spaces trimmed per row).
 pub fn selected_text(cache: &Cache) -> String {
-    let Some((a, b)) = cache.selection else { return String::new() };
+    let Some((a, b)) = cache.selection else {
+        return String::new();
+    };
     let ((first, from), (last, to)) = ordered(a, b);
     let mut out = Vec::new();
     for index in first..=last.min(cache.lines.len().saturating_sub(1)) {
-        let Some(line) = cache.lines.get(index) else { break };
+        let Some(line) = cache.lines.get(index) else {
+            break;
+        };
         let mut column = 0usize;
         let mut text = String::new();
         for span in &line.spans {
@@ -152,12 +258,18 @@ fn highlight(line: Line<'static>, from: usize, to: usize) -> Line<'static> {
     for span in line.spans {
         let mut plain = String::new();
         let mut marked = String::new();
-        let flush = |plain: &mut String, marked: &mut String, spans: &mut Vec<Span<'static>>, style: Style| {
+        let flush = |plain: &mut String,
+                     marked: &mut String,
+                     spans: &mut Vec<Span<'static>>,
+                     style: Style| {
             if !plain.is_empty() {
                 spans.push(Span::styled(std::mem::take(plain), style));
             }
             if !marked.is_empty() {
-                spans.push(Span::styled(std::mem::take(marked), style.add_modifier(Modifier::REVERSED)));
+                spans.push(Span::styled(
+                    std::mem::take(marked),
+                    style.add_modifier(Modifier::REVERSED),
+                ));
             }
         };
         let mut in_range = false;
@@ -168,7 +280,11 @@ fn highlight(line: Line<'static>, from: usize, to: usize) -> Line<'static> {
                 flush(&mut plain, &mut marked, &mut spans, span.style);
                 in_range = inside;
             }
-            if inside { marked.push_str(g) } else { plain.push_str(g) }
+            if inside {
+                marked.push_str(g)
+            } else {
+                plain.push_str(g)
+            }
             column += width;
         }
         flush(&mut plain, &mut marked, &mut spans, span.style);
@@ -192,12 +308,61 @@ pub fn targets(cache: &Cache) -> Vec<(usize, usize)> {
 }
 pub const SPINNER_SLOT: char = '\u{e000}';
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-/// Whether any block has a running-tool slot, i.e. the screen needs ~8 Hz redraws.
+/// Running turns, tools, sessions and usage refreshes need ~8 Hz redraws.
 pub fn animating(s: &Snapshot) -> bool {
-    s.blocks.iter().any(|block| block.text.contains(SPINNER_SLOT)) || s.sessions.iter().chain(s.tabs.iter()).any(|row| row.status == "working")
+    s.panel_loading
+        || matches!(s.voice_phase.as_str(), "recording" | "transcribing")
+        || matches!(s.status.as_str(), "running" | "active" | "working")
+        || s.blocks.iter().any(|block| {
+            block.text.contains(SPINNER_SLOT)
+                || (block.kind == "tool_group" && block.status == "running")
+        })
+        || s.sessions
+            .iter()
+            .chain(s.tabs.iter())
+            .any(|row| row.status == "working")
+}
+/// Agent-colored moving fifth while working; a quiet rule while idle.
+fn activity_meter(s: &Snapshot, p: &Palette, width: usize, tick: usize) -> Vec<Span<'static>> {
+    let running = matches!(s.status.as_str(), "running" | "active" | "working");
+    let accent = crate::transcript::color(&s.agent_color, p.blue, p);
+    let size = (width / 5).max(1);
+    let travel = width.saturating_sub(size).max(1);
+    let phase = (tick % 180) as f64 / 180.0;
+    let start = travel as f64 * (1.0 - (phase * std::f64::consts::TAU).cos()) / 2.0;
+    (0..width)
+        .map(|i| {
+            let tone = if running {
+                let coverage = ((i + 1) as f64).min(start + size as f64) - (i as f64).max(start);
+                let amount = coverage.clamp(0.0, 1.0);
+                match (p.border, accent) {
+                    (Color::Rgb(r, g, b), Color::Rgb(br, bg, bb)) => {
+                        let mix = |a: u8, z: u8| {
+                            (a as f64 + (z as f64 - a as f64) * amount).round() as u8
+                        };
+                        Color::Rgb(mix(r, br), mix(g, bg), mix(b, bb))
+                    }
+                    _ => {
+                        if amount > 0.5 {
+                            accent
+                        } else {
+                            p.border
+                        }
+                    }
+                }
+            } else {
+                p.border
+            };
+            Span::styled("─", Style::default().fg(tone))
+        })
+        .collect()
 }
 fn with_spinner(line: &Line<'static>, frame: usize) -> Line<'static> {
-    if !line.spans.iter().any(|span| span.content.contains(SPINNER_SLOT)) {
+    if !line
+        .spans
+        .iter()
+        .any(|span| span.content.contains(SPINNER_SLOT))
+    {
         return line.clone();
     }
     let glyph = SPINNER[frame % SPINNER.len()];
@@ -209,7 +374,67 @@ fn with_spinner(line: &Line<'static>, frame: usize) -> Line<'static> {
     }
     line
 }
+fn same_block(a: &crate::bridge::Content, b: &crate::bridge::Content) -> bool {
+    if a.rev.is_empty() || b.rev.is_empty() {
+        a == b
+    } else {
+        a.id == b.id && a.rev == b.rev
+    }
+}
 impl Cache {
+    pub fn session_rows(
+        &mut self,
+        s: &Snapshot,
+        p: &Palette,
+        width: u16,
+    ) -> &[(Line<'static>, Option<SidebarHit>)] {
+        let key = (
+            s.revision,
+            width,
+            self.filter.clone(),
+            self.filtering,
+            self.spin,
+        );
+        let same = self.session_chrome.as_ref().is_some_and(|old| {
+            (old.0, old.1, &old.2, old.3, old.4) == (key.0, key.1, &key.2, key.3, key.4)
+        });
+        if !same {
+            self.session_chrome = Some((
+                key.0,
+                key.1,
+                key.2,
+                key.3,
+                key.4,
+                session_sidebar(
+                    s,
+                    p,
+                    width as usize,
+                    self.spin,
+                    &self.filter,
+                    self.filtering,
+                ),
+            ));
+        }
+        &self.session_chrome.as_ref().unwrap().5
+    }
+    pub fn detail_rows(
+        &mut self,
+        s: &Snapshot,
+        p: &Palette,
+        width: u16,
+    ) -> &(Vec<Line<'static>>, Vec<Option<usize>>) {
+        // Stored as a pair below to share exactly the drawing/hit-test rows.
+        let same = self
+            .details_chrome
+            .as_ref()
+            .is_some_and(|old| old.0 == s.revision && old.1 == width);
+        if !same {
+            let (lines, hits) = details_rows(s, p, width);
+            self.details_chrome = Some((s.revision, width, (lines, hits)));
+        }
+        &self.details_chrome.as_ref().unwrap().2
+    }
+
     pub fn update(&mut self, source: &[String], width: u16, palette: &Palette) {
         if self.source == source && self.width == width {
             return;
@@ -256,59 +481,112 @@ impl Cache {
         width: u16,
         palette: &Palette,
     ) {
-        if self.blocks == blocks && self.source == context && self.width == width && self.typing == self.built_typing {
+        let began = std::time::Instant::now();
+        self.content_elapsed = std::time::Duration::ZERO;
+        if self.blocks.len() == blocks.len()
+            && self
+                .blocks
+                .iter()
+                .zip(blocks)
+                .all(|(old, new)| same_block(old, new))
+            && self.source == context
+            && self.width == width
+            && self.typing == self.built_typing
+        {
             return;
         }
         if self.typing != self.built_typing {
             self.parts.clear();
         }
         self.built_typing = self.typing;
-        self.lines.clear();
-        self.operations.clear();
+        if !context.is_empty() {
+            self.lines.clear();
+            self.operations.clear();
+        }
         for row in context {
             for line in row.lines() {
-                for cells in crate::transcript::wrap(&[Span::raw(line.to_string())], usize::from(width)) {
-                    self.lines.push(crate::transcript::line(vec![], cells, None, Style::default().fg(palette.muted)));
+                for cells in
+                    crate::transcript::wrap(&[Span::raw(line.to_string())], usize::from(width))
+                {
+                    self.lines.push(crate::transcript::line(
+                        vec![],
+                        cells,
+                        None,
+                        Style::default().fg(palette.muted),
+                    ));
                     self.operations.push(None);
                 }
             }
         }
         let mut old = std::mem::take(&mut self.parts);
+        let mut lines = Vec::new();
+        let mut operations = Vec::new();
         for (i, block) in blocks.iter().enumerate() {
-            let key = format!("{}:{}", block.id, i);
+            let key = format!("{}|{}:{}", self.page, block.id, i);
             let part = if let Some(part) = old
                 .remove(&key)
-                .filter(|part| part.block == *block && part.width == width)
+                .filter(|part| same_block(&part.block, block) && part.width == width)
             {
                 part
             } else {
                 let mut shown = block.clone();
                 if self.typing && shown.kind == "hints" {
-                    shown.text = shown.text.lines().map(|_| "\t").collect::<Vec<_>>().join("\n");
+                    shown.text = shown
+                        .text
+                        .lines()
+                        .map(|_| "\t")
+                        .collect::<Vec<_>>()
+                        .join("\n");
                 }
                 let rows = crate::transcript::build(&shown, width, palette);
-                Part {
+                std::sync::Arc::new(Part {
                     block: block.clone(),
                     width,
-                    operations: rows.iter().map(|(_, op)| op.clone()).collect(),
-                    lines: rows.into_iter().map(|(line, _)| line).collect(),
-                }
+                    operations: std::sync::Arc::new(
+                        rows.iter().map(|(_, op)| op.clone()).collect(),
+                    ),
+                    lines: std::sync::Arc::new(rows.into_iter().map(|(line, _)| line).collect()),
+                })
             };
-            self.lines.extend(part.lines.clone());
-            self.operations.extend(part.operations.clone());
-            if i + 4096 >= blocks.len() {
+            lines.push(part.lines.clone());
+            operations.push(part.operations.clone());
+            if i + 16384 >= blocks.len() {
                 self.parts.insert(key, part);
             }
         }
+        self.lines.set_parts(lines);
+        self.operations.set_parts(operations);
+        let mine = format!("{}|", self.page);
+        if self.parts.len() + old.len() <= 32768 {
+            self.parts
+                .extend(old.into_iter().filter(|(key, _)| !key.starts_with(&mine)));
+        }
         self.source = context.to_vec();
-        self.blocks = blocks.to_vec();
+        self.blocks = blocks
+            .iter()
+            .map(|block| {
+                if block.rev.is_empty() {
+                    block.clone()
+                } else {
+                    crate::bridge::Content {
+                        id: block.id.clone(),
+                        rev: block.rev.clone(),
+                        ..Default::default()
+                    }
+                }
+            })
+            .collect();
         self.width = width;
+        self.content_elapsed = began.elapsed();
     }
     pub fn reset(&mut self) {
         self.width = 0;
         self.parts.clear();
+        self.session_chrome = None;
+        self.details_chrome = None;
     }
 }
+#[derive(Default, Clone, Copy)]
 pub struct Regions {
     pub transcript: Rect,
     pub composer: Rect,
@@ -316,61 +594,86 @@ pub struct Regions {
     pub details: Rect,
     pub tabs: Rect,
     pub context: Rect,
-    /// The docked Logs drawer (36 columns on the right); empty when closed or too narrow.
-    pub logs: Rect,
 }
 /// Composer height: the editor grows with its wrapped content up to Textual's
-/// `max-height: 22` (never below the 8-row resting layout), leaving the
+/// `max-height: 22` (9-row resting layout), leaving the
 /// transcript at least four rows.
 /// Rows above the editor for queued messages (Textual's input-queue preview).
 pub fn queue_rows(s: &Snapshot) -> u16 {
     s.queue_lines.len().min(4) as u16
 }
 pub fn composer_height(area: Rect, draft: &Editor, s: &Snapshot) -> u16 {
-    let width = area.width.saturating_sub(9);
-    let rows = editor_view(draft, false, &Palette::new(false), width, u16::MAX).len();
-    let wanted = 5 + rows.clamp(3, 22) as u16 + queue_rows(s);
-    wanted.min(area.height.saturating_sub(3 + 4)).max(8)
+    if !s.agent_page.is_empty() {
+        return 3;
+    }
+    let width = regions(area, s, 0, false).composer.width.saturating_sub(9);
+    let mut displayed = Editor::default();
+    displayed.text = draft.text.clone();
+    displayed.cursor = draft.cursor;
+    if matches!(s.voice_phase.as_str(), "recording" | "transcribing") {
+        displayed.text.insert_str(draft.cursor, &s.voice_preview);
+        displayed.cursor += s.voice_preview.len();
+    }
+    let rows = editor_view(&displayed, false, &Palette::new(false), width, u16::MAX).len();
+    let wanted = 4 + rows.clamp(3, 22) as u16 + queue_rows(s);
+    wanted
+        .min(area.height.saturating_sub(3 + 4))
+        .min(area.height)
+        .max(area.height.min(6))
 }
-pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, logs_open: bool) -> Regions {
-    let main = Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Min(3),
-        Constraint::Length(composer_height),
-    ])
-    .split(area);
-    let docked = logs_open && area.width >= 100;
-    let (middle, logs) = if docked {
-        let split = Layout::horizontal([Constraint::Min(10), Constraint::Length(36)]).split(main[1]);
-        (split[0], split[1])
-    } else {
-        (main[1], Rect::new(main[1].x, main[1].y, 0, main[1].height))
-    };
-    let left = if s.sessions_sidebar && middle.width >= 110 {
+pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool) -> Regions {
+    let both = area.width >= 130;
+    let details_wins = s.last_opened != "sessions";
+    let left = if s.sessions_sidebar
+        && area.width >= 90
+        && (!s.details_sidebar || both || !details_wins)
+    {
         30
     } else {
         0
     };
-    let right = if s.details_sidebar && middle.width >= if left > 0 { 170 } else { 110 } {
+    let right = if s.details_sidebar
+        && area.width >= 100
+        && (!s.sessions_sidebar || both || details_wins)
+    {
         40
     } else {
         0
     };
     let columns = Layout::horizontal([
         Constraint::Length(left),
-        Constraint::Min(10),
+        Constraint::Min(1),
         Constraint::Length(right),
     ])
-    .split(middle);
-    let center = Layout::vertical([Constraint::Length(0), Constraint::Min(1)]).split(columns[1]);
+    .split(area);
+    let top = if left > 0 || !s.agent_page.is_empty() {
+        2
+    } else {
+        3
+    };
+    let center = Layout::vertical([
+        Constraint::Length(top),
+        Constraint::Min(1),
+        Constraint::Length(composer_height),
+    ])
+    .split(columns[1]);
+    let drawer = s.details_sidebar && area.width < 100;
     Regions {
-        tabs: main[0],
+        tabs: center[0],
         sessions: columns[0],
-        details: columns[2],
-        context: center[0],
+        details: if drawer {
+            Rect::new(
+                area.right().saturating_sub(area.width.min(40)),
+                area.y,
+                area.width.min(40),
+                area.height,
+            )
+        } else {
+            columns[2]
+        },
+        context: Rect::default(),
         transcript: center[1],
-        composer: main[2],
-        logs,
+        composer: center[2],
     }
 }
 pub fn editor_text(editor: &Editor, secret: bool, palette: &Palette) -> Vec<Line<'static>> {
@@ -428,7 +731,7 @@ pub fn draw(
     cache: &mut Cache,
     follow: bool,
     logs_open: bool,
-    leader: bool,
+    _leader: bool,
     panel_detail: bool,
     sessions_scroll: usize,
     logs_scroll: usize,
@@ -439,55 +742,63 @@ pub fn draw(
         Block::default().style(Style::default().bg(p.background).fg(p.text)),
         frame.area(),
     );
-    let r = regions(frame.area(), s, composer_height(frame.area(), draft, s), logs_open);
+    let r = regions(
+        frame.area(),
+        s,
+        composer_height(frame.area(), draft, s),
+        logs_open,
+    );
     draw_top_bar(frame, s, r.tabs, &p, cache.spin);
     if r.sessions.width > 0 {
         let inner = usize::from(r.sessions.width.saturating_sub(3));
-        let height = usize::from(r.sessions.height.saturating_sub(1));
-        let mut lines: Vec<Line<'static>> = session_sidebar(s, &p, inner, cache.spin, &cache.filter, cache.filtering)
-            .into_iter()
-            .skip(sessions_scroll)
-            .take(height.saturating_sub(2))
-            .map(|(line, _)| line)
+        let height = usize::from(r.sessions.height.saturating_sub(3));
+        let mut lines: Vec<Line<'static>> = cache
+            .session_rows(s, &p, inner as u16)
+            .iter()
+            .skip(1 + sessions_scroll)
+            .take(height)
+            .map(|(line, _)| line.clone())
             .collect();
-        lines.resize(height.saturating_sub(1), Line::default());
-        lines.push(Line::styled("↵ open · ctrl+z undo", Style::default().fg(p.quiet)));
+        lines.resize(height, Line::default());
         frame.render_widget(
             Paragraph::new(lines)
-                .block(Block::default().borders(Borders::RIGHT).border_style(Style::default().fg(p.border)).padding(ratatui::widgets::Padding::new(1, 1, 1, 0)))
+                .block(
+                    Block::default()
+                        .borders(Borders::RIGHT)
+                        .border_style(Style::default().fg(p.border_strong))
+                        .padding(ratatui::widgets::Padding::new(1, 1, 2, 0)),
+                )
                 .style(Style::default().bg(p.panel)),
             r.sessions,
         );
     }
-    if r.details.width > 0 {
-        frame.render_widget(
-            Paragraph::new(details_rows(s, &p, r.details.width.saturating_sub(5)).0.into_iter().skip(details_scroll).collect::<Vec<_>>())
-                .block(Block::default().borders(Borders::LEFT).border_style(Style::default().fg(p.border)).padding(ratatui::widgets::Padding::new(2, 2, 1, 0)))
-                .style(Style::default().bg(p.panel).fg(p.text)),
-            r.details,
-        );
-    }
+    cache.content_elapsed = std::time::Duration::ZERO;
     cache.typing = !draft.text.is_empty();
+    cache.page = s.agent_page.clone();
     if s.blocks.is_empty() {
         cache.update(&s.lines, r.transcript.width, &p);
     } else {
         cache.update_content(&[], &s.blocks, r.transcript.width, &p);
     }
-    let offset = if follow {
-        cache
-            .lines
-            .len()
-            .saturating_sub(r.transcript.height as usize)
+    let height = r.transcript.height as usize;
+    // Sub-agent pages are read-only: leave 30% of the viewport below the last row.
+    cache.pad = if s.agent_page.is_empty() {
+        0
     } else {
-        scroll.min(cache.lines.len().saturating_sub(1))
+        height * 3 / 10
+    };
+    let total = cache.lines.len() + cache.pad;
+    cache.max_scroll = total.saturating_sub(height);
+    let offset = if follow {
+        cache.max_scroll
+    } else {
+        scroll.min(cache.max_scroll)
     };
     frame.render_widget(
         Paragraph::new(
             cache
                 .lines
-                .iter()
-                .skip(offset)
-                .take(r.transcript.height as usize)
+                .range(offset, r.transcript.height as usize)
                 .enumerate()
                 .map(|(row, line)| {
                     let mut line = with_spinner(line, cache.spin);
@@ -516,9 +827,9 @@ pub fn draw(
         ),
         r.transcript,
     );
-    if cache.lines.len() > r.transcript.height as usize && r.transcript.width > 2 {
+    if total > height && r.transcript.width > 2 {
         // A thin scrollbar on the transcript's right edge, like Textual's.
-        let mut state = ratatui::widgets::ScrollbarState::new(cache.lines.len().saturating_sub(r.transcript.height as usize)).position(offset);
+        let mut state = ratatui::widgets::ScrollbarState::new(cache.max_scroll).position(offset);
         frame.render_stateful_widget(
             ratatui::widgets::Scrollbar::new(ratatui::widgets::ScrollbarOrientation::VerticalRight)
                 .begin_symbol(None)
@@ -531,153 +842,289 @@ pub fn draw(
             &mut state,
         );
     }
-    let rows = Layout::vertical([
-        Constraint::Length(1 + queue_rows(s)),
-        Constraint::Min(4),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-    ])
-    .split(r.composer);
+    let rows = composer_rows(r.composer, s);
     let inset = |a: Rect, left: u16, right: u16| Rect {
         x: a.x + left,
         width: a.width.saturating_sub(left + right),
         ..a
     };
-    // The chat input box: panel background, blue left bar spanning editor and runtime rows.
-    let box_area = Rect { x: rows[1].x + 2, width: rows[1].width.saturating_sub(4), y: rows[1].y, height: rows[1].height + 1 };
-    frame.render_widget(Block::default().style(Style::default().bg(p.panel)), box_area);
-    for y in box_area.y..box_area.y + box_area.height {
-        frame.render_widget(
-            Paragraph::new("▌").style(Style::default().fg(p.blue).bg(p.panel)),
-            Rect { x: box_area.x, y, width: 1, height: 1 },
-        );
-    }
-    let editor_area = Rect {
-        x: box_area.x + 3,
-        y: rows[1].y + 1,
-        width: box_area.width.saturating_sub(5),
-        height: rows[1].height.saturating_sub(1),
+    let agent_color = crate::transcript::color(&s.agent_color, p.blue, &p);
+    // The chat input box: agent-colored left bar spanning editor and runtime rows.
+    let box_area = Rect {
+        x: rows[1].x + 2,
+        width: rows[1].width.saturating_sub(4),
+        y: rows[1].y,
+        height: rows[1].height + 1,
     };
-    frame.render_widget(
-        Paragraph::new(editor_view(draft, false, &p, editor_area.width, editor_area.height))
-            .style(Style::default().bg(p.panel)),
-        editor_area,
-    );
-    frame.render_widget(
-        Paragraph::new({
-            let mut lines: Vec<Line<'static>> = s.queue_lines.iter().take(4).map(|row| Line::styled(row.clone(), Style::default().fg(p.quiet))).collect();
-            lines.push(Line::styled(s.attachment_lines.join(" · "), Style::default().fg(p.accent)));
-            lines
-        }),
-        inset(rows[0], 2, 2),
-    );
-    let sep = || Span::styled(" · ", Style::default().fg(p.quiet).bg(p.panel));
-    let on_panel = Style::default().bg(p.panel);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                {
-                    let mut name = s.agent.clone();
-                    if let Some(first) = name.get_mut(0..1) {
-                        first.make_ascii_uppercase();
-                    }
-                    name
-                },
-                on_panel.fg(p.blue).add_modifier(Modifier::BOLD),
-            ),
-            sep(),
-            Span::styled(s.model.clone(), on_panel.fg(p.text)),
-            Span::styled(format!(" {}", s.provider), on_panel.fg(p.muted)),
-            sep(),
-            Span::styled(s.effort.clone(), on_panel.fg(p.muted)),
-        ]))
-        .style(on_panel),
-        Rect { x: box_area.x + 3, y: rows[2].y, width: box_area.width.saturating_sub(4), height: 1 },
-    );
-    let hint = "ctrl+p commands";
-    let usage = s.context_usage.clone();
-    let right = format!("{usage}  {hint}");
-    let width = usize::from(rows[3].width);
-    let cwd: String = s.breadcrumb.chars().take(width.saturating_sub(right.width() + 6)).collect();
-    let left_width = if s.update_notice.is_empty() { cwd.width() } else { s.update_notice.width().min(width.saturating_sub(right.width() + 6)) };
-    let gap = width.saturating_sub(2 + left_width + right.width() + 2);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::raw("  "),
-            if s.update_notice.is_empty() {
-                Span::styled(cwd, Style::default().fg(p.quiet))
-            } else {
-                Span::styled(s.update_notice.chars().take(width.saturating_sub(right.width() + 6)).collect::<String>(), Style::default().fg(p.accent))
-            },
-            Span::raw(" ".repeat(gap)),
-            Span::styled(right, Style::default().fg(p.quiet)),
-        ])),
-        rows[3],
-    );
-    if leader {
+    if !s.agent_page.is_empty() {
         frame.render_widget(
-            Paragraph::new("  Ctrl+X · M model · V voice · ? hotkeys").style(Style::default().fg(p.accent)),
-            rows[4],
+            Paragraph::new("Sub agent · read-only · Esc or ↑ returns to the parent")
+                .style(Style::default().fg(p.muted).bg(p.panel))
+                .block(Block::default().padding(ratatui::widgets::Padding::new(2, 2, 1, 0))),
+            r.composer,
         );
-    }
-    let composer = [rows[1], inset(rows[0], 2, 2)];
-    if logs_open {
-        let area = logs_region(&r);
-        frame.render_widget(Clear, area);
-        if r.logs.width > 0 {
-            // Docked on the right like Textual's `#logs-drawer`: panel colour, a strong left
-            // border, a title bar with the close hint, then the log rows.
+    } else {
+        frame.render_widget(
+            Block::default().style(Style::default().bg(p.panel)),
+            box_area,
+        );
+        for y in box_area.y..box_area.y + box_area.height {
             frame.render_widget(
-                Block::default()
-                    .borders(Borders::LEFT)
-                    .border_style(Style::default().fg(p.border_strong))
-                    .padding(ratatui::widgets::Padding::new(1, 1, 0, 0))
-                    .style(Style::default().bg(p.panel).fg(p.text)),
-                area,
+                Paragraph::new("│").style(Style::default().fg(agent_color).bg(p.panel)),
+                Rect {
+                    x: box_area.x,
+                    y,
+                    width: 1,
+                    height: 1,
+                },
             );
-            let inner = Rect { x: area.x + 2, y: area.y, width: area.width.saturating_sub(3), height: area.height };
-            let parts = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).split(inner);
-            let gap = usize::from(parts[0].width).saturating_sub("Logs".len() + "ctrl+e ×".chars().count());
+        }
+        let editor_area = Rect {
+            x: box_area.x + 3,
+            y: rows[1].y + 1,
+            width: box_area.width.saturating_sub(5),
+            height: rows[1].height.saturating_sub(1),
+        };
+        let preview = if matches!(s.voice_phase.as_str(), "recording" | "transcribing") {
+            animated_voice_preview(cache, &s.voice_preview)
+        } else {
+            String::new()
+        };
+        let mut displayed = Editor::default();
+        displayed.text = draft.text.clone();
+        displayed.cursor = draft.cursor;
+        if !preview.is_empty() {
+            let at = cache
+                .voice_cursor
+                .unwrap_or(draft.cursor)
+                .min(draft.text.len());
+            if draft.text.is_char_boundary(at) {
+                let prefix = if at > 0 && !draft.text[..at].ends_with(char::is_whitespace) {
+                    " "
+                } else {
+                    ""
+                };
+                let suffix = if at < draft.text.len()
+                    && !draft.text[at..].starts_with(char::is_whitespace)
+                {
+                    " "
+                } else {
+                    ""
+                };
+                let addition = format!("{prefix}{preview}{suffix}");
+                displayed.text.insert_str(at, &addition);
+                if displayed.cursor >= at {
+                    displayed.cursor += addition.len();
+                }
+            }
+        }
+        if displayed.text.is_empty() {
             frame.render_widget(
-                Paragraph::new(vec![
-                    Line::from(vec![
-                        Span::styled("Logs", Style::default().fg(p.accent).add_modifier(Modifier::BOLD)),
-                        Span::raw(" ".repeat(gap)),
-                        Span::styled("ctrl+e ×", Style::default().fg(p.quiet)),
-                    ]),
-                    Line::styled("─".repeat(usize::from(parts[0].width)), Style::default().fg(p.border)),
-                ])
-                .style(Style::default().bg(p.panel)),
-                parts[0],
-            );
-            frame.render_widget(
-                Paragraph::new(s.logs.iter().skip(logs_scroll).cloned().collect::<Vec<_>>().join("\n"))
-                    .wrap(ratatui::widgets::Wrap { trim: false })
-                    .style(Style::default().bg(p.panel).fg(p.muted)),
-                parts[1],
+                Paragraph::new("Type a message…").style(Style::default().fg(p.quiet).bg(p.panel)),
+                editor_area,
             );
         } else {
             frame.render_widget(
-                Paragraph::new(
-                    s.logs
-                        .iter()
-                        .skip(logs_scroll)
-                        .take(area.height.saturating_sub(2) as usize)
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                )
-                .wrap(ratatui::widgets::Wrap { trim: false })
-                .block(Block::default().title("Logs · Ctrl+E close").borders(Borders::ALL)),
-                area,
+                Paragraph::new(editor_view(
+                    &displayed,
+                    false,
+                    &p,
+                    editor_area.width,
+                    editor_area.height,
+                ))
+                .style(Style::default().bg(p.panel)),
+                editor_area,
             );
         }
+        frame.render_widget(
+            Paragraph::new({
+                let mut lines: Vec<Line<'static>> = s
+                    .queue_lines
+                    .iter()
+                    .take(4)
+                    .map(|row| Line::styled(row.clone(), Style::default().fg(p.quiet)))
+                    .collect();
+                lines.push(Line::styled(
+                    s.attachment_lines.join(" · "),
+                    Style::default().fg(p.accent),
+                ));
+                lines
+            }),
+            inset(rows[0], 2, 2),
+        );
+        let controls = Rect {
+            x: box_area.x + 3,
+            y: rows[2].y,
+            width: box_area.width.saturating_sub(5),
+            height: 1,
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(control_spans(s, &p, controls.width as usize)))
+                .style(Style::default().bg(p.panel)),
+            controls,
+        );
+        let meter_area = inset(rows[3], 2, 2);
+        frame.render_widget(
+            Paragraph::new(Line::from(activity_meter(
+                s,
+                &p,
+                usize::from(meter_area.width),
+                cache.activity_frame,
+            ))),
+            meter_area,
+        );
+    }
+    if r.sessions.width > 0 {
+        let title = format!(
+            "☰ Sessions{}+",
+            " ".repeat(r.sessions.width.saturating_sub(13) as usize)
+        );
+        frame.render_widget(
+            Paragraph::new(title).style(Style::default().fg(p.text).bg(p.panel)),
+            Rect::new(
+                r.sessions.x + 1,
+                r.sessions.y,
+                r.sessions.width.saturating_sub(2),
+                1,
+            ),
+        );
+        let field = if cache.filter.is_empty() && !cache.filtering {
+            "Filter sessions".into()
+        } else {
+            format!("{}{}", cache.filter, if cache.filtering { "▏" } else { "" })
+        };
+        frame.render_widget(
+            Paragraph::new(field).style(Style::default().fg(p.quiet).bg(p.panel)),
+            Rect::new(
+                r.sessions.x + 1,
+                r.sessions.bottom().saturating_sub(1),
+                r.sessions.width.saturating_sub(2),
+                1,
+            ),
+        );
+    }
+    if r.details.width > 0 {
+        frame.render_widget(Clear, r.details);
+        frame.render_widget(
+            Block::default()
+                .borders(Borders::LEFT)
+                .border_style(Style::default().fg(p.border_strong))
+                .style(Style::default().bg(p.panel)),
+            r.details,
+        );
+        let strip = Rect {
+            x: r.details.x + 2,
+            y: r.details.y,
+            width: r.details.width.saturating_sub(3),
+            height: 1,
+        };
+        let mut spans = Vec::new();
+        for tab in ["Session", "Files", "MCP", "Logs"] {
+            spans.push(Span::styled(
+                format!("{tab} "),
+                Style::default()
+                    .fg(if s.details_panel.tab == tab {
+                        p.text
+                    } else {
+                        p.muted
+                    })
+                    .add_modifier(if s.details_panel.tab == tab {
+                        Modifier::UNDERLINED
+                    } else {
+                        Modifier::empty()
+                    }),
+            ));
+        }
+
+        let header_lines: Vec<Line<'static>> = if s.details_panel.tab == "Logs" {
+            s.details_panel
+                .logs_header
+                .iter()
+                .flat_map(|(label, value)| {
+                    crate::transcript::wrap(
+                        &[Span::styled(
+                            format!(
+                                "{label:<10}{value}{}",
+                                if label == "Session" { " ⧉" } else { "" }
+                            ),
+                            Style::default().fg(p.muted),
+                        )],
+                        r.details.width.saturating_sub(5) as usize,
+                    )
+                    .into_iter()
+                    .map(|cells| crate::transcript::line(vec![], cells, None, Style::default()))
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+        let header_height = (header_lines.len() as u16).min(r.details.height.saturating_sub(4));
+        let body_area = Rect {
+            y: r.details.y + header_height,
+            height: r.details.height.saturating_sub(header_height),
+            ..r.details
+        };
+        frame.render_widget(
+            Paragraph::new({
+                let rows = cache.detail_rows(s, &p, r.details.width.saturating_sub(5));
+                let offset = if s.details_panel.tab == "Logs" {
+                    rows.0
+                        .len()
+                        .saturating_sub(body_area.height.saturating_sub(2) as usize)
+                        .saturating_sub(logs_scroll)
+                } else {
+                    details_scroll.min(
+                        rows.0
+                            .len()
+                            .saturating_sub(r.details.height.saturating_sub(1) as usize),
+                    )
+                };
+                rows.0.iter().skip(offset).cloned().collect::<Vec<_>>()
+            })
+            .block(
+                Block::default()
+                    .borders(Borders::LEFT)
+                    .border_style(Style::default().fg(p.border_strong))
+                    .padding(ratatui::widgets::Padding::new(2, 2, 1, 0)),
+            )
+            .style(Style::default().bg(p.panel).fg(p.text)),
+            body_area,
+        );
+        if header_height > 0 {
+            frame.render_widget(
+                Paragraph::new(header_lines).style(Style::default().bg(p.panel)),
+                Rect {
+                    x: r.details.x + 3,
+                    y: r.details.y + 1,
+                    width: r.details.width.saturating_sub(5),
+                    height: header_height,
+                },
+            );
+            frame.render_widget(
+                Paragraph::new("│".repeat(1))
+                    .style(Style::default().fg(p.border_strong).bg(p.panel)),
+                Rect::new(r.details.x, r.details.y, 1, header_height + 1),
+            );
+        }
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)).style(Style::default().bg(p.panel)),
+            strip,
+        );
     }
     if !s.panel_title.is_empty() {
-        let mut inner = dialog_frame(frame, r.transcript, &s.panel_title, &p);
+        let area = panel_area(r.transcript, s);
+        let title = if s.panel_loading {
+            format!(
+                "{} {} · refreshing",
+                SPINNER[cache.spin % SPINNER.len()],
+                s.panel_title
+            )
+        } else {
+            s.panel_title.clone()
+        };
+        let mut inner = dialog_frame(frame, area, &title, &p, s.panel_layout == "drawer");
         if let Some(nav) = &s.nav {
-            let list = nav_rect(r.transcript);
+            let list = nav_rect(area);
             let lines: Vec<Line<'static>> = nav
                 .items
                 .iter()
@@ -685,23 +1132,51 @@ pub fn draw(
                 .take(list.height as usize)
                 .map(|(i, (label, _, heading))| {
                     if *heading {
-                        Line::styled(label.clone(), Style::default().fg(p.quiet).bg(p.dialog).add_modifier(Modifier::BOLD))
+                        Line::styled(
+                            label.clone(),
+                            Style::default()
+                                .fg(p.quiet)
+                                .bg(p.dialog)
+                                .add_modifier(Modifier::BOLD),
+                        )
                     } else if i as i64 == nav.selected {
-                        Line::styled(format!("{:<w$}", format!("▸ {label}"), w = usize::from(list.width)), Style::default().fg(p.accent).bg(p.element_hi).add_modifier(Modifier::BOLD))
+                        Line::styled(
+                            format!("{:<w$}", format!("▸ {label}"), w = usize::from(list.width)),
+                            Style::default()
+                                .fg(p.accent)
+                                .bg(p.element_hi)
+                                .add_modifier(Modifier::BOLD),
+                        )
                     } else {
-                        Line::styled(format!("  {label}"), Style::default().fg(p.muted).bg(p.dialog))
+                        Line::styled(
+                            format!("  {label}"),
+                            Style::default().fg(p.muted).bg(p.dialog),
+                        )
                     }
                 })
                 .collect();
-            frame.render_widget(Paragraph::new(lines).style(Style::default().bg(p.dialog)), list);
+            frame.render_widget(
+                Paragraph::new(lines).style(Style::default().bg(p.dialog)),
+                list,
+            );
             let taken = list.width + 2;
-            inner = Rect { x: inner.x + taken, width: inner.width.saturating_sub(taken), ..inner };
+            inner = Rect {
+                x: inner.x + taken,
+                width: inner.width.saturating_sub(taken),
+                ..inner
+            };
         }
         if let Some(f) = &s.form {
             let areas = Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).split(inner);
             frame.render_widget(
-                Paragraph::new(editor_view(form, f.secret, &p, areas[0].width, areas[0].height))
-                    .style(Style::default().bg(p.dialog)),
+                Paragraph::new(editor_view(
+                    form,
+                    f.secret,
+                    &p,
+                    areas[0].width,
+                    areas[0].height,
+                ))
+                .style(Style::default().bg(p.dialog)),
                 areas[0],
             );
             frame.render_widget(
@@ -723,7 +1198,10 @@ pub fn draw(
             let mut lines: Vec<Line<'static>> = Vec::new();
             if s.nav.is_some() {
                 for text in s.panel_lines.iter().take(2) {
-                    lines.push(Line::styled(crate::transcript::truncate(text, usize::from(inner.width)), Style::default().fg(p.quiet).bg(p.dialog)));
+                    lines.push(Line::styled(
+                        crate::transcript::truncate(text, usize::from(inner.width)),
+                        Style::default().fg(p.quiet).bg(p.dialog),
+                    ));
                 }
             }
             lines.push(Line::from(vec![
@@ -738,12 +1216,21 @@ pub fn draw(
             let mut group = "";
             for (i, item) in rows.iter().enumerate() {
                 if !item.group.is_empty() && item.group != group {
-                    body.push(Line::styled(item.group.clone(), Style::default().fg(p.purple).bg(p.dialog).add_modifier(Modifier::BOLD)));
+                    body.push(Line::styled(
+                        item.group.clone(),
+                        Style::default()
+                            .fg(p.purple)
+                            .bg(p.dialog)
+                            .add_modifier(Modifier::BOLD),
+                    ));
                 }
                 group = &item.group;
                 let on = i == selection;
                 let style = if on {
-                    Style::default().fg(p.text).bg(p.element_hi).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(p.text)
+                        .bg(p.element_hi)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(p.muted).bg(p.dialog)
                 };
@@ -757,21 +1244,56 @@ pub fn draw(
             let room = inner.height.saturating_sub(lines.len() as u16) as usize;
             let start = (selected_line + 1).saturating_sub(room.max(1));
             lines.extend(body.into_iter().skip(start).take(room));
-            frame.render_widget(Paragraph::new(lines).style(Style::default().bg(p.dialog)), inner);
+            frame.render_widget(
+                Paragraph::new(lines).style(Style::default().bg(p.dialog)),
+                inner,
+            );
         } else {
-            let mut panel = Cache::default();
-            if s.panel_tones.len() == s.panel_lines.len() && !s.panel_tones.is_empty() {
-                panel.lines = toned_lines(&s.panel_lines, &s.panel_tones, inner.width, &p);
-            } else {
-                panel.update(&s.panel_lines, inner.width, &p);
+            let rebuild =
+                cache
+                    .panel_body
+                    .as_ref()
+                    .is_none_or(|(source, tones, format, width, _)| {
+                        source != &s.panel_lines
+                            || tones != &s.panel_tones
+                            || format != &s.panel_format
+                            || *width != inner.width
+                    });
+            if rebuild {
+                let mut panel = Cache::default();
+                if s.panel_format == "markdown" {
+                    let block = crate::bridge::Content {
+                        kind: "markdown".into(),
+                        text: s.panel_lines.join("\n"),
+                        ..Default::default()
+                    };
+                    panel.lines = crate::transcript::build(&block, inner.width, &p)
+                        .into_iter()
+                        .map(|(line, _)| line)
+                        .collect::<Vec<_>>()
+                        .into();
+                } else if s.panel_tones.len() == s.panel_lines.len() && !s.panel_tones.is_empty() {
+                    panel.lines =
+                        toned_lines(&s.panel_lines, &s.panel_tones, inner.width, &p).into();
+                } else {
+                    panel.update(&s.panel_lines, inner.width, &p);
+                }
+                cache.panel_body = Some((
+                    s.panel_lines.clone(),
+                    s.panel_tones.clone(),
+                    s.panel_format.clone(),
+                    inner.width,
+                    panel.lines.iter().cloned().collect(),
+                ));
             }
+            let body = &cache.panel_body.as_ref().unwrap().4;
+            let offset = panel_scroll.min(body.len().saturating_sub(inner.height as usize));
             frame.render_widget(
                 Paragraph::new(
-                    panel
-                        .lines
-                        .into_iter()
-                        .skip(panel_scroll)
+                    body.iter()
+                        .skip(offset)
                         .take(inner.height as usize)
+                        .cloned()
                         .collect::<Vec<_>>(),
                 )
                 .style(Style::default().bg(p.dialog)),
@@ -784,11 +1306,28 @@ pub fn draw(
         // composer with the transcript still visible.
         let area = prompt_area(r.transcript, prompt);
         frame.render_widget(Clear, area);
-        frame.render_widget(Block::default().style(Style::default().bg(p.panel).fg(p.text)), area);
-        let title = if prompt.kind == "permission" { "Permission requested" } else { "Question" };
         frame.render_widget(
-            Paragraph::new(title).style(Style::default().fg(p.accent).bg(p.panel).add_modifier(Modifier::BOLD)),
-            Rect { x: area.x + 2, y: area.y, width: area.width.saturating_sub(4), height: 1 },
+            Block::default().style(Style::default().bg(p.panel).fg(p.text)),
+            area,
+        );
+        let title = if prompt.kind == "permission" {
+            "Permission requested"
+        } else {
+            "Question"
+        };
+        frame.render_widget(
+            Paragraph::new(title).style(
+                Style::default()
+                    .fg(p.accent)
+                    .bg(p.panel)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Rect {
+                x: area.x + 2,
+                y: area.y,
+                width: area.width.saturating_sub(4),
+                height: 1,
+            },
         );
         let (content_area, choices_area) = prompt_regions(area, prompt.choices.len());
         let mut content = Cache::default();
@@ -797,7 +1336,8 @@ pub fn draw(
             Paragraph::new(
                 content
                     .lines
-                    .into_iter()
+                    .iter()
+                    .cloned()
                     .skip(panel_scroll)
                     .take(content_area.height as usize)
                     .collect::<Vec<_>>(),
@@ -822,7 +1362,10 @@ pub fn draw(
                 let style = if c.disabled {
                     Style::default().fg(p.quiet).bg(p.panel)
                 } else if on {
-                    Style::default().fg(p.text).bg(p.element_hi).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(p.text)
+                        .bg(p.element_hi)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(p.muted).bg(p.panel)
                 };
@@ -840,33 +1383,20 @@ pub fn draw(
             " ↑/↓ choose · Enter select · keys pick · Esc deny",
             Style::default().fg(p.quiet),
         ));
-        frame.render_widget(Paragraph::new(lines).style(Style::default().bg(p.panel)), choices_area);
-    }
-    if s.voice_phase != "idle" && !s.voice_phase.is_empty() {
-        // A floating row above the composer, like Textual's `VoiceStrip`: state, elapsed time,
-        // a level wave while recording, the live partial text, and the keys that end it.
-        let strip = Rect { x: composer[1].x, y: composer[1].y.saturating_sub(0), width: composer[1].width, height: 1 };
-        let wave: String = cache
-            .voice_levels
-            .iter()
-            .map(|level| ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"][((level.clamp(0.0, 1.0) * 7.0).round() as usize).min(7)])
-            .collect();
-        let (label, hint) = match s.voice_phase.as_str() {
-            "recording" => ("● Recording", "Esc cancel · any key stops"),
-            "transcribing" => ("◌ Transcribing", "Esc cancel"),
-            other => (other, ""),
-        };
-        let mut text = format!("{label} {}:{:02}  {wave}  ", cache.voice_elapsed / 60, cache.voice_elapsed % 60);
-        text.push_str(&crate::transcript::truncate(&s.voice_preview, usize::from(strip.width).saturating_sub(text.chars().count() + hint.chars().count() + 4)));
-        let pad = usize::from(strip.width).saturating_sub(text.chars().count() + hint.chars().count() + 1);
-        frame.render_widget(Clear, strip);
         frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(text, Style::default().fg(p.accent).bg(p.element).add_modifier(Modifier::BOLD)),
-                Span::styled(" ".repeat(pad), Style::default().bg(p.element)),
-                Span::styled(format!("{hint} "), Style::default().fg(p.quiet).bg(p.element)),
-            ])),
-            strip,
+            Paragraph::new(lines).style(Style::default().bg(p.panel)),
+            choices_area,
+        );
+    }
+    if s.voice_phase == "recording" {
+        let tone = if cache.spin % 8 < 4 {
+            p.accent
+        } else {
+            p.quiet
+        };
+        frame.render_widget(
+            Paragraph::new("■").style(Style::default().fg(tone).bg(p.panel)),
+            Rect::new(box_area.x + 3, rows[3].y, 1, 1),
         );
     }
     r
@@ -876,38 +1406,92 @@ mod tests {
     use super::*;
     use ratatui::{backend::TestBackend, Terminal};
     #[test]
+    fn activity_rule_is_quiet_when_idle_and_agent_colored_when_running() {
+        let p = Palette::new(false);
+        let mut s = Snapshot {
+            context_used: Some(60),
+            context_window: Some(100),
+            context_marks: vec![80],
+            ..Default::default()
+        };
+        let meter = activity_meter(&s, &p, 10, 0);
+        assert!(meter
+            .iter()
+            .all(|span| span.style.fg == Some(p.border) && span.content == "─"));
+        s.status = "running".into();
+        let first = activity_meter(&s, &p, 10, 0);
+        let next = activity_meter(&s, &p, 10, 3);
+        assert_eq!(
+            first
+                .iter()
+                .filter(|span| span.style.fg == Some(p.blue))
+                .count(),
+            2
+        );
+        assert_ne!(first, next);
+        assert!(next.iter().all(|span| span.content == "─"));
+    }
+    #[test]
     fn hints_blank_while_typing_but_keep_their_rows() {
         let palette = Palette::new(false);
         let blocks = vec![crate::bridge::Content {
-            id: "empty-hints".into(), kind: "hints".into(), gap: 4,
-            text: "esc\tstop\n  /\tcommands".into(), ..Default::default()
+            id: "empty-hints".into(),
+            kind: "hints".into(),
+            gap: 4,
+            text: "esc\tstop\n  /\tcommands".into(),
+            ..Default::default()
         }];
         let mut cache = Cache::default();
         cache.update_content(&[], &blocks, 80, &palette);
         let shown = cache.lines.len();
         assert_eq!(shown, 6);
-        assert!(cache.lines[4].spans.iter().any(|span| span.content.contains("stop")));
+        assert!(cache.lines[4]
+            .spans
+            .iter()
+            .any(|span| span.content.contains("stop")));
         cache.typing = true;
         cache.update_content(&[], &blocks, 80, &palette);
         assert_eq!(cache.lines.len(), shown);
-        assert!(!cache.lines[4].spans.iter().any(|span| span.content.contains("stop")));
+        assert!(!cache.lines[4]
+            .spans
+            .iter()
+            .any(|span| span.content.contains("stop")));
     }
     #[test]
     fn modified_file_rows_expand_with_a_colored_diff_and_map_to_files() {
         use crate::bridge::FileChange;
         let mut s = Snapshot::default();
         s.details_panel.files = vec![
-            FileChange { path: "src/a.rs".into(), added: 1, removed: 1, open: true, diff: vec!["@@ -1 +1 @@".into(), "-old".into(), "+new".into()], ..Default::default() },
-            FileChange { path: "b.rs".into(), created: true, ..Default::default() },
+            FileChange {
+                path: "src/a.rs".into(),
+                added: 1,
+                removed: 1,
+                open: true,
+                diff: vec!["@@ -1 +1 @@".into(), "-old".into(), "+new".into()],
+                ..Default::default()
+            },
+            FileChange {
+                path: "b.rs".into(),
+                created: true,
+                ..Default::default()
+            },
         ];
         let (lines, files) = details_rows(&s, &Palette::new(false), 40);
         assert_eq!(lines.len(), files.len());
         let first = files.iter().position(|f| *f == Some(0)).unwrap();
-        let text: String = lines[first].spans.iter().map(|span| span.content.as_ref()).collect();
+        let text: String = lines[first]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
         assert!(text.starts_with("▾ M ") && text.contains("a.rs"));
         assert_eq!(lines[first + 2].spans[0].content, "  -old");
         assert_eq!(files[first + 1], None, "diff rows do not toggle");
-        let second: String = lines[files.iter().position(|f| *f == Some(1)).unwrap()].spans.iter().map(|span| span.content.as_ref()).collect();
+        let second: String = lines[files.iter().position(|f| *f == Some(1)).unwrap()]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
         assert!(second.starts_with("▸ A "));
     }
     #[test]
@@ -915,26 +1499,57 @@ mod tests {
         use crate::bridge::Session;
         let mut s = Snapshot::default();
         s.sessions = vec![
-            Session { group: "Today".into(), id: "a".into(), title: "Fix bug".into(), status: "working".into(), sub: "working now · just now".into(), active: true, ..Default::default() },
-            Session { group: "Today".into(), id: "b".into(), title: "Docs".into(), status: "done".into(), sub: "finished · 5m ago".into(), ..Default::default() },
+            Session {
+                group: "Today".into(),
+                id: "a".into(),
+                title: "Fix bug".into(),
+                status: "working".into(),
+                sub: "working now · just now".into(),
+                active: true,
+                ..Default::default()
+            },
+            Session {
+                group: "Today".into(),
+                id: "b".into(),
+                title: "Docs".into(),
+                status: "done".into(),
+                sub: "finished · 5m ago".into(),
+                ..Default::default()
+            },
         ];
         assert!(animating(&s));
         let rows = session_sidebar(&s, &Palette::new(false), 27, 1, "", false);
-        let text = |i: usize| rows[i].0.spans.iter().map(|span| span.content.as_ref()).collect::<String>();
-        assert!(text(0).starts_with("+ New session") && text(0).ends_with("ctrl+n"));
+        let text = |i: usize| {
+            rows[i]
+                .0
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        };
+        assert_eq!(text(0), "☰ Sessions");
         assert_eq!(rows[0].1, Some(SidebarHit::New));
-        assert_eq!(rows[1].1, Some(SidebarHit::Filter));
-        assert!(text(1).starts_with("Filter sessions"));
-        assert_eq!(text(3), "SESSIONS 2");
-        let first = rows.iter().position(|(_, hit)| *hit == Some(SidebarHit::Session(0))).unwrap();
+        assert_eq!(text(1), "SESSIONS 2");
+        let first = rows
+            .iter()
+            .position(|(_, hit)| *hit == Some(SidebarHit::Session(0)))
+            .unwrap();
         assert!(text(first).starts_with("▌⠙ Fix bug"), "{}", text(first));
         assert!(text(first + 1).contains("working now · just now"));
-        assert!(text(first + 3).starts_with(" ✓ Docs"));
+        assert!(text(first + 2).starts_with(" ✓ Docs"));
         let filtered = session_sidebar(&s, &Palette::new(false), 27, 1, "docs", true);
-        let titles: Vec<String> = filtered.iter().filter(|(_, hit)| matches!(hit, Some(SidebarHit::Session(_)))).map(|(l, _)| l.spans.iter().map(|x| x.content.as_ref()).collect::<String>()).collect();
+        let titles: Vec<String> = filtered
+            .iter()
+            .filter(|(_, hit)| matches!(hit, Some(SidebarHit::Session(_))))
+            .map(|(l, _)| {
+                l.spans
+                    .iter()
+                    .map(|x| x.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect();
         assert_eq!(titles.len(), 2, "one session card of two lines matches");
         assert!(titles[0].contains("Docs"));
-        assert!(filtered[1].0.spans.iter().map(|x| x.content.as_ref()).collect::<String>().starts_with("docs▏"));
         s.archived_label = "Archived · 3".into();
         let rows = session_sidebar(&s, &Palette::new(false), 27, 1, "", false);
         assert_eq!(rows.last().unwrap().1, Some(SidebarHit::Archived));
@@ -942,74 +1557,184 @@ mod tests {
     #[test]
     fn tabs_scroll_to_keep_the_current_one_and_map_to_cells() {
         use crate::bridge::Session;
-        let tab = |id: &str, active: bool| Session { id: id.into(), title: format!("session {id} title"), active, ..Default::default() };
+        let tab = |id: &str, active: bool| Session {
+            id: id.into(),
+            title: format!("session {id} title"),
+            active,
+            ..Default::default()
+        };
         let mut s = Snapshot::default();
         s.tabs = (0..6).map(|i| tab(&i.to_string(), i == 5)).collect();
         let cells = tab_cells(&s, 60);
         assert_eq!(cells.first().unwrap().kind, TabHit::Sessions);
-        assert!(cells.iter().any(|c| c.kind == TabHit::Tab(5)), "the current tab stays visible");
-        assert!(!cells.iter().any(|c| c.kind == TabHit::Tab(0)), "older tabs scroll out");
+        assert!(
+            cells.iter().any(|c| c.kind == TabHit::Tab(5)),
+            "the current tab stays visible"
+        );
+        assert!(
+            !cells.iter().any(|c| c.kind == TabHit::Tab(0)),
+            "older tabs scroll out"
+        );
         assert_eq!(cells[cells.len() - 2].kind, TabHit::New);
         assert!(cells.iter().all(|c| c.end <= 60));
         s.tabs.truncate(1);
         s.tabs[0].active = true;
         let cells = tab_cells(&s, 120);
-        assert_eq!((cells[1].start, cells[1].end), (2, 2 + 6 + "session 0 title".len()));
+        assert_eq!(
+            (cells[1].start, cells[1].end),
+            (4, 4 + 6 + "session 0 title".len())
+        );
     }
     #[test]
     fn inline_diff_has_counts_numbers_tints_and_hunk_gaps() {
         let p = Palette::new(false);
-        let row = |a: u32, b: &str, c: u32, d: &str, k: &str| (a, b.to_string(), c, d.to_string(), k.to_string());
+        let row = |a: u32, b: &str, c: u32, d: &str, k: &str| {
+            (a, b.to_string(), c, d.to_string(), k.to_string())
+        };
         let block = crate::bridge::Content {
-            id: "d".into(), kind: "diff".into(), title: "src/a.py".into(), added: 1, removed: 1,
-            diff_rows: vec![row(9, "keep", 9, "keep", "ctx"), row(10, "old", 10, "new", "change"), row(0, "", 0, "", "sep"), row(40, "tail", 40, "tail", "ctx")],
+            id: "d".into(),
+            kind: "diff".into(),
+            title: "src/a.py".into(),
+            added: 1,
+            removed: 1,
+            diff_rows: vec![
+                row(9, "keep", 9, "keep", "ctx"),
+                row(10, "old", 10, "new", "change"),
+                row(0, "", 0, "", "sep"),
+                row(40, "tail", 40, "tail", "ctx"),
+            ],
             ..Default::default()
         };
         let rows = crate::transcript::build(&block, 60, &p);
-        let text = |i: usize| rows[i].0.spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+        let text = |i: usize| {
+            rows[i]
+                .0
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
+        };
         assert_eq!(text(0), "  src/a.py (+1, -1)");
-        assert!(text(1).contains(" 9 keep") && text(1).contains("│ 9 keep"), "{}", text(1));
-        assert!(text(2).contains("10 old") && text(2).contains("│10 new"), "{}", text(2));
-        assert!(rows[2].0.spans.iter().any(|s| s.style.bg == Some(p.diff_del)));
-        assert!(rows[2].0.spans.iter().any(|s| s.style.bg == Some(p.diff_add)));
+        assert!(
+            text(1).contains(" 9 keep") && text(1).contains("│ 9 keep"),
+            "{}",
+            text(1)
+        );
+        assert!(
+            text(2).contains("10 old") && text(2).contains("│10 new"),
+            "{}",
+            text(2)
+        );
+        assert!(rows[2]
+            .0
+            .spans
+            .iter()
+            .any(|s| s.style.bg == Some(p.diff_del)));
+        assert!(rows[2]
+            .0
+            .spans
+            .iter()
+            .any(|s| s.style.bg == Some(p.diff_add)));
         assert_eq!(text(3), "  ⋯");
         assert!(text(4).contains("40 tail"));
     }
     #[test]
     fn tool_detail_lines_are_toned_and_wrapped_inside_the_dialog() {
         let p = Palette::new(false);
-        let lines = vec!["PARAMETERS".to_string(), "  path: src/a.py".into(), "  +added line that is rather long indeed".into()];
+        let lines = vec![
+            "PARAMETERS".to_string(),
+            "  path: src/a.py".into(),
+            "  +added line that is rather long indeed".into(),
+        ];
         let tones = vec!["title".to_string(), "kv".into(), "add".into()];
         let rows = toned_lines(&lines, &tones, 20, &p);
-        assert!(rows[0].spans.iter().any(|s| s.style.add_modifier.contains(Modifier::BOLD)));
-        assert_eq!(rows[1].spans.iter().map(|s| s.content.as_ref()).collect::<String>(), "  path: src/a.py");
+        assert!(rows[0]
+            .spans
+            .iter()
+            .any(|s| s.style.add_modifier.contains(Modifier::BOLD)));
+        assert_eq!(
+            rows[1]
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>(),
+            "  path: src/a.py"
+        );
         assert_eq!(rows[1].spans[1].style.fg, Some(p.quiet), "the label is dim");
         assert!(rows.len() > 3, "the long added line wrapped");
-        assert!(rows.iter().all(|r| r.spans.iter().map(|s| s.content.chars().count()).sum::<usize>() <= 20));
+        assert!(rows.iter().all(|r| r
+            .spans
+            .iter()
+            .map(|s| s.content.chars().count())
+            .sum::<usize>()
+            <= 20));
     }
     #[test]
     fn keyboard_targets_are_runs_of_lines_with_the_same_operation() {
         let op = |id: &str| Some(serde_json::json!({"kind": "tool_page", "id": id}));
         let mut cache = Cache::default();
-        cache.operations = vec![None, op("a"), op("a"), None, op("b"), op("c"), op("c"), None];
+        cache.operations = vec![
+            None,
+            op("a"),
+            op("a"),
+            None,
+            op("b"),
+            op("c"),
+            op("c"),
+            None,
+        ]
+        .into();
         assert_eq!(targets(&cache), vec![(1, 2), (4, 4), (5, 6)]);
         assert!(targets(&Cache::default()).is_empty());
     }
     #[test]
-    fn logs_dock_on_the_right_when_wide_and_fall_back_when_narrow() {
-        let s = Snapshot::default();
-        let wide = regions(Rect::new(0, 0, 120, 40), &s, 8, true);
-        assert_eq!((wide.logs.width, wide.logs.x), (36, 84));
-        assert!(wide.transcript.x + wide.transcript.width <= 84);
-        assert_eq!(regions(Rect::new(0, 0, 120, 40), &s, 8, false).logs.width, 0);
-        let narrow = regions(Rect::new(0, 0, 90, 40), &s, 8, true);
-        assert_eq!(narrow.logs.width, 0);
-        assert_eq!(logs_region(&narrow).y, narrow.transcript.y + narrow.transcript.height / 2);
+    fn sidebar_width_policy_retains_preferences_and_uses_full_height() {
+        for width in [80, 120, 170, 220] {
+            for left in [false, true] {
+                for right in [false, true] {
+                    for last in ["sessions", "details"] {
+                        let s = Snapshot {
+                            sessions_sidebar: left,
+                            details_sidebar: right,
+                            last_opened: last.into(),
+                            ..Default::default()
+                        };
+                        let r = regions(Rect::new(0, 0, width, 50), &s, 7, false);
+                        if r.sessions.width > 0 {
+                            assert_eq!(r.sessions.height, 50);
+                            assert_eq!(r.sessions.y, 0);
+                            assert_eq!(r.tabs.height, 2);
+                        }
+                        if r.details.width > 0 {
+                            assert_eq!(r.details.height, 50);
+                            assert_eq!(r.details.y, 0);
+                        }
+                        if width >= 170 {
+                            assert_eq!(r.sessions.width > 0, left);
+                            assert_eq!(r.details.width > 0, right);
+                        }
+                        if width == 120 && left && right {
+                            assert_eq!(r.details.width > 0, last == "details");
+                            assert_eq!(r.sessions.width > 0, last == "sessions");
+                        }
+                        if width == 80 && right {
+                            assert_eq!(r.details.right(), 80);
+                            assert_eq!(logs_region(&r), r.details);
+                        }
+                    }
+                }
+            }
+        }
     }
     #[test]
     fn selection_extracts_text_by_columns_and_reverses_the_highlight() {
         let mut cache = Cache::default();
-        cache.lines = vec![Line::from("hello world"), Line::from("  second line  "), Line::from("third")];
+        cache.lines = vec![
+            Line::from("hello world"),
+            Line::from("  second line  "),
+            Line::from("third"),
+        ]
+        .into();
         cache.selection = Some(((0, 6), (2, 3)));
         assert_eq!(selected_text(&cache), "world\n  second line\nthi");
         cache.selection = Some(((1, 8), (1, 2))); // reversed drag
@@ -1018,47 +1743,173 @@ mod tests {
     #[test]
     fn highlight_splits_spans_at_the_selected_columns() {
         let line = highlight(Line::from("abcdef"), 2, 4);
-        let parts: Vec<(String, bool)> = line.spans.iter().map(|s| (s.content.to_string(), s.style.add_modifier.contains(Modifier::REVERSED))).collect();
-        assert_eq!(parts, vec![("ab".to_string(), false), ("cd".to_string(), true), ("ef".to_string(), false)]);
+        let parts: Vec<(String, bool)> = line
+            .spans
+            .iter()
+            .map(|s| {
+                (
+                    s.content.to_string(),
+                    s.style.add_modifier.contains(Modifier::REVERSED),
+                )
+            })
+            .collect();
+        assert_eq!(
+            parts,
+            vec![
+                ("ab".to_string(), false),
+                ("cd".to_string(), true),
+                ("ef".to_string(), false)
+            ]
+        );
     }
     #[test]
     fn picker_group_headings_do_not_change_item_selection() {
         let mut s = Snapshot::default();
         s.panel_title = "Models".into();
-        let item = |label: &str, group: &str| crate::bridge::Item { label: label.into(), group: group.into(), ..Default::default() };
-        s.items = vec![item("a", "Favorites"), item("b", "Recent"), item("c", "Recent")];
-        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        let item = |label: &str, group: &str| crate::bridge::Item {
+            label: label.into(),
+            group: group.into(),
+            ..Default::default()
+        };
+        s.items = vec![
+            item("a", "Favorites"),
+            item("b", "Recent"),
+            item("c", "Recent"),
+        ];
+        let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
         let mut cache = Cache::default();
-        terminal.draw(|frame| {
-            draw(frame, &s, &Editor::default(), &Editor::default(), &Editor::default(), "", 2, 0, 0, &mut cache, true, false, false, false, 0, 0, 0);
-        }).unwrap();
-        let screen: Vec<String> = (0..24).map(|y| (0..80).map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string()).collect::<String>()).collect();
-        let at = |needle: &str| screen.iter().position(|row| row.contains(needle)).unwrap_or_else(|| panic!("{needle} missing"));
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &s,
+                    &Editor::default(),
+                    &Editor::default(),
+                    &Editor::default(),
+                    "",
+                    2,
+                    0,
+                    0,
+                    &mut cache,
+                    true,
+                    false,
+                    false,
+                    false,
+                    0,
+                    0,
+                    0,
+                );
+            })
+            .unwrap();
+        let screen: Vec<String> = (0..30)
+            .map(|y| {
+                (0..80)
+                    .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect();
+        let at = |needle: &str| {
+            screen
+                .iter()
+                .position(|row| row.contains(needle))
+                .unwrap_or_else(|| panic!("{needle} missing"))
+        };
         assert!(at("Favorites") < at(" a") && at(" a") < at("Recent") && at("Recent") < at(" b"));
-        assert!(screen[at(" c")].contains("▸"), "selection 2 is the third item, not the third line");
-        assert_eq!(screen.iter().filter(|row| row.contains("Recent")).count(), 1, "one heading per group");
+        assert!(
+            screen[at(" c")].contains("▸"),
+            "selection 2 is the third item, not the third line"
+        );
+        assert_eq!(
+            screen.iter().filter(|row| row.contains("Recent")).count(),
+            1,
+            "one heading per group"
+        );
     }
     #[test]
     fn settings_area_list_steps_over_headings_and_draws_beside_the_page() {
         use crate::bridge::Nav;
-        let nav = Nav { items: vec![("GENERAL".into(), "".into(), true), ("Appearance".into(), "appearance".into(), false), ("Layout".into(), "layout".into(), false),
-                                    ("CONFIGURE".into(), "".into(), true), ("Providers".into(), "providers".into(), false)], selected: 2 };
-        assert_eq!(nav_step(&nav, true), Some(4), "the CONFIGURE heading is skipped");
+        let nav = Nav {
+            items: vec![
+                ("GENERAL".into(), "".into(), true),
+                ("Appearance".into(), "appearance".into(), false),
+                ("Layout".into(), "layout".into(), false),
+                ("CONFIGURE".into(), "".into(), true),
+                ("Providers".into(), "providers".into(), false),
+            ],
+            selected: 2,
+        };
+        assert_eq!(
+            nav_step(&nav, true),
+            Some(4),
+            "the CONFIGURE heading is skipped"
+        );
         assert_eq!(nav_step(&nav, false), Some(1));
-        assert_eq!(nav_step(&Nav { selected: 1, ..Nav { items: nav.items.clone(), selected: 0 } }, false), None);
+        assert_eq!(
+            nav_step(
+                &Nav {
+                    selected: 1,
+                    ..Nav {
+                        items: nav.items.clone(),
+                        selected: 0
+                    }
+                },
+                false
+            ),
+            None
+        );
         let mut s = Snapshot::default();
         s.panel_title = "Layout".into();
         s.panel_lines = vec!["Panels hide automatically".into()];
         s.nav = Some(nav);
         let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
         let mut cache = Cache::default();
-        terminal.draw(|frame| {
-            draw(frame, &s, &Editor::default(), &Editor::default(), &Editor::default(), "", 0, 0, 0, &mut cache, true, false, false, false, 0, 0, 0);
-        }).unwrap();
-        let row_of = |needle: &str| (0..30u16).find(|y| (0..100u16).map(|x| terminal.backend().buffer()[(x, *y)].symbol().to_string()).collect::<String>().contains(needle)).unwrap_or_else(|| panic!("{needle} missing"));
-        let col_of = |needle: &str| { let y = row_of(needle); let line: String = (0..100u16).map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string()).collect(); line.find(needle).unwrap() };
-        assert!(row_of("▸ Layout") > row_of("GENERAL") && row_of("Providers") > row_of("CONFIGURE"));
-        assert!(col_of("Panels hide") > col_of("Providers"), "the page sits to the right of the list");
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &s,
+                    &Editor::default(),
+                    &Editor::default(),
+                    &Editor::default(),
+                    "",
+                    0,
+                    0,
+                    0,
+                    &mut cache,
+                    true,
+                    false,
+                    false,
+                    false,
+                    0,
+                    0,
+                    0,
+                );
+            })
+            .unwrap();
+        let row_of = |needle: &str| {
+            (0..30u16)
+                .find(|y| {
+                    (0..100u16)
+                        .map(|x| terminal.backend().buffer()[(x, *y)].symbol().to_string())
+                        .collect::<String>()
+                        .contains(needle)
+                })
+                .unwrap_or_else(|| panic!("{needle} missing"))
+        };
+        let col_of = |needle: &str| {
+            let y = row_of(needle);
+            let line: String = (0..100u16)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string())
+                .collect();
+            line.find(needle).unwrap()
+        };
+        assert!(
+            row_of("▸ Layout") > row_of("GENERAL") && row_of("Providers") > row_of("CONFIGURE")
+        );
+        assert!(
+            col_of("Panels hide") > col_of("Providers"),
+            "the page sits to the right of the list"
+        );
     }
     fn rich_snapshot(light: bool) -> Snapshot {
         serde_json::from_value(serde_json::json!({
@@ -1087,39 +1938,106 @@ mod tests {
                 let s = rich_snapshot(light);
                 let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
                 let mut cache = Cache::default();
-                terminal.draw(|frame| {
-                    draw(frame, &s, &Editor::default(), &Editor::default(), &Editor::default(), "", 0, 0, 0, &mut cache, true, false, false, false, 0, 0, 0);
-                }).unwrap();
-                let screen: String = (0..height).map(|y| (0..width).map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string()).collect::<String>() + "\n").collect();
+                terminal
+                    .draw(|frame| {
+                        draw(
+                            frame,
+                            &s,
+                            &Editor::default(),
+                            &Editor::default(),
+                            &Editor::default(),
+                            "",
+                            0,
+                            0,
+                            0,
+                            &mut cache,
+                            true,
+                            false,
+                            false,
+                            false,
+                            0,
+                            0,
+                            0,
+                        );
+                    })
+                    .unwrap();
+                let screen: String = (0..height)
+                    .map(|y| {
+                        (0..width)
+                            .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string())
+                            .collect::<String>()
+                            + "\n"
+                    })
+                    .collect();
                 let at = format!("{width}x{height} light={light}");
-                assert!(screen.contains("Permission requested"), "{at}: the prompt is always reachable");
+                assert!(
+                    screen.contains("Permission requested"),
+                    "{at}: the prompt is always reachable"
+                );
                 assert!(screen.contains("Allow once"), "{at}");
                 assert!(screen.contains("Build"), "{at}: the runtime row");
-                assert!(screen.contains("Fix the parser"), "{at}: the current tab");
-                if width >= 110 {
+                if width >= 170 {
+                    assert!(screen.contains("Fix the parser"), "{at}: current session");
+                }
+                if width >= 170 {
                     assert!(screen.contains("SESSIONS 1"), "{at}: sessions sidebar");
                 }
                 if width >= 170 {
-                    assert!(screen.contains("MODIFIED FILES") && screen.contains("src/parser.py"), "{at}: details sidebar");
+                    assert!(
+                        screen.contains("MODIFIED FILES") && screen.contains("src/parser.py"),
+                        "{at}: details sidebar"
+                    );
                 }
             }
         }
     }
     #[test]
-    fn voice_strip_shows_state_time_wave_and_partial_text() {
+    fn voice_preview_is_inline_with_only_a_recording_square() {
         let mut s = Snapshot::default();
         s.voice_phase = "recording".into();
         s.voice_preview = "hello wor".into();
         let mut cache = Cache::default();
         cache.voice_levels = vec![0.0, 0.5, 1.0];
         cache.voice_elapsed = 65;
+        cache.voice_text = s.voice_preview.clone();
+        cache.spin = 3;
         let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
-        terminal.draw(|frame| {
-            draw(frame, &s, &Editor::default(), &Editor::default(), &Editor::default(), "", 0, 0, 0, &mut cache, true, false, false, false, 0, 0, 0);
-        }).unwrap();
-        let screen: String = (0..24u16).map(|y| (0..100u16).map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string()).collect::<String>() + "\n").collect();
-        assert!(screen.contains("● Recording 1:05"), "{screen}");
-        assert!(screen.contains("▁▅█") && screen.contains("hello wor") && screen.contains("Esc cancel"));
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &s,
+                    &Editor::default(),
+                    &Editor::default(),
+                    &Editor::default(),
+                    "",
+                    0,
+                    0,
+                    0,
+                    &mut cache,
+                    true,
+                    false,
+                    false,
+                    false,
+                    0,
+                    0,
+                    0,
+                );
+            })
+            .unwrap();
+        let screen: String = (0..24u16)
+            .map(|y| {
+                (0..100u16)
+                    .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string())
+                    .collect::<String>()
+                    + "\n"
+            })
+            .collect();
+        assert!(
+            screen.contains("hello wor") && screen.contains("■"),
+            "{screen}"
+        );
+        assert!(!screen.contains("Recording") && !screen.contains("Esc cancel"));
     }
     #[test]
     fn running_slot_is_replaced_per_frame() {
@@ -1133,15 +2051,23 @@ mod tests {
     fn composer_grows_with_content_and_is_capped() {
         let area = Rect::new(0, 0, 80, 60);
         let mut draft = Editor::default();
-        assert_eq!(composer_height(area, &draft, &Snapshot::default()), 8);
+        assert_eq!(composer_height(area, &draft, &Snapshot::default()), 7);
         draft.insert(&"line\n".repeat(9));
-        assert_eq!(composer_height(area, &draft, &Snapshot::default()), 5 + 10);
+        assert_eq!(composer_height(area, &draft, &Snapshot::default()), 4 + 10);
         draft.insert(&"line\n".repeat(60));
-        assert_eq!(composer_height(area, &draft, &Snapshot::default()), 5 + 22);
-        assert_eq!(composer_height(Rect::new(0, 0, 80, 14), &draft, &Snapshot::default()), 8, "the transcript keeps its rows");
+        assert_eq!(composer_height(area, &draft, &Snapshot::default()), 4 + 22);
+        assert_eq!(
+            composer_height(Rect::new(0, 0, 80, 14), &draft, &Snapshot::default()),
+            7,
+            "the transcript keeps its rows"
+        );
         let mut queued = Snapshot::default();
         queued.queue_lines = vec!["Queued · a".into(), "Steering · b".into()];
-        assert_eq!(composer_height(Rect::new(0, 0, 80, 60), &Editor::default(), &queued), 10, "queued messages get rows above the editor");
+        assert_eq!(
+            composer_height(Rect::new(0, 0, 80, 60), &Editor::default(), &queued),
+            9,
+            "queued messages get rows above the editor"
+        );
     }
     #[test]
     fn narrow_layout_and_safe_wrap() {
@@ -1276,3 +2202,394 @@ mod history_benchmark {
     }
 }
 
+pub fn composer_rows(area: Rect, s: &Snapshot) -> Vec<Rect> {
+    Layout::vertical([
+        Constraint::Length(1 + queue_rows(s)),
+        Constraint::Min(4),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .split(area)
+    .to_vec()
+}
+
+struct ControlLayout {
+    left: Vec<(String, &'static str)>,
+    text: String,
+    bars: bool,
+    gap: usize,
+    context_start: usize,
+}
+fn control_layout(s: &Snapshot, width: usize) -> ControlLayout {
+    let mut provider = !s.provider.is_empty();
+    let mut effort = !s.effort.is_empty();
+    let mut numbers: Vec<&str> = s
+        .context_label
+        .split(" · ")
+        .filter(|text| !text.is_empty())
+        .collect();
+    if numbers.is_empty() {
+        numbers.push("unavailable");
+    }
+    let mut bars = true;
+    loop {
+        let mut agent = s.agent.clone();
+        if let Some(first) = agent.get_mut(0..1) {
+            first.make_ascii_uppercase();
+        }
+        let mut left = vec![(agent, "/agent"), (s.model.clone(), "/model")];
+        if provider {
+            left[1].0 += &format!(" {}", s.provider);
+        }
+        if effort {
+            left.push((s.effort.clone(), "/effort"));
+        }
+        let mut text = numbers.join(" · ");
+        if bars && s.context_window.unwrap_or(0) == 0 {
+            text += " ?";
+        }
+        let left_width = left.iter().map(|(text, _)| text.width()).sum::<usize>()
+            + left.len().saturating_sub(1) * 3;
+        let right_width = text.width() + if bars { 12 } else { 0 };
+        if left_width + right_width + 2 <= width
+            || (!provider && !effort && numbers.len() <= 1 && !bars)
+        {
+            let available = width.saturating_sub(right_width + 2);
+            if left_width > available {
+                let name_width = left[0].0.width().min(available);
+                left[0].0 = crate::transcript::truncate(&left[0].0, name_width);
+                left[1].0 = crate::transcript::truncate(
+                    &left[1].0,
+                    available.saturating_sub(name_width + 3),
+                );
+                if left[1].0.is_empty() {
+                    left.pop();
+                }
+            }
+            let used = left.iter().map(|(text, _)| text.width()).sum::<usize>()
+                + left.len().saturating_sub(1) * 3;
+            if right_width > width {
+                text = crate::transcript::truncate(&text, width);
+            }
+            let context_start = width.saturating_sub(text.width() + if bars { 12 } else { 0 });
+            return ControlLayout {
+                left,
+                text,
+                bars,
+                gap: context_start.saturating_sub(used),
+                context_start,
+            };
+        }
+        if provider {
+            provider = false;
+        } else if effort {
+            effort = false;
+        } else if numbers.len() > 2 {
+            numbers.pop();
+        } else if bars {
+            bars = false;
+        } else if numbers.len() > 1 {
+            numbers.pop();
+        }
+    }
+}
+fn control_spans(s: &Snapshot, p: &Palette, width: usize) -> Vec<Span<'static>> {
+    let layout = control_layout(s, width);
+    let accent = crate::transcript::color(&s.agent_color, p.blue, p);
+    let mut spans = Vec::new();
+    for (i, (text, command)) in layout.left.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" · ", Style::default().fg(p.quiet)));
+        }
+        spans.push(Span::styled(
+            text.clone(),
+            Style::default()
+                .fg(if *command == "/agent" {
+                    accent
+                } else {
+                    p.muted
+                })
+                .add_modifier(if *command == "/agent" {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+        ));
+    }
+    spans.push(Span::raw(" ".repeat(layout.gap)));
+    if layout.bars {
+        let fill = s
+            .context_window
+            .filter(|window| *window > 0)
+            .map(|window| {
+                (s.context_used.unwrap_or(0) as f64 / window as f64 * 10.0)
+                    .ceil()
+                    .clamp(0.0, 10.0) as usize
+            })
+            .unwrap_or(0);
+        for i in 0..10 {
+            spans.push(Span::styled(
+                "╱",
+                Style::default().fg(if i < fill { accent } else { p.border }),
+            ));
+        }
+        spans.push(Span::raw("  "));
+    }
+    spans.push(Span::styled(layout.text, Style::default().fg(p.muted)));
+    spans
+}
+pub fn composer_context_at(area: Rect, s: &Snapshot, x: u16, y: u16) -> bool {
+    if !s.agent_page.is_empty() || y != composer_rows(area, s)[2].y {
+        return false;
+    }
+    let layout = control_layout(s, area.width.saturating_sub(9) as usize);
+    x >= area.x + 5 + layout.context_start as u16 && x < area.right().saturating_sub(4)
+}
+pub fn composer_control_at(area: Rect, s: &Snapshot, x: u16, y: u16) -> Option<&'static str> {
+    if !s.agent_page.is_empty() || y != composer_rows(area, s)[2].y {
+        return None;
+    }
+    let layout = control_layout(s, area.width.saturating_sub(9) as usize);
+    let mut start = area.x + 5;
+    for (text, command) in layout.left {
+        let end = start.saturating_add(text.width() as u16);
+        if x >= start && x < end {
+            return Some(command);
+        }
+        start = end + 3;
+    }
+    None
+}
+
+#[cfg(test)]
+mod composer_control_tests {
+    use super::*;
+    #[test]
+    fn controls_follow_runtime_row_and_queue_height() {
+        let mut s = Snapshot::default();
+        s.agent = "root".into();
+        s.model = "model".into();
+        s.provider = "vendor".into();
+        s.effort = "high".into();
+        let area = Rect::new(0, 15, 100, 9);
+        for queued in [false, true] {
+            if queued {
+                s.queue_lines.push("queued".into());
+            }
+            let y = composer_rows(area, &s)[2].y;
+            for (x, command) in [
+                (5, "/agent"),
+                (12, "/model"),
+                (18, "/model"),
+                (27, "/effort"),
+            ] {
+                assert_eq!(composer_control_at(area, &s, x, y), Some(command));
+                assert_eq!(composer_control_at(area, &s, x, y + 1), None);
+            }
+        }
+    }
+}
+
+/// Briefly resolve changed ASCII letters; stable words and Unicode stay readable.
+fn animated_voice_preview(cache: &mut Cache, text: &str) -> String {
+    if cache.voice_text != text {
+        let common = cache
+            .voice_text
+            .chars()
+            .zip(text.chars())
+            .take_while(|(a, b)| a == b)
+            .count();
+        cache.voice_stable_prefix = text
+            .chars()
+            .take(common)
+            .enumerate()
+            .filter(|(_, c)| c.is_whitespace())
+            .map(|(i, _)| i + 1)
+            .last()
+            .unwrap_or(0);
+        cache.voice_text = text.to_string();
+        cache.voice_changed_at = cache.spin;
+    }
+    let age = cache.spin.saturating_sub(cache.voice_changed_at);
+    text.chars()
+        .enumerate()
+        .map(|(i, c)| {
+            if age < 3
+                && i >= cache.voice_stable_prefix
+                && c.is_ascii_alphabetic()
+                && (i + age) % 3 != age
+            {
+                (b'a' + ((i * 17 + cache.spin * 11) % 26) as u8) as char
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod voice_animation_tests {
+    use super::*;
+    #[test]
+    fn changed_words_resolve_and_preserve_stable_text() {
+        let mut cache = Cache::default();
+        cache.voice_text = "hello word".into();
+        cache.spin = 10;
+        let first = animated_voice_preview(&mut cache, "hello world");
+        assert!(first.starts_with("hello "));
+        assert_ne!(first, "hello world");
+        cache.spin = 13;
+        assert_eq!(
+            animated_voice_preview(&mut cache, "hello world"),
+            "hello world"
+        );
+        assert_eq!(animated_voice_preview(&mut cache, "你好 🌍"), "你好 🌍");
+    }
+}
+
+#[cfg(test)]
+mod redesign_regressions {
+    use super::*;
+    use crate::bridge::Content;
+    use ratatui::{backend::TestBackend, Terminal};
+    #[test]
+    fn revision_cache_reuses_history_and_only_rewraps_changed_tail() {
+        let p = Palette::new(false);
+        let mut cache = Cache::default();
+        let mut blocks = vec![
+            Content {
+                id: "old".into(),
+                rev: "1".into(),
+                kind: "markdown".into(),
+                text: "history".into(),
+                ..Default::default()
+            },
+            Content {
+                id: "tail".into(),
+                rev: "1".into(),
+                kind: "markdown".into(),
+                text: "stream".into(),
+                ..Default::default()
+            },
+        ];
+        cache.update_content(&[], &blocks, 100, &p);
+        let history = cache.parts["|old:0"].clone();
+        blocks[1].text.push_str("ing");
+        blocks[1].rev = "2".into();
+        cache.update_content(&[], &blocks, 100, &p);
+        assert!(std::sync::Arc::ptr_eq(&history, &cache.parts["|old:0"]));
+        assert!(cache.lines.range(0, 100).any(|line| line
+            .spans
+            .iter()
+            .any(|span| span.content.contains("streaming"))));
+        assert_eq!(cache.lines.len(), cache.operations.len());
+        let text = cache
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        cache.update_content(&[], &blocks, 40, &p);
+        assert!(!std::sync::Arc::ptr_eq(&history, &cache.parts["|old:0"]));
+        assert!(text.contains("history"));
+    }
+    #[test]
+    fn context_cluster_and_controls_never_overlap_and_share_hit_targets() {
+        let s = Snapshot {
+            agent: "build".into(),
+            model: "opus-5.5".into(),
+            provider: "anthropic".into(),
+            effort: "high".into(),
+            context_label: "52K · 26% · 5.2%".into(),
+            context_used: Some(52000),
+            context_window: Some(1000000),
+            ..Default::default()
+        };
+        for width in [30, 50, 80, 120, 200] {
+            let area = Rect::new(7, 3, width, 7);
+            let row = composer_rows(area, &s)[2].y;
+            let layout = control_layout(&s, width.saturating_sub(9) as usize);
+            assert!(
+                control_spans(&s, &Palette::new(false), width.saturating_sub(9) as usize)
+                    .iter()
+                    .map(|span| span.content.width())
+                    .sum::<usize>()
+                    <= width.saturating_sub(9) as usize
+            );
+            for x in area.x..area.right() {
+                assert!(
+                    !(composer_control_at(area, &s, x, row).is_some()
+                        && composer_context_at(area, &s, x, row))
+                );
+            }
+            assert!(layout.text.contains("52K"));
+        }
+    }
+    #[test]
+    #[ignore = "manual 2,000-turn streaming/scroll frame benchmark"]
+    fn streaming_2000_turns_300_scroll_events() {
+        let mut s = Snapshot {
+            schema: 2,
+            status: "running".into(),
+            agent: "build".into(),
+            model: "test".into(),
+            ..Default::default()
+        };
+        for i in 0..2000 {
+            for (suffix, kind, text) in [
+                ("user", "user", "Inspect the parser"),
+                (
+                    "reply",
+                    "markdown",
+                    "I will inspect the parser and preserve all diagnostics.",
+                ),
+                ("tool", "tool_group", "Read nexus/parse.py · 412 lines"),
+            ] {
+                s.blocks.push(Content {
+                    id: format!("{i}:{suffix}"),
+                    rev: "1".into(),
+                    kind: kind.into(),
+                    title: if kind == "user" {
+                        text.into()
+                    } else {
+                        String::new()
+                    },
+                    text: text.into(),
+                    gap: 1,
+                    count: 7,
+                    status: "completed".into(),
+                    ..Default::default()
+                });
+            }
+        }
+        let mut terminal = Terminal::new(TestBackend::new(200, 50)).unwrap();
+        let mut cache = Cache::default();
+        let mut samples = Vec::new();
+        let draft = Editor::default();
+        let mut scroll = 0;
+        for event in 0..301 {
+            let start = std::time::Instant::now();
+            // 300 wheel events/s with 50 streaming snapshots/s: a new tail every sixth event.
+            if event % 6 == 0 {
+                let tail = s.blocks.last_mut().unwrap();
+                tail.rev = event.to_string();
+                tail.text = format!("Read nexus/parse.py · {} lines", event);
+                s.revision += 1;
+            }
+            scroll = (scroll + 3) % 8000;
+            terminal
+                .draw(|frame| {
+                    draw(
+                        frame, &s, &draft, &draft, &draft, "", 0, scroll, 0, &mut cache, false,
+                        false, false, false, 0, 0, 0,
+                    );
+                })
+                .unwrap();
+            if event > 0 {
+                samples.push(start.elapsed().as_secs_f64() * 1000.0);
+            }
+        }
+        samples.sort_by(f64::total_cmp);
+        eprintln!("2000 turns, 300 wheel events, simulated 50 snapshots/s: p50 {:.3} p95 {:.3} max {:.3} ms (TestBackend, no real terminal flush)",samples[150],samples[285],samples[299]);
+    }
+}

@@ -17,6 +17,10 @@ class ProviderError(NexusError, RuntimeError):
     """A model/provider transport or protocol failure."""
 
 
+class ProviderOverloaded(ProviderError):
+    """An explicit transient service overload, eligible for a bounded retry."""
+
+
 class MalformedToolCall(ProviderError):
     """A provider stream produced tool-call arguments that are not valid JSON.
 

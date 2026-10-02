@@ -112,6 +112,44 @@ def tool_batches(tools: Sequence[ToolCallView]) -> dict[str, str]:
     return out
 
 
+@dataclass(frozen=True)
+class ToolGroup:
+    """A stable native activity group; shared Textual formatting stays unchanged."""
+    id: str
+    members: tuple[ToolCallView, ...]
+    failures: int
+    running: bool
+
+    @property
+    def latest(self):
+        return next((tool for tool in reversed(self.members) if tool_status(tool) == "running"), self.members[-1])
+
+
+def group_tools(turn: TurnView) -> list[ToolGroup]:
+    """Consecutive calls, separated by visible messages and standalone tasks."""
+    events = sorted([(message.event_seq, 0, message) for message in turn.messages if message.text or message.thinking]
+                    + [(tool.event_seq, 1, tool) for tool in turn.tools], key=lambda row: (row[0], row[1]))
+    groups, pending = [], []
+    def finish():
+        if pending:
+            members = tuple(pending)
+            groups.append(ToolGroup(f"{turn.id}:g{members[0].call_id}", members,
+                sum(tool_status(tool) == "failed" for tool in members),
+                any(tool_status(tool) == "running" for tool in members)))
+            pending.clear()
+    for _, kind, value in events:
+        if kind == 0:
+            finish()
+        elif value.name.casefold() in {"task", "subagent"}:
+            finish()
+            pending.append(value)
+            finish()
+        else:
+            pending.append(value)
+    finish()
+    return groups
+
+
 def tool_heading(tool: ToolCallView) -> str:
     """``$ command`` for shells, ``→ Read path`` style for everything else."""
     name = tool.name.casefold()
@@ -570,7 +608,9 @@ def turn_footer_text(turn: TurnView) -> str:
     model = _turn_models(turn).split(", ")[0].rsplit("/", 1)[-1]
     usage = turn.usage
     prompt = usage.input_tokens + usage.cache_read_tokens + usage.cache_write_tokens
-    tokens = f"↑{_compact_tokens(prompt)} ↓{_compact_tokens(usage.output_tokens)}" if prompt or usage.output_tokens else ""
+    # This is additive provider usage for the whole turn, not the latest
+    # request size shown by the composer context meter.
+    tokens = f"turn ↑{_compact_tokens(prompt)} ↓{_compact_tokens(usage.output_tokens)}" if prompt or usage.output_tokens else ""
     cached = f"{round(usage.cache_read_tokens / prompt * 100)}% cached" if prompt and usage.cache_read_tokens else ""
     shown = any(block.kind == "thinking" and block.text.strip() for message in turn.messages for block in message.blocks)
     reasoning = (f"{_compact_tokens(usage.reasoning_tokens)} reasoning" + ("" if shown else " (not shown)")

@@ -512,9 +512,10 @@ def _opt_resource(args: Mapping[str, Any]) -> str | None:
     value = args.get("resource")
     if value is None:
         return None
-    if not isinstance(value, str) or not value.strip():
-        raise _SkillToolError("'resource' must be a non-empty string when given")
-    return value.strip()
+    if not isinstance(value, str):
+        raise _SkillToolError("'resource' must be a string when given")
+    # Some providers fill every optional field, sending "" for "not given".
+    return value.strip() or None
 
 
 async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
@@ -542,9 +543,11 @@ async def run(args: dict[str, Any], ctx: ToolContext) -> ToolExecutionResult:
         _check_cancel(ctx)
         skill = service.get(name)
         if skill is None:
+            names = getattr(service, "names", None)
+            known = ", ".join(sorted(names)) if names else "none"
             raise _SkillToolError(
-                f"unknown skill {name!r}; call ListExtensions to see available "
-                "skills, or check the skills index"
+                f"unknown skill {name!r}; available skills: {known}. Pass the "
+                "exact skill name and omit 'resource' to load the body"
             )
         generation = _generation(ctx)
 

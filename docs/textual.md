@@ -1,5 +1,8 @@
 # Textual app (`nexus chat`)
 
+Parallel tool markers occupy one cell of the left padding, keeping tool text
+aligned with standalone calls.
+
 The terminal chat shell. It is a **pure host client**: every session, model,
 agent, permission and turn operation is a host command over the Unix socket, and
 it renders the reduced `ConversationView`. It never reads session files.
@@ -59,7 +62,7 @@ import Textual besides `ui/tui/`):
 | `tui_list.py` | shared `ListPanel`/`ListItem` (completions and pickers): dim rows, grey selection, orange scrollbar, filter row |
 | `tui_model_picker.py` | fuzzy-searchable (`fuzzy.py`), grouped `/model` modal with favorites, recents, sort, `↻`/Ctrl+R refresh (`ModelsRefresh`) |
 | `tui_command_palette.py` | palette entries and the `SHORTCUTS`/`LEADER_SHORTCUTS` reference |
-| `tui_settings.py` | full-screen Settings page over `Settings*` commands |
+| `tui_settings.py` | large Settings modal over `Settings*` commands |
 | `tui_setup.py`, `tui_providers.py` | first-run setup; Providers pane (Claude card takes a pasted sign-in code) |
 | `tui_archived.py` | archived-session search/preview/resume dialog |
 | `tui_diff.py` | `ToolDiff`: one `textual_diff_view.DiffView` per file (split view: original left, updated right; plain filename titles) |
@@ -204,3 +207,17 @@ and folds routine entries while showing problems. Native controls are Ctrl+E
 open/close, Ctrl+A fold/unfold, PageUp/PageDown or wheel to scroll, and Escape
 return to the conversation. Migration progress lives in
 [../plans/RATATUI_PLAN.md](../plans/RATATUI_PLAN.md).
+
+## Provider usage refresh
+
+The usage modal opens with the last successful report for the current client.
+A loading indicator remains visible while its worker fetches fresh limits;
+refresh failures retain the cached report and append the error. Reconnecting to
+a different client discards cached display data. `r` refreshes and Escape closes.
+
+
+Settings opens in a large inset modal so the conversation remains visible around it.
+The native Voice section configures enabled input, auto-send, processing device
+and recording duration through host Settings commands without starting capture.
+Provider pages group sign-in options and connection management beneath a labelled
+connection status. Model downloads remain explicitly confirmed.

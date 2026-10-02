@@ -11,12 +11,13 @@ import contextlib
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 from ...ui.cli import open_client
 from ...ui_support.prompts import approval_choices, pending_questions
 from .actions import ShellActions, labelled
-from ...ui_support.context import context_usage
-from ...ui_support.hints import pick_hints
+from ...ui_support.context import context_usage, context_measure, price_tier_thresholds
+from ...ui_support.completion import root_agents
 from ...ui_support.tui_history import load_history
 from ...ui_support.clipboard import read_clipboard_image
 from .controller import NativeController as TuiController
@@ -24,9 +25,26 @@ from ...ui_support.text import escape_controls, redact, sanitize
 from ...ui_support.tool_details import sections_to_text, tool_detail_sections
 
 
+_OUTPUT_SECTIONS = frozenset({"Result", "Summary", "Error", "Progress"})
+_EXPAND_AFTER_LINES = 12  # outputs longer than this expand in place on click
+
+def _revision(block):
+    import hashlib
+    return hashlib.blake2s(json.dumps({key: value for key, value in block.items() if key != "rev"},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(), digest_size=8).hexdigest()
+
+
 def _safe_blocks(blocks):
-    return [{**block, **{key: redact(escape_controls(block[key])) for key in ("title", "text", "path", "detail") if key in block},
-             **({"chips": [redact(escape_controls(chip)) for chip in block["chips"]]} if block.get("chips") else {})} for block in blocks]
+    result = []
+    for block in blocks:
+        safe = {**block, **{key: redact(escape_controls(block[key])) for key in ("title", "text", "path", "detail", "color") if key in block}}
+        if block.get("chips"):
+            safe["chips"] = [redact(escape_controls(chip)) for chip in block["chips"]]
+        if "members" in block:
+            safe["members"] = _safe_blocks(block["members"])
+        safe["rev"] = _revision(safe)
+        result.append(safe)
+    return result
 
 
 def _project_turn(turn, shell, agents=None, literal=True):
@@ -37,13 +55,16 @@ def _project_turn(turn, shell, agents=None, literal=True):
     """
     from ...ui_support.timeline import (
         BATCH_GLYPHS, _has_message_content, _literal, submitted_attachment_summary,
-        thought_title, tool_batches, tool_row_text, tool_status, turn_agent_label, turn_footer_text,
+        thought_title, tool_batches, tool_row_text, tool_status, turn_footer_text,
         _turn_duration, _text)
     collapsed = bool(shell and turn.id in shell.collapsed_turns)
     lines = [f"\nTurn {turn.index} · {turn.phase}"] if literal else []
     emit = lines.append if literal else (lambda _line: None)
     entries = []  # (seq, rank, block, top_margin, bottom_margin)
-    first_reply = None
+    for retry in turn.retries:
+        if retry.reason == "provider_overloaded":
+            entries.append((retry.event_seq, 1, {"id": f"{turn.id}:retry:{retry.event_seq}", "kind": "literal",
+                "title": "Provider overloaded", "text": f"Retry {retry.attempt}/3 after {retry.delay_seconds}s"}, 1, 1, "retry"))
     for index, message in enumerate(turn.messages):
         if message.role == "user":
             if not _has_message_content(message):
@@ -78,34 +99,48 @@ def _project_turn(turn, shell, agents=None, literal=True):
             block = {"id": message.id + "text", "kind": "markdown", "text": message.text}
             entries.append((message.event_seq, 2, block, 0, 1, "assistant"))
             emit(f"assistant · text\n{message.text}")
-            if first_reply is None:
-                first_reply = message.event_seq
-    name, color = turn_agent_label(turn)
-    if name and first_reply is not None:
-        entries.append((first_reply, 1, {"id": turn.id + ":agent", "kind": "agent", "title": name, "color": color}, 0, 0, "agent"))
     batches = tool_batches(turn.tools)
     for tool in turn.tools:
-        # The full detail text is only needed for the literal projection (tests) and verbose mode.
-        body = sections_to_text(tool_detail_sections(tool)) if literal or (shell and shell.verbose) else ""
+        # Rows open nothing by default; only a long output expands in place (`out_id`),
+        # and only a spawned subagent opens a page of its own.
+        status = tool_status(tool)
+        sections = tool_detail_sections(tool)
+        out_lines = sum(len(row.value.splitlines()) or 1 for section in sections
+                        if section.title in _OUTPUT_SECTIONS for row in section.rows)
+        out_id = tool.call_id + ":output"
+        expandable = out_lines > _EXPAND_AFTER_LINES
+        expanded = bool(shell and (shell.verbose or out_id in shell.expanded))
+        detail_open = bool(shell and (shell.verbose or tool.call_id + ":detail" in shell.expanded))
+        body = sections_to_text(sections) if literal or detail_open else ""
+        if detail_open and not expanded and out_lines > _EXPAND_AFTER_LINES:
+            body_rows = body.splitlines()
+            output_start = next((i for i, row in enumerate(body_rows) if row.strip().rstrip(":").title() in _OUTPUT_SECTIONS), len(body_rows))
+            end = output_start + _EXPAND_AFTER_LINES + 1
+            if end < len(body_rows):
+                body = "\n".join(body_rows[:end] + [f"… {len(body_rows) - end} more lines · Enter for all"])
+
         emit(body)
         glyph = BATCH_GLYPHS.get(batches.get(tool.call_id, ""))
-        gutter = f"{glyph} " if glyph else ""
-        operation = {"kind": "tool_page", "id": tool.call_id}
+        operation = {"kind": "block_toggle", "id": tool.call_id + ":detail"}
         if tool.name.casefold() in {"task", "subagent"}:
             from ...ui_support.timeline import _task_children, _task_header, _task_metrics
             child = next(iter(_task_children(tool, agents or {})), None)
             head, running = _task_header(tool, child, 0)
-            text = f"{gutter}{head}\n{gutter}  {_task_metrics(tool, child, running)}"
-            if child is not None:  # Textual opens a spawned child's page straight away
-                operation = {"kind": "agent_page", "id": child.id}
+            text = f"{head}\n  {_task_metrics(tool, child, running)}"
+            operation = {"kind": "agent_page", "id": child.id} if child is not None else None
         else:
-            text = tool_row_text(tool, 0, gutter)
+            text = tool_row_text(tool, 0)
+            if expandable:
+                first, _, rest = text.partition("\n")
+                text = f"{first} · {out_lines} lines {'▾' if expanded else '▸'}" + (f"\n{rest}" if rest else "")
         if tool_status(tool) == "running":  # the native client animates this slot (docs/ratatui-parity.md)
             text = text.replace(SPINNER_FRAMES[0], SPINNER_SLOT, 1)
         block = {"id": tool.call_id, "kind": "tool", "status": tool_status(tool), "text": text,
-                 "detail": body if shell and shell.verbose else "", "operation": operation}
+                 "batch_glyph": glyph or "",
+                 "detail": body if detail_open else "", "operation": operation,
+                 "output_operation": {"kind": "block_toggle", "id": out_id} if detail_open and expandable else None}
         entries.append((tool.event_seq, 3, block, 0, 0, "tool"))
-        if tool.diff:
+        if tool.diff and (literal or detail_open):
             from ...ui_support.timeline import diff_sections, diff_split_rows, split_diff_files
             hunks = dict(split_diff_files(tool.diff))
             for diff in diff_sections(tool.diff):
@@ -113,12 +148,49 @@ def _project_turn(turn, shell, agents=None, literal=True):
                         for old_no, old_text, new_no, new_text, kind in diff_split_rows(hunks.get(diff.path, ""))]
                 entries.append((tool.event_seq, 3, {"id": tool.call_id + diff.path, "kind": "diff", "title": diff.path,
                     "path": diff.path, "added": diff.added, "removed": diff.removed, "diff_rows": rows,
-                    "operation": {"kind": "tool_page", "id": tool.call_id}}, 0, 0, "diff"))
+                    "operation": None}, 1, 1, "diff"))
     if turn.terminal and turn.error:
         entries.append((max((entry[0] for entry in entries), default=0) + 1, 4,
                         {"id": turn.id + ":error", "kind": "error", "text": "Error: " + _text(turn.error)}, 1, 0, "error"))
         emit(f"Error: {turn.error}")
     entries.sort(key=lambda entry: (entry[0], entry[1]))
+    from ...ui_support.timeline import group_tools, tool_heading, tool_summary
+    group_map = {tool.call_id: group for group in group_tools(turn) for tool in group.members
+                 if tool.name.casefold() not in {"task", "subagent"}}
+    emitted, grouped = set(), []
+    for entry in entries:
+        seq, rank, block, top, bottom, role = entry
+        group = group_map.get(block["id"]) if role == "tool" else None
+        if group is None:
+            # Diffs belong to expanded member detail, rather than the collapsed transcript.
+            if role != "diff":
+                grouped.append(entry)
+            continue
+        if group.id in emitted:
+            continue
+        emitted.add(group.id)
+        opened = bool(shell and (shell.verbose or group.id in shell.expanded))
+        members = []
+        for tool in group.members:
+            member = next(row[2] for row in entries if row[2]["id"] == tool.call_id)
+            heading = tool_heading(tool).split(" ", 1)[-1]
+            summary = tool_summary(tool)
+            if tool.diff:
+                from ...ui_support.timeline import diff_sections
+                diffs = diff_sections(tool.diff)
+                summary = f"+{sum(d.added for d in diffs)} −{sum(d.removed for d in diffs)}"
+            member = {**member, "title": tool.name.title(), "text": heading.removeprefix(tool.name.title()).strip() + (f" · {summary}" if summary else ""),
+                      "batch_glyph": "∥" if member.get("batch_glyph") else ""}
+            member["members"] = [row[2] for row in entries if row[5] == "diff" and row[2]["id"].startswith(tool.call_id)]
+            members.append(member)
+        latest = next(row for row in members if row["id"] == group.latest.call_id)
+        status = "running" if group.running else "failed" if group.failures else "completed"
+        text = f"{latest['title']} {latest['text']}"
+        grouped.append((seq, rank, {"id": group.id, "kind": "tool_group", "text": text,
+            "color": _agent_color(shell, getattr(getattr(shell, "controller", None), "agent_name", "build")),
+            "status": status, "count": len(group.members), "failures": group.failures, "collapsed": not opened,
+            "members": members if opened else [], "operation": {"kind": "block_toggle", "id": group.id}}, top, bottom, role))
+    entries = grouped
     if collapsed:
         entries = [entry for entry in entries if entry[5] == "user"]
     blocks, previous = [], None
@@ -126,11 +198,11 @@ def _project_turn(turn, shell, agents=None, literal=True):
         if previous is not None:
             if previous[0] == "user":
                 top = max(top, 1)
-            elif previous[0] == "tool" and role in {"assistant", "agent"}:
+            elif (previous[0] == "tool" and role in {"assistant", "agent"}) or (previous[0] == "assistant" and role == "tool"):
                 top = max(top, 1)
             block = {**block, "gap": max(previous[1], top)}
         blocks.append(block)
-        previous = (role, bottom)
+        previous = (role, 0 if role == "assistant" else bottom)
     if collapsed:
         reply = next((message.text.splitlines()[0] for message in turn.messages if message.role == "assistant" and message.text), "")
         metrics = " · ".join(part for part in (str(turn.usage.total_tokens) + " tokens" if turn.usage.total_tokens else "", _turn_duration(turn) or "") if part)
@@ -145,22 +217,41 @@ def _project_turn(turn, shell, agents=None, literal=True):
     return [redact(escape_controls(line)) for line in lines], _safe_blocks(blocks)
 
 
+def _agent_color(shell, name):
+    from ...ui_support.context_header import agent_color
+    identity = getattr(getattr(shell, "preview", None), "agent", None)
+    identity = identity if isinstance(identity, dict) and identity.get("name") == name else getattr(shell, "agent_definitions", {}).get(name, {})
+    return identity.get("color") or agent_color(name)
+
+
 def _context_blocks(shell, view):
     """The request-context header that opens every conversation (Textual ContextHeader)."""
-    from ...ui_support.context_header import NEUTRAL, HeaderBlock, agent_color, header_blocks
+    from ...ui_support.context_header import NEUTRAL, HeaderBlock, header_blocks
     from ...ui_support.context import _compact_tokens
     preview = shell.preview
     if preview is not None and hasattr(preview, "tools"):
-        agent = preview.agent if isinstance(getattr(preview, "agent", None), dict) else {}
-        color = agent.get("color") if isinstance(agent.get("color"), str) and agent.get("color") else agent_color(str(agent.get("name") or "build"))
+        color = _agent_color(shell, getattr(getattr(shell, "controller", None), "agent_name", (getattr(preview, "agent", {}) or {}).get("name", "build")))
         found = header_blocks(preview, color)
     else:
         found = [HeaderBlock(key, label, "", "", None, NEUTRAL) for key, label in (
             ("system", "System prompt"), ("tools", "Tools"), ("agents", "AGENTS.md"), ("skills", "Skills"), ("mcp", "MCP"))]
     return [{"id": "context:" + block.key, "kind": "context", "title": block.label, "text": block.body,
-             "status": f"~{_compact_tokens(block.tokens)} tokens" if block.tokens else "", "color": block.color,
-             "gap": 1 if index else 0, "operation": {"kind": "context_show", "key": block.key}}
-            for index, block in enumerate(found)]
+             "status": f"~{_compact_tokens(block.tokens)} tokens" if block.tokens else "", "color": _agent_color(shell, getattr(getattr(shell, "controller", None), "agent_name", (getattr(preview, "agent", {}) or {}).get("name", "build"))),
+             "gap": 1, "operation": {"kind": "context_show", "key": block.key}}
+            for block in found]
+
+
+def _compact_header(shell, view):
+    """One compact chip strip; its full labelled sections open from the same menu."""
+    chips = _context_blocks(shell, view)
+    preview = shell.preview
+    counts = {"context:tools": len(getattr(preview, "tools", [])),
+              "context:skills": len(getattr(preview, "skills_index", [])),
+              "context:mcp": len(getattr(preview, "mcp", []))}
+    chips = [{**chip, "text": "", "title": chip["title"] + (f" {counts[chip['id']]}" if chip["id"] in counts and preview else ""),
+              "gap": 0} for chip in chips]
+    return [{"id": "context:header", "kind": "context_header", "gap": 1, "color": chips[0]["color"],
+             "members": chips, "operation": {"kind": "context_menu"}}]
 
 
 def _details_panel(controller, view, shell):
@@ -171,7 +262,31 @@ def _details_panel(controller, view, shell):
                         effort=getattr(controller, "reasoning_effort", None))
     files = modified_files(view)
     added, removed = sum(f.added for f in files), sum(f.removed for f in files)
+    report = getattr(shell, "mcp_report", None) or {}
+    daemon = report.get("daemon") or {}
+    from importlib.metadata import version
+    from datetime import datetime
+    def stamp(value):
+        try:
+            return datetime.fromtimestamp(value).astimezone().strftime("%Y-%m-%d %H:%M:%S") if value is not None else "unavailable"
+        except (TypeError, ValueError, OverflowError, OSError):
+            return "unavailable"
+    selected = next((row for row in getattr(shell, "sessions", []) if row["id"] == getattr(controller, "session", view.session_id)), {})
+    rows = [("ID", str(getattr(controller, "session", view.session_id))),
+            ("Title", selected.get("title") or getattr(controller, "title", None) or "Untitled"), *rows,
+            ("Provider", getattr(controller, "provider", None) or "unavailable"),
+            ("Cost", str(getattr(view.usage, "cost", None) or "unavailable")),
+            ("Created", stamp(view.turns[0].started_ts) if view.turns else "unavailable"),
+            ("Updated", stamp(view.turns[-1].updated_ts) if view.turns else "unavailable"),
+            ("Workspace", str(getattr(shell, "workspace", "") or "unavailable")),
+            ("Branch", str((report.get("git") or {}).get("branch") or "unavailable"))]
     return {
+        "tab": shell.preferences.values["details_tab"] if shell else "Session",
+        "logs_header": [["Session", str(getattr(controller, "session", view.session_id))], ["Daemon pid", str(daemon.get("pid") or "unavailable")],
+                        ["Socket", redact(escape_controls(str(daemon.get("socket") or "unavailable")))],
+                        ["Client", str(getattr(getattr(getattr(controller, "client", None), "health", None), "version", "unavailable"))],
+                        ["Bridge", "2 (schema 1 compatible)"], ["Nexus", version("nexus-harness")],
+                        *[["Timing", line] for line in getattr(getattr(shell, "logs", None), "trace", [])]],
         "session": [[label, redact(escape_controls(value))] for label, value in rows],
         "files": [{"path": redact(escape_controls(f.path)), "added": f.added, "removed": f.removed, "created": f.created,
                    "open": (is_open := bool(shell and f.path in shell.open_files)),
@@ -199,11 +314,36 @@ def _settings_nav(shell):
     return {"items": [[label, key or "", key is None] for key, label in SETTINGS_SECTIONS], "selected": selected}
 
 
-def _meter_extras(view):
-    """Price-tier warning and the live thinking summary, appended to the usage meter as Textual does."""
-    from ...ui_support.context import _compact_tokens, price_tier_thresholds, thinking_status
-    tiers = price_tier_thresholds(view)
-    return (f"price ↑ at {_compact_tokens(tiers[0])}" if tiers else "", thinking_status(view))
+def _context_display_view(view, shell):
+    """Fill missing durable accounting from the host's current request preview."""
+    preview = getattr(shell, "preview", None)
+    accounting = dict(getattr(preview, "request_context", {}) or {})
+    durable = view.context if isinstance(view.context, dict) else {}
+    durable = durable.get("context", durable)
+    if isinstance(durable, dict):
+        accounting.update({key: value for key, value in durable.items() if value is not None})
+    return SimpleNamespace(context=accounting)
+
+
+def _context_label(view):
+    """Used tokens and occupancy of each reported price tier/window."""
+    used, _window, _measured = context_measure(view)
+    def compact(value):
+        if value is None:
+            return "unavailable"
+        if value >= 1_000_000:
+            return f"{value / 1_000_000:.1f}".rstrip("0").rstrip(".") + "M"
+        if value >= 1_000:
+            return f"{value / 1_000:.1f}".rstrip("0").rstrip(".") + "K"
+        return str(value)
+    limits = _context_tiers(view)
+    return " · ".join([compact(used), *[f"{used / limit * 100:.1f}%" for limit in limits if used is not None]])
+
+
+def _context_tiers(view):
+    _, window, _ = context_measure(view)
+    boundaries = price_tier_thresholds(view)
+    return ([boundaries[0]] if boundaries and boundaries[0] != window else []) + ([window] if window else [])
 
 
 def _queue_lines(view):
@@ -252,8 +392,8 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
     blocks = []
     context_lines = []
     if shell and shell.preferences.values["context_preview"]:
-        blocks.extend(_guarded(failures, "Context header", lambda: _safe_blocks(_context_blocks(shell, view)), []))
-    flags = (bool(shell and shell.verbose), frozenset(shell.expanded) if shell else frozenset(), frozenset(shell.collapsed_turns) if shell else frozenset(), id(view.agents), literal)
+        blocks.extend(_guarded(failures, "Context header", lambda: _safe_blocks(_compact_header(shell, view)), []))
+    flags = (_agent_color(shell, getattr(controller, "agent_name", "build")), bool(shell and shell.verbose), frozenset(shell.expanded) if shell else frozenset(), frozenset(shell.collapsed_turns) if shell else frozenset(), id(view.agents), literal)
     for turn in view.turns:
         cached = shell.turn_cache.get(turn.id) if shell else None
         if cached and cached[0] is turn and cached[1] == flags:
@@ -273,14 +413,10 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
                     shell.turn_cache_bytes -= removed[4]
         lines.extend(turn_lines)
         if blocks and turn_blocks:  # Textual's .turn margin-bottom: one blank row between turns
-            turn_blocks = [{**turn_blocks[0], "gap": max(1, turn_blocks[0].get("gap", 0))}, *turn_blocks[1:]]
+            first = {**turn_blocks[0], "gap": max(1, turn_blocks[0].get("gap", 0))}
+            first["rev"] = _revision(first)
+            turn_blocks = [first, *turn_blocks[1:]]
         blocks.extend(turn_blocks)
-    if not view.turns:  # grey tips in an empty session; the native client blanks them while typing
-        rows = pick_hints(view.session_id or "session")
-        keys_width = max(len(keys) for keys, _ in rows)
-        tail_width = max(len(text) for _, text in rows)
-        blocks.append({"id": "empty-hints", "kind": "hints", "gap": 4,
-                       "text": "\n".join(f"{redact(escape_controls(keys.rjust(keys_width)))}\t{redact(escape_controls(text.ljust(tail_width)))}" for keys, text in rows)})
     linked = {agent_id for turn in view.turns for tool in turn.tools for agent_id in tool.child_agent_ids}
     for agent in view.agents.values():
         if agent.id in linked:  # shown by its Task card
@@ -318,11 +454,22 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
     if notice:
         lines.append(redact(escape_controls(f"Error: {notice}")))
         blocks.append({"id": "notice", "title": "Notice", "text": redact(escape_controls(notice)), "kind": "literal"})
-    return {"schema": 1, "revision": revision, "title": f"Nexus · {view.session_id}",
+    display_view = _context_display_view(view, shell)
+    used, window, _measured = context_measure(display_view)
+    snapshot = {"schema": 1, "revision": revision, "title": f"Nexus · {view.session_id}",
             "status": view.phase,
+            "panel_layout": shell.panel_layout if shell else "modal",
+            "panel_format": shell.panel_format if shell else "plain",
+            "panel_loading": bool(shell and shell.panel_loading),
             "blocks": blocks,
             "context_lines": [redact(escape_controls(line)) for line in context_lines],
-            "context_usage": " · ".join(filter(None, (context_usage(view), *_meter_extras(view)))),
+            "context_used": used,
+            "context_window": window,
+            "context_marks": [],
+            "context_tiers": _context_tiers(display_view),
+            "context_usage": context_usage(view),
+            "context_note": "",
+            "context_label": _context_label(display_view),
             "queue_lines": _queue_lines(view),
             "nav": _settings_nav(shell),
             "update_notice": redact(escape_controls(shell.update_notice)) if shell else "",
@@ -349,6 +496,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "voice_preview": redact(escape_controls(shell.voice.preview)) if shell else "",
             "voice_level": shell.voice.level if shell else 0,
             "completion_query": getattr(shell, "completion_query", "") if shell else "",
+            "completion_prefix": getattr(shell, "completion_prefix", "") if shell else "",
             "completions": getattr(shell, "completions", []) if shell else [],
             "generation": shell.generation if shell else 0,
             "panel_title": redact(escape_controls(shell.panel_title)) if shell else "",
@@ -361,6 +509,43 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "model": redact(escape_controls(getattr(controller, "model", None) or "default")),
             "attachments": len(shell.attachments) if shell else 0,
             "lines": lines}
+    if shell and shell.workflows.agent_page_id:
+        agent = shell.workflows.selected_agent
+        if agent is not None:
+            from ...host.protocol import ContextInspectResult
+            fields = set(ContextInspectResult.__struct_fields__) - {"session"}
+            context = shell.workflows.agent_context
+            preview = ContextInspectResult(session=agent.id, **{k: v for k, v in context.items() if k in fields})
+            child_shell = SimpleNamespace(preview=preview)
+            child_blocks = _compact_header(child_shell, agent.body)
+            prompt_text = next((str(block.get("text") or "") for message in preview.messages[:1]
+                               for block in message.get("blocks", []) if block.get("text")), "")
+            if not prompt_text:
+                prompt_text = next((str(tool.input.get("prompt") or "") for turn in view.turns for tool in turn.tools
+                                    if tool.call_id == agent.parent_call_id), agent.task or agent.description)
+            child_blocks.insert(1, {"id": agent.id + ":task", "kind": "context", "title": "Task", "text": prompt_text, "gap": 1})
+            if not context:
+                child_blocks[0]["text"] = "Waiting for the first request…" if agent.status == "spawned" else "Not recorded for this agent"
+            for turn in agent.body.turns:
+                _, projected = _project_turn(turn, shell, agent.body.agents, literal=False)
+                child_blocks.extend(projected)
+            from dataclasses import replace
+            agent_status = "failed" if agent.is_error or agent.ok is False else agent.status
+            snapshot.update(blocks=_safe_blocks(child_blocks), agent_page=agent.id,
+                status="running" if agent.status == "spawned" else "done",
+                sessions_sidebar=False, sessions=[], tabs=[], prompt=None, queue_lines=[],
+                completions=[], voice_phase="idle", voice_preview="",
+                agent=agent.type or "subagent", model=agent.model or preview.model or "default",
+                title=f"{agent.type or 'Subagent'} · {agent.description or agent.task}",
+                details_panel=_details_panel(SimpleNamespace(agent_name=agent.type, model=agent.model), replace(agent.body, phase=agent_status), shell))
+    snapshot["agent_color"] = _agent_color(shell, snapshot["agent"])
+    if snapshot.get("agent_page"):
+        snapshot["agent_color"] = next((block["color"] for block in snapshot["blocks"]
+                                        if block.get("id") == "context:header"), snapshot["agent_color"])
+    for block in snapshot["blocks"]:
+        if not block.get("rev"):
+            block["rev"] = _revision(block)
+    return snapshot
 
 
 async def run(workspace: Path, session: str, binary: Path, client=None, reconnect=None) -> int:
@@ -376,8 +561,10 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
     write_lock = asyncio.Lock()
     revision = 0
     last_sent = [""]
+    sent_blocks = []
+    sent_identity = None
     async def update(event=False):
-        nonlocal revision
+        nonlocal revision, sent_blocks, sent_identity
         if event is None:
             shell.notice = "Disconnected: use /reconnect to replay and reattach"
         elif event is False and shell.notice.startswith("Disconnected"):
@@ -390,20 +577,29 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
             # The literal `lines` projection is a test seam; the native typed blocks already
             # carry the transcript and the full-detail actions, so it is not built here.
             snapshot = project(controller, revision, shell=shell, literal=False)
-            encoded = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
             # Poll ticks that change nothing are not resent; one-shot composer
             # fields (restore/insert) always are, since they repeat legitimately.
-            fingerprint = json.dumps({**snapshot, "revision": 0}, ensure_ascii=False)
+            fingerprint = json.dumps({**snapshot, "revision": 0, "blocks": [(block["id"], block["rev"]) for block in snapshot["blocks"]]}, ensure_ascii=False)
             one_shot = snapshot.get("restore") or snapshot.get("insert")
             if fingerprint == last_sent[0] and not one_shot:
                 return
             last_sent[0] = fingerprint
+            identity = (snapshot["generation"], snapshot.get("agent_page", ""))
+            current = [(block["id"], block["rev"]) for block in snapshot["blocks"]]
+            start = 0
+            if identity == sent_identity:
+                while start < min(len(current), len(sent_blocks)) and current[start] == sent_blocks[start]:
+                    start += 1
+            wire = {**snapshot, "schema": 2, "blocks_from": start, "blocks": snapshot["blocks"][start:]}
+            encoded = json.dumps(wire, ensure_ascii=False, separators=(",", ":"))
             process.stdin.write((encoded + "\n").encode())
+            sent_blocks, sent_identity = current, identity
             shell.composer_restore = ""
             shell.composer_insert = ""
             shell.composer_auto_send = False
             shell.composer_insert_kind = ""
             await process.stdin.drain()
+    shell.on_update = update
     poll_task = None
     async def poll():
         preview_cursor = -1
@@ -433,8 +629,11 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                 archived = await shell.client.list_archived_sessions("", limit=200)
                 count = len(archived.sessions)
                 shell.archived_label = f"Archived · {count}{'+' if archived.has_more else ''}" if count else ""
-                if shell.workflows.agent_page_id and shell.panel_title == "Agent transcript":
-                    shell.panel_lines = labelled(await shell.client.agent_transcript(controller.session, shell.workflows.agent_page_id))
+                if shell.workflows.agent_page_id and not shell.workflows.agent_context:
+                    agent_id, generation, session = shell.workflows.agent_page_id, shell.generation, controller.session
+                    result = await shell.client.agent_transcript(session, agent_id)
+                    if (agent_id, generation, session) == (shell.workflows.agent_page_id, shell.generation, controller.session):
+                        shell.workflows.agent_context = result.get("context") or {}
             async def dictation():
                 if shell.panel_title == "Local dictation":
                     await shell.voice.open()
@@ -466,10 +665,12 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     if "while the session is active" not in str(exc):
                         raise
                 if preview is not None and generation == shell.generation:
+                    from datetime import datetime
                     shell.preview = preview
+                    shell.preview_at = datetime.now().astimezone()
                     preview_cursor = cursor
             async def logs():
-                if shell.logs.open:
+                if shell.logs.open and shell.logs.visible:
                     await shell.logs.poll()
             for label, work in (("Sessions", sessions), ("Dictation", dictation), ("Health", health), ("Context", context), ("Logs", logs)):
                 await section(label, work)
@@ -553,11 +754,16 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                                 shell.notice = "Question already answered by another client"
                 elif action["type"] == "operation":
                     operation = action.get("operation")
-                    allowed_operations = [item.get("operation") for item in shell.items] + [block.get("operation") for block in project(controller, revision, shell=shell, literal=False)["blocks"]]
+                    def operations(blocks):
+                        for block in blocks:
+                            yield block.get("operation")
+                            yield block.get("output_operation")
+                            yield from operations(block.get("members", []))
+                    allowed_operations = [item.get("operation") for item in shell.items] + list(operations(project(controller, revision, shell=shell, literal=False)["blocks"]))
                     if operation and operation in allowed_operations:
                         if operation["kind"] == "block_toggle":
                             if operation["id"] in shell.expanded: shell.expanded.remove(operation["id"])
-                            else: shell.expanded.add(operation["id"])
+                            elif len(shell.expanded) < 4096: shell.expanded.add(operation["id"])
                         else:
                             if await shell.workflows.operate(operation) is False:
                                 process.stdin.close()
@@ -573,14 +779,14 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     if target and target["kind"] == "settings_read":
                         await shell.workflows.operate({"kind": "confirm", "label": "Delete this file or restore its built-in default?", "next": {**target, "kind": "settings_delete"}})
                 elif action["type"] == "voice_stop":
-                    async def finish_voice(discard):
+                    async def finish_voice(discard, send):
                         try:
-                            await shell.voice.stop(discard)
+                            await shell.voice.stop(discard, send=send)
                         except Exception as exc:
                             shell.notice = str(exc)
                         await update()
                     if not shell.voice.finish_task or shell.voice.finish_task.done():
-                        shell.voice.finish_task = asyncio.create_task(finish_voice(action.get("discard", False)))
+                        shell.voice.finish_task = asyncio.create_task(finish_voice(action.get("discard", False), action.get("send", False)))
                 elif action["type"] == "voice_discard":
                     await shell.voice.discard()
                 elif action["type"] == "context_header":
@@ -591,15 +797,33 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     key = action.get("key")
                     if key in {"sessions_sidebar", "details_sidebar", "context_preview"}:
                         shell.preferences.set(key, not shell.preferences.values[key])
+                        shell.logs.open = shell.preferences.values["details_sidebar"] and shell.preferences.values["details_tab"] == "Logs"
                 elif action["type"] == "file_toggle":
                     path = action["text"]
                     if path in shell.open_files:
                         shell.open_files.discard(path)
                     elif len(shell.open_files) < 256:
                         shell.open_files.add(path)
+                elif action["type"] == "details_tab":
+                    tab = action.get("text")
+                    if tab in {"Session", "Files", "MCP", "Logs"}:
+                        shell.preferences.set("details_tab", tab)
+                        shell.logs.open = tab == "Logs" and shell.preferences.values["details_sidebar"]
+                        if shell.logs.open and shell.logs.visible:
+                            await shell.logs.poll()
+                elif action["type"] == "details_visible":
+                    shell.logs.visible = bool(action.get("open"))
+                elif action["type"] == "ui_trace":
+                    shell.logs.trace = [sanitize(line, 256) for line in action.get("lines", [])[:12]]
+                elif action["type"] == "update_help":
+                    shell.show("Nexus update", (shell.update_notice or "Run nexus update to check and install the current release.") + "\nRun this command in your terminal. Esc closes this help.")
+                elif action["type"] == "context_popover":
+                    shell.context_popover()
                 elif action["type"] == "logs":
+                    shell.preferences.set("details_sidebar", bool(action.get("open", True)))
+                    shell.preferences.set("details_tab", "Logs")
                     shell.logs.open = bool(action.get("open", True))
-                    if shell.logs.open:
+                    if shell.logs.open and shell.logs.visible:
                         await shell.logs.poll()
                 elif action["type"] == "logs_fold":
                     shell.logs.show_all = not shell.logs.show_all
@@ -624,6 +848,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                 elif action["type"] == "complete":
                     from ...ui_support.completion import complete
                     query = shell.completion_query = action["text"]
+                    shell.completion_prefix = action.get("prefix", query)
                     shell.completions = await complete(
                         shell.client, action.get("prefix", query), query, efforts=controller.supported_levels)
                 elif action["type"] == "nav_select":
@@ -655,11 +880,11 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     await shell.client.select_reasoning_effort(controller.session, levels[(index+1)%len(levels)])
                     await controller.refresh_agent_metadata()
                 elif action["type"] == "cycle_agent":
-                    agents = await shell.client.list_agents()
+                    agents = root_agents(await shell.client.list_agents())
                     names = [row["name"] for row in agents]
                     if names:
                         index = names.index(controller.agent_name) if controller.agent_name in names else -1
-                        await controller.select_agent(names[(index+1)%len(names)])
+                        await shell.select_agent(names[(index+1)%len(names)])
                 elif action["type"] == "session_actions":
                     row = next((row for row in shell.sessions if row["id"] == action["text"] and row["workspace"] == action["workspace"]), None)
                     if row:
@@ -685,6 +910,10 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                 await update()
         return await process.wait()
     finally:
+        if shell.usage_task:
+            shell.usage_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await shell.usage_task
         if poll_task:
             poll_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

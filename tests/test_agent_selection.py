@@ -524,3 +524,25 @@ async def test_root_agent_fallbacks_ride_in_request_metadata(tmp_path):
     [event async for event in runtime.session("fb").send("go")]
     assert provider.requests[0].metadata["agent_fallback"] == ["scripted/backup", "other/model"]
     await runtime.aclose()
+
+
+async def test_model_and_effort_are_remembered_per_root_agent(tmp_path):
+    _write_plan_agent(tmp_path)
+    runtime = Runtime(tmp_path, home=tmp_path / "home", config=_config("build"),
+                      providers={"scripted": ScriptedProvider(text_response("ok"))})
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+    await facade.handle(p.ModelSelect(session="s", ref="scripted/build-model"))
+    await facade.handle(p.AgentSelect(session="s", name="plan"))
+    await facade.handle(p.ModelSelect(session="s", ref="scripted/plan-model"))
+    assert runtime.session("s").model_selection.reference == "scripted/plan-model"
+
+    await facade.handle(p.AgentSelect(session="s", name="build"))
+    assert runtime.session("s").model_selection.reference == "scripted/build-model"
+    await facade.handle(p.AgentSelect(session="s", name="plan"))
+    assert runtime.session("s").model_selection.reference == "scripted/plan-model"
+
+    # A second runtime on the same home sees the stored choice (machine state).
+    other = Runtime(tmp_path, home=tmp_path / "home", config=_config("build"),
+                    providers={"scripted": ScriptedProvider(text_response("ok"))})
+    assert other._agent_choices.get("build") == ("scripted/build-model", None)

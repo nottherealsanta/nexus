@@ -402,6 +402,13 @@ def _on_turn_terminal(
         "messages": messages,
         "updated_ts": event.ts,
     }
+    if phase != "completed":
+        changes["tools"] = [
+            replace(tool, status="failed", is_error=True,
+                    error=tool.error or _as_str(data.get("error")) or _as_str(data.get("reason")) or "Turn ended before this tool finished")
+            if tool.status in {"requested", "running"} else tool
+            for tool in turn.tools
+        ]
     if phase == "completed":
         changes["stop_reason"] = _as_str(data.get("stop_reason"))
         usage = data.get("usage")
@@ -605,6 +612,8 @@ def _on_model_retrying(state: ConversationView, event: Event, data: Mapping[str,
     state, index = _turn_for(state, event)
     turn = state.turns[index]
     retry = RetryView(
+        event_seq=event.seq,
+        delay_seconds=_as_int(data.get("delay_seconds")),
         iteration=_as_int(data.get("iteration"), turn.iteration),
         attempt=_as_int(data.get("attempt")),
         from_provider=_as_str(data.get("from_provider")),
@@ -613,7 +622,9 @@ def _on_model_retrying(state: ConversationView, event: Event, data: Mapping[str,
         model=_as_str(data.get("model")),
         reason=_as_str(data.get("reason")),
     )
-    turn = replace(turn, retries=[*turn.retries, retry], updated_ts=event.ts)
+    messages = [replace(message, done=True) if message.role == "assistant" and not message.done else message
+                for message in turn.messages] if retry.reason == "provider_overloaded" else turn.messages
+    turn = replace(turn, messages=messages, retries=[*turn.retries, retry], updated_ts=event.ts)
     return _put(state, index, turn)
 
 # ---------------------------------------------------------------------------

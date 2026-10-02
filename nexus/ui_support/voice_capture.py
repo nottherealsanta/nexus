@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 import struct
 import threading
 from collections import deque
@@ -10,6 +11,38 @@ from collections.abc import Callable
 from typing import Any
 
 SAMPLE_RATE = 16_000
+_CUE_RATE = 44_100
+_CUES = {"start": (660.0, 880.0), "stop": (880.0, 587.0)}  # rising on, falling off
+
+
+def _cue_pcm(kind: str) -> bytes:
+    """Two short soft notes as mono PCM16: rising when dictation starts, falling when it ends."""
+    out = bytearray()
+    for freq in _CUES[kind]:
+        count = int(_CUE_RATE * 0.07)
+        for i in range(count):
+            envelope = math.sin(math.pi * i / count) ** 2
+            out += struct.pack("<h", int(9000 * envelope * math.sin(2 * math.pi * freq * i / _CUE_RATE)))
+    return bytes(out)
+
+
+def play_cue(kind: str, *, wait: bool = False) -> None:
+    """Best-effort start/stop sound; silent without an output device or with ``NEXUS_VOICE_SOUNDS=off``."""
+    if os.environ.get("NEXUS_VOICE_SOUNDS", "").lower() in {"off", "0", "false"}:
+        return
+
+    def run() -> None:
+        try:
+            import sounddevice
+            with sounddevice.RawOutputStream(samplerate=_CUE_RATE, channels=1, dtype="int16") as stream:
+                stream.write(_cue_pcm(kind))
+        except Exception:  # noqa: BLE001, S110 - a missing speaker must never break dictation
+            pass
+
+    if wait:
+        run()
+    else:
+        threading.Thread(target=run, name="voice-cue", daemon=True).start()
 
 
 class VoiceCaptureError(RuntimeError):
@@ -23,7 +56,8 @@ class VoiceCaptureError(RuntimeError):
 class Recorder:
     """Capture bounded mono PCM16 audio; import sounddevice only when started."""
 
-    def __init__(self, max_seconds: int = 120, on_level: Callable[[float], None] | None = None):
+    def __init__(self, max_seconds: int = 120, on_level: Callable[[float], None] | None = None, *, cues: bool = True):
+        self.cues = cues
         self.max_seconds = max(1, min(120, int(max_seconds)))
         self.on_level = on_level
         self._chunks: deque[bytes] = deque()
@@ -38,6 +72,9 @@ class Recorder:
             import sounddevice
         except ImportError as exc:
             raise VoiceCaptureError("voice_unavailable", "Install sounddevice to use the microphone") from exc
+
+        if self.cues:
+            play_cue("start", wait=True)  # finished before the microphone opens, so it is not recorded
 
         def callback(indata, frames, _time_info, status):
             del frames, status
@@ -91,6 +128,8 @@ class Recorder:
                 self._stream.close()
             finally:
                 self._stream = None
+            if self.cues:
+                play_cue("stop")
         with self._lock:
             pcm = b"".join(self._chunks)
             self._chunks.clear()

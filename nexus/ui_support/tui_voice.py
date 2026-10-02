@@ -505,7 +505,7 @@ class VoiceController:
         ))
         strip.place()
 
-    async def stop(self) -> None:
+    async def stop(self, *, send: bool = False) -> None:
         recorder, request_id, session = self.recorder, self.request_id, self.session
         if recorder is None or request_id is None:
             return
@@ -549,7 +549,7 @@ class VoiceController:
         suffix = " " if after and not after[0].isspace() else ""
         editor.insert(prefix + text + suffix)
         editor.focus()
-        if self.auto_send:
+        if send or self.auto_send:
             editor.post_message(editor.SubmitRequested(editor.text))
             editor.clear()
 

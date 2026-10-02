@@ -8,7 +8,7 @@ from pathlib import Path
 
 class Preferences:
     DEFAULTS = {"theme": "nexus-dark", "sessions_sidebar": True, "details_sidebar": True,
-                "context_preview": True, "model_favorites": [], "model_recent": []}
+                "details_tab": "Session", "context_preview": True, "model_favorites": [], "model_recent": []}
 
     def __init__(self, path=None):
         self.path = path or Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "nexus/tui.json"
@@ -22,9 +22,13 @@ class Preferences:
                             self.values[key] = value[key]
         except (OSError, ValueError):
             pass
+        if self.values["details_tab"] not in {"Session", "Files", "MCP", "Logs"}:
+            self.values["details_tab"] = "Session"
 
     def set(self, key, value):
         if key not in self.DEFAULTS or not isinstance(value, type(self.DEFAULTS[key])):
+            return
+        if key == "details_tab" and value not in {"Session", "Files", "MCP", "Logs"}:
             return
         if isinstance(value, list):
             value = list(dict.fromkeys(item for item in value if isinstance(item, str) and len(item) <= 256))[:100]

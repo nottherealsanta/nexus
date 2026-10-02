@@ -243,7 +243,7 @@ function groupSummary(group){const clauses=[],counts=new Map();for(const item of
   for(const [cls,d] of counts){if(cls==='read')clauses.push(`Read ${d.n} ${d.n===1?'file':'files'}`);else if(cls==='search')clauses.push(`Searched ${d.n} ${d.n===1?'location':'locations'}`);else if(cls==='command')clauses.push(`Ran ${d.n} ${d.n===1?'command':'commands'}`);else if(cls==='edit')clauses.push(d.files.size?`Edited ${d.files.size} ${d.files.size===1?'file':'files'}`:`Edited ${d.n} ${d.n===1?'time':'times'}`);else{const names=[...d.names];clauses.push(names.length===1?`Used ${names[0]}${d.n===1?' once':` ${d.n} times`}`:`Used ${d.n} tools (${names.join(', ')})`);}}
   return clauses.join(' · ');
 }
-function entities(view){const out=[];for(const turn of view?.turns||[]){const own=[];for(const m of turn.messages||[])own.push({kind:'message',seq:m.event_seq,id:m.id,turn,data:m});for(const t of turn.tools||[])own.push({kind:'tool',seq:t.event_seq,id:t.call_id,turn,data:t});const last=Math.max(0,...own.map(item=>Number(item.seq)||0));out.push(...own);if(turn.error)out.push({kind:'boundary',seq:last+.3,id:`error:${turn.id}`,turn,data:{kind:'error',text:turn.error}});if(turn.phase==='failed'||turn.phase==='cancelled')out.push({kind:'boundary',seq:last+.4,id:`end:${turn.id}`,turn,data:{kind:'end',phase:turn.phase}});if(['completed','failed','cancelled'].includes(turn.phase)&&(turn.messages||[]).some(m=>m.role==='assistant'))out.push({kind:'footer',seq:last+.6,id:`footer:${turn.id}`,turn,data:turn});}
+function entities(view){const out=[];for(const turn of view?.turns||[]){const own=[];for(const m of turn.messages||[])own.push({kind:'message',seq:m.event_seq,id:m.id,turn,data:m});for(const t of turn.tools||[])own.push({kind:'tool',seq:t.event_seq,id:t.call_id,turn,data:t});for(const retry of turn.retries||[])if(retry.reason==='provider_overloaded')own.push({kind:'boundary',seq:retry.event_seq,id:`retry:${turn.id}:${retry.event_seq}`,turn,data:{kind:'retry',text:`Retry ${retry.attempt}/3 after ${retry.delay_seconds}s`}});const last=Math.max(0,...own.map(item=>Number(item.seq)||0));out.push(...own);if(turn.error)out.push({kind:'boundary',seq:last+.3,id:`error:${turn.id}`,turn,data:{kind:'error',text:turn.error}});if(turn.phase==='failed'||turn.phase==='cancelled')out.push({kind:'boundary',seq:last+.4,id:`end:${turn.id}`,turn,data:{kind:'end',phase:turn.phase}});if(['completed','failed','cancelled'].includes(turn.phase)&&(turn.messages||[]).some(m=>m.role==='assistant'))out.push({kind:'footer',seq:last+.6,id:`footer:${turn.id}`,turn,data:turn});}
   out.sort((a,b)=>(a.seq||0)-(b.seq||0));return out;}
 function classifyNarration(item,view){const {turn,data}=item;const assistant=(turn?.messages||[]).filter(m=>m.role==='assistant').sort((a,b)=>a.event_seq-b.event_seq);if(turn?.phase==='active'){if(assistant.some(m=>typeof m.done!=='boolean'||!Number.isFinite(m.event_seq)||!m.id))return 'full';const trailing=[...assistant].reverse().find(m=>m.done===false);if(!trailing)return 'full';if(trailing.id===data.id)return 'streaming';return 'intermediate';}
   if(['failed','cancelled'].includes(turn?.phase))return 'full';if(turn?.phase==='completed')return assistant.at(-1)?.id===data.id?'final':'intermediate';return 'full';}
@@ -305,7 +305,7 @@ function renderTool(tool,item,{standalone=false}={}){const key=`tool:${tool.call
 const LIVE_TAIL_LINES=4;
 function liveShellTail(tool){if(!isShellTool(tool)||!['running','requested'].includes(tool.status))return [];const rows=redactToolText((tool.progress||[]).slice(-200).join('')).split('\n').filter(line=>line.trim()).map(line=>firstLine(line,160)),shown=rows.slice(-LIVE_TAIL_LINES),hidden=rows.length-shown.length,box=el('div','tool-live');box.append(el('div','tool-live-lines',(shown.length?shown:['running…']).join('\n')));if(hidden>0)box.append(el('div','tool-live-clip',`… ${hidden} earlier line${hidden===1?'':'s'} · open for full output`));return [box];}
 function grouping(items){return items;}
-function renderBoundary(item){const key=`boundary:${item.id}`,node=ensureNode(key,'section','turn-boundary');node.replaceChildren();if(item.data.kind==='error')node.append(el('strong','','Error'),el('p','',item.data.text));else node.append(el('strong','',item.data.phase==='failed'?'Turn failed':'Turn cancelled'));return node;}
+function renderBoundary(item){const key=`boundary:${item.id}`,node=ensureNode(key,'section','turn-boundary');node.replaceChildren();if(item.data.kind==='retry')node.append(el('strong','','Provider overloaded'),el('p','',item.data.text));else if(item.data.kind==='error')node.append(el('strong','','Error'),el('p','',item.data.text));else node.append(el('strong','',item.data.phase==='failed'?'Turn failed':'Turn cancelled'));return node;}
 function refreshInspectorToolRows(view){const tools=(view?.turns||[]).flatMap(t=>t.tools||[]),byId=new Map(tools.map(t=>[t.call_id,t]));for(const row of $('inspector-content').querySelectorAll('.tool-row[data-call-id]')){const tool=byId.get(row.dataset.callId);if(!tool)continue;const label=row.firstChild;if(label?.nodeType===Node.TEXT_NODE)label.textContent=`${tool.name||'Tool'} · ${tool.status||'requested'}`;row.className=`tool-row ${tool.status||'requested'}`;const small=row.querySelector('small');if(small)small.textContent=toolArguments(tool);}}
 
 const AGENT_COLORS=['#a78bfa','#69b7d5','#86b97a','#d18a38','#dc8295','#55b9a5'],agentColors=new Map();
@@ -579,7 +579,27 @@ async function cycleAgent(){if(state.view?.turns?.length){notify('Agents are loc
 function showText(title,body,{diff=false,node=null}={}){const overlay=$('text-overlay');state.textReturnFocus=document.activeElement;$('text-title').textContent=title;const pre=$('text-body');pre.replaceChildren();pre.classList.toggle('structured',!!node);if(node)pre.append(node);else if(diff){for(const line of String(body).split('\n')){const row=el('span',line.startsWith('+')&&!line.startsWith('+++')?'add':line.startsWith('-')&&!line.startsWith('---')?'del':line.startsWith('@@')?'hunk':'',`${line}\n`);pre.append(row);}}else pre.textContent=body;overlay.hidden=false;app.inert=true;$('text-dialog').focus({preventScroll:true});}
 // Ctrl+U, Ctrl+X U and /usage: plan limits for every connected provider (ui/tui/usage.py).
 const USAGE_TITLE='Provider usage and limits';
-async function openUsage(){const request=(state.usageRequest||0)+1;state.usageRequest=request;const box=el('div','usage-dialog-body');box.append(el('p','usage-note','Reading usage from connected providers…'));if($('text-overlay').hidden||$('text-title').textContent!==USAGE_TITLE)showText(USAGE_TITLE,'',{node:box});else $('text-body').replaceChildren(box);let result;try{result=await api.command({type:'ProvidersUsage'});}catch(error){result=null;box.replaceChildren(el('p','usage-error',`Usage unavailable · ${error.message}`));}if(state.usageRequest!==request||!box.isConnected)return;if(result)box.replaceChildren(renderUsage(result,el));const refresh=el('button','toolbar-button usage-refresh','Refresh');refresh.type='button';refresh.onclick=()=>openUsage();box.append(refresh);}
+async function openUsage(){
+  const request=(state.usageRequest||0)+1;state.usageRequest=request;
+  const workspace=state.workspace,session=state.session;
+  const box=el('div','usage-dialog-body');
+  if(state.usageCache?.workspace===workspace)box.append(renderUsage(state.usageCache.result,el));
+  else box.append(el('p','usage-note','Reading usage from connected providers…'));
+  const loading=el('p','usage-note');loading.setAttribute('role','status');
+  loading.append(el('span','usage-spinner','◌'),document.createTextNode(' Refreshing…'));box.append(loading);
+  const refresh=el('button','toolbar-button usage-refresh','Refresh');refresh.type='button';refresh.onclick=()=>openUsage();box.append(refresh);
+  if($('text-overlay').hidden||$('text-title').textContent!==USAGE_TITLE)showText(USAGE_TITLE,'',{node:box});
+  else $('text-body').replaceChildren(box);
+  try{
+    const result=await api.command({type:'ProvidersUsage'});
+    if(state.usageRequest!==request||state.workspace!==workspace||state.session!==session)return;
+    state.usageCache={workspace,result};
+    if(box.isConnected)box.replaceChildren(renderUsage(result,el),refresh);
+  }catch(error){
+    if(state.usageRequest!==request||!box.isConnected||state.workspace!==workspace||state.session!==session)return;
+    loading.replaceWith(el('p','usage-error',`Usage unavailable · ${error.message}`));
+  }
+}
 function findTool(callId,view=state.view,depth=0){if(!view||depth>8)return null;for(const turn of view.turns||[]){const tool=(turn.tools||[]).find(item=>item.call_id===callId);if(tool)return tool;}for(const agent of view.agents||[]){const tool=findTool(callId,agent.body,depth+1);if(tool)return tool;}return null;}
 // A Task call that spawned a child opens straight on its sub agent page; other calls show details.
 function openToolDetails(tool){if(!tool)return;const child=tool.child_agent_ids?.at(-1);if(child&&findAgent(state.view,child)){openAgent(child);return;}showText(`${(tool.name||'Tool').replace(/^./,c=>c.toUpperCase())} · ${tool.status||'requested'}`,null,{node:renderToolDetails(toolDetailSections(tool,redactToolText))});}

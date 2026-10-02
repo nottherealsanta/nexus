@@ -16,6 +16,11 @@ from ..client.protocol import ClientError
 from ..host import TransportError
 from ..ui.cli import commands
 
+def root_agents(rows):
+    """Agent definitions eligible to own a conversation."""
+    return [row for row in rows if "root" in row.get("contexts", ())]
+
+
 FILE_LIMIT = 30
 ARGUMENT_LIMIT = 100
 
@@ -78,7 +83,7 @@ async def _arguments(client: Any, name: str, query: str, efforts: Sequence[str])
     if name == "/model":
         values = ["list", *model_refs(await client.list_models(selectable_only=True))]
     elif name == "/agent":
-        values = ["list", "current", "reset", *[str(r.get("name", "")) for r in await client.list_agents()]]
+        values = ["list", "current", "reset", *[str(r.get("name", "")) for r in root_agents(await client.list_agents())]]
     elif name == "/effort":
         values = ["default", *efforts]
     elif name == "/sessions":

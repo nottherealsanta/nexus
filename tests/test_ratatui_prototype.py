@@ -30,7 +30,7 @@ def test_native_blocks_follow_durable_conversation_order():
         tools=[ToolCallView(call_id="read", name="Read", event_seq=3)]))
     blocks = project(SimpleNamespace(view=view), 1)["blocks"]
     ids = [block["id"] for block in blocks]
-    assert ids.index("firstthinking") < ids.index("read") < ids.index("lasttext")
+    assert ids.index("firstthinking") < ids.index("turn:gread") < ids.index("lasttext")
 
 
 def test_projection_cache_reuses_unchanged_turns_and_invalidates_replacements(tmp_path, monkeypatch):

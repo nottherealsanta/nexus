@@ -100,9 +100,9 @@ async def test_mock_parallel_tools_render_as_grouped_batches(dev_env):
             assert by_position[0] is None  # the lone glob has no gutter
             assert by_position[1] == "first" and "last" in by_position
             first = next(c for c in cards if c.batch == "first")
-            assert str(first.query_one("#tool-header", Static).render()).startswith("┌ ")
+            assert str(first.query_one("#tool-header", Static).render()).startswith("┌")
             last = next(c for c in cards if c.batch == "last")
-            assert str(last.query_one("#tool-header", Static).render()).startswith("└ ")
+            assert str(last.query_one("#tool-header", Static).render()).startswith("└")
     finally:
         await facade.wait_idle(timeout=10.0)
         await runtime.aclose()

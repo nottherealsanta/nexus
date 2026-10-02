@@ -76,7 +76,10 @@ impl<'a> Walker<'a> {
         match self.marker.take() {
             Some(marker) => {
                 let lead = base.saturating_sub(3);
-                spans.push(Span::styled(format!("{}{marker}", " ".repeat(lead)), text_style.fg(self.p.quiet)));
+                spans.push(Span::styled(
+                    format!("{}{marker}", " ".repeat(lead)),
+                    text_style.fg(self.p.quiet),
+                ));
             }
             None => spans.push(Span::styled(" ".repeat(base), text_style)),
         }
@@ -89,13 +92,21 @@ impl<'a> Walker<'a> {
         }
         let (prefix, _) = self.prefix();
         let spans = std::mem::take(&mut self.cur);
-        self.rows.push(Row { prefix, spans, bg: self.bg(), blank: false });
+        self.rows.push(Row {
+            prefix,
+            spans,
+            bg: self.bg(),
+            blank: false,
+        });
     }
     fn blank(&mut self) {
         if self.rows.last().is_some_and(|row| row.blank) || self.rows.is_empty() {
             return;
         }
-        self.rows.push(Row { blank: true, ..Default::default() });
+        self.rows.push(Row {
+            blank: true,
+            ..Default::default()
+        });
     }
     fn style(&self) -> Style {
         let mut style = Style::default();
@@ -143,11 +154,15 @@ impl<'a> Walker<'a> {
         let bg = self.p.panel;
         let style = Style::default().fg(self.p.text).bg(bg);
         if !language.is_empty() {
-            self.cur.push(Span::styled(language.to_string(), Style::default().fg(self.p.quiet).bg(bg)));
+            self.cur.push(Span::styled(
+                language.to_string(),
+                Style::default().fg(self.p.quiet).bg(bg),
+            ));
             self.fence_row();
         }
         for line in body.trim_end_matches('\n').split('\n') {
-            self.cur.push(Span::styled(line.replace('\t', "    "), style));
+            self.cur
+                .push(Span::styled(line.replace('\t', "    "), style));
             self.fence_row();
         }
     }
@@ -155,31 +170,57 @@ impl<'a> Walker<'a> {
         let (mut prefix, _) = self.prefix();
         prefix.push(Span::styled(" ", Style::default().bg(self.p.panel)));
         let spans = std::mem::take(&mut self.cur);
-        self.rows.push(Row { prefix, spans, bg: Some(self.p.panel), blank: false });
+        self.rows.push(Row {
+            prefix,
+            spans,
+            bg: Some(self.p.panel),
+            blank: false,
+        });
     }
     fn finish_table(&mut self) {
-        let Some(table) = self.table.take() else { return };
+        let Some(table) = self.table.take() else {
+            return;
+        };
         let columns = table.rows.iter().map(Vec::len).max().unwrap_or(0);
         let widths: Vec<usize> = (0..columns)
-            .map(|c| table.rows.iter().map(|row| row.get(c).map_or(0, |cell| cell.width())).max().unwrap_or(0))
+            .map(|c| {
+                table
+                    .rows
+                    .iter()
+                    .map(|row| row.get(c).map_or(0, |cell| cell.width()))
+                    .max()
+                    .unwrap_or(0)
+            })
             .collect();
         let line = |cells: &[String]| {
             (0..columns)
                 .map(|c| {
                     let cell = cells.get(c).map(String::as_str).unwrap_or("");
-                    format!("{cell}{}", " ".repeat(widths[c].saturating_sub(cell.width())))
+                    format!(
+                        "{cell}{}",
+                        " ".repeat(widths[c].saturating_sub(cell.width()))
+                    )
                 })
                 .collect::<Vec<_>>()
                 .join(" │ ")
         };
         for (i, cells) in table.rows.iter().enumerate() {
             let head = i < table.head_rows;
-            let style = if head { Style::default().add_modifier(Modifier::BOLD) } else { Style::default() };
+            let style = if head {
+                Style::default().add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
             self.cur.push(Span::styled(line(cells), style));
             self.flush();
             if head && i + 1 == table.head_rows {
-                let rule = widths.iter().map(|w| "─".repeat(*w)).collect::<Vec<_>>().join("─┼─");
-                self.cur.push(Span::styled(rule, Style::default().fg(self.p.quiet)));
+                let rule = widths
+                    .iter()
+                    .map(|w| "─".repeat(*w))
+                    .collect::<Vec<_>>()
+                    .join("─┼─");
+                self.cur
+                    .push(Span::styled(rule, Style::default().fg(self.p.quiet)));
                 self.flush();
             }
         }
@@ -189,8 +230,21 @@ impl<'a> Walker<'a> {
 
 pub fn lines(text: &str, p: &Palette, width: usize) -> Vec<Row> {
     let mut w = Walker {
-        p, width, rows: Vec::new(), cur: Vec::new(), marker: None, levels: Vec::new(), quote: 0,
-        bold: 0, italic: 0, strike: 0, code_block: None, heading: None, links: Vec::new(), table: None, item_depth: 0,
+        p,
+        width,
+        rows: Vec::new(),
+        cur: Vec::new(),
+        marker: None,
+        levels: Vec::new(),
+        quote: 0,
+        bold: 0,
+        italic: 0,
+        strike: 0,
+        code_block: None,
+        heading: None,
+        links: Vec::new(),
+        table: None,
+        item_depth: 0,
     };
     let mut fence_body = String::new();
     for event in Parser::new_ext(
@@ -220,7 +274,9 @@ pub fn lines(text: &str, p: &Palette, width: usize) -> Vec<Row> {
                 w.flush();
                 fence_body.clear();
                 w.code_block = Some(match kind {
-                    CodeBlockKind::Fenced(language) => language.split_whitespace().next().unwrap_or("").to_string(),
+                    CodeBlockKind::Fenced(language) => {
+                        language.split_whitespace().next().unwrap_or("").to_string()
+                    }
                     CodeBlockKind::Indented => String::new(),
                 });
             }
@@ -260,7 +316,8 @@ pub fn lines(text: &str, p: &Palette, width: usize) -> Vec<Row> {
                 w.marker = None;
                 w.item_depth = w.item_depth.saturating_sub(1);
             }
-            Event::Start(Tag::Link { dest_url, .. }) | Event::Start(Tag::Image { dest_url, .. }) => {
+            Event::Start(Tag::Link { dest_url, .. })
+            | Event::Start(Tag::Image { dest_url, .. }) => {
                 w.links.push(dest_url.to_string());
             }
             Event::End(TagEnd::Link) | Event::End(TagEnd::Image) => {
@@ -331,7 +388,8 @@ pub fn lines(text: &str, p: &Palette, width: usize) -> Vec<Row> {
             Event::Rule => {
                 w.flush();
                 let rule = "─".repeat(w.width.saturating_sub(8).clamp(3, 60));
-                w.cur.push(Span::styled(rule, Style::default().fg(p.border)));
+                w.cur
+                    .push(Span::styled(rule, Style::default().fg(p.border)));
                 w.flush();
                 w.blank();
             }
@@ -353,14 +411,25 @@ pub fn lines(text: &str, p: &Palette, width: usize) -> Vec<Row> {
 mod tests {
     use super::*;
     fn plain(row: &Row) -> String {
-        row.prefix.iter().chain(row.spans.iter()).map(|s| s.content.as_ref()).collect()
+        row.prefix
+            .iter()
+            .chain(row.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect()
     }
     fn render(text: &str) -> Vec<String> {
-        lines(text, &Palette::new(false), 60).iter().map(|row| if row.blank { String::new() } else { plain(row) }).collect()
+        lines(text, &Palette::new(false), 60)
+            .iter()
+            .map(|row| if row.blank { String::new() } else { plain(row) })
+            .collect()
     }
     #[test]
     fn literal_html_and_link_target() {
-        let rows = lines("**bold** [link](https://example.com)\n\n<environment>literal</environment>", &Palette::new(false), 60);
+        let rows = lines(
+            "**bold** [link](https://example.com)\n\n<environment>literal</environment>",
+            &Palette::new(false),
+            60,
+        );
         let text = rows.iter().map(plain).collect::<Vec<_>>().join("\n");
         assert!(text.contains("https://example.com"));
         assert!(text.contains("<environment>literal</environment>"));
@@ -370,12 +439,22 @@ mod tests {
     fn headings_use_textual_level_colours() {
         let p = Palette::new(false);
         let rows = lines("# one\n\n## two\n\n### three", &p, 60);
-        let colours: Vec<_> = rows.iter().filter(|r| !r.blank).map(|r| r.spans[0].style.fg).collect();
-        assert_eq!(colours, vec![Some(p.accent), Some(p.purple), Some(p.success)]);
+        let colours: Vec<_> = rows
+            .iter()
+            .filter(|r| !r.blank)
+            .map(|r| r.spans[0].style.fg)
+            .collect();
+        assert_eq!(
+            colours,
+            vec![Some(p.accent), Some(p.purple), Some(p.success)]
+        );
     }
     #[test]
     fn lists_nest_with_markers_and_hanging_indent() {
-        assert_eq!(render("- a\n  - b\n- c\n\n1. x\n2. y"), vec!["• a", "   ◦ b", "• c", "", "1. x", "2. y"]);
+        assert_eq!(
+            render("- a\n  - b\n- c\n\n1. x\n2. y"),
+            vec!["• a", "   ◦ b", "• c", "", "1. x", "2. y"]
+        );
     }
     #[test]
     fn fences_carry_language_and_fill_with_panel_colour() {

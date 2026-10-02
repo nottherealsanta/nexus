@@ -496,8 +496,10 @@ async def test_settings_console_edits_host_inventory_with_sha():
         await pilot.pause()
         screen = app.screen
         assert isinstance(screen, SettingsConsole)
-        # Full-screen page with a left sidebar of areas.
-        assert screen.query_one("#settings-console").region.width == 160
+        # Large inset modal with a left sidebar of areas.
+        region = screen.query_one("#settings-console").region
+        assert 140 <= region.width < 160
+        assert region.x > 0 and region.y > 0
         sections = screen.query_one("#settings-sections", OptionList)
         sections.highlighted = screen._section_index("tools")
         await pilot.pause()

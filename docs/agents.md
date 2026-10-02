@@ -61,11 +61,22 @@ applies from the next turn; locked after the first turn for prompt-cache reasons
 project config. The context sees only `name: description` lines; bodies are
 snapshot per generation and disclosed on demand.
 
+**Remembered model per root agent.** Picking a model or effort records it for the
+root agent in effect (`~/.nexus/agent_models.json`, machine state, not config).
+Selecting that agent in any session, including `AgentReset`, restores the model
+and effort; a model that no longer resolves is skipped and the current one kept.
+A brand-new session that never selects an agent does not restore (not done).
+
 ## Spawning (`subagent` tool)
 
 `subagent(prompt, subagent_type?, tools?, model?, description?, worktree?)` runs a
 named role or an ad-hoc agent. The child does not see the parent conversation:
 the prompt is the whole assignment.
+
+An omitted, null, or blank `model` override uses the role's configured model,
+falling back to the parent's model. Surrounding whitespace is trimmed from model
+overrides; whitespace inside a model reference is rejected. Permission-key
+resolution and child execution use the same normalization.
 
 Four bounds are computed **before** the child exists, so a child can never gain
 authority its parent lacks:
@@ -94,6 +105,23 @@ child `turn.completed` would look like the parent ending, and a relayed
 `context.assembled` records the request it actually sent; the subagent page
 reads it back through `AgentTranscript`. Events: `agent.spawned`,
 `agent.completed`, `agent.clamped`.
+
+## Failed subagents keep their context
+
+A child that stops without finishing (`max_iterations` or the wall-clock/token
+budget, a provider error, a crash) returns `status: failed` with a **handoff**
+(`agents/handoff.py`): task given, stop reason, last assistant message, files
+changed, and the last 30 tool calls with errors flagged. It is built
+deterministically from the child's durable session, with no model call, so it
+works even when the child failed because of the clock. The Task result carries a
+bounded digest; the full report is saved to `<nexus home>/handoffs/<session>.md`
+(best effort; a failed write still returns the digest and says it was not saved).
+There is no resume field on the `task` tool: hand-offs are rare, so the root
+decides itself whether the work still matters and starts a new `task` whose
+prompt carries what it needs from the digest (or the saved file); the failed
+child's edits are already in the workspace. The report is not a
+model-written summary; not verified: whether a final model wrap-up turn near the
+limit would be worth its cost.
 
 ## Worktrees
 
