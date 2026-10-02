@@ -191,11 +191,20 @@ pub struct Regions {
     pub tabs: Rect,
     pub context: Rect,
 }
-pub fn regions(area: Rect, s: &Snapshot) -> Regions {
+/// Composer height: the editor grows with its wrapped content up to Textual's
+/// `max-height: 22` (never below the 8-row resting layout), leaving the
+/// transcript at least four rows.
+pub fn composer_height(area: Rect, draft: &Editor) -> u16 {
+    let width = area.width.saturating_sub(9);
+    let rows = editor_view(draft, false, &Palette::new(false), width, u16::MAX).len();
+    let wanted = 5 + rows.clamp(3, 22) as u16;
+    wanted.min(area.height.saturating_sub(3 + 4)).max(8)
+}
+pub fn regions(area: Rect, s: &Snapshot, composer_height: u16) -> Regions {
     let main = Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(3),
-        Constraint::Length(8),
+        Constraint::Length(composer_height),
     ])
     .split(area);
     let left = if s.sessions_sidebar && area.width >= 110 {
@@ -289,7 +298,7 @@ pub fn draw(
         Block::default().style(Style::default().bg(p.background).fg(p.text)),
         frame.area(),
     );
-    let r = regions(frame.area(), s);
+    let r = regions(frame.area(), s, composer_height(frame.area(), draft));
     draw_top_bar(frame, s, r.tabs, &p);
     if r.sessions.width > 0 {
         let mut lines = vec![Line::styled("SESSIONS", Style::default().fg(p.quiet).add_modifier(Modifier::BOLD))];
@@ -597,6 +606,17 @@ pub fn draw(
 mod tests {
     use super::*;
     use ratatui::{backend::TestBackend, Terminal};
+    #[test]
+    fn composer_grows_with_content_and_is_capped() {
+        let area = Rect::new(0, 0, 80, 60);
+        let mut draft = Editor::default();
+        assert_eq!(composer_height(area, &draft), 8);
+        draft.insert(&"line\n".repeat(9));
+        assert_eq!(composer_height(area, &draft), 5 + 10);
+        draft.insert(&"line\n".repeat(60));
+        assert_eq!(composer_height(area, &draft), 5 + 22);
+        assert_eq!(composer_height(Rect::new(0, 0, 80, 14), &draft), 8, "the transcript keeps its rows");
+    }
     #[test]
     fn narrow_layout_and_safe_wrap() {
         let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();

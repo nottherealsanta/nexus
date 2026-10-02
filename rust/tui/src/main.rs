@@ -786,6 +786,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let r = render::regions(
                     ratatui::layout::Rect::new(0, 0, size.width, size.height),
                     &s,
+                    render::composer_height(ratatui::layout::Rect::new(0, 0, size.width, size.height), &draft),
                 );
                 match mouse.kind {
                     MouseEventKind::ScrollUp => {

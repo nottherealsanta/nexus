@@ -81,3 +81,7 @@ control, the task/subagent card, and voice, worktree and settings screens.
 Streamed snapshots are sent compactly, identical ones are skipped, and Rust
 parses only the newest of a queued backlog unless an older one carries a
 one-shot composer effect.
+
+The composer grows with its wrapped content from the 8-row resting layout up to
+Textual's `max-height: 22` editor rows, always leaving the transcript four rows
+(`render::composer_height`; mouse hit-testing uses the same height).

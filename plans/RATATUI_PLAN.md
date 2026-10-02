@@ -81,7 +81,7 @@ Details and sessions sidebars
       active styling, status dot; currently approximated.
 
 Composer and input
-- [ ] Editor height should grow with content (Textual `max-height: 22`); native is a
+- [x] (done, Rust test `composer_grows_with_content_and_is_capped`) Editor height should grow with content (Textual `max-height: 22`); native is a
       fixed 8-row composer region.
 - [ ] As-you-type completion (inline list under the composer, `tui_list.py`) rather
       than Tab-only popup; style the popup like Textual; argument providers exist in
