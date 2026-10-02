@@ -484,7 +484,14 @@ here, so add a row when you add a file.
 | `__init__.py` | Experimental native surface package |
 | `prototype.py` | Host adapter and labelled snapshot projection |
 
-`rust/tui/src/main.rs` owns the native prototype terminal and typed actions.
+The Rust client lives in `rust/tui/src/`: `main.rs` (terminal loop, key and mouse
+handling), `input.rs` (action writers, editor keys, picking, OSC 52 base64),
+`bridge.rs` (the versioned snapshot contract), `editor.rs` (grapheme editor),
+`render.rs` (palette, layout regions, the draw pass), `render/chrome.rs` (top bar,
+tabs, sessions and details sidebars), `render/dialogs.rs` (dialog frames, toned
+panel text, Settings area list, prompt and logs regions, completion popup),
+`transcript.rs` (blocks to rows, diffs) and `markdown.rs`. `main()` is still one long
+loop over local state; splitting it further needs a state struct and is not done.
 | `actions.py` | Native shell slash dispatch, attachments and host-backed panels |
 | `controller.py` | Continuous native subscription using canonical bootstrap and reduction |
 | `preferences.py` | Textual-compatible native shell preferences |

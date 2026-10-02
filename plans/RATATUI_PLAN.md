@@ -152,7 +152,7 @@ Dialogs and screens (all currently generic panels/menus)
 
 ### P4: code health
 
-- [ ] `rust/tui/src/main.rs` (~1,000 lines) mixes input, leader, mouse and actions;
+- [~] Partly done: `input.rs`, `render/chrome.rs` and `render/dialogs.rs` split out; `main()` is still one 900-line loop (needs a state struct). Original: `rust/tui/src/main.rs` (~1,000 lines) mixes input, leader, mouse and actions;
       split into modules (`input.rs`, `mouse.rs`, `actions.rs`) per AGENTS rule 3.
       `render.rs` is also growing (top bar, sidebars, composer, dialogs): move
       chrome into `chrome.rs` / `dialogs.rs`.
