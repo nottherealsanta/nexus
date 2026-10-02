@@ -115,3 +115,29 @@ def test_every_shared_shortcut_is_bound_natively():
         if match:
             assert f"KeyCode::Char('{match.group(1)}')" in source, f"{key} is not bound"
     assert "KeyModifiers::ALT" in source and "KeyCode::BackTab" in source and "1500" in source
+
+
+async def test_preview_refusal_while_a_turn_runs_is_not_an_error(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from nexus.ui.ratatui.actions import ShellActions
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    class Client:
+        outcome: object = RuntimeError("context preview is unavailable while the session is active")
+
+        async def inspect_context(self, session):
+            if isinstance(self.outcome, Exception):
+                raise self.outcome
+            return self.outcome
+
+    client = Client()
+    shell = ShellActions(SimpleNamespace(client=client, session="s"))
+    shell.preview = "stale"
+    assert await shell.refresh_preview() is False and shell.preview is None
+    client.outcome = "ready"
+    assert await shell.refresh_preview() is True and shell.preview == "ready"
+    client.outcome = RuntimeError("daemon exploded")
+    with pytest.raises(RuntimeError, match="exploded"):
+        await shell.refresh_preview()

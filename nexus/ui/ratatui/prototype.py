@@ -407,8 +407,15 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                 if controller.cursor == preview_cursor:
                     return
                 generation, session_id, cursor = shell.generation, controller.session, controller.cursor
-                preview = await shell.client.inspect_context(session_id)
-                if generation == shell.generation:
+                if controller.running:  # the host has no preview while a turn runs; retry when idle
+                    return
+                preview = None
+                try:
+                    preview = await shell.client.inspect_context(session_id)
+                except Exception as exc:  # noqa: BLE001
+                    if "while the session is active" not in str(exc):
+                        raise
+                if preview is not None and generation == shell.generation:
                     shell.preview = preview
                     preview_cursor = cursor
             async def logs():
@@ -424,7 +431,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                 shell.notice = f"Display update failed: {type(exc).__name__}: {exc}"
     try:
         await controller.bootstrap()
-        shell.preview = await client.inspect_context(session)
+        await shell.refresh_preview(session)
         try:
             doctor = await client.doctor()
             git = doctor.report.get("git", {})

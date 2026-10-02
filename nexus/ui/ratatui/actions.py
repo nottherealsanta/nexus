@@ -113,9 +113,24 @@ class ShellActions:
         self.items = []
         await self.controller.switch_session(session)
         await self.controller.bootstrap()
-        self.preview = await self.client.inspect_context(session)
+        await self.refresh_preview(session)
         self.panel_title = ""
         self.panel_lines = []
+
+    async def refresh_preview(self, session: str | None = None) -> bool:
+        """Reload the next-turn context preview; an active session has none yet.
+
+        The host refuses a preview while a turn runs. That is expected, not an
+        error: the header keeps its placeholders and the poll loop retries.
+        """
+        try:
+            self.preview = await self.client.inspect_context(session or self.controller.session)
+            return True
+        except Exception as exc:  # noqa: BLE001 - only the "active" refusal is expected
+            if "while the session is active" not in str(exc):
+                raise
+            self.preview = None
+            return False
 
     async def cancel(self):
         result = await self.controller.cancel()
@@ -185,7 +200,7 @@ class ShellActions:
         elif name == "/model":
             if argument and argument != "list":
                 await self.controller.select_model(argument)
-                self.preview = await self.client.inspect_context(session)
+                await self.refresh_preview(session)
                 recent = self.preferences.values["model_recent"]
                 self.preferences.set("model_recent", [argument, *[ref for ref in recent if ref != argument]])
             else:
@@ -224,7 +239,7 @@ class ShellActions:
                 self.show("Current agent", await self.client.current_agent(session))
             elif argument and argument != "list":
                 await self.controller.select_agent(argument)
-                self.preview = await self.client.inspect_context(session)
+                await self.refresh_preview(session)
             else:
                 self.picker("Agents", await self.client.list_agents(), "/agent", "name")
         elif name == "/context":

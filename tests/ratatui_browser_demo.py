@@ -67,14 +67,14 @@ async def fixture():
     await controller.close()
 
 
-def bridge():
+def bridge(command=None):
     master, slave = pty.openpty()
     def resize(width, height):
         fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", height, width, 0, 0))
     resize(int(os.getenv("COLUMNS", "122")), int(os.getenv("ROWS", "40")))
     env = dict(os.environ, TERM="xterm-256color", COLORTERM="truecolor")
     env.pop("NO_COLOR", None)
-    child = subprocess.Popen([sys.executable, __file__, "--child"], stdin=slave, stdout=slave, stderr=slave, env=env)
+    child = subprocess.Popen([sys.executable, __file__, *(["--exec", *command] if command else ["--child"])], stdin=slave, stdout=slave, stderr=slave, env=env)
     os.close(slave)
     os.write(1, b"__GANGLION__\n")
     buffer = b""
@@ -115,9 +115,14 @@ def bridge():
 
 
 if __name__ == "__main__":
-    if "--child" in sys.argv:
+    if "--exec" in sys.argv:
+        # Run any command (e.g. the real `nexus chat`) on a controlling PTY, for live browser checks.
+        os.setsid()
+        fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+        os.execvp(sys.argv[sys.argv.index("--exec") + 1], sys.argv[sys.argv.index("--exec") + 1:])
+    elif "--child" in sys.argv:
         os.setsid()
         fcntl.ioctl(0, termios.TIOCSCTTY, 0)
         asyncio.run(fixture())
     else:
-        bridge()
+        bridge(sys.argv[sys.argv.index("--bridge") + 1:] if "--bridge" in sys.argv else None)

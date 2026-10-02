@@ -23,7 +23,7 @@ fixes: the whole suite and the Textual timing-sensitive group.
 
 ### P0: correctness and trust (do first)
 
-- [ ] (static audit done: every host result consumer in `nexus/ui/ratatui/` checked against `host/protocol.py` types, no further mapping-on-struct found; hand-driven run with a real provider still open) Run the app interactively end to end with a real daemon and a real provider
+- [ ] (static audit done: every host result consumer in `nexus/ui/ratatui/` checked against `host/protocol.py` types, no further mapping-on-struct found; first live run done with the dev-mode mock provider via `tests/playwright_ratatui_live.py` (hello, streaming-rich, question: working; fixed the active-session preview error); a real provider and keyboard-driven checks of permissions/tools are still open) Run the app interactively end to end with a real daemon and a real provider
       (nobody has driven it by hand yet; all evidence is tests and browser
       terminals). Fix whatever breaks. The first manual run already found a crash
       (`DoctorResult` has no `get`), so expect more struct-vs-dict mistakes: grep

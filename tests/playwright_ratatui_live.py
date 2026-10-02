@@ -1,0 +1,43 @@
+"""Drive the real native client against a real daemon in dev mode (mock provider).
+
+    PYTHONPATH=. python tests/playwright_ratatui_live.py "/mock hello" "/mock question" "blue wins"
+
+Each argument is typed and submitted in turn; a screenshot follows each under
+artifacts/ratatui-live/. Needs cargo build first. Dev mode isolates state
+in ~/.nexus/dev; no provider credentials or network are used.
+"""
+import os
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from playwright.sync_api import sync_playwright
+ROOT = Path(__file__).resolve().parents[1]
+OUT = ROOT / "artifacts/ratatui-live"; OUT.mkdir(exist_ok=True, parents=True)
+ws = tempfile.mkdtemp()
+with socket.socket() as s:
+    s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]
+env = dict(os.environ, PYTHONPATH=str(ROOT), NEXUS_DEV="1", TERM="xterm-256color")
+env.pop("FORCE_COLOR", None)
+cmd = f"{sys.executable} tests/ratatui_browser_demo.py --bridge {sys.executable} -m nexus --dev --workspace {ws} chat --renderer ratatui"
+server = subprocess.Popen([sys.executable, "tests/browser_serve.py", "--port", str(port), "--command", cmd], cwd=ROOT, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, start_new_session=True)
+with sync_playwright() as pw:
+    b = pw.chromium.launch(); page = b.new_page(viewport={"width": 1300, "height": 850})
+    try:
+        for _ in range(40):
+            try:
+                page.goto(f"http://127.0.0.1:{port}?fontsize=15", timeout=2000)
+                page.get_by_role("textbox", name="Terminal input").wait_for(timeout=2000); break
+            except Exception:
+                page.wait_for_timeout(250)
+        page.wait_for_timeout(8000)
+        page.screenshot(path=str(OUT / "1-start.png"))
+        page.get_by_role("textbox", name="Terminal input").click()
+        for step, text in enumerate(sys.argv[1:], 2):
+            page.keyboard.type(text); page.keyboard.press("Enter"); page.wait_for_timeout(9000)
+            page.screenshot(path=str(OUT / f"{step}.png"))
+    finally:
+        page.close(); os.killpg(server.pid, signal.SIGTERM); b.close()
+        print(server.stderr.read().decode()[-2000:])

@@ -118,3 +118,10 @@ build. It captures both clients with identical reference events, exercises draft
 input and resizing, and writes ignored PNGs under `artifacts/ratatui-parity/`.
 The native development adapter supplies a controlling PTY and forwards bytes to
 the existing browser test server; it is not an installed product surface.
+
+`PYTHONPATH=. python tests/playwright_ratatui_live.py "/mock question" "blue wins"`
+drives the real `nexus --dev chat --renderer ratatui` (real daemon, mock provider,
+no credentials) through the same adapter (`ratatui_browser_demo.py --bridge CMD`)
+and saves one screenshot per typed line under `artifacts/ratatui-live/`. It found
+the "context preview unavailable while the session is active" bug that unit tests
+missed.
