@@ -35,6 +35,7 @@ pub struct Snapshot {
     pub sessions: Vec<Session>,
     pub tabs: Vec<Session>,
     pub archived_label: String,
+    pub sessions_truncated: bool,
     pub breadcrumb: String,
     pub details_panel: DetailsPanel,
     pub logs: Vec<String>,

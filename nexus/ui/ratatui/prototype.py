@@ -298,6 +298,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "context_preview": shell.preferences.values["context_preview"] if shell else True,
             "sessions": shell.sessions if shell else [],
             "archived_label": shell.archived_label if shell else "",
+            "sessions_truncated": bool(shell and shell.sessions_truncated),
             "tabs": _tab_rows(controller, shell) if shell else [],
             "breadcrumb": redact(escape_controls(shell.breadcrumb)) if shell else "",
             "details_panel": details_panel,
@@ -387,6 +388,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                 result = await shell.client.project_sessions()
                 from .workflows import session_rows
                 shell.sessions = session_rows(result, controller.session, shell.seen_seq)
+                shell.sessions_truncated = bool(result.truncated)
                 for row in shell.sessions:
                     existing = next((tab for tab in shell.tabs if tab["id"] == row["id"] and tab["workspace"] == row["workspace"]), None)
                     if existing:

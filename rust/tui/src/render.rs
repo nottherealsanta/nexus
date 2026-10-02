@@ -1076,6 +1076,9 @@ pub fn session_sidebar(s: &Snapshot, p: &Palette, width: usize, spin: usize, fil
         ));
         rows.push((Line::default(), None));
     }
+    if s.sessions_truncated {
+        rows.push((Line::styled("[Session list truncated]", Style::default().fg(p.warning)), None));
+    }
     if !s.archived_label.is_empty() {
         rows.push((Line::styled(s.archived_label.clone(), Style::default().fg(p.quiet)), Some(SidebarHit::Archived)));
     }

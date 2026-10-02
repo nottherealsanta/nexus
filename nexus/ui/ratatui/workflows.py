@@ -604,6 +604,7 @@ class Workflows:
     async def sessions(self):
         result = await self.client.project_sessions()
         self.shell.sessions = session_rows(result, self.shell.controller.session, self.shell.seen_seq)
+        self.shell.sessions_truncated = bool(result.truncated)
         self.menu("Sessions", [(f"{row['workspace']} · {row['title']} · {row['state']}",
             {"kind": "session_open", "id": row["id"], "workspace": row["workspace"]}) for row in self.shell.sessions],
             ["[Session list truncated]"] if result.truncated else [])
