@@ -193,8 +193,8 @@ The native prototype has grown into a broad, working Ratatui client, with the
 host contract and Python reducer still providing canonical state. It is not yet
 ready to replace Textual: interaction coverage, visual matching, a final full
 regression, and hosted distribution checks remain open (see HANDOFF above for the
-current, prioritised list). The worktree is intentionally left uncommitted on
-`feat/ratatui-prototype` for continuation.
+current, prioritised list). The work is committed and pushed on
+`feat/ratatui-prototype` (earlier text in this section predates that).
 
 Most recent checks recorded:
 
@@ -216,7 +216,7 @@ Most recent checks recorded:
   launched the native binary. Hosted runner coverage and post-latest-change
   wheel builds remain open.
 
-No commit, merge, publication, or default-renderer switch has been made.
+Commits and pushes to the branch were made later; no merge to `main`, publication or version bump has been made. `--renderer auto` has been the default since the early work.
 
 ## Objective and current state
 
@@ -226,7 +226,7 @@ Start with a prototype, then reach parity before switching the default.
 
 - Worktree: `/private/tmp/nexus-ratatui-prototype`.
 - Branch: `feat/ratatui-prototype`, based on `6e359ff`.
-- Changes are currently uncommitted. The original checkout is preserved.
+- Changes are committed and pushed; the original checkout is preserved.
 - Launch: `PYTHONPATH=. /Users/santa/repos/nexus/.venv/bin/python -m nexus.ui.ratatui.prototype --workspace "$PWD"`.
 - CLI integration: `nexus chat --renderer ratatui`.
 - **Textual is still the default and remains a runtime dependency. The replacement is not complete.**
