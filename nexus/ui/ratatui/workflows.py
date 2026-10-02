@@ -89,7 +89,9 @@ class Workflows:
             rows += [("New file", {"kind": "settings_new", "scope": scope, "category": category}),
                      ("Reset category…", {"kind": "confirm", "label": "Reset this category to default? Removed files move to trash.",
                       "lines": names, "next": {"kind": "settings_reset", "scope": scope, "category": category}})]
-        return f"Settings · {scope} · {category or 'sections'}", rows, [inventory.root_display]
+        from ...ui_support.settings_help import SETTINGS_HELP
+        help_text = SETTINGS_HELP.get(category, "")
+        return f"Settings · {scope} · {category or 'sections'}", rows, [inventory.root_display, *([help_text] if help_text else [])]
 
     async def settings(self, scope="global", category=""):
         title, rows, lines = await self.settings_menu(scope, category)
