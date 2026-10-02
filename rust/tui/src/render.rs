@@ -1307,6 +1307,11 @@ pub fn toned_lines(lines: &[String], tones: &[String], width: u16, p: &Palette) 
             "add" => vec![Span::styled(body.to_string(), style(p.success))],
             "del" => vec![Span::styled(body.to_string(), style(p.error))],
             "hunk" => vec![Span::styled(body.to_string(), style(p.purple))],
+            // Usage windows: the bar's tone colours the whole row.
+            "ok" => vec![Span::styled(body.to_string(), style(p.success))],
+            "warn" => vec![Span::styled(body.to_string(), style(p.warning))],
+            "critical" | "bad" => vec![Span::styled(body.to_string(), style(p.error))],
+            "dim" | "unknown" => vec![Span::styled(body.to_string(), style(p.quiet))],
             "kv" => match body.split_once(": ") {
                 Some((label, value)) => vec![
                     Span::styled(format!("{label}: "), style(p.quiet)),

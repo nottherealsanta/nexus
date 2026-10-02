@@ -37,6 +37,7 @@ class Workflows:
             self.stack = self.stack[-20:]
         self.shell.show(title, list(lines))
         self.shell.panel_lines = list(lines)
+        self.shell.panel_tones = []
         self.shell.items = [{"label": label, "command": "", "operation": operation}
                             for label, operation in rows]
         self.form = None
@@ -87,6 +88,8 @@ class Workflows:
                 rows.insert(0, ("New sessions start with…", {"kind": "default_agent"}))
             names = [item.id for item in items if not item.builtin and (category != "agents" or getattr(item, "overrides_builtin", False))]
             rows += [("New file", {"kind": "settings_new", "scope": scope, "category": category}),
+                     *([] if category == "agents" else [("Switch to project" if scope == "global" else "Switch to global",
+                       {"kind": "settings", "scope": "project" if scope == "global" else "global", "category": category})]),
                      ("Reset category…", {"kind": "confirm", "label": "Reset this category to default? Removed files move to trash.",
                       "lines": names, "next": {"kind": "settings_reset", "scope": scope, "category": category}})]
         from ...ui_support.settings_help import SETTINGS_HELP

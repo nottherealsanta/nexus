@@ -11,6 +11,7 @@ import uuid
 
 from ..cli.commands import help_text, parse
 from ...ui_support.tool_details import flatten
+from ...ui_support.usage import usage_lines
 
 
 def plain(value):
@@ -85,8 +86,9 @@ class ShellActions:
         if hasattr(self, "workflows"):
             self.workflows.form = None
         self.panel_title = title
-        self.panel_tones = []
         self.panel_lines = value.splitlines() if isinstance(value, str) else labelled(value)
+        # Labelled values read as dim `label: ` then the value; plain text stays plain.
+        self.panel_tones = [] if isinstance(value, str) else ["kv"] * len(self.panel_lines)
 
     def show_styled(self, title, lines, tones):
         """A panel whose lines carry tones (``ui_support.tool_details.styled_lines``)."""
@@ -274,7 +276,7 @@ class ShellActions:
         elif name == "/cost":
             self.show("Usage", self.controller.view.usage.to_dict())
         elif name == "/usage":
-            self.show("Provider usage", await self.client.providers_usage())
+            self.show_styled("Provider usage", *usage_lines(await self.client.providers_usage()))
         elif name == "/export":
             self.show("Session export", await self.client.export(session, format=argument or "markdown"))
         elif name == "/diff":
@@ -288,7 +290,8 @@ class ShellActions:
         elif name == "/archived":
             await self.workflows.operate({"kind": "archived", "query": argument})
         elif name == "/settings":
-            await self.workflows.settings(argument if argument in {"project", "global"} else "global")
+            self.workflows.settings_scope = argument if argument in {"project", "global"} else "global"
+            await self.workflows.operate({"kind": "appearance"})  # Textual opens Settings on Appearance
         elif name == "/reload":
             self.show("Extensions reloaded", await self.client.reload_extensions(trigger="chat"))
             self.mcp_due = 0.0

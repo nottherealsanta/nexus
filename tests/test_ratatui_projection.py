@@ -227,3 +227,17 @@ def test_queue_lines_and_meter_extras_follow_the_textual_status_row(tmp_path, mo
     view.input_queue = [QueuedInputView(queued_id=str(i), mode=mode, content=[{"type": "text", "text": f"msg {i}"}])
                         for i, mode in enumerate(["queue", "steer", "interrupt", "queue", "queue"])]
     assert _queue_lines(view) == ["Queued · msg 0", "Steer · msg 1", "Interrupt · msg 2", "+2 more queued"]
+
+
+def test_usage_lines_bar_each_window_with_its_tone():
+    from nexus.ui_support.usage import usage_lines
+
+    result = {"providers": [{"id": "claude", "label": "Claude", "plan": "Pro", "windows": [
+        {"label": "5-hour session", "used_percent": 79.0}, {"label": "Weekly", "used_percent": 12.0}], "notes": ["a note"], "source": "cli"}],
+        "not_connected": ["ChatGPT"]}
+    lines, tones = usage_lines(result, now=0)
+    assert len(lines) == len(tones) and tones[0] == "title"
+    window_tones = [t for line, t in zip(lines, tones) if "session" in line or "Weekly" in line]
+    assert window_tones == ["warn", "ok"] or window_tones[1] == "ok"
+    assert "dim" in tones and lines[-1].startswith("Not connected")
+    assert usage_lines({"providers": []})[0][0] == "No connected provider reports usage."

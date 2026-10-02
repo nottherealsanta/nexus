@@ -191,6 +191,10 @@ provider/date) like Textual; headings are display-only, so selection and favouri
 count models. Ctrl+S toggles `Updated ↓` and `Name A–Z`. Fuzzy ranking stays in
 Python (`model_choice`), and the Rust filter is a substring match on the label.
 
+Labelled panels read as dim `label: ` then value. `/usage` renders per-provider
+limit bars coloured by tone (`ui_support/usage.usage_lines`, the same wording as
+Textual's modal). `/settings` opens on Appearance, like Textual.
+
 Context chips say "unavailable while a turn is running" instead of failing when the
 host has no preview. Rows are menu lines, so there are no swatch colours or aligned
 token column yet.

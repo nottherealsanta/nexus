@@ -105,7 +105,53 @@ def fetched_text(fetched_at: Any) -> str:
     return "Fetched " + datetime.fromtimestamp(fetched_at).strftime("%H:%M:%S")
 
 
+def usage_lines(result: Any, now: float | None = None) -> tuple[list[str], list[str]]:
+    """The usage screen as text lines with a tone each (``title``, ``ok``/``warn``/``critical``/
+    ``unknown`` for limit windows, ``dim``, ``bad``, ``""``), mirroring Textual's ``render_usage``."""
+    from .text import sanitize
+
+    lines: list[str] = []
+    tones: list[str] = []
+
+    def put(line: str, tone_name: str = "") -> None:
+        lines.append(line)
+        tones.append(tone_name)
+
+    rows = list(_field(result, "providers", ()) or ())[:8]
+    if not rows:
+        put("No connected provider reports usage.", "title")
+        put("Connect ChatGPT, Claude, GitHub Copilot or OpenCode Go in Settings → Providers.", "dim")
+    width = max((len(sanitize(str(_field(w, "label", "") or "Limit"), 40))
+                 for row in rows for w in list(_field(row, "windows", ()) or ())[:16]), default=0)
+    for index, row in enumerate(rows):
+        if index:
+            put("")
+        put(sanitize(heading(row), 80), "title")
+        error = _field(row, "error")
+        if error:
+            put("  Unavailable: " + sanitize(str(error), 240), "bad")
+        windows = list(_field(row, "windows", ()) or ())[:16]
+        if not windows and not error:
+            put("  No limit windows reported.", "dim")
+        for window in windows:
+            label = sanitize(str(_field(window, "label", "") or "Limit"), 40)
+            put(f"  {label:<{width}}  {bar(window)}  {sanitize(summary(window, now), 200)}", tone(window))
+        for note in list(_field(row, "notes", ()) or ())[:8]:
+            put(f"  · {sanitize(str(note), 160)}", "dim")
+        if source := _field(row, "source"):
+            put(f"  Source: {sanitize(str(source), 80)}", "dim")
+    missing = [sanitize(str(name), 40) for name in list(_field(result, "not_connected", ()) or ())[:8]]
+    if missing and rows:
+        put("")
+        put("Not connected: " + ", ".join(missing), "dim")
+    if fetched := fetched_text(_field(result, "fetched_at")):
+        put("")
+        put(fetched, "dim")
+    return lines, tones
+
+
 __all__ = [
+    "usage_lines",
     "BAR_WIDTH",
     "bar",
     "duration",
