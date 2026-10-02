@@ -950,11 +950,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 send(json!({"type":"file_toggle","text":file.path,"generation":s.generation}))?;
                             }
                         } else if r.sessions.contains((mouse.column, mouse.row).into()) {
-                            if render::session_sidebar(&s, &render::Palette::new(s.theme == "nexus-light"), usize::from(r.sessions.width.saturating_sub(3)), 0)
+                            let hit = render::session_sidebar(&s, &render::Palette::new(s.theme == "nexus-light"), usize::from(r.sessions.width.saturating_sub(3)), 0)
                                 .get(sessions_scroll + (mouse.row - r.sessions.y).saturating_sub(1) as usize)
-                                .is_some_and(|(_, hit)| *hit == Some(render::SidebarHit::New))
-                            {
-                                action("command", "/new")?;
+                                .and_then(|(_, hit)| *hit);
+                            match hit {
+                                Some(render::SidebarHit::New) => action("command", "/new")?,
+                                Some(render::SidebarHit::Archived) => action("command", "/archived")?,
+                                _ => {}
                             }
                             if let Some(row) = render::session_sidebar(&s, &render::Palette::new(s.theme == "nexus-light"), usize::from(r.sessions.width.saturating_sub(3)), 0)
                                 .get(sessions_scroll + (mouse.row - r.sessions.y).saturating_sub(1) as usize)

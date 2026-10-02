@@ -297,6 +297,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "details_sidebar": shell.preferences.values["details_sidebar"] if shell else True,
             "context_preview": shell.preferences.values["context_preview"] if shell else True,
             "sessions": shell.sessions if shell else [],
+            "archived_label": shell.archived_label if shell else "",
             "tabs": _tab_rows(controller, shell) if shell else [],
             "breadcrumb": redact(escape_controls(shell.breadcrumb)) if shell else "",
             "details_panel": details_panel,
@@ -392,6 +393,9 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                         existing.update(row)
                     elif row["state"] in {"running", "awaiting_input", "awaiting_permission"}:
                         shell.tabs.append(dict(row))
+                archived = await shell.client.list_archived_sessions("", limit=200)
+                count = len(archived.sessions)
+                shell.archived_label = f"Archived · {count}{'+' if archived.has_more else ''}" if count else ""
                 if shell.workflows.agent_page_id and shell.panel_title == "Agent transcript":
                     shell.panel_lines = labelled(await shell.client.agent_transcript(controller.session, shell.workflows.agent_page_id))
             async def dictation():

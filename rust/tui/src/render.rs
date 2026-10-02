@@ -698,6 +698,9 @@ mod tests {
         assert!(text(first).starts_with("▌⠙ Fix bug"), "{}", text(first));
         assert!(text(first + 1).contains("working now · just now"));
         assert!(text(first + 3).starts_with(" ✓ Docs"));
+        s.archived_label = "Archived · 3".into();
+        let rows = session_sidebar(&s, &Palette::new(false), 27, 1);
+        assert_eq!(rows.last().unwrap().1, Some(SidebarHit::Archived));
     }
     #[test]
     fn tabs_scroll_to_keep_the_current_one_and_map_to_cells() {
@@ -903,6 +906,7 @@ mod editor_layout_tests {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SidebarHit {
     New,
+    Archived,
     Session(usize),
 }
 
@@ -955,6 +959,9 @@ pub fn session_sidebar(s: &Snapshot, p: &Palette, width: usize, spin: usize) -> 
             Some(SidebarHit::Session(i)),
         ));
         rows.push((Line::default(), None));
+    }
+    if !s.archived_label.is_empty() {
+        rows.push((Line::styled(s.archived_label.clone(), Style::default().fg(p.quiet)), Some(SidebarHit::Archived)));
     }
     rows
 }
