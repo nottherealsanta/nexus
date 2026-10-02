@@ -100,3 +100,21 @@ cancellation at each await point (`test_core_loop.py`, `test_session_send.py`).
 sharing an isolated home. It checks duplicate project/session names, date groups,
 path filtering, opening the owning project, reconnect, and light/dark screenshots
 at 1440, 1024 and 400px (`artifacts/project-sessions/`).
+
+### Native terminal checks
+
+Build the debug executable before running `tests/test_ratatui_pty.py`; the test
+needs local controlling-terminal permissions and checks keyboard input,
+approval decisions, Settings edits and canonical/echo/signal restoration. Native
+cell layouts, Markdown and editor transitions use `cargo test --manifest-path
+rust/tui/Cargo.toml`. Python tests in `test_ratatui_*` exercise the actual scripted
+harness, replay, launch routing, preferences, failed submissions, Settings hash
+conflicts and credential-form handling. Source wheel builds require the dev
+`setuptools-rust` dependency and Rust ≥1.88. Keep Textual tests during migration.
+
+The Ratatui migration has a side-by-side terminal check:
+`PYTHONPATH=. python tests/playwright_ratatui_check.py` after the native Cargo
+build. It captures both clients with identical reference events, exercises draft
+input and resizing, and writes ignored PNGs under `artifacts/ratatui-parity/`.
+The native development adapter supplies a controlling PTY and forwards bytes to
+the existing browser test server; it is not an installed product surface.

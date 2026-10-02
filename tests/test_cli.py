@@ -210,7 +210,7 @@ async def test_claude_init_saves_provider_through_the_host(monkeypatch, tmp_path
 
 def test_chat_starts_a_new_session_unless_one_is_named(monkeypatch):
     seen: list[str] = []
-    monkeypatch.setattr(cli, "_chat_entry", lambda workspace, *, session: seen.append(session) or 0)
+    monkeypatch.setattr(cli, "_chat_entry", lambda workspace, *, session, renderer="textual": seen.append(session) or 0)
     class Tty(io.StringIO):
         def isatty(self):
             return True
@@ -739,3 +739,25 @@ def test_no_codex_binary_or_acp_is_needed_for_regular_commands():
     assert not (REPO_ROOT / "nexus" / "store.py").exists()
     assert not (REPO_ROOT / "nexus" / "model" / "providers" / "legacy_codex_cli.py").exists()
     assert not (REPO_ROOT / "nexus" / "ui" / "native.py").exists()
+
+
+def test_chat_renderer_auto_prefers_native_when_installed(monkeypatch):
+    chosen: list[str] = []
+    monkeypatch.setattr(cli, "_chat_entry", lambda workspace, *, session, renderer="textual": chosen.append(renderer) or 0)
+
+    class Tty(io.StringIO):
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr(cli.sys, "stdin", Tty())
+    monkeypatch.setattr(cli.sys, "stdout", Tty())
+    monkeypatch.setattr(cli.importlib.util, "find_spec", lambda name: object())
+    monkeypatch.setenv("TERM", "xterm")
+    import nexus.ui.ratatui.run as native
+
+    monkeypatch.setattr(native, "available", lambda: True)
+    assert cli.main(["chat"]) == 0
+    monkeypatch.setattr(native, "available", lambda: False)
+    assert cli.main(["chat"]) == 0
+    assert cli.main(["chat", "--renderer", "ratatui"]) == 0
+    assert chosen == ["ratatui", "textual", "ratatui"]

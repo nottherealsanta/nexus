@@ -8,7 +8,8 @@ in [host.md](host.md).
 
 A proposed Rust/Ratatui replacement with a Python adapter and maturin packaging
 is assessed in [ratatui-feasibility.md](ratatui-feasibility.md). It is a feasibility
-report, not an implemented or approved backend change.
+report. The authorized replacement is being implemented separately; its current
+coverage and remaining work are in [ratatui-parity.md](ratatui-parity.md).
 
 ## Launch path
 
@@ -194,3 +195,12 @@ within the original and updated columns.
 The sessions sidebar groups saved sessions from all projects by directory name
 and local activity date. Opening another project replaces the host client and
 reconnect target with that workspace’s daemon; active work continues there.
+
+
+The native replacement shares the neutral shortcut table and project/date
+session grouping with Textual. Its diagnostics drawer follows the same host
+paging boundary, keeps separate daemon/session cursors, bounds retained rows,
+and folds routine entries while showing problems. Native controls are Ctrl+E
+open/close, Ctrl+A fold/unfold, PageUp/PageDown or wheel to scroll, and Escape
+return to the conversation. Migration progress lives in
+[../plans/RATATUI_PLAN.md](../plans/RATATUI_PLAN.md).

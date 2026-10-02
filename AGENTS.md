@@ -34,6 +34,7 @@ Update the matching doc in the same change as the code.
 | `nexus chat`, the Textual shell (`nexus/ui/tui/`, `nexus/ui_support/`) | [docs/textual.md](docs/textual.md) |
 | Feasibility of a Rust/Ratatui TUI with Python and maturin | [docs/ratatui-feasibility.md](docs/ratatui-feasibility.md) |
 | `nexus web`, the browser client (`nexus/ui/web/`, `nexus/host/web.py`) | [docs/web.md](docs/web.md) |
+| Native Ratatui replacement and parity | [docs/ratatui-parity.md](docs/ratatui-parity.md) |
 | Local dictation | [docs/voice.md](docs/voice.md) |
 | Trust boundaries, network, credentials | [docs/security.md](docs/security.md) |
 | Tests, fakes, browser checks | [docs/testing.md](docs/testing.md) |

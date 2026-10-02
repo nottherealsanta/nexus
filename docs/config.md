@@ -111,3 +111,8 @@ Command hooks receive `NEXUS_HOOK_EVENT`, `NEXUS_TOOL_NAME`, `NEXUS_TOOL_KEY`,
    `host_support/settings_inventory.py` / `doctor.py`.
 3. Document it here and in `examples/nexus.toml`.
 4. Tests: `tests/test_config_*.py`.
+
+On the native-terminal migration branch, `NEXUS_TUI_BINARY` explicitly selects
+the Rust executable. Shell preferences retain `$XDG_CONFIG_HOME/nexus/tui.json`
+(or `~/.config/nexus/tui.json`) and the existing Textual keys. Native startup
+never opens session storage; session data continues to come from the host.

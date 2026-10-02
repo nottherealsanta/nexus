@@ -19,6 +19,8 @@ jobs:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.2.0
         with: {enable-cache: true, python-version: "3.13"}
+      - run: cargo test --locked --manifest-path rust/tui/Cargo.toml
+      - run: cargo build --locked --manifest-path rust/tui/Cargo.toml
       - run: uv sync --locked --extra dev
       - run: uvx ruff check nexus tests
       # Textual pilot tests are timing/terminal sensitive and fail on the shared
@@ -37,9 +39,11 @@ jobs:
       - uses: astral-sh/setup-uv@v10.2.0
       - run: uv build
       - run: uv run --with pytest --with pytest-asyncio --with setuptools pytest -q tests/test_model_data_package.py tests/test_install_script.py
+  native-wheels:
+    uses: ./.github/workflows/native-wheels.yml
   ci-ok:            # the one required status check; its name never changes with the matrix
     if: always()
-    needs: [test, build]
+    needs: [test, build, native-wheels]
     runs-on: ubuntu-latest
     steps:
       - run: '[ "${{ contains(needs.*.result, ''failure'') || contains(needs.*.result, ''cancelled'') }}" = false ]'

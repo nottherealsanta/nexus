@@ -146,16 +146,21 @@ async def _mock(workspace: Path, args: argparse.Namespace, stdout: TextIO, stder
         await client.aclose()
 
 
-async def _chat(workspace: Path, *, session: str) -> int:
+async def _chat(workspace: Path, *, session: str, renderer: str = "textual") -> int:
     """Launch the only interactive chat shell over the host client."""
     from .ui.cli import open_client
-    from .ui.tui.run import run
+    if renderer == "ratatui":
+        from .ui.ratatui.run import run
+    else:
+        from .ui.tui.run import run
 
     client = await open_client(workspace)
     try:
         async def reconnect():
             return await open_client(workspace)
 
+        if renderer == "ratatui":
+            return await run(client, session=session, reconnect=reconnect, workspace=workspace)
         return await run(client, session=session, reconnect=reconnect)
     finally:
         await client.aclose()
@@ -193,10 +198,10 @@ def _new_session_id() -> str:
     return f"session-{uuid.uuid4().hex[:8]}"
 
 
-def _chat_entry(workspace: Path, *, session: str) -> int:
+def _chat_entry(workspace: Path, *, session: str, renderer: str = "textual") -> int:
     """KeyboardInterrupt boundary for Textual's guaranteed terminal restore."""
     try:
-        return asyncio.run(_chat(workspace, session=session))
+        return asyncio.run(_chat(workspace, session=session, renderer=renderer))
     except KeyboardInterrupt:
         return 130
 
@@ -1384,6 +1389,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--json", action="store_true", help="Stream JSONL event envelopes")
 
     chat = sub.add_parser("chat", help="Open the interactive Textual chat")
+    chat.add_argument("--renderer", choices=("auto", "ratatui", "textual"), default="auto", help="Terminal renderer: auto uses the native Ratatui client when its executable is installed, otherwise Textual")
     chat.add_argument(
         "--session",
         default=None,
@@ -1634,10 +1640,16 @@ def main(argv: list[str] | None = None) -> int:
                     "Use `nexus run <prompt>` for piped or non-interactive input.\n"
                 )
                 return 2
-            if importlib.util.find_spec("textual") is None:
+            renderer = getattr(args, "renderer", "auto")
+            if renderer == "auto":
+                from .ui.ratatui.run import available as native_available
+                renderer = "ratatui" if native_available() else "textual"
+            if renderer == "textual" and importlib.util.find_spec("textual") is None:
                 stderr.write("Error: Textual is required for `nexus chat`; reinstall Nexus with its runtime dependencies.\n")
                 return 1
             try:
+                if renderer == "ratatui":
+                    return _chat_entry(workspace, session=args.session or _new_session_id(), renderer=renderer)
                 return _chat_entry(workspace, session=args.session or _new_session_id())
             except ModuleNotFoundError as exc:
                 if exc.name == "textual":

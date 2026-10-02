@@ -93,3 +93,11 @@ microphone latency and inference on supported hardware are **not verified**.
 
 `nexus voice` defaults to status. Missing-runtime download failures preserve the
 host installation guidance once, without appending a second installation recipe.
+
+
+The native Ratatui client uses the same host-backed TOML voice settings helper
+as Textual for `/voice on|off`. It observes `enabled`, `max_seconds` and
+`auto_send`, and submits only a final transcript combined with the existing
+composer draft. A late result is discarded if the session or active panel
+changed. Partial transcripts are previews only. Native capture tests use a fake
+recorder; physical microphone and model-runtime parity remain unverified.

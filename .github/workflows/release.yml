@@ -39,13 +39,23 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-  publish:
+  native-wheels:
     needs: release-please
     if: >-
       always() &&
       (needs.release-please.outputs.created == 'true' || github.event_name == 'workflow_dispatch')
+    uses: ./.github/workflows/native-wheels.yml
+    with:
+      ref: ${{ needs.release-please.outputs.tag || inputs.tag }}
+
+  publish:
+    needs: [release-please, native-wheels]
+    if: >-
+      always() &&
+      needs.native-wheels.result == 'success' &&
+      (needs.release-please.outputs.created == 'true' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     environment: pypi
     permissions:
       contents: write     # upload release assets
@@ -60,7 +70,12 @@ jobs:
         run: |
           v=$(python3 -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
           [ "v$v" = "$TAG" ] || { echo "tag $TAG != pyproject $v"; exit 1; }
-      - run: uv build
+      - run: uv build --sdist
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-wheels-*
+          path: dist
+          merge-multiple: true
       - name: Wheel contains the web, TUI and agent assets
         run: uv run --with pytest --with pytest-asyncio --with setuptools pytest -q tests/test_model_data_package.py tests/test_install_script.py
       - run: uv publish --trusted-publishing always

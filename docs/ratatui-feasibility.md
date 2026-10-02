@@ -1,9 +1,10 @@
 # Feasibility: a Rust/Ratatui TUI with Python and maturin
 
-Assessment date: 2026-10-01. Status: **proposal, not an approved migration**.
+Assessment date: 2026-10-01. Status: **migration authorized; native implementation in progress**.
 Repository baseline: `nexus-harness` 0.2.13, Python ≥3.13, Textual 8.2.8.
-This report changes documentation only. No Rust prototype or comparative benchmark
-has been run; performance projections and effort estimates below are not verified.
+The original assessment preceded implementation. A Rust prototype now exists;
+current coverage is recorded in [ratatui-parity.md](ratatui-parity.md). No comparative
+benchmark has been run; performance projections remain unverified.
 
 ## 1. Recommendation
 
@@ -468,3 +469,32 @@ The valuable design is a native TUI whose boundary preserves Nexus's Python
 contracts and complete context presentation; maturin makes shipping that boundary
 practical, but feature reconstruction and release engineering determine whether
 the migration is worthwhile.
+
+## Prototype on `feat/ratatui-prototype`
+
+The migration is authorized; the first slice uses option B (native subprocess)
+without changing the Python build backend or production `nexus chat` entry point.
+Python reuses the host client and canonical controller; Rust owns terminal input
+and rendering. Private schema-1 JSONL carries complete labelled snapshots and
+submit/cancel/quit actions. No Rust database, manager, provider or tool access.
+
+From the worktree root:
+
+```sh
+cargo build --manifest-path rust/tui/Cargo.toml
+PYTHONPATH=. /Users/santa/repos/nexus/.venv/bin/python -m nexus.ui.ratatui.prototype --workspace "$PWD"
+```
+
+Enter queues, Ctrl+Enter steers, Alt+Enter interrupts, and Shift+Enter/Ctrl+J
+insert newlines. Page Up/Down scroll; Ctrl+C cancels and returns queued messages;
+Escape dismisses panels or cancels after two presses; Ctrl+Q detaches.
+Host-backed sessions, replay, continuous streaming, context preview, reasoning,
+labelled tool details, approval/question responses, searchable pickers, inspection
+commands and attachment preparation are implemented. The full parity ledger is
+[ratatui-parity.md](ratatui-parity.md). This is not the complete Textual replacement.
+Performance, native wheels and cross-platform compatibility remain unverified.
+
+The input-reader fix enables Crossterm `use-dev-tty`: bridge stdin remains
+a pipe while keyboard events read the controlling terminal. A sized, drained
+PTY regression verifies submit, quit, and restoration of canonical input, echo
+and signal flags. Full cross-terminal validation remains pending.
