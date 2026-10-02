@@ -504,6 +504,21 @@ pub fn draw(
         ),
         r.transcript,
     );
+    if cache.lines.len() > r.transcript.height as usize && r.transcript.width > 2 {
+        // A thin scrollbar on the transcript's right edge, like Textual's.
+        let mut state = ratatui::widgets::ScrollbarState::new(cache.lines.len().saturating_sub(r.transcript.height as usize)).position(offset);
+        frame.render_stateful_widget(
+            ratatui::widgets::Scrollbar::new(ratatui::widgets::ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
+                .track_symbol(Some(" "))
+                .thumb_symbol("▐")
+                .thumb_style(Style::default().fg(p.border_strong))
+                .track_style(Style::default().bg(p.background)),
+            r.transcript,
+            &mut state,
+        );
+    }
     let rows = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(4),

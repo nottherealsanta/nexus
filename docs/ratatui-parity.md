@@ -169,6 +169,9 @@ clipboard even over SSH) and through the daemon-side desktop clipboard
 that is released without dragging is still a click on the block. Any key clears the
 selection. Only the transcript can be selected; sidebars and dialogs cannot.
 
+The transcript shows a thin scrollbar on its right edge when it overflows, and
+typing returns the view to the live end.
+
 Context chips say "unavailable while a turn is running" instead of failing when the
 host has no preview. Rows are menu lines, so there are no swatch colours or aligned
 token column yet.

@@ -61,7 +61,7 @@ Transcript
       `.tool-card:focus`).
 - [x] Empty-session hints done (`hints` block). Still open:  connection-status banner, activity progress
       bar, update-available notice, `thinking_status` "Activity" row.
-- [x] Mouse selection and copy done (checked live; scrollbar indicator and typing-scrolls-to-bottom still open). Mouse text selection and copy in the transcript; scrollbar indicator; typing
+- [x] Mouse selection and copy done (checked live; scrollbar indicator and typing-scrolls-to-bottom done too). Mouse text selection and copy in the transcript; scrollbar indicator; typing
       scrolls to bottom (`set_typing`).
 - [x] Markdown rebuilt (6 Rust tests; capture checked, fence syntax highlighting still open). Original: Markdown: code fence background and language label, block quote bar, headings
       colour/levels, table layout, list hanging indent, inline code styling

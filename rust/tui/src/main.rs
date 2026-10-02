@@ -355,6 +355,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // As-you-type completion (Textual `refresh_completion`): a `/command`,
         // an `@file`, or a command argument asks the host after a 120 ms pause.
         if typed != (draft.text.clone(), draft.cursor) {
+            if typed.0 != draft.text && !draft.text.is_empty() {
+                follow = true; // typing returns to the live end of the conversation
+            }
             typed = (draft.text.clone(), draft.cursor);
             let query = draft.text[..draft.cursor].rsplit(char::is_whitespace).next().unwrap_or("");
             let argument = (draft.text.starts_with("/model ") || draft.text.starts_with("/agent ")) && draft.text[..draft.cursor].contains(' ');
