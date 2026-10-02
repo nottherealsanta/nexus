@@ -15,7 +15,7 @@ How to work: use the project skill `.agents/skills/nexus-ratatui/SKILL.md` (and
 its `reference/`). Textual is the reference; match it, and put shared pure logic
 in `nexus/ui_support/` so both clients use it.
 
-Last verified (2026-10-02, after the P1 batch: tabs, sessions sidebar, Markdown, diffs, completion): full offline suite 4,988 passed / 312 skipped / 4 deselected; Rust 23 tests pass; Ruff clean. (A Textual teardown prints a `#logs-content` NoMatches traceback to stderr during the run; tests still pass; not investigated.) Earlier record: Rust 11 tests pass; Ruff clean; full offline suite
+Last verified (2026-10-02, after the P1 batch and the main 0.2.17 merge): full offline suite 4,991 passed / 312 skipped / 4 deselected; Rust 23 tests pass; Ruff clean. (A Textual teardown prints a `#logs-content` NoMatches traceback to stderr during the run; tests still pass; not investigated.) Earlier record: Rust 11 tests pass; Ruff clean; full offline suite
 4,974 passed / 312 skipped, with 3 failures that were fixed or were timing-flaky
 (see "Aggregate regression" below); Playwright captures of reference, permission,
 picker, panel, light and narrow screens complete. Not rerun after the last small
@@ -42,7 +42,7 @@ fixes: the whole suite and the Textual timing-sensitive group.
 - [x] (fixed: newest build wins; `nexus doctor` prints `native tui:`) Binary discovery prefers `rust/tui/target/debug` over `release`; a stale debug
       build can shadow a fresh release build. Fix the order or print which binary ran
       (`nexus doctor`).
-- [ ] Rebase onto `main` (0.2.17; this branch still says 0.2.16) before any release
+- [x] (main 0.2.17 merged into the branch with a merge commit, not a rebase, so no force-push; duplicate `_session_groups` removed; full suite 4,991 passed) Rebase onto `main` before any release
       candidate. Do not edit version files by hand.
 
 ### P1: Textual features not yet in the native client
