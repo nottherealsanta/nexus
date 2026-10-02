@@ -2,7 +2,7 @@
 
     PYTHONPATH=. python tests/playwright_ratatui_live.py "/mock hello" "/mock question" "blue wins"
 
-Each argument is typed and submitted in turn; a screenshot follows each under
+Each argument is typed and submitted in turn (or `click:X,Y` / `key:Control+p`); a screenshot follows each under
 artifacts/ratatui-live/. Needs cargo build first. Dev mode isolates state
 in ~/.nexus/dev; no provider credentials or network are used.
 """
@@ -36,7 +36,13 @@ with sync_playwright() as pw:
         page.screenshot(path=str(OUT / "1-start.png"))
         page.get_by_role("textbox", name="Terminal input").click()
         for step, text in enumerate(sys.argv[1:], 2):
-            page.keyboard.type(text); page.keyboard.press("Enter"); page.wait_for_timeout(9000)
+            if text.startswith("click:"):  # click:X,Y in page pixels
+                x, y = (float(v) for v in text[6:].split(","))
+                page.mouse.click(x, y); page.wait_for_timeout(1500)
+            elif text.startswith("key:"):  # key:Control+p
+                page.keyboard.press(text[4:]); page.wait_for_timeout(1500)
+            else:
+                page.keyboard.type(text); page.keyboard.press("Enter"); page.wait_for_timeout(9000)
             page.screenshot(path=str(OUT / f"{step}.png"))
     finally:
         page.close(); os.killpg(server.pid, signal.SIGTERM); b.close()
