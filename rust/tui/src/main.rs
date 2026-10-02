@@ -675,6 +675,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 action("refresh_models", "")?
                             }
+                            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) && s.panel_title.starts_with("Models") => {
+                                action("model_sort", "")?
+                            }
                             KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 send(
                                     json!({"type":"favorite","selection":selection,"filter":filter}),

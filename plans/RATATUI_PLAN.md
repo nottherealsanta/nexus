@@ -86,7 +86,7 @@ Composer and input
 - [x] As-you-type trigger done (debounced `complete`; PTY test); inline-list styling still open: As-you-type completion (inline list under the composer, `tui_list.py`) rather
       than Tab-only popup; style the popup like Textual; argument providers exist in
       `ui_support/completion.py`.
-- [ ] Model picker: group header rows, fuzzy ranking in the Rust filter (Python
+- [x] Group headings and Ctrl+S sort done (fuzzy ranking is a label substring match in Rust; effort step styling open). Model picker: group header rows, fuzzy ranking in the Rust filter (Python
       already ranks), Ctrl+S sort toggle, effort step styling (`tui_model_picker.py`).
 - [ ] Agent picker as the inline `AgentPickerPanel`, new-session picker
       (`new_session.py`), sessions dialog, archived dialog (`tui_archived.py`).

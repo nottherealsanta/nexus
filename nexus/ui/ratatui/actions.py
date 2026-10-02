@@ -59,6 +59,7 @@ class ShellActions:
         self.workspace = ""
         self.tabs = []
         self.breadcrumb = ""
+        self.model_sort = "updated"  # model picker order: updated|name (Ctrl+S)
         self.update_notice = ""  # "<version> available: <command>" shown in the footer
         self.sessions_truncated = False  # the host list hit its cap
         self.archived_label = ""  # "Archived · N" under the sessions list, "" when none
@@ -222,15 +223,16 @@ class ShellActions:
                 favorites = self.preferences.values["model_favorites"]
                 recent = self.preferences.values["model_recent"]
                 current = f"{self.controller.provider}/{self.controller.model}" if self.controller.provider and self.controller.model else ""
-                groups, _ = model_groups(rows, favorites=favorites, recent=recent)
+                groups, _ = model_groups(rows, sort_mode=self.model_sort, favorites=favorites, recent=recent)
                 rows = []
                 for title, group in groups:
                     for row in group:
                         mark = "★ " if row["ref"] in favorites else ""
                         here = " ◀" if row["ref"] == current else ""
-                        rows.append({**row, "name": f"{mark}{row.get('name') or row['ref']} · {row['ref']}{here} · {title}"})
-                self.picker("Models · Ctrl+F favorite · Ctrl+R refresh", rows, "/model", "ref")
+                        rows.append({**row, "group": title, "name": f"{mark}{row.get('name') or row['ref']} · {row['ref']}{here}"})
+                self.picker(f"Models · {'Updated ↓' if self.model_sort == 'updated' else 'Name A–Z'} · Ctrl+S sort · Ctrl+F favorite · Ctrl+R refresh", rows, "/model", "ref")
                 for item, row in zip(self.items, rows):
+                    item["group"] = row["group"]
                     state = dict(current=current, current_effort=self.controller.reasoning_effort, stored_override=self.controller.stored_override)
                     from ...ui_support.model_choice import preselected_effort, selection_effort
                     keep, commit = selection_effort(row, effort_source=self.controller.reasoning_effort_source, pending=None, touched=False, **state)

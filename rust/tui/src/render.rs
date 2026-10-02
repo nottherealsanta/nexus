@@ -690,19 +690,21 @@ pub fn draw(
                 .iter()
                 .filter(|item| item.label.to_lowercase().contains(&needle))
                 .collect();
-            let start = selection.saturating_sub(inner.height.saturating_sub(3) as usize);
             let mut lines = vec![Line::from(vec![
                 Span::styled("Filter ", Style::default().fg(p.quiet)),
                 Span::styled(format!("{filter}▏"), Style::default().fg(p.text)),
                 Span::styled("   Tab inspect details", Style::default().fg(p.quiet)),
             ])];
             lines.push(Line::default());
-            for (i, item) in rows
-                .iter()
-                .enumerate()
-                .skip(start)
-                .take(inner.height.saturating_sub(2) as usize)
-            {
+            // Group headings sit above the first item of each group; selection counts items only.
+            let mut body: Vec<Line<'static>> = Vec::new();
+            let mut selected_line = 0usize;
+            let mut group = "";
+            for (i, item) in rows.iter().enumerate() {
+                if !item.group.is_empty() && item.group != group {
+                    body.push(Line::styled(item.group.clone(), Style::default().fg(p.purple).bg(p.dialog).add_modifier(Modifier::BOLD)));
+                }
+                group = &item.group;
                 let on = i == selection;
                 let style = if on {
                     Style::default().fg(p.text).bg(p.element_hi).add_modifier(Modifier::BOLD)
@@ -711,8 +713,14 @@ pub fn draw(
                 };
                 let text = format!(" {} {}", if on { "▸" } else { " " }, item.label);
                 let pad = usize::from(inner.width).saturating_sub(text.width());
-                lines.push(Line::styled(format!("{text}{}", " ".repeat(pad)), style));
+                if on {
+                    selected_line = body.len();
+                }
+                body.push(Line::styled(format!("{text}{}", " ".repeat(pad)), style));
             }
+            let room = inner.height.saturating_sub(2) as usize;
+            let start = (selected_line + 1).saturating_sub(room.max(1));
+            lines.extend(body.into_iter().skip(start).take(room));
             frame.render_widget(Paragraph::new(lines).style(Style::default().bg(p.dialog)), inner);
         } else {
             let mut panel = Cache::default();
@@ -961,6 +969,23 @@ mod tests {
         let line = highlight(Line::from("abcdef"), 2, 4);
         let parts: Vec<(String, bool)> = line.spans.iter().map(|s| (s.content.to_string(), s.style.add_modifier.contains(Modifier::REVERSED))).collect();
         assert_eq!(parts, vec![("ab".to_string(), false), ("cd".to_string(), true), ("ef".to_string(), false)]);
+    }
+    #[test]
+    fn picker_group_headings_do_not_change_item_selection() {
+        let mut s = Snapshot::default();
+        s.panel_title = "Models".into();
+        let item = |label: &str, group: &str| crate::bridge::Item { label: label.into(), group: group.into(), ..Default::default() };
+        s.items = vec![item("a", "Favorites"), item("b", "Recent"), item("c", "Recent")];
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        let mut cache = Cache::default();
+        terminal.draw(|frame| {
+            draw(frame, &s, &Editor::default(), &Editor::default(), &Editor::default(), "", 2, 0, 0, &mut cache, true, false, false, false, 0, 0, 0);
+        }).unwrap();
+        let screen: Vec<String> = (0..24).map(|y| (0..80).map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string()).collect::<String>()).collect();
+        let at = |needle: &str| screen.iter().position(|row| row.contains(needle)).unwrap_or_else(|| panic!("{needle} missing"));
+        assert!(at("Favorites") < at(" a") && at(" a") < at("Recent") && at("Recent") < at(" b"));
+        assert!(screen[at(" c")].contains("▸"), "selection 2 is the third item, not the third line");
+        assert_eq!(screen.iter().filter(|row| row.contains("Recent")).count(), 1, "one heading per group");
     }
     #[test]
     fn running_slot_is_replaced_per_frame() {

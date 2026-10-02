@@ -80,7 +80,22 @@ async def test_native_model_picker_orders_and_commits_effort(tmp_path, monkeypat
     shell.preferences.set("model_favorites", ["a/mid"])
     await shell.submit("/model")
     assert [i["label"].split(" · ")[1] for i in shell.items][0] == "a/mid"
-    assert "Favorites" in shell.items[0]["label"]
+    assert shell.items[0]["group"] == "Favorites"  # shown as a heading above the first favorite
     first = next(i for i in shell.items if "a/old" in i["label"])
     assert "◀" in first["label"] and first["operation"]["selected"] == "high"
     assert any("b/new" in i["label"] for i in shell.items)
+
+
+@pytest.mark.asyncio
+async def test_model_picker_sort_toggle_is_named_in_the_title(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    from nexus.ui.ratatui.actions import ShellActions
+    controller = SimpleNamespace(client=client(), session="s", provider="a", model="old", reasoning_effort="high",
+        stored_override=None, reasoning_effort_source=None, supported_levels=[], select_model_and_effort=AsyncMock())
+    shell = ShellActions(controller)
+    await shell.submit("/model")
+    assert "Updated ↓" in shell.panel_title
+    shell.model_sort = "name"
+    await shell.submit("/model")
+    assert "Name A–Z" in shell.panel_title and all("group" in item for item in shell.items)

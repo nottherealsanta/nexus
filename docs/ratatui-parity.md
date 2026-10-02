@@ -180,6 +180,11 @@ messages show above the editor like Textual's input-queue preview (three rows pl
 There is no separate connection-status row or activity progress bar: disconnects
 and errors appear as labelled notices in the transcript.
 
+The model picker lists models under group headings (Favorites, Recent, then by
+provider/date) like Textual; headings are display-only, so selection and favourites
+count models. Ctrl+S toggles `Updated ↓` and `Name A–Z`. Fuzzy ranking stays in
+Python (`model_choice`), and the Rust filter is a substring match on the label.
+
 Context chips say "unavailable while a turn is running" instead of failing when the
 host has no preview. Rows are menu lines, so there are no swatch colours or aligned
 token column yet.

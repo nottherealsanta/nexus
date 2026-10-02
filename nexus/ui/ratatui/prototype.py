@@ -611,6 +611,9 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     query = shell.completion_query = action["text"]
                     shell.completions = await complete(
                         shell.client, action.get("prefix", query), query, efforts=controller.supported_levels)
+                elif action["type"] == "model_sort":
+                    shell.model_sort = "name" if shell.model_sort == "updated" else "updated"
+                    await shell.command("/model", ())
                 elif action["type"] == "refresh_models":
                     await shell.client.refresh_models()
                     await shell.command("/model", ())

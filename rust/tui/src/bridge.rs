@@ -58,6 +58,9 @@ pub struct Item {
     pub label: String,
     pub command: String,
     pub operation: Option<Value>,
+    /// Heading shown above the first item of each group (model picker); display only.
+    #[serde(default)]
+    pub group: String,
 }
 #[derive(Deserialize)]
 pub struct Prompt {
