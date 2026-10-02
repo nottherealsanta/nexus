@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/nottherealsanta/nexus/compare/v0.2.17...v0.3.0) (2026-10-02)
+
+
+### Features
+
+* add the native Ratatui terminal client and make it the default chat renderer ([#52](https://github.com/nottherealsanta/nexus/issues/52)) ([1a5b693](https://github.com/nottherealsanta/nexus/commit/1a5b693dcd57ff2eea60cd57ff5d1a8eea9f98ca))
+
 ## [0.2.17](https://github.com/nottherealsanta/nexus/compare/v0.2.16...v0.2.17) (2026-10-02)
 
 
