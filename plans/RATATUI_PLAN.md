@@ -141,9 +141,9 @@ Dialogs and screens (all currently generic panels/menus)
       (current `auto`), publish a binary-less wheel, or mark the Rust bin optional.
 - [ ] CI: add a check that native launches with Textual uninstalled (current
       `CIBW_TEST_COMMAND` only runs `--version`); pin Rust >= 1.88 on macOS runners;
-      path-gate the four-runner wheel matrix so it is not run on every PR; verify
+      (path-gating done in `ci.yml` `changes` job, not run on hosted CI yet) path-gate the four-runner wheel matrix so it is not run on every PR; verify
       cp314 and musllinux jobs, the `macos-15-intel` label, rustup in containers.
-- [ ] Missing-toolchain error should mention the minimum Rust version.
+- [x] (documented in docs/release.md; Cargo's `rust-version` already names 1.88) Missing-toolchain error should mention the minimum Rust version.
 - [ ] Installer (`install.sh`, `install.ps1`) and `nexus update` behaviour with a
       native binary; hosted wheel matrix results.
 - [ ] Only then: remove Textual/textual-diff-view from runtime dependencies, retire
