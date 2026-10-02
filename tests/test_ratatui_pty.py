@@ -124,3 +124,13 @@ def test_native_bridge_keyboard_and_terminal_restoration():
         drain.join(timeout=.5)
         os.close(master)
         os.close(slave)
+
+
+@pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
+def test_running_the_binary_directly_explains_itself_and_exits():
+    master, slave = pty.openpty()  # a terminal on stdin means no Nexus host is feeding it
+    result = subprocess.run([str(BINARY)], stdin=slave, capture_output=True, timeout=10)
+    os.close(slave)
+    os.close(master)
+    assert result.returncode == 2
+    assert b"nexus chat" in result.stderr

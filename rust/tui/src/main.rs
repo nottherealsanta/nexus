@@ -19,7 +19,7 @@ use input::{action, base64, edit, pick, save, send, MAX_DRAFT};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use serde_json::json;
 use std::{
-    io::{self, BufRead, Write},
+    io::{self, BufRead, IsTerminal, Write},
     sync::mpsc,
     thread,
     time::{Duration, Instant},
@@ -43,6 +43,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().any(|arg| arg == "--version") {
         println!("Nexus Ratatui · bridge 1");
         return Ok(());
+    }
+    if io::stdin().is_terminal() {
+        // Run on its own it would wait forever for snapshots and show an empty screen.
+        eprintln!("nexus-ratatui draws the screen for `nexus chat`; it needs the Nexus host on its stdin.\nStart it with `nexus` (or `nexus chat`) instead of running this binary directly.");
+        std::process::exit(2);
     }
     let (tx, rx) = mpsc::sync_channel(2);
     thread::spawn(move || {
