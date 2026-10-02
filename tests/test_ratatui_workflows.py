@@ -247,3 +247,18 @@ async def test_context_click_while_a_turn_runs_says_so(shell):
     shell.refresh_preview = AsyncMock(return_value=False)
     await shell.workflows.operate({"kind": "context_show", "key": "tools"})
     assert "unavailable while a turn is running" in shell.notice
+
+
+@pytest.mark.asyncio
+async def test_layout_and_appearance_toggle_and_reset_to_defaults(shell):
+    await shell.workflows.operate({"kind": "layout"})
+    assert [item["label"] for item in shell.items][:2] == ["Sessions sidebar  ctrl+b · on", "Details sidebar  ctrl+l · on"]
+    await shell.workflows.operate(shell.items[0]["operation"])
+    assert shell.preferences.values["sessions_sidebar"] is False
+    assert shell.items[0]["label"].endswith("· off")
+    await shell.workflows.operate(shell.items[-1]["operation"])  # Reset to default
+    assert shell.preferences.values["sessions_sidebar"] is True
+    await shell.workflows.operate({"kind": "theme", "value": "nexus-light"})
+    assert shell.panel_title == "Appearance" and shell.items[1]["label"] == "Light · selected"
+    await shell.workflows.operate(shell.items[-1]["operation"])
+    assert shell.preferences.values["theme"] == "nexus-dark"

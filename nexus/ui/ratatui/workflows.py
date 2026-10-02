@@ -231,12 +231,20 @@ class Workflows:
         elif kind == "default_agent_save":
             self.shell.show("Default agent saved", await self.client.set_default_agent(operation["name"], "global"))
         elif kind == "layout":
-            self.menu("Layout", [(key.replace("_", " ") + (" · enabled" if self.shell.preferences.values[key] else " · disabled"),
-                {"kind": "toggle_pref", "key": key}) for key in ("sessions_sidebar", "details_sidebar", "context_preview")])
+            labels = {"sessions_sidebar": ("Sessions sidebar", "ctrl+b"), "details_sidebar": ("Details sidebar", "ctrl+l"),
+                      "context_preview": ("Show context header", "")}
+            rows = [(f"{labels[key][0]}{'  ' + labels[key][1] if labels[key][1] else ''} · {'on' if self.shell.preferences.values[key] else 'off'}",
+                     {"kind": "toggle_pref", "key": key}) for key in labels]
+            rows.append(("Reset to default", {"kind": "reset_prefs", "keys": list(labels), "then": "layout"}))
+            self.menu("Layout", rows, ["Panels hide automatically on narrow terminals."])
         elif kind == "toggle_pref":
             key = operation["key"]
             self.shell.preferences.set(key, not self.shell.preferences.values[key])
             await self.operate({"kind": "layout"})
+        elif kind == "reset_prefs":
+            for key in operation["keys"]:
+                self.shell.preferences.set(key, self.shell.preferences.DEFAULTS[key])
+            await self.operate({"kind": operation["then"]})
         elif kind == "keyboard":
             await self.shell.command("/hotkeys", ())
         elif kind == "workspace":
@@ -247,10 +255,15 @@ class Workflows:
             if self.login.url.startswith("https://"):
                 await asyncio.to_thread(webbrowser.open, self.login.url)
         elif kind == "appearance":
-            self.menu("Appearance", [("Dark", {"kind": "theme", "value": "nexus-dark"}), ("Light", {"kind": "theme", "value": "nexus-light"})])
+            current = self.shell.preferences.values["theme"]
+            self.menu("Appearance", [("Dark" + (" · selected" if current == "nexus-dark" else ""), {"kind": "theme", "value": "nexus-dark"}),
+                                     ("Light" + (" · selected" if current == "nexus-light" else ""), {"kind": "theme", "value": "nexus-light"}),
+                                     ("Reset to default", {"kind": "reset_prefs", "keys": ["theme"], "then": "appearance"})],
+                      ["Theme for this terminal shell."])
         elif kind == "theme":
             self.shell.preferences.set("theme", operation["value"])
             self.shell.notice = "Theme saved"
+            await self.operate({"kind": "appearance"})
         elif kind == "context_show":
             if not await self.shell.refresh_preview():
                 self.shell.notice = "Context details are unavailable while a turn is running"

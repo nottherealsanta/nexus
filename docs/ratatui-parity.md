@@ -145,6 +145,11 @@ transcript, not a floating modal.
 The Tools dialog (click the Tools chip) mirrors `ToolsModal`: one row per tool
 family and MCP server with its tool names and token estimate; a row expands to its
 tools, a tool opens its description and schema, and `Edit tools…` opens Settings.
+Settings pages show each area's help line (`ui_support/settings_help.py`, shared with
+Textual); Appearance and Layout use Textual's labels and end with `Reset to default`.
+The two-pane full-page Settings layout is not built: Settings is still a stack of
+menus.
+
 Context chips say "unavailable while a turn is running" instead of failing when the
 host has no preview. Rows are menu lines, so there are no swatch colours or aligned
 token column yet.
