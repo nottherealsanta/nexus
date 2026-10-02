@@ -38,6 +38,7 @@ from ..config import Config
 from ..errors import ToolError
 from ..model.message import ContentBlock, Text, ToolResult, ToolUse
 from ..model.request import ToolSchema
+from ..util import redact_secrets
 
 if TYPE_CHECKING:
     from ..net import OutboundHTTPService
@@ -482,7 +483,12 @@ class ToolSpec(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
         """
         if self.permission_key is None:
             return None
-        value = self.permission_key(dict(tool_input))
+        try:
+            value = self.permission_key(dict(tool_input))
+        except ToolSpecError:
+            raise
+        except Exception as exc:
+            raise ToolSpecError(f"{self.name}.permission_key: {redact_secrets(str(exc))}") from exc
         if not isinstance(value, str) or not value:
             raise ToolSpecError(
                 f"{self.name}.permission_key must return a non-empty string"

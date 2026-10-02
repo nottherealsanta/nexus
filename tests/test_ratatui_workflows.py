@@ -73,7 +73,8 @@ async def test_settings_validation_keeps_editor_and_disables_autosave(shell):
 
 
 @pytest.mark.asyncio
-async def test_voice_finish_inserts_final_not_partial(shell, monkeypatch):
+@pytest.mark.parametrize("send", [False, True])
+async def test_voice_finish_inserts_final_not_partial(shell, monkeypatch, send):
     from nexus.ui.ratatui import voice
     recorder = SimpleNamespace(start=lambda: None, stop=lambda: b"wav", snapshot=lambda: b"wav", full=False, duration=0)
     monkeypatch.setattr(voice, "Recorder", lambda **kwargs: recorder)
@@ -82,10 +83,12 @@ async def test_voice_finish_inserts_final_not_partial(shell, monkeypatch):
     async def transcribe(audio, request_id, **kwargs):
         return p.VoiceTranscribeResult(request_id=request_id, text="final transcript", duration_s=1, elapsed_s=.1)
     shell.client.voice_transcribe = AsyncMock(side_effect=transcribe)
-    await shell.voice.start()
+    await shell.voice.open()
+    assert shell.panel_title == ""
     assert shell.voice.phase == "recording"
-    await shell.voice.stop()
+    await shell.voice.stop(send=send)
     assert shell.composer_insert == "final transcript"
+    assert shell.composer_auto_send is send
     assert shell.voice.phase == "idle"
     assert not shell.client.voice_transcribe.await_args.kwargs.get("partial", False)
 
@@ -284,3 +287,89 @@ async def test_settings_pages_carry_the_area_list_and_switching_replaces_the_pag
     shell.preview = SimpleNamespace(system_text="prompt")
     await shell.workflows.operate({"kind": "context_show", "key": "system"})
     assert _settings_nav(shell) is None  # a non-Settings panel does not keep the area list
+
+
+@pytest.mark.asyncio
+async def test_agents_document_uses_markdown_and_preserves_newlines(shell):
+    preview = p.ContextInspectResult(session="s", included_parts=[
+        {"name": "agents_md", "text": "# Project rules\n\n- Keep context visible\n\n```py\nx = 1\n```"}],
+        system_files={"agents": {"source": "/workspace/AGENTS.md"}})
+    shell.client.inspect_context = AsyncMock(return_value=preview)
+    await shell.workflows.operate({"kind": "context_show", "key": "agents"})
+    assert shell.panel_format == "markdown" and shell.panel_layout == "modal"
+    assert "/workspace/AGENTS.md" in shell.panel_title
+    assert "\n".join(shell.panel_lines) == preview.included_parts[0]["text"]
+    shell.workflows.menu("Next", [("Back", {"kind": "back"})])
+    shell.workflows.back()
+    assert shell.panel_format == "markdown" and shell.panel_layout == "modal"
+
+
+@pytest.mark.asyncio
+async def test_voice_settings_never_starts_capture_and_saves_options(shell):
+    shell.client.voice_status = AsyncMock(return_value=p.VoiceStatusResult(enabled=True, state="ready", configured_device="cpu"))
+    shell.client.settings_read = AsyncMock(return_value=p.SettingsReadResult(body="config_version = 2\n", rel_path="config.toml", builtin=False, sha256="h"))
+    shell.client.settings_write = AsyncMock(return_value=p.SettingsWriteResult(status="saved"))
+    await shell.workflows.settings_area("voice")
+    assert shell.voice.phase == "idle"
+    assert shell.settings_nav == "voice"
+    assert any("Processing device · cpu" in item["label"] for item in shell.items)
+    await shell.workflows.operate(shell.items[1]["operation"])
+    assert "auto_send = true" in shell.client.settings_write.await_args.args[3]
+    assert shell.settings_nav == "voice"
+    assert shell.voice.phase == "idle"
+
+
+@pytest.mark.asyncio
+async def test_provider_options_have_headings_and_connection_status(shell):
+    shell.client.providers_status = AsyncMock(return_value=p.ProvidersStatusResult(providers=[
+        {"id": "openai", "label": "OpenAI", "connected": True, "methods": ["api_key"]}]))
+    await shell.workflows.settings_area("providers")
+    await shell.workflows.operate(shell.items[0]["operation"])
+    assert shell.panel_lines[0] == "Connection: connected"
+    assert [item["group"] for item in shell.items] == ["Sign-in options", "Connection management"]
+    assert shell.settings_nav == "providers"
+
+
+async def test_subagent_page_context_nested_back_and_child_tool_details(shell):
+    from nexus.view import initial_state
+    from nexus.view.model import AgentView, TurnView, ToolCallView
+    body = initial_state("child")
+    body.turns = [TurnView(id="ct", tools=[ToolCallView(call_id="read-child", name="Read", status="failed", error="missing")])]
+    nested = AgentView(id="nested", body=initial_state("nested"))
+    body.agents = {"nested": nested}
+    root = initial_state("s")
+    root.agents = {"child": AgentView(id="child", body=body)}
+    shell.controller.view = root
+    shell.client.agent_transcript = AsyncMock(return_value={"found": True, "context": {"system_text": "Child system"}})
+    await shell.workflows.operate({"kind": "agent_page", "id": "child"})
+    assert shell.panel_title == "" and shell.workflows.active_view is body
+    await shell.workflows.operate({"kind": "context_show", "key": "system"})
+    assert shell.panel_lines == ["Child system"]
+    shell.workflows.back()
+    assert shell.workflows.agent_page_id == "child"
+    await shell.workflows.operate({"kind": "tool_page", "id": "read-child"})
+    assert shell.panel_title == "Read"
+    shell.workflows.back()
+    await shell.workflows.operate({"kind": "agent_page", "id": "nested"})
+    assert shell.workflows.selected_agent is nested
+    shell.workflows.back()
+    assert shell.workflows.agent_page_id == "child"
+    shell.workflows.back()
+    assert shell.workflows.agent_page_id is None
+
+
+async def test_subagent_page_rejects_stale_session_response(shell):
+    async def fetch(session, agent):
+        shell.generation += 1
+        return {"found": True, "context": {"system_text": "stale"}}
+    shell.client.agent_transcript = AsyncMock(side_effect=fetch)
+    await shell.workflows.operate({"kind": "agent_page", "id": "child"})
+    assert shell.workflows.agent_page_id is None
+
+
+async def test_remembered_model_skips_effort_prompt(shell):
+    shell.controller.select_model_and_effort = AsyncMock()
+    shell.client.inspect_context = AsyncMock(return_value={})
+    await shell.workflows.operate({"kind": "model_choose", "ref": "openai/example",
+        "levels": ["low", "high"], "selected": "high", "remembered": True})
+    shell.controller.select_model_and_effort.assert_awaited_once_with("openai/example", "high")

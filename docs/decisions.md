@@ -221,3 +221,42 @@ a wheel with no `cargo` on `PATH`: it succeeds and contains no `nexus-ratatui`).
 reason for not publishing a separate pure wheel is that one source tree builds both
 shapes. The cost is that a broken Rust build on a supported platform no longer fails
 the build by itself; the wheel CI test (`nexus-ratatui --version`) catches that.
+
+## Native TUI overlays and black theme (2026-10-02)
+
+Native conversation/dialog backgrounds are explicitly black rather than terminal
+transparent. Simple inspection/picker views are bounded overlays, root-agent
+selection is anchored above the composer, and Settings editing keeps a full page.
+An explicit presentation field separates placement from title wording. Provider
+usage opens from cached data before fetching to keep the interface responsive;
+refresh failures preserve useful data and show the error.
+
+Subagent failures hand their context back instead of losing it. A failed child
+returns a deterministic digest (no model call) and a saved markdown report, and
+the root reads it and writes the next `task` prompt itself; a `resume_from` tool
+field was removed because models filled the optional string with `""`, `" "` or
+`"none"` and failed three spawns in a row. A model-written wrap-up was not chosen
+because it would need a call exactly when the limit, budget or provider has already
+failed. The iteration cap now defaults to unlimited (`max_iterations = 0`); the
+wall-clock and token limits remain the automatic stops.
+
+## Native redesign: layout, context and incremental rendering (2026-10-02)
+
+The Ratatui redesign is intentionally independent of the fallback Textual
+presentation. Tool grouping is a pure helper, consumed by native projection;
+existing Textual rows remain unchanged. Full-height sidebars replace the lower
+Logs pane. At constrained widths the most recently opened sidebar takes priority,
+with a narrow right overlay; saved visibility remains intact across resizing.
+Open sessions are marked in the Sessions list when its presence removes center tabs.
+
+Context inspections can be refused during a turn. Keep the last successful preview
+with its timestamp and label it as cached, while taking accent identity from the
+current selected agent. Never infer context tiers or model windows from defaults.
+
+Schema 2 sends changed block suffixes to avoid encoding and parsing the entire
+history for each token. These dependent patches must be applied in sequence;
+only schema 1 full snapshots can be coalesced. Stable revisions let the renderer
+reuse wrapped history and indexed row ranges. Terminal output is buffered to
+reduce per-cell system calls. The synthetic PTY benchmark meets latency budgets,
+but streaming CPU remains above its target; it is not evidence of live-provider
+end-to-end latency.

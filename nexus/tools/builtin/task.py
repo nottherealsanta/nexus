@@ -95,10 +95,9 @@ _TASK_SCHEMA: dict[str, Any] = {
         },
         "model": {
             "type": "string",
-            "minLength": 1,
             "description": (
                 "Optional concrete provider/model or bare model id override; a provider "
-                "name alone is not a model id. Omit it to use the role's configured "
+                "name alone is not a model id. Omit it or leave it blank to use the role's configured "
                 "model, falling back to the parent's model. A tier name "
                 "('low'/'medium'/'high') does not override the role's configured model; "
                 "routing remains subject to the configured max tier."
@@ -165,6 +164,8 @@ def _static_permission_key(data: Mapping[str, Any]) -> str:
     if not isinstance(subagent_type, str) or not subagent_type.strip():
         subagent_type = DEFAULT_SUBAGENT_TYPE
     model = data.get("model")
+    if isinstance(model, str):
+        model = model.strip()
     if isinstance(model, str) and model in TIER_ORDER:
         tier = model
     elif isinstance(model, str) and model.strip():
@@ -238,6 +239,10 @@ def _build_request(args: Mapping[str, Any]) -> dict[str, Any]:
         value = args.get(name)
         if value is None:
             continue
+        if name == "model" and isinstance(value, str):
+            value = value.strip()
+            if not value:
+                continue
         if not isinstance(value, str) or not value.strip():
             raise _TaskToolError(f"'{name}' must be a non-empty string when given")
         request[name] = value
@@ -303,11 +308,15 @@ def _to_result(outcome: object) -> ToolExecutionResult:
         metrics["worktree"] = dict(worktree)
     if not text.strip():
         text = f"Task: subagent {agent} returned {status}"
-    context_note = (
-        f"[Task {agent} ({session_id}): {status}; re-run to see the full report]"
-        if session_id
-        else f"[Task {agent}: {status}; re-run to see the full report]"
-    )
+    if session_id and status == "failed":
+        context_note = (
+            f"[Task {agent} ({session_id}): failed; the report above has what it "
+            "did, start a new task from it if the work still matters]"
+        )
+    elif session_id:
+        context_note = f"[Task {agent} ({session_id}): {status}; re-run to see the full report]"
+    else:
+        context_note = f"[Task {agent}: {status}; re-run to see the full report]"
     return ToolExecutionResult.text(
         text,
         is_error=is_error,

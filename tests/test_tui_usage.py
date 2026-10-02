@@ -138,3 +138,41 @@ async def test_claude_card_signs_in_with_a_pasted_code_and_hides_disconnect(monk
         await pane._send_code("claude-agent")
         assert transport.codes == [("C1", 10)] and field.value == ""
         assert card.query_one(".provider-flow", Static).render().plain.startswith("Code sent")
+
+
+@pytest.mark.asyncio
+async def test_usage_reopen_shows_cache_while_refreshing_and_preserves_it_on_failure():
+    import asyncio
+    from textual.widgets import LoadingIndicator
+
+    gate = asyncio.Event()
+    gate.set()
+
+    class DelayedUsageTransport(UsageTransport):
+        fail = False
+
+        async def request(self, command):
+            if isinstance(command, p.ProvidersUsage):
+                await gate.wait()
+                if self.fail:
+                    raise RuntimeError("offline")
+            return await super().request(command)
+
+    transport = DelayedUsageTransport()
+    app = NexusTextualApp(_client(transport), session="s")
+    async with app.run_test(size=(140, 44)) as pilot:
+        await pilot.pause()
+        app.action_show_usage()
+        await pilot.pause(0.1)
+        await pilot.press("escape")
+        gate.clear()
+        transport.fail = True
+        app.action_show_usage()
+        await pilot.pause(0.1)
+        assert "ChatGPT (Codex) · Plus" in app.screen.query_one("#usage-body", Static).render().plain
+        assert app.screen.query_one("#usage-loading", LoadingIndicator).display
+        gate.set()
+        await pilot.pause(0.1)
+        body = app.screen.query_one("#usage-body", Static).render().plain
+        assert "ChatGPT (Codex) · Plus" in body and "offline" in body
+        assert not app.screen.query_one("#usage-loading", LoadingIndicator).display

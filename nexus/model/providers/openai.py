@@ -85,7 +85,7 @@ from typing import Any
 
 import msgspec
 
-from ...errors import ProviderError
+from ...errors import ProviderError, ProviderOverloaded
 from ..capabilities import Capabilities
 from ..http import HTTPTransport, redact_secrets
 from ..message import (
@@ -704,7 +704,8 @@ def _events_for_chat_chunk(
         kind = _stream_error_label(error)
         message = str(error.get("message") or "")
         detail = redact_secrets(message.strip())[:_STREAM_ERROR_LIMIT]
-        raise ProviderError(f"openai: stream error {kind}: {detail}")
+        failure = ProviderOverloaded if any(label in kind.casefold() for label in ("service_unavailable", "overloaded")) else ProviderError
+        raise failure(f"openai: stream error {kind}: {detail}")
     choices = payload.get("choices")
     if not isinstance(choices, list):
         return
@@ -813,7 +814,8 @@ def _events_for_responses_event(
         kind = _stream_error_label(error, fallback=event_type or "error")
         message = str(error.get("message") or payload.get("message") or "")
         detail = redact_secrets(message.strip())[:_STREAM_ERROR_LIMIT]
-        raise ProviderError(f"openai: stream error {kind}: {detail}")
+        failure = ProviderOverloaded if any(label in kind.casefold() for label in ("service_unavailable", "overloaded")) else ProviderError
+        raise failure(f"openai: stream error {kind}: {detail}")
 
     if event_type == "response.output_item.added":
         item = payload.get("item")

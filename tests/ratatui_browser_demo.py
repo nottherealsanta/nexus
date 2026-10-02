@@ -41,17 +41,63 @@ async def fixture():
     process = await asyncio.create_subprocess_exec(str(binary_path()), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
     snapshot = project(controller, 1, shell=shell)
     state = os.environ.get("NEXUS_RATATUI_STATE", "")
-    if state == "permission":
+    if state.startswith("redesign-"):
+        _, theme, sidebars, mode = state.split("-", 3)
+        shell.preferences.values.update(theme=f"nexus-{theme}", sessions_sidebar=sidebars[0]=="1", details_sidebar=sidebars[1]=="1", details_tab=mode if mode in {"Session","Files","MCP","Logs"} else "Session")
+        shell.workspace = str(ROOT)
+        shell.sessions = [{"id":"visual","title":"Fix the parser","workspace":str(ROOT),"active":True,"status":"idle","sub":"12 · 5m","group":"NEXUS"},
+                          {"id":"other","title":"Release notes","workspace":str(ROOT),"status":"idle","sub":"3 · 2d","group":"NEXUS"}]
+        shell.tabs = shell.sessions[:]
+        shell.mcp_report={"daemon":{"pid":1234,"socket":"/tmp/nexus/demo.sock"},"git":{"branch":"main"},"mcp":{"servers":[{"name":"docs","health":"ready","tool_count":6}]}}
+        shell.logs.trace=["draw: p50 0.3 · p95 1.3 · max 1.6 ms"]
+        if mode=="expanded":
+            shell.verbose=True
+        if mode=="popover":
+            from datetime import datetime
+            shell.preview_at=datetime.now().astimezone()
+            shell.context_popover()
+        snapshot=project(controller,1,shell=shell)
+        snapshot.update(context_used=52140,context_window=1000000,context_tiers=[200000,1000000],context_label="52.1K · 26.1% · 5.2%")
+        if mode=="running":
+            snapshot["status"]="running"
+        if mode=="Logs":
+            snapshot["logs"]=["12:04:20 [ERROR] session · tool.failed · Parse failed", "4 routine entries folded · Ctrl+A toggle"]
+    elif state == "subagent":
+        from visual_tui_demo import subagent_fixture
+        agent, context = subagent_fixture()
+        controller.view.agents[agent.id] = agent
+        shell.workflows.agent_page_id = agent.id
+        shell.workflows.agent_context = context
+        snapshot = project(controller, 1, shell=shell)
+    elif state == "permission":
         snapshot["prompt"] = {"kind": "permission", "id": "p1",
             "lines": ["Tool: Shell", "Command: rm -rf build", "Path: /private/tmp/nexus-ratatui-prototype"],
             "choices": [{"label": "Allow once", "value": "allow_once", "key": "y", "disabled": False},
                         {"label": "Always allow", "value": "allow_always", "key": "a", "disabled": False},
                         {"label": "Deny", "value": "deny_once", "key": "n", "disabled": False}]}
     elif state == "picker":
+        snapshot["panel_layout"] = "drawer"
         snapshot["panel_title"] = "Models · Ctrl+F favorite · Ctrl+R refresh"
         snapshot["items"] = [{"label": label, "command": "", "operation": {"kind": "noop"}} for label in (
             "★ GPT-6 Luna · openai/gpt-6-luna", "Claude Opus 5.5 · anthropic/claude-opus-5-5",
             "Claude Sonnet 5.5 · anthropic/claude-sonnet-5-5", "Haiku 4.5 · anthropic/claude-haiku-4-5")]
+    elif state == "agents":
+        snapshot["panel_title"] = "Agents"
+        snapshot["panel_layout"] = "drawer"
+        snapshot["items"] = [{"label": name, "command": "/agent " + name} for name in ("build", "advisor", "task")]
+    elif state == "markdown":
+        snapshot["panel_title"] = "AGENTS.md · /workspace/AGENTS.md"
+        snapshot["panel_format"] = "markdown"
+        snapshot["panel_lines"] = ["# Project rules", "", "Keep context visible.", "", "- Preserve newlines", "- Show every parameter", "", "```python", "value = 42", "```"]
+    elif state == "usage":
+        snapshot["panel_title"] = "Provider usage"
+        snapshot["panel_loading"] = True
+        snapshot["panel_lines"] = ["Codex · Plus", "  Session  ████░░░░░░░░  33% used", "Fetched 12:00:00", "r refresh · Esc close"]
+        snapshot["panel_tones"] = ["title", "ok", "dim", "dim"]
+    elif state == "completion":
+        snapshot["restore"] = "/"
+        snapshot["completion_query"] = "/"
+        snapshot["completions"] = ["/agent", "/context", "/help", "/usage"]
     elif state == "diff":
         from nexus.ui_support.timeline import diff_split_rows
         hunk = ("@@ -8,7 +8,8 @@\n def total(values):\n-    return sum(values)\n+    result = sum(values)\n+    return int(result)\n \n \n"
@@ -69,6 +115,7 @@ async def fixture():
     elif state == "settings":
         from nexus.ui_support.settings_help import SETTINGS_SECTIONS
         snapshot["panel_title"] = "Settings · global · agents"
+        snapshot["panel_layout"] = "page"
         snapshot["panel_lines"] = ["~/.nexus", "Build is the default root agent; advisor, task and quick are subagents."]
         snapshot["items"] = [{"label": label, "command": "", "operation": {"kind": "noop"}} for label in (
             "New sessions start with…", "build · built-in", "advisor · built-in", "quick · built-in", "task · built-in", "New file", "Reset category…")]

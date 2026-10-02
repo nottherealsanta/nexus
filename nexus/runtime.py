@@ -49,6 +49,10 @@ import msgspec
 import os
 
 from .agents import SubagentOutcome, SubagentRunner, SubagentUsage
+from .agents.handoff import build_handoff, write_handoff
+from .agents.handoff import digest as handoff_digest
+from .agents.last_choice import AgentChoiceStore
+from .model.effort_preferences import ModelEffortStore
 from .agents.model import AgentError, AgentNotFoundError
 from .agents.runner import WORKTREE_CHILD_TOOLS, files_changed
 from .config import Config
@@ -89,6 +93,7 @@ from .model.registry import (
 )
 from .model.request import REASONING_EFFORT_ORDER, ModelRequest, ToolSchema
 from .model.router import ModelRouter
+from .model.reasoning_effort import ReasoningEffortSelection
 from .model.selection import ModelSelection
 from .model.tiers import DEFAULT_TIER, TierTable
 from .net import OutboundHTTPService, SafeOutboundHTTPService
@@ -1921,10 +1926,12 @@ class _ChildRuntime:
                     else None
                 ),
             )
-            max_iterations = int(spec.max_iterations or 60)
+            max_iterations = int(spec.max_iterations or 0)
             limits = TurnLimits(max_iterations=max_iterations, max_seconds=1800.0)
             lease = session.begin_turn(limits=limits)
             sink = _ChildEventSink(session, spec.emit)
+            crash: Exception | None = None
+            outcome = None
             try:
                 outcome = await run_turn(
                     session=session,
@@ -1939,16 +1946,64 @@ class _ChildRuntime:
                     hooks=spec.hooks,
                     relay_transcript=True,
                 )
+            except Exception as exc:  # noqa: BLE001 - a hard failure still hands its context back
+                crash = exc
             finally:
                 with contextlib.suppress(Exception):
                     lease.release()
+            if crash is not None:
+                return self._failed(spec, session, f"{type(crash).__name__}: {crash}")
             cost = runtime._child_cost(session, outcome)
-            return runtime._child_outcome(spec, session, outcome, cost=cost)
+            result = runtime._child_outcome(spec, session, outcome, cost=cost)
+            if getattr(result, "status", None) == "failed":
+                result = self._with_handoff(result, spec, session)
+            return result
         finally:
             store = runtime._effective_todo_store()
             clear_session = getattr(store, "clear_session", None)
             if callable(clear_session):
                 clear_session(real_id)
+
+    def _with_handoff(
+        self, result: SubagentOutcome, spec: Any, session: Any, *, detail: str = ""
+    ) -> SubagentOutcome:
+        """Attach the failure handoff: an inline digest plus a saved markdown report."""
+        report = build_handoff(
+            agent=result.agent,
+            session_id=result.session_id,
+            prompt=spec.prompt,
+            status=result.status,
+            stop_reason=result.stop_reason,
+            error=result.error,
+            iterations=result.iterations,
+            messages=list(getattr(session, "messages", ()) or ()),
+            files_changed=result.files_changed,
+            total_tokens=result.usage.total_tokens,
+            detail=detail,
+        )
+        saved = write_handoff(nexus_home(self._runtime._home), result.session_id, report)
+        return replace(
+            result,
+            handoff=handoff_digest(report),
+            handoff_path=str(saved) if saved is not None else None,
+        )
+
+    def _failed(self, spec: Any, session: Any, message: str) -> SubagentOutcome:
+        """A failed outcome for a run that raised or could not start."""
+        base = SubagentOutcome(
+            agent=spec.agent,
+            session_id=spec.session_id,
+            status="failed",
+            is_error=True,
+            text=message,
+            error=redact_secrets(message)[:500],
+            stop_reason="error",
+            dropped_tools=tuple(spec.dropped_tools),
+            clamped=bool(spec.clamped),
+            tier=spec.tier,
+            requested_tier=spec.requested_tier,
+        )
+        return self._with_handoff(base, spec, session)
 
     async def aclose(self) -> None:
         return None
@@ -2007,6 +2062,8 @@ class Runtime:
     ) -> None:
         self.workspace = Path(workspace).resolve()
         self._home = Path(home) if home is not None else None
+        self._agent_choices = AgentChoiceStore(nexus_home(self._home) / "agent_models.json")
+        self._model_efforts = ModelEffortStore(nexus_home(self._home) / "model_efforts.json")
         # SHARED_DAEMON_PLAN §3 B1: capture once at the ownership boundary.
         # An explicit empty mapping must not fall back to the daemon environment.
         environ = dict(os.environ if environ is None else environ)
@@ -2578,8 +2635,9 @@ class Runtime:
         prompt-submit/compaction hooks, persist summaries, or call a provider.
         """
         await self.ensure_started()
-        if getattr(session, "active", False):
-            raise ConfigError("context preview is unavailable while the session is active")
+        # An active session is inspectable too: the preview reads only the
+        # durable records, so Tools/Skills/MCP/AGENTS.md open read-only mid-turn
+        # (the first turn has already locked the selections).
         class _PreviewSession:
             """Read-only subset of Session used during local preparation."""
 
@@ -2909,7 +2967,55 @@ class Runtime:
         selection = self._validate_model_selection(reference)
         handle = self._sessions.open(session_id, create=create, recover=True)
         handle.select_model(selection)
+        remembered = self._model_efforts.get(f"{selection.provider}/{selection.model}")
+        if remembered is not None:
+            effort = remembered[0]
+            if effort is not None and effort in self.root_reasoning_effort_metadata(handle)["supported_levels"]:
+                handle.select_reasoning_effort(ReasoningEffortSelection(effort=effort))
+            else:
+                handle.clear_reasoning_effort()
+        self.remember_agent_choice(handle)
         return selection
+
+    def remember_agent_choice(self, handle: Session) -> None:
+        """Record the session's model and effort as the last choice for its agent."""
+        selection = getattr(handle, "model_selection", None)
+        if selection is None:
+            return
+        effort = getattr(getattr(handle, "reasoning_effort_selection", None), "effort", None)
+        self._agent_choices.put(self.effective_session_agent(handle)[0], selection.reference, effort)
+
+    def remember_model_effort(self, handle: Session) -> None:
+        """Remember explicit effort choices independently of the selected agent."""
+        selection = getattr(handle, "model_selection", None)
+        if selection is not None:
+            ref = f"{selection.provider}/{selection.model}"
+        else:
+            route = self.root_route_metadata(handle)
+            if not route["provider"] or not route["model"]:
+                return
+            ref = f"{route['provider']}/{route['model']}"
+        effort = getattr(getattr(handle, "reasoning_effort_selection", None), "effort", None)
+        self._model_efforts.put(ref, effort)
+
+    def remembered_model_effort(self, provider: str, model: str) -> tuple[str | None] | None:
+        """Descriptive per-model preference for host model-picker rows."""
+        return self._model_efforts.get(f"{provider}/{model}")
+
+    def _restore_agent_choice(self, handle: Session) -> None:
+        """Re-apply the model and effort last chosen for the session's agent."""
+        remembered = self._agent_choices.get(self.effective_session_agent(handle)[0])
+        if remembered is None:
+            return
+        model, effort = remembered
+        try:
+            handle.select_model(self._validate_model_selection(model))
+        except ConfigError:
+            return  # the model is gone (provider removed); keep the current one
+        if effort is not None and effort in self.root_reasoning_effort_metadata(handle)["supported_levels"]:
+            handle.select_reasoning_effort(ReasoningEffortSelection(effort=effort))
+        else:
+            handle.clear_reasoning_effort()
 
     def _selected_skills(self, session):
         manager = self._skills
@@ -2971,8 +3077,10 @@ class Runtime:
             raise ConfigError("Agents are locked after the first turn to preserve the prompt cache. Start a new session to change agents.")
         if name is None:
             handle.reset_agent()
+            self._restore_agent_choice(handle)
             return self.effective_session_agent(handle)
         handle.select_agent(AgentSelection(name=definition.name))
+        self._restore_agent_choice(handle)
         return definition.name, "session"
 
     def effective_session_agent(self, handle: Session) -> tuple[str, str]:

@@ -136,7 +136,7 @@ def test_state_records_usage_across_iterations():
 
 def test_limits_validation_and_exceeded():
     with pytest.raises(ValueError):
-        TurnLimits(max_iterations=0)
+        TurnLimits(max_iterations=-1)
     with pytest.raises(ValueError):
         TurnLimits(max_seconds=float("nan"))
     with pytest.raises(ValueError):
@@ -146,6 +146,7 @@ def test_limits_validation_and_exceeded():
     assert limits.exceeded(TurnUsage(input_tokens=1, output_tokens=1), 0.0) is None
     assert limits.exceeded(TurnUsage(), 0.0, iterations=3) == "max_iterations"
     assert limits.exceeded(TurnUsage(), 10.0) == "max_seconds"
+    assert TurnLimits().exceeded(TurnUsage(), 0.0, iterations=10_000) is None  # 0 = unlimited
     assert limits.exceeded(TurnUsage(input_tokens=60, output_tokens=40), 0.0) == "max_total_tokens"
     assert TurnLimits(max_output_tokens=5).exceeded(
         TurnUsage(output_tokens=5), 0.0

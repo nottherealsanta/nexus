@@ -62,17 +62,20 @@ Phases: `new → awaiting_model ⇄ awaiting_tools → completed | failed | canc
 Stop reasons: `end_turn`, `tool_use`, `max_tokens`, `stop_sequence`, `refusal`,
 `error`, `budget`, `max_iterations`, `cancelled`.
 
-`TurnLimits` (defaults from `[agent]`): `max_iterations` 60, `max_seconds` 1800,
+`TurnLimits` (defaults from `[agent]`): `max_iterations` 0 (unlimited; a positive value caps model iterations), `max_seconds` 1800,
 optional `max_input_tokens`, `max_output_tokens`, `max_total_tokens`. `exceeded()`
 returns the first tripped limit; the loop records `max_iterations` or `budget`.
 `TurnUsage` is additive across iterations (input, output, cache read/write,
-reasoning).
+reasoning). The completed-turn footer's `turn ↑… ↓…` is this cumulative usage;
+the composer context meter instead shows the latest request's prompt size and
+context-window position, so the two numbers are not expected to match.
 
 ## Failure handling
 
 | Failure | Response |
 | --- | --- |
 | Transport, 408/409/425/429/5xx | Bounded jittered retry inside `model/http.py` (`RetryPolicy`: 4 attempts, 0.5s base, 30s cap). Never mid-stream. |
+| Explicit OpenAI-compatible stream overload (`service_unavailable` / `overloaded`) | Retry the same request after 2, 4 and 8 seconds (three retries). Waiting is cancellable; `model.retrying` records attempt and delay. Partial text stays visible as an interrupted attempt; unfinished tool calls are discarded before retry and never executed. Persistent overload fails after the bound. |
 | Provider error before any output | Try the next fallback (`model.retrying`, `context.degraded` with `feature: provider_failure`). A refusal or partial stream never falls back. |
 | Provider rejects a capability the registry claimed | `CapabilityRejected`: one retry without the feature, `registry.mismatch`, the turn completes. Adapters declare a degradation policy `drop` / `to_text` / `error` per block type. |
 | Provider switched mid-session | Allowed, lossy, visible: `context.degraded` with `feature: provider_switch`. |

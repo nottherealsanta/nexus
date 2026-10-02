@@ -42,7 +42,7 @@ class LeaderKeys:
         voice = self.app.voice
         if voice.recording:
             self._consume(event)
-            worker = voice.cancel() if key == "escape" else voice.stop()
+            worker = voice.cancel() if key == "escape" else voice.stop(send=key == "enter")
             self.app.run_worker(worker, group="voice", exclusive=True)
             return True
         if self.armed:

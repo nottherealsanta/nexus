@@ -541,9 +541,11 @@ async def test_facade_handle_dispatches_every_verb():
     assert selected.accepted and selected.provider == "scripted"
     assert selected.model == "low" and selected.tier == "low"
 
+    facade.daemon_info = {"pid": 123, "socket": "/tmp/nexus-test.sock"}
     doctor = await facade.handle(p.Doctor(explain_reload=True))
     assert isinstance(doctor, p.DoctorResult) and doctor.ok
     assert doctor.report["reload"]["hot"]
+    assert doctor.report["daemon"] == facade.daemon_info
 
     # A runtime that cannot answer never breaks the advisory notice (and never
     # reaches the network from a test).
@@ -639,15 +641,14 @@ def test_context_block_projection_preserves_tool_call_result_linkage():
     assert result["content"] == [{"type": "text", "text": "contents"}]
 
 
-async def test_context_inspect_refuses_to_read_active_turn(tmp_path):
+async def test_context_inspect_reads_while_a_turn_is_active(tmp_path):
     runtime = _runtime(tmp_path, ScriptedProvider(text_response("unused")))
     facade = HostFacade(runtime)
     session = runtime.session("busy-context")
     lease = session.begin_turn()
     try:
         result = await facade.handle(p.ContextInspect(session="busy-context"))
-        assert isinstance(result, p.ErrorResult)
-        assert "active" in result.message
+        assert isinstance(result, p.ContextInspectResult)
     finally:
         lease.release()
         await runtime.aclose()

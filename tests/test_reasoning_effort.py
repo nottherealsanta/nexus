@@ -869,3 +869,36 @@ def test_thinking_capability_requests_summary_with_default_effort():
         capabilities=Capabilities(thinking=False),
     )
     assert "reasoning" not in body
+
+
+async def test_per_model_effort_recalled_across_sessions_and_restart(tmp_path):
+    from nexus.host import protocol as p
+    from nexus.host.facade import HostFacade
+
+    config = Config(
+        model="scripted/a", version=2,
+        v2=ConfigV2(
+            model=ModelSection(default="scripted/a"),
+            models=ModelsSection(default="scripted/a", offline=True,
+                reasoning_efforts={"scripted/a": ["high", "low"], "scripted/b": ["high", "low"]}),
+        ),
+    )
+    for iteration in range(2):
+        runtime = Runtime(tmp_path, home=tmp_path / "home", config=config,
+                          providers={"scripted": ScriptedProvider(capabilities=Capabilities(thinking=True))})
+        runtime._registry = SimpleNamespace(get=lambda ref: SimpleNamespace(reasoning_efforts=("high", "low")))
+        runtime._assembler._registry = runtime._registry
+        facade = HostFacade(runtime)
+        session = runtime.session(f"recall-{iteration}")
+        try:
+            runtime.select_session_model(f"recall-{iteration}", "scripted/a")
+            if iteration == 0:
+                await facade.handle(p.ReasoningEffortSelect(session=f"recall-{iteration}", effort="high"))
+                runtime.select_session_model(f"recall-{iteration}", "scripted/b")
+                await facade.handle(p.ReasoningEffortSelect(session=f"recall-{iteration}", effort=None))
+                runtime.select_session_model(f"recall-{iteration}", "scripted/a")
+            assert session.reasoning_effort_selection.effort == "high"
+            runtime.select_session_model(f"recall-{iteration}", "scripted/b")
+            assert session.reasoning_effort_selection.effort is None
+        finally:
+            await runtime.aclose()

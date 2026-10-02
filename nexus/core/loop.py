@@ -62,7 +62,7 @@ from typing import Any, Protocol
 
 import msgspec
 
-from ..errors import MalformedToolCall, OperationCancelled, ProviderError
+from ..errors import MalformedToolCall, OperationCancelled, ProviderError, ProviderOverloaded
 from ..events import Event
 from ..model.capabilities import Capabilities
 from ..model.message import (
@@ -1145,8 +1145,9 @@ async def _stream_with_degradation(
     claimed, the turn degrades rather than failing -- ``context.degraded`` and
     ``registry.mismatch`` are emitted, the offending feature is disabled, and
     the call is retried exactly once. A rejection is only retried when nothing
-    visible has streamed yet; a refusal (a stop reason) or a mid-stream failure
-    is never retried.
+    visible has streamed yet. Explicit overloads separately retry up to three
+    times, closing each partial attempt and discarding its unfinished calls.
+    Refusals and other mid-stream failures are never retried.
 
     ``collector`` may be supplied by the caller so it can inspect whether any
     output streamed after a failure (the provider-fallback guard). It is reused
@@ -1157,6 +1158,7 @@ async def _stream_with_degradation(
     if collector is None:
         collector = _BlockCollector()
     retried = False
+    overload_retries = 0
     while True:
         try:
             stop_reason, usage, malformed = await _collect_stream(
@@ -1168,6 +1170,31 @@ async def _stream_with_degradation(
             # result; it is never a capability retry.
             raise
         except ProviderError as exc:
+            if isinstance(exc, ProviderOverloaded) and overload_retries < 3:
+                overload_retries += 1
+                delay = 2 ** overload_retries
+                await emitter.emit("model.retrying", {
+                    "iteration": iteration, "attempt": overload_retries,
+                    "provider": provider.name, "model": model,
+                    "from_provider": provider.name, "from_model": model,
+                    "reason": "provider_overloaded", "delay_seconds": delay,
+                    "detail": redact_secrets(str(exc)),
+                })
+                # Discard unfinished tool arguments. No tools from this attempt
+                # have executed; the request still contains all prior results.
+                collector.__init__()
+                try:
+                    await asyncio.wait_for(token.wait(), timeout=delay)
+                except TimeoutError:
+                    pass
+                token.raise_if_cancelled()
+                await emitter.emit("model.started", {
+                    "iteration": iteration, "attempt": overload_retries,
+                    "provider": provider.name, "model": model,
+                    "tools": attempt_caps.tools, "streaming": attempt_caps.streaming,
+                    "reasoning_effort": attempt_request.params.reasoning_effort,
+                })
+                continue
             feature = None if retried else _rejected_feature(exc)
             if feature is None or collector.has_output():
                 raise

@@ -135,9 +135,113 @@ async def test_preview_refusal_while_a_turn_runs_is_not_an_error(tmp_path, monke
     client = Client()
     shell = ShellActions(SimpleNamespace(client=client, session="s"))
     shell.preview = "stale"
-    assert await shell.refresh_preview() is False and shell.preview is None
+    assert await shell.refresh_preview() is False and shell.preview == "stale"
     client.outcome = "ready"
     assert await shell.refresh_preview() is True and shell.preview == "ready"
     client.outcome = RuntimeError("daemon exploded")
     with pytest.raises(RuntimeError, match="exploded"):
         await shell.refresh_preview()
+
+
+@pytest.mark.asyncio
+async def test_usage_opens_before_fetch_and_keeps_cached_data_on_error(tmp_path, monkeypatch):
+    import asyncio
+
+    gate = asyncio.Event()
+    result = {"providers": [{"id": "codex", "label": "Codex", "plan": "Plus"}], "fetched_at": 1}
+
+    async def fetch():
+        await gate.wait()
+        return result
+
+    shell = _shell(tmp_path, monkeypatch, providers_usage=AsyncMock(side_effect=fetch))
+    shell.on_update = AsyncMock()
+    await shell.command("/usage", ())
+    assert shell.panel_title == "Provider usage" and shell.panel_layout == "modal"
+    assert shell.panel_loading and "No cached" in shell.panel_lines[0]
+    assert not shell.usage_task.done()
+    gate.set()
+    await shell.usage_task
+    assert not shell.panel_loading and "Codex · Plus" in shell.panel_lines
+    shell.on_update.assert_awaited_once()
+
+    shell.client.providers_usage = AsyncMock(side_effect=RuntimeError("offline"))
+    await shell.command("/usage", ())
+    assert shell.panel_loading and "Codex · Plus" in shell.panel_lines
+    await shell.usage_task
+    assert not shell.panel_loading and "Codex · Plus" in shell.panel_lines
+    assert "offline" in shell.panel_lines[-1]
+
+
+@pytest.mark.asyncio
+async def test_usage_refresh_cannot_replace_a_dismissed_or_new_panel(tmp_path, monkeypatch):
+    import asyncio
+
+    gate = asyncio.Event()
+
+    async def fetch():
+        await gate.wait()
+        return {"providers": [{"label": "Fresh"}]}
+
+    shell = _shell(tmp_path, monkeypatch, providers_usage=AsyncMock(side_effect=fetch))
+    shell.on_update = AsyncMock()
+    await shell.command("/usage", ())
+    shell.workflows.back()
+    shell.show("Different panel", "Keep this")
+    gate.set()
+    await shell.usage_task
+    assert shell.panel_title == "Different panel" and shell.panel_lines == ["Keep this"]
+    shell.on_update.assert_not_awaited()
+    assert shell.usage_cache is not None
+
+
+@pytest.mark.asyncio
+async def test_context_usage_modal_preserves_document_newlines(tmp_path, monkeypatch):
+    from nexus.host.protocol import ContextInspectResult
+
+    preview = ContextInspectResult(session="s", system_text="first\nsecond",
+                                   included_parts=[{"name": "agents_md", "text": "# Rules\n\n- One\n- Two"}])
+    shell = _shell(tmp_path, monkeypatch, inspect_context=AsyncMock(return_value=preview))
+    shell.controller.view = initial_state("s")
+    await shell.command("/context", ())
+    assert shell.panel_title == "Context usage" and shell.panel_layout == "modal"
+    body = "\n".join(shell.panel_lines)
+    assert "# Rules\n\n- One\n- Two" in body and "first\nsecond" in body
+    assert "Tools" in body and "Request details" in body
+
+    shell.client.inspect_context = AsyncMock(side_effect=RuntimeError("session is active"))
+    await shell.command("/context", ())
+    assert shell.panel_title == "Context usage"
+    assert "session is active" in "\n".join(shell.panel_lines)
+
+
+@pytest.mark.asyncio
+async def test_older_usage_reply_cannot_overwrite_the_newer_cache(tmp_path, monkeypatch):
+    import asyncio
+
+    old_gate = asyncio.Event()
+    started = asyncio.Event()
+    calls = 0
+
+    async def fetch():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            started.set()
+            try:
+                await old_gate.wait()
+            except asyncio.CancelledError:
+                await old_gate.wait()  # Simulate a transport that finishes despite cancellation.
+            return {"providers": [{"label": "Older"}]}
+        return {"providers": [{"label": "Newest"}]}
+
+    shell = _shell(tmp_path, monkeypatch, providers_usage=AsyncMock(side_effect=fetch))
+    shell.open_usage()
+    older = shell.usage_task
+    await started.wait()
+    shell.open_usage()
+    await shell.usage_task
+    old_gate.set()
+    await older
+    assert "Newest" in shell.panel_lines
+    assert shell.usage_cache["providers"][0]["label"] == "Newest"

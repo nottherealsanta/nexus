@@ -118,6 +118,8 @@ def model_groups(rows: list[dict], *, query: str = "", sort_mode: str = "updated
 def preselected_effort(row: dict, *, current: str, current_effort: str | None, stored_override: str | None) -> str | None:
     """The effort the picker starts on for ``row`` (stored override, else the current one on the same model)."""
     levels = row.get("supported_efforts") or ()
+    if _ref(row) != current and "remembered_effort" in row:
+        return row["remembered_effort"] if row["remembered_effort"] in levels else None
     if stored_override in levels:
         return stored_override
     return current_effort if _ref(row) == current and current_effort in levels else None
@@ -126,6 +128,9 @@ def preselected_effort(row: dict, *, current: str, current_effort: str | None, s
 def selection_effort(row: dict, *, current: str, current_effort: str | None, stored_override: str | None,
                      effort_source: str | None, pending: str | None, touched: bool) -> tuple[str | None, bool]:
     """(effort, commit) for Enter: commit atomically only if the user chose an effort or an agent effort must be kept."""
+    if not touched and _ref(row) != current and "remembered_effort" in row:
+        effort = row["remembered_effort"]
+        return (effort if effort in (row.get("supported_efforts") or ()) else None), True
     preserve_agent = (_ref(row) == current and effort_source == "agent" and stored_override is None
                       and current_effort in (row.get("supported_efforts") or ()))
     commit = touched or preserve_agent

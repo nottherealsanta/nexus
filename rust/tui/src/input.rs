@@ -6,6 +6,9 @@ use serde_json::{json, Value};
 use std::io::{self, Write};
 
 pub const MAX_DRAFT: usize = 1024 * 1024;
+pub fn voice_stop(key: KeyCode) -> Value {
+    json!({"type":"voice_stop","discard":key == KeyCode::Esc,"send":key == KeyCode::Enter})
+}
 pub fn send(value: Value) -> io::Result<()> {
     let mut out = io::stdout().lock();
     writeln!(out, "{}", value)?;
@@ -110,16 +113,43 @@ pub fn base64(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
-        let n = (u32::from(chunk[0]) << 16) | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8) | u32::from(*chunk.get(2).unwrap_or(&0));
+        let n = (u32::from(chunk[0]) << 16)
+            | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
+            | u32::from(*chunk.get(2).unwrap_or(&0));
         out.push(TABLE[(n >> 18) as usize & 63] as char);
         out.push(TABLE[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            TABLE[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[n as usize & 63] as char
+        } else {
+            '='
+        });
     }
     out
 }
 #[cfg(test)]
 mod base64_tests {
+    #[test]
+    fn voice_enter_sends_escape_discards_and_other_keys_only_stop() {
+        use crossterm::event::KeyCode;
+        assert_eq!(
+            super::voice_stop(KeyCode::Enter),
+            serde_json::json!({"type":"voice_stop","discard":false,"send":true})
+        );
+        assert_eq!(
+            super::voice_stop(KeyCode::Esc),
+            serde_json::json!({"type":"voice_stop","discard":true,"send":false})
+        );
+        assert_eq!(
+            super::voice_stop(KeyCode::Char('a')),
+            serde_json::json!({"type":"voice_stop","discard":false,"send":false})
+        );
+    }
+
     #[test]
     fn matches_the_standard_alphabet_with_padding() {
         assert_eq!(super::base64(b""), "");

@@ -1,5 +1,12 @@
 # Web app (`nexus web`)
 
+> **To be deprecated.** No new features are added or ported here unless explicitly
+> requested; the terminal clients (Ratatui, Textual) come first. Existing behavior
+> below stays as documented until removal.
+
+Parallel tool markers sit in the left gutter outside the header's text flow,
+so grouped and standalone tool calls share the same left alignment.
+
 A framework-free browser client (plain HTML, CSS and ES modules; **no build
 step**) for the same per-workspace daemon. It mirrors the Textual shell: same
 functionality, everything in the same place ([surfaces.md](surfaces.md)). Product
@@ -239,3 +246,18 @@ with no global/project selector. Other file categories retain scoped editing.
 The sessions sidebar refreshes the cross-project index every five seconds and
 groups projects by newest activity, then dates and sessions newest first. Opening
 another project follows a one-use launch URL to its owning workspace listener.
+
+## Provider usage refresh
+
+`Ctrl+U` and `/usage` show the previous workspace report immediately, with a
+refresh spinner. Fresh limits replace the report in place; errors retain cached
+limits. Request, workspace, session and mounted-view guards prevent late replies
+from replacing a newer or closed view. The cache retains one workspace report.
+The focused browser check is `tests/playwright_usage_check.py`.
+
+
+Settings opens in a large inset modal so the conversation remains visible around it.
+The native Voice section configures enabled input, auto-send, processing device
+and recording duration through host Settings commands without starting capture.
+Provider pages group sign-in options and connection management beneath a labelled
+connection status. Model downloads remain explicitly confirmed.

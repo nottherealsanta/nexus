@@ -210,6 +210,16 @@ async def test_body_is_returned_only_on_invocation_delimited_and_hashed(
     assert result.metrics["fingerprint"]
 
 
+async def test_empty_resource_means_body(workspace: Path):
+    write_skill(workspace, "demo", description="does demo things", body="THE BODY")
+    manager = SkillManager.for_workspace(workspace, home=workspace / "home")
+    ctx = make_ctx(workspace, skills=manager)
+    for empty in ("", "  "):
+        result = await skillmod.run({"name": "demo", "resource": empty}, ctx)
+        assert result.is_error is False
+        assert "THE BODY" in result.content[0].text
+
+
 async def test_snapshot_is_generation_stable(workspace: Path):
     directory = write_skill(workspace, "demo", body="ORIGINAL")
     manager = SkillManager.for_workspace(workspace, home=workspace / "home")

@@ -30,6 +30,9 @@ class Voice:
     async def open(self, *, download=False):
         status = await self.shell.client.voice_status()
         ready = getattr(status, "state", "") in {"ready", "loaded"} or getattr(status, "loaded", False)
+        if ready and status.enabled and not download:
+            await self.start()
+            return
         rows = [("Enable voice", {"kind": "voice_enable"})] if not status.enabled and not download else [("Start dictation", {"kind": "voice_start"})] if ready else [
             ("Download voice model…", {"kind": "confirm", "label": "Download the local voice model (~179 MB)?",
              "next": {"kind": "voice_prepare"}})]
@@ -41,7 +44,7 @@ class Voice:
         status = await self.shell.client.voice_status()
         if not status.enabled:
             raise ValueError("Voice is off · use /voice on")
-        if status.state not in {"ready", "loaded"}:
+        if status.state not in {"ready", "loaded"} and not getattr(status, "loaded", False):
             raise ValueError("Voice model is not ready · use /voice download")
         self.auto_send = bool(status.auto_send)
         self.request = uuid.uuid4().hex
@@ -52,6 +55,7 @@ class Voice:
         except Exception:
             self.recorder = None
             raise
+        self.preview = ""
         self.phase = "recording"
         self.shell.panel_title = ""
         self.shell.items = []
@@ -87,7 +91,7 @@ class Voice:
         except asyncio.CancelledError:
             raise
 
-    async def stop(self, discard=False):
+    async def stop(self, discard=False, *, send=False):
         recorder, self.recorder = self.recorder, None
         if not recorder:
             return
@@ -107,7 +111,7 @@ class Voice:
                 if (self.generation == self.shell.generation and self.phase == "transcribing"
                         and not self.shell.panel_title and result.request_id == self.request):
                     self.shell.composer_insert = getattr(result, "text", "")
-                    self.shell.composer_auto_send = self.auto_send
+                    self.shell.composer_auto_send = send or self.auto_send
                     self.shell.composer_insert_kind = "voice"
             finally:
                 self.phase = "idle"

@@ -7,7 +7,10 @@ from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
 from collections import OrderedDict
+from ...ui_support.completion import root_agents
+
 import uuid
+import asyncio
 
 from ..cli.commands import help_text, parse
 from ...ui_support.tool_details import flatten
@@ -36,6 +39,14 @@ class ShellActions:
     def __init__(self, controller):
         self.controller = controller
         self.panel_title = ""
+        self.panel_layout = "modal"
+        self.panel_format = "plain"
+        self.panel_loading = False
+        self.panel_revision = 0
+        self.usage_cache = None
+        self.usage_task = None
+        self.usage_request = 0
+        self.on_update = None
         self.panel_lines = []
         self.panel_tones = []
         self.attachments = []
@@ -43,6 +54,8 @@ class ShellActions:
         self.generation = 0
         self.items = []
         self.preview = None
+        self.preview_at = None
+        self.agent_definitions = {}
         self.notice = ""
         self.composer_restore = ""
         self.composer_insert = ""
@@ -76,12 +89,17 @@ class ShellActions:
         self.workflows = Workflows(self)
         self.voice = Voice(self)
         self.logs = Logs(self)
+        self.logs.open = self.preferences.values["details_sidebar"] and self.preferences.values["details_tab"] == "Logs"
 
     @property
     def client(self):
         return self.controller.client
 
-    def show(self, title, value):
+    def show(self, title, value, *, layout="modal", format="plain"):
+        self.panel_revision += 1
+        self.panel_layout = layout
+        self.panel_format = format
+        self.panel_loading = False
         self.items = []
         if hasattr(self, "workflows"):
             self.workflows.form = None
@@ -96,12 +114,55 @@ class ShellActions:
         self.panel_lines, self.panel_tones = list(lines), list(tones)
 
     def picker(self, title, rows, command, key):
-        self.show(title, rows)
+        self.show(title, rows, layout="drawer")
         self.items = [{"label": str(row.get("title") or row.get("name") or row.get(key)),
                        "command": f"{command} {row[key]}"} for row in rows if row.get(key)]
 
+    def open_usage(self):
+        """Open immediately; one bounded background fetch refreshes the visible modal."""
+        if self.usage_task:
+            self.usage_task.cancel()
+        self.usage_request += 1
+        request = self.usage_request
+        self.show_styled("Provider usage", *(usage_lines(self.usage_cache) if self.usage_cache is not None
+                                            else (["No cached usage yet."], ["dim"])))
+        self.panel_lines.append("r refresh · Esc close")
+        self.panel_tones.append("dim")
+        self.panel_loading = True
+        revision, generation, client = self.panel_revision, self.generation, self.client
+
+        async def refresh():
+            try:
+                result = await asyncio.wait_for(client.providers_usage(), 30)
+                if request != self.usage_request or generation != self.generation or client is not self.client:
+                    return
+                self.usage_cache = result
+                lines, tones = usage_lines(result)
+                lines.append("r refresh · Esc close")
+                tones.append("dim")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                lines, tones = list(self.panel_lines), list(self.panel_tones)
+                lines.append(f"Refresh failed: {type(exc).__name__}: {exc}")
+                tones.append("bad")
+            if revision != self.panel_revision or generation != self.generation or self.panel_title != "Provider usage":
+                return
+            self.panel_lines, self.panel_tones = lines, tones
+            self.panel_loading = False
+            if self.on_update:
+                try:
+                    await self.on_update()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass  # The terminal closed while the read-only refresh completed.
+
+        self.usage_task = asyncio.create_task(refresh())
+
     async def switch_project(self, workspace, session):
         if workspace != self.workspace:
+            self.usage_cache = None
+            if self.usage_task:
+                self.usage_task.cancel()
             result = await self.client.open_project_session(workspace, session)
             from ..cli import open_client
             client = await open_client(workspace, socket_path=result.socket_path)
@@ -117,6 +178,9 @@ class ShellActions:
         await self.voice.discard()
         self.workflows.form = None
         self.workflows.stack.clear()
+        self.workflows.agent_page_id = None
+        self.workflows.agent_context = {}
+        self.workflows.agent_parents.clear()
         self.turn_cache.clear()
         self.turn_cache_bytes = 0
         self.generation += 1
@@ -125,26 +189,71 @@ class ShellActions:
             self.tabs.append({"id": session, "title": session, "workspace": self.workspace, "state": "idle"})
         self.attachments.clear(); self.attachment_labels.clear()
         self.items = []
+        self.preview = None
+        self.preview_at = None
         await self.controller.switch_session(session)
         await self.controller.bootstrap()
         await self.refresh_preview(session)
         self.panel_title = ""
+        self.panel_loading = False
+        self.panel_revision += 1
+        if self.usage_task:
+            self.usage_task.cancel()
         self.panel_lines = []
 
     async def refresh_preview(self, session: str | None = None) -> bool:
         """Reload the next-turn context preview; an active session has none yet.
 
         The host refuses a preview while a turn runs. That is expected, not an
-        error: the header keeps its placeholders and the poll loop retries.
+        error: the header retains the last successful preview and its timestamp.
         """
         try:
-            self.preview = await self.client.inspect_context(session or self.controller.session)
+            from datetime import datetime
+            generation, selected = self.generation, session or self.controller.session
+            preview = await self.client.inspect_context(selected)
+            if generation != self.generation or selected != self.controller.session:
+                return False
+            self.preview = preview
+            self.preview_at = datetime.now().astimezone()
             return True
         except Exception as exc:  # noqa: BLE001 - only the "active" refusal is expected
             if "while the session is active" not in str(exc):
                 raise
-            self.preview = None
             return False
+
+    def context_popover(self):
+        """Live occupancy plus the last successful, timestamped request breakdown."""
+        from .prototype import _context_display_view, _context_tiers
+        from ...ui_support.context import context_measure, context_groups, context_pricing_note
+        used, window, _ = context_measure(_context_display_view(self.controller.view, self))
+        stamp = self.preview_at.strftime("%H:%M:%S") if self.preview_at else "unavailable"
+        lines = [f"Used          {used:,} tokens" if used is not None else "Used          unavailable"]
+        for index, limit in enumerate(_context_tiers(_context_display_view(self.controller.view, self))):
+            label = "Window" if limit == window else f"Tier {index + 1}"
+            lines.append(f"{label:<14}" + (f"{used / limit * 100:.1f}% of {limit:,}" if used is not None else f"{limit:,} tokens"))
+        turns = self.controller.view.turns
+        if turns:
+            usage = turns[-1].usage
+            lines.append(f"Last turn     in {usage.input_tokens:,} · out {usage.output_tokens:,} · cache read {usage.cache_read_tokens:,}")
+        if self.preview is not None:
+            if getattr(self.controller, "running", False):
+                lines.append("Breakdown from before the running turn; occupancy is live.")
+            lines.extend(f"{group.title} · ~{group.tokens:,} tokens · {group.detail}" for group in context_groups(self.preview))
+            pricing = context_pricing_note(_context_display_view(self.controller.view, self))
+            if pricing:
+                lines.append(pricing)
+        else:
+            lines.append("Breakdown unavailable; open /context after the turn finishes.")
+        lines.append("Enter open full /context view · Esc close")
+        self.show(f"Context · as of {stamp}", "\n".join(lines), layout="drawer")
+
+
+    async def select_agent(self, name):
+        """All native selection paths refresh identity and request context together."""
+        await self.controller.select_agent(name)
+        rows = await self.client.list_agents()
+        self.agent_definitions = {row["name"]: row for row in rows}
+        await self.refresh_preview()
 
     async def cancel(self):
         result = await self.controller.cancel()
@@ -183,12 +292,18 @@ class ShellActions:
             from ..cli.commands import SPECS
             self.items = []
             self.workflows.menu("Commands", [(spec.name + " · " + spec.summary, {"kind": "chat_command", "command": spec.name}) for spec in SPECS], help_text().splitlines())
+            self.panel_layout = "drawer"
+            for label, command in (("Ctrl+I · Context usage", "/context"), ("Ctrl+U · Provider usage", "/usage"),
+                                   ("Ctrl+X M · Models", "/model"),
+                                   ("Ctrl+X G · Agents", "/agent")):
+                self.items.append({"label": label, "command": command})
         elif name == "/hotkeys":
             from ...ui_support.shortcuts import KEYBOARD_SHORTCUTS
             self.show("Keyboard shortcuts", "\n".join(KEYBOARD_SHORTCUTS))
         elif name == "/new":
             session_id = argument or uuid.uuid4().hex[:12]
-            self.workflows.menu("New session · choose root agent", [(row["name"], {"kind": "new_session", "id": session_id, "agent": row["name"]}) for row in await self.client.list_agents()])
+            self.workflows.menu("New session · choose root agent", [(row["name"], {"kind": "new_session", "id": session_id, "agent": row["name"]}) for row in root_agents(await self.client.list_agents())])
+            self.panel_layout = "drawer"
         elif name == "/sessions":
             if argument:
                 rows = await self.client.list_sessions()
@@ -240,7 +355,8 @@ class ShellActions:
                     from ...ui_support.model_choice import preselected_effort, selection_effort
                     keep, commit = selection_effort(row, effort_source=self.controller.reasoning_effort_source, pending=None, touched=False, **state)
                     item["operation"] = {"kind": "model_choose", "ref": row["ref"], "levels": list(row.get("supported_efforts") or []),
-                                         "selected": preselected_effort(row, **state), "keep": keep, "commit": commit}
+                                         "selected": preselected_effort(row, **state), "keep": keep, "commit": commit,
+                                         "remembered": "remembered_effort" in row}
         elif name == "/effort":
             if argument:
                 await self.client.select_reasoning_effort(session, None if argument == "default" else argument)
@@ -250,15 +366,37 @@ class ShellActions:
         elif name == "/agent":
             if argument == "reset":
                 await self.controller.reset_agent()
+                await self.refresh_preview(session)
             elif argument == "current":
                 self.show("Current agent", await self.client.current_agent(session))
             elif argument and argument != "list":
-                await self.controller.select_agent(argument)
-                await self.refresh_preview(session)
+                await self.select_agent(argument)
             else:
-                self.picker("Agents", await self.client.list_agents(), "/agent", "name")
+                self.picker("Agents", root_agents(await self.client.list_agents()), "/agent", "name")
         elif name == "/context":
-            self.show("Context", await self.client.inspect_context(session))
+            from ...ui_support.context import context_summary, context_detail_usage, context_turn_usage, context_groups
+            error = None
+            try:
+                preview = await self.client.inspect_context(session)
+            except Exception as exc:
+                preview = None
+                error = str(exc)
+            lines = [context_summary(preview, context_detail_usage(self.controller.view), error=error),
+                     context_turn_usage(self.controller.view)]
+            if preview is not None:
+                from datetime import datetime
+                self.preview_at = datetime.now().astimezone()
+                self.preview = preview
+                for group in context_groups(preview):
+                    lines.extend(("", f"{group.title} · ~{group.tokens} tokens · {group.detail}"))
+                    if group.key == "request":
+                        lines.extend(labelled({"Accounting": preview.request_context or preview.budget,
+                                               "Model parameters": preview.params, "System files": preview.system_files,
+                                               "Display limitations": preview.omitted}))
+                    else:
+                        for entry in group.entries:
+                            lines.extend(("", f"{entry.title} · ~{entry.tokens} tokens", entry.body))
+            self.show("Context usage", "\n".join(lines))
         elif name == "/details":
             self.show("Session details", self.controller.view.to_dict())
         elif name == "/tools":
@@ -276,7 +414,7 @@ class ShellActions:
         elif name == "/cost":
             self.show("Usage", self.controller.view.usage.to_dict())
         elif name == "/usage":
-            self.show_styled("Provider usage", *usage_lines(await self.client.providers_usage()))
+            self.open_usage()
         elif name == "/export":
             self.show("Session export", await self.client.export(session, format=argument or "markdown"))
         elif name == "/diff":

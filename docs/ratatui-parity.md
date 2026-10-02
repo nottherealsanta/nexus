@@ -1,5 +1,17 @@
 # Ratatui implementation and parity ledger
 
+The composer border and agent name share the active agent's context-header
+color, including configured identity colors. One blank line precedes the
+System prompt header, matching the spacing between context blocks.
+
+Parallel tool calls keep the same text column as standalone calls. Their `┌│└`
+markers occupy the cell immediately before that column; the snapshot sends
+`batch_glyph` separately from tool text, including subagent metrics.
+Verified with Rust column tests, Python projection/PTY tests and native/Textual
+browser screenshots. The web browser suite is not verified: its existing
+`wait_for_function` fails against the page's Content Security Policy before
+reaching tool rows.
+
 The native replacement is developed in the separate `feat/ratatui-prototype`
 worktree. `nexus chat` launches it by default (`--renderer ratatui`); Textual is the fallback when
 the native executable is missing and stays a runtime dependency until the migration
@@ -10,8 +22,8 @@ not a claim of verified feature or visual parity.
 | --- | --- | --- |
 | Host/reducer | Shared session controller, replay, continuous follow, bounded automatic reconnect, cross-project routing | Reconnect and project switching under real daemon churn |
 | Transcript | Textual-ordered turns (prompt card with `▼ … #N`, thought, `◆` agent label, reply, tool rows with batch gutters, right-aligned footer) with Textual's collapsed margins computed in Python (`gap`) and drawn by `rust/tui/src/transcript.rs`; word-boundary wrapping; split diffs, child-agent pages | Task/subagent card header, inline diff line numbers, long-history performance |
-| Context | Header opens the transcript as labelled chips with token estimates, shared with Textual through `ui_support/context_header.py`; clickable sections, extension toggles and locks, context meter | Side-by-side check of a populated header |
-| Composer | Grapheme editing, selection, undo/redo, multiline movement, persisted history, paste, completion requests via shared `ui_support/completion.py` (visible commands sorted, `@` files limit 30, `/model` `/agent` `/effort` `/theme` `/export` `/voice` `/sessions` `/attach` arguments, case-insensitive prefix) | Selectable completion menu, word wrapping at cursor |
+| Context | Header opens the transcript as labelled chips with token estimates, shared with Textual through `ui_support/context_header.py`; clickable sections, extension toggles and locks, context/activity meter, context-usage modal and Markdown AGENTS.md | Side-by-side check of a populated header |
+| Composer | Grapheme editing, selection, undo/redo, multiline movement, persisted history, paste, completion requests via shared `ui_support/completion.py` (visible commands sorted, `@` files limit 30, `/model` `/agent` `/effort` `/theme` `/export` `/voice` `/sessions` `/attach` arguments, case-insensitive prefix) | Word wrapping at cursor; completion menu now supports keyboard and mouse selection |
 | Submission | Queue/steer/interrupt, returned queue restoration, failed draft recovery, keyboard negotiation, Ctrl+X leader | Supported terminal matrix and race checks |
 | Prompts | Durable nested permission and question projection, disabled decisions, free text, arbitration feedback | Mouse choice focus and multiple-question journey checks |
 | Navigation | Searchable pickers, tabs with open/close clicks, sidebars, cross-project sessions, archive/trash/undo, model favorites/recents; `/model` picker uses shared `ui_support/model_choice.py` (freshness filter, Favorites/Recent/Recently-updated order, atomic model+effort with preselected effort); fuzzy filtering while typing is still the Rust substring filter | Focus navigation, visual group/last-tab checks |
@@ -63,14 +75,40 @@ terminal rendering performance still need measurement.
 
 ## Visual matching (2026-10-02)
 
-The native palette mirrors `ui/tui/theme.py` (dark and light). Layout follows
-the Textual shell: a three-row top bar (tabs with `+` and `▐` at the right,
-workspace and status, rule), docked sessions and 40-column details sidebars on
-the panel colour, a tinted composer box with a blue left bar, runtime row
-(agent, model, provider, effort) and a bottom row (workspace, context usage,
-`ctrl+p commands`), and approvals/questions as a panel above the composer with
-the transcript still visible. Pickers and panels use the dialog colour with an
-accent title and rule. The details sidebar (SESSION, MODIFIED FILES, MCP SERVERS)
+The native dark theme uses explicit black for the conversation and dialogs;
+other color roles follow `ui/tui/theme.py`, and the light theme remains available.
+The four-row top bar contains tabs, a divider, workspace/status and a bottom rule.
+Sessions retain two-line cards with no blank row between cards; sidebar toggle
+hit targets span three columns and the first two top-bar rows. User messages have
+a one-cell left inset, thin blue rules, and muted turn numbers on the card's own
+background. The composer uses the same thin rule, a runtime row, and a blank row
+below it. Its bottommost row shows labelled context usage/limit and activity, with a
+spinner and the Textual meter's moving segment while running, context fraction
+and price-tier marks while idle; clicking that row opens context usage. The repository
+breadcrumb appears only at the top.
+
+Presentation snapshots declare `panel_layout` (`modal`, `drawer`, `page`),
+`panel_format` (`plain`, `markdown`) and `panel_loading`. Context meter data
+(`context_used`, `context_window`, `context_marks`) and context notes are derived
+from the shared Textual context helpers. Old snapshots without a
+layout retain full pages. Command, model and root-agent choices dock above the composer; context inspection
+and provider usage use bounded modals.
+Settings editors retain full pages. Painting and mouse hit-testing share the
+same rectangles. Escape/outside click dismisses, mouse selection and wheel
+navigation operate on filtered picker items, and the composer draft is retained.
+Slash/file completion uses explicit palette colors and follows the actual
+composer position as the editor grows.
+
+`Ctrl+U` and `/usage` open immediately with the last fetched report, or a loading
+state on the first open. A bounded background request refreshes the same modal;
+`r` refreshes, errors retain cached data, and stale panel/session responses do not
+replace another view. The cache holds one host report and resets across workspace
+changes. `AGENTS.md` preserves its included body/newlines and source label and
+uses the existing Markdown renderer; the system prompt remains literal text.
+Context usage shows shared Textual accounting and the assembled request in
+labelled groups; unavailable previews still open with observed usage and an error.
+
+The details sidebar (SESSION, MODIFIED FILES, MCP SERVERS)
 and context header come from the toolkit-free `ui_support/details.py` and
 `ui_support/context_header.py`; the tool row, turn footer and agent label text
 come from `ui_support/timeline.py`, which the Textual widgets now call too.
@@ -83,8 +121,8 @@ Streamed snapshots are sent compactly, identical ones are skipped, and Rust
 parses only the newest of a queued backlog unless an older one carries a
 one-shot composer effect.
 
-The composer grows with its wrapped content from the 8-row resting layout up to
-Textual's `max-height: 22` editor rows, always leaving the transcript four rows
+The composer grows with its wrapped content from the 9-row resting layout up to
+Textual's `max-height: 22` editor rows, reserving four transcript rows when space permits
 (`render::composer_height`; mouse hit-testing uses the same height).
 
 Running tool rows animate: Python puts the private-use slot `U+E000` where the
@@ -96,10 +134,10 @@ Completion is requested as you type, not only on Tab: when the token at the
 cursor starts with `/` or `@`, or the draft is a slash command with an argument,
 Rust sends one `complete` action after a 120 ms pause (the same trigger as
 Textual's `refresh_completion`). Tab still forces a request. Escape hides the
-list for that token until it changes. As-you-type argument lists exist only for
-`/model` and `/agent` (Textual's set); Tab completes any command's arguments.
+list for that token until it changes. As-you-type argument requests cover every slash command; supported choices are
+provided by the shared completion helper.
 Enter on a standalone `/command` runs the highlighted command (Textual's rule);
-on an argument that is already complete it submits the draft. The popup styling is still approximate.
+on an argument that is already complete it submits the draft. Completion and choice menus span the transcript width without borders.
 
 Empty sessions show the same grey tips as Textual's `EmptyHints`
 (`ui_support/hints.pick_hints`, seeded by session id): Python sends a `hints`
@@ -143,6 +181,16 @@ diff lines. Python sends one tone per line (`ui_support/tool_details.styled_line
 joined it equals `sections_to_text`), Rust colours and wraps them
 (`render::toned_lines`). Other panels stay plain. It is a panel over the
 transcript, not a floating modal.
+
+Tool rows are not clickable by default. Only a row whose output (Result, Summary,
+Error, Progress) exceeds 8 lines gets `N lines ▸`; clicking or Enter expands the
+full details in place (`block_toggle` on `<call_id>:output`, kept in `shell.expanded`).
+Only a subagent row opens a page. On that page the top bar shows the child's
+model, and Up returns to the parent like Escape (PageUp/PageDown/wheel scroll).
+The page keeps 30% of the viewport as blank padding below the last row so tools never
+sit on the bottom edge, and every scroll key clamps to the same `max_scroll` as the
+wheel (no overshoot). Laid-out rows are cached per page, so Esc back to the parent
+does not re-wrap the whole conversation.
 
 The Tools dialog (click the Tools chip) mirrors `ToolsModal`: one row per tool
 family and MCP server with its tool names and token estimate; a row expands to its
@@ -201,8 +249,9 @@ a level wave of the last 28 samples (kept in Rust from the `voice_level` field o
 each snapshot), the live partial text and the cancel hint. Not exercised with real
 audio hardware.
 
-Context chips say "unavailable while a turn is running" instead of failing when the
-host has no preview. Rows are menu lines, so there are no swatch colours or aligned
+Context chips open read-only while a turn runs (the host previews from the durable
+records; toggles are locked after the first turn). They say "unavailable" instead of
+failing only when the host has no preview. Rows are menu lines, so there are no swatch colours or aligned
 token column yet.
 
 The tab row follows `SessionTabs`: sessions toggle, one tab per open session
@@ -210,3 +259,151 @@ The tab row follows `SessionTabs`: sessions toggle, one tab per open session
 `+`, details toggle. Overflow scrolls the leftmost tabs out so the current one
 stays visible. Drawing and mouse hit-testing both use `render::tab_cells`; the
 toggles and `×` are clickable. The current tab reads "working" while its turn runs.
+
+## UI polish verification (2026-10-02)
+
+Rust rendering/layout tests, native Python regressions, Textual usage tests,
+layering/docs checks and Ruff passed. The controlling-PTY check covers modal
+mouse selection, outside dismissal, refresh keys, preserved drafts and the
+context-row click. Browser captures under `artifacts/ratatui-parity/` use the
+newly built debug binary explicitly (an installed binary can otherwise be stale).
+Reviewed native wide/narrow layout, agent drawer, Markdown, cached usage with
+spinner, and completion colors. This does not establish complete Textual parity.
+
+A focused web browser check (`tests/playwright_usage_check.py`) verifies cached
+refresh, errors, stale replies and dismissal. The broad web check currently
+stops before usage checks because its `wait_for_function` evaluates a string
+under the application's CSP; full web regression is not verified by that run.
+
+## Native UI refinement (implemented)
+
+The native header uses three gray rows with one black divider. Sessions show
+numeric message counts and compact ages, stronger boundaries and no shortcut
+footer. Sidebars retain their existing height. Root response labels and new-session
+tips are removed; child-agent identities remain visible.
+
+Composer agent, model/provider and effort controls are clickable. Agent completion,
+selection and cycling filter root-capable definitions; host validation still
+enforces the post-turn lock. Context figures are right aligned inside the composer
+as used / reported pricing boundary / capacity and percentage. The full-width
+activity meter animates without a separate status label or spinner. Pricing
+boundaries use thin ticks.
+
+Verification: 83 native Python checks, 37 Rust checks (one manual benchmark
+ignored), and the real-terminal keyboard/mouse check passed. Full-height sidebar
+reflow remains optional and was not implemented.
+
+Visual verification: refreshed wide/narrow terminal, agent drawer, Markdown, usage
+and completion captures in `artifacts/ratatui-parity/`; reviewed the main layout.
+The workspace `.venv/bin/nexus-ratatui` was refreshed from the local build.
+
+Native Ctrl+X, V starts capture immediately when voice is enabled and its model is
+ready. Setup retains a bounded dialog when enablement or download is needed. Live
+preview words resolve changed ASCII letters over three 125 ms frames, preserving
+stable preceding words, whitespace and Unicode. Final transcription remains the
+only inserted text. The Ctrl+X leader has no visible shortcut banner. Physical
+microphone latency and real inference remain unverified.
+
+Native dictation now previews directly inside the editable composer, at the capture
+insertion position. Recording shows only a one-cell pulsing orange outline square
+below the agent control; the floating waveform/status strip is removed. Typing
+stops capture and also applies the typed key. Final text replaces the temporary
+preview at the captured position, preserving typed suffix text; Escape discards.
+The composer grows for live previews. Real microphone/model latency is unverified.
+
+The native activity meter has two-cell side margins and an independent 60 Hz
+render clock. Its moving segment eases through a six-second round trip, blending
+boundary-cell colors for motion between terminal columns. Other spinner and
+dictation animations retain their existing cadence. Actual terminal refresh rate
+depends on the terminal and rendering load.
+
+Context footer accounting now falls back to the host inspection when durable turn
+accounting has no figures (including a new conversation). Reported durable usage
+retains precedence. Missing accounting says `unavailable` rather than `?`. Opening
+context inspection refreshes the cached preview. Plain/Markdown panel rows are
+cached across frames and scrolling is clamped to the last viewport, avoiding
+repeated wrapping of large context bodies. Build and Ruff passed; the reported
+scroll crash has not been reproduced on the user's session.
+
+The completed-turn `turn ↑… ↓…` footer reports cumulative provider usage across
+the turn's iterations; the composer context meter reports the latest request's
+prompt occupancy. These intentionally differ on multi-request turns.
+
+
+Settings opens in a large inset modal so the conversation remains visible around it.
+The native Voice section configures enabled input, auto-send, processing device
+and recording duration through host Settings commands without starting capture.
+Provider pages group sign-in options and connection management beneath a labelled
+connection status. Model downloads remain explicitly confirmed.
+
+Subagent cards now open a read-only conversation page using the canonical child
+body, shared transcript blocks, the child's recorded context and details sidebar.
+Child tool/message inspection and nested subagent navigation use the selected
+child view; Escape returns to the parent, preserving its draft. Context fetching
+is session/generation guarded and retries while the first request is unavailable.
+Native, Textual and web transcripts display overload retry attempts and delays.
+
+Verification for the subagent page: native and Textual terminal screenshots were
+inspected side by side (`artifacts/ratatui-parity/*-subagent.png`); the real PTY
+check verifies ignored typing/paste, Escape and retained parent draft. Focused
+projection/workflow/reducer/provider checks and Rust tests pass. The broader web
+browser check stops at its string-based `wait_for_function` CSP violation; web
+transport checks and JavaScript syntax pass. Exact pixel parity and a live
+provider overload are not verified.
+
+
+## Composer command choices (2026-10-02)
+
+Native slash/file completion and command choice menus use the full transcript
+width directly above the composer, without borders. Agent, model, effort and
+follow-up operation menus remain in this dock; Settings retains its navigation
+modal. Every slash argument requests completion after the existing 120 ms pause.
+A bounded 32-request cache filters matching ancestor results while replies arrive,
+including on backspace; command/token context and session generation isolate
+cached candidates. Exact host replies retain the host's search ordering/results.
+
+Verification: Rust regressions, native Python checks, controlling-PTY check and
+browser captures for completion, agent and model choices. The native captures
+were inspected. Textual/web menu placement has not been changed or verified.
+
+### Remembered model effort
+
+Model picks reuse the last explicit effort for that provider/model (including
+Default) without another effort prompt. `/effort` changes the remembered choice;
+preferences survive daemon restarts (see [models.md](models.md)).
+
+## Native redesign (2026-10-02)
+
+`plans/RATATUI_REDESIGN_PLAN.md` supersedes the earlier native composer and
+sidebar layout descriptions. This presentation is native-only; shared grouping
+helpers do not change the Textual renderer.
+
+Sidebars occupy the full terminal height: Sessions is 30 columns, details is 40,
+and both fit from 130 columns. Below that, the last opened sidebar wins; the
+right sidebar overlays the conversation below 100 columns. Preferences survive
+resizing. Sessions pins its heading and filter, marks open tabs with `◦`, and
+removes the redundant center tab row while visible. Details pins Session, Files,
+MCP and Logs tabs. Brackets change tabs when focused, `c` copies the session ID,
+and Escape closes the narrow overlay. Ctrl+E opens Logs. Logs pins daemon/client
+identity, follows the tail, folds routine entries, and polls only while visible.
+
+The composer has no reserved blank context row. Its controls end in ten slanted
+context bars and only reported used/window/tier figures; missing data is `?`.
+Click the figures or press Ctrl+X,C for a context summary, then Enter for full
+context. The context header opens a section picker. Preview information is
+cached with an as-of timestamp during a running turn, and agent selection refreshes
+it centrally; accents follow the selected agent even before a fresh preview.
+
+Consecutive tools form stable native groups, interrupted by visible messages,
+thoughts or task/subagent boundaries. Groups report count, status and failures.
+Members reveal labelled parameters/results and independently folded output;
+`/verbose` reveals all details. User cards put their chevron in column 2 and
+text in column 4. Assistant footers have no preceding blank row.
+
+The live bridge uses schema 2 suffix patches (`blocks_from`) and block revisions;
+schema 1 full snapshots remain readable. Patches are applied in order and cannot
+be dropped like full snapshots. Rust caches wrapped block parts and draws only
+the visible indexed range. Optional `NEXUS_TUI_TRACE=1` records bounded latency
+samples and presents percentiles in Logs; `NEXUS_TUI_TRACE_FILE` selects the
+exit report. Trace files contain timings, not conversation bodies. See the plan
+ledger for measured limits, including the remaining streaming CPU budget gap.

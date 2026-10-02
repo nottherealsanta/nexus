@@ -591,6 +591,7 @@ class Daemon:
             # Diagnostics are owned by this daemon generation and shared with
             # the facade's read-only LogsRead projection.
             self._facade.daemon_diagnostics = self.diagnostics
+            self._facade.daemon_info = {"pid": os.getpid(), "socket": str(self._socket)}
             self._server = await asyncio.start_unix_server(
                 self._on_connection, path=str(self._socket)
             )

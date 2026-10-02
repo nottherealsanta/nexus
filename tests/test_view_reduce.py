@@ -680,6 +680,7 @@ def test_apply_rejects_non_events():
 
 def test_context_usage_prefers_the_provider_measurement_and_carries_it_forward():
     from nexus.ui_support.context import context_measure, context_usage
+    from nexus.ui_support.timeline import turn_footer_text
 
     assembled = {"context": {"used_tokens": 4000, "input_budget": 90000, "context_window": 100000}}
     state = apply_many(initial_state("s1"), [
@@ -697,6 +698,7 @@ def test_context_usage_prefers_the_provider_measurement_and_carries_it_forward()
     # A log without ``prompt`` falls back to ``input``.
     state = apply(state, _ev(5, "model.usage", {"input": 3800, "output": 50}, turn="t1"))
     assert context_measure(state)[0] == 3850
+    assert turn_footer_text(state.turns[0]).endswith("turn ↑6.7K ↓150 · 43% cached")
     assert fold([
         _ev(1, "turn.started", turn="t1"),
         _ev(2, "context.assembled", {"iteration": 1, **assembled}, turn="t1"),
@@ -727,3 +729,30 @@ def test_tool_batches_group_calls_sharing_a_model_iteration():
         ToolCallView(call_id="e", event_seq=5, iteration=3),
     ]
     assert tool_batches(tools) == {"b": "first", "c": "middle", "d": "last"}
+
+
+def test_failed_turn_finishes_unresolved_task_for_live_and_replay():
+    events = [_ev(1, "turn.started", turn="t"),
+              _ev(2, "tool.requested", {"call_id": "task", "tool": "subagent"}, turn="t"),
+              _ev(3, "turn.failed", {"error": "SubagentError: invalid model"}, turn="t")]
+    before = fold(events[:2])
+    live = apply(before, events[-1])
+    tool = live.turns[0].tools[0]
+    assert tool.status == "failed" and tool.is_error
+    assert tool.error == "SubagentError: invalid model"
+    assert before.turns[0].tools[0].status == "requested"
+    assert live.to_dict() == fold(events).to_dict()
+
+
+def test_overload_retry_keeps_interrupted_text_separate_and_replays():
+    events = [_ev(1, "turn.started", turn="t"),
+              _ev(2, "model.started", {"iteration": 1, "model": "m"}, turn="t"),
+              _ev(3, "text.delta", {"text": "partial"}, turn="t"),
+              _ev(4, "model.retrying", {"reason": "provider_overloaded", "attempt": 1, "delay_seconds": 2}, turn="t"),
+              _ev(5, "model.started", {"iteration": 1, "model": "m", "attempt": 1}, turn="t"),
+              _ev(6, "text.delta", {"text": "recovered"}, turn="t")]
+    view = fold(events)
+    assert [m.text for m in view.turns[0].messages] == ["partial", "recovered"]
+    assert view.turns[0].messages[0].done
+    assert view.turns[0].retries[0].delay_seconds == 2
+    assert fold(events[4:], fold(events[:4])).to_dict() == view.to_dict()

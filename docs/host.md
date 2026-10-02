@@ -194,3 +194,10 @@ recorded workspace/session pair before connecting to its owning daemon, returnin
 a socket path for the terminal or a one-use browser launch URL. Each workspace
 keeps its own runtime, settings and permissions. This does not implement the
 shared-daemon plan.
+
+### Native diagnostics identity
+
+The daemon attaches its PID and socket path to the host doctor report as
+`daemon`. The native Logs header consumes this report through the existing
+host command, together with session and protocol identity. Embedded clients may
+have an empty daemon identity. The UI does not inspect daemon files or managers.

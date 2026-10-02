@@ -1133,11 +1133,11 @@ async def test_cancellation_during_approval_cancels_pending_and_releases(tmp_pat
             seen.append(event)
 
     task = asyncio.create_task(consume())
-    for _ in range(500):
-        await asyncio.sleep(0)
-        if any(event.type == "permission.requested" for event in seen):
-            break
-    assert any(event.type == "permission.requested" for event in seen)
+    # Session setup includes real disk work. Bound elapsed time rather than the
+    # number of event-loop yields, which can finish before I/O on CI runners.
+    async with asyncio.timeout(5):
+        while not any(event.type == "permission.requested" for event in seen):
+            await asyncio.sleep(0.01)
 
     session.cancel("user said no")
     await asyncio.wait_for(task, timeout=3)

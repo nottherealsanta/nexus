@@ -16,6 +16,8 @@ class Logs:
     def __init__(self, shell):
         self.shell = shell
         self.open = False
+        self.visible = False
+        self.trace = []
         self.show_all = False
         self.rows = {"daemon": [], "session": []}
         self.cursors = {"daemon": None, "session": None}
@@ -57,7 +59,7 @@ class Logs:
         rows = sorted([*self.rows["daemon"], *self.rows["session"]], key=lambda row: row.ts)
         problems = [row for row in rows if row.level != "info"]
         routine = [row for row in rows if row.level == "info"]
-        selected = problems + (routine if self.show_all else [])
+        selected = sorted(problems + (routine if self.show_all else []), key=lambda row: row.ts)
         lines = []
         if self.truncated:
             lines.append("[Earlier log entries clipped · " + ", ".join(sorted(self.truncated)) + "]")

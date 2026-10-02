@@ -13,6 +13,7 @@ uv sync --extra dev                                 # or: pip install -e '.[dev]
 .venv/bin/python -m pytest -q                       # full offline suite
 .venv/bin/python -m pytest -q tests/test_host_facade.py -k name
 ruff check nexus tests                              # ruff is installed separately; rules E4 E9 F E713
+./rust-build-test.sh                                # locked Rust build and unit tests (Ratatui)
 python -m playwright install chromium               # once, for browser checks
 .venv/bin/python tests/playwright_web_check.py      # real-browser web client check
 .venv/bin/python tests/playwright_tui_check.py      # Textual shell served to a browser
@@ -125,3 +126,27 @@ no credentials) through the same adapter (`ratatui_browser_demo.py --bridge CMD`
 and saves one screenshot per typed line (or `click:X,Y` / `key:Control+p` step; it uses fresh preferences so both sidebars show) under `artifacts/ratatui-live/`. It found
 the "context preview unavailable while the session is active" bug that unit tests
 missed.
+
+## Native redesign verification
+
+Run `cargo test --locked --manifest-path rust/tui/Cargo.toml` and
+`.venv/bin/python -m pytest -q tests -k ratatui`. The two ignored Rust benchmarks
+are manual measurements; the 2,000-turn case is
+`cargo test --release --manifest-path rust/tui/Cargo.toml streaming_2000 -- --ignored --nocapture`.
+
+Build the release binary before running
+`.venv/bin/python tests/ratatui_performance_check.py`. This controlling-PTY test
+feeds 2,000 turns, 300 wheel events, 50 keys and 50 suffix patches per second,
+drains terminal output, samples native-process CPU, and writes ignored artifacts
+under `artifacts/ratatui-parity/`. It excludes Python projection and provider latency.
+A controlling TTY and process CPU inspection may require sandbox escalation.
+
+`NEXUS_RATATUI_MATRIX=1 .venv/bin/python tests/playwright_ratatui_check.py`
+captures both themes, four sidebar combinations, and 80/120/200-column layouts,
+plus expanded tools, context popover, running composer and details tabs.
+`NEXUS_TUI_TRACE=1` enables bounded native timing statistics in Logs;
+`NEXUS_TUI_TRACE_FILE=/path/report.log` writes an exit report.
+
+The cancellation-during-approval integration check waits up to five seconds for
+the durable permission request, rather than counting event-loop yields; session
+setup performs disk I/O and yield counts are not a portable readiness bound.

@@ -110,6 +110,43 @@ def test_native_bridge_keyboard_and_terminal_restoration():
         os.write(master, b"secret-value\x1b")
         # Escape cancels a credential form; only explicit Ctrl+S may save it.
         assert read_action() == {"type": "dismiss", "text": ""}
+        # Bounded modal: mouse selects an item; outside click dismisses without touching chat.
+        process.stdin.write((json.dumps({"schema": 1, "revision": 6, "status": "idle",
+            "panel_title": "Commands", "panel_layout": "modal", "restore": "keep this draft",
+            "items": [{"label": "Context", "command": "/context"}]}) + "\n").encode())
+        process.stdin.flush()
+        time.sleep(.1)
+        os.write(master, b"\x1b[<0;10;12M")
+        assert read_action() == {"type": "pick", "text": "/context", "generation": 0}
+        os.write(master, b"\x1b[<0;1;1M")
+        assert read_action() == {"type": "dismiss", "text": ""}
+        process.stdin.write((json.dumps({"schema": 1, "revision": 7, "status": "idle",
+            "panel_title": "Provider usage", "panel_layout": "modal", "panel_loading": True,
+            "panel_lines": ["Cached limits"]}) + "\n").encode())
+        process.stdin.flush()
+        time.sleep(.1)
+        os.write(master, b"r")
+        assert read_action() == {"type": "command", "text": "/usage"}
+        # A child page is read-only; keys and paste cannot change the root draft.
+        process.stdin.write((json.dumps({"schema": 1, "revision": 8, "status": "done",
+            "agent_page": "child", "title": "advisor · Inspect", "sessions_sidebar": False}) + "\n").encode())
+        process.stdin.flush()
+        time.sleep(.1)
+        os.write(master, b"ignored\r\x1b[200~pasted\x1b[201~")
+        time.sleep(.1)
+        os.write(master, b"\x1b")
+        assert read_action() == {"type": "dismiss", "text": ""}
+        process.stdin.write((json.dumps({"schema": 1, "revision": 8, "status": "idle"}) + "\n").encode())
+        process.stdin.flush()
+        time.sleep(.1)
+        os.write(master, b"\r")
+        assert read_action() == {"type": "submit", "text": "keep this draft", "mode": "queue", "generation": 0}
+        os.write(master, b"\x1b[<0;90;23M")
+        assert read_action() == {"type": "context_popover", "text": ""}
+        os.write(master, b"\x18c")
+        assert read_action() == {"type": "context_popover", "text": ""}
+        os.write(master, b"\x0c")
+        assert read_action() == {"type": "toggle", "key": "details_sidebar"}
         os.write(master, b"\x11")
         assert read_action()["type"] == "quit"
         assert read_action() == {"restored": True}

@@ -1598,6 +1598,8 @@ async def main() -> None:
                 provider_keys: list[int] = []
                 provider_codes: list[tuple[str, int]] = []
                 usage_calls: list[int] = []
+                usage_delay = 0.0
+                usage_failure = False
                 usage_now = time.time()
 
                 async def route_provider_command(route) -> None:
@@ -1621,6 +1623,10 @@ async def main() -> None:
                                   "status": "pending", "url": "", "user_code": "", "message": "", "code_entry": True}
                     elif kind == "ProvidersUsage":
                         usage_calls.append(1)
+                        await asyncio.sleep(usage_delay)
+                        if usage_failure:
+                            await route.abort("failed")
+                            return
                         result = {"type": "ProvidersUsageResult", "fetched_at": usage_now, "not_connected": ["OpenCode Go"], "providers": [
                             {"id": "codex", "label": "ChatGPT (Codex)", "plan": "Plus", "source": "chatgpt.com · wham/usage", "error": "",
                              "notes": ["Limit reached: new requests wait for the next reset"],
@@ -1729,9 +1735,17 @@ async def main() -> None:
                     assert expected in usage_text, (expected, usage_text)
                 await page.wait_for_timeout(400)  # the dialog fades in
                 await page.screenshot(path=str(ARTIFACTS / "usage-dark.png"))
+                usage_delay = 0.3
                 await usage_dialog.get_by_role("button", name="Refresh").click()
-                await page.wait_for_timeout(200)
+                assert await usage_dialog.locator(".usage-spinner").is_visible()
+                assert await usage_dialog.locator(".usage-provider-name").first.inner_text() == "ChatGPT (Codex) · Plus"
+                await page.wait_for_timeout(400)
                 assert len(usage_calls) == 2
+                usage_failure = True
+                await usage_dialog.get_by_role("button", name="Refresh").click()
+                await usage_dialog.locator(".usage-error").filter(has_text="Usage unavailable").wait_for()
+                assert await usage_dialog.locator(".usage-provider-name").first.inner_text() == "ChatGPT (Codex) · Plus"
+                usage_failure = False
                 await page.keyboard.press("Escape")
                 await usage_dialog.wait_for(state="hidden")
                 await page.keyboard.press("Control+x")

@@ -512,6 +512,14 @@ ArchivedSessionsScreen {
     color: $nx-quiet;
 }
 
+.tool-card.-batched {
+    padding: 0 2 0 1;
+}
+
+.tool-card.-batched #task-metrics {
+    padding-left: 1;
+}
+
 .tool-card.-batched #tool-header {
     color: $nx-quiet;
 }
@@ -1700,15 +1708,16 @@ SettingsScreen {
 }
 
 SettingsConsole {
-    align: left top;
-    background: $nx-bg;
+    align: center middle;
+    background: $nx-bg 60%;
 }
 
-/* Full-screen page: left sidebar of areas, content on the right. */
+/* Large Settings modal: sections stay beside their controls. */
 #settings-console {
-    width: 100%;
-    height: 1fr;
-    background: $nx-bg;
+    width: 94%;
+    height: 90%;
+    border: solid $nx-border;
+    background: $nx-panel;
 }
 
 #settings-console #settings-nav {

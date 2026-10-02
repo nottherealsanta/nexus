@@ -1232,3 +1232,15 @@ def test_bash_backstop_follows_bash_max_s_not_the_yield_window(tmp_path: Path):
     # A 600s timeout_s must not be cut at yield window + grace (125s).
     assert m._timeout_for(bash.SPEC) == 900 + BASH_TIMEOUT_GRACE_S
     assert m._timeout_for(bash.SPEC) > 600
+
+
+async def test_broken_permission_key_returns_model_visible_error(tmp_path):
+    def key(data):
+        raise ValueError("model must be a non-empty reference without whitespace")
+    async def run(args, ctx):
+        pytest.fail("Invalid permission key must never execute")
+    m = manager(tmp_path, [make_tool("Task", run, permission_key=key)], ["Task"])
+    batch = m.prepare([ToolCall(id="c", name="Task", input={})])
+    assert batch.for_call("c").code == "permission_key_error"
+    results = await m.dispatch(batch, ctx_factory(tmp_path))
+    assert results[0].is_error and "model must" in results[0].content[0].text

@@ -21,7 +21,7 @@ def _turn(**kwargs):
     )
 
 
-def _snapshot(tmp_path, monkeypatch, turns, **shell_values):
+def _snapshot(tmp_path, monkeypatch, turns, literal=True, **shell_values):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     view = initial_state("s")
@@ -31,18 +31,35 @@ def _snapshot(tmp_path, monkeypatch, turns, **shell_values):
     shell.preferences.values["context_preview"] = False
     for key, value in shell_values.items():
         setattr(shell, key, value)
-    return project(controller, 1, shell=shell)
+    return project(controller, 1, shell=shell, literal=literal)
+
+
+def test_parallel_markers_are_separate_from_tool_text(tmp_path, monkeypatch):
+    tools = [
+        ToolCallView(call_id="a", name="read", event_seq=2, iteration=1,
+                     status="completed", input={"path": "README.md"}),
+        ToolCallView(call_id="b", name="subagent", event_seq=3, iteration=1,
+                     status="running", input={"description": "Scan"}),
+        ToolCallView(call_id="c", name="grep", event_seq=4, iteration=2,
+                     status="completed", input={"pattern": "main"}),
+    ]
+    snapshot = _snapshot(tmp_path, monkeypatch, [replace(_turn(), tools=tools)])
+    blocks = [b for b in snapshot["blocks"] if b["kind"] in {"tool", "tool_group"}]
+    assert [b["kind"] for b in blocks] == ["tool_group", "tool", "tool_group"]
+    assert [b["count"] for b in blocks if b["kind"] == "tool_group"] == [1, 1]
+    assert all(not b["text"].startswith(("┌", "│", "└")) for b in blocks)
+    assert blocks[1]["text"].splitlines()[1].startswith("  ")
 
 
 def test_blocks_follow_event_order_with_textual_gaps(tmp_path, monkeypatch):
     blocks = _snapshot(tmp_path, monkeypatch, [_turn(), replace(_turn(), id="t2", index=1)])["blocks"]
     kinds = [block["kind"] for block in blocks[:4]]
-    assert kinds == ["user", "tool", "markdown", "summary"]
+    assert kinds == ["user", "tool_group", "markdown", "summary"]
     user, tool, reply, summary = blocks[:4]
     assert user["number"] == 1 and user["title"] == "hi there" and user["text"] == "second line"
     assert tool["gap"] == 1 and "Read" in tool["text"]  # margin after the prompt card
     assert reply["gap"] == 1  # a reply after a tool call is set apart
-    assert summary["gap"] == 1 and "3.3s" in summary["text"]  # reply bottom margin collapses with the footer's
+    assert summary["gap"] == 0 and "3.3s" in summary["text"]  # reply bottom margin collapses with the footer's
     assert blocks[4]["id"].startswith("u:user") and blocks[4]["gap"] == 1  # turn margin-bottom
 
 
@@ -59,14 +76,15 @@ def test_error_only_for_terminal_turns_and_context_header_placeholders(tmp_path,
     running = _snapshot(tmp_path, monkeypatch, [_turn(error="boom", phase="active")])["blocks"]
     assert not any(block["kind"] == "error" for block in running)
     shown = _snapshot(tmp_path, monkeypatch, [])
-    assert [block["kind"] for block in shown["blocks"]] == ["hints"]  # only the empty-session tips
+    assert [block["kind"] for block in shown["blocks"]] == []
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     view = initial_state("s")
     shell = ShellActions(SimpleNamespace(view=view, session="s"))
     snapshot = project(SimpleNamespace(view=view, session="s"), 1, shell=shell)
-    header = [block for block in snapshot["blocks"] if block["kind"] == "context"]
+    header = next(block for block in snapshot["blocks"] if block["kind"] == "context_header")["members"]
     assert [block["title"] for block in header] == ["System prompt", "Tools", "AGENTS.md", "Skills", "MCP"]
-    assert all(block["color"] == "$nx-label-neutral" for block in header)
+    assert all(block["color"] == snapshot["agent_color"] for block in header)
+    assert header[0]["gap"] == 0
     assert header[4]["operation"] == {"kind": "context_show", "key": "mcp"}
 
 
@@ -74,7 +92,7 @@ def test_details_panel_matches_textual_sections(tmp_path, monkeypatch):
     panel = _snapshot(tmp_path, monkeypatch, [_turn()], mcp_report={"mcp": {"servers": [
         {"name": "cvc", "health": "ready", "tool_count": 4}]}})["details_panel"]
     labels = [label for label, _ in panel["session"]]
-    assert labels[:6] == ["Status", "Agent", "Model", "Effort", "Turns", "Tool calls"]
+    assert labels[:8] == ["ID", "Title", "Status", "Agent", "Model", "Effort", "Turns", "Tool calls"]
     assert panel["files"] == [] and panel["files_summary"] == ""
     assert panel["mcp"] == [["success", "cvc", "4 tools"]]
 
@@ -128,22 +146,19 @@ def test_failing_section_becomes_a_notice_and_other_sections_render(tmp_path, mo
 
 
 def test_running_tool_carries_the_animation_slot_and_finished_does_not(tmp_path, monkeypatch):
-    from nexus.ui.ratatui.prototype import SPINNER_FRAMES, SPINNER_SLOT
+    from nexus.ui.ratatui.prototype import SPINNER_FRAMES
 
     running = replace(_turn(phase="running"), tools=[ToolCallView(call_id="c", name="Bash", event_seq=2, status="running", input={"command": "ls"})])
     blocks = _snapshot(tmp_path, monkeypatch, [running])["blocks"]
-    tool = next(block for block in blocks if block["kind"] == "tool")
-    assert SPINNER_SLOT in tool["text"] and not any(frame in tool["text"] for frame in SPINNER_FRAMES)
-    done = next(block for block in _snapshot(tmp_path, monkeypatch, [_turn()])["blocks"] if block["kind"] == "tool")
-    assert SPINNER_SLOT not in done["text"]
+    tool = next(block for block in blocks if block["kind"] == "tool_group")
+    assert tool["status"] == "running" and not any(frame in tool["text"] for frame in SPINNER_FRAMES)
+    done = next(block for block in _snapshot(tmp_path, monkeypatch, [_turn()])["blocks"] if block["kind"] == "tool_group")
+    assert done["status"] != "running"
 
 
-def test_empty_session_hints_are_aligned_and_vanish_with_the_first_turn(tmp_path, monkeypatch):
-    hints = _snapshot(tmp_path, monkeypatch, [])["blocks"][0]
-    rows = [row.split("\t") for row in hints["text"].splitlines()]
-    assert hints["kind"] == "hints" and hints["gap"] == 4 and len(rows) == 4
-    assert len({len(keys) for keys, _ in rows}) == 1 and len({len(text) for _, text in rows}) == 1
-    assert not any(block["kind"] == "hints" for block in _snapshot(tmp_path, monkeypatch, [_turn()])["blocks"])
+def test_empty_session_has_no_shortcut_splash(tmp_path, monkeypatch):
+    assert _snapshot(tmp_path, monkeypatch, [])['blocks'] == []
+    assert not any(block['kind'] == 'hints' for block in _snapshot(tmp_path, monkeypatch, [_turn()])['blocks'])
 
 
 def test_modified_file_diff_is_sent_only_while_expanded(tmp_path, monkeypatch):
@@ -167,9 +182,9 @@ def test_session_cards_carry_status_words_age_and_the_current_marker():
     result = ProjectSessionsListResult(sessions=[row("a", "running", 5, "Busy"), row("b", "idle", 5, "Quiet"), row("c", "awaiting_input", 5, "Asks")])
     seen = {"b": 2}  # b finished something since it was last viewed
     rows = {r["id"]: r for r in session_rows(result, current="a", seen=seen, now=1000.0 + 300)}
-    assert rows["a"]["status"] == "working" and rows["a"]["active"] is True and rows["a"]["sub"] == "working now · 5m ago"
-    assert rows["b"]["status"] == "done" and rows["b"]["sub"].startswith("finished")
-    assert rows["c"]["status"] == "input" and rows["c"]["sub"].startswith("needs input")
+    assert rows["a"]["status"] == "working" and rows["a"]["active"] is True and rows["a"]["sub"] == "3 · 5m"
+    assert rows["b"]["status"] == "done" and rows["b"]["sub"] == "3 · 5m"
+    assert rows["c"]["status"] == "input" and rows["c"]["sub"] == "3 · 5m"
 
 
 def test_tabs_mark_the_current_session_and_its_running_turn(tmp_path, monkeypatch):
@@ -203,7 +218,8 @@ def test_diff_rows_carry_real_line_numbers_pairing_and_gaps():
 def test_diff_blocks_send_rows_and_counts(tmp_path, monkeypatch):
     edit = ToolCallView(call_id="e", name="Edit", event_seq=2, status="completed", input={"path": "a.py"},
                         diff={"path": "a.py", "hunk": "--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-old\n+new"})
-    diff = next(b for b in _snapshot(tmp_path, monkeypatch, [replace(_turn(), tools=[edit])])["blocks"] if b["kind"] == "diff")
+    group = next(b for b in _snapshot(tmp_path, monkeypatch, [replace(_turn(), tools=[edit])], verbose=True)["blocks"] if b["kind"] == "tool_group")
+    diff = group["members"][0]["members"][0]
     assert diff["title"] == "a.py" and (diff["added"], diff["removed"]) == (1, 1)
     assert diff["diff_rows"] == [[1, "old", 1, "new", "change"]]
 
@@ -260,3 +276,45 @@ def test_live_projection_skips_the_literal_lines_but_keeps_blocks(tmp_path, monk
     assert "Read" in "\n".join(literal["lines"])
     assert live["lines"] == []
     assert [b["kind"] for b in live["blocks"]] == [b["kind"] for b in literal["blocks"]]
+
+
+def test_agent_page_uses_child_conversation_and_recorded_context(tmp_path, monkeypatch):
+    from nexus.view.model import AgentView
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    view, body = initial_state("s"), initial_state("child")
+    body.turns = [_turn()]
+    view.agents = {"child": AgentView(id="child", type="advisor", task="Inspect", body=body)}
+    controller = SimpleNamespace(view=view, session="s")
+    shell = ShellActions(controller)
+    shell.workflows.agent_page_id = "child"
+    shell.workflows.agent_context = {"system_text": "Child instructions", "agent": {"name": "advisor"},
+                                    "messages": [{"blocks": [{"text": "Inspect the UI"}]}]}
+    snapshot = project(controller, 1, shell=shell)
+    assert snapshot["agent_page"] == "child" and snapshot["panel_title"] == ""
+    assert not snapshot["sessions_sidebar"] and snapshot["prompt"] is None
+    assert snapshot["blocks"][0]["members"][0]["title"] == "System prompt"
+    assert snapshot["blocks"][0]["operation"] == {"kind": "context_menu"}
+    assert shell.workflows.agent_context["system_text"] == "Child instructions"
+    assert any(b["title"] == "Task" and b["text"] == "Inspect the UI"
+               for b in snapshot["blocks"] if "title" in b)
+    assert any(b["kind"] == "markdown" and b["text"] == "Hello!" for b in snapshot["blocks"])
+    shell.workflows.back()
+    assert shell.workflows.agent_page_id is None
+
+
+def test_groups_and_tool_detail_have_independent_expansion(tmp_path, monkeypatch):
+    long_out = "\n".join(f"line {i}" for i in range(30))
+    tools = [ToolCallView(call_id="short", name="Bash", event_seq=2, status="completed", input={"command": "ls"}, display="ok"),
+             ToolCallView(call_id="long", name="Bash", event_seq=3, status="completed", input={"command": "ls"}, display=long_out)]
+    turn = replace(_turn(), messages=[_turn().messages[0]], tools=tools)
+    def group(expanded):
+        return next(b for b in _snapshot(tmp_path, monkeypatch, [turn], literal=False, expanded=expanded)["blocks"] if b["kind"] == "tool_group")
+    assert group(set())["members"] == []
+    opened = group({"t:gshort"})
+    assert opened["count"] == 2 and not opened["members"][1]["detail"]
+    folded = group({"t:gshort", "long:detail"})["members"][1]
+    assert "command: ls" in folded["detail"] and "more lines" in folded["detail"]
+    assert folded["output_operation"] == {"kind": "block_toggle", "id": "long:output"}
+    all_output = group({"t:gshort", "long:detail", "long:output"})["members"][1]
+    assert "line 29" in all_output["detail"]

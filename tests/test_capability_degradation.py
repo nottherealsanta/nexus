@@ -349,3 +349,87 @@ async def test_mid_stream_output_never_retries():
     assert outcome.phase == "failed"
     assert provider.calls == 1
     assert "context.degraded" not in [event.type for event in sink.events]
+
+
+@pytest.mark.parametrize("partial", [False, True])
+async def test_overload_retries_same_request_and_discards_partial_calls(monkeypatch, partial):
+    from nexus.core import loop
+    from nexus.errors import ProviderOverloaded
+    from nexus.model.stream import TextDelta, ToolCallStart, ToolCallDelta, MessageStop
+
+    delays = []
+    async def skip_wait(awaitable, timeout):
+        awaitable.close()
+        delays.append(timeout)
+        raise TimeoutError
+    monkeypatch.setattr(loop.asyncio, "wait_for", skip_wait)
+
+    class Provider:
+        name = "overloaded"
+        calls = 0
+        requests = []
+        async def stream(self, req):
+            self.requests.append(req)
+            self.calls += 1
+            if self.calls == 1:
+                if partial:
+                    yield TextDelta(text="interrupted")
+                    yield ToolCallStart(id="unfinished", name="Read")
+                    yield ToolCallDelta(id="unfinished", partial_json='{"path":')
+                raise ProviderOverloaded("service_unavailable: overloaded")
+            yield TextDelta(text="recovered")
+            yield MessageStop(stop_reason="end_turn")
+
+    provider, sink = Provider(), _Sink()
+    result = await loop._stream_with_degradation(provider=provider, request=request(),
+        capabilities=Capabilities(tools=True, streaming=True), emitter=loop._Emitter(sink, "s", "t"),
+        token=CancelToken(), iteration=1, model="m")
+    assert delays == [2] and provider.calls == 2
+    assert provider.requests[0] is provider.requests[1]
+    blocks = result[0].blocks()
+    assert blocks == [Text(text="recovered")]
+    assert [e.type for e in sink.events].count("model.retrying") == 1
+    assert not any(e.type == "tool.requested" for e in sink.events)
+
+
+async def test_overload_retry_is_bounded(monkeypatch):
+    from nexus.core import loop
+    from nexus.errors import ProviderOverloaded
+    delays = []
+    async def skip_wait(awaitable, timeout):
+        awaitable.close()
+        delays.append(timeout)
+        raise TimeoutError
+    monkeypatch.setattr(loop.asyncio, "wait_for", skip_wait)
+    class Provider:
+        name = "overloaded"
+        calls = 0
+        async def stream(self, req):
+            self.calls += 1
+            raise ProviderOverloaded("overloaded")
+            yield
+    provider = Provider()
+    with pytest.raises(ProviderOverloaded):
+        await loop._stream_with_degradation(provider=provider, request=request(),
+            capabilities=Capabilities(), emitter=loop._Emitter(_Sink(), "s", "t"),
+            token=CancelToken(), iteration=1, model="m")
+    assert provider.calls == 4 and delays == [2, 4, 8]
+
+
+async def test_overload_wait_can_be_cancelled():
+    from nexus.core import loop
+    from nexus.errors import ProviderOverloaded, OperationCancelled
+    token = CancelToken()
+    class Provider:
+        name = "overloaded"
+        async def stream(self, req):
+            raise ProviderOverloaded("overloaded")
+            yield
+    class Sink:
+        def emit(self, event):
+            if event.type == "model.retrying":
+                token.cancel("stop")
+    with pytest.raises(OperationCancelled, match="stop"):
+        await loop._stream_with_degradation(provider=Provider(), request=request(),
+            capabilities=Capabilities(), emitter=loop._Emitter(Sink(), "s", "t"),
+            token=token, iteration=1, model="m")

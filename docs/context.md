@@ -86,6 +86,10 @@ semantic hash of the request, never prompt text), then the calibrated heuristic
 (`HeuristicTokenizer`). The cache file stores only hash, count and timestamp;
 a corrupt or truncated entry is a miss; a cache write never fails a caller. The
 provider's own `usage.prompt` feeds the UI meter ([loop.md](loop.md#context-accounting)).
+That meter describes the latest request's context-window occupancy. The completed
+turn footer's `turn ↑… ↓…` shows provider token usage summed over every model
+iteration in the turn; it is a cumulative counter, not a second measurement of
+the current prompt.
 
 ## Prompt-cache boundaries
 

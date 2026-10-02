@@ -162,6 +162,42 @@ def test_task_request_defaults_and_mapping_coercion():
     assert TaskRequest.from_value({"prompt": "go", "worktree": True}).worktree is True
 
 
+@pytest.mark.parametrize("model", ["", " ", "\t\n", None])
+@pytest.mark.parametrize("role_model", [None, "codex/gpt-5-mini"])
+async def test_blank_model_uses_default_for_permission_and_execution(tmp_path, model, role_model):
+    from nexus.tools.builtin import task
+    from nexus.tools.spec import ToolContext
+    from nexus.config import Config
+
+    if role_model:
+        definitions = tmp_path / "ws" / ".agents" / "agents"
+        definitions.mkdir(parents=True)
+        (definitions / "task.md").write_text(
+            f"---\nname: task\ndescription: custom task\nmodel: {role_model}\n---\nWork.\n",
+            encoding="utf-8",
+        )
+    factory = Factory()
+    runner = make_runner(tmp_path, factory, parent_model="codex/gpt-6-luna")
+    request = {"prompt": "go", "model": model}
+    assert TaskRequest.from_value(request).model is None
+    assert task.make_task_spec(runner).resolve_permission_key(request) == (
+        runner.permission_key({"prompt": "go"})
+    )
+    ctx = ToolContext(
+        workspace=tmp_path, session_id="root", turn_id="turn",
+        config=Config(), subagents=runner,
+    )
+    result = await task.run(request, ctx)
+    assert not result.is_error
+    assert factory.specs[-1].model == (role_model or "codex/gpt-6-luna")
+
+
+def test_model_reference_trims_surrounding_whitespace():
+    assert TaskRequest(prompt="go", model=" codex/gpt-6-luna ").model == (
+        "codex/gpt-6-luna"
+    )
+
+
 @pytest.mark.parametrize(
     "payload",
     [

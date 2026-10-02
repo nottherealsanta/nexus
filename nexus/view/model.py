@@ -297,6 +297,8 @@ class RetryView(_View):
     provider: str | None = None
     model: str | None = None
     reason: str | None = None
+    event_seq: int = 0
+    delay_seconds: int = 0
 
 @dataclass
 class TurnView(_View):

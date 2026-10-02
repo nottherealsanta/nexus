@@ -179,6 +179,38 @@ async def test_voice_slash_status_and_draft_insertion(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_enter_stops_recording_and_sends_final_transcript(monkeypatch):
+    transport = VoiceTransport()
+    transport.voice_state = "ready"
+    app = NexusTextualApp(_client(transport), session="voice-enter-send")
+
+    class FakeRecorder:
+        full = False
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def start(self):
+            pass
+
+        def stop(self):
+            return b"wav"
+
+    monkeypatch.setattr("nexus.ui_support.tui_voice.Recorder", FakeRecorder)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await app.voice.start_or_confirm()
+        await pilot.pause()
+        assert app.voice.recording
+        await pilot.press("enter")
+        await pilot.pause()
+        assert not app.voice.recording
+        assert transport.transcribe_calls == 1
+        assert transport.last_input == "spoken words"
+        assert app.query_one("#chat-editor").text == ""
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("state", ["error", "unsupported"])
 async def test_voice_dialog_shows_failure_without_download_prompt(state):
     transport = VoiceTransport()

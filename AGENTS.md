@@ -33,7 +33,7 @@ Update the matching doc in the same change as the code.
 | Anything both UIs must do the same way | [docs/surfaces.md](docs/surfaces.md) |
 | `nexus chat`, the Textual shell (`nexus/ui/tui/`, `nexus/ui_support/`) | [docs/textual.md](docs/textual.md) |
 | Feasibility of a Rust/Ratatui TUI with Python and maturin | [docs/ratatui-feasibility.md](docs/ratatui-feasibility.md) |
-| `nexus web`, the browser client (`nexus/ui/web/`, `nexus/host/web.py`) | [docs/web.md](docs/web.md) |
+| `nexus web`, the browser client (**to be deprecated**; `nexus/ui/web/`, `nexus/host/web.py`) | [docs/web.md](docs/web.md) |
 | Native Ratatui replacement and parity | [docs/ratatui-parity.md](docs/ratatui-parity.md) |
 | Local dictation | [docs/voice.md](docs/voice.md) |
 | Trust boundaries, network, credentials | [docs/security.md](docs/security.md) |
@@ -102,14 +102,16 @@ Tests need no network or credentials. They use temporary workspaces,
 
 ## Conventions
 
-- **The web app mirrors the TUI.** `nexus web` has the same functionality as
+- **The web app is to be deprecated.** Do not add new features to it or port
+  new work to it unless the user asks; terminal clients come first. Until it is
+  removed, it mirrors the TUI: `nexus web` has the same functionality as
   `nexus chat`, with everything in the same place: top bar (`▌` title … status
   `+` `▐`), sessions sidebar, the context header opening every conversation,
   timeline, composer rows, details sidebar, the same chat commands (from
   `ui/cli/commands.py`) and the same Control-key shortcuts. It should feel and
   behave the same. It may look more modern (softer corners, taller lines,
-  floating dialogs) and uses sans-serif interface text, stroke icons, and Monaspace Argon for code. A feature or wording
-  change in one surface goes into the other. Details are in [docs/web.md](docs/web.md).
+  floating dialogs) and uses sans-serif interface text, stroke icons, and Monaspace Argon for code. Existing
+  features stay in sync, but new features need not be ported. Details are in [docs/web.md](docs/web.md).
 
 - **Present context clearly.** Tool calls, results, context blocks and errors
   render as labelled, structured rows that miss nothing (`ui_support/tool_details.py`

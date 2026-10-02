@@ -32,7 +32,10 @@ model cache. Plans and spike notes: `plans/VOICE_PLAN.md`, `plans/VOICE_SPIKE.md
    An absent model stays cached-only.
 4. **Capture:** clients send bounded mono 16 kHz PCM16 WAV (`VoiceTranscribe`; the
    browser uses `POST /v1/web/voice`, 8 MiB cap). The transcript is inserted as
-   editable composer text; `auto_send` is off by default.
+   editable composer text; `auto_send` is off by default. In terminal clients,
+   Enter during recording stops capture and sends the completed message after
+   final transcription, even with `auto_send` off. Other keys keep their existing
+   stop behavior; Escape discards. Failed or empty transcription does not send.
 5. **Live preview:** while recording, clients re-send the growing recording as
    `VoiceTranscribe(partial=True)` (web: `?partial=1`), request id
    `<recording id>-p<n>`. At most one preview is in flight, sent only after
@@ -101,3 +104,26 @@ as Textual for `/voice on|off`. It observes `enabled`, `max_seconds` and
 composer draft. A late result is discarded if the session or active panel
 changed. Partial transcripts are previews only. Native capture tests use a fake
 recorder; physical microphone and model-runtime parity remain unverified.
+
+Native Ctrl+X, V starts capture immediately when voice is enabled and its model is
+ready. Setup retains a bounded dialog when enablement or download is needed. Live
+preview words resolve changed ASCII letters over three 125 ms frames, preserving
+stable preceding words, whitespace and Unicode. Final transcription remains the
+only inserted text. The Ctrl+X leader has no visible shortcut banner. Physical
+microphone latency and real inference remain unverified.
+
+Native dictation now previews directly inside the editable composer, at the capture
+insertion position. Recording shows only a one-cell pulsing orange outline square
+below the agent control; the floating waveform/status strip is removed. Typing
+stops capture and also applies the typed key. Final text replaces the temporary
+preview at the captured position, preserving typed suffix text; Escape discards.
+The composer grows for live previews. Real microphone/model latency is unverified.
+
+## Start and stop cues
+
+Starting dictation plays a short rising two-note cue; stopping plays a falling
+one. The cue (`ui_support/voice_capture.py:play_cue`, via `sounddevice`
+output) finishes before the microphone opens so it is not recorded. It is
+terminal-only (Textual and Ratatui); the web app has none. Cues are best-effort (a
+missing output device is silent) and `NEXUS_VOICE_SOUNDS=off` disables them. Discarding with Escape also plays the stop cue. Audible result on
+real hardware is not verified.

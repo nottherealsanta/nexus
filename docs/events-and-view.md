@@ -90,3 +90,9 @@ in any UI; a surface never reads files to render one.
    ([surfaces.md](surfaces.md)).
 4. Tests: `tests/test_view_reduce.py`, the fixtures under `tests/fixtures/view/`,
    and `tests/test_events*.py` where the catalogue is pinned.
+
+Overload retries record `model.retrying` with `reason: provider_overloaded`,
+`attempt`, and `delay_seconds`. The reducer closes the interrupted assistant
+message; the next `model.started` opens a separate attempt, retaining partial
+text for live display and replay. Failed/cancelled turns mark unfinished tool
+rows failed, so a task cannot remain at “Starting…” after its turn has ended.

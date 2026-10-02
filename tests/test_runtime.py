@@ -776,15 +776,22 @@ async def test_child_runtime_clears_todos_after_failure_or_cancellation(
         _router=object(),
         _child_cost=lambda *_args: None,
         _child_outcome=lambda *_args, **_kwargs: None,
+        _home=tmp_path,
     )
     spec = SimpleNamespace(
         session_id="root/sub/failed",
         agent_id="root/sub/failed",
+        agent="task",
         grants=(),
         max_iterations=1,
         prompt="child task",
         emit=None,
         hooks=None,
+        dropped_tools=(),
+        clamped=False,
+        tier="low",
+        requested_tier="low",
+        metadata={},
     )
 
     async def fail_run_turn(**_kwargs):
@@ -792,8 +799,14 @@ async def test_child_runtime_clears_todos_after_failure_or_cancellation(
 
     monkeypatch.setattr(runtime_module, "run_turn", fail_run_turn)
 
-    with pytest.raises(error_type, match="child stopped"):
-        await _ChildRuntime(runtime, spec, runner=object()).run()
+    if error_type is RuntimeError:
+        # A crash is not lost: the child reports failed with a handoff for the parent.
+        failed = await _ChildRuntime(runtime, spec, runner=object()).run()
+        assert failed.status == "failed" and "child stopped" in failed.error
+        assert failed.handoff_path
+    else:
+        with pytest.raises(error_type, match="child stopped"):
+            await _ChildRuntime(runtime, spec, runner=object()).run()
 
     assert store.get(child_session_id, spec.agent_id) == ()
     assert store.revision(child_session_id, spec.agent_id) == 0

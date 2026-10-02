@@ -291,3 +291,13 @@ async def test_mixed_chat_reasoning_and_answer_keeps_thought_before_text():
         assert [type(event) for event in events if isinstance(event, (ThinkingDelta, TextDelta))] == [ThinkingDelta, TextDelta]
     finally:
         await provider.aclose()
+
+
+@pytest.mark.parametrize("error_type,code", [("service_unavailable_error", "server_is_overloaded"), ("server_error", "overloaded")])
+async def test_explicit_stream_overload_is_retryable(error_type, code):
+    from nexus.errors import ProviderOverloaded
+    body = _sse(("error", {"type": "error", "error": {"type": error_type, "code": code, "message": "Try again later"}}))
+    provider = _provider(lambda req: httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body))
+    with pytest.raises(ProviderOverloaded):
+        async for _ in provider.stream(ModelRequest(messages=[Message(role="user", content=[Text(text="hi")])])):
+            pass
