@@ -398,6 +398,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     action("quit", "")?;
                     break;
                 }
+                // Sessions filter (click the box): typing edits it, Enter keeps it, Escape clears it.
+                if cache.filtering {
+                    match key.code {
+                        KeyCode::Enter => cache.filtering = false,
+                        KeyCode::Esc => {
+                            cache.filter.clear();
+                            cache.filtering = false;
+                        }
+                        KeyCode::Backspace => {
+                            cache.filter.pop();
+                        }
+                        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) && cache.filter.chars().count() < 80 => cache.filter.push(c),
+                        _ => {}
+                    }
+                    sessions_scroll = 0;
+                    dirty = true;
+                    continue;
+                }
                 // Keyboard focus over clickable transcript blocks: Tab (empty draft) enters,
                 // arrows/Tab move, Enter or Space opens what a click would, Escape or any
                 // other key leaves.
@@ -939,7 +957,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         if r.sessions.contains((mouse.column, mouse.row).into()) {
                             sessions_scroll = (sessions_scroll + 3).min(
-                                render::session_sidebar(&s, &render::Palette::new(s.theme == "nexus-light"), usize::from(r.sessions.width.saturating_sub(3)), 0)
+                                render::session_sidebar(&s, &render::Palette::new(s.theme == "nexus-light"), usize::from(r.sessions.width.saturating_sub(3)), 0, &cache.filter, cache.filtering)
                                     .len()
                                     .saturating_sub(r.sessions.height.saturating_sub(3) as usize),
                             );
@@ -960,7 +978,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     MouseEventKind::Down(event::MouseButton::Right) => {
                         if r.sessions.contains((mouse.column, mouse.row).into()) {
-                            if let Some(row) = render::session_sidebar(&s, &render::Palette::new(s.theme == "nexus-light"), usize::from(r.sessions.width.saturating_sub(3)), 0)
+                            if let Some(row) = render::session_sidebar(&s, &render::Palette::new(s.theme == "nexus-light"), usize::from(r.sessions.width.saturating_sub(3)), 0, &cache.filter, cache.filtering)
                                 .get(sessions_scroll + (mouse.row - r.sessions.y).saturating_sub(1) as usize)
                                 .and_then(|(_, hit)| match hit {
                                     Some(render::SidebarHit::Session(index)) => s.sessions.get(*index),
@@ -1001,15 +1019,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 send(json!({"type":"file_toggle","text":file.path,"generation":s.generation}))?;
                             }
                         } else if r.sessions.contains((mouse.column, mouse.row).into()) {
-                            let hit = render::session_sidebar(&s, &render::Palette::new(s.theme == "nexus-light"), usize::from(r.sessions.width.saturating_sub(3)), 0)
+                            let hit = render::session_sidebar(&s, &render::Palette::new(s.theme == "nexus-light"), usize::from(r.sessions.width.saturating_sub(3)), 0, &cache.filter, cache.filtering)
                                 .get(sessions_scroll + (mouse.row - r.sessions.y).saturating_sub(1) as usize)
                                 .and_then(|(_, hit)| *hit);
                             match hit {
                                 Some(render::SidebarHit::New) => action("command", "/new")?,
+                                Some(render::SidebarHit::Filter) => cache.filtering = true,
                                 Some(render::SidebarHit::Archived) => action("command", "/archived")?,
                                 _ => {}
                             }
-                            if let Some(row) = render::session_sidebar(&s, &render::Palette::new(s.theme == "nexus-light"), usize::from(r.sessions.width.saturating_sub(3)), 0)
+                            if let Some(row) = render::session_sidebar(&s, &render::Palette::new(s.theme == "nexus-light"), usize::from(r.sessions.width.saturating_sub(3)), 0, &cache.filter, cache.filtering)
                                 .get(sessions_scroll + (mouse.row - r.sessions.y).saturating_sub(1) as usize)
                                 .and_then(|(_, hit)| match hit {
                                     Some(render::SidebarHit::Session(index)) => s.sessions.get(*index),

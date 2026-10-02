@@ -117,8 +117,9 @@ title; "working now", "needs input", "finished" or a message count, then age).
 The current session has a left bar; a background session that advanced since it
 was last viewed reads "finished". Status words come from
 `ui_support/session_status.py`, shared with Textual. An `Archived · N` row under the list (counted by the poll, `+` when more than 200)
-opens the archived sessions menu. The filter box and per-card delete are not in
-the native sidebar yet.
+opens the archived sessions menu. A `Filter sessions` box (click it; type; Enter keeps, Escape clears) narrows the
+cards by title, id, project or heading and shows `SESSIONS n of m`. Per-card
+delete is not in the native sidebar (use the right-click session actions).
 
 Assistant Markdown (`rust/tui/src/markdown.rs`) follows the `.timeline-assistant`
 rules: headings coloured by level (accent, purple, success, warning), inline code

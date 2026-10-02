@@ -103,6 +103,9 @@ pub struct Cache {
     built_typing: bool,
     /// Line range of the transcript block focused with the keyboard (highlighted).
     pub focus: Option<(usize, usize)>,
+    /// Sessions sidebar filter text and whether it is being edited.
+    pub filter: String,
+    pub filtering: bool,
 }
 /// Keyboard-focusable transcript blocks: runs of consecutive lines that open the
 /// same operation (what a click on them would do), as `(first line, last line)`.
@@ -369,7 +372,7 @@ pub fn draw(
     if r.sessions.width > 0 {
         let inner = usize::from(r.sessions.width.saturating_sub(3));
         let height = usize::from(r.sessions.height.saturating_sub(1));
-        let mut lines: Vec<Line<'static>> = session_sidebar(s, &p, inner, cache.spin)
+        let mut lines: Vec<Line<'static>> = session_sidebar(s, &p, inner, cache.spin, &cache.filter, cache.filtering)
             .into_iter()
             .skip(sessions_scroll)
             .take(height.saturating_sub(2))
@@ -760,17 +763,24 @@ mod tests {
             Session { group: "Today".into(), id: "b".into(), title: "Docs".into(), status: "done".into(), sub: "finished · 5m ago".into(), ..Default::default() },
         ];
         assert!(animating(&s));
-        let rows = session_sidebar(&s, &Palette::new(false), 27, 1);
+        let rows = session_sidebar(&s, &Palette::new(false), 27, 1, "", false);
         let text = |i: usize| rows[i].0.spans.iter().map(|span| span.content.as_ref()).collect::<String>();
         assert!(text(0).starts_with("+ New session") && text(0).ends_with("ctrl+n"));
         assert_eq!(rows[0].1, Some(SidebarHit::New));
-        assert_eq!(text(2), "SESSIONS 2");
+        assert_eq!(rows[1].1, Some(SidebarHit::Filter));
+        assert!(text(1).starts_with("Filter sessions"));
+        assert_eq!(text(3), "SESSIONS 2");
         let first = rows.iter().position(|(_, hit)| *hit == Some(SidebarHit::Session(0))).unwrap();
         assert!(text(first).starts_with("▌⠙ Fix bug"), "{}", text(first));
         assert!(text(first + 1).contains("working now · just now"));
         assert!(text(first + 3).starts_with(" ✓ Docs"));
+        let filtered = session_sidebar(&s, &Palette::new(false), 27, 1, "docs", true);
+        let titles: Vec<String> = filtered.iter().filter(|(_, hit)| matches!(hit, Some(SidebarHit::Session(_)))).map(|(l, _)| l.spans.iter().map(|x| x.content.as_ref()).collect::<String>()).collect();
+        assert_eq!(titles.len(), 2, "one session card of two lines matches");
+        assert!(titles[0].contains("Docs"));
+        assert!(filtered[1].0.spans.iter().map(|x| x.content.as_ref()).collect::<String>().starts_with("docs▏"));
         s.archived_label = "Archived · 3".into();
-        let rows = session_sidebar(&s, &Palette::new(false), 27, 1);
+        let rows = session_sidebar(&s, &Palette::new(false), 27, 1, "", false);
         assert_eq!(rows.last().unwrap().1, Some(SidebarHit::Archived));
     }
     #[test]
@@ -996,6 +1006,7 @@ mod editor_layout_tests {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SidebarHit {
     New,
+    Filter,
     Archived,
     Session(usize),
 }
@@ -1003,7 +1014,7 @@ pub enum SidebarHit {
 /// The sessions sidebar as styled rows, like Textual's `SessionSidebar`: a New
 /// session button, `SESSIONS N`, day/project headings and two-line cards (glyph
 /// and title; status words and age) with a left bar on the current session.
-pub fn session_sidebar(s: &Snapshot, p: &Palette, width: usize, spin: usize) -> Vec<(Line<'static>, Option<SidebarHit>)> {
+pub fn session_sidebar(s: &Snapshot, p: &Palette, width: usize, spin: usize, filter: &str, editing: bool) -> Vec<(Line<'static>, Option<SidebarHit>)> {
     let pad = |text: String, style: Style| {
         let used = text.width();
         Span::styled(format!("{text}{}", " ".repeat(width.saturating_sub(used))), style)
@@ -1013,10 +1024,25 @@ pub fn session_sidebar(s: &Snapshot, p: &Palette, width: usize, spin: usize) -> 
         Line::from(pad(format!("{button}{}ctrl+n", " ".repeat(width.saturating_sub(button.len() + 6).max(1))), Style::default().fg(p.text).bg(p.element))),
         Some(SidebarHit::New),
     )];
+    let needle = filter.to_lowercase();
+    let shown: Vec<usize> = (0..s.sessions.len())
+        .filter(|i| {
+            let row = &s.sessions[*i];
+            needle.is_empty() || format!("{} {} {} {}", row.title, row.id, row.workspace, row.group).to_lowercase().contains(&needle)
+        })
+        .collect();
+    let field = if filter.is_empty() && !editing {
+        Span::styled(format!("{:<width$}", "Filter sessions"), Style::default().fg(p.quiet).bg(p.element))
+    } else {
+        let text = format!("{filter}{}", if editing { "▏" } else { "" });
+        Span::styled(format!("{text:<width$}"), Style::default().fg(p.text).bg(p.element))
+    };
+    rows.push((Line::from(field), Some(SidebarHit::Filter)));
     rows.push((Line::default(), None));
-    rows.push((Line::styled(format!("SESSIONS {}", s.sessions.len()), Style::default().fg(p.quiet).add_modifier(Modifier::BOLD)), None));
+    rows.push((Line::styled(if needle.is_empty() { format!("SESSIONS {}", s.sessions.len()) } else { format!("SESSIONS {} of {}", shown.len(), s.sessions.len()) }, Style::default().fg(p.quiet).add_modifier(Modifier::BOLD)), None));
     let mut previous = "";
-    for (i, session) in s.sessions.iter().enumerate() {
+    for i in shown {
+        let session = &s.sessions[i];
         if session.group != previous {
             rows.push((Line::default(), None));
             rows.push((Line::styled(session.group.clone(), Style::default().fg(p.purple).add_modifier(Modifier::BOLD)), None));
