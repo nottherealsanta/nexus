@@ -61,6 +61,26 @@ def test_newest_source_build_wins_over_a_stale_one(tmp_path, monkeypatch):
     assert "debug" in str(binary_path())
 
 
+def test_a_fresh_source_build_beats_a_stale_executable_next_to_the_interpreter(tmp_path, monkeypatch):
+    import nexus.ui.ratatui.run as run
+
+    root = tmp_path / "repo"
+    monkeypatch.delenv("NEXUS_TUI_BINARY", raising=False)
+    monkeypatch.setattr(run, "__file__", str(root / "nexus/ui/ratatui/run.py"))
+    monkeypatch.setattr(run.shutil, "which", lambda name: None)
+    monkeypatch.setattr(run.sys, "executable", str(tmp_path / "venv/bin/python"))
+    stale = tmp_path / "venv/bin/nexus-ratatui"
+    fresh = root / "rust/tui/target/debug/nexus-ratatui"
+    for path, age in ((stale, 100), (fresh, 0)):
+        path.parent.mkdir(parents=True)
+        path.write_text("#!/bin/sh\n")
+        path.chmod(0o700)
+        os.utime(path, (path.stat().st_mtime - age, path.stat().st_mtime - age))
+    assert binary_path() == fresh.resolve()
+    os.utime(stale, None)
+    assert binary_path() == stale.resolve()
+
+
 def test_native_binary_build_is_optional_so_toolchainless_platforms_still_install():
     import tomllib
 

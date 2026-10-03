@@ -12,11 +12,11 @@ from typing import Any
 
 SAMPLE_RATE = 16_000
 _CUE_RATE = 44_100
-_CUES = {"start": (660.0, 880.0), "stop": (880.0, 587.0)}  # rising on, falling off
+_CUES = {"start": (660.0, 880.0), "stop": (880.0, 587.0), "complete": (660.0, 1046.5)}
 
 
 def _cue_pcm(kind: str) -> bytes:
-    """Two short soft notes as mono PCM16: rising when dictation starts, falling when it ends."""
+    """Two short soft notes as mono PCM16 for recording and completion cues."""
     out = bytearray()
     for freq in _CUES[kind]:
         count = int(_CUE_RATE * 0.07)
@@ -27,8 +27,9 @@ def _cue_pcm(kind: str) -> bytes:
 
 
 def play_cue(kind: str, *, wait: bool = False) -> None:
-    """Best-effort start/stop sound; silent without an output device or with ``NEXUS_VOICE_SOUNDS=off``."""
-    if os.environ.get("NEXUS_VOICE_SOUNDS", "").lower() in {"off", "0", "false"}:
+    """Best-effort generated sound; missing output devices are silent."""
+    setting = "NEXUS_COMPLETION_SOUNDS" if kind == "complete" else "NEXUS_VOICE_SOUNDS"
+    if os.environ.get(setting, "").lower() in {"off", "0", "false"}:
         return
 
     def run() -> None:

@@ -1,5 +1,120 @@
 # Ratatui implementation and parity ledger
 
+Untitled sessions display as **New Session** in the native tab bar and session
+picker, including immediately after creation and after session-list refreshes.
+Existing titles remain unchanged; session IDs are retained for navigation, not
+used as fallback names.
+
+### Completion notifications
+
+The native client plays a Nexus-generated two-note completion cue through
+`sounddevice`, using the same nonblocking playback path as recording cues—not
+an OS system sound or terminal bell. Missing audio dependencies or output
+devices are silently tolerated. `NEXUS_COMPLETION_SOUNDS=off` disables this cue.
+Known background tabs also notify once when they transition to unread completed
+state; repeated session refreshes do not repeat the sound. An unread finished
+tab shows a solid blue circle until the session is viewed; idle/read tabs retain
+the quiet gray indicator. Opening a session acknowledges the replayed completion
+watermark as well as streamed terminal events, even before the next sessions
+refresh. General `last_seq` remains the cursor for all log records; presence-only
+updates when a view detaches cannot restore an acknowledged completion dot.
+Switching away cannot restore the dot or replay the cue for that viewed completion.
+Initial discovery of an old completed session does
+not play a sound.
+
+The context header ends with a right-aligned `Context total · ~N tokens` footer,
+using the same subdued summary styling as per-turn usage. It sums the shared
+header section estimates (not conversation history or future output), and shows
+`tokens unavailable` until a context preview is available. Child-agent headers
+use their own preview in the same way.
+
+User-message borders use the turn's recorded agent color, falling back to the
+active agent color when the turn has no recorded color.
+
+Live turn completion and failure emit the terminal notification bell, matching
+Textual. The Python bridge carries a monotonic `completion_bell` counter; native
+snapshots ring only when it increases, so redraws and historical replay stay
+silent. Cancellation and subagent activity do not ring. Terminal emulator bell
+settings determine whether the notification is audible or visual.
+
+Context-header inspection uses a large inset modal spanning the available
+conversation area, rather than the compact picker dialog. The System prompt
+uses the shared header projection to exclude the separately displayed AGENTS.md
+when the inspected parts reconstruct the complete prompt (clipped/incomplete
+previews retain their literal text rather than silently dropping context).
+Tools open with their families expanded. Each tool, skill and MCP server has a
+right-aligned ON/OFF switch: click it or press Space to change the session
+selection, and click the label or press Enter to inspect definitions/details.
+Switches show LOCKED after the first turn and on read-only child pages; the host
+still enforces that lock. These controls change session context, not config files.
+Covered by native workflow, Rust layout/hit-target and controlling-PTY tests.
+Live-provider and real-desktop visual verification are not claimed.
+
+Thought blocks and tool groups have one blank row between them in either order,
+including when expanded, so reasoning does not visually attach to the preceding
+tool group. Covered by native projection tests.
+
+Transcript rows follow the OpenCode-style layout. Prompt cards keep the left
+rail unbroken on every row; the fold chevron (`▾` open, `▸` collapsed) sits in the
+left margin outside the card in the border colour, barely visible, and the row
+still toggles the turn. `Thought: 671ms` is amber behind a faint left rule; the duration
+is derived in the reducer from the `thinking.delta`/`thinking.end` event
+timestamps (`BlockView.elapsed_ms`, so replay reproduces it), and the reasoning
+opens beneath it dimmed, with a whole-line `**heading**` shown bold. Lookup-only
+tool groups (Read/Grep/Glob/List, two or more calls) collapse to
+`→ Explored: 1 search, 1 read`; other groups list tool names plus `· N calls`;
+expanded members show their full heading (`✱ Grep …`, `→ Read …`). A subagent
+call is one row, `<spinner|✓> Explore Subagent — short phrase · model (effort) · time`,
+with elapsed time after the model/effort only once finished, derived
+from the child's durable spawn/completion timestamps. Running subagents do not
+show a duration. Missing
+timestamps omit the duration rather than inventing one. The tick uses the muted
+tool tone. A subagent page opens with its task as a
+prompt card whose rail uses the agent's colour (no context-header strip, so the
+child's context chips are not shown there). The dark background is `#0B0B0B`.
+Covered by Rust transcript tests and `tests/test_ratatui_projection.py`; not
+verified in a real terminal or against a live provider. The bottom
+Subagents/Shell/Terminals panel from the reference screenshots is not ported.
+
+Transcript column: the first character of every row is aligned with the first
+character of the prompt text (column 5): the reply text, thoughts (rule), tool
+rows and groups (`→`/`✓`), expanded members, subagent rows, agent labels, errors
+and the context-header glyphs. The context header is a vertical list, one chip per
+row: the glyph `◈` in the block's colour, a bold title, a dark-grey dot leader, counts, and right-aligned token
+figures, all rows padded to one length with a blank row between them; each row is its own click target. Hovering a clickable context row changes its background to dark grey (the light theme uses its matching highlight tone). The highlight follows the same column ranges as clicking, clears outside those ranges, and is suppressed behind dialogs. Diffs and the empty-session hints keep their own layout.
+
+List dialogs (model picker first) use a borderless panel: bold title with a
+dim `esc` at the right, a `Search` row, purple group headings, the selected row
+as a solid accent bar, and `●` plus an accent name on the active choice. The
+model picker is a centred modal titled `Select model`; each row is the model
+name followed by its dim `provider/model` ref, and the sort, favorite and
+refresh keys sit on the bottom row (`panel_hint`). Not verified visually in a
+real terminal; the `Free` price tag and the "Connect an integration" action from
+the reference are not ported.
+
+The composer card has a heavy `▎` rail in the agent colour with a sliver of
+background before the card, one padding row above the editor and one below the
+controls; the workspace line sits under the card on the plain background.
+
+`nexus chat` launches the most recently modified native executable among the one
+beside the interpreter, `rust/tui/target/{release,debug}` and `PATH`, so a fresh
+`cargo build` is used on the next launch; `NEXUS_TUI_BINARY` overrides this.
+
+The workspace/branch/worktree/status bar uses the black conversation background,
+with its path aligned to the composer agent label. It sits below the composer controls and
+directly above the activity meter. Session tabs remain at the top when the
+sessions sidebar is hidden; the workspace bar's details and update click targets
+move with it. This is an intentional native layout difference from Textual.
+
+User message cards have one blank row of panel-colored padding above and below
+their content, including collapsed turns and messages with attachments. Padding
+retains the card's left rail and turn-toggle click target, matching the Textual
+client's vertical spacing.
+
+Agent replies have one additional column of left padding throughout, including
+tool counts, expanded tool details, and nested diffs. Wrapping reserves that
+column; nested content receives the padding only once.
+
 The composer border and agent name share the active agent's context-header
 color, including configured identity colors. One blank line precedes the
 System prompt header, matching the spacing between context blocks.
@@ -17,6 +132,12 @@ worktree. `nexus chat` launches it by default (`--renderer ratatui`); Textual is
 the native executable is missing and stays a runtime dependency until the migration
 gates below are met. This is an implementation ledger,
 not a claim of verified feature or visual parity.
+
+New-session actions (`/new`, named `/new`, and Ctrl+N) open the session
+immediately, without an agent picker. They capture the current/last-active
+root agent before switching and persist that selection through the host in
+the new session; `/agent` remains the explicit way to choose another agent.
+Covered by native action regression tests and Textual functional journeys.
 
 | Area | Implemented | Remaining verification or work |
 | --- | --- | --- |
@@ -194,7 +315,20 @@ does not re-wrap the whole conversation.
 
 The Tools dialog (click the Tools chip) mirrors `ToolsModal`: one row per tool
 family and MCP server with its tool names and token estimate; a row expands to its
-tools, a tool opens its description and schema, and `Edit tools…` opens Settings.
+tools (expanded initially), and `Edit tools…` opens Settings. Each tool row has a
+right-side ON/OFF switch; clicking it or pressing Space changes the session selection
+(`ContextExtensionSelect`, category `tools`). Enter or a label click opens descriptions
+and schemas. After the first turn switches show LOCKED; inspection remains available. Each header chip owns its own click range
+(`context_chips` rows, resolved in `main.rs`), so a click opens that chip's section and
+Enter on the strip opens the section menu. Skills and MCP chips show two unlabelled
+counts, project then global (project greyed), enclosed together in square brackets.
+Native context rows have no diamond/dot prefix: labels are immediately followed by
+counts (`Tools [13]`, `Skills [1 0]`, `MCP [0 0]`) and a two-space gap before any
+token estimate. The native top bar is one row, with no separator row below it.
+The workspace/status row no longer repeats the details-sidebar toggle beside
+`idle`; the top-bar toggle and keyboard shortcut remain available. Tool groups carry no `✓`/`✗` or `· N failed`
+(the harness recovers on its own; the expanded call still shows the error output). A
+subagent row has a blank row above and below and shows only its latest tool call.
 Settings pages show each area's help line (`ui_support/settings_help.py`, shared with
 Textual); Appearance and Layout use Textual's labels and end with `Reset to default`.
 Settings has Textual's two-pane shape: a left list of areas (GENERAL: Appearance,
@@ -396,9 +530,12 @@ it centrally; accents follow the selected agent even before a fresh preview.
 
 Consecutive tools form stable native groups, interrupted by visible messages,
 thoughts or task/subagent boundaries. Groups report count, status and failures.
+Single-call groups use the same compact summary as larger groups (`Explored: 1 read`
+for a lookup, or `Bash · 1 call`); parameters and results stay behind expansion,
+not in the group heading.
 Members reveal labelled parameters/results and independently folded output;
-`/verbose` reveals all details. User cards put their chevron in column 2 and
-text in column 4. Assistant footers have no preceding blank row.
+`/verbose` reveals all details. User cards put their chevron in the left margin (column 0) and
+text in column 5, the common transcript column. Assistant footers have no preceding blank row.
 
 The live bridge uses schema 2 suffix patches (`blocks_from`) and block revisions;
 schema 1 full snapshots remain readable. Patches are applied in order and cannot
@@ -407,3 +544,36 @@ the visible indexed range. Optional `NEXUS_TUI_TRACE=1` records bounded latency
 samples and presents percentiles in Logs; `NEXUS_TUI_TRACE_FILE` selects the
 exit report. Trace files contain timings, not conversation bodies. See the plan
 ledger for measured limits, including the remaining streaming CPU budget gap.
+
+### Empty composer cursor
+
+The native composer retains its accent-colored insertion marker before the
+placeholder when the draft is empty, including after deleting or sending text.
+Native editor insertion markers use a solid one-cell block (`█`) rather than a
+thin line, including composer, filter, and answer fields.
+The placeholder uses muted text; typing continues through the normal grapheme
+editor and wrapping path. This is a rendered cursor, independent of terminal
+cursor visibility settings.
+
+Native unsent drafts are retained by workspace/session while the client is open:
+switching tabs restores text, cursor, selection and undo state, alongside pending
+attachments and their stable numbering. This is not restart-persistent storage;
+prepared attachments retain the daemon's existing expiry policy.
+Pasted/attached images insert `[image N]` references (documents use `[document N]`).
+The editor treats valid references as atomic navigation/deletion units; removing
+one excludes its payload from submission, and undo restores it. Up to eight
+attachments may be included in a message. The model receives the original bytes
+alongside a labelled reference, not merely the marker text.
+
+Attachment More info uses `ratatui-image` for a resized native preview with name,
+media type and byte size. Image bytes come only from the daemon's bounded
+`AttachmentPreview` command, never a surface filesystem read. Rendering uses the
+library's non-query picker (half-block fallback) to avoid competing with the input
+thread for terminal capability replies. Decode dimensions/allocation are bounded;
+an undecodable image shows a labelled notice. Real graphics-protocol terminal
+rendering has not been verified.
+
+Normal sends (Enter, including attachment-only sends) steer an active turn at
+the next model step after the current operation; idle sends start a turn.
+Ctrl+Enter explicitly queues a new turn; Alt+Enter interrupts. Bridge submit
+actions that omit `mode` also default to steering.

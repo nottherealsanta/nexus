@@ -197,6 +197,21 @@ class ModelRouter:
         )
         return ref if ref in order else None
 
+    def tier_runnable(self, tier: str) -> bool:
+        """Whether ``tier`` resolves to a model one of the providers can stream.
+
+        ``False`` when the router has no registry and tier table (a plain config
+        has no tiers: a bare tier name would be sent to the provider as a model
+        id), or when no listed model for the tier has a runnable provider.
+        """
+        if self._as_tier(tier) is None:
+            return False
+        try:
+            self._resolve_tier(tier, tier)
+        except ConfigError:
+            return False
+        return True
+
     def _registry_lookup(self, ref: str) -> Any | None:
         if self._registry is None:
             return None
@@ -220,6 +235,12 @@ class ModelRouter:
             for info in candidates
             if getattr(info, "provider", None) in self._providers
         ]
+        # The user's own ``[models.tiers]`` list is an explicit, ordered pin: its
+        # first runnable entry wins over the catalogue's order (Settings ->
+        # Models edits this list).
+        pinned = self._first_pinned(tier)
+        if pinned is not None:
+            return self._resolve_info(pinned, ref)
         if not runnable:
             registered = ", ".join(sorted(self._providers)) or "none"
             available = (
@@ -239,6 +260,20 @@ class ModelRouter:
                 f"catalogue providers offering this tier: {available}"
             )
         return self._resolve_info(runnable[0], ref)
+
+    def _first_pinned(self, tier: str) -> Any | None:
+        """The first runnable model the user pinned to ``tier``, in list order."""
+        overrides = getattr(self._tiers, "overrides", None)
+        if not overrides:
+            return None
+        order = getattr(self._tiers, "order", ())
+        for reference, assigned in dict(overrides).items():
+            if assigned != tier or reference in order:
+                continue
+            info = self._registry_lookup(reference)
+            if info is not None and getattr(info, "provider", None) in self._providers:
+                return info
+        return None
 
     def _resolve_info(self, info: Any, ref: str) -> ResolvedModel:
         provider_name = getattr(info, "provider", None)

@@ -21,6 +21,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+speak = ["kokoro>=0.9.4,<1", "sounddevice>=0.5,<1", "numpy>=1.26"]
 # claude-agent and documents are compatibility aliases, included by default.
 # voice is separate: its runtime (kestrel-native) has no musl wheels, so a default
 # dependency would break installs on Alpine. install.sh adds it except on musl.

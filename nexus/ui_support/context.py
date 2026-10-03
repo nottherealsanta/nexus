@@ -25,7 +25,7 @@ def header_system_prompt(result: p.ContextInspectResult) -> str:
     context that cannot be reconstructed from the inspection.
     """
     system = result.system_text or ""
-    parts = [part for part in result.included_parts if isinstance(part, Mapping)]
+    parts = [part for part in getattr(result, "included_parts", ()) if isinstance(part, Mapping)]
     if any(part.get("name") == "agents_md" for part in parts):
         texts = [str(part.get("text") or "") for part in parts]
         if "\n\n".join(texts) == system:

@@ -2819,6 +2819,7 @@ class Runtime:
                 "tools": [
                     {
                         "name": schema.name,
+                        "enabled": True,
                         "description": schema.description,
                         "input_schema": dict(schema.input_schema),
                         "group": (
@@ -2828,6 +2829,20 @@ class Runtime:
                         "bundle": getattr(tool_specs.get(schema.name), "bundle", ""),
                     }
                     for schema in request.tools[:512]
+                ] + [
+                    {
+                        "name": name,
+                        "enabled": False,
+                        "description": str(getattr(getattr(manifest, "tools", {}).get(name), "description", "") or ""),
+                        "input_schema": {},
+                        "group": (
+                            f"mcp:{name.split('__', 2)[1]}" if name.startswith("mcp__") and name.count("__") >= 2
+                            else getattr(getattr(manifest, "tools", {}).get(name), "group", "") or name
+                        ),
+                        "bundle": "",
+                    }
+                    for name in sorted(session.disabled_extensions.get("tools", ()))[:256]
+                    if name not in {schema.name for schema in request.tools}
                 ] if tools_supported else [],
                 "tools_supported": tools_supported,
                 "model": request.model,
@@ -3034,12 +3049,13 @@ class Runtime:
         disabled = getattr(session, "disabled_extensions", {})
         skills = disabled.get("skills", ())
         servers = disabled.get("mcp", ())
-        if not skills and not servers:
+        off_tools = disabled.get("tools", ())
+        if not skills and not servers and not off_tools:
             return manifest
         disabled_tools = {
             tool.name for name, server in manifest.mcp.items() if name in servers
             for tool in getattr(server, "tools", ())
-        }
+        } | set(off_tools)
         tools = {name: tool for name, tool in manifest.tools.items() if name not in disabled_tools}
         selected_servers = {name: value for name, value in manifest.mcp.items() if name not in servers}
         if not any(getattr(server, "resources", ()) or getattr(server, "resource_templates", ()) for server in selected_servers.values()):
@@ -4579,7 +4595,7 @@ class Runtime:
             parent_provider = None
         from .tools.bundles import profile_tools
 
-        max_tier = str(getattr(section, "max_tier", "medium"))
+        max_tier = str(getattr(section, "max_tier", "high"))
         if self._tiers.rank(max_tier) is None:
             max_tier = self._tiers.default
         try:
@@ -4613,6 +4629,7 @@ class Runtime:
                 mutating_tools=self._mutating_names(catalog),
                 hooks=hooks,
                 worktree_service=self._worktree_service,
+                tier_probe=self._tier_runnable,
                 worktree_root=expected_worktree_root,
                 worktree_root_for=self._owned_worktree_root_for,
                 runtime_supports_workspace=runtime_supports_workspace,
@@ -4825,6 +4842,10 @@ class Runtime:
         if missing is not None:
             raise missing
         raise WorktreeError(f"no owned worktree record for child {child_id!r}")
+
+    def _tier_runnable(self, tier: str) -> bool:
+        """Whether ``tier`` currently resolves to a model a provider can run."""
+        return self._router.tier_runnable(tier)
 
     def _build_child_runtime(self, spec: Any) -> _ChildRuntime:
         """The ``RuntimeFactory``: build a nested, restricted child run."""

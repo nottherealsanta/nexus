@@ -1610,7 +1610,7 @@ async def test_enter_sends_shift_enter_newlines_and_editor_clears():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("key,mode", [("enter", "queue"), ("ctrl+enter", "steer"), ("alt+enter", "interrupt")])
+@pytest.mark.parametrize("key,mode", [("enter", "steer"), ("ctrl+enter", "queue"), ("alt+enter", "interrupt")])
 async def test_submit_while_running_uses_requested_mode(key, mode):
     from nexus.ui.tui.widgets import ChatEditor
     transport = FakeTransport()

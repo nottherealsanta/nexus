@@ -32,6 +32,7 @@ from ...ui_support.tui_command_palette import (
 from ...ui_support.tui_context_header import ContextBlock, ContextHeader, ContextModal
 from ...ui_support.tui_model_picker import ModelPickerScreen
 from ...ui_support.tui_panels import DetailsSidebar, SessionSidebar, TuiPreferences
+from ...ui_support.tui_speech import speak_command, stop_speaking
 from ...ui_support.tui_setup import block_unconfigured_turn, open_first_run_setup
 from ...ui_support.tui_voice import VoiceController, VoiceStrip
 from ..cli import commands
@@ -54,7 +55,7 @@ from .messages import (
 )
 from .keychord import LeaderKeys
 from .attachments import AttachmentsMixin
-from .new_session import apply_agent_choice, open_new_session_picker
+from .new_session import open_new_session
 from .panels import MainLayout, PanelsMixin, SessionTabs, TopBar
 from .permission import ListPrompt, PermissionScreen, ask_pending_question
 from .theme import NEXUS_THEMES
@@ -216,6 +217,10 @@ class NexusTextualApp(AttachmentsMixin, ExtraCommandsMixin, PanelsMixin, App[int
             event.stop()
             event.prevent_default()
             self.run_worker(self.voice.toggle(), group="voice", exclusive=True)
+        elif event.key == "escape" and getattr(self, "speaking", False):
+            event.stop()
+            event.prevent_default()
+            self.run_worker(stop_speaking(self), group="speak-stop", exclusive=True)
         elif event.key == "escape" and self.voice.transcribing:
             event.stop()
             event.prevent_default()
@@ -459,7 +464,7 @@ class NexusTextualApp(AttachmentsMixin, ExtraCommandsMixin, PanelsMixin, App[int
             elif parsed.name == "/reconnect":
                 await self.action_reconnect()
             elif parsed.name == "/new":
-                await open_new_session_picker(self, args[0] if args else f"session-{uuid.uuid4().hex[:8]}")
+                await open_new_session(self, args[0] if args else f"session-{uuid.uuid4().hex[:8]}")
             elif parsed.name == "/usage":
                 self.action_show_usage()
             elif parsed.name == "/hotkeys":
@@ -523,6 +528,11 @@ class NexusTextualApp(AttachmentsMixin, ExtraCommandsMixin, PanelsMixin, App[int
                 ) or "No tools used in this transcript")
             elif parsed.name == "/details":
                 await self._show_notice("\n".join(detail_lines(self.controller.session, self.controller.view)))
+            elif parsed.name == "/speak":
+                if args not in ((), ("download",)):
+                    await self._show_notice("Usage: /speak [download]")
+                else:
+                    await speak_command(self, tuple(args))
             elif parsed.name == "/voice":
                 await self.voice.command(args)
             elif parsed.name == "/context":
@@ -704,7 +714,10 @@ class NexusTextualApp(AttachmentsMixin, ExtraCommandsMixin, PanelsMixin, App[int
     @on(EventReceived)
     async def _event_received(self, message: EventReceived) -> None:
         event = message.event
+        previous_bell = self.controller.completion_bell
         changed, _ = self.controller.ingest(event)
+        if self.controller.completion_bell > previous_bell:
+            self.bell()
         if event.type == "error":
             detail = event.data.get("message") or event.data.get("error") or "Session error"
             self._sync_status(f"Error · {sanitize(detail, 180)}", error=True)
@@ -1057,7 +1070,7 @@ class NexusTextualApp(AttachmentsMixin, ExtraCommandsMixin, PanelsMixin, App[int
         kind = self._inline_picker_kind
         self._close_inline_picker()
         if kind == "agent":
-            await apply_agent_choice(self, message.value)
+            await self._apply_agent_selection(message.value)
         elif kind == "model":
             await self._apply_model_selection(
                 message.value, message.effort, commit_effort=message.commit_effort
@@ -1101,7 +1114,6 @@ class NexusTextualApp(AttachmentsMixin, ExtraCommandsMixin, PanelsMixin, App[int
 
     @on(AgentPickerPanel.Cancelled)
     def _inline_picker_cancelled(self, _: AgentPickerPanel.Cancelled) -> None:
-        self._new_session_id = None
         self._close_inline_picker()
 
     async def _apply_agent_selection(self, name: str) -> None:

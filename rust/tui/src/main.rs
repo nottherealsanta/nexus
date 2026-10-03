@@ -20,11 +20,34 @@ use input::{action, base64, edit, pick, save, send, MAX_DRAFT};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use serde_json::json;
 use std::{
+    collections::HashMap,
     io::{self, BufRead, Write},
     sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
+/// A row's click operation. Header rows carry one range per chip, so a click
+/// opens the chip under the column; the keyboard (no column) opens the menu.
+fn resolve_operation(
+    operation: &Option<serde_json::Value>,
+    column: Option<usize>,
+) -> Option<serde_json::Value> {
+    let operation = operation.as_ref()?;
+    if operation["kind"] != "context_chips" {
+        return Some(operation.clone());
+    }
+    let Some(column) = column else {
+        return Some(json!({"kind":"context_menu"}));
+    };
+    operation["chips"].as_array()?.iter().find_map(|chip| {
+        let (start, end) = (
+            chip["start"].as_u64()? as usize,
+            chip["end"].as_u64()? as usize,
+        );
+        (column >= start && column < end).then(|| chip["operation"].clone())
+    })
+}
+
 /// Reuse only ancestor requests in the same token context while the host responds.
 fn completion_candidates(cache: &[(String, Vec<String>)], prefix: &str) -> Vec<String> {
     let token = prefix.rsplit(char::is_whitespace).next().unwrap_or("");
@@ -103,6 +126,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )))?;
     let mut s = Snapshot::default();
     let mut draft = Editor::default();
+    let mut session_drafts: HashMap<String, Editor> = HashMap::new();
     let mut form_editor = Editor::default();
     let mut answer = Editor::default();
     let mut prompt_id = String::new();
@@ -181,7 +205,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if next.generation != s.generation {
                 page_positions.clear();
-                draft = Editor::default();
+                session_drafts.insert(s.composer_key.clone(), std::mem::take(&mut draft));
+                draft = session_drafts
+                    .remove(&next.composer_key)
+                    .unwrap_or_default();
                 follow = true;
                 scroll = 0;
                 details_scroll = 0;
@@ -272,7 +299,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 if next.auto_send_insert && !draft.text.trim().is_empty() {
                     send(
-                        json!({"type":"submit","text":draft.take(),"mode":"queue","generation":next.generation}),
+                        json!({"type":"submit","text":draft.take(),"mode":"steer","generation":next.generation}),
                     )?;
                 }
             }
@@ -401,6 +428,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // As-you-type completion (Textual `refresh_completion`): a `/command`,
         // an `@file`, or a command argument asks the host after a 120 ms pause.
         if typed != (draft.text.clone(), draft.cursor) {
+            if typed.0 != draft.text
+                && (s.attachments > 0
+                    || typed.0.contains("[image ")
+                    || draft.text.contains("[image ")
+                    || typed.0.contains("[document ")
+                    || draft.text.contains("[document "))
+            {
+                send(json!({"type":"draft_changed","text":draft.text,"generation":s.generation}))?;
+            }
             if typed.0 != draft.text && !draft.text.is_empty() {
                 follow = true; // typing returns to the live end of the conversation
             }
@@ -613,12 +649,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         dirty = true;
                         match key.code {
                             KeyCode::Enter | KeyCode::Char(' ') => {
-                                if let Some(Some(operation)) = blocks
+                                if let Some(operation) = blocks
                                     .get(index)
                                     .and_then(|(first, _)| cache.operations.get(*first))
+                                    .and_then(|operation| resolve_operation(operation, None))
                                 {
                                     send(
-                                        json!({"type":"operation","operation":operation,"generation":s.generation}),
+                                        json!({"type":"operation","operation":&operation,"generation":s.generation}),
                                     )?;
                                 }
                                 continue;
@@ -873,6 +910,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     selection = (selection + 1).min(count.saturating_sub(1))
                                 }
                                 KeyCode::Enter => pick(&s, selection, &filter)?,
+                                KeyCode::Char(' ') => input::toggle(&s, selection, &filter)?,
                                 KeyCode::Backspace => {
                                     filter.pop();
                                     selection = 0;
@@ -955,7 +993,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .clone();
                                 draft.take();
                                 send(
-                                    json!({"type":"submit","text":value,"mode":"queue","generation":s.generation}),
+                                    json!({"type":"submit","text":value,"mode":"steer","generation":s.generation}),
                                 )?;
                                 dirty = true;
                                 continue;
@@ -1092,11 +1130,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::Enter => {
                             if !draft.text.trim().is_empty() || s.attachments > 0 {
                                 let mode = if key.modifiers.contains(KeyModifiers::CONTROL) {
-                                    "steer"
+                                    "queue"
                                 } else if key.modifiers.contains(KeyModifiers::ALT) {
                                     "interrupt"
                                 } else {
-                                    "queue"
+                                    "steer"
                                 };
                                 send(
                                     json!({"type":"submit","text":draft.take(),"mode":mode,"generation":s.generation}),
@@ -1174,6 +1212,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Event::Mouse(mouse) => {
                     let r = drawn_regions;
+                    let pointer = Some((mouse.column, mouse.row));
+                    if cache.pointer != pointer {
+                        cache.pointer = pointer;
+                        dirty = true;
+                    }
                     match mouse.kind {
                         MouseEventKind::ScrollUp => {
                             if !s.panel_title.is_empty() {
@@ -1337,7 +1380,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                         MouseEventKind::Up(event::MouseButton::Left) => {
-                            if let Some((line, _)) = press.take() {
+                            if let Some((line, column)) = press.take() {
                                 let text = if cache
                                     .selection
                                     .is_some_and(|(a, b)| a.0 != b.0 || a.1.abs_diff(b.1) > 1)
@@ -1348,9 +1391,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 };
                                 if text.is_empty() {
                                     cache.selection = None;
-                                    if let Some(Some(operation)) = cache.operations.get(line) {
+                                    if let Some(operation) =
+                                        cache.operations.get(line).and_then(|operation| {
+                                            resolve_operation(operation, Some(column))
+                                        })
+                                    {
                                         send(
-                                            json!({"type":"operation","operation":operation,"generation":s.generation}),
+                                            json!({"type":"operation","operation":&operation,"generation":s.generation}),
                                         )?;
                                     }
                                 } else {
@@ -1365,7 +1412,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                         MouseEventKind::Down(event::MouseButton::Left) => {
-                            if render::update_notice_at(&s, r.tabs, mouse.column, mouse.row) {
+                            if render::update_notice_at(&s, r.workspace, mouse.column, mouse.row) {
                                 action("update_help", "")?;
                                 continue;
                             }
@@ -1430,7 +1477,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         &s, area, &filter, selection, mouse.row,
                                     ) {
                                         selection = index;
-                                        pick(&s, selection, &filter)?;
+                                        if render::panel_toggle_at(
+                                            &s,
+                                            area,
+                                            &filter,
+                                            selection,
+                                            mouse.column,
+                                            mouse.row,
+                                        ) {
+                                            input::toggle(&s, selection, &filter)?;
+                                        } else {
+                                            pick(&s, selection, &filter)?;
+                                        }
                                     }
                                 }
                                 dirty = true;
@@ -1585,7 +1643,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     json!({"type":"context_header","key":(["system","tools","agents","skills","mcp"][index]),"generation":s.generation}),
                                 )?;
                             } else if r.tabs.contains((mouse.column, mouse.row).into())
-                                && mouse.row <= r.tabs.y + 1
+                                && mouse.row == r.tabs.y
                             {
                                 let column = usize::from(mouse.column.saturating_sub(r.tabs.x));
                                 let hit = render::top_cells(&s, r.tabs).into_iter().find(|cell| {
@@ -1644,6 +1702,7 @@ use unicode_segmentation::UnicodeSegmentation;
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn completion_remains_visible_while_typing_and_backspacing() {
         let cache = vec![
@@ -1671,5 +1730,24 @@ mod tests {
         .unwrap();
         assert_eq!(s.schema, 1);
         assert_eq!(s.lines[0], "User: hello");
+    }
+}
+
+#[cfg(test)]
+mod click_tests {
+    use super::*;
+
+    #[test]
+    fn a_header_click_opens_the_chip_under_the_column_not_the_menu() {
+        let row = Some(json!({"kind":"context_chips","chips":[
+            {"start":4,"end":12,"operation":{"kind":"context_show","key":"tools"}},
+            {"start":15,"end":30,"operation":{"kind":"context_show","key":"skills"}}]}));
+        assert_eq!(resolve_operation(&row, Some(5)).unwrap()["key"], "tools");
+        assert_eq!(resolve_operation(&row, Some(20)).unwrap()["key"], "skills");
+        assert!(resolve_operation(&row, Some(13)).is_none());
+        assert_eq!(
+            resolve_operation(&row, None).unwrap()["kind"],
+            "context_menu"
+        );
     }
 }

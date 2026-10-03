@@ -184,6 +184,8 @@ MAX_PROVIDER_CHARS = 64
 MAX_LIST_ITEMS = 64
 #: Per-agent fallback chain length.
 MAX_FALLBACKS = 8
+#: Allowed tiers per agent (``tiers:``); the first is the role's default.
+MAX_TIERS = 8
 MAX_TOOLS = MAX_LIST_ITEMS
 MAX_BUNDLES = MAX_LIST_ITEMS
 #: Integer clamps for the two numeric declarations.
@@ -238,6 +240,9 @@ _INT_RE = re.compile(r"[0-9]+\Z")
 _FLOAT_RE = re.compile(r"[0-9]+\.[0-9]+\Z")
 _PROVIDER_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}\Z")
 _COLOR_RE = re.compile(r"#[0-9A-Fa-f]{6}\Z")
+#: A tier name: the shape only. Whether it names a known (or custom) tier is
+#: decided where the tier table is available (the runner and Settings).
+_TIER_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}\Z")
 #: A fallback model reference: bounded, no whitespace or flow-list punctuation.
 _MODEL_REF_RE = re.compile(rf"[A-Za-z0-9][A-Za-z0-9._:/@+-]{{0,{MAX_MODEL_CHARS - 1}}}\Z")
 
@@ -251,6 +256,7 @@ _FIELDS = (
     "provider",
     "reasoning_effort",
     "fallback",
+    "tiers",
     "color",
     "max_iterations",
     "context_tokens",
@@ -258,7 +264,9 @@ _FIELDS = (
     "profile",
     "write_roots",
 )
-_LIST_FIELDS = frozenset({"bundles", "tools", "fallback", "contexts", "write_roots"})
+_LIST_FIELDS = frozenset(
+    {"bundles", "tools", "fallback", "tiers", "contexts", "write_roots"}
+)
 _REQUIRED_FIELDS = frozenset({"name", "description"})
 
 #: A value may not *begin* with one of these: each is a YAML structural marker.
@@ -383,6 +391,7 @@ class ParsedFrontmatter:
     migration_notices: tuple[str, ...]
     raw: bytes
     fallback: tuple[str, ...] = ()
+    tiers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -687,6 +696,19 @@ def _parse_raw(raw: bytes) -> ParsedFrontmatter:
     )
     if len(fallback) > MAX_FALLBACKS:
         raise AgentParseError(f"fallback: at most {MAX_FALLBACKS} models are allowed")
+    tiers = (
+        _parse_list(fields["tiers"], "tiers", _TIER_RE, "tier name")
+        if "tiers" in fields
+        else ()
+    )
+    if "tiers" in fields and not tiers:
+        raise AgentParseError("tiers must list at least one tier")
+    if len(tiers) > MAX_TIERS:
+        raise AgentParseError(f"tiers: at most {MAX_TIERS} tiers are allowed")
+    if tiers and model == MODEL_INHERIT:
+        raise AgentParseError(
+            "tiers conflicts with model: inherit; remove one of them"
+        )
     color = (
         _parse_color(fields["color"])
         if "color" in fields
@@ -744,6 +766,7 @@ def _parse_raw(raw: bytes) -> ParsedFrontmatter:
         migration_notices=migration_notices,
         raw=raw,
         fallback=fallback,
+        tiers=tiers,
     )
 
 
@@ -915,6 +938,8 @@ class AgentDef:
     color: str = ""
     #: Ordered model references tried when the primary model fails pre-stream.
     fallback: tuple[str, ...] = ()
+    #: Tiers the role may run on, default first; empty = not set (inherit).
+    tiers: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.color:
@@ -998,6 +1023,7 @@ class AgentDef:
             "provider": self.provider,
             "reasoning_effort": self.reasoning_effort,
             "fallback": list(self.fallback),
+            "tiers": list(self.tiers),
             "color": self.color,
             "max_iterations": self.max_iterations,
             "context_tokens": self.context_tokens,
@@ -1086,9 +1112,16 @@ class AgentIndexEntry:
     reasoning_effort: str | None = None
     color: str | None = None
     fallback: tuple[str, ...] = ()
+    tiers: tuple[str, ...] = ()
 
     def line(self) -> str:
-        return f"{self.name}: {self.description}"
+        if not self.tiers:
+            return f"{self.name}: {self.description}"
+        listed = ", ".join(
+            f"{tier} (default)" if index == 0 and len(self.tiers) > 1 else tier
+            for index, tier in enumerate(self.tiers)
+        )
+        return f"{self.name} [tiers: {listed}]: {self.description}"
 
 
 @dataclass(frozen=True)

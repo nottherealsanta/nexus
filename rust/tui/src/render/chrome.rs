@@ -68,13 +68,13 @@ pub fn session_sidebar(
         let tone = match session.status.as_str() {
             "working" => p.accent,
             "input" => p.warning,
-            "done" => p.success,
+            "done" => p.quiet,
             _ => p.quiet,
         };
         let glyph = match session.status.as_str() {
             "working" => SPINNER[spin % SPINNER.len()],
             "input" => "●",
-            "done" => "✓",
+            "done" => "·",
             _ => "·",
         };
         let bg = if session.active { p.element } else { p.panel };
@@ -239,18 +239,7 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
         );
         return;
     }
-    if area.height == 2 {
-        frame.render_widget(
-            Paragraph::new(vec![
-                breadcrumb_row(s, area, p, spin),
-                Line::styled(
-                    "─".repeat(area.width as usize),
-                    Style::default().fg(p.border_strong),
-                ),
-            ])
-            .style(Style::default().bg(p.panel)),
-            area,
-        );
+    if area.height == 0 {
         return;
     }
     let width = usize::from(area.width);
@@ -322,13 +311,13 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
                 let tone = match row.status.as_str() {
                     "working" => p.accent,
                     "input" => p.warning,
-                    "done" => p.success,
+                    "done" => p.blue,
                     _ => p.quiet,
                 };
                 let glyph = match row.status.as_str() {
                     "working" => SPINNER[spin % SPINNER.len()],
                     "input" => "●",
-                    "done" => "✓",
+                    "done" => "●",
                     _ => "·",
                 };
                 let title = crate::transcript::truncate(&row.title, 24);
@@ -356,15 +345,7 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
             }
         }
     }
-    let row1 = breadcrumb_row(s, area, p, spin);
-    let rule = Line::styled(
-        "─".repeat(width),
-        Style::default().fg(p.border_strong).bg(p.panel),
-    );
-    frame.render_widget(
-        Paragraph::new(vec![Line::from(tabs), row1, rule]).style(background),
-        area,
-    );
+    frame.render_widget(Paragraph::new(Line::from(tabs)).style(background), area);
 }
 /// Details sidebar rows, and for each row the modified file it toggles (if any).
 pub fn details_rows(
@@ -535,17 +516,22 @@ pub fn details_rows(
     (out, file_rows)
 }
 
-/// Actual top-bar targets when the tab row has been removed.
+/// Workspace metadata below the composer and above the activity meter.
+pub(super) fn draw_workspace_bar(
+    frame: &mut Frame,
+    s: &Snapshot,
+    area: Rect,
+    p: &Palette,
+    spin: usize,
+) {
+    frame.render_widget(
+        Paragraph::new(breadcrumb_row(s, area, p, spin)).style(Style::default().bg(p.background)),
+        area,
+    );
+}
+
 pub fn top_cells(s: &Snapshot, area: Rect) -> Vec<TabCell> {
-    if area.height == 2 {
-        vec![TabCell {
-            kind: TabHit::Details,
-            start: area.width.saturating_sub(3) as usize,
-            end: area.width as usize,
-        }]
-    } else {
-        tab_cells(s, area.width as usize)
-    }
+    tab_cells(s, area.width as usize)
 }
 pub fn details_tab_at(area: Rect, x: u16) -> Option<&'static str> {
     let mut start = area.x + 2;
@@ -568,7 +554,7 @@ fn breadcrumb_status(s: &Snapshot, spin: usize) -> String {
     }
 }
 fn notice_width(s: &Snapshot, area: Rect) -> usize {
-    let reserved = breadcrumb_status(s, 0).width() + if area.height == 2 { 6 } else { 4 };
+    let reserved = breadcrumb_status(s, 0).width() + 3;
     crate::transcript::truncate(
         &s.update_notice,
         20.min((area.width as usize).saturating_sub(reserved)),
@@ -579,14 +565,16 @@ fn breadcrumb_row(s: &Snapshot, area: Rect, p: &Palette, spin: usize) -> Line<'s
     let width = area.width as usize;
     let status = breadcrumb_status(s, spin);
     let notice = crate::transcript::truncate(&s.update_notice, notice_width(s, area));
-    let suffix = if area.height == 2 { "  ▐ " } else { "  " };
+    let suffix = " ";
     let reserved =
         status.width() + suffix.width() + notice.width() + if notice.is_empty() { 0 } else { 3 };
-    let crumb = crate::transcript::truncate(&s.breadcrumb, width.saturating_sub(reserved + 2));
-    let gap = width.saturating_sub(crumb.width() + reserved + 2);
+    // Match the composer inset (two cells) plus its three-cell rail padding.
+    let indent = 5;
+    let crumb = crate::transcript::truncate(&s.breadcrumb, width.saturating_sub(reserved + indent));
+    let gap = width.saturating_sub(crumb.width() + reserved + indent);
     Line::from(vec![
         Span::styled(
-            format!("  {crumb}{}", " ".repeat(gap)),
+            format!("{}{crumb}{}", " ".repeat(indent), " ".repeat(gap)),
             Style::default().fg(p.muted),
         ),
         Span::styled(notice.clone(), Style::default().fg(p.accent)),
@@ -608,11 +596,11 @@ fn breadcrumb_row(s: &Snapshot, area: Rect, p: &Palette, spin: usize) -> Line<'s
     ])
 }
 pub fn update_notice_at(s: &Snapshot, area: Rect, x: u16, y: u16) -> bool {
-    if s.update_notice.is_empty() || y != area.y + if area.height == 2 { 0 } else { 1 } {
+    if s.update_notice.is_empty() || !area.contains((x, y).into()) || y != area.y {
         return false;
     }
-    let end = area.right().saturating_sub(
-        (breadcrumb_status(s, 0).width() + 3 + if area.height == 2 { 4 } else { 2 }) as u16,
-    );
+    let end = area
+        .right()
+        .saturating_sub((breadcrumb_status(s, 0).width() + 3 + 1) as u16);
     x >= end.saturating_sub(notice_width(s, area) as u16) && x < end
 }

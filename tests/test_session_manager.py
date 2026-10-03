@@ -175,6 +175,33 @@ def test_open_can_skip_recovery(tmp_path):
     assert len(reopened.messages) == 1
 
 
+def test_completion_watermark_ignores_presence_and_advances_for_next_turn(tmp_path):
+    from nexus.ui_support.session_status import session_status
+
+    manager = SessionManager(tmp_path)
+    session = manager.open("completion-watermark", recover=False)
+    session.append_event(Event(type="turn.completed"))
+    completed = manager.summary(session.id)
+    assert completed.completion_seq == completed.last_seq
+
+    # Acknowledging completion, then a view detaching writes presence events;
+    # these must not change the durable identity of the completed turn.
+    acknowledged = completed.completion_seq
+    seen = {session.id: acknowledged}
+    session.append_event(Event(type="presence.left", data={"viewers": 0}))
+    session.append_event(Event(type="presence.changed", data={"viewers": 0}))
+    after_presence = manager.summary(session.id)
+    assert after_presence.last_seq > completed.last_seq
+    assert after_presence.completion_seq == acknowledged
+    assert session_status(after_presence, seen, "other") == "idle"
+
+    session.append_event(Event(type="turn.failed"))
+    next_turn = manager.summary(session.id)
+    assert next_turn.completion_seq > acknowledged
+    assert next_turn.completion_seq == next_turn.last_seq
+    assert session_status(next_turn, seen, "other") == "done"
+
+
 # ---------------------------------------------------------------------------
 # fork
 # ---------------------------------------------------------------------------

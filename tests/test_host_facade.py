@@ -28,6 +28,7 @@ from nexus.config.schema import (
 )
 from nexus.errors import SessionBusy, SessionError
 from nexus.events import Event
+from nexus.session.db import SCHEMA_VERSION
 from nexus.host import PROTOCOL_VERSION, HostFacade, Presence
 from nexus.host import protocol as p
 from nexus.model.message import Text, ToolResult, ToolUse
@@ -338,6 +339,14 @@ def test_protocol_round_trips_every_command_and_result():
         p.ModelsList(provider="p", tier="high"),
         p.ModelShow(ref="p/m"),
         p.ModelTiers(),
+        p.SpeechStatus(),
+        p.SpeechPrepare(),
+        p.SpeakStop(),
+        p.ModelTierSet(tier="low", refs=["openai/gpt-5-mini"]),
+        p.ModelTierReset(tier="low"),
+        p.AgentMaxTierSet(tier="high"),
+        p.SessionTitleSettings(),
+        p.SessionTitleSettingsSet(enabled=False, model="low"),
         p.ModelSelect(session="s", ref="high"),
         p.ReasoningEffortSelect(session="s", effort="high"),
         p.FileSearch(query="src"),
@@ -348,6 +357,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.WorktreeAcknowledge(child_id="s/sub/1", review_id="a" * 32, digest="b" * 64),
         p.WorktreeIntegrate(child_id="s/sub/1", review_id="a" * 32, digest="b" * 64),
         p.WorktreeDiscard(child_id="s/sub/1", force=True, review_id="a" * 32),
+        p.Speak(session_id="s", download=True),
         p.VoiceStatus(),
         p.VoicePrepare(force=True),
         p.VoiceTranscribe(audio=b"wav", request_id="req_1"),
@@ -419,6 +429,8 @@ def test_protocol_round_trips_every_command_and_result():
         p.ModelsListResult(count=1, models=[{"id": "m"}]),
         p.ModelShowResult(ref="p/m", found=True, model={"id": "m"}),
         p.ModelTiersResult(order=["low", "medium", "high"], default="medium"),
+        p.SessionTitleSettingsResult(enabled=True, model="low", resolved="openai/gpt-5-mini"),
+        p.SpeechStatusResult(state="absent", bytes_total=345_000_000),
         p.ModelSelectResult(session="s", provider="p", model="m", tier="high"),
         p.ReasoningEffortSelectResult(
             session="s", stored_override="high", effective_effort="high",
@@ -455,6 +467,7 @@ def test_protocol_round_trips_every_command_and_result():
             included_parts=[{"name": "identity", "text": "standing prompt"}],
         ),
         p.DoctorResult(ok=True, report={"workspace": "/tmp/ws"}),
+        p.SpeakResult(message="Finished speaking", backend="kokoro-cpu"),
         p.VoiceStatusResult(state="ready", enabled=True),
         p.VoiceTranscribeResult(request_id="req_1", text="hello", duration_s=1.0, elapsed_s=0.1),
         p.VoiceCancelResult(cancelled=True),
@@ -1073,7 +1086,7 @@ async def test_facade_doctor_aggregates_durable_registry_mismatches(tmp_path):
     assert summary["samples"][0]["session"] == "probe"
     assert "sk-secret1234567" not in str(summary)
     assert summary["sessions_scanned"] == 1
-    assert report["database"]["schema_user_version"] == 1
+    assert report["database"]["schema_user_version"] == SCHEMA_VERSION
     assert report["database"]["quick_check"] == "ok"
     assert report["database"]["size_bytes"] > 0
     await runtime.aclose()
@@ -1184,7 +1197,7 @@ async def test_facade_enqueue_runs_at_the_next_turn_boundary(tmp_path):
     facade.open_session("s")
 
     await facade.start_turn("s", "one")
-    queued_id, turn_id = await facade.enqueue("s", "two")
+    queued_id, turn_id = await facade.enqueue("s", "two", mode="queue")
     assert queued_id and turn_id
     await facade.wait_idle(timeout=5.0)
 
@@ -1340,7 +1353,7 @@ def test_host_layer_never_imports_a_ui():
         assert not violations, f"{path.name} imports {violations}"
 
 
-@pytest.mark.parametrize("mode", ["queue", "steer", "interrupt"])
+@pytest.mark.parametrize("mode", ["queue", "steer", "interrupt", "default"])
 async def test_messages_during_active_turn(tmp_path, mode):
     gate = asyncio.Event()
     provider = ScriptedProvider(
@@ -1354,8 +1367,12 @@ async def test_messages_during_active_turn(tmp_path, mode):
     try:
         await facade.start_turn("s", "original")
         await wait_for(lambda: provider.calls == 1)
-        await facade.enqueue("s", "later")
-        result = await facade.handle(p.SessionEnqueue(session="s", content="direction", mode=mode))
+        await facade.enqueue("s", "later", mode="queue")
+        command = (p.SessionEnqueue(session="s", content="direction") if mode == "default"
+                   else p.SessionEnqueue(session="s", content="direction", mode=mode))
+        if mode == "default":
+            mode = "steer"
+        result = await facade.handle(command)
         assert isinstance(result, p.SessionEnqueueResult)
         if mode != "interrupt":
             assert provider.calls == 1

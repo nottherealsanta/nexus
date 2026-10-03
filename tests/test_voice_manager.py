@@ -19,6 +19,9 @@ class FakeStore:
         self.calls = []
         self.removed = False
 
+    def cached(self) -> bool:
+        return not self.missing and not self.removed
+
     async def ensure(self, progress_cb, *, allow_download=True):
         self.calls.append(allow_download)
         if self.missing:
@@ -79,6 +82,28 @@ async def test_prepare_lifecycle_and_retry_after_failure(monkeypatch):
     assert manager.status().revision == "rev1"
     await manager.shutdown()
     assert engine.closed
+
+
+@pytest.mark.asyncio
+async def test_cached_status_survives_idle_unload_and_loads_without_download():
+    store = FakeStore()
+    manager, _ = make_manager(store=store)
+    assert manager.status().cached
+    await manager.prepare(allow_download=False)
+    await manager._unload_after(0)
+    assert manager.status().state == "absent"
+    assert manager.status().cached
+    await manager.prepare(allow_download=False)
+    assert store.calls == [False, False]
+    assert manager.status().state == "ready"
+    await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_missing_model_reports_not_cached():
+    manager, _ = make_manager(store=FakeStore(missing=True))
+    assert not manager.status().cached
+    await manager.shutdown()
 
 
 @pytest.mark.asyncio

@@ -531,7 +531,7 @@ def _on_thinking_delta(state: ConversationView, event: Event, data: Mapping[str,
     state, index = _turn_for(state, event)
     turn, message_index = _ensure_assistant(state.turns[index], event, data)
     message = turn.messages[message_index]
-    blocks = accumulate(message.blocks, "thinking", _text(data))
+    blocks = accumulate(message.blocks, "thinking", _text(data), _opt_float(event.ts))
     turn = _with_message(turn, message_index, replace(message, blocks=blocks))
     return _put(state, index, replace(turn, updated_ts=event.ts))
 
@@ -541,6 +541,13 @@ def _on_thinking_end(state: ConversationView, event: Event, data: Mapping[str, A
     turn, message_index = _ensure_assistant(state.turns[index], event, data)
     message = turn.messages[message_index]
     blocks = finalize_thinking(message.blocks, "", _as_str(data.get("signature")))
+    ended = _opt_float(event.ts)
+    for i in range(len(blocks) - 1, -1, -1):
+        block = blocks[i]
+        if block.kind == "thinking" and block.started_ts is not None and block.elapsed_ms is None:
+            if ended is not None and ended >= block.started_ts:
+                blocks[i] = replace(block, elapsed_ms=round((ended - block.started_ts) * 1000))
+            break
     turn = _with_message(turn, message_index, replace(message, blocks=blocks))
     return _put(state, index, replace(turn, updated_ts=event.ts))
 

@@ -249,9 +249,22 @@ def delete(runtime: object, scope: str, category: str, item_id: str) -> dict[str
 _TABLE = re.compile(r"^\s*\[\s*([A-Za-z0-9_.-]+)\s*\]\s*(?:#.*)?$")
 
 
-def set_toml_key(body: str, table: str, key: str, value: str) -> str:
-    """Set ``[table] key = "value"`` in TOML text, leaving every other line alone."""
-    literal = json.dumps(value)  # a JSON string is a valid TOML basic string
+def _literal(value: Any) -> str:
+    """A TOML literal for a string, bool, int or list of those."""
+    if isinstance(value, str):
+        return json.dumps(value)  # a JSON string is a valid TOML basic string
+    return _toml_literal(value)
+
+
+def set_toml_key(body: str, table: str, key: str, value: Any) -> str:
+    """Set ``[table] key = value`` in TOML text, leaving every other line alone.
+
+    ``value`` is a string, bool, int or list of those. ``None`` removes the key
+    (and does nothing when it is absent).
+    """
+    if value is None:
+        return remove_toml_key(body, table, key)
+    literal = _literal(value)
     lines = body.splitlines()
     start = next((i for i, line in enumerate(lines) if (m := _TABLE.match(line)) and m.group(1) == table), None)
     if start is None:
@@ -264,6 +277,21 @@ def set_toml_key(body: str, table: str, key: str, value: str) -> str:
         lines.insert(start + 1, f"{key} = {literal}")
     else:
         lines[row] = f"{key} = {literal}"
+    return "\n".join(lines) + "\n"
+
+
+def remove_toml_key(body: str, table: str, key: str) -> str:
+    """Delete a one-line ``[table] key = ...`` assignment; other lines are untouched."""
+    lines = body.splitlines()
+    start = next((i for i, line in enumerate(lines) if (m := _TABLE.match(line)) and m.group(1) == table), None)
+    if start is None:
+        return body
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].lstrip().startswith("[")), len(lines))
+    assignment = re.compile(rf"^\s*{re.escape(key)}\s*=")
+    row = next((i for i in range(start + 1, end) if assignment.match(lines[i])), None)
+    if row is None:
+        return body
+    del lines[row]
     return "\n".join(lines) + "\n"
 
 
@@ -408,4 +436,4 @@ async def dispatch_settings(command: Any, runtime: object) -> Any | None:
     return None
 
 
-__all__ = ["delete", "dispatch_settings", "inventory", "read", "set_default_agent", "set_toml_key", "write"]
+__all__ = ["delete", "dispatch_settings", "inventory", "read", "remove_toml_key", "set_default_agent", "set_toml_key", "write"]

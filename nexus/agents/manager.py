@@ -697,6 +697,7 @@ class AgentManager:
                 color=agent.color,
                 read_only=agent.read_only,
                 fallback=agent.fallback,
+                tiers=agent.tiers,
             )
             for agent, description in zip(self._agents, descriptions)
         )
@@ -1015,6 +1016,7 @@ class AgentManager:
             provider=parsed.provider,
             reasoning_effort=parsed.reasoning_effort,
             fallback=parsed.fallback,
+            tiers=parsed.tiers,
             color=parsed.color,
             max_iterations=parsed.max_iterations,
             context_tokens=parsed.context_tokens,

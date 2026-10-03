@@ -33,9 +33,17 @@ class Voice:
         if ready and status.enabled and not download:
             await self.start()
             return
-        rows = [("Enable voice", {"kind": "voice_enable"})] if not status.enabled and not download else [("Start dictation", {"kind": "voice_start"})] if ready else [
-            ("Download voice model…", {"kind": "confirm", "label": "Download the local voice model (~179 MB)?",
-             "next": {"kind": "voice_prepare"}})]
+        if not status.enabled and not download:
+            rows = [("Enable voice", {"kind": "voice_enable"})]
+        elif ready:
+            rows = [("Start dictation", {"kind": "voice_start"})]
+        elif status.state in {"loading", "downloading"}:
+            rows = [("Refresh model status", {"kind": "voice"})]
+        elif status.cached:
+            rows = [("Load voice model", {"kind": "voice_prepare", "allow_download": False})]
+        else:
+            rows = [("Download voice model…", {"kind": "confirm", "label": "Download the local voice model (~179 MB)?",
+                     "next": {"kind": "voice_prepare"}})]
         self.shell.workflows.menu("Local dictation", rows, [f"{key}: {getattr(status, key)}" for key in status.__struct_fields__])
 
     async def start(self):

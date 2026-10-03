@@ -206,6 +206,7 @@ def doctor_report(
             getattr(runtime, "workspace", None)
         ),
     }
+    report["agents_without_tiers"] = _agents_without_tiers(runtime)
     sessions = getattr(runtime, "sessions", None)
     database = database_diagnostics(getattr(sessions, "store", None))
     if database is not None:
@@ -226,6 +227,26 @@ def doctor_report(
     if explain_reload:
         report["reload"] = _reload_boundary()
     return report
+
+
+def _agents_without_tiers(runtime: object, *, limit: int = 32) -> list[str]:
+    """Subagent roles that declare no ``tiers`` (a hint, never an error).
+
+    Such a role keeps the earlier rule: its ``model`` or the parent's model.
+    """
+    agents = getattr(runtime, "agents", None)
+    roles = getattr(agents, "agents", None)
+    if roles is None:
+        return []
+    try:
+        names = [
+            str(role.name)
+            for role in roles
+            if role.eligible_in("subagent") and not role.tiers
+        ]
+    except Exception:  # noqa: BLE001 - a doctor hint must never break the report
+        return []
+    return sorted(names)[:limit]
 
 
 def _session_source(runtime: object) -> object:

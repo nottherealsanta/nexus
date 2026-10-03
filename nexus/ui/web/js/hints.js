@@ -15,7 +15,7 @@ export const EMPTY_HINTS = [
   ['ctrl+e', 'open the logs drawer'],
   ['ctrl+u', 'provider usage and limits'],
   ['shift+enter', 'new line in the message'],
-  ['ctrl+enter', 'steer a running turn at its next step'],
+  ['ctrl+enter', 'queue a message for the next turn'],
   ['alt+enter', 'interrupt the running turn and send'],
   ['esc esc', 'stop the running turn'],
   ['ctrl+f', 'fork this session'],

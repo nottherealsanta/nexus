@@ -31,7 +31,9 @@ inward-only exceptions. Errors are
 | --- | --- |
 | Sessions | `SessionList` `ProjectSessionsList` `ProjectSessionOpen` `SessionOpen` `SessionStart` `SessionEnqueue` `SessionCancel` `SessionSubscribe` `SessionState` `SessionFork` `SessionDelete` `SessionRestore` `SessionExport` `SessionArchive` `SessionUnarchive` `SessionListArchived` `SessionSearch` `SessionPreview` |
 | Approvals | `PermissionResolve` `QuestionAnswer` |
-| Models | `ModelsList` `ModelShow` `ModelTiers` `ModelsRefresh` `ModelSelect` `ReasoningEffortSelect` |
+| Models | `ModelsList` `ModelShow` `ModelTiers` `ModelTierSet` `ModelTierReset` `AgentMaxTierSet` `ModelsRefresh` `ModelSelect` `ReasoningEffortSelect` |
+| Session titles | `SessionTitleSettings` `SessionTitleSettingsSet` |
+| Speech | `Speak` `SpeechStatus` `SpeechPrepare` |
 | Agents | `AgentsList` `AgentCurrent` `AgentSelect` `AgentReset` `AgentDefaultSet` `AgentTranscript` |
 | Context and tools | `ContextInspect` `ContextExtensionSelect` `ToolsList` |
 | Extensions | `ExtensionsReload` `ExtensionsList` `ExtensionsValidate` `ExtensionsTrash` |
@@ -68,6 +70,10 @@ names it and the transport attaches through `HostFacade.subscribe`.
   `interrupt`.
 - `subscribe(session, from_seq)` registers a view in `Presence`, catches up from
   the log and follows live; closing it frees the view's approval leases.
+- Session summaries retain `last_seq` for stream cursors and expose
+  `completion_seq` separately for unread/done status. The latter advances only
+  on durable `turn.completed`, `turn.failed` or `turn.cancelled` records; presence
+  events emitted when a view closes do not retrigger completion indicators.
 - `state` folds the log through `view.reduce` into a baseline plus `seq`.
 - `web_snapshot` / `subscribe_web` produce the versioned browser snapshot and
   JSON-Pointer patches (`host_support/browser_view.py`).
@@ -149,6 +155,7 @@ Read-only projections and helpers kept out of `host/`:
 | `git_diff.py` | bounded read-only Git diff |
 | `worktree_projection.py` | allow-listed worktree records and diffs |
 | `session_archive.py`, `archive_protocol.py` | bounded archive projections and wire records |
+| `model_settings.py`, `auto_title.py` | Tier lists, the subagent ceiling and the title switch (global config); the background title task |
 | `settings_inventory.py`, `settings_scope.py` | Settings console reads/writes and path policy ([extensions.md](extensions.md#settings-files-host)) |
 | `setup.py`, `provider_auth.py` | first-run setup and provider sign-in ([models.md](models.md#authentication)) |
 | `doctor.py` | bounded redacted health; aggregates durable `registry.mismatch` events from a bounded tail of a bounded set of logs, never opening a session |

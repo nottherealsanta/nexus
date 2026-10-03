@@ -10,6 +10,7 @@ SETTINGS_HELP: dict[str, str] = {
     "skills": "Teach reusable workflows with skills. Choose a SKILL.md to edit its instructions, or create a new skill.",
     "hooks": "Run commands at lifecycle events. Edit hooks.toml to choose when each hook runs and what it executes.",
     "config": "Configure default models, fallbacks, permissions and context limits. Choose the config file to edit; the host validates changes.",
+    "speech": "Configure local Kokoro speech for /speak. A model download is never automatic; /speak requests consent before downloading.",
     "soul": "Set instructions included in every conversation. Edit SOUL.md here; start a new session to use updated instructions.",
 }
 
@@ -19,6 +20,6 @@ SETTINGS_SECTIONS: tuple[tuple[str | None, str], ...] = (
     ("appearance", "Appearance"), ("layout", "Layout"), ("keys", "Keyboard"), ("workspace", "Workspace"),
     (None, ""),
     (None, "CONFIGURE"),
-    ("providers", "Providers"), ("voice", "Voice"), ("agents", "Agents"), ("tools", "Tools"),
+    ("providers", "Providers"), ("models", "Models"), ("titles", "Session titles"), ("voice", "Voice"), ("speech", "Speech"), ("agents", "Agents"), ("tools", "Tools"),
     ("mcp", "MCP servers"), ("skills", "Skills"), ("hooks", "Hooks"), ("config", "Config"), ("soul", "Soul"),
 )

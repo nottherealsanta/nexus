@@ -163,7 +163,7 @@ def test_session_status_relative_time_and_preferences(tmp_path):
     seen = {"s": 4, "done": 2}
     assert session_status(SessionSummary(id="x", state="running"), seen, "s") == "working"
     assert session_status(SessionSummary(id="x", state="awaiting_input"), seen, "s") == "input"
-    assert session_status(SessionSummary(id="done", last_seq=5), seen, "s") == "done"
+    assert session_status(SessionSummary(id="done", last_seq=5, completion_seq=5), seen, "s") == "done"
     assert session_status(SessionSummary(id="s", last_seq=9), seen, "s") == "idle"
     assert session_status(SessionSummary(id="new", last_seq=9), seen, "s") == "idle"
     assert relative_time(100.0, now=110.0) == "just now"

@@ -33,6 +33,9 @@ class SessionController:
         self.session = session
         self.view: ConversationView = initial_state(session)
         self.cursor = 0
+        self.completion_seq = 0
+        # Live-only notification count; replay and session switches leave it alone.
+        self.completion_bell = 0
         self.agent_name = "build"
         self.agent_source = "default"
         self.agent_color: str | None = None
@@ -116,11 +119,14 @@ class SessionController:
         # The host projection establishes the baseline seq; hydrate the typed
         # reducer through the same append-only event protocol before tailing.
         view = initial_state(session)
+        completion_seq = 0
         async with aclosing(self.client.stream(session, 0, follow=False)) as events:
             async for event in events:
                 if not self._bootstrap_is_current(session, bootstrap_revision):
                     return "", summary
                 view = apply(view, event)
+                if event.type in {"turn.completed", "turn.failed", "turn.cancelled"}:
+                    completion_seq = max(completion_seq, event.seq)
         if not self._bootstrap_is_current(session, bootstrap_revision):
             return "", summary
         cursor = max(max(0, int(seq)), view.last_seq)
@@ -128,6 +134,7 @@ class SessionController:
             view = replace(view, last_seq=cursor)
         self.view = view
         self.cursor = cursor
+        self.completion_seq = completion_seq
         await self._refresh_agent_metadata(
             session,
             metadata_revision,
@@ -231,8 +238,17 @@ class SessionController:
     def ingest(self, event: Event) -> tuple[bool, str]:
         """Canonically reduce an event; presentation reads only this projection."""
         before = self.view
+        notify = (
+            event.session == self.session
+            and event.seq > self.cursor
+            and event.type in {"turn.completed", "turn.failed"}
+        )
         self.view = apply(self.view, event)
         self.cursor = max(self.cursor, self.view.last_seq)
+        if event.type in {"turn.completed", "turn.failed", "turn.cancelled"}:
+            self.completion_seq = max(self.completion_seq, event.seq)
+        if notify and self.view is not before:
+            self.completion_bell += 1
         return self.view is not before, ""
 
     def replace_client(self, client: Client) -> Client:

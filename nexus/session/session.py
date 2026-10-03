@@ -715,7 +715,7 @@ class Session:
 
     @property
     def disabled_extensions(self) -> dict[str, frozenset[str]]:
-        disabled = {"skills": set(), "mcp": set()}
+        disabled = {"skills": set(), "mcp": set(), "tools": set()}
         for event in self.read().events():
             if event.type != "context.extension_selected" or not isinstance(event.data, Mapping):
                 continue
@@ -729,7 +729,7 @@ class Session:
 
     def select_extension(self, category: str, name: str, enabled: bool) -> None:
         self._ensure_writable()
-        if category not in {"skills", "mcp"} or not isinstance(name, str) or not name or len(name) > 256 or not isinstance(enabled, bool):
+        if category not in {"skills", "mcp", "tools"} or not isinstance(name, str) or not name or len(name) > 256 or not isinstance(enabled, bool):
             raise ValueError("Invalid extension selection")
         if self.context_locked:
             raise ValueError("Skills, MCP and agents are locked after the first turn to preserve the prompt cache. Start a new session to change them.")
@@ -1447,20 +1447,24 @@ class Session:
 
     def _resolve_turn_input(
         self, user_input: str | list[ContentBlock] | None
-    ) -> tuple[list[ContentBlock], _QueuedInput | None]:
-        """Return the turn's content and, if it comes from the queue, its item.
+    ) -> tuple[list[ContentBlock], tuple[_QueuedInput, ...]]:
+        """Return turn content and the pending queue snapshot it represents.
 
-        The queue head is **peeked**, not popped: the caller removes it only
-        after the lease and config snapshot succeed, so a failed start (for
-        example :class:`SessionBusy`) leaves the durable FIFO intact instead of
-        silently losing the submission from memory.
+        A queue-backed turn snapshots every currently pending submission. The
+        snapshot is only removed after the lease and config snapshot succeed;
+        queue arrivals after this call remain pending for a later turn.
         """
         if user_input is None:
-            if not self._queue:
+            items = tuple(self._queue)
+            if not items:
                 raise ValueError("no queued input to start a turn")
-            item = self._queue[0]
-            return item.content, item
-        return _coerce_user_input(user_input), None
+            content: list[ContentBlock] = []
+            for index, item in enumerate(items):
+                if index:
+                    content.append(Text(text="\n\n"))
+                content.extend(item.content)
+            return content, items
+        return _coerce_user_input(user_input), ()
 
     def _remove_queued(self, item: _QueuedInput) -> bool:
         """Remove ``item`` from the FIFO by identity; ``False`` if absent."""
@@ -1657,7 +1661,7 @@ class Session:
         turn_id: str | None,
         limits: TurnLimits | None,
         *,
-        queued_item: _QueuedInput | None = None,
+        queued_items: tuple[_QueuedInput, ...] = (),
     ) -> tuple[TurnLease, Any, Any]:
         """Claim the lease, snapshot config, and persist the user message.
 
@@ -1714,7 +1718,7 @@ class Session:
             raise
         self._active_tools = tool_turn
         try:
-            if queued_item is not None:
+            for queued_item in queued_items:
                 # Emit before removing: if the durable event fails, the item
                 # stays queued and memory still matches the log.
                 self._emit(
@@ -1811,63 +1815,71 @@ class Session:
             return
         if self._queued_task is not None and not self._queued_task.done():
             return
+        content, items = self._resolve_turn_input(None)
         if self._hook_runner() is None:
-            item = self._queue[0]
-            self._start_queued_turn(item.content, item)
+            self._start_queued_turn(content, items)
             return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        self._queued_task = loop.create_task(self._consume_queued_turn())
+        self._queued_task = loop.create_task(self._consume_queued_turn(items))
 
     def _start_queued_turn(
-        self, content: list[ContentBlock], item: _QueuedInput
+        self, content: list[ContentBlock], items: tuple[_QueuedInput, ...]
     ) -> None:
         """Prepare and launch one queued turn from already-gated content."""
         try:
             lease, assembler, tool_turn = self._prepare_turn(
-                content, self.attended, None, None, queued_item=item
+                content, self.attended, None, None, queued_items=items
             )
         except BaseException:  # noqa: BLE001 - a bad queued turn must not crash the drain
-            # Drop only if it is still pending. If preparation got past the
-            # consumed transition before failing, a second ``input.dropped``
-            # would contradict the durable ``input.consumed``.
-            if self._remove_queued(item):
-                self._emit(
-                    "input.dropped",
-                    {"queued_id": item.queued_id, "reason": "turn start failed"},
-                )
+            # Drop only still-pending items. Preparation can have durably
+            # consumed a prefix before a later event write fails.
+            for item in items:
+                if self._remove_queued(item):
+                    self._emit(
+                        "input.dropped",
+                        {"queued_id": item.queued_id, "reason": "turn start failed"},
+                    )
             return
         try:
             self._launch_turn(lease, content, assembler, tool_turn, fanout=None)
         except BaseException:  # noqa: BLE001 - release the lease, then keep draining
             self._active_tools = None
             lease.release()
-            if self._remove_queued(item):
-                self._emit(
-                    "input.dropped",
-                    {"queued_id": item.queued_id, "reason": "turn launch failed"},
-                )
+            for item in items:
+                if self._remove_queued(item):
+                    self._emit(
+                        "input.dropped",
+                        {"queued_id": item.queued_id, "reason": "turn launch failed"},
+                    )
 
-    async def _consume_queued_turn(self) -> None:
-        """Run the queued prompt's hooks, then prepare and launch its turn."""
-        if self._active is not None or not self._queue:
+    async def _consume_queued_turn(
+        self, items: tuple[_QueuedInput, ...]
+    ) -> None:
+        """Run hooks for the queue snapshot and launch its batched turn."""
+        if self._active is not None:
             return
-        item = self._queue[0]
-        content, block_reason = await self._gate_user_prompt(item.content)
+        content: list[ContentBlock] = []
+        for index, item in enumerate(items):
+            if index:
+                content.append(Text(text="\n\n"))
+            content.extend(item.content)
+        content, block_reason = await self._gate_user_prompt(content)
         if block_reason is not None:
-            if self._remove_queued(item):
-                self._emit(
-                    "input.dropped",
-                    {
-                        "queued_id": item.queued_id,
-                        "reason": f"UserPromptSubmit blocked: {block_reason}",
-                    },
-                )
+            for item in items:
+                if self._remove_queued(item):
+                    self._emit(
+                        "input.dropped",
+                        {
+                            "queued_id": item.queued_id,
+                            "reason": f"UserPromptSubmit blocked: {block_reason}",
+                        },
+                    )
             self._fail_blocked_prompt(block_reason)
             return
-        self._start_queued_turn(content, item)
+        self._start_queued_turn(content, items)
 
     async def start_turn(
         self,
@@ -1880,8 +1892,8 @@ class Session:
         """Start one turn detached from any subscriber; return its ``turn_id``.
 
         The turn runs to completion as a session-owned task, so closing or never
-        opening a subscriber does not affect it. With ``user_input=None`` the
-        head of the input queue is consumed instead (emitting ``input.consumed``).
+        opening a subscriber does not affect it. With ``user_input=None`` all
+        submissions pending at turn start are combined and consumed together.
 
         Configuration is snapshotted once, synchronously, before the task starts;
         a snapshot failure releases the lease without touching the log.
@@ -1897,17 +1909,18 @@ class Session:
         # Re-check after the await: a delete can retire the handle while the
         # readiness seam yields, and a retired handle must never write.
         self._ensure_writable()
-        content, queued_item = self._resolve_turn_input(user_input)
+        content, queued_items = self._resolve_turn_input(user_input)
         content, block_reason = await self._gate_user_prompt(content)
         if block_reason is not None:
-            if queued_item is not None and self._remove_queued(queued_item):
-                self._emit(
-                    "input.dropped",
-                    {
-                        "queued_id": queued_item.queued_id,
-                        "reason": f"UserPromptSubmit blocked: {block_reason}",
-                    },
-                )
+            for queued_item in queued_items:
+                if self._remove_queued(queued_item):
+                    self._emit(
+                        "input.dropped",
+                        {
+                            "queued_id": queued_item.queued_id,
+                            "reason": f"UserPromptSubmit blocked: {block_reason}",
+                        },
+                    )
             return self._fail_blocked_prompt(block_reason)
         effective = self.attended if attended is None else bool(attended)
         lease, assembler, tool_turn = self._prepare_turn(
@@ -1915,7 +1928,7 @@ class Session:
             effective,
             turn_id,
             limits,
-            queued_item=queued_item,
+            queued_items=queued_items,
         )
         try:
             self._launch_turn(
@@ -1924,8 +1937,8 @@ class Session:
                 assembler,
                 tool_turn,
                 fanout=None,
-                input_id=new_id() if queued_item is None else None,
-                input_content=_encode_queued_content(content) if queued_item is None else None,
+                input_id=new_id() if not queued_items else None,
+                input_content=_encode_queued_content(content) if not queued_items else None,
             )
         except BaseException:
             self._active_tools = None
@@ -2021,7 +2034,7 @@ class Session:
             await self._idle.wait()
 
     async def send(
-        self, user_input: str | list[ContentBlock], *, attended: bool | None = None
+        self, user_input: str | list[ContentBlock] | None = None, *, attended: bool | None = None
     ) -> AsyncIterator[Event]:
         """Run one turn and stream its persisted events in order (attached).
 
@@ -2040,12 +2053,19 @@ class Session:
         if self._ensure_ready is not None:
             await self._ensure_ready()
         self._ensure_writable()
-        content = _coerce_user_input(user_input)
+        content, queued_items = self._resolve_turn_input(user_input)
         # ``UserPromptSubmit`` runs before anything is durable; capture the log
         # watermark so the blocked path can yield exactly the events it emitted.
         watermark = self.next_seq() - 1
         content, block_reason = await self._gate_user_prompt(content)
         if block_reason is not None:
+            for item in queued_items:
+                if self._remove_queued(item):
+                    self._emit(
+                        "input.dropped",
+                        {"queued_id": item.queued_id,
+                         "reason": f"UserPromptSubmit blocked: {block_reason}"},
+                    )
             self._fail_blocked_prompt(block_reason)
             for event in self._events_after(watermark):
                 yield event
@@ -2054,7 +2074,9 @@ class Session:
         # headless JSON consumer stays unattended even while it is attached.
         effective = self._attended if attended is None else bool(attended)
         fanout = _Fanout(self._event_buffer)
-        lease, assembler, tool_turn = self._prepare_turn(content, effective, None, None)
+        lease, assembler, tool_turn = self._prepare_turn(
+            content, effective, None, None, queued_items=queued_items
+        )
         # Every event persisted before the producer started (the gate's hook
         # events, and a queued ``input.consumed``) is replayed first, because the
         # fan-out only captures what the loop emits after launch.
@@ -2066,8 +2088,8 @@ class Session:
                 assembler,
                 tool_turn,
                 fanout=fanout,
-                input_id=new_id(),
-                input_content=_encode_queued_content(content),
+                input_id=new_id() if not queued_items else None,
+                input_content=_encode_queued_content(content) if not queued_items else None,
             )
         except BaseException:
             self._active_tools = None

@@ -235,14 +235,46 @@ async def test_tools_dialog_groups_expands_and_opens_a_definition(shell):
     shell.refresh_preview = AsyncMock(return_value=True)
     await shell.workflows.operate({"kind": "context_show", "key": "tools"})
     labels = [item["label"] for item in shell.items]
-    assert shell.panel_title.startswith("Tools · 3 definitions · ~")
-    assert labels[0].startswith("▸ ■ files") and "read  write" in labels[0] and labels[1].startswith("▸ ■ fs")
+    assert shell.panel_title.startswith("Tools · 3 of 3 definitions · ~")
+    assert shell.panel_layout == "context"
+    assert labels[0].startswith("▾ files") and labels[1].strip().startswith("read")
     assert labels[-1] == "Edit tools…"
-    await shell.workflows.operate(shell.items[0]["operation"])
-    labels = [item["label"] for item in shell.items]
-    assert labels[0].startswith("▾ ■ files") and labels[1].strip().startswith("read")
+    assert shell.items[1]["toggle_enabled"] is True
     await shell.workflows.operate(shell.items[1]["operation"])
     assert shell.panel_title.startswith("Tool · read · ~") and "Read a file" in "\n".join(shell.panel_lines)
+    assert shell.panel_layout == "context"
+
+
+@pytest.mark.asyncio
+async def test_tools_dialog_switches_a_tool_off_and_on_before_the_first_turn(shell):
+    tools = [{"name": "read", "group": "files", "description": "Read a file"},
+             {"name": "write", "group": "files", "description": "Write a file"}]
+    shell.preview = SimpleNamespace(tools=tools, tools_supported=True, context_locked=False)
+    shell.refresh_preview = AsyncMock(return_value=True)
+    after = SimpleNamespace(tools=[{**tools[0], "enabled": False}, tools[1]], tools_supported=True, context_locked=False)
+    shell.client.select_context_extension = AsyncMock(return_value=after)
+    await shell.workflows.operate({"kind": "context_show", "key": "tools"})
+    await shell.workflows.operate(shell.items[1]["toggle_operation"])  # read
+    shell.client.select_context_extension.assert_awaited_with(shell.controller.session, "tools", "read", False)
+    assert shell.panel_title.startswith("Tools · 1 of 2 definitions")
+    assert shell.items[1]["toggle_enabled"] is False and shell.items[2]["toggle_enabled"] is True
+    assert shell.items[1]["toggle_operation"]["enabled"] is True
+    assert shell.items[1]["operation"]["kind"] == "tool_definition"
+    assert len(shell.workflows.stack) == 0
+    shell.client.select_context_extension.return_value = shell.preview = SimpleNamespace(tools=tools, tools_supported=True, context_locked=False)
+    await shell.workflows.operate(shell.items[1]["toggle_operation"])
+    shell.client.select_context_extension.assert_awaited_with(shell.controller.session, "tools", "read", True)
+
+
+@pytest.mark.asyncio
+async def test_locked_tools_dialog_has_no_toggles(shell):
+    tools = [{"name": "read", "group": "files", "description": "Read a file"}]
+    shell.preview = SimpleNamespace(tools=tools, tools_supported=True, context_locked=True)
+    shell.refresh_preview = AsyncMock(return_value=True)
+    await shell.workflows.operate({"kind": "context_show", "key": "tools"})
+    assert shell.items[1]["toggle_locked"] is True
+    assert shell.items[1]["operation"]["kind"] == "tool_definition"
+    assert "●" not in shell.items[1]["label"] and "Context locked after first turn" in shell.panel_lines
 
 
 @pytest.mark.asyncio
@@ -250,6 +282,19 @@ async def test_context_click_while_a_turn_runs_says_so(shell):
     shell.refresh_preview = AsyncMock(return_value=False)
     await shell.workflows.operate({"kind": "context_show", "key": "tools"})
     assert "unavailable while a turn is running" in shell.notice
+
+
+@pytest.mark.asyncio
+async def test_image_more_info_uses_daemon_preview(shell):
+    item = p.AttachmentPrepareResult("image-id", "shot.png", "image", "Image: shot.png")
+    shell.attachments = [item]
+    shell.client.preview_attachment = AsyncMock(return_value=p.AttachmentPreviewResult(
+        "image-id", "image/png", b"png bytes"))
+    await shell.workflows.operate({"kind": "attachment_preview", "id": "image-id"})
+    shell.client.preview_attachment.assert_awaited_once_with("image-id")
+    assert shell.panel_format == "image"
+    assert shell.preview_image == b"png bytes"
+    assert shell.panel_lines == ["Name: shot.png", "Media type: image/png", "Size: 9 bytes"]
 
 
 @pytest.mark.asyncio
@@ -296,12 +341,12 @@ async def test_agents_document_uses_markdown_and_preserves_newlines(shell):
         system_files={"agents": {"source": "/workspace/AGENTS.md"}})
     shell.client.inspect_context = AsyncMock(return_value=preview)
     await shell.workflows.operate({"kind": "context_show", "key": "agents"})
-    assert shell.panel_format == "markdown" and shell.panel_layout == "modal"
+    assert shell.panel_format == "markdown" and shell.panel_layout == "context"
     assert "/workspace/AGENTS.md" in shell.panel_title
     assert "\n".join(shell.panel_lines) == preview.included_parts[0]["text"]
     shell.workflows.menu("Next", [("Back", {"kind": "back"})])
     shell.workflows.back()
-    assert shell.panel_format == "markdown" and shell.panel_layout == "modal"
+    assert shell.panel_format == "markdown" and shell.panel_layout == "context"
 
 
 @pytest.mark.asyncio
@@ -373,3 +418,95 @@ async def test_remembered_model_skips_effort_prompt(shell):
     await shell.workflows.operate({"kind": "model_choose", "ref": "openai/example",
         "levels": ["low", "high"], "selected": "high", "remembered": True})
     shell.controller.select_model_and_effort.assert_awaited_once_with("openai/example", "high")
+
+
+def test_compact_header_chips_open_their_section_and_count_project_then_global():
+    from nexus.ui.ratatui.prototype import _compact_header
+    preview = SimpleNamespace(
+        tools=[{"name": "read", "group": "files"}, {"name": "write", "group": "files", "enabled": False}],
+        skills_index=[{"name": "a", "scope": "project"}, {"name": "b", "scope": "global"}, {"name": "c", "scope": "global"}, {"name": "d", "scope": "global", "enabled": False}],
+        mcp_servers=[], mcp=[], tools_supported=True, system_text="", included_parts=[], mcp_index="", agent={"name": "build"})
+    shell = SimpleNamespace(preview=preview, controller=SimpleNamespace(agent_name="build"), agent_definitions={})
+    [header, footer] = _compact_header(shell, None)
+    chips = {chip["id"]: chip for chip in header["members"]}
+    assert chips["context:skills"]["counts"] == [1, 2]
+    assert chips["context:mcp"]["counts"] == [0, 0]
+    assert chips["context:tools"]["counts"] == [1]
+    assert chips["context:skills"]["operation"] == {"kind": "context_show", "key": "skills"}
+    from nexus.ui_support.context_header import header_blocks
+    total = sum(block.tokens or 0 for block in header_blocks(preview, header["color"]))
+    assert footer == {"id": "context:total", "kind": "summary", "text": f"Context total · ~{total:,} tokens"}
+
+
+def test_compact_header_total_is_unavailable_without_preview():
+    from nexus.ui.ratatui.prototype import _compact_header
+    shell = SimpleNamespace(preview=None, controller=SimpleNamespace(agent_name="build"), agent_definitions={})
+    [header, footer] = _compact_header(shell, None)
+    assert header["kind"] == "context_header"
+    assert footer["kind"] == "summary"
+    assert footer["text"] == "Context total · tokens unavailable"
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_dialog_excludes_separate_agents_document(shell):
+    shell.preview = p.ContextInspectResult(session="s", system_text="System rules\n\nProject rules", included_parts=[
+        {"name": "system", "text": "System rules"}, {"name": "agents_md", "text": "Project rules"}])
+    shell.refresh_preview = AsyncMock(return_value=True)
+    await shell.workflows.operate({"kind": "context_show", "key": "system"})
+    assert shell.panel_lines == ["System rules"]
+    assert shell.panel_layout == "context"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("category", ["skills", "mcp"])
+async def test_extension_dialog_has_separate_inspection_and_toggle(shell, category):
+    row = {"name": "example", "scope": "project", "enabled": True, "description": "Helpful extension"}
+    shell.preview = p.ContextInspectResult(session="s", skills_index=[row], mcp_servers=[row])
+    shell.client.inspect_context = AsyncMock(return_value=shell.preview)
+    await shell.workflows.context_extensions(category)
+    item = shell.items[0]
+    assert shell.panel_layout == "context" and item["toggle_enabled"] is True
+    assert item["toggle_operation"] == {"kind": "context_toggle", "category": category, "name": "example", "enabled": False}
+    await shell.workflows.operate(item["operation"])
+    assert "Helpful extension" in "\n".join(shell.panel_lines)
+    await shell.workflows.operate({"kind": "back"})
+    assert shell.items[0]["toggle_enabled"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state,cached,label", [
+    ("absent", True, "Load voice model"),
+    ("error", True, "Load voice model"),
+    ("loading", True, "Refresh model status"),
+    ("downloading", False, "Refresh model status"),
+    ("absent", False, "Download voice model…"),
+])
+async def test_voice_model_menu_distinguishes_cache_from_loaded_state(shell, state, cached, label):
+    shell.client.voice_status = AsyncMock(return_value=p.VoiceStatusResult(
+        enabled=True, state=state, cached=cached,
+    ))
+    await shell.voice.open()
+    assert shell.items[0]["label"] == label
+    operation = shell.items[0]["operation"]
+    if cached and state not in {"loading", "downloading"}:
+        assert operation == {"kind": "voice_prepare", "allow_download": False}
+        shell.client.voice_prepare = AsyncMock()
+        await shell.workflows.operate(operation)
+        shell.client.voice_prepare.assert_awaited_once_with(allow_download=False)
+    elif state in {"loading", "downloading"}:
+        assert operation["kind"] == "voice"
+    else:
+        assert operation["kind"] == "confirm"
+
+
+@pytest.mark.asyncio
+async def test_voice_settings_cached_model_needs_no_download_consent(shell):
+    shell.client.voice_status = AsyncMock(return_value=p.VoiceStatusResult(
+        enabled=True, state="absent", cached=True,
+    ))
+    await shell.workflows.voice_settings()
+    assert not any(item["label"] == "Download local model…" for item in shell.items)
+    operation = next(item["operation"] for item in shell.items if item["label"] == "Load / prepare local model")
+    shell.client.voice_prepare = AsyncMock()
+    await shell.workflows.operate(operation)
+    shell.client.voice_prepare.assert_awaited_once_with(allow_download=False)

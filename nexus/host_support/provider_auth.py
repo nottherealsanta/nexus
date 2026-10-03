@@ -179,8 +179,14 @@ def _route(provider: str, domain: str | None = None) -> tuple[tuple[str, str], .
     return (("auth", "keychain"), ("base_url", OPENCODE_GO_BASE_URL), ("api", "chat"))
 
 
-def write_global_keys(runtime: object, updates: tuple[tuple[str, str, str], ...]) -> None:
-    """Set ``(table, key, value)`` rows in ``~/.nexus/config.toml`` (v2 only)."""
+def write_global_keys(runtime: object, updates: tuple[tuple[str, str, Any], ...]) -> None:
+    """Set ``(table, key, value)`` rows in ``~/.nexus/config.toml`` (v2 only).
+
+    A value may be a string, bool, int or list of strings; ``None`` removes the
+    key. After editing, every row is read back from the parsed document, so a
+    key the line editor could not place (an inline table, say) is an error
+    instead of a silent no-op.
+    """
     target = settings_target(runtime, "global", "config", "config")
     try:
         with target.path.open("rb") as stream:
@@ -201,6 +207,17 @@ def write_global_keys(runtime: object, updates: tuple[tuple[str, str, str], ...]
     body = text if document else "config_version = 2\n\n"
     for table, key, value in updates:
         body = settings_inventory.set_toml_key(body, table, key, value)
+    try:
+        written = tomllib.loads(body)
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError("could not save global config") from exc
+    for table, key, value in updates:
+        node: Any = written
+        for part in table.split("."):
+            node = node.get(part, {}) if isinstance(node, dict) else {}
+        found = node.get(key) if isinstance(node, dict) else None
+        if found != value:
+            raise ConfigError(f"cannot update [{table}] {key} in the global config; edit it in Settings > Config")
     expected = hashlib.sha256(old).hexdigest() if old else ""
     try:
         result = settings_inventory.write(runtime, "global", "config", "config", body, expected)

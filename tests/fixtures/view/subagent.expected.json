@@ -50,6 +50,7 @@
                     "finalized": true,
                     "kind": "text",
                     "signature": null,
+                    "started_ts": null,
                     "streamed": true,
                     "text": "Found it."
                   }

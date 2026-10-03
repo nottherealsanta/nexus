@@ -76,7 +76,7 @@ user > builtin): `<workspace>/.agents/skills/` (and legacy `.nexus/skills/`),
 - `SkillActivation` is an immutable overlay that **narrows** the turn's tools:
   `active = (available ∩ profile) ∩ declared`. A declaration never grants; unknown
   bundles fail closed to the empty set; declaring nothing does not narrow.
-- Per session, an individual skill can be switched off (`ContextExtensionSelect`);
+- Per session, an individual skill (or tool, `category="tools"`) can be switched off (`ContextExtensionSelect`);
   disabled skills leave the index, invocation and bundled tools. Locked after the
   first turn.
 - Events: `skill.invoked`, `skill.completed`.

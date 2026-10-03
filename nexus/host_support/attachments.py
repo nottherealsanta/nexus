@@ -144,6 +144,22 @@ class AttachmentStore:
             self.drafts[token] = (time.monotonic() + TTL_SECONDS, blocks)
             return p.AttachmentPrepareResult(token, name, kind, preview)
 
+    async def preview(self, command: p.AttachmentPreview) -> p.AttachmentPreviewResult:
+        """Return only bounded image payloads retained by this daemon."""
+        if not 1 <= command.max_bytes <= MAX_ATTACHMENT_BYTES:
+            raise ValueError("Preview byte limit must be between 1 byte and 8 MiB")
+        async with self.lock:
+            self.expire()
+            draft = self.drafts.get(command.attachment_id)
+            if draft is None:
+                raise ValueError("Attachment expired; attach the file again")
+            image = next((block for block in draft[1] if isinstance(block, Image)), None)
+            if image is None or image.data is None:
+                raise ValueError("Only prepared images can be previewed")
+            if len(image.data) > command.max_bytes:
+                raise ValueError("Image exceeds the requested preview byte limit")
+            return p.AttachmentPreviewResult(command.attachment_id, image.media_type, image.data)
+
     def release(self, tokens: list[str]) -> None:
         """Free prepared bytes once their content has been durably submitted."""
         for token in tokens:

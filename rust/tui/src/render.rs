@@ -1,5 +1,6 @@
 //! Native shell layout and bounded-width cell cache (feasibility §6–7).
 use crate::{bridge::Snapshot, editor::Editor};
+use base64::Engine as _;
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -62,7 +63,7 @@ impl Palette {
             }
         } else {
             Self {
-                background: rgb(0, 0, 0),
+                background: rgb(11, 11, 11),
                 text: rgb(238, 238, 238),
                 muted: rgb(163, 163, 163),
                 quiet: rgb(111, 111, 111),
@@ -70,7 +71,7 @@ impl Palette {
                 panel: rgb(20, 20, 20),
                 element: rgb(30, 30, 30),
                 element_hi: rgb(40, 40, 40),
-                dialog: rgb(0, 0, 0),
+                dialog: rgb(20, 20, 20),
                 border: rgb(44, 44, 44),
                 border_strong: rgb(72, 72, 72),
                 diff_del: rgb(62, 27, 33),
@@ -172,6 +173,8 @@ pub struct Cache {
     parts: std::collections::HashMap<String, std::sync::Arc<Part>>,
     blocks: Vec<crate::bridge::Content>,
     pub operations: Indexed<Option<serde_json::Value>>,
+    pub image_protocol: Option<ratatui_image::protocol::StatefulProtocol>,
+    image_source: String,
     source: Vec<String>,
     width: u16,
     pub lines: Indexed<Line<'static>>,
@@ -201,6 +204,7 @@ pub struct Cache {
     built_typing: bool,
     /// Line range of the transcript block focused with the keyboard (highlighted).
     pub focus: Option<(usize, usize)>,
+    pub pointer: Option<(u16, u16)>,
     /// Sessions sidebar filter text and whether it is being edited.
     pub filter: String,
     pub filtering: bool,
@@ -291,6 +295,46 @@ fn highlight(line: Line<'static>, from: usize, to: usize) -> Line<'static> {
     }
     Line::from(spans)
 }
+
+/// Highlight only the clickable columns of a context row, using its click map.
+fn context_hover(
+    line: Line<'static>,
+    operation: Option<&Option<serde_json::Value>>,
+    column: usize,
+    background: Color,
+) -> Line<'static> {
+    let Some(operation) = operation.and_then(Option::as_ref) else {
+        return line;
+    };
+    if operation["kind"] != "context_chips" {
+        return line;
+    }
+    let range = operation["chips"].as_array().and_then(|chips| {
+        chips.iter().find_map(|chip| {
+            let start = chip["start"].as_u64()? as usize;
+            let end = chip["end"].as_u64()? as usize;
+            (start <= column && column < end).then_some((start, end))
+        })
+    });
+    let Some((start, end)) = range else {
+        return line;
+    };
+    let mut result = Line::default().style(line.style);
+    let mut at = 0;
+    for span in line.spans {
+        for grapheme in span.content.graphemes(true) {
+            let width = UnicodeWidthStr::width(grapheme);
+            let style = if at < end && at + width > start {
+                span.style.bg(background)
+            } else {
+                span.style
+            };
+            result.spans.push(Span::styled(grapheme.to_owned(), style));
+            at += width;
+        }
+    }
+    result
+}
 /// Keyboard-focusable transcript blocks: runs of consecutive lines that open the
 /// same operation (what a click on them would do), as `(first line, last line)`.
 pub fn targets(cache: &Cache) -> Vec<(usize, usize)> {
@@ -351,7 +395,25 @@ fn activity_meter(s: &Snapshot, p: &Palette, width: usize, tick: usize) -> Vec<S
                     }
                 }
             } else {
-                p.border
+                let window = s.context_window.filter(|window| *window > 0);
+                let ratio = window
+                    .map(|window| s.context_used.unwrap_or(0) as f64 / window as f64)
+                    .unwrap_or(0.0)
+                    .clamp(0.0, 1.0);
+                let soft = s.context_tiers.first().copied().unwrap_or(0);
+                let amount = if soft > 0 && s.context_used.unwrap_or(0) >= soft {
+                    (s.context_used.unwrap_or(0) as f64 / window.unwrap_or(1) as f64)
+                        .clamp(0.0, 1.0)
+                } else if soft > 0 {
+                    (s.context_used.unwrap_or(0) as f64 / soft as f64).clamp(0.0, 1.0)
+                } else {
+                    ratio
+                };
+                if (i as f64) < amount * width as f64 {
+                    accent
+                } else {
+                    p.border
+                }
             };
             Span::styled("─", Style::default().fg(tone))
         })
@@ -593,6 +655,7 @@ pub struct Regions {
     pub sessions: Rect,
     pub details: Rect,
     pub tabs: Rect,
+    pub workspace: Rect,
     pub context: Rect,
 }
 /// Composer height: the editor grows with its wrapped content up to Textual's
@@ -615,11 +678,11 @@ pub fn composer_height(area: Rect, draft: &Editor, s: &Snapshot) -> u16 {
         displayed.cursor += s.voice_preview.len();
     }
     let rows = editor_view(&displayed, false, &Palette::new(false), width, u16::MAX).len();
-    let wanted = 4 + rows.clamp(3, 22) as u16 + queue_rows(s);
+    let wanted = 6 + rows.clamp(3, 22) as u16 + queue_rows(s);
     wanted
-        .min(area.height.saturating_sub(3 + 4))
+        .min(area.height.saturating_sub(2 + 4))
         .min(area.height)
-        .max(area.height.min(6))
+        .max(area.height.min(7))
 }
 pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool) -> Regions {
     let both = area.width >= 130;
@@ -646,10 +709,12 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
         Constraint::Length(right),
     ])
     .split(area);
-    let top = if left > 0 || !s.agent_page.is_empty() {
-        2
+    let top = if !s.agent_page.is_empty() {
+        1
+    } else if left > 0 {
+        0
     } else {
-        3
+        1
     };
     let center = Layout::vertical([
         Constraint::Length(top),
@@ -660,6 +725,12 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
     let drawer = s.details_sidebar && area.width < 100;
     Regions {
         tabs: center[0],
+        workspace: Rect::new(
+            center[2].x,
+            center[2].bottom().saturating_sub(2),
+            center[2].width,
+            1,
+        ),
         sessions: columns[0],
         details: if drawer {
             Rect::new(
@@ -685,7 +756,7 @@ pub fn editor_text(editor: &Editor, secret: bool, palette: &Palette) -> Vec<Line
                 .last_mut()
                 .unwrap()
                 .spans
-                .push(Span::styled("▏", Style::default().fg(palette.accent)));
+                .push(Span::styled("█", Style::default().fg(palette.accent)));
         }
         if g == "\n" {
             lines.push(Line::default());
@@ -714,7 +785,7 @@ pub fn editor_text(editor: &Editor, secret: bool, palette: &Palette) -> Vec<Line
             .last_mut()
             .unwrap()
             .spans
-            .push(Span::styled("▏", Style::default().fg(palette.accent)));
+            .push(Span::styled("█", Style::default().fg(palette.accent)));
     }
     lines
 }
@@ -802,6 +873,20 @@ pub fn draw(
                 .enumerate()
                 .map(|(row, line)| {
                     let mut line = with_spinner(line, cache.spin);
+                    if s.panel_title.is_empty() && s.prompt.is_none() {
+                        if let Some((x, y)) = cache.pointer {
+                            if r.transcript.contains((x, y).into())
+                                && usize::from(y - r.transcript.y) == row
+                            {
+                                line = context_hover(
+                                    line,
+                                    cache.operations.get(offset + row),
+                                    usize::from(x - r.transcript.x),
+                                    p.element_hi,
+                                );
+                            }
+                        }
+                    }
                     if let Some((a, b)) = cache.selection {
                         let ((first, from), (last, to)) = ordered(a, b);
                         let at = offset + row;
@@ -854,7 +939,7 @@ pub fn draw(
         x: rows[1].x + 2,
         width: rows[1].width.saturating_sub(4),
         y: rows[1].y,
-        height: rows[1].height + 1,
+        height: rows[1].height + 2, // editor, controls and one row of bottom padding
     };
     if !s.agent_page.is_empty() {
         frame.render_widget(
@@ -864,13 +949,18 @@ pub fn draw(
             r.composer,
         );
     } else {
+        // A heavy agent-coloured rail, then a sliver of background, then the card.
         frame.render_widget(
             Block::default().style(Style::default().bg(p.panel)),
-            box_area,
+            Rect {
+                x: box_area.x + 1,
+                width: box_area.width.saturating_sub(1),
+                ..box_area
+            },
         );
         for y in box_area.y..box_area.y + box_area.height {
             frame.render_widget(
-                Paragraph::new("│").style(Style::default().fg(agent_color).bg(p.panel)),
+                Paragraph::new("▎").style(Style::default().fg(agent_color).bg(p.background)),
                 Rect {
                     x: box_area.x,
                     y,
@@ -920,7 +1010,11 @@ pub fn draw(
         }
         if displayed.text.is_empty() {
             frame.render_widget(
-                Paragraph::new("Type a message…").style(Style::default().fg(p.quiet).bg(p.panel)),
+                Paragraph::new(Line::from(vec![
+                    Span::styled("█", Style::default().fg(p.accent)),
+                    Span::styled("Type a message…", Style::default().fg(p.quiet)),
+                ]))
+                .style(Style::default().bg(p.panel)),
                 editor_area,
             );
         } else {
@@ -963,7 +1057,8 @@ pub fn draw(
                 .style(Style::default().bg(p.panel)),
             controls,
         );
-        let meter_area = inset(rows[3], 2, 2);
+        chrome::draw_workspace_bar(frame, s, r.workspace, &p, cache.spin);
+        let meter_area = inset(rows[5], 2, 2);
         frame.render_widget(
             Paragraph::new(Line::from(activity_meter(
                 s,
@@ -991,7 +1086,7 @@ pub fn draw(
         let field = if cache.filter.is_empty() && !cache.filtering {
             "Filter sessions".into()
         } else {
-            format!("{}{}", cache.filter, if cache.filtering { "▏" } else { "" })
+            format!("{}{}", cache.filter, if cache.filtering { "█" } else { "" })
         };
         frame.render_widget(
             Paragraph::new(field).style(Style::default().fg(p.quiet).bg(p.panel)),
@@ -1166,7 +1261,49 @@ pub fn draw(
                 ..inner
             };
         }
-        if let Some(f) = &s.form {
+        if s.panel_format == "image" && !s.preview_image.is_empty() {
+            let areas = Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).split(inner);
+            frame.render_widget(
+                Paragraph::new(s.panel_lines.join("\n")).style(Style::default().fg(p.text)),
+                areas[0],
+            );
+            if cache.image_source != s.preview_image {
+                cache.image_protocol = base64::engine::general_purpose::STANDARD
+                    .decode(&s.preview_image)
+                    .ok()
+                    .and_then(|bytes| {
+                        let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+                            .with_guessed_format()
+                            .ok()?;
+                        let mut limits = image::Limits::default();
+                        limits.max_image_width = Some(8192);
+                        limits.max_image_height = Some(8192);
+                        limits.max_alloc = Some(128 * 1024 * 1024);
+                        reader.limits(limits);
+                        reader.decode().ok()
+                    })
+                    .map(|image| {
+                        // The input reader already owns the terminal. Querying here
+                        // would race it for capability responses and stall rendering.
+                        let picker = ratatui_image::picker::Picker::from_fontsize((10, 20));
+                        picker.new_resize_protocol(image)
+                    });
+                cache.image_source.clone_from(&s.preview_image);
+            }
+            if let Some(protocol) = cache.image_protocol.as_mut() {
+                frame.render_stateful_widget(
+                    ratatui_image::StatefulImage::new(),
+                    areas[1],
+                    protocol,
+                );
+            } else {
+                frame.render_widget(
+                    Paragraph::new("Image could not be decoded for preview")
+                        .style(Style::default().fg(p.muted)),
+                    areas[1],
+                );
+            }
+        } else if let Some(f) = &s.form {
             let areas = Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).split(inner);
             frame.render_widget(
                 Paragraph::new(editor_view(
@@ -1204,11 +1341,17 @@ pub fn draw(
                     ));
                 }
             }
-            lines.push(Line::from(vec![
-                Span::styled("Filter ", Style::default().fg(p.quiet)),
-                Span::styled(format!("{filter}▏"), Style::default().fg(p.text)),
-                Span::styled("   Tab inspect details", Style::default().fg(p.quiet)),
-            ]));
+            lines.push(Line::from(if filter.is_empty() {
+                vec![
+                    Span::styled("Search", Style::default().fg(p.quiet)),
+                    Span::styled("   Tab inspect details", Style::default().fg(p.quiet)),
+                ]
+            } else {
+                vec![
+                    Span::styled(format!("{filter}█"), Style::default().fg(p.text)),
+                    Span::styled("   Tab inspect details", Style::default().fg(p.quiet)),
+                ]
+            }));
             lines.push(Line::default());
             // Group headings sit above the first item of each group; selection counts items only.
             let mut body: Vec<Line<'static>> = Vec::new();
@@ -1226,28 +1369,95 @@ pub fn draw(
                 }
                 group = &item.group;
                 let on = i == selection;
-                let style = if on {
-                    Style::default()
-                        .fg(p.text)
-                        .bg(p.element_hi)
-                        .add_modifier(Modifier::BOLD)
+                // Selected: solid accent bar with dark text. Active choice: `●` + accent name.
+                let (name_style, detail_style, fill) = if on {
+                    let dark = Style::default().fg(p.background).bg(p.accent);
+                    (dark.add_modifier(Modifier::BOLD), dark, dark)
                 } else {
-                    Style::default().fg(p.muted).bg(p.dialog)
+                    let base = Style::default().bg(p.dialog);
+                    (
+                        base.fg(if item.current { p.accent } else { p.text }),
+                        base.fg(p.quiet),
+                        base,
+                    )
                 };
-                let text = format!(" {} {}", if on { "▸" } else { " " }, item.label);
-                let pad = usize::from(inner.width).saturating_sub(text.width());
+                let toggle = item.toggle_operation.as_ref().map(|_| {
+                    if item.toggle_locked {
+                        "[ LOCKED ]".to_string()
+                    } else if item.toggle_enabled.unwrap_or(false) {
+                        "[ ON ]".to_string()
+                    } else {
+                        "[ OFF ]".to_string()
+                    }
+                });
+                let marker = if item.current { "●" } else { " " };
+                let width = usize::from(inner.width);
+                let available =
+                    width.saturating_sub(3 + toggle.as_ref().map_or(0, |t| t.width() + 1));
+                let label = truncate_width(&item.label, available);
+                let mut spans = vec![
+                    Span::styled(
+                        format!(" {marker} "),
+                        if on {
+                            name_style
+                        } else {
+                            name_style.fg(p.accent)
+                        },
+                    ),
+                    Span::styled(label.clone(), name_style),
+                ];
+                let mut used = 3 + label.width();
+                if !item.detail.is_empty() {
+                    let detail =
+                        truncate_width(&item.detail, available.saturating_sub(label.width() + 1));
+                    if !detail.is_empty() {
+                        used += 1 + detail.width();
+                        spans.push(Span::styled(format!(" {detail}"), detail_style));
+                    }
+                }
+                if let Some(toggle) = toggle {
+                    let gap = width.saturating_sub(used + toggle.width());
+                    spans.push(Span::styled(" ".repeat(gap), fill));
+                    used += gap + toggle.width();
+                    spans.push(Span::styled(toggle, name_style));
+                }
+                spans.push(Span::styled(" ".repeat(width.saturating_sub(used)), fill));
                 if on {
                     selected_line = body.len();
                 }
-                body.push(Line::styled(format!("{text}{}", " ".repeat(pad)), style));
+                body.push(Line::from(spans));
             }
-            let room = inner.height.saturating_sub(lines.len() as u16) as usize;
+            let reserved = if s.panel_hint.is_empty() { 0 } else { 2 };
+            let room = inner.height.saturating_sub(lines.len() as u16 + reserved) as usize;
             let start = (selected_line + 1).saturating_sub(room.max(1));
             lines.extend(body.into_iter().skip(start).take(room));
             frame.render_widget(
                 Paragraph::new(lines).style(Style::default().bg(p.dialog)),
                 inner,
             );
+            if !s.panel_hint.is_empty() && inner.height > 0 {
+                // Key hints: the key text is dim, its action label bright.
+                let spans: Vec<Span<'static>> = s
+                    .panel_hint
+                    .split("  ")
+                    .flat_map(|part| {
+                        let (label, key) = part
+                            .rsplit_once(" ctrl+")
+                            .map_or((part, String::new()), |(l, k)| (l, format!(" ctrl+{k}")));
+                        [
+                            Span::styled(
+                                label.to_string(),
+                                Style::default().fg(p.text).add_modifier(Modifier::BOLD),
+                            ),
+                            Span::styled(format!("{key}  "), Style::default().fg(p.quiet)),
+                        ]
+                    })
+                    .collect();
+                frame.render_widget(
+                    Paragraph::new(Line::from(spans)).style(Style::default().bg(p.dialog)),
+                    Rect::new(inner.x, inner.bottom() - 1, inner.width, 1),
+                );
+            }
         } else {
             let rebuild =
                 cache
@@ -1375,7 +1585,7 @@ pub fn draw(
         if prompt.kind == "question" {
             lines.push(Line::from(vec![
                 Span::styled(" Answer ", Style::default().fg(p.quiet)),
-                Span::styled(format!("{}▏", answer.text), Style::default().fg(p.text)),
+                Span::styled(format!("{}█", answer.text), Style::default().fg(p.text)),
                 Span::styled("   Enter submit", Style::default().fg(p.quiet)),
             ]));
         }
@@ -1396,15 +1606,153 @@ pub fn draw(
         };
         frame.render_widget(
             Paragraph::new("■").style(Style::default().fg(tone).bg(p.panel)),
-            Rect::new(box_area.x + 3, rows[3].y, 1, 1),
+            Rect::new(box_area.x + 3, rows[5].y, 1, 1),
         );
     }
     r
 }
+
+fn truncate_width(text: &str, width: usize) -> String {
+    if text.width() <= width {
+        return text.to_string();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    let mut used = 0;
+    for grapheme in text.graphemes(true) {
+        let gw = grapheme.width();
+        if used + gw > width {
+            break;
+        }
+        out.push_str(grapheme);
+        used += gw;
+    }
+    out
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unread_completed_tab_has_a_solid_blue_dot() {
+        let mut s = Snapshot::default();
+        s.tabs = vec![crate::bridge::Session {
+            id: "finished".into(),
+            title: "Finished agent".into(),
+            status: "done".into(),
+            ..Default::default()
+        }];
+        let p = Palette::new(false);
+        let backend = ratatui::backend::TestBackend::new(80, 2);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|frame| {
+            draw_top_bar(frame, &s, frame.area(), &p, 0);
+        }).unwrap();
+        let buffer = terminal.backend().buffer();
+        let dot = buffer.content.iter().find(|cell| cell.symbol() == "●").unwrap();
+        assert_eq!(dot.fg, p.blue);
+    }
     use ratatui::{backend::TestBackend, Terminal};
+    #[test]
+    fn context_hover_matches_click_bounds_and_preserves_foreground() {
+        let p = Palette::new(false);
+        let line = Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "◈ Title  ",
+                Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+        ]);
+        let operation = Some(serde_json::json!({
+            "kind": "context_chips",
+            "chips": [{"start": 1, "end": 10, "name": "Instructions"}]
+        }));
+        for column in [1, 5, 9] {
+            let hovered = context_hover(line.clone(), Some(&operation), column, p.element_hi);
+            assert_eq!(hovered.spans[0].style.bg, None);
+            assert_eq!(hovered.spans[10].style.bg, None);
+            for span in &hovered.spans[1..10] {
+                assert_eq!(span.style.bg, Some(p.element_hi));
+                assert_eq!(span.style.fg, Some(p.accent));
+                assert!(span.style.add_modifier.contains(Modifier::BOLD));
+            }
+        }
+        for column in [0, 10, 20] {
+            assert_eq!(
+                context_hover(line.clone(), Some(&operation), column, p.element_hi),
+                line
+            );
+        }
+        assert_eq!(context_hover(line.clone(), None, 1, p.element_hi), line);
+        let other = Some(serde_json::json!({"kind": "tool"}));
+        assert_eq!(
+            context_hover(line.clone(), Some(&other), 1, p.element_hi),
+            line
+        );
+    }
+    #[test]
+    fn context_hover_follows_pointer_and_clears_on_exit() {
+        let s: Snapshot = serde_json::from_value(serde_json::json!({
+            "schema": 1, "revision": 1,
+            "blocks": [{"id": "header", "kind": "context_header", "members": [
+                {"id": "instructions", "title": "Instructions", "text": "1 file", "operation": {"kind": "context_show", "key": "instructions"}}
+            ]}]
+        })).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        let mut cache = Cache::default();
+        let mut paint = |cache: &mut Cache| {
+            let mut regions = Regions::default();
+            terminal
+                .draw(|frame| {
+                    regions = draw(
+                        frame,
+                        &s,
+                        &Editor::default(),
+                        &Editor::default(),
+                        &Editor::default(),
+                        "",
+                        0,
+                        0,
+                        0,
+                        cache,
+                        false,
+                        false,
+                        false,
+                        false,
+                        0,
+                        0,
+                        0,
+                    );
+                })
+                .unwrap();
+            (regions, terminal.backend().buffer().clone())
+        };
+        let (regions, _) = paint(&mut cache);
+        let row = (0..cache.lines.len())
+            .find(|row| {
+                cache
+                    .operations
+                    .get(*row)
+                    .and_then(Option::as_ref)
+                    .is_some_and(|op| op["kind"] == "context_chips")
+            })
+            .unwrap();
+        let operation = cache.operations.get(row).unwrap().as_ref().unwrap();
+        let column = operation["chips"][0]["start"].as_u64().unwrap() as u16;
+        let cell = (
+            regions.transcript.x + column,
+            regions.transcript.y + row as u16,
+        );
+        cache.pointer = Some(cell);
+        let (_, hovered) = paint(&mut cache);
+        assert_eq!(hovered[cell].bg, Palette::new(false).element_hi);
+        cache.pointer = Some((0, 0));
+        let (_, cleared) = paint(&mut cache);
+        assert_ne!(cleared[cell].bg, Palette::new(false).element_hi);
+    }
     #[test]
     fn activity_rule_is_quiet_when_idle_and_agent_colored_when_running() {
         let p = Palette::new(false);
@@ -1414,10 +1762,16 @@ mod tests {
             context_marks: vec![80],
             ..Default::default()
         };
+        // Idle: the rule shows context fill (60 of 100 -> 6 of 10 cells in the
+        // agent colour); the rest stays the quiet border colour.
         let meter = activity_meter(&s, &p, 10, 0);
-        assert!(meter
+        assert!(meter.iter().all(|span| span.content == "─"));
+        assert!(meter[..6].iter().all(|span| span.style.fg == Some(p.blue)));
+        assert!(meter[6..].iter().all(|span| span.style.fg == Some(p.border)));
+        let empty = Snapshot::default();
+        assert!(activity_meter(&empty, &p, 10, 0)
             .iter()
-            .all(|span| span.style.fg == Some(p.border) && span.content == "─"));
+            .all(|span| span.style.fg == Some(p.border)));
         s.status = "running".into();
         let first = activity_meter(&s, &p, 10, 0);
         let next = activity_meter(&s, &p, 10, 3);
@@ -1536,7 +1890,7 @@ mod tests {
             .unwrap();
         assert!(text(first).starts_with("▌⠙ Fix bug"), "{}", text(first));
         assert!(text(first + 1).contains("working now · just now"));
-        assert!(text(first + 2).starts_with(" ✓ Docs"));
+        assert!(text(first + 2).starts_with(" · Docs"));
         let filtered = session_sidebar(&s, &Palette::new(false), 27, 1, "docs", true);
         let titles: Vec<String> = filtered
             .iter()
@@ -1614,7 +1968,7 @@ mod tests {
                 .map(|s| s.content.as_ref())
                 .collect::<String>()
         };
-        assert_eq!(text(0), "  src/a.py (+1, -1)");
+        assert_eq!(text(0), "   src/a.py (+1, -1)");
         assert!(
             text(1).contains(" 9 keep") && text(1).contains("│ 9 keep"),
             "{}",
@@ -1635,7 +1989,7 @@ mod tests {
             .spans
             .iter()
             .any(|s| s.style.bg == Some(p.diff_add)));
-        assert_eq!(text(3), "  ⋯");
+        assert_eq!(text(3), "   ⋯");
         assert!(text(4).contains("40 tail"));
     }
     #[test]
@@ -1703,7 +2057,7 @@ mod tests {
                         if r.sessions.width > 0 {
                             assert_eq!(r.sessions.height, 50);
                             assert_eq!(r.sessions.y, 0);
-                            assert_eq!(r.tabs.height, 2);
+                            assert_eq!(r.tabs.height, 0);
                         }
                         if r.details.width > 0 {
                             assert_eq!(r.details.height, 50);
@@ -1815,8 +2169,10 @@ mod tests {
                 .unwrap_or_else(|| panic!("{needle} missing"))
         };
         assert!(at("Favorites") < at(" a") && at(" a") < at("Recent") && at("Recent") < at(" b"));
-        assert!(
-            screen[at(" c")].contains("▸"),
+        let bg = |row: usize| terminal.backend().buffer()[(40, row as u16)].bg;
+        assert_ne!(
+            bg(at(" c")),
+            bg(at(" b")),
             "selection 2 is the third item, not the third line"
         );
         assert_eq!(
@@ -1835,6 +2191,7 @@ mod tests {
                 ("Layout".into(), "layout".into(), false),
                 ("CONFIGURE".into(), "".into(), true),
                 ("Providers".into(), "providers".into(), false),
+                ("Speech".into(), "speech".into(), false),
             ],
             selected: 2,
         };
@@ -2051,23 +2408,93 @@ mod tests {
     fn composer_grows_with_content_and_is_capped() {
         let area = Rect::new(0, 0, 80, 60);
         let mut draft = Editor::default();
-        assert_eq!(composer_height(area, &draft, &Snapshot::default()), 7);
+        assert_eq!(composer_height(area, &draft, &Snapshot::default()), 9);
         draft.insert(&"line\n".repeat(9));
-        assert_eq!(composer_height(area, &draft, &Snapshot::default()), 4 + 10);
+        assert_eq!(composer_height(area, &draft, &Snapshot::default()), 6 + 10);
         draft.insert(&"line\n".repeat(60));
-        assert_eq!(composer_height(area, &draft, &Snapshot::default()), 4 + 22);
+        assert_eq!(composer_height(area, &draft, &Snapshot::default()), 6 + 22);
         assert_eq!(
             composer_height(Rect::new(0, 0, 80, 14), &draft, &Snapshot::default()),
-            7,
-            "the transcript keeps its rows"
+            8,
+            "the transcript keeps its rows with a single-row top bar"
         );
         let mut queued = Snapshot::default();
         queued.queue_lines = vec!["Queued · a".into(), "Steering · b".into()];
         assert_eq!(
             composer_height(Rect::new(0, 0, 80, 60), &Editor::default(), &queued),
-            9,
+            11,
             "queued messages get rows above the editor"
         );
+    }
+    #[test]
+    fn workspace_bar_is_between_composer_controls_and_activity() {
+        for width in [60, 120, 180] {
+            for sessions_sidebar in [false, true] {
+                let s = Snapshot {
+                    breadcrumb: "/workspace · main · worktree".into(),
+                    agent: "Agent".into(),
+                    sessions_sidebar,
+                    ..Default::default()
+                };
+                let area = Rect::new(0, 0, width, 40);
+                let r = regions(
+                    area,
+                    &s,
+                    composer_height(area, &Editor::default(), &s),
+                    false,
+                );
+                let rows = composer_rows(r.composer, &s);
+                assert_eq!(r.workspace, rows[4]);
+                assert_eq!(rows[3].bottom(), r.workspace.y);
+                assert_eq!(r.workspace.bottom(), rows[5].y);
+                let mut terminal = Terminal::new(TestBackend::new(width, 40)).unwrap();
+                let mut cache = Cache::default();
+                terminal
+                    .draw(|frame| {
+                        draw(
+                            frame,
+                            &s,
+                            &Editor::default(),
+                            &Editor::default(),
+                            &Editor::default(),
+                            "",
+                            0,
+                            0,
+                            0,
+                            &mut cache,
+                            true,
+                            false,
+                            false,
+                            false,
+                            0,
+                            0,
+                            0,
+                        );
+                    })
+                    .unwrap();
+                let row: String = (r.workspace.x..r.workspace.right())
+                    .map(|x| terminal.backend().buffer()[(x, r.workspace.y)].symbol())
+                    .collect();
+                assert!(row.contains("/workspace") && row.contains("idle"), "{row}");
+                assert!(!row.contains('▐'), "no duplicate details toggle: {row}");
+                if r.tabs.height > 0 {
+                    assert_eq!(r.tabs.height, 1, "top bar has no separator row");
+                    let top: String = (r.tabs.x..r.tabs.right())
+                        .map(|x| terminal.backend().buffer()[(x, r.tabs.y)].symbol())
+                        .collect();
+                    assert!(top.contains('▐'), "top-bar toggle remains: {top}");
+                }
+                let buffer = terminal.backend().buffer();
+                assert_eq!(buffer[(r.workspace.x + 5, r.workspace.y)].symbol(), "/");
+                assert_eq!(buffer[(r.workspace.x + 5, rows[2].y)].symbol(), "A");
+                for x in r.workspace.x..r.workspace.right() {
+                    assert_eq!(
+                        buffer[(x, r.workspace.y)].bg,
+                        Palette::new(false).background
+                    );
+                }
+            }
+        }
     }
     #[test]
     fn narrow_layout_and_safe_wrap() {
@@ -2131,7 +2558,7 @@ fn editor_view(
                     rows.push(Line::default());
                     columns = 0;
                 }
-                if grapheme == "▏" && span.style.fg == Some(palette.accent) {
+                if grapheme == "█" && span.style.fg == Some(palette.accent) {
                     cursor_row = rows.len() - 1;
                 }
                 rows.last_mut()
@@ -2153,6 +2580,62 @@ fn editor_view(
 mod editor_layout_tests {
     use super::*;
     #[test]
+    fn composer_cursor_stays_visible_before_typing_and_after_clear() {
+        use ratatui::{backend::TestBackend, Terminal};
+        for light in [false, true] {
+            let s = Snapshot {
+                theme: if light { "nexus-light" } else { "nexus-dark" }.into(),
+                ..Default::default()
+            };
+            let p = Palette::new(light);
+            let mut editor = Editor::default();
+            let mut cache = Cache::default();
+            let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+            for text in ["", "hello", ""] {
+                editor.take();
+                editor.insert(text);
+                let mut composer = Rect::default();
+                terminal
+                    .draw(|frame| {
+                        composer = draw(
+                            frame,
+                            &s,
+                            &editor,
+                            &Editor::default(),
+                            &Editor::default(),
+                            "",
+                            0,
+                            0,
+                            0,
+                            &mut cache,
+                            false,
+                            false,
+                            false,
+                            false,
+                            0,
+                            0,
+                            0,
+                        )
+                        .composer;
+                    })
+                    .unwrap();
+                let rows = composer_rows(composer, &s);
+                let cursor = &terminal.backend().buffer()
+                    [(composer.x + 5 + text.len() as u16, rows[1].y + 1)];
+                assert_eq!(cursor.symbol(), "█");
+                assert_eq!(cursor.fg, p.accent);
+                assert_eq!(cursor.bg, p.panel);
+                if text.is_empty() {
+                    assert_eq!(
+                        terminal.backend().buffer()[(composer.x + 6, rows[1].y + 1)].symbol(),
+                        "T"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn long_line_keeps_cursor_visible_and_graphemes_whole() {
         let mut editor = Editor::default();
         editor.insert(&"🧑🏽‍💻a".repeat(80));
@@ -2162,7 +2645,7 @@ mod editor_layout_tests {
         assert!(rows
             .iter()
             .flat_map(|row| row.spans.iter())
-            .any(|span| span.content == "▏"));
+            .any(|span| span.content == "█"));
     }
 }
 
@@ -2208,6 +2691,8 @@ pub fn composer_rows(area: Rect, s: &Snapshot) -> Vec<Rect> {
         Constraint::Min(4),
         Constraint::Length(1),
         Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
     ])
     .split(area)
     .to_vec()
@@ -2231,7 +2716,7 @@ fn control_layout(s: &Snapshot, width: usize) -> ControlLayout {
     if numbers.is_empty() {
         numbers.push("unavailable");
     }
-    let mut bars = true;
+    let mut bars = false;
     loop {
         let mut agent = s.agent.clone();
         if let Some(first) = agent.get_mut(0..1) {

@@ -100,6 +100,21 @@ pub fn pick(s: &Snapshot, index: usize, filter: &str) -> io::Result<()> {
         Ok(())
     }
 }
+pub fn toggle(s: &Snapshot, index: usize, filter: &str) -> io::Result<()> {
+    if let Some(item) = s
+        .items
+        .iter()
+        .filter(|row| row.label.to_lowercase().contains(&filter.to_lowercase()))
+        .nth(index)
+        .filter(|item| item.toggle_operation.is_some() && !item.toggle_locked)
+    {
+        send(
+            json!({"type":"operation","operation":item.toggle_operation.as_ref().unwrap(),"generation":s.generation}),
+        )
+    } else {
+        Ok(())
+    }
+}
 pub fn save(s: &Snapshot, editor: &Editor, revision: u64) -> io::Result<()> {
     if let Some(form) = &s.form {
         send(

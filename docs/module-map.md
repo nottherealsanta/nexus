@@ -201,6 +201,7 @@ here, so add a row when you add a file.
 | `__init__.py` | Implementation helpers for host-facing read-only projections |
 | `agent_context.py` | The request context one subagent actually sent, shaped for the context header |
 | `approval.py` | Bounded permission-request projection shared by attended host clients |
+| `auto_title.py` | Starts, bounds and cancels the background session-title call for a new root session |
 | `archive_protocol.py` | Wire records for the bounded session archive commands |
 | `attachments.py` | Bounded attachment preparation (images stay image blocks, documents via the isolated AnyDoc worker); drafts expire |
 | `browser_view.py` | Browser-safe reducer projection and compact structural JSON patches |
@@ -210,6 +211,7 @@ here, so add a row when you add a file.
 | `git_diff.py` | Bounded, read-only Git diff projection for the host |
 | `install.py` | Install, upgrade, and daemon-hygiene helpers |
 | `mock.py` | Host dispatch for the dev-mode `Mock*` commands |
+| `model_settings.py` | Settings → Models and Session titles: tier lists, the subagent ceiling, the auto-title switch |
 | `provider_auth.py` | Provider sign-in behind the host boundary: Settings → Providers |
 | `provider_usage.py` | Plan usage and limits for every connected provider (`ProvidersUsage`) |
 | `searchserver.py` | Start the loopback-only search service using packaged Compose assets |
@@ -217,6 +219,7 @@ here, so add a row when you add a file.
 | `settings_inventory.py` | Bounded Settings console inventory, validation and safe file mutations |
 | `settings_scope.py` | Single path policy for Settings console reads and mutations |
 | `setup.py` | First-run setup behind the host boundary |
+| `speech.py` | Isolated Kokoro text-to-speech for the latest completed answer (`Speak`, `/speak`) |
 | `socket_dir.py` | Private fallback directory for daemon sockets whose default path is too long |
 | `update_check.py` | The "update available" notice (docs/release.md) |
 | `voice.py` | Redacted host projection and dispatch for local voice commands |
@@ -297,6 +300,7 @@ here, so add a row when you add a file.
 | `manager.py` | SessionManager: open/fork/replay/list/archive/delete/export |
 | `records.py` | Versioned records persisted by the SQLite session store |
 | `session.py` | The public session handle over SQLite records |
+| `title.py` | Automatic session titles: the small side call to a cheap model, the title prompt and reply cleaning |
 | `snapshot.py` | Versioned, derived snapshots for fast session resume |
 
 ### `nexus/skills/`
@@ -419,8 +423,11 @@ here, so add a row when you add a file.
 | File | Purpose |
 | --- | --- |
 | `voice_settings.py` | Host-backed voice configuration shared by terminal surfaces |
+| `speech_settings.py` | Host-backed Kokoro `/speak` settings with safe `[speech]` TOML updates |
 | `shortcuts.py` | Shared terminal shortcut and leader reference |
 | `settings_help.py` | One-line help per Settings area, shared by both consoles |
+| `speech_download.py` | Rules and wording for the `/speak` model download, shared by both clients |
+| `tier_settings.py` | Rows, labels and help text for Settings → Models, Session titles and an agent's Tiers row |
 | `session_status.py` | Shared session-card status words, relative age and sub-line |
 | `session_groups.py` | Shared project and local-date grouping for terminal session lists |
 | `session_controller.py` | Shared host-client lifecycle, selection and canonical reducer seam |
@@ -451,6 +458,8 @@ here, so add a row when you add a file.
 | `completion.py` | Toolkit-free composer completion shared by the native shell |
 | `model_choice.py` | Toolkit-free model picker sort, fuzzy rank, grouping and effort rules |
 | `tui_model_picker.py` | Searchable, grouped terminal model selector |
+| `tui_speech.py` | `/speak` model consent, download progress and the `/speak` entry point for the Textual shell |
+| `tui_models.py` | Settings → Models and Session titles panes, and the agent Tiers dialog |
 | `tui_panels.py` | Side panels and the Settings screen for the Textual shell |
 | `tui_providers.py` | Settings → Providers pane: sign in to Codex, GitHub Copilot and OpenCode Go |
 | `tui_settings.py` | Full-screen Settings page backed entirely by host inventory commands |
@@ -499,6 +508,8 @@ loop over local state; splitting it further needs a state struct and is not done
 | `controller.py` | Continuous native subscription using canonical bootstrap and reduction |
 | `preferences.py` | Textual-compatible native shell preferences |
 | `workflows.py` | Settings, provider, context, session and worktree workflows |
+| `speak_pages.py` | `/speak` consent, download progress and speaking in the native client |
+| `tier_pages.py` | Settings → Models, Session titles and an agent's Tiers row |
 | `logs.py` | Bounded paged native diagnostics with routine-entry folding |
 | `voice.py` | Bounded native dictation using shared capture and host transcription |
 | `desktop.py` | Explicit clipboard operations with byte/time bounds |

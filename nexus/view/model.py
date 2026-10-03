@@ -170,6 +170,10 @@ class BlockView(_View):
     signature: str | None = None
     streamed: bool = False
     finalized: bool = False
+    #: Thinking runs only: first-delta event time and the closed run's length,
+    #: both derived from event timestamps so replay reproduces them.
+    started_ts: float | None = None
+    elapsed_ms: int | None = None
 
 @dataclass
 class MessageView(_View):
@@ -195,6 +199,12 @@ class MessageView(_View):
     @property
     def thinking(self) -> str:
         return "".join(b.text for b in self.blocks if b.kind == "thinking")
+
+    @property
+    def thinking_ms(self) -> int | None:
+        """Total closed thinking time, or None when no run recorded one."""
+        runs = [b.elapsed_ms for b in self.blocks if b.kind == "thinking" and b.elapsed_ms is not None]
+        return sum(runs) if runs else None
 
 @dataclass
 class ToolCallView(_View):

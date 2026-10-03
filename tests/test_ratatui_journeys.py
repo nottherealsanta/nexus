@@ -445,6 +445,7 @@ async def test_every_attachment_kind_is_numbered_previewed_and_removal_keeps_num
         assert len(shell.items) == 6 and "document 2 · d.md" in labels(shell)[3]
         await shell.workflows.operate(shell.items[0]["operation"])
         assert shell.panel_title == "Attachment · a.png"
+        assert shell.preview_image
         await shell.workflows.operate(shell.items[0]["operation"])  # remove image 1
         assert [shell.attachment_label(i) for i in range(5)] == ["image 2", "document 1", "document 2", "document 3", "document 4"]
         assert [item["label"].split(" · ")[0] for item in shell.items] == ["image 2", "document 1", "document 2", "document 3", "document 4"]

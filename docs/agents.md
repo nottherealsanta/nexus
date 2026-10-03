@@ -26,7 +26,8 @@ comments, nesting, duplicate and unknown keys. One bad line rejects the file.
 Keys: `name`\*, `description`\*, `bundles`, `tools` (a leading `-` excludes),
 `model` (opaque here: a tier, `inherit`, `provider/model` or bare id),
 `provider`, `reasoning_effort` (`minimal` … `xhigh`), `fallback` (≤ 8 models,
-tried before `models.fallback`), `color` (`#RRGGBB`, else derived from the name),
+tried before `models.fallback`), `tiers` (≤ 8 tier names the role may run on, the
+first is its default; see [Tiers per role](#tiers-per-role)), `color` (`#RRGGBB`, else derived from the name),
 `max_iterations`, `context_tokens`, `contexts` (`root`, `subagent`; default
 subagent-only), `profile`, `write_roots` (`global`, `project`: narrows mutating
 file tools to `~/.nexus/` and `<workspace>/.agents/`, never widens; credentials,
@@ -73,8 +74,8 @@ A brand-new session that never selects an agent does not restore (not done).
 named role or an ad-hoc agent. The child does not see the parent conversation:
 the prompt is the whole assignment.
 
-An omitted, null, or blank `model` override uses the role's configured model,
-falling back to the parent's model. Surrounding whitespace is trimmed from model
+An omitted, null, or blank `model` override uses the role's configured model (or
+its first tier, see below), falling back to the parent's model. Surrounding whitespace is trimmed from model
 overrides; whitespace inside a model reference is rejected. Permission-key
 resolution and child execution use the same normalization.
 
@@ -84,13 +85,50 @@ authority its parent lacks:
 1. **Tools intersect:** `parent ∩ role ∩ requested`; dropped names are reported back.
 2. **Permissions inherit:** the parent's snapshot and session grants pass through
    unchanged; `deny` stays absolute.
-3. **Tier is capped** at `agents.max_tier` (`agent.clamped` is emitted). A bare
-   tier hint does not replace a role's configured model; with no role model the
-   child inherits the parent's. Saving an agent definition applies to the next
-   child call, even mid-turn.
+3. **Tier is bounded** by the role's `tiers` (when it declares them) and capped at
+   `agents.max_tier` (default `high`); either move emits `agent.clamped` with a
+   `reason` (`role` or `max_tier`). A role with **no** `tiers` keeps the older
+   rule: a bare tier hint labels the spawn but does not replace the role's model,
+   and with no role model the child inherits the parent's. Saving an agent
+   definition applies to the next child call, even mid-turn.
 4. **Budgets:** a shared `SubagentBudget` bounds depth (`max_depth` 3), concurrency
    (`max_concurrent` 4), fan-out (`max_fanout` 16) and aggregate tokens/cost
    (`token_budget`, `cost_budget`) across the whole tree.
+
+### Tiers per role
+
+A role lists the tiers it may use: `tiers: [low, medium]`. The first is the
+default. The built-ins are `quick` `[low]`, `task` `[low, medium]` and `advisor`
+`[medium, high]`; roots (`build`, `orchestrator`) have none. A user-added role
+works the same way and new roles from Settings start with `[low, medium]`.
+Names are checked for shape only here; an unknown name is skipped when the tier
+is resolved. `tiers` with `model: inherit` is a definition error. Repeats collapse
+like other list keys.
+
+Which tier a child runs on (first match wins; `TierDecision` in `runner.py`):
+
+1. the call names a tier (`model: "medium"`);
+2. the call names a concrete model: its tier is used, and the exact model runs
+   while that tier is allowed;
+3. the role's pinned `model`;
+4. the role's first tier.
+
+A tier outside the list moves to the **nearest allowed tier** (ties go to the
+cheaper one) instead of failing, because a hint should never break delegation;
+the report says so (`quick runs on low only; requested 'high' ran on 'low'`). The
+global `max_tier` is applied last. A tier with no runnable model falls through to
+the role's other tiers, then to the parent's model. A tier is only run as a tier
+when the router has a registry (a plain config has none, so the child inherits
+the parent's model). The permission key uses the final tier, so
+`deny = ["Task(*:high)"]` keeps working. `agent.spawned` carries `allowed_tiers`
+and the requested tier. A pinned model whose tier is not listed is not blocked:
+calls move to the nearest listed tier, and Settings points the conflict out.
+
+The roster in the `subagent` tool description shows each role's tiers
+(`task [tiers: low (default), medium]`) and a short guide on when to use each
+tier ([tools.md](tools.md)). Settings → Agents edits `tiers` for every subagent
+([surfaces.md](surfaces.md#settings)); `nexus doctor` hints at subagents without
+any.
 
 Refusals (unknown role, depth, budget) return as error outcomes, not exceptions.
 The runner appends every file a child changed (≤ 100) to its report.

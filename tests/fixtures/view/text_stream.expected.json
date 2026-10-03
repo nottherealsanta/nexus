@@ -18,6 +18,7 @@
           "finalized": true,
           "kind": "thinking",
           "signature": "sig-1",
+          "started_ts": 3.0,
           "streamed": true,
           "text": "Let me think."
         },
@@ -25,6 +26,7 @@
           "finalized": true,
           "kind": "text",
           "signature": null,
+          "started_ts": null,
           "streamed": true,
           "text": "Hello"
         }
@@ -75,6 +77,7 @@
               "finalized": true,
               "kind": "thinking",
               "signature": "sig-1",
+              "started_ts": 3.0,
               "streamed": true,
               "text": "Let me think."
             },
@@ -82,6 +85,7 @@
               "finalized": true,
               "kind": "text",
               "signature": null,
+              "started_ts": null,
               "streamed": true,
               "text": "Hello"
             }

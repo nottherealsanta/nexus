@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -18,6 +19,7 @@ class Engine(Protocol):
 
 
 class Store(Protocol):
+    def cached(self) -> bool: ...
     async def ensure(
         self, progress_cb: Callable[..., None], *, allow_download: bool = True
     ) -> Path: ...
@@ -71,7 +73,7 @@ class VoiceManager:
 
     def status(self) -> VoiceState:
         self._sync_enabled()
-        return self._state
+        return replace(self._state, cached=self.store.cached())
 
     def _sync_enabled(self) -> None:
         if self._enabled():

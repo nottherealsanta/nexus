@@ -132,7 +132,7 @@ def tool_detail_lines(groups: Mapping[str, list[dict]]) -> list[str]:
 def header_blocks(result: Any, color: str) -> list[HeaderBlock]:
     """The five header blocks of an inspected request, in display order."""
     prompt = header_system_prompt(result)
-    groups, mcp_tools = group_tools(result.tools)
+    groups, mcp_tools = group_tools([t for t in result.tools if not isinstance(t, Mapping) or t.get('enabled') is not False])
     labels = [f"{group}({len(rows)})" if len(rows) > 1 else group for group, rows in groups.items()]
     builtin = [tool for rows in groups.values() for tool in rows]
     agents = next(

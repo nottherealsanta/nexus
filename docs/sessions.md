@@ -24,11 +24,18 @@ One SQLite database, `~/.nexus/nexus.db`, shared by every project and daemon.
 | Table | Purpose |
 | --- | --- |
 | `projects` | workspace id (`project_key`), root, timestamps |
-| `sessions` | `(project_id, namespace, id)` with `last_seq`, `last_activity`, `message_count`, `title`, `parent_id`, `fork_seq`, archive columns, trash columns |
+| `sessions` | `(project_id, namespace, id)` with `last_seq`, `completion_seq`, `last_activity`, `message_count`, `title`, `title_source`, `parent_id`, `fork_seq`, archive columns, trash columns |
 | `records` | `(…, session_id, seq)` → `kind` (`event`/`message`/`summary`), `ts`, `body` |
 | `snapshots` | one derived snapshot per session |
 | `kv` | small per-project key/value |
 
+- `title_source` (schema 2) says where the title came from: `''` (not set, or a
+  row that predates the column), `first_message`, `auto` or `user`. Schema 2 means
+  an older Nexus refuses the shared database ("newer than this Nexus").
+- `completion_seq` (schema 3) is the latest durable sequence of a `turn.completed`,
+  `turn.failed` or `turn.cancelled` event. Unlike `last_seq`, it ignores presence
+  and other log activity, so session-unread acknowledgements remain stable when
+  a view detaches or presence changes.
 - `records.body` is exactly `msgspec.json.encode(record)`: the bytes a JSONL
   export line carries, so the reducer, export, fork and replay read the same data.
 - **Durability:** WAL, `synchronous=FULL`, `busy_timeout=5000`, every write in
@@ -38,7 +45,7 @@ One SQLite database, `~/.nexus/nexus.db`, shared by every project and daemon.
 - `namespace = "main"` for user sessions, `"agents"` for subagent child sessions
   (their own real, replayable logs; logical id `<parent>/sub/<n>`, stored under a
   sanitised id with a hash suffix).
-- Schema is versioned by `PRAGMA user_version` (`SCHEMA_VERSION` 1); the record
+- Schema is versioned by `PRAGMA user_version` (`SCHEMA_VERSION` 3); the record
   envelope by `SESSION_LOG_VERSION` (1). A future runtime refuses old logs
   explicitly rather than misreading them.
 
@@ -58,7 +65,13 @@ Legacy JSONL session directories are not imported. JSONL is an export format onl
   then follow the live `Bus`, gap-free). `send()` is the attached wrapper whose
   early close still cancels.
 - **Queue.** `enqueue()` persists a submission (`input.queued`) consumed at the
-  next turn boundary; `consume_steering()` injects steering at a safe model
+  next turn boundary. All submissions pending when a queue-backed turn starts
+  are combined into one user message in queue order, separated by blank lines;
+  attachments remain in order. Each original ID gets an `input.consumed` event
+  for that same turn. Later arrivals stay queued for the following turn, and
+  explicit input does not drain the queue. This applies to automatic starts,
+  `start_turn(None)`, and `send(None)`; prompt hooks see the combined message.
+  `consume_steering()` injects steering at a safe model
   boundary ([loop.md](loop.md#steering-queue-interrupt)).
 - **Crash recovery.** `recover_dangling_tool_uses()` appends an error
   `ToolResult` for every unresolved `ToolUse`, executing nothing.
@@ -106,3 +119,29 @@ Host-side archive projections (`SessionListArchived`, `SessionSearch`,
   replay reproduces it. Bump the relevant version if an encoding changes.
 - Tests: `tests/test_session_*.py`, `test_host_session_archive.py`,
   `test_runtime_shared_state.py`, `test_core_loop.py` (crash-resume).
+
+## Automatic titles
+
+A session's title starts as the first line of the first user message
+(`export.derive_title`, instant, `title_source = first_message`). When
+`[sessions] auto_title` is on, `AutoTitler` (`host_support/auto_title.py`) then
+makes **one small side call** to `[sessions] title_model` (the `low` tier by
+default) and `SessionManager.set_auto_title` stores the result (`auto`).
+
+- It is not a session: no loop, no tools, no memory, no events, and no cost in the
+  session's usage. The turn never waits for it.
+- Root sessions only (the check runs in `SessionStart` before the first message is
+  logged); forks and subagents never start it. One task per session, two at once,
+  cancelled when the session is deleted or the host stops.
+- Input is the first message (≤ 2,000 characters, `…` marks a cut, attachments as
+  `@name`) in `<message>` tags, treated as data. Output is capped (256 tokens; a
+  reasoning model spends hidden tokens against it), cleaned to one line of ≤ 50
+  characters (`clean_title`), with a 15 s timeout. The prompt is in `session/title.py`.
+- A failure, timeout, refusal or empty reply keeps the first-message title. One
+  daemon-log line records model, latency, tokens and the outcome; the title text
+  is debug-only.
+- `set_auto_title` is one conditional `UPDATE ... WHERE title_source =
+  'first_message'`, so a title the user sets (reserved source `user`) always wins.
+  Clients see the new title on their normal session-list refresh.
+- Settings → Session titles switches it off and shows which model titles go to.
+

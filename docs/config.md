@@ -50,10 +50,10 @@ errors redact them and any URL userinfo (`util.redact_secrets`).
 | `[permissions]` | `mode` allow, `allow`/`ask`/`deny` lists, `write_roots` (`./`), `read_denyroots`, `on_unattended` deny |
 | `[tools]` | `bash_timeout_s` 120, `bash_yield_s`, `bash_max_s` 3600, `grep_timeout_s` 5.0, `max_result_tokens` 25000, `max_parallel` 8, `[tools.web]` (local search on, `searxng_instances`, `allowed_origins`, fetch on, timeouts, `max_results` 5, `max_output_bytes` 512000) |
 | `[ext]` | `enabled`, `watch_interval_ms` 500 (0 disables), `dirs` (`.agents/tools`, `.nexus/tools`, `~/.nexus/tools`), `quarantine` true, `max_file_bytes` 262144 |
-| `[agents]` | `enabled`, `default_type` task, `max_depth` 3, `max_concurrent` 4, `max_fanout` 16, `max_tier` medium, `token_budget`, `cost_budget`, `seed_roles` |
+| `[agents]` | `enabled`, `default_type` task, `max_depth` 3, `max_concurrent` 4, `max_fanout` 16, `max_tier` high (the ceiling; each role's own `tiers` narrow it), `token_budget`, `cost_budget`, `seed_roles` |
 | `[hooks]` | `enabled` (hook declarations live in `hooks.toml`, not here) |
 | `[mcp]` | `enabled`, `connect_timeout_s` 20, `restart_max` 5 (servers live in `mcp.json`) |
-| `[session]` / `[sessions]` | `snapshot_every` 20 (`store` is a legacy key kept for old files; storage is always SQLite) / `auto_archive_days` 2 (0 disables, ≤ 3650) |
+| `[session]` / `[sessions]` | `snapshot_every` 20 (`store` is a legacy key kept for old files; storage is always SQLite) / `auto_archive_days` 2 (0 disables, ≤ 3650), `auto_title` true (name new sessions with one small model call), `title_model` `low` (a tier or `provider/model`) |
 | `[settings]` | `confirm_edits` false |
 | `[telemetry]` | `log_level`, `log_file`, `redact` patterns |
 | `[voice]` | `enabled`, `autoload` false, `model`, pinned `revision`, `device`, `max_seconds` 120, `auto_send` false, `unload_after_minutes` 0 |
@@ -94,6 +94,10 @@ Legacy session and trash directories are **not** imported; export sessions
 before switching storage if they must be kept.
 
 ## Other environment variables
+
+`NEXUS_COMPLETION_SOUNDS=off` (also `0` or `false`) disables the native client's
+generated completion audio cue independently of `NEXUS_VOICE_SOUNDS` recording
+cues. Audio playback requires `sounddevice` and a working output device.
 
 `NEXUS_HOME` (state root), `NEXUS_DEV` (dev mode), `NEXUS_HTTP`, `NEXUS_HTTP_HOST`,
 `NEXUS_HTTP_PORT`, `NEXUS_HTTP_TOKEN`, `NEXUS_HTTP_ORIGINS` (opt-in HTTP/SSE

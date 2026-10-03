@@ -15,6 +15,7 @@ VoiceStateName = Literal[
 class VoiceState:
     state: VoiceStateName = "absent"
     progress: float = 0.0
+    cached: bool = False
     bytes_done: int = 0
     bytes_total: int = 0
     device: str = ""

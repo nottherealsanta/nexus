@@ -117,7 +117,7 @@ also cover their legacy twins (historical rules).
 | `write` | yes | atomic, symlink-safe replace; parents created only with `create_parents` |
 | `apply_patch` | yes | multi-file `*** Begin Patch` format (add/update/delete/move) with `@@` anchors, hunks located by content; ≤ 1,000,000 chars, 1,000 operations; `_patch_parse` → `_patch_stage` → `_patch_commit` (validate all, stage, guarded commit with rollback) |
 | `bash` | yes | see below |
-| `subagent` | no | spawns a bounded child ([agents.md](agents.md)); params `prompt`, `subagent_type`, `tools`, `model`, `description`, `worktree` |
+| `subagent` | no | spawns a bounded child ([agents.md](agents.md)); params `prompt`, `subagent_type`, `tools`, `model` (a tier from the role's list, or a concrete model), `description`, `worktree`; the description lists each role's tiers and says when to pick low, medium or high ([agents.md](agents.md#tiers-per-role)) |
 | `todowrite` | no | agent-scoped in-memory task list (pending/in_progress/completed); full list each call; restored per session |
 | `question` | no | asks the user one question (≤ 3 options, free text if none), waits up to 15 min; fails fast when no operator is attached |
 | `webfetch` | no | public HTTP(S) → bounded Markdown wrapped in `<<< BEGIN UNTRUSTED WEB CONTENT >>>`; PDFs/binaries unsupported |

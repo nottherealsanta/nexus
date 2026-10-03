@@ -27,18 +27,24 @@ class JourneyTransport(FakeTransport):
         super().__init__(events)
         self.commands: list[p.Command] = []
         self.selected_model = (None, None)
+        self.session_agents: dict[str, tuple[str, str]] = {}
 
     async def request(self, command):
         self.commands.append(command)
         result = await super().request(command)
         if isinstance(command, p.AgentCurrent):
+            name, source = self.session_agents.get(command.session, ("general", "default"))
             return p.AgentCurrentResult(
                 session=command.session,
-                name=self.agent_name,
-                source=self.agent_source,
+                name=name,
+                source=source,
                 provider=self.selected_model[0],
                 model=self.selected_model[1],
             )
+        if isinstance(command, p.AgentSelect):
+            self.session_agents[command.session] = (command.name, "session")
+        if isinstance(command, p.AgentReset):
+            self.session_agents[command.session] = ("general", "default")
         if isinstance(command, p.ModelSelect):
             provider, model = command.ref.split("/", 1)
             self.selected_model = (provider, model)
@@ -74,7 +80,6 @@ async def test_session_lifecycle_shortcuts_render_the_selected_session(journey_t
         await pilot.pause()
         await pilot.press("ctrl+n")
         await pilot.pause()
-        await pilot.press("enter")  # keep the preselected agent
         await pilot.pause()
         created = app.controller.session
         assert created != "s"
@@ -274,22 +279,15 @@ async def test_narrow_resize_keeps_composer_bounded_and_focused(journey_transpor
 
 
 @pytest.mark.asyncio
-async def test_new_session_picker_defaults_to_current_agent_and_applies_choice(journey_transport):
+async def test_new_session_durably_reuses_current_agent_without_picker(journey_transport):
     app = NexusTextualApp(_client(journey_transport), session="s")
     async with app.run_test() as pilot:
         await pilot.pause()
+        await app._apply_agent_selection("plan")
         await app._dispatch_chat_command("/new made-a")
-        await pilot.pause()
-        panel = app.query_one("#inline-picker", AgentPickerPanel)
-        assert panel.display and panel.current == app.controller.agent_name
-        await pilot.press("escape")
-        await pilot.pause()
-        assert app.controller.session == "s"  # cancel opens nothing
-
-        await app._dispatch_chat_command("/new made-b")
-        await pilot.pause()
-        await pilot.press("down", "enter")
         await pilot.pause(0.1)
-        assert app.controller.session == "made-b"
-        assert p.SessionOpen(session="made-b") in journey_transport.commands
-        assert p.AgentSelect(session="made-b", name="plan") in journey_transport.commands
+        assert app.controller.session == "made-a"
+        assert app.controller.agent_name == "plan"
+        assert app.query_one("#inline-picker", AgentPickerPanel).display is False
+        assert p.SessionOpen(session="made-a") in journey_transport.commands
+        assert p.AgentSelect(session="made-a", name="plan") in journey_transport.commands

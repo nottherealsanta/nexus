@@ -83,7 +83,8 @@ Tests need no network or credentials. They use temporary workspaces,
    `nexus/ui_support/tui_context_header.py`, `nexus/ui_support/tui_archived.py`,
   `nexus/ui_support/tui_diff.py`,
   `nexus/ui_support/tui_settings.py`, `nexus/ui_support/tui_setup.py`,
-  `nexus/ui_support/tui_providers.py`, `nexus/ui_support/tui_voice.py`).
+  `nexus/ui_support/tui_providers.py`, `nexus/ui_support/tui_models.py`,
+  `nexus/ui_support/tui_speech.py`, `nexus/ui_support/tui_voice.py`).
    Checked by `tests/test_ui_layering.py`.
 3. **No line caps.** Line counts are recorded in the Phase 3 baseline report
    (`tests/test_phase3_exit.py`) for information only. New Textual behavior still

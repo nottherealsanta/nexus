@@ -24,11 +24,13 @@ def test_native_bridge_keyboard_and_terminal_restoration():
     termios.tcsetwinsize(slave, (24, 100))
     before = termios.tcgetattr(slave)
     stop_drain = threading.Event()
+    bells = []
     def drain_terminal():
         while not stop_drain.is_set():
             try:
                 if select.select([master], [], [], .1)[0]:
-                    os.read(master, 65536)
+                    output = os.read(master, 65536)
+                    bells.extend([True] * output.count(b"\x07"))
             except OSError:
                 return
     drain = threading.Thread(target=drain_terminal, daemon=True)
@@ -69,6 +71,22 @@ def test_native_bridge_keyboard_and_terminal_restoration():
             time.sleep(.01)
         os.write(master, b"hello\r")
         assert read_action() == {"type": "submit", "text": "hello", "mode": "queue", "generation": 0}
+        # Drafts belong to workspace/session, not to the currently visible tab.
+        def session_snapshot(key, generation, revision):
+            process.stdin.write((json.dumps({"schema": 1, "revision": revision,
+                "composer_key": key, "generation": generation, "status": "idle"}) + "\n").encode())
+            process.stdin.flush()
+            time.sleep(.15)
+        session_snapshot("workspace/a", 1, 1)
+        os.write(master, b"keep my draft")
+        time.sleep(.15)
+        session_snapshot("workspace/b", 2, 1)
+        os.write(master, b"other\r")
+        assert read_action() == {"type": "submit", "text": "other", "mode": "queue", "generation": 2}
+        session_snapshot("workspace/a", 3, 1)
+        os.write(master, b"\r")
+        assert read_action() == {"type": "submit", "text": "keep my draft", "mode": "queue", "generation": 3}
+        session_snapshot("", 0, 1)
         os.write(master, b"/m")  # no Tab: completion is requested after a short pause
         assert read_action() == {"type": "complete", "text": "/m", "prefix": "/m", "generation": 0}
         os.write(master, b"\t")
@@ -85,6 +103,15 @@ def test_native_bridge_keyboard_and_terminal_restoration():
                        {"id": "t2", "kind": "tool", "text": "Read b.py", "operation": {"kind": "tool_page", "id": "t2"}}]}) + "\n").encode())
         process.stdin.flush()
         time.sleep(.2)
+        assert not bells
+        for revision in (3, 3):
+            process.stdin.write((json.dumps({"schema": 1, "revision": revision,
+                "completion_bell": 1, "blocks": [
+                    {"id": "t1", "kind": "tool", "text": "Read a.py", "operation": {"kind": "tool_page", "id": "t1"}},
+                    {"id": "t2", "kind": "tool", "text": "Read b.py", "operation": {"kind": "tool_page", "id": "t2"}}]}) + "\n").encode())
+            process.stdin.flush()
+            time.sleep(.1)
+        assert bells == [True]
         os.write(master, b"\t\x1b[A\r")
         assert read_action() == {"type": "operation", "operation": {"kind": "tool_page", "id": "t1"}, "generation": 0}
         process.stdin.write((json.dumps({"schema": 1, "revision": 3,
@@ -116,7 +143,7 @@ def test_native_bridge_keyboard_and_terminal_restoration():
             "items": [{"label": "Context", "command": "/context"}]}) + "\n").encode())
         process.stdin.flush()
         time.sleep(.1)
-        os.write(master, b"\x1b[<0;10;12M")
+        os.write(master, b"\x1b[<0;10;10M")  # first item row; moves with the composer height
         assert read_action() == {"type": "pick", "text": "/context", "generation": 0}
         os.write(master, b"\x1b[<0;1;1M")
         assert read_action() == {"type": "dismiss", "text": ""}
@@ -141,7 +168,7 @@ def test_native_bridge_keyboard_and_terminal_restoration():
         time.sleep(.1)
         os.write(master, b"\r")
         assert read_action() == {"type": "submit", "text": "keep this draft", "mode": "queue", "generation": 0}
-        os.write(master, b"\x1b[<0;90;23M")
+        os.write(master, b"\x1b[<0;90;21M")  # controls row: above padding, workspace and meter rows
         assert read_action() == {"type": "context_popover", "text": ""}
         os.write(master, b"\x18c")
         assert read_action() == {"type": "context_popover", "text": ""}
@@ -159,5 +186,55 @@ def test_native_bridge_keyboard_and_terminal_restoration():
         process.stdout.close()
         stop_drain.set()
         drain.join(timeout=.5)
+        os.close(master)
+        os.close(slave)
+
+
+@pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
+def test_context_dialog_toggle_keyboard_and_lock():
+    master, slave = pty.openpty()
+    termios.tcsetwinsize(slave, (40, 140))
+    setup = (
+        "import os,fcntl,termios; os.setsid(); "
+        "fcntl.ioctl(2,termios.TIOCSCTTY,0); os.execv(" + repr(str(BINARY)) + ", [" + repr(str(BINARY)) + "])"
+    )
+    process = subprocess.Popen([sys.executable, "-c", setup], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=slave)
+    stop = threading.Event()
+    def drain():
+        while not stop.is_set():
+            try:
+                if select.select([master], [], [], .1)[0]:
+                    os.read(master, 65536)
+            except OSError:
+                return
+    thread = threading.Thread(target=drain, daemon=True)
+    thread.start()
+    def action():
+        assert select.select([process.stdout], [], [], 3)[0], "native action timed out"
+        return json.loads(process.stdout.readline())
+    def snapshot(locked=False):
+        process.stdin.write((json.dumps({"schema": 1, "status": "idle", "panel_title": "Tools", "panel_layout": "context",
+            "items": [{"label": "read", "operation": {"kind": "tool_definition"}, "toggle_enabled": True,
+                       "toggle_locked": locked, "toggle_operation": {"kind": "context_toggle"}}]}) + "\n").encode())
+        process.stdin.flush()
+        time.sleep(.2)
+    try:
+        snapshot()
+        os.write(master, b" ")
+        assert action()["operation"]["kind"] == "context_toggle"
+        os.write(master, b"\r")
+        assert action()["operation"]["kind"] == "tool_definition"
+        snapshot(locked=True)
+        os.write(master, b" ")
+        assert not select.select([process.stdout], [], [], .2)[0]
+        os.write(master, b"\r")
+        assert action()["operation"]["kind"] == "tool_definition"
+    finally:
+        process.kill()
+        process.wait(timeout=3)
+        process.stdin.close()
+        process.stdout.close()
+        stop.set()
+        thread.join(timeout=.5)
         os.close(master)
         os.close(slave)

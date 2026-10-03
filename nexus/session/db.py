@@ -62,7 +62,7 @@ from .records import (
 #: Current schema version. Bumped whenever ``_SCHEMA_STEPS`` grows a step; a
 #: database with a *higher* ``user_version`` than this was written by a newer
 #: Nexus and is refused rather than misread.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 3
 
 #: Forward-only DDL, one tuple of statements per schema version. Applied inside
 #: a single ``BEGIN IMMEDIATE`` transaction so two processes racing to create a
@@ -124,6 +124,21 @@ _SCHEMA_STEPS: tuple[tuple[str, ...], ...] = (
         )
         """,
         "CREATE INDEX sessions_by_activity ON sessions(project_id, namespace, last_activity DESC)",
+    ),
+    # v2: where a session's title came from. ``first_message`` is the derived
+    # title a model-written one may replace; ``auto`` and ``user`` are never
+    # overwritten. Rows that predate the column keep ``''`` and are left alone.
+    ("ALTER TABLE sessions ADD COLUMN title_source TEXT NOT NULL DEFAULT ''",),
+    # v3: durable watermark for the latest turn terminal event, distinct from
+    # last_seq, which also advances for presence and other non-turn activity.
+    (
+        "ALTER TABLE sessions ADD COLUMN completion_seq INTEGER NOT NULL DEFAULT 0",
+        "UPDATE sessions SET completion_seq=COALESCE(("
+        "SELECT MAX(r.seq) FROM records r WHERE r.project_id=sessions.project_id "
+        "AND r.namespace=sessions.namespace AND r.session_id=sessions.id "
+        "AND r.kind='event' AND json_extract(r.body, '$.event.type') IN "
+        "('turn.completed','turn.failed','turn.cancelled')"
+        "), 0)",
     ),
 )
 
@@ -375,6 +390,14 @@ class SqliteSessionStore:
         now = time.time()
         created_at = next((r.ts for r in records if r.ts > 0), now)
         last_seq = max((r.seq for r in records), default=0)
+        completion_seq = max(
+            (
+                r.seq for r in records
+                if isinstance(r, EventRecord)
+                and r.event.type in {"turn.completed", "turn.failed", "turn.cancelled"}
+            ),
+            default=0,
+        )
         last_activity = max((r.ts for r in records if r.ts > 0), default=0.0)
         message_count = sum(
             1 for r in records if isinstance(r, MessageRecord) and r.message.role == "user"
@@ -389,12 +412,12 @@ class SqliteSessionStore:
             with self.db.transaction() as conn:
                 conn.execute(
                     "INSERT INTO sessions"
-                    "(project_id, namespace, id, created_at, last_seq, last_activity,"
+                    "(project_id, namespace, id, created_at, last_seq, completion_seq, last_activity,"
                     " message_count, title, parent_id, fork_seq, archived_at, archive_reason,"
                     " trash_id, trashed_at, trash_expires_at, trash_reason)"
-                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
-                        self.project_id, self.namespace, session, created_at, last_seq,
+                        self.project_id, self.namespace, session, created_at, last_seq, completion_seq,
                         last_activity, message_count, title, parent_id, fork_seq,
                         archived_at, archive_reason,
                         trash_id, trashed_at, trash_expires_at, trash_reason,
@@ -573,13 +596,13 @@ class SqliteSessionStore:
             raise ValueError("seq must be a positive integer")
         with self.db.transaction() as conn:
             row = conn.execute(
-                "SELECT last_seq, title, message_count, created_at, last_activity FROM sessions "
-                "WHERE project_id=? AND namespace=? AND id=?",
+                "SELECT last_seq, title, message_count, created_at, last_activity, title_source "
+                "FROM sessions WHERE project_id=? AND namespace=? AND id=?",
                 (self.project_id, self.namespace, session),
             ).fetchone()
             if row is None:
                 raise SessionError(f"Session {session!r} does not exist")
-            last_seq, title, message_count, created_at, last_activity = row
+            last_seq, title, message_count, created_at, last_activity, title_source = row
             assigned = requested_seq if requested_seq is not None else last_seq + 1
             payload, encoded = build(assigned)
             try:
@@ -596,20 +619,27 @@ class SqliteSessionStore:
             new_last_seq = max(last_seq, assigned)
             new_message_count = message_count
             new_title = title
+            new_title_source = title_source
             if kind == "message" and isinstance(payload, Message) and payload.role == "user":
                 new_message_count += 1
                 if not new_title:
                     candidate = export_mod.derive_title([payload])
                     if candidate:
                         new_title = candidate
+                        new_title_source = "first_message"
             new_created_at = created_at if created_at > 0 else (ts if ts > 0 else created_at)
             new_activity = max(last_activity, ts) if ts > 0 else last_activity
             conn.execute(
-                "UPDATE sessions SET last_seq=?, title=?, message_count=?, created_at=?, "
-                "last_activity=? WHERE project_id=? AND namespace=? AND id=?",
+                "UPDATE sessions SET last_seq=?, title=?, title_source=?, message_count=?, "
+                "created_at=?, last_activity=?, completion_seq=CASE "
+                "WHEN ? THEN MAX(completion_seq, ?) ELSE completion_seq END "
+                "WHERE project_id=? AND namespace=? AND id=?",
                 (
-                    new_last_seq, new_title, new_message_count, new_created_at,
-                    new_activity, self.project_id, self.namespace, session,
+                    new_last_seq, new_title, new_title_source, new_message_count,
+                    new_created_at, new_activity,
+                    kind == "event" and isinstance(payload, Event) and payload.type in {
+                        "turn.completed", "turn.failed", "turn.cancelled"
+                    }, assigned, self.project_id, self.namespace, session,
                 ),
             )
         if kind == "event":
@@ -638,6 +668,24 @@ class SqliteSessionStore:
         query = "SELECT * FROM sessions WHERE " + " AND ".join(clauses)
         rows = self.db._connection().execute(query, params).fetchall()
         return [dict(row) for row in rows]
+
+    def set_auto_title(self, session: str, title: str) -> bool:
+        """Replace a still-derived title with a model-written one.
+
+        One conditional ``UPDATE``: only a row whose title came from the first
+        message changes, so a title the user set (or one already written) always
+        wins, even against a slow side call. Returns whether a row changed.
+        """
+        session = validate_session_id(session)
+        if not isinstance(title, str) or not title.strip():
+            return False
+        with self.db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE sessions SET title=?, title_source='auto' "
+                "WHERE project_id=? AND namespace=? AND id=? AND title_source='first_message'",
+                (title, self.project_id, self.namespace, session),
+            )
+            return cur.rowcount > 0
 
     def delete_row(self, session: str) -> None:
         """Hard-delete a session row and its records/snapshot (cascades)."""

@@ -1238,6 +1238,13 @@ def _print_doctor(report: dict[str, Any], stdout: TextIO) -> None:
                 f"WARNING: legacy extensions found ({entries}); move them to "
                 ".agents/ to keep them active.\n"
             )
+    untiered = report.get("agents_without_tiers")
+    if isinstance(untiered, list) and untiered:
+        names = ", ".join(name for name in untiered[:8] if isinstance(name, str))
+        stdout.write(
+            f"hint: subagents without tiers ({names}) use their model or the parent's model; "
+            "set tiers in Settings > Agents to let callers choose a tier.\n"
+        )
     providers = report.get("providers", []) or []
     stdout.write(f"providers: {len(providers)}\n")
     stdout.writelines(

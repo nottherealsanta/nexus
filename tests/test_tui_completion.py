@@ -101,8 +101,6 @@ async def test_typing_slash_n_then_enter_selects_new_session_command():
 
         await pilot.press("enter")
         await pilot.pause(0.1)
-        await pilot.press("enter")  # confirm the new-session agent picker
-        await pilot.pause(0.1)
 
         assert app.controller.session != "s"
         assert app.controller.session.startswith("session-")

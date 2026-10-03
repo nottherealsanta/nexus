@@ -260,3 +260,47 @@ reuse wrapped history and indexed row ranges. Terminal output is buffered to
 reduce per-cell system calls. The synthetic PTY benchmark meets latency budgets,
 but streaming CPU remains above its target; it is not evidence of live-provider
 end-to-end latency.
+
+## Tool failures are not marked in the timeline
+
+A failed tool call does not turn its group red, show `✗`, or add `· N failed`:
+the loop recovers on its own, so the mark is noise. The error text stays in the
+expanded call detail (nothing the agent saw is hidden). Header chips for skills
+and MCP show unlabelled `project global` counts for the same reason: the order is
+fixed and the section dialog names the scopes.
+
+## Native transcript copies the OpenCode row layout
+
+Thought duration comes from event timestamps in the reducer rather than from the
+UI, so every surface and a replay agree. Subagent pages drop the context header
+for a task prompt card to match the reference design; inspecting a child's
+context chips from its page is the cost of that choice.
+
+## Session titles are a side call, not a tool or a tag
+
+A new session is named by one small request to a cheap model (the `low` tier by
+default), started in the background after the first message. A title tool in the
+session would run on the expensive model, pollute the agent's context and tools,
+and break prompt caching; a title tag in the main reply leaks into the stream and
+varies by provider. The side call is a plain request: no loop, no tools, bounded
+input and output, a timeout, and any failure keeps the first-message title.
+
+The title is metadata on the session row (`title_source`), not an event in the
+log: it is not part of the conversation, and replaying it would change nothing the
+agent sees. It is on by default, visible and switchable in Settings → Session
+titles, which names the model the first message goes to (it can be another
+provider than the session's). Cost: schema 2 means an older Nexus refuses the
+shared database. Not done: re-titling later, manual rename (`user` is reserved).
+
+## Subagent roles own their allowed tiers
+
+Each subagent role lists the tiers it may use (`tiers:`, default first) so a quick
+lookup cannot spin up a flagship and an advisor is never given the cheapest model.
+The calling agent is told this in the `subagent` tool description. A request
+outside the list moves to the nearest allowed tier with a note, never an error:
+a model hint must not break delegation. `agents.max_tier` stays as a user ceiling
+(default `high`; it was `medium`, which would have stopped the advisor ever
+reaching `high`). Roles without `tiers` keep the old behaviour, so existing custom
+agents change nothing until their owner opts in. Tier names are checked for shape
+at parse time and resolved later, because custom tiers live in config, not here.
+

@@ -1,7 +1,7 @@
 """Read and rewrite the simple ``key: value`` frontmatter of an agent ``*.md``.
 
-The Settings page edits an agent's model, provider, reasoning effort, and
-fallback list as form fields while the prompt stays in the text editor. This is
+The Settings page edits an agent's model, provider, reasoning effort,
+fallback list and allowed tiers as form fields while the prompt stays in the text editor. This is
 a deliberately small text transform, not a parser: the host validates the saved
 file with the real restricted grammar (``nexus.agents.model``) and rejects
 anything invalid, so a bad value surfaces as a save error. Only single-line
@@ -14,8 +14,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 #: The fields the Settings form edits, in the order they are inserted.
-FORM_FIELDS = ("model", "provider", "reasoning_effort", "fallback")
+FORM_FIELDS = ("model", "provider", "reasoning_effort", "fallback", "tiers")
 MAX_FALLBACKS = 8
+MAX_TIERS = 8
+_LIST_FORM_FIELDS = ("fallback", "tiers")
 
 
 def _bounds(lines: list[str]) -> tuple[int, int] | None:
@@ -50,10 +52,20 @@ def fallback_items(value: str) -> list[str]:
     return [item for item in items if item][:MAX_FALLBACKS]
 
 
+def tier_items(value: str) -> list[str]:
+    """Split a ``[low, medium]`` tiers value into bounded names, order kept."""
+    inner = value.strip()
+    if inner.startswith("[") and inner.endswith("]"):
+        inner = inner[1:-1]
+    items = [item.strip() for item in inner.split(",")]
+    return list(dict.fromkeys(item for item in items if item))[:MAX_TIERS]
+
+
 def set_agent_fields(body: str, updates: Mapping[str, str]) -> str:
     """Return ``body`` with each form field set, or removed when blank.
 
-    ``fallback`` accepts a comma-separated list and is written as a flow list.
+    ``fallback`` and ``tiers`` accept a comma-separated list and are written as
+    a flow list.
     A body without frontmatter is returned unchanged.
     """
     lines = body.splitlines(keepends=True)
@@ -67,8 +79,9 @@ def set_agent_fields(body: str, updates: Mapping[str, str]) -> str:
         if key not in FORM_FIELDS:
             continue
         value = " ".join(str(raw).split())
-        if key == "fallback" and value:
-            value = "[" + ", ".join(fallback_items(value)) + "]"
+        if key in _LIST_FORM_FIELDS and value:
+            items = fallback_items(value) if key == "fallback" else tier_items(value)
+            value = "[" + ", ".join(items) + "]"
             if value == "[]":
                 value = ""
         index = next(
@@ -87,4 +100,6 @@ def set_agent_fields(body: str, updates: Mapping[str, str]) -> str:
     return "".join([*lines[:start], *head, *lines[end:]])
 
 
-__all__ = ["FORM_FIELDS", "MAX_FALLBACKS", "agent_fields", "fallback_items", "set_agent_fields"]
+__all__ = [
+    "FORM_FIELDS", "MAX_FALLBACKS", "MAX_TIERS", "agent_fields", "fallback_items", "set_agent_fields", "tier_items",
+]

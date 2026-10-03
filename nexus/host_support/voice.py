@@ -21,7 +21,7 @@ def voice_status_result(manager: Any) -> p.VoiceStatusResult:
     config = getattr(manager, "config", None)
     max_seconds = getattr(config, "max_seconds", 120)
     return p.VoiceStatusResult(
-        state=str(state.state), progress=float(state.progress),
+        state=str(state.state), progress=float(state.progress), cached=state.cached,
         bytes_done=int(state.bytes_done), bytes_total=int(state.bytes_total),
         device=str(state.device)[:64], revision=str(state.revision)[:128],
         message=str(state.message)[:240], max_seconds=int(max_seconds),
@@ -55,7 +55,7 @@ async def dispatch_voice(command: Any, runtime: Any) -> p.Result | None:
     if isinstance(command, p.VoiceStatus):
         return voice_status_result(manager)
     if isinstance(command, p.VoicePrepare):
-        manager.schedule_prepare(force=command.force)
+        manager.schedule_prepare(force=command.force, allow_download=command.allow_download)
         # schedule_prepare updates the snapshot synchronously.
         return voice_status_result(manager)
     if isinstance(command, p.VoiceTranscribe):

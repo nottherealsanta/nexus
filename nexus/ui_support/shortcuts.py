@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 SHORTCUTS: tuple[tuple[str, str | None, str], ...] = (
-    ("enter", None, "Send message (queue while working)"),
-    ("ctrl+enter", None, "Steer at the next model step"),
+    ("enter", None, "Send message (steer while working)"),
+    ("ctrl+enter", None, "Queue message for the next turn"),
     ("alt+enter", None, "Interrupt and send message"),
     ("shift+enter", None, "Insert newline (or Ctrl+J)"),
     ("ctrl+p", "command_palette", "Commands (Show keyboard shortcuts, chat commands)"),

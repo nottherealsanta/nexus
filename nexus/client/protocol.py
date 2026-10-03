@@ -186,10 +186,13 @@ class Client:
                                  data: bytes = b"") -> p.AttachmentPrepareResult:
         return await self._request(p.AttachmentPrepare(path=path, name=name, data=data))  # type: ignore[return-value]
 
+    async def preview_attachment(self, attachment_id: str, *, max_bytes: int = 4 * 1024 * 1024) -> p.AttachmentPreviewResult:
+        return await self._request(p.AttachmentPreview(attachment_id=attachment_id, max_bytes=max_bytes))  # type: ignore[return-value]
+
     async def start_turn(self, session: str, content: str) -> str:
         return (await self._request(p.SessionStart(session=session, content=content))).turn_id  # type: ignore[union-attr]
 
-    async def enqueue(self, session: str, content: str, *, mode: str = "queue", attachments: list[str] | None = None, attachment_labels: list[str] | None = None) -> tuple[str, str]:
+    async def enqueue(self, session: str, content: str, *, mode: str = "steer", attachments: list[str] | None = None, attachment_labels: list[str] | None = None) -> tuple[str, str]:
         result = await self._request(p.SessionEnqueue(session=session, content=content, mode=mode, attachments=attachments or [], attachment_labels=attachment_labels or []))
         return result.queued_id, result.turn_id  # type: ignore[union-attr]
 
@@ -225,11 +228,23 @@ class Client:
         command = p.LogsRead(session=session, daemon_cursor=daemon_cursor, session_cursor=session_cursor, limit=limit)
         return await self._request(command)  # type: ignore[return-value]
 
+    async def speech_status(self) -> p.SpeechStatusResult:
+        return await self._request(p.SpeechStatus())  # type: ignore[return-value]
+
+    async def speech_prepare(self) -> p.SpeechStatusResult:
+        return await self._request(p.SpeechPrepare())  # type: ignore[return-value]
+
+    async def speak(self, session: str, *, download: bool = False) -> p.SpeakResult:
+        return await self._request(p.Speak(session_id=session, download=download))  # type: ignore[return-value]
+
+    async def speak_stop(self) -> p.SpeakResult:
+        return await self._request(p.SpeakStop())  # type: ignore[return-value]
+
     async def voice_status(self) -> p.VoiceStatusResult:
         return await self._request(p.VoiceStatus())  # type: ignore[return-value]
 
-    async def voice_prepare(self, *, force: bool = False) -> p.VoiceStatusResult:
-        return await self._request(p.VoicePrepare(force=force))  # type: ignore[return-value]
+    async def voice_prepare(self, *, force: bool = False, allow_download: bool = True) -> p.VoiceStatusResult:
+        return await self._request(p.VoicePrepare(force=force, allow_download=allow_download))  # type: ignore[return-value]
 
     async def voice_transcribe(
         self, audio: bytes, request_id: str, *, session: str = "", partial: bool = False
@@ -285,6 +300,18 @@ class Client:
     async def show_model(self, ref: str) -> Any: return await self._request(p.ModelShow(ref=ref))
 
     async def model_tiers(self) -> Any: return await self._request(p.ModelTiers())
+
+    async def model_tier_set(self, tier: str, refs: list[str]) -> Any:
+        return await self._request(p.ModelTierSet(tier=tier, refs=list(refs)))
+
+    async def model_tier_reset(self, tier: str) -> Any: return await self._request(p.ModelTierReset(tier=tier))
+
+    async def agent_max_tier_set(self, tier: str) -> Any: return await self._request(p.AgentMaxTierSet(tier=tier))
+
+    async def session_title_settings(self) -> Any: return await self._request(p.SessionTitleSettings())
+
+    async def session_title_settings_set(self, *, enabled: bool | None = None, model: str | None = None) -> Any:
+        return await self._request(p.SessionTitleSettingsSet(enabled=enabled, model=model))
 
     async def select_model(self, session: str, ref: str) -> Any: return await self._request(p.ModelSelect(session=session, ref=ref))
 

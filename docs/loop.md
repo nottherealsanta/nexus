@@ -95,7 +95,7 @@ failures end the turn.**
 ## Steering, queue, interrupt
 
 Input submitted during a turn is durable (`input.queued`). Three modes
-(`HostFacade.enqueue`): `queue` (runs as a new turn at the boundary), `steer`
+(`HostFacade.enqueue`, default `steer`): `queue` (runs as a new turn at the boundary), `steer`
 (`consume_steering` injects it at the next model step, after the current
 operation), `interrupt` (cancels the active turn without dropping other queued
 input, then runs first). `input.started` / `input.consumed` / `input.dropped`

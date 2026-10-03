@@ -117,6 +117,16 @@ the effort prompt for remembered models; `/effort` remains available to change i
   with Nexus → blended cost `input + output/4` (`low ≤ 2.5 < medium ≤ 10 < high`)
   → no cost data reads as `low`. `clamp` (used for `agents.max_tier`) only ever
   narrows.
+- **A tier runs the first runnable model of the user's list.** `[models.tiers]`
+  lists are ordered; `ModelRouter._first_pinned` walks the list in order and uses
+  the first model whose provider can stream, before falling back to the
+  catalogue's order. Settings → Models edits these lists (`ModelTierSet`,
+  `ModelTierReset`, global `config.toml`) and rebuilds routes while no turn runs.
+  `ModelRouter.tier_runnable(tier)` says whether a tier resolves; it is `False`
+  without a registry, because a plain config has no tiers and a bare `low` would
+  be sent to the provider as a model id.
+- Tiers are used by subagents ([agents.md](agents.md#tiers-per-role)) and by the
+  automatic session title ([sessions.md](sessions.md#automatic-titles)).
 
 ## Authentication
 
