@@ -81,7 +81,7 @@ def inline_images(view, shell):
         images.append({"id": identity, "message": message, "label": label,
                        "draft_index": next((i for i, item in enumerate(shell.attachments) if item.attachment_id == identity), None) if not message else None,
                        "operation": operation, "media": media, "data": encoded})
-    from .text import escape_controls, redact
+    from .text import escape_controls
     for image in images:
-        image["label"] = redact(escape_controls(image["label"]))
+        image["label"] = escape_controls(image["label"])
     return list(reversed(images))

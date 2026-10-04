@@ -77,6 +77,7 @@ class ShellActions:
         self.mcp_due = 0.0
         self.turn_cache = OrderedDict()
         self.turn_cache_bytes = 0
+        self.preview_task: asyncio.Task | None = None
         self.sessions = []
         self.workspace = ""
         self.tabs = []
@@ -224,8 +225,7 @@ class ShellActions:
         self.workflows.agent_page_id = None
         self.workflows.agent_context = {}
         self.workflows.agent_parents.clear()
-        self.turn_cache.clear()
-        self.turn_cache_bytes = 0
+        # The turn cache is keyed by session and bounded, so open tabs keep their rows.
         self.generation += 1
         self.logs.reset_session()
         if not any(row["id"] == session and row["workspace"] == self.workspace for row in self.tabs):
@@ -243,13 +243,27 @@ class ShellActions:
         await self.controller.switch_session(session)
         await self.controller.bootstrap()
         self.mark_current_seen()
-        await self.refresh_preview(session)
+        # The context preview is a host round-trip the first paint does not need.
+        if self.preview_task:
+            self.preview_task.cancel()
+        self.preview_task = asyncio.create_task(self._refresh_preview_later(session))
         self.panel_title = ""
         self.panel_loading = False
         self.panel_revision += 1
         if self.usage_task:
             self.usage_task.cancel()
         self.panel_lines = []
+
+    async def _refresh_preview_later(self, session: str) -> None:
+        try:
+            if await self.refresh_preview(session) and self.on_update:
+                await self.on_update()
+        except asyncio.CancelledError:
+            raise
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # The terminal closed while the read-only refresh completed.
+        except Exception as exc:  # noqa: BLE001 - surfaced like any other action failure
+            self.notice = str(exc)
 
     async def refresh_preview(self, session: str | None = None) -> bool:
         """Reload the next-turn context preview; an active session has none yet.

@@ -31,10 +31,10 @@ def test_result_blocks_error_metrics_progress_and_overview_are_all_present():
         assert needle in text, needle
 
 
-def test_secrets_are_redacted_and_long_values_report_the_clip():
+def test_secrets_are_shown_and_long_values_report_the_clip():
     tool = _tool(input={"token": "password=hunter2", "big": "x" * 30_000})
     text = sections_to_text(tool_detail_sections(tool))
-    assert "hunter2" not in text
+    assert "hunter2" in text  # nothing is redacted; the user sees what the agent sees
     assert "[clipped 10000 more characters]" in text
 
 

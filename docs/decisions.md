@@ -356,3 +356,22 @@ computed from the blocks Rust already holds, so it is local and needs no host
 round trip; when a new turn pushes the oldest out, the layout is told to rebuild
 from that turn because no patch covers it. Python still projects and sends the
 folded turns; lazy loading of old turns is a separate, undecided change.
+
+Terminal presentation no longer redacts credential-shaped text. The idea of Nexus is
+that the user sees what the agent sees, and the six regex passes per field were the
+largest cost of a cold projection (about 58% at 300 turns, so a session switch or
+close lagged). `ui_support/text.py` still escapes terminal controls and caps length;
+`util.redact_secrets` still covers logs, errors and host-boundary messages. The
+browser client's `redactToolText` (`ui/web/js/app.js`) still redacts: not changed.
+
+Switching sessions keeps each open tab's reduced view and cursor
+(`SessionController._parked`, up to 8) and returns by reading only newer events; the
+projected-turn cache is keyed by session and bounded at 64 MiB (`TURN_CACHE_BYTES`)
+instead of being cleared. The context preview refreshes in the background rather
+than before the first paint.
+
+The terminal loop paces frames at 16 ms (`FRAME_INTERVAL`, `rust/tui/src/main.rs`):
+a wheel fling used to draw hundreds of near-full-screen frames faster than a terminal
+parses them (32 MB over 8,000 events, 2.6 MB paced), so a reversal waited behind the
+backlog. The spinner clock advances on every loop pass, not only when input is idle.
+Slow phases (over 50 ms) are logged to `~/.nexus/tui-stalls.log`.

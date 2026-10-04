@@ -10,7 +10,7 @@ from ...ui_support.completion import root_agents
 
 import uuid
 
-from ...ui_support.text import escape_controls, redact
+from ...ui_support.text import escape_controls
 from .actions import labelled
 from .speak_pages import SpeakPages
 from .tier_pages import TierPages
@@ -678,7 +678,7 @@ class Workflows(TierPages, SpeakPages):
                 {"kind": "setup_save", "provider": row["provider"], "model": row["id"]}) for row in rows])
         elif kind == "setup_save":
             result = await self.client.setup_save(operation["provider"], operation["model"])
-            model = redact(escape_controls(result.global_model))
+            model = escape_controls(result.global_model)
             self.shell.show("Setup saved", "\n".join([f"Saved {model} as the default."] + (
                 ["Restart the daemon (nexus daemon stop) to use it."] if result.restart_required else ["Using it now · /model to change"])))
             if not result.restart_required:
@@ -1014,7 +1014,7 @@ def session_rows(result, current: str = "", seen: dict | None = None, now: float
     """
     from ...ui_support.session_groups import _session_groups
     from ...ui_support.session_status import session_status, session_subline
-    from ...ui_support.text import escape_controls, redact
+    from ...ui_support.text import escape_controls
     seen = {} if seen is None else seen
     groups = _session_groups([(row.workspace, row.session) for row in result.sessions], "")
     workspace_for = {id(row.session): row.workspace for row in result.sessions}
@@ -1027,8 +1027,8 @@ def session_rows(result, current: str = "", seen: dict | None = None, now: float
                     getattr(row, "completion_seq", getattr(row, "last_seq", 0)),
                 )
             status = session_status(row, seen, current)
-            rows.append({"id": row.id, "title": redact(escape_controls(row.title or "New Session")),
-                         "workspace": workspace_for[id(row)], "state": row.state, "group": redact(escape_controls(group)),
-                         "status": status, "sub": redact(escape_controls(session_subline(row, status, now, compact=True))),
+            rows.append({"id": row.id, "title": escape_controls(row.title or "New Session"),
+                         "workspace": workspace_for[id(row)], "state": row.state, "group": escape_controls(group),
+                         "status": status, "sub": escape_controls(session_subline(row, status, now, compact=True)),
                          "active": row.id == current})
     return rows

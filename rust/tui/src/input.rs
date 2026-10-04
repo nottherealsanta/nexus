@@ -10,9 +10,12 @@ pub fn voice_stop(key: KeyCode) -> Value {
     json!({"type":"voice_stop","discard":key == KeyCode::Esc,"send":key == KeyCode::Enter})
 }
 pub fn send(value: Value) -> io::Result<()> {
+    let started = std::time::Instant::now();
     let mut out = io::stdout().lock();
     writeln!(out, "{}", value)?;
-    out.flush()
+    let result = out.flush();
+    crate::trace::stall("send to host (pipe blocked)", started.elapsed());
+    result
 }
 pub fn action(kind: &str, text: &str) -> io::Result<()> {
     send(json!({"type":kind,"text":text}))

@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from typing import Any, TextIO
 
 from ...events import Event
-from ...ui_support.text import escape_controls, redact, sanitize
+from ...ui_support.text import escape_controls, sanitize
 
 #: Event types that terminate a turn, shared by every runner.
 TERMINAL_EVENTS = frozenset({"turn.completed", "turn.failed", "turn.cancelled"})
@@ -197,6 +197,5 @@ __all__ = [
     "TerminalRenderer",
     "escape_controls",
     "exit_code",
-    "redact",
     "sanitize",
 ]

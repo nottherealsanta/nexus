@@ -3,6 +3,39 @@ use std::{
     collections::{BTreeMap, VecDeque},
     time::{Duration, Instant},
 };
+/// Phases slower than this are appended to `~/.nexus/tui-stalls.log` (always on, bounded).
+const STALL: Duration = Duration::from_millis(50);
+const STALL_LOG_LIMIT: u64 = 256 * 1024;
+/// Records one slow phase of the terminal loop so a multi-second freeze names its cause.
+pub fn stall(phase: &str, elapsed: Duration) {
+    if elapsed < STALL {
+        return;
+    }
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
+    let path = std::path::PathBuf::from(home).join(".nexus/tui-stalls.log");
+    let oversized = std::fs::metadata(&path).is_ok_and(|meta| meta.len() > STALL_LOG_LIMIT);
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_secs_f64());
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).write(true);
+    if oversized {
+        options.truncate(true);
+    } else {
+        options.append(true);
+    }
+    if let Ok(mut file) = options.open(path) {
+        let _ = writeln!(
+            file,
+            "{at:.3} pid {} {phase}: {:.0} ms",
+            std::process::id(),
+            elapsed.as_secs_f64() * 1000.0
+        );
+    }
+}
 #[derive(Default)]
 pub struct Trace {
     enabled: bool,

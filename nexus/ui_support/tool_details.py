@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..view import ToolCallView
-from .text import escape_controls, redact
+from .text import escape_controls
 from .timeline import tool_status
 
 VALUE_LIMIT = 20_000
@@ -48,7 +48,7 @@ class DetailSection:
 
 
 def _clean(value: object, limit: int = VALUE_LIMIT) -> str:
-    text = redact(escape_controls(str(value)))
+    text = escape_controls(str(value))
     if len(text) > limit:
         return f"{text[:limit]}\n[clipped {len(text) - limit} more characters]"
     return text

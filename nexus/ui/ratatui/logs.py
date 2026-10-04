@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from ...ui_support.text import escape_controls, redact
+from ...ui_support.text import escape_controls
 
 
 class Logs:
@@ -74,4 +74,4 @@ class Logs:
         lines.append(f"{len(routine)} routine entries {'shown' if show_all else 'folded'} · Ctrl+A toggle")
         if self.error:
             lines.append("Log read failed: " + self.error)
-        return [redact(escape_controls(line)) for line in lines]
+        return [escape_controls(line) for line in lines]

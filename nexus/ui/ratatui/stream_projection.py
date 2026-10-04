@@ -47,8 +47,8 @@ class StreamProjection:
         snapshot = {**self.snapshot, "blocks": blocks, "revision": revision,
                     "status": controller.view.phase, "changed_from": self.start+offset}
         from ...ui_support.context import thinking_status
-        from ...ui_support.text import escape_controls, redact
-        activity = redact(escape_controls(thinking_status(controller.view)))
+        from ...ui_support.text import escape_controls
+        activity = escape_controls(thinking_status(controller.view))
         panel = snapshot["details_panel"]
         rows = [row for row in panel.get("session", []) if row[0] != "Activity"]
         if activity:

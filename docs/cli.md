@@ -46,13 +46,13 @@ With no subcommand, `nexus` opens `chat`. Bare `nexus voice` shows voice status.
 | `ui/cli/details.py` | `detail_lines(session, view)`: pure function of the reduced view; used by `/details` and the status line so they cannot disagree |
 | `ui/cli/commands.py` | slash commands as data |
 | `ui/cli/stream.py`, `ui/jsonl.py` | streaming helpers and JSONL passthrough (every envelope, unattended) |
-| `ui_support/text.py` | control-safe, credential-redacted text |
+| `ui_support/text.py` | control-safe text (nothing is redacted) |
 
-Rendering rules: control characters are escaped and credential shapes redacted
-before any tool name, key, error or permission preview reaches the terminal;
-streamed assistant prose is control-escaped with newlines/tabs kept (a credential
-can be split across deltas, so blanket redaction of the stream is deliberately not
-claimed). ANSI only on a TTY (`NO_COLOR`, `TERM=dumb` disable; `FORCE_COLOR`
+Rendering rules: control characters are escaped before any tool name, key, error
+or permission preview reaches the terminal; streamed assistant prose is
+control-escaped with newlines/tabs kept. The terminal clients do not redact
+credential-shaped text: the user sees what the agent sees (see
+[decisions](decisions.md)). ANSI only on a TTY (`NO_COLOR`, `TERM=dumb` disable; `FORCE_COLOR`
 forces). The `details` model/provider shown is the *effective* one
 (`model.started`, or the durable `model.selected` until the next turn reports).
 

@@ -90,6 +90,8 @@ impl Drop for Cleanup {
         let _ = write!(io::stderr(), "\x1b[>4;0m");
     }
 }
+/// Minimum time between terminal frames (about 60 fps).
+const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().any(|arg| arg == "--version") {
         println!("Nexus Ratatui · bridge 3 (schema 1/2 compatible)");
@@ -147,6 +149,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut completion_cache: Vec<(String, Vec<String>)> = Vec::new();
     let mut completion_hidden = "\0".to_string();
     let mut dirty = true;
+    // Frames are paced: a wheel fling used to emit hundreds of near-full-screen frames
+    // faster than a terminal parses them, so a reversal waited behind the backlog.
+    let mut last_draw = Instant::now() - FRAME_INTERVAL;
     let mut animating = false;
     let mut timings = trace::Trace::new();
     let mut input_received: Option<Instant> = None;
@@ -225,6 +230,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 None
             };
+            trace::stall("snapshot parse", parsed_at.elapsed());
             timings.record("parse", parsed_at.elapsed());
             if !matches!(next.schema, 1 | 2 | 3) {
                 return Err("unsupported bridge schema".into());
@@ -426,7 +432,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 completion_candidates(&completion_cache, prefix)
             };
-        if dirty {
+        if dirty && last_draw.elapsed() >= FRAME_INTERVAL {
+            last_draw = Instant::now();
             cache.focus = nav.and_then(|index| render::targets(&cache).get(index).copied());
             let drawing_at = Instant::now();
             let mut drawn_at = drawing_at;
@@ -470,6 +477,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 details_visible = visible;
                 send(json!({"type":"details_visible","open":visible}))?;
             }
+            trace::stall("draw (layout+render)", drawn_at.duration_since(drawing_at));
+            trace::stall("terminal flush", drawn_at.elapsed());
             timings.record("update_content", cache.content_elapsed);
             timings.record_count("layout_blocks", cache.content_blocks);
             timings.record_count("layout_reset", usize::from(cache.content_reset));
@@ -545,19 +554,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 json!({"type":"complete","text":query,"prefix":prefix,"generation":s.generation}),
             )?;
         }
-        if !event::poll(Duration::from_millis(8))? {
-            if animating {
-                let elapsed = spin_clock.elapsed();
-                let frame = (elapsed.as_nanos() * 30 / 1_000_000_000) as usize;
-                if (frame != cache.activity_frame
-                    && matches!(s.status.as_str(), "running" | "active" | "working"))
-                    || (elapsed.as_millis() / 125) as usize != cache.spin
-                {
-                    cache.activity_frame = frame;
-                    cache.spin = (elapsed.as_millis() / 125) as usize;
-                    dirty = true;
-                }
+        // The animation clock advances on every pass, not only when input is idle:
+        // a continuous wheel or pointer stream keeps `poll` returning true, which
+        // used to freeze the spinner and activity bar while scrolling.
+        if animating {
+            let elapsed = spin_clock.elapsed();
+            let frame = (elapsed.as_nanos() * 30 / 1_000_000_000) as usize;
+            if (frame != cache.activity_frame
+                && matches!(s.status.as_str(), "running" | "active" | "working"))
+                || (elapsed.as_millis() / 125) as usize != cache.spin
+            {
+                cache.activity_frame = frame;
+                cache.spin = (elapsed.as_millis() / 125) as usize;
+                dirty = true;
             }
+        }
+        // A pending frame waits only for its slot; otherwise idle polling stays at 8 ms.
+        let wait = if dirty {
+            FRAME_INTERVAL
+                .saturating_sub(last_draw.elapsed())
+                .max(Duration::from_millis(1))
+        } else {
+            Duration::from_millis(8)
+        };
+        if !event::poll(wait.min(Duration::from_millis(8)))? {
             continue;
         }
         input_received.get_or_insert_with(Instant::now);
@@ -1812,6 +1832,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 _ => {}
             }
         }
+        trace::stall(input_kind, handling_at.elapsed());
         timings.record("event handling", handling_at.elapsed());
     }
     drop(_cleanup);

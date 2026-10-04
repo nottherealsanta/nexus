@@ -22,7 +22,7 @@ It reuses the native terminal workflows; adding it does not require new web work
    ([host.md](host.md#adding-a-capability-a-ui-can-use)).
 4. **Durable state survives reconnect.** A turn started in the terminal is live
    in the browser and vice versa; closing a view never stops work.
-5. **Everything from the host is untrusted text.** Control-safe and redacted in
+5. **Everything from the host is untrusted text.** Control-safe (not redacted) in
    the terminal; `textContent`/escaped Markdown in the browser.
 6. **Tolerate stale async results.** Compare session and request ids before
    applying a late response.
@@ -38,7 +38,7 @@ Pure presentation helpers, importable by all surfaces. Rich is used only by
 | `context.py` | `context_groups`, `tool_groups`, `context_summary`, `context_measure` (the one source for the context meter), `context_usage`, `thinking_status` | `ui/web/js/context-view.js` |
 | `timeline.py` | tool headings/summaries, batch glyphs, diff splitting (`split_diff_files`, `diff_sections`), thought titles | `renderTool`, `diffFiles`, `splitDiff` |
 | `prompts.py` | `approval_choices` (four decisions, unavailable ones disabled), pending questions | `approvalChoices` |
-| `text.py` | control-safe, redacted text | `el(tag, cls, text)` |
+| `text.py` | control-safe text | `el(tag, cls, text)` |
 | `agent_frontmatter.py` | read/rewrite agent frontmatter lines for the Settings form | `settings-files.js` |
 | `usage.py` | provider usage wording: `bar`, `tone` (ok < 70 % ≤ warn < 90 % ≤ critical), `summary` (`41% used · 59% left · resets in 6d 5h (Wed Oct 7 17:05)`), `heading` | `ui/web/js/usage.js` |
 | `ui/cli/commands.py` | slash commands | `SLASH_COMMANDS` |

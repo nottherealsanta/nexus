@@ -7,7 +7,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from ..ui_support.text import escape_controls, redact, sanitize
+from ..ui_support.text import escape_controls, sanitize
 from ..view import AgentView, MessageView, ToolCallView, TurnView
 
 _DETAIL_LIMIT = 1_600
@@ -170,7 +170,7 @@ def todo_preview(tool: ToolCallView) -> list[str]:
         return []
     glyphs = {"pending": "☐", "in_progress": "◐", "completed": "✓", "cancelled": "✗"}
     shown = todos[:4] if len(todos) > 5 else todos
-    rows = [f"{glyphs.get(str(item.get('status')), '☐')} {redact(_first_line(_text(item.get('content', ''), 180)))}"
+    rows = [f"{glyphs.get(str(item.get('status')), '☐')} {_first_line(_text(item.get('content', ''), 180))}"
             for item in shown if isinstance(item, Mapping)]
     if len(todos) > 5:
         rows.append(f"{len(todos) - 4} more")
@@ -180,7 +180,7 @@ def todo_preview(tool: ToolCallView) -> list[str]:
 def tool_output(tool: ToolCallView) -> str:
     """The body a tool block shows: raw output for shells and searches."""
     if tool.error:
-        return redact(_literal(tool.error))
+        return _literal(tool.error)
     if tool.name.casefold() in _RAW_OUTPUT_TOOLS and tool.result:
         parts = [
             _literal(block.get("text", ""), _DETAIL_LIMIT)
@@ -487,7 +487,7 @@ def _latest_activity(agent: AgentView) -> str:
 def _task_short_phrase(value: object) -> str:
     if value is None:
         return ""
-    phrase = redact(_text(value, 240))
+    phrase = _text(value, 240)
     phrase = " ".join(phrase.split())
     phrase = re.split(r"(?<=[.!?])\s+", phrase, maxsplit=1)[0]
     return _text(phrase, 100)
@@ -531,7 +531,7 @@ def _task_header(tool: ToolCallView, agent: AgentView | None, spinner_index: int
         if isinstance(tool.input, Mapping)
         else None
     ) or "General"
-    kind = redact(_text(str(kind), 32)).title()
+    kind = _text(str(kind), 32).title()
     running = marker == "running" and (agent is None or agent.status == "spawned")
     phrase = _task_phrase(tool, agent) or "completed"
     spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -548,10 +548,10 @@ def _task_child_activity(agent: AgentView) -> str:
         return "Starting…"
     calls = []
     for tool in tools[-1:]:
-        name = redact(_text(tool.name or "tool", 32))
+        name = _text(tool.name or "tool", 32)
         target = "" if tool.name.casefold() in {"task", "subagent"} else format_arguments(tool)
         progress = tool.progress[-1] if tool.progress else ""
-        detail = redact(_text(" · ".join(part for part in (target, progress) if part), 90))
+        detail = _text(" · ".join(part for part in (target, progress) if part), 90)
         calls.append(f"{name}: {detail}" if detail else name)
     return "  →  ".join(calls)
 
@@ -712,7 +712,7 @@ def tool_row_text(tool: ToolCallView, spinner_index: int = 0, gutter: str = "") 
         summary = _text(tool.error.splitlines()[0], 88)
     if summary.casefold().startswith(f"{tool.name.casefold()}:"):
         summary = summary[len(tool.name) + 1 :].strip()
-    summary = redact(summary)
+    summary = summary
     suffix = f" · {summary}" if summary else (f" · {marker}" if marker not in {"completed", "failed"} else "")
     rows = todo_preview(tool)
     heading = "☐ Todo " + rows[0] if rows else tool_heading(tool)
@@ -791,7 +791,7 @@ def running_output_tail(tool: ToolCallView, lines: int = LIVE_TAIL_LINES) -> tup
     """
     if tool.name.casefold() not in _LIVE_OUTPUT_TOOLS:
         return None
-    output = redact("".join(tool.progress[-200:]))
+    output = "".join(tool.progress[-200:])
     rows = [_text(line, 160) for line in output.splitlines() if line.strip()]
     return rows[-lines:], max(0, len(rows) - lines)
 

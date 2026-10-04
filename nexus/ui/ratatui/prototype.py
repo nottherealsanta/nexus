@@ -21,7 +21,7 @@ from ...ui_support.context import context_usage, context_measure, price_tier_thr
 from ...ui_support.completion import root_agents
 from ...ui_support.prompt_history import load_history
 from .controller import NativeController as TuiController
-from ...ui_support.text import escape_controls, redact, sanitize
+from ...ui_support.text import escape_controls, sanitize
 from ...ui_support.tool_details import sections_to_text
 
 
@@ -62,6 +62,10 @@ def _thought_took(ms: int) -> str:
         return f"{ms / 1000:.1f}s"
     return f"{ms // 60_000}m {(ms // 1000) % 60}s"
 
+#: Projected-turn cache bound, shared by every open tab (keys are namespaced by session).
+TURN_CACHE_BYTES = 64 * 1024 * 1024
+
+
 def _revision(block):
     import hashlib
     return hashlib.blake2s(json.dumps({key: value for key, value in block.items() if key != "rev"},
@@ -71,9 +75,9 @@ def _revision(block):
 def _safe_blocks(blocks):
     result = []
     for block in blocks:
-        safe = {**block, **{key: redact(escape_controls(block[key])) for key in ("title", "text", "path", "detail", "color", "local_detail", "local_preview", "fold_summary", "heading") if key in block}}
+        safe = {**block, **{key: escape_controls(block[key]) for key in ("title", "text", "path", "detail", "color", "local_detail", "local_preview", "fold_summary", "heading") if key in block}}
         if block.get("chips"):
-            safe["chips"] = [redact(escape_controls(chip)) for chip in block["chips"]]
+            safe["chips"] = [escape_controls(chip) for chip in block["chips"]]
         if "members" in block:
             safe["members"] = _safe_blocks(block["members"])
         safe["rev"] = _revision(safe)
@@ -193,7 +197,7 @@ def _project_turn(turn, shell, agents=None, literal=True):
             text = f"{SPINNER_SLOT if running else '✓'} {name} Subagent — {phrase}"
             if child is not None and child.model:
                 effort = next((t.reasoning_effort for t in child.body.turns if t.reasoning_effort), None)
-                text += f" · {redact(child.model.rsplit('/', 1)[-1])}" + (f" ({effort})" if effort else "")
+                text += f" · {child.model.rsplit('/', 1)[-1]}" + (f" ({effort})" if effort else "")
             if not running and child is not None and child.spawned_ts is not None:
                 end = child.completed_ts
                 if end is not None:
@@ -219,7 +223,7 @@ def _project_turn(turn, shell, agents=None, literal=True):
             from ...ui_support.timeline import diff_sections, diff_split_rows, split_diff_files
             hunks = dict(split_diff_files(tool.diff))
             for diff in diff_sections(tool.diff):
-                rows = [[old_no, redact(escape_controls(old_text)), new_no, redact(escape_controls(new_text)), kind]
+                rows = [[old_no, escape_controls(old_text), new_no, escape_controls(new_text), kind]
                         for old_no, old_text, new_no, new_text, kind in diff_split_rows(hunks.get(diff.path, ""))]
                 entries.append((tool.event_seq, 3, {"id": tool.call_id + diff.path, "kind": "diff", "title": diff.path,
                     "path": diff.path, "added": diff.added, "removed": diff.removed, "diff_rows": rows,
@@ -331,7 +335,7 @@ def _project_turn(turn, shell, agents=None, literal=True):
             block["turn_id"] = turn.id
             if block["kind"] == "user":
                 block.update(local_ui=True, fold_summary=summary)
-    return [redact(escape_controls(line)) for line in lines], _safe_blocks(blocks)
+    return [escape_controls(line) for line in lines], _safe_blocks(blocks)
 
 
 def _agent_color(shell, name):
@@ -428,16 +432,16 @@ def _details_panel(controller, view, shell):
     return {
         "tab": shell.preferences.values["details_tab"] if shell else "Session",
         "logs_header": [["Session", str(getattr(controller, "session", view.session_id))], ["Daemon pid", str(daemon.get("pid") or "unavailable")],
-                        ["Socket", redact(escape_controls(str(daemon.get("socket") or "unavailable")))],
+                        ["Socket", escape_controls(str(daemon.get("socket") or "unavailable"))],
                         ["Client", str(getattr(getattr(getattr(controller, "client", None), "health", None), "version", "unavailable"))],
                         ["Bridge", "3 (schema 1/2 compatible)" if shell and getattr(shell, "local_transcript", False) else "Desktop schema 3"], ["Nexus", version("nexus-harness")],
                         *[["Timing", line] for line in (getattr(getattr(shell, "logs", None), "trace", []) + getattr(getattr(shell, "logs", None), "python_trace", []))]],
-        "session": [[label, redact(escape_controls(value))] for label, value in rows],
-        "files": [{"path": redact(escape_controls(f.path)), "added": f.added, "removed": f.removed, "created": f.created,
+        "session": [[label, escape_controls(value)] for label, value in rows],
+        "files": [{"path": escape_controls(f.path), "added": f.added, "removed": f.removed, "created": f.created,
                    "open": (is_open := bool(shell and f.path in shell.open_files)),
-                   "diff": [redact(escape_controls(line)) for line in diff_preview_lines(f.hunks)] if is_open or bool(shell and getattr(shell, "local_transcript", False)) else []} for f in files],
+                   "diff": [escape_controls(line) for line in diff_preview_lines(f.hunks)] if is_open or bool(shell and getattr(shell, "local_transcript", False)) else []} for f in files],
         "files_summary": f"+{added} -{removed} across {len(files)} file{'s' if len(files) != 1 else ''}" if files else "",
-        "mcp": [[tone, redact(escape_controls(text)), redact(escape_controls(note))]
+        "mcp": [[tone, escape_controls(text), escape_controls(note)]
                 for tone, text, note in mcp_rows(getattr(shell, "mcp_report", None), error=getattr(shell, "mcp_error", None))],
     }
 
@@ -499,7 +503,7 @@ def _queue_lines(view):
         block.get("text", "") for block in item.content if isinstance(block, dict)), 160) for item in queue[:3]]
     if len(queue) > 3:
         rows.append(f"+{len(queue) - 3} more queued")
-    return [redact(escape_controls(row)) for row in rows]
+    return [escape_controls(row) for row in rows]
 
 
 def _tab_rows(controller, shell):
@@ -534,7 +538,7 @@ def _child_turn_blocks(shell, agent, turn, flags):
     body = agent.body
     deps = tuple((tool.call_id, tuple(id(body.agents.get(child)) for child in tool.child_agent_ids))
                  for tool in turn.tools if tool.child_agent_ids)
-    key, turn_flags = f"{agent.id}\x00{turn.id}", (*flags, deps)
+    key, turn_flags = f"{getattr(shell.controller, 'session', '')}\x00{agent.id}\x00{turn.id}", (*flags, deps)
     cached = shell.turn_cache.get(key)
     if cached and cached[0] is turn and cached[1] == turn_flags:
         return cached[3]
@@ -546,7 +550,7 @@ def _child_turn_blocks(shell, agent, turn, flags):
     shell.turn_cache[key] = (turn, turn_flags, [], blocks, size)
     shell.turn_cache.move_to_end(key)
     shell.turn_cache_bytes += size
-    while len(shell.turn_cache) > 4096 or shell.turn_cache_bytes > 8 * 1024 * 1024:
+    while len(shell.turn_cache) > 4096 or shell.turn_cache_bytes > TURN_CACHE_BYTES:
         _, removed = shell.turn_cache.popitem(last=False)
         shell.turn_cache_bytes -= removed[4]
     return blocks
@@ -576,7 +580,8 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
         turn_flags = (*flags, tuple((tool.call_id, tuple(dependencies.get(tool.call_id, ())),
                                     tuple(id(view.agents.get(child)) for child in tool.child_agent_ids))
                                    for tool in turn.tools if tool.child_agent_ids or tool.call_id in dependencies))
-        cached = shell.turn_cache.get(turn.id) if shell else None
+        cache_key = f"{getattr(controller, 'session', view.session_id)}\x00{turn.id}"
+        cached = shell.turn_cache.get(cache_key) if shell else None
         if cached and cached[0] is turn and cached[1] == turn_flags:
             turn_lines, turn_blocks = cached[2], cached[3]
         else:
@@ -590,10 +595,10 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
                 if cached:
                     shell.turn_cache_bytes -= cached[4]
                 size = len(json.dumps([turn_lines, turn_blocks], ensure_ascii=False).encode())
-                shell.turn_cache[turn.id] = (turn, turn_flags, turn_lines, turn_blocks, size)
-                shell.turn_cache.move_to_end(turn.id)
+                shell.turn_cache[cache_key] = (turn, turn_flags, turn_lines, turn_blocks, size)
+                shell.turn_cache.move_to_end(cache_key)
                 shell.turn_cache_bytes += size
-                while len(shell.turn_cache) > 4096 or shell.turn_cache_bytes > 8 * 1024 * 1024:
+                while len(shell.turn_cache) > 4096 or shell.turn_cache_bytes > TURN_CACHE_BYTES:
                     _, removed = shell.turn_cache.popitem(last=False)
                     shell.turn_cache_bytes -= removed[4]
         lines.extend(turn_lines)
@@ -606,7 +611,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
     for agent in () if on_agent_page else view.agents.values():
         if agent.id in linked:  # shown by its Task card
             continue
-        blocks.append({"id": agent.id, "title": redact(escape_controls(f"Agent {agent.id} · {agent.status}")), "text": redact(escape_controls(agent.description)),
+        blocks.append({"id": agent.id, "title": escape_controls(f"Agent {agent.id} · {agent.status}"), "text": escape_controls(agent.description),
                        "kind": "literal", "operation": {"kind": "agent_page", "id": agent.id}})
     prompt = None
     def permissions(body, depth=0):
@@ -631,14 +636,14 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
                                "key": choice.key, "disabled": False}
                               for choice in question.choices()]}
     if prompt:
-        prompt["lines"] = [redact(escape_controls(line)) for line in prompt["lines"]]
+        prompt["lines"] = [escape_controls(line) for line in prompt["lines"]]
         for choice in prompt["choices"]:
-            choice["label"] = redact(escape_controls(choice["label"]))
+            choice["label"] = escape_controls(choice["label"])
     details_panel = {} if on_agent_page else _guarded(failures, "Details sidebar", lambda: _details_panel(controller, view, shell), {})
     notice = "\n".join(part for part in [error or (shell.notice if shell else ""), *failures] if part)
     if notice:
-        lines.append(redact(escape_controls(f"Error: {notice}")))
-        blocks.append({"id": "notice", "title": "Notice", "text": redact(escape_controls(notice)), "kind": "literal"})
+        lines.append(escape_controls(f"Error: {notice}"))
+        blocks.append({"id": "notice", "title": "Notice", "text": escape_controls(notice), "kind": "literal"})
     display_view = _context_display_view(view, shell)
     used, window, _measured = context_measure(display_view)
     snapshot = {"schema": 1, "revision": revision, "title": f"Nexus · {view.session_id}",
@@ -653,7 +658,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "local_ui_enabled": bool(shell and getattr(shell, "local_transcript", False)),
             "ui_ack": getattr(shell, "ui_ack", 0) if shell else 0,
             "commands": getattr(shell, "static_commands", []) if shell else [],
-            "context_lines": [redact(escape_controls(line)) for line in context_lines],
+            "context_lines": [escape_controls(line) for line in context_lines],
             "context_used": used,
             "context_window": window,
             "context_marks": [],
@@ -664,7 +669,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "queue_lines": _queue_lines(view),
             "composer_key": json.dumps([shell.workspace if shell else "", getattr(controller, "session", view.session_id)]),
             "nav": _settings_nav(shell),
-            "update_notice": redact(escape_controls(shell.update_notice)) if shell else "",
+            "update_notice": escape_controls(shell.update_notice) if shell else "",
             "disconnected": bool(
                 shell and str(getattr(shell, "notice", "")).startswith("Disconnected")
             ),
@@ -678,36 +683,36 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "archived_label": shell.archived_label if shell else "",
             "sessions_truncated": bool(shell and shell.sessions_truncated),
             "tabs": _tab_rows(controller, shell) if shell else [],
-            "breadcrumb": redact(escape_controls(shell.breadcrumb)) if shell else "",
+            "breadcrumb": escape_controls(shell.breadcrumb) if shell else "",
             "details_panel": details_panel,
             "logs": shell.logs.lines() if shell else [],
             **({"logs_all": shell.logs.lines(show_all=True), "logs_folded": shell.logs.lines(show_all=False),
                 "logs_show_all": shell.logs.show_all} if shell and getattr(shell, "local_transcript", False) else {}),
-            "attachment_lines": [f"{shell.attachment_label(i)}: {redact(escape_controls(item.name))}" for i,item in enumerate(shell.attachments)] if shell else [],
-            "form": {**shell.workflows.form, "can_delete": bool(shell.workflows.form_target and shell.workflows.form_target.get("kind") == "settings_read"), "status": redact(escape_controls(shell.workflows.form["status"]))} if shell and shell.workflows.form else None,
+            "attachment_lines": [f"{shell.attachment_label(i)}: {escape_controls(item.name)}" for i,item in enumerate(shell.attachments)] if shell else [],
+            "form": {**shell.workflows.form, "can_delete": bool(shell.workflows.form_target and shell.workflows.form_target.get("kind") == "settings_read"), "status": escape_controls(shell.workflows.form["status"])} if shell and shell.workflows.form else None,
             "history": getattr(shell, "history", []) if shell else [],
             "insert": shell.composer_insert if shell else "",
             "auto_send_insert": shell.composer_auto_send if shell else False,
             "insert_kind": shell.composer_insert_kind if shell else "",
             "voice_phase": shell.voice.phase if shell else "idle",
-            "voice_preview": redact(escape_controls(shell.voice.preview)) if shell else "",
+            "voice_preview": escape_controls(shell.voice.preview) if shell else "",
             "voice_level": shell.voice.level if shell else 0,
             "completion_query": getattr(shell, "completion_query", "") if shell else "",
             "completion_prefix": getattr(shell, "completion_prefix", "") if shell else "",
             "completions": getattr(shell, "completions", []) if shell else [],
             "generation": shell.generation if shell else 0,
-            "panel_title": redact(escape_controls(shell.panel_title)) if shell else "",
-            "panel_hint": redact(escape_controls(getattr(shell, "panel_hint", ""))) if shell else "",
-            "panel_lines": [redact(escape_controls(line)) for line in shell.panel_lines] if shell else [],
+            "panel_title": escape_controls(shell.panel_title) if shell else "",
+            "panel_hint": escape_controls(getattr(shell, "panel_hint", "")) if shell else "",
+            "panel_lines": [escape_controls(line) for line in shell.panel_lines] if shell else [],
             "panel_tones": list(shell.panel_tones) if shell else [],
-            "items": [{**item, "label": redact(escape_controls(item["label"])),
-                       **({"detail": redact(escape_controls(item["detail"]))} if "detail" in item else {})} for item in shell.items] if shell else [],
+            "items": [{**item, "label": escape_controls(item["label"]),
+                       **({"detail": escape_controls(item["detail"])} if "detail" in item else {})} for item in shell.items] if shell else [],
             "prompt": prompt,
             "restore": shell.composer_restore if shell else "",
             "agent": getattr(controller, "agent_name", "build"),
-            "model": redact(escape_controls(
+            "model": escape_controls(
                 (shell.model_names.get((getattr(controller, "provider", None) or "", getattr(controller, "model", None) or "")) if shell else None)
-                or getattr(controller, "model", None) or "default")),
+                or getattr(controller, "model", None) or "default"),
             "attachments": len(shell.attachments) if shell else 0,
             "lines": lines}
     if shell and shell.workflows.agent_page_id:
@@ -1169,6 +1174,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                         await shell.command("/new", ())
                     elif index is not None:
                         shell.tabs.pop(index)
+                        controller.forget(action["text"])
                         if controller.session == action["text"] and shell.tabs:
                             row = shell.tabs[min(index, len(shell.tabs)-1)]
                             await shell.switch_project(row["workspace"], row["id"])
