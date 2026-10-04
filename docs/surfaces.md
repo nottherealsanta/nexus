@@ -1,13 +1,17 @@
 # Surfaces: what every client does the same way
 
-Three clients sit on the host contract: the Textual app (`nexus chat`,
-[textual.md](textual.md)), the browser app (`nexus web`, [web.md](web.md)) and
-the one-shot CLI/JSONL ([cli.md](cli.md)). This page holds the behavior that must
-be identical across them. **A feature or wording change in one surface goes into
-the other.** The web app mirrors the TUI: same places, same commands, same
-Control-key shortcuts; it may look more modern but must behave the same.
+Four surfaces sit on the host contract: the native Ratatui terminal app (`nexus
+chat`, Textual fallback), the GPUI desktop app (`nexus desktop`,
+[desktop.md](desktop.md)), the browser app (`nexus web`, [web.md](web.md)) and
+the one-shot CLI/JSONL ([cli.md](cli.md)). This page holds shared behavior and
+context contracts. The browser is being deprecated: preserve existing behavior,
+but new terminal/desktop features need not be ported unless requested.
 
 ## Principles
+
+The additional [GPUI desktop client](desktop.md) follows these host and context
+contracts while using desktop typography, native text input and window controls.
+It reuses the native terminal workflows; adding it does not require new web work.
 
 1. **Present context clearly.** Show everything that matters (every parameter,
    every output), labelled and readable, never a raw JSON dump, and never hide

@@ -292,6 +292,17 @@ titles, which names the model the first message goes to (it can be another
 provider than the session's). Cost: schema 2 means an older Nexus refuses the
 shared database. Not done: re-titling later, manual rename (`user` is reserved).
 
+## GPUI desktop reuses native host workflows
+
+The desktop client is a separate Rust crate in `rust/desktop/`, using GPUI for
+windowing, layout, rendering and native text input. It reuses the Ratatui
+presentation bridge and includes its wire structs, so approvals, settings,
+sessions, context and subagents keep one host-only implementation. UI geometry
+and native input stay in Rust; providers and durable reduction stay in Python.
+This avoids maintaining a second agent harness or copying the host protocol into
+Rust. The cost is a Python presentation process and GPUI's pre-1.0 dependency;
+GPUI is pinned and desktop packaging is separate from the terminal wheel.
+
 ## Subagent roles own their allowed tiers
 
 Each subagent role lists the tiers it may use (`tiers:`, default first) so a quick
@@ -303,4 +314,3 @@ a model hint must not break delegation. `agents.max_tier` stays as a user ceilin
 reaching `high`). Roles without `tiers` keep the old behaviour, so existing custom
 agents change nothing until their owner opts in. Tier names are checked for shape
 at parse time and resolved later, because custom tiers live in config, not here.
-

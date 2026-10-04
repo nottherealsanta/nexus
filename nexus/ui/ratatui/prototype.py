@@ -35,6 +35,15 @@ _EXPLORE_KINDS = {"grep": ("search", "searches"), "glob": ("search", "searches")
                   "read": ("read", "reads"), "ls": ("list", "lists")}
 
 
+def _block_operations(blocks):
+    """Allow only actions present in the current projected transcript, including chips."""
+    for block in blocks:
+        for key in ("operation", "output_operation", "chip_operation"):
+            if operation := block.get(key):
+                yield operation
+        yield from _block_operations(block.get("members", []))
+
+
 def _explored_summary(tools) -> str:
     """`1 search, 2 reads` when every call is a lookup, else empty."""
     kinds = [_EXPLORE_KINDS.get(tool.name.casefold()) for tool in tools]
@@ -550,7 +559,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "details_panel": details_panel,
             "logs": shell.logs.lines() if shell else [],
             "attachment_lines": [f"{shell.attachment_label(i)}: {redact(escape_controls(item.name))}" for i,item in enumerate(shell.attachments)] if shell else [],
-            "form": {**shell.workflows.form, "status": redact(escape_controls(shell.workflows.form["status"]))} if shell and shell.workflows.form else None,
+            "form": {**shell.workflows.form, "can_delete": bool(shell.workflows.form_target and shell.workflows.form_target.get("kind") == "settings_read"), "status": redact(escape_controls(shell.workflows.form["status"]))} if shell and shell.workflows.form else None,
             "history": getattr(shell, "history", []) if shell else [],
             "insert": shell.composer_insert if shell else "",
             "auto_send_insert": shell.composer_auto_send if shell else False,
@@ -827,12 +836,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                                 shell.notice = "Question already answered by another client"
                 elif action["type"] == "operation":
                     operation = action.get("operation")
-                    def operations(blocks):
-                        for block in blocks:
-                            yield block.get("operation")
-                            yield block.get("output_operation")
-                            yield from operations(block.get("members", []))
-                    allowed_operations = [item.get("operation") for item in shell.items] + [item.get("toggle_operation") for item in shell.items if not item.get("toggle_locked")] + list(operations(project(controller, revision, shell=shell, literal=False)["blocks"]))
+                    allowed_operations = [item.get("operation") for item in shell.items] + [item.get("toggle_operation") for item in shell.items if not item.get("toggle_locked")] + list(_block_operations(project(controller, revision, shell=shell, literal=False)["blocks"]))
                     if operation and operation in allowed_operations:
                         if operation["kind"] == "block_toggle":
                             if operation["id"] in shell.expanded: shell.expanded.remove(operation["id"])

@@ -412,3 +412,23 @@ async def test_opening_finished_session_acknowledges_snapshot_before_switching_a
     shell.refresh_session_tabs(rows("complete", 12))
     assert shell.tabs[0]["status"] == "done"
     assert shell.controller.completion_bell == 2
+
+
+def test_projected_attachment_operations_are_allowed_recursively():
+    from nexus.ui.ratatui.prototype import _block_operations
+
+    message = {"kind": "message_page", "id": "message-1"}
+    output = {"kind": "tool_output", "id": "tool-1"}
+    chip = {"kind": "message_page", "id": "message-2"}
+    blocks = [{"operation": message, "output_operation": output,
+               "members": [{"chip_operation": chip}, {"text": "not an operation"}]}]
+    assert list(_block_operations(blocks)) == [message, output, chip]
+    assert list(_block_operations([])) == []
+
+
+def test_form_delete_capability_is_limited_to_settings_files(tmp_path, monkeypatch):
+    shell = _shell(tmp_path, monkeypatch)
+    shell.workflows.edit("Settings", "body", {"kind": "settings_read"}, autosave=True)
+    assert project(shell.controller, 1, shell=shell)["form"]["can_delete"] is True
+    shell.workflows.edit("Provider key", "", {"kind": "provider_key"}, secret=True)
+    assert project(shell.controller, 2, shell=shell)["form"]["can_delete"] is False

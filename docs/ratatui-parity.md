@@ -577,3 +577,14 @@ Normal sends (Enter, including attachment-only sends) steer an active turn at
 the next model step after the current operation; idle sends start a turn.
 Ctrl+Enter explicitly queues a new turn; Alt+Enter interrupts. Bridge submit
 actions that omit `mode` also default to steering.
+
+### Shared desktop bridge attachment actions
+
+The operation allowlist includes `chip_operation` recursively alongside block and
+output operations. This lets the GPUI client inspect submitted attachment chips
+using the existing message page; it accepts only operations projected for the
+current view. Covered by `test_projected_attachment_operations_are_allowed_recursively`.
+
+Forms also project a defaulted `can_delete` capability for settings-file targets.
+The desktop shows delete/reset only where the shared host workflow supports it;
+confirmation and built-in-default protection remain in that workflow.

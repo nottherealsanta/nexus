@@ -30,6 +30,7 @@ agent can see is hidden from the user. Keep this in mind for every change.
 | Something every client must do the same way | [surfaces.md](surfaces.md) | `nexus/ui_support/` |
 | Work on `nexus chat` | [textual.md](textual.md) | `nexus/ui/tui/` |
 | Build the Rust/Ratatui replacement | [ratatui-parity.md](ratatui-parity.md), [ratatui-feasibility.md](ratatui-feasibility.md) | `nexus/ui/ratatui/`, `rust/tui/` |
+| Build or run the GPUI desktop client | [desktop.md](desktop.md) | `nexus/ui/desktop/`, `rust/desktop/` |
 | Work on `nexus web` | [web.md](web.md) | `nexus/ui/web/`, `nexus/host/web.py` |
 | Local dictation | [voice.md](voice.md) | `nexus/voice/` |
 | Network, credentials, sandboxing, trust boundaries | [security.md](security.md) | |

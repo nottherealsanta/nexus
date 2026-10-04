@@ -1414,7 +1414,10 @@ def build_parser() -> argparse.ArgumentParser:
     web = sub.add_parser("web", help="Open the workspace in a local browser")
     web.add_argument("--no-browser", action="store_true", help="Print the one-time launch URL")
 
-    for dev_capable in (run, chat, web):  # `nexus chat --dev` as well as `nexus --dev chat`
+    desktop = sub.add_parser("desktop", help="Open the native GPUI desktop client")
+    desktop.add_argument("--session", default=None, help="Reopen a session (default: new session)")
+
+    for dev_capable in (run, chat, web, desktop):  # trailing --dev is accepted by interactive clients
         dev_capable.add_argument("--dev", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     mock = sub.add_parser("mock", help="Dev mode: run scripted mock scenarios headlessly")
     mock.add_argument("mock_action", choices=["list", "run", "all", "clean"])
@@ -1677,6 +1680,10 @@ def main(argv: list[str] | None = None) -> int:
                 raise
         if args.command == "mock":
             return asyncio.run(_mock(workspace, args, stdout, stderr))
+        if args.command == "desktop":
+            from .ui.desktop.run import run as run_desktop
+
+            return asyncio.run(run_desktop(workspace, session=args.session or _new_session_id()))
         if args.command == "web":
             return asyncio.run(_web(workspace, open_browser=not args.no_browser))
         if args.command == "replay":

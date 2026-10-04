@@ -1,0 +1,12 @@
+The native input-handler implementation in src/input.rs adapts patterns from
+the GPUI 0.2.2 input example, https://github.com/zed-industries/zed/tree/main/crates/gpui/examples.
+GPUI is Copyright Zed Industries and contributors, licensed under Apache 2.0.
+The applicable license is included in LICENSE-APACHE. Nexus-specific editing,
+selection, wrapping, styling, bounds, and integration have been added.
+
+The embedded SVG icon assets are from Lucide (https://lucide.dev /
+https://github.com/lucide-icons/lucide), retrieved 2026-10-04 from main;
+legacy names circle-help, cpu, brain, circle-dot, refresh-cw, network and
+git-branch use the official 0.468.0 tag. These frozen local assets require
+no font installation. ISC license and Feather attribution are included in
+assets/LICENSE-LUCIDE and assets/LICENSE-FEATHER.

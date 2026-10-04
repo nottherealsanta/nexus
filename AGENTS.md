@@ -1,9 +1,9 @@
 # AGENTS.md
 
 Guidance for coding agents working on **Nexus**, a provider-agnostic Python agent
-harness. A per-workspace daemon owns sessions and turns. Three surfaces are clients
+harness. A per-workspace daemon owns sessions and turns. Four surfaces are clients
 of it: a terminal chat client (the native Ratatui client by default, with the Textual app as the fallback), a one-shot CLI and JSONL stream, and a plain HTML/CSS/JS
-browser app.
+browser app, and a Rust GPUI desktop client.
 
 **The idea of Nexus is that the context is clearly presented to the user and to
 agents.** Keep this in mind for every change: show everything that matters
@@ -35,6 +35,7 @@ Update the matching doc in the same change as the code.
 | Feasibility of a Rust/Ratatui TUI with Python and maturin | [docs/ratatui-feasibility.md](docs/ratatui-feasibility.md) |
 | `nexus web`, the browser client (**to be deprecated**; `nexus/ui/web/`, `nexus/host/web.py`) | [docs/web.md](docs/web.md) |
 | Native Ratatui replacement and parity | [docs/ratatui-parity.md](docs/ratatui-parity.md) |
+| Rust GPUI desktop client | [docs/desktop.md](docs/desktop.md), [GPUI skill](skills/gpui-nexus/SKILL.md), [native screenshot skill](skills/native-app-review/SKILL.md) |
 | Local dictation | [docs/voice.md](docs/voice.md) |
 | Trust boundaries, network, credentials | [docs/security.md](docs/security.md) |
 | Tests, fakes, browser checks | [docs/testing.md](docs/testing.md) |

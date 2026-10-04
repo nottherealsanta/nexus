@@ -11,6 +11,9 @@ here, so add a row when you add a file.
 | Path | Contents |
 | --- | --- |
 | `nexus/` | the package (below) |
+| `rust/desktop/` | GPUI desktop executable, native editor/transcript/panels and visual fixtures ([desktop.md](desktop.md)) |
+| `skills/gpui-nexus/` | version-aware GPUI implementation/design guidance, reviewed upstream references and licenses |
+| `skills/native-app-review/` | reusable native screenshot/review skill and local macOS bundling helper |
 | `docs/` | this documentation |
 | `tests/` | offline suite, Playwright/visual checks, fixtures, provider conformance ([testing.md](testing.md)) |
 | `examples/` | facade example and extension samples ([devtools.md](devtools.md#examples-examples)) |
@@ -489,6 +492,12 @@ here, so add a row when you add a file.
 | `store.py` | Pinned, bounded local voice model storage |
 
 
+### `nexus/ui/desktop/`
+
+| File | Contract |
+| --- | --- |
+| `run.py` | GPUI executable discovery and host-only native presentation bridge launch. |
+
 ### `nexus/ui/ratatui/`
 
 | Module | Responsibility |
@@ -522,4 +531,3 @@ loop over local state; splitting it further needs a state struct and is not done
 
 The manual `tests/ratatui_performance_check.py` script measures controlling-PTY
 streaming, input and CPU cost.
-

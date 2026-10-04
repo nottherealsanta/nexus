@@ -114,6 +114,7 @@ pub struct Form {
     pub body: String,
     pub secret: bool,
     pub autosave: bool,
+    pub can_delete: bool,
     pub status: String,
     pub revision: u64,
 }
@@ -124,6 +125,7 @@ impl Default for Form {
             body: String::new(),
             secret: false,
             autosave: false,
+            can_delete: false,
             status: String::new(),
             revision: 0,
         }
