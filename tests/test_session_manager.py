@@ -2,7 +2,7 @@ import pytest
 
 from nexus.errors import SessionBusy, SessionError
 from nexus.events import Event
-from nexus.model.message import Message, Text, ToolResult, ToolUse
+from nexus.model.message import Message, MessageMeta, Text, ToolResult, ToolUse
 from nexus.session import snapshot as snapshot_mod
 from nexus.session.ids import is_valid_session_id
 from nexus.session.manager import SessionManager
@@ -160,6 +160,7 @@ def test_recovery_skips_when_turn_is_active(tmp_path):
 
 def test_open_runs_recovery_by_default(tmp_path):
     session = SessionManager(tmp_path).open("main")
+    session.append_message(_msg("hello"))
     session.append_message(_tool_use("call-1"))
 
     reopened = SessionManager(tmp_path).open("main")
@@ -169,10 +170,11 @@ def test_open_runs_recovery_by_default(tmp_path):
 
 def test_open_can_skip_recovery(tmp_path):
     session = SessionManager(tmp_path).open("main")
+    session.append_message(_msg("hello"))
     session.append_message(_tool_use("call-1"))
     reopened = SessionManager(tmp_path).open("main", recover=False)
     assert reopened.recovered == ()
-    assert len(reopened.messages) == 1
+    assert len(reopened.messages) == 2
 
 
 def test_completion_watermark_ignores_presence_and_advances_for_next_turn(tmp_path):
@@ -180,6 +182,7 @@ def test_completion_watermark_ignores_presence_and_advances_for_next_turn(tmp_pa
 
     manager = SessionManager(tmp_path)
     session = manager.open("completion-watermark", recover=False)
+    session.append_message(_msg("hello"))
     session.append_event(Event(type="turn.completed"))
     completed = manager.summary(session.id)
     assert completed.completion_seq == completed.last_seq
@@ -449,8 +452,10 @@ def test_archive_is_durable_across_a_restarted_manager(tmp_path):
 def test_archive_stale_skips_live_handles_and_archives_only_old_idle_sessions(tmp_path):
     first = SessionManager(tmp_path)
     live = first.open("live")
+    first.store.append_message("live", Message(role="user", content=[Text(text="hello")], meta=MessageMeta(ts=0)))
     live.append_event(Event(type="turn.completed", ts=1))
     old = first.open("old")
+    first.store.append_message("old", Message(role="user", content=[Text(text="hello")], meta=MessageMeta(ts=0)))
     old.append_event(Event(type="turn.completed", ts=2))
     # The second manager has no local open handles, as a daemon startup sweep
     # would. The `live` record's lock is not held, so mark it as open only in
@@ -469,6 +474,7 @@ def test_archive_stale_is_bounded_per_call_oldest_first(tmp_path, monkeypatch):
     manager = SessionManager(tmp_path)
     for index in range(5):
         session = manager.open(f"session-{index}")
+        manager.store.append_message(session.id, Message(role="user", content=[Text(text="hello")], meta=MessageMeta(ts=0)))
         session.append_event(Event(type="turn.completed", data={}, ts=float(index)))
         manager.evict(f"session-{index}")  # a live handle would exclude it from the sweep
 
@@ -572,3 +578,38 @@ async def test_replay_orders_by_persisted_sequence(tmp_path):
     seqs = [event.seq for event in replayed]
     assert seqs == sorted(seqs)
     assert [event.type for event in replayed] == ["a", "b", "c"]
+
+
+def test_draft_is_unsaved_and_hidden_until_first_user_input(tmp_path):
+    manager = SessionManager(tmp_path)
+    session = manager.open("draft")
+    session.append_event(Event(type="session.model", data={}))
+    session.append_message(_msg("not user input", role="assistant"))
+    assert manager.list() == []
+    assert manager.store.db.project_sessions() == []
+    conn = manager.store.db._connection()
+    assert conn.execute("SELECT count(*) FROM sessions").fetchone()[0] == 0
+    assert conn.execute("SELECT count(*) FROM records").fetchone()[0] == 0
+    assert len(session.read().records) == 2
+    assert not SessionManager(tmp_path).store.exists("draft")
+    session.append_message(_msg("hello"))
+    assert [row.id for row in manager.list()] == ["draft"]
+    assert len(SessionManager(tmp_path).open("draft", create=False).read().records) == 3
+
+
+def test_queued_user_submission_promotes_draft(tmp_path):
+    manager = SessionManager(tmp_path)
+    session = manager.open("draft")
+    session.append_event(Event(type="input.queued", data={"queued_id": "q1", "text": "hi"}))
+    assert [row.id for row in manager.list()] == ["draft"]
+    assert SessionManager(tmp_path).store.exists("draft")
+
+
+def test_existing_zero_user_sessions_hidden_without_purge(tmp_path):
+    manager = SessionManager(tmp_path)
+    manager.store.create("empty")
+    manager.store.append_message("empty", _msg("assistant only", role="assistant"))
+    assert manager.list(include_archived=True) == []
+    assert manager.store.db.project_sessions() == []
+    assert manager.store.exists("empty")
+    assert len(manager.store.read("empty").records) == 1

@@ -440,6 +440,7 @@ def test_project_session_index_keeps_project_identity_and_excludes_hidden_rows(t
     a.archive("archived", "user")
     b.create("trashed")
     b.trash("trashed", reason="user", retention_seconds=60)
+    a.append_message("same", _msg("earlier"))
     b.append_message("same", _msg("latest"))
     rows = db.project_sessions()
     assert [(r["project_id"], r["id"], r["workspace"]) for r in rows] == [

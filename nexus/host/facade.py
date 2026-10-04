@@ -132,6 +132,8 @@ class HostFacade:
         self._started = time.time()
         self._closed = False
         self._managed: set[str] = set()
+        # session id -> (folded view, events consumed, the last of them); see state().
+        self._state_cache: dict[str, tuple[ConversationView, int, Event]] = {}
         self._worktree_confirmation_key = secrets.token_bytes(32)
         self._worktree_lock = threading.Lock()
         self._worktree_confirmation_lock = threading.Lock()
@@ -690,10 +692,26 @@ class HostFacade:
         ``seq + 1``. This is the same pure reducer every surface renders with.
         """
         handle = self._session(session_id, create=False, recover=False)
-        view = initial_state(session_id)
-        for event in handle.events:
-            if event.seq > from_seq:
-                view = apply(view, event)
+        events = handle.events
+        if from_seq:
+            view = initial_state(session_id)
+            for event in events:
+                if event.seq > from_seq:
+                    view = apply(view, event)
+            return view, view.last_seq
+        # The full fold is O(session) and runs on the host loop, so keep the last
+        # one and apply only the new tail. The reducer is pure and views are only
+        # read, so sharing is safe. A shrunk or rewritten log fails the check
+        # below and is folded from scratch.
+        view, count, last = self._state_cache.pop(session_id, (None, 0, None))
+        if view is None or count > len(events) or (count and events[count - 1] != last):
+            view, count = initial_state(session_id), 0
+        for event in events[count:]:
+            view = apply(view, event)
+        if events:
+            self._state_cache[session_id] = (view, len(events), events[-1])
+            while len(self._state_cache) > 8:
+                self._state_cache.pop(next(iter(self._state_cache)))
         return view, view.last_seq
 
     def web_snapshot(self, session_id: str, from_seq: int = 0) -> dict[str, Any]:

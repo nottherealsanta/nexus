@@ -31,7 +31,7 @@ from nexus.events import Event
 from nexus.session.db import SCHEMA_VERSION
 from nexus.host import PROTOCOL_VERSION, HostFacade, Presence
 from nexus.host import protocol as p
-from nexus.model.message import Text, ToolResult, ToolUse
+from nexus.model.message import Message, Text, ToolResult, ToolUse
 from nexus.model.providers.scripted import (
     ScriptedProvider,
     Wait,
@@ -1064,6 +1064,7 @@ async def test_facade_doctor_aggregates_durable_registry_mismatches(tmp_path):
     """A recorded `registry.mismatch` is surfaced, redacted, by `doctor` (§15.5)."""
     runtime = _runtime(tmp_path, ScriptedProvider(text_response("ok")))
     handle = runtime.session("probe")
+    handle.append_message(Message(role="user", content=[Text(text="probe")]))
     handle.append_event(
         Event(
             type="registry.mismatch",
@@ -1129,6 +1130,30 @@ async def test_facade_state_matches_a_direct_fold_of_the_log(tmp_path):
     assert seq == handle.events[-1].seq
     assert any("world" in message.text for message in view.messages)
     assert view.turns and view.turns[-1].terminal
+    await runtime.aclose()
+
+
+async def test_facade_state_cache_applies_only_the_new_tail(tmp_path):
+    runtime = _runtime(tmp_path, ScriptedProvider(text_response("one"), text_response("two")))
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+
+    await facade.start_turn("s", "first")
+    await facade.wait_idle(timeout=5.0)
+    first, _ = facade.state("s")
+    assert facade.state("s")[0] is first  # nothing new: the cached fold is reused
+
+    await facade.start_turn("s", "second")
+    await facade.wait_idle(timeout=5.0)
+    view, seq = facade.state("s")
+    events = runtime.session("s").events
+    assert view.to_dict() == fold(events).to_dict()
+    assert seq == events[-1].seq and len(view.turns) == 2
+
+    # A log that no longer matches the cache is folded from scratch.
+    cached, count, last = facade._state_cache["s"]
+    facade._state_cache["s"] = (cached, count, Event(type="x", seq=last.seq + 1000))
+    assert facade.state("s")[0].to_dict() == fold(events).to_dict()
     await runtime.aclose()
 
 
@@ -1427,10 +1452,12 @@ async def test_project_sessions_list_and_open_validate_recorded_workspace(tmp_pa
     runtime = _runtime(tmp_path, ScriptedProvider(text_response("answer")))
     facade = HostFacade(runtime)
     facade.open_session("same")
+    runtime.session("same").append_message(Message(role="user", content=[Text(text="hi")]))
     other = tmp_path / "other"
     other.mkdir()
     store = SqliteSessionStore(runtime.sessions.store.db, "other", root=str(other))
     store.create("same")
+    store.append_message("same", Message(role="user", content=[Text(text="hi")]))
     result = await facade.handle(p.ProjectSessionsList())
     assert isinstance(result, p.ProjectSessionsListResult)
     assert result.workspace == str(tmp_path)

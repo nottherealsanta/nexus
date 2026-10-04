@@ -30,6 +30,7 @@ committed prefix and never blocks (or is blocked by) a writer.
 Secrecy boundary (STATE_PLAN §2.7): the database file is created ``0600`` and
 its parent directory ``0700`` before the first connection.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -58,6 +59,18 @@ from .records import (
     SessionRecord,
     SummaryRecord,
 )
+
+
+def _has_user_input(alias: str = "sessions") -> str:
+    """SQL predicate shared by workspace and global session lists."""
+    return (
+        "EXISTS (SELECT 1 FROM records r WHERE "
+        f"r.project_id={alias}.project_id AND r.namespace={alias}.namespace "
+        f"AND r.session_id={alias}.id AND ("
+        "(r.kind='message' AND json_extract(r.body, '$.message.role')='user') OR "
+        "(r.kind='event' AND json_extract(r.body, '$.event.type')='input.queued')))"
+    )
+
 
 #: Current schema version. Bumped whenever ``_SCHEMA_STEPS`` grows a step; a
 #: database with a *higher* ``user_version`` than this was written by a newer
@@ -270,12 +283,17 @@ class StateDatabase:
         """Bounded cross-project sidebar index; excludes children, archive and trash."""
         if not 1 <= limit <= _MAX_LIMIT:
             raise ValueError("invalid project session limit")
-        return [dict(row) for row in self._connection().execute(
-            "SELECT s.*, p.root AS workspace FROM sessions s "
-            "JOIN projects p ON p.id=s.project_id "
-            "WHERE s.namespace='main' AND s.archived_at IS NULL AND s.trash_id IS NULL "
-            "ORDER BY s.last_activity DESC, s.project_id, s.id LIMIT ?", (limit,),
-        )]
+        return [
+            dict(row)
+            for row in self._connection().execute(
+                "SELECT s.*, p.root AS workspace FROM sessions s "
+                "JOIN projects p ON p.id=s.project_id "
+                "WHERE s.namespace='main' AND s.archived_at IS NULL AND s.trash_id IS NULL "
+                f"AND {_has_user_input('s')} "
+                "ORDER BY s.last_activity DESC, s.project_id, s.id LIMIT ?",
+                (limit,),
+            )
+        ]
 
     def close(self) -> None:
         conn = getattr(self._local, "conn", None)
@@ -320,6 +338,8 @@ class SqliteSessionStore:
         self.db.touch_project(project_id, root if root is not None else project_id)
         self._lock_dir = Path(lock_dir) if lock_dir is not None else None
         self._fsync = lambda fd: None  # durability is PRAGMA-provided
+        self._drafts: dict[str, list[SessionRecord]] = {}
+        self._draft_lock = threading.RLock()
 
     @property
     def fsync(self):
@@ -338,20 +358,34 @@ class SqliteSessionStore:
 
     def exists(self, session: str) -> bool:
         session = validate_session_id(session)
-        row = self.db._connection().execute(
-            "SELECT 1 FROM sessions WHERE project_id=? AND namespace=? AND id=? "
-            "AND trash_id IS NULL",
-            (self.project_id, self.namespace, session),
-        ).fetchone()
+        with self._draft_lock:
+            if session in self._drafts:
+                return True
+        row = (
+            self.db._connection()
+            .execute(
+                "SELECT 1 FROM sessions WHERE project_id=? AND namespace=? AND id=? "
+                "AND trash_id IS NULL",
+                (self.project_id, self.namespace, session),
+            )
+            .fetchone()
+        )
         return row is not None
 
     def row_exists(self, session: str) -> bool:
         """Whether any row (live or trashed) exists for ``session``."""
         session = validate_session_id(session)
-        row = self.db._connection().execute(
-            "SELECT 1 FROM sessions WHERE project_id=? AND namespace=? AND id=?",
-            (self.project_id, self.namespace, session),
-        ).fetchone()
+        with self._draft_lock:
+            if session in self._drafts:
+                return True
+        row = (
+            self.db._connection()
+            .execute(
+                "SELECT 1 FROM sessions WHERE project_id=? AND namespace=? AND id=?",
+                (self.project_id, self.namespace, session),
+            )
+            .fetchone()
+        )
         return row is not None
 
     def create(self, session: str) -> None:
@@ -364,6 +398,13 @@ class SqliteSessionStore:
                 "VALUES (?,?,?,?,0,0)",
                 (self.project_id, self.namespace, session, time.time()),
             )
+
+    def create_draft(self, session: str) -> None:
+        """Reserve a chat in memory until its first accepted user input."""
+        session = validate_session_id(session)
+        with self._draft_lock:
+            if not self.row_exists(session):
+                self._drafts[session] = []
 
     def create_from_records(
         self,
@@ -392,7 +433,8 @@ class SqliteSessionStore:
         last_seq = max((r.seq for r in records), default=0)
         completion_seq = max(
             (
-                r.seq for r in records
+                r.seq
+                for r in records
                 if isinstance(r, EventRecord)
                 and r.event.type in {"turn.completed", "turn.failed", "turn.cancelled"}
             ),
@@ -400,7 +442,9 @@ class SqliteSessionStore:
         )
         last_activity = max((r.ts for r in records if r.ts > 0), default=0.0)
         message_count = sum(
-            1 for r in records if isinstance(r, MessageRecord) and r.message.role == "user"
+            1
+            for r in records
+            if isinstance(r, MessageRecord) and r.message.role == "user"
         )
         title = ""
         for r in records:
@@ -417,10 +461,23 @@ class SqliteSessionStore:
                     " trash_id, trashed_at, trash_expires_at, trash_reason)"
                     " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
-                        self.project_id, self.namespace, session, created_at, last_seq, completion_seq,
-                        last_activity, message_count, title, parent_id, fork_seq,
-                        archived_at, archive_reason,
-                        trash_id, trashed_at, trash_expires_at, trash_reason,
+                        self.project_id,
+                        self.namespace,
+                        session,
+                        created_at,
+                        last_seq,
+                        completion_seq,
+                        last_activity,
+                        message_count,
+                        title,
+                        parent_id,
+                        fork_seq,
+                        archived_at,
+                        archive_reason,
+                        trash_id,
+                        trashed_at,
+                        trash_expires_at,
+                        trash_reason,
                     ),
                 )
                 conn.executemany(
@@ -429,8 +486,13 @@ class SqliteSessionStore:
                     "VALUES (?,?,?,?,?,?,?)",
                     [
                         (
-                            self.project_id, self.namespace, session, r.seq,
-                            _kind_of(r), r.ts, msgspec.json.encode(r),
+                            self.project_id,
+                            self.namespace,
+                            session,
+                            r.seq,
+                            _kind_of(r),
+                            r.ts,
+                            msgspec.json.encode(r),
                         )
                         for r in records
                     ],
@@ -442,11 +504,19 @@ class SqliteSessionStore:
 
     def read(self, session: str) -> ReadResult:
         session = validate_session_id(session)
-        rows = self.db._connection().execute(
-            "SELECT body FROM records WHERE project_id=? AND namespace=? AND session_id=? "
-            "ORDER BY seq ASC",
-            (self.project_id, self.namespace, session),
-        ).fetchall()
+        with self._draft_lock:
+            if session in self._drafts:
+                records = list(self._drafts[session])
+                return ReadResult(records=records)
+        rows = (
+            self.db._connection()
+            .execute(
+                "SELECT body FROM records WHERE project_id=? AND namespace=? AND session_id=? "
+                "ORDER BY seq ASC",
+                (self.project_id, self.namespace, session),
+            )
+            .fetchall()
+        )
         records = tuple(_decode_record(row[0]) for row in rows)
         valid_bytes = sum(len(row[0]) + 1 for row in rows)
         return ReadResult(records, False, valid_bytes, True)
@@ -460,11 +530,20 @@ class SqliteSessionStore:
         session = validate_session_id(session)
         if type(max_records) is not int or max_records < 1:
             raise ValueError("max_records must be a positive integer")
-        rows = self.db._connection().execute(
-            "SELECT body FROM records WHERE project_id=? AND namespace=? AND session_id=? "
-            "ORDER BY seq DESC LIMIT ?",
-            (self.project_id, self.namespace, session, min(max_records, _MAX_LIMIT)),
-        ).fetchall()
+        rows = (
+            self.db._connection()
+            .execute(
+                "SELECT body FROM records WHERE project_id=? AND namespace=? AND session_id=? "
+                "ORDER BY seq DESC LIMIT ?",
+                (
+                    self.project_id,
+                    self.namespace,
+                    session,
+                    min(max_records, _MAX_LIMIT),
+                ),
+            )
+            .fetchall()
+        )
         rows.reverse()
         records = tuple(_decode_record(row[0]) for row in rows)
         return ReadResult(records, False, sum(len(row[0]) + 1 for row in rows), True)
@@ -509,17 +588,26 @@ class SqliteSessionStore:
 
     def next_seq(self, session: str) -> int:
         session = validate_session_id(session)
-        row = self.db._connection().execute(
-            "SELECT last_seq FROM sessions WHERE project_id=? AND namespace=? AND id=?",
-            (self.project_id, self.namespace, session),
-        ).fetchone()
+        with self._draft_lock:
+            if session in self._drafts:
+                return max((r.seq for r in self._drafts[session]), default=0) + 1
+        row = (
+            self.db._connection()
+            .execute(
+                "SELECT last_seq FROM sessions WHERE project_id=? AND namespace=? AND id=?",
+                (self.project_id, self.namespace, session),
+            )
+            .fetchone()
+        )
         if row is None:
             return 1
         return int(row[0]) + 1
 
     # -- appending ---------------------------------------------------------
 
-    def append_event(self, session: str, event: Event, *, seq: int | None = None) -> EventRecord:
+    def append_event(
+        self, session: str, event: Event, *, seq: int | None = None
+    ) -> EventRecord:
         if not isinstance(event, Event):
             raise TypeError("append_event requires an Event")
         session = validate_session_id(session)
@@ -529,7 +617,9 @@ class SqliteSessionStore:
             ev = event
             if seq_value != ev.seq or ev.session is None:
                 ev = msgspec.structs.replace(
-                    ev, seq=seq_value, session=ev.session if ev.session is not None else session
+                    ev,
+                    seq=seq_value,
+                    session=ev.session if ev.session is not None else session,
                 )
             record = EventRecord(seq=seq_value, event=ev, ts=ev.ts)
             return ev, msgspec.json.encode(record)
@@ -592,8 +682,35 @@ class SqliteSessionStore:
         return self._commit_append(session, seq, "summary", stamp, build)
 
     def _commit_append(self, session, requested_seq, kind, ts, build):
-        if requested_seq is not None and (type(requested_seq) is not int or requested_seq < 1):
+        if requested_seq is not None and (
+            type(requested_seq) is not int or requested_seq < 1
+        ):
             raise ValueError("seq must be a positive integer")
+        with self._draft_lock:
+            if session in self._drafts:
+                records = self._drafts[session]
+                assigned = (
+                    requested_seq
+                    if requested_seq is not None
+                    else self.next_seq(session)
+                )
+                if any(r.seq == assigned for r in records):
+                    raise SessionError(
+                        f"seq {assigned} already exists for session {session!r}"
+                    )
+                payload, encoded = build(assigned)
+                record = msgspec.json.decode(encoded, type=SessionRecord)
+                submitted = (
+                    isinstance(payload, Message) and payload.role == "user"
+                ) or (isinstance(payload, Event) and payload.type == "input.queued")
+                if submitted:
+                    # All setup records and the first input become durable together.
+                    # A failed transaction leaves the draft available for retry.
+                    self.create_from_records(session, [*records, record])
+                    del self._drafts[session]
+                else:
+                    records.append(record)
+                return record
         with self.db.transaction() as conn:
             row = conn.execute(
                 "SELECT last_seq, title, message_count, created_at, last_activity, title_source "
@@ -602,7 +719,9 @@ class SqliteSessionStore:
             ).fetchone()
             if row is None:
                 raise SessionError(f"Session {session!r} does not exist")
-            last_seq, title, message_count, created_at, last_activity, title_source = row
+            last_seq, title, message_count, created_at, last_activity, title_source = (
+                row
+            )
             assigned = requested_seq if requested_seq is not None else last_seq + 1
             payload, encoded = build(assigned)
             try:
@@ -610,7 +729,15 @@ class SqliteSessionStore:
                     "INSERT INTO records"
                     "(project_id, namespace, session_id, seq, kind, ts, body) "
                     "VALUES (?,?,?,?,?,?,?)",
-                    (self.project_id, self.namespace, session, assigned, kind, ts, encoded),
+                    (
+                        self.project_id,
+                        self.namespace,
+                        session,
+                        assigned,
+                        kind,
+                        ts,
+                        encoded,
+                    ),
                 )
             except sqlite3.IntegrityError as exc:
                 raise SessionError(
@@ -620,14 +747,20 @@ class SqliteSessionStore:
             new_message_count = message_count
             new_title = title
             new_title_source = title_source
-            if kind == "message" and isinstance(payload, Message) and payload.role == "user":
+            if (
+                kind == "message"
+                and isinstance(payload, Message)
+                and payload.role == "user"
+            ):
                 new_message_count += 1
                 if not new_title:
                     candidate = export_mod.derive_title([payload])
                     if candidate:
                         new_title = candidate
                         new_title_source = "first_message"
-            new_created_at = created_at if created_at > 0 else (ts if ts > 0 else created_at)
+            new_created_at = (
+                created_at if created_at > 0 else (ts if ts > 0 else created_at)
+            )
             new_activity = max(last_activity, ts) if ts > 0 else last_activity
             conn.execute(
                 "UPDATE sessions SET last_seq=?, title=?, title_source=?, message_count=?, "
@@ -635,11 +768,20 @@ class SqliteSessionStore:
                 "WHEN ? THEN MAX(completion_seq, ?) ELSE completion_seq END "
                 "WHERE project_id=? AND namespace=? AND id=?",
                 (
-                    new_last_seq, new_title, new_title_source, new_message_count,
-                    new_created_at, new_activity,
-                    kind == "event" and isinstance(payload, Event) and payload.type in {
-                        "turn.completed", "turn.failed", "turn.cancelled"
-                    }, assigned, self.project_id, self.namespace, session,
+                    new_last_seq,
+                    new_title,
+                    new_title_source,
+                    new_message_count,
+                    new_created_at,
+                    new_activity,
+                    kind == "event"
+                    and isinstance(payload, Event)
+                    and payload.type
+                    in {"turn.completed", "turn.failed", "turn.cancelled"},
+                    assigned,
+                    self.project_id,
+                    self.namespace,
+                    session,
                 ),
             )
         if kind == "event":
@@ -652,14 +794,49 @@ class SqliteSessionStore:
 
     def session_row(self, session: str) -> dict[str, Any] | None:
         session = validate_session_id(session)
-        row = self.db._connection().execute(
-            "SELECT * FROM sessions WHERE project_id=? AND namespace=? AND id=?",
-            (self.project_id, self.namespace, session),
-        ).fetchone()
+        with self._draft_lock:
+            if session in self._drafts:
+                fork = next(
+                    (
+                        r.event.data
+                        for r in self._drafts[session]
+                        if isinstance(r, EventRecord)
+                        and r.event.type == "session.forked"
+                    ),
+                    {},
+                )
+                return {
+                    "id": session,
+                    "title": "",
+                    "title_source": "",
+                    "created_at": min(
+                        (r.ts for r in self._drafts[session]), default=0.0
+                    ),
+                    "last_activity": max(
+                        (r.ts for r in self._drafts[session]), default=0.0
+                    ),
+                    "last_seq": self.next_seq(session) - 1,
+                    "message_count": 0,
+                    "completion_seq": 0,
+                    "parent_id": fork.get("parent", ""),
+                    "fork_seq": fork.get("at_seq", 0),
+                    "archived_at": None,
+                    "trash_id": None,
+                }
+        row = (
+            self.db._connection()
+            .execute(
+                "SELECT * FROM sessions WHERE project_id=? AND namespace=? AND id=?",
+                (self.project_id, self.namespace, session),
+            )
+            .fetchone()
+        )
         return dict(row) if row is not None else None
 
-    def list_rows(self, *, include_trashed: bool = False, include_archived: bool = True) -> list[dict[str, Any]]:
-        clauses = ["project_id=?", "namespace=?"]
+    def list_rows(
+        self, *, include_trashed: bool = False, include_archived: bool = True
+    ) -> list[dict[str, Any]]:
+        clauses = ["project_id=?", "namespace=?", _has_user_input()]
         params: list[Any] = [self.project_id, self.namespace]
         if not include_trashed:
             clauses.append("trash_id IS NULL")
@@ -730,11 +907,15 @@ class SqliteSessionStore:
             return cur.rowcount > 0
 
     def archived_rows(self) -> list[dict[str, Any]]:
-        rows = self.db._connection().execute(
-            "SELECT id AS session_id, archived_at, archive_reason AS reason FROM sessions "
-            "WHERE project_id=? AND namespace=? AND archived_at IS NOT NULL AND trash_id IS NULL",
-            (self.project_id, self.namespace),
-        ).fetchall()
+        rows = (
+            self.db._connection()
+            .execute(
+                "SELECT id AS session_id, archived_at, archive_reason AS reason FROM sessions "
+                "WHERE project_id=? AND namespace=? AND archived_at IS NOT NULL AND trash_id IS NULL",
+                (self.project_id, self.namespace),
+            )
+            .fetchall()
+        )
         return [dict(row) for row in rows]
 
     def stale_candidates(self, *, threshold: float, limit: int) -> list[str]:
@@ -745,17 +926,23 @@ class SqliteSessionStore:
         """
         if type(limit) is not int or limit < 1:
             raise ValueError("limit must be a positive integer")
-        rows = self.db._connection().execute(
-            "SELECT id FROM sessions WHERE project_id=? AND namespace=? AND "
-            "trash_id IS NULL AND archived_at IS NULL AND last_activity <= ? "
-            "ORDER BY last_activity ASC LIMIT ?",
-            (self.project_id, self.namespace, threshold, min(limit, _MAX_LIMIT)),
-        ).fetchall()
+        rows = (
+            self.db._connection()
+            .execute(
+                "SELECT id FROM sessions WHERE project_id=? AND namespace=? AND "
+                "trash_id IS NULL AND archived_at IS NULL AND last_activity <= ? "
+                "ORDER BY last_activity ASC LIMIT ?",
+                (self.project_id, self.namespace, threshold, min(limit, _MAX_LIMIT)),
+            )
+            .fetchall()
+        )
         return [row[0] for row in rows]
 
     # -- trash -----------------------------------------------------------
 
-    def trash(self, session: str, *, reason: str, retention_seconds: float) -> dict[str, Any] | None:
+    def trash(
+        self, session: str, *, reason: str, retention_seconds: float
+    ) -> dict[str, Any] | None:
         session = validate_session_id(session)
         now = time.time()
         token = secrets.token_hex(6)
@@ -774,8 +961,13 @@ class SqliteSessionStore:
                 "trash_reason=? "
                 "WHERE project_id=? AND namespace=? AND id=?",
                 (
-                    trash_id, now, now + retention_seconds, reason,
-                    self.project_id, self.namespace, session,
+                    trash_id,
+                    now,
+                    now + retention_seconds,
+                    reason,
+                    self.project_id,
+                    self.namespace,
+                    session,
                 ),
             )
         return {
@@ -789,11 +981,15 @@ class SqliteSessionStore:
         }
 
     def find_trash(self, trash_id: str) -> dict[str, Any] | None:
-        row = self.db._connection().execute(
-            "SELECT * FROM sessions WHERE project_id=? AND namespace=? AND "
-            "(trash_id=? OR (id=? AND trash_id IS NOT NULL))",
-            (self.project_id, self.namespace, trash_id, trash_id),
-        ).fetchone()
+        row = (
+            self.db._connection()
+            .execute(
+                "SELECT * FROM sessions WHERE project_id=? AND namespace=? AND "
+                "(trash_id=? OR (id=? AND trash_id IS NOT NULL))",
+                (self.project_id, self.namespace, trash_id, trash_id),
+            )
+            .fetchone()
+        )
         return dict(row) if row is not None else None
 
     def restore(self, trash_id: str) -> str | None:
@@ -815,10 +1011,14 @@ class SqliteSessionStore:
         return session
 
     def trashed_rows(self) -> list[dict[str, Any]]:
-        rows = self.db._connection().execute(
-            "SELECT * FROM sessions WHERE project_id=? AND namespace=? AND trash_id IS NOT NULL",
-            (self.project_id, self.namespace),
-        ).fetchall()
+        rows = (
+            self.db._connection()
+            .execute(
+                "SELECT * FROM sessions WHERE project_id=? AND namespace=? AND trash_id IS NOT NULL",
+                (self.project_id, self.namespace),
+            )
+            .fetchall()
+        )
         return [dict(row) for row in rows]
 
     def purge_expired(self, *, now: float | None = None) -> list[str]:
@@ -839,12 +1039,18 @@ class SqliteSessionStore:
 
     # -- snapshots -----------------------------------------------------
 
-    def load_snapshot(self, session: str, read: ReadResult) -> snapshot_mod.Snapshot | None:
+    def load_snapshot(
+        self, session: str, read: ReadResult
+    ) -> snapshot_mod.Snapshot | None:
         session = validate_session_id(session)
-        row = self.db._connection().execute(
-            "SELECT body FROM snapshots WHERE project_id=? AND namespace=? AND session_id=?",
-            (self.project_id, self.namespace, session),
-        ).fetchone()
+        row = (
+            self.db._connection()
+            .execute(
+                "SELECT body FROM snapshots WHERE project_id=? AND namespace=? AND session_id=?",
+                (self.project_id, self.namespace, session),
+            )
+            .fetchone()
+        )
         if row is None:
             return None
         try:
@@ -855,6 +1061,9 @@ class SqliteSessionStore:
 
     def write_snapshot(self, session: str, snapshot: snapshot_mod.Snapshot) -> None:
         session = validate_session_id(session)
+        with self._draft_lock:
+            if session in self._drafts:
+                return
         encoded = msgspec.json.encode(snapshot)
         with self.db.transaction() as conn:
             conn.execute(
@@ -868,10 +1077,14 @@ class SqliteSessionStore:
     # -- kv (archive cursor, etc.) ---------------------------------------
 
     def kv_get(self, key: str) -> str | None:
-        row = self.db._connection().execute(
-            "SELECT value FROM kv WHERE project_id=? AND namespace=? AND key=?",
-            (self.project_id, self.namespace, key),
-        ).fetchone()
+        row = (
+            self.db._connection()
+            .execute(
+                "SELECT value FROM kv WHERE project_id=? AND namespace=? AND key=?",
+                (self.project_id, self.namespace, key),
+            )
+            .fetchone()
+        )
         return row[0] if row is not None else None
 
     def kv_set(self, key: str, value: str) -> None:

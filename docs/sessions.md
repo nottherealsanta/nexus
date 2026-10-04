@@ -1,5 +1,15 @@
 # Sessions and durable state
 
+Opening a new chat reserves an **in-memory draft**, not a saved session. Setup
+and presence events remain in memory and snapshots are not written. The first
+user message atomically saves the draft's buffered records and the session row.
+An accepted `input.queued` submission also saves it immediately so queued user
+work survives a daemon restart. Unsubmitted drafts disappear on restart and do
+not appear in workspace or cross-project session lists. Existing records with
+no user message or accepted queued input are hidden from those lists, not
+purged. Assistant-only messages do not qualify a chat for listing.
+
+
 `nexus/session/` owns the append-only record of every conversation. The log is
 the source of truth: views, snapshots, exports and forks are all derived from it.
 
