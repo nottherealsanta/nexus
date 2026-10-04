@@ -231,3 +231,10 @@ retain the list's scroll position. A native rendering regression loads 1,000
 sessions, verifies fewer than 100 rows are instantiated for a frame, and checks
 that searching reaches session 999. This addresses the previously eager sidebar;
 it does not establish a frame-rate guarantee for every conversation or machine.
+
+## MCP loading controls
+
+The shared native workflow presents per-session Search/Load all actions and
+structured Settings → MCP server rows with token estimates. The inspector
+includes each server's loading mode. Target names and “via McpCall” are visible
+in permission and tool disclosures.

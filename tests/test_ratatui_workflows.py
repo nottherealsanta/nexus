@@ -510,3 +510,27 @@ async def test_voice_settings_cached_model_needs_no_download_consent(shell):
     shell.client.voice_prepare = AsyncMock()
     await shell.workflows.operate(operation)
     shell.client.voice_prepare.assert_awaited_once_with(allow_download=False)
+
+
+@pytest.mark.asyncio
+async def test_mcp_loading_details_and_lock(shell):
+    shell.preview = p.ContextInspectResult(session="s", mcp_servers=[{"name": "fs", "tool_loading": "search", "schema_tokens": 123}], context_locked=False)
+    await shell.workflows.operate({"kind": "context_extension_details", "category": "mcp", "name": "fs"})
+    assert shell.items[0]["label"] == "Find tools by search"
+    assert "123 tokens" in shell.items[1]["label"]
+    shell.preview = p.ContextInspectResult(session="s", mcp_servers=[{"name": "fs"}], context_locked=True)
+    await shell.workflows.operate({"kind": "context_extension_details", "category": "mcp", "name": "fs"})
+    assert [item["label"] for item in shell.items] == ["Back"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_loading_command_and_settings_hash(shell):
+    preview = p.ContextInspectResult(session="s", mcp_servers=[{"name": "fs", "tool_loading": "all"}])
+    shell.client.select_context_mcp_loading = AsyncMock(return_value=preview)
+    shell.client.inspect_context = AsyncMock(return_value=preview)
+    await shell.workflows.operate({"kind": "context_mcp_loading", "name": "fs", "mode": "all"})
+    shell.client.select_context_mcp_loading.assert_awaited_once_with("s", "fs", "all")
+    assert "all" in shell.items[0]["label"]
+    shell.client.settings_read = AsyncMock(return_value=p.SettingsReadResult(body="{}", sha256="hash", rel_path="mcp.json", builtin=False))
+    await shell.workflows.operate({"kind": "settings_mcp_loading", "scope": "project", "name": "fs", "tokens": 123})
+    assert shell.items[1]["operation"]["sha256"] == "hash"

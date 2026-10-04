@@ -247,7 +247,8 @@
           ],
           "requested_ts": 12.0,
           "started_ts": 15.0,
-          "status": "completed"
+          "status": "completed",
+          "target": null
         }
       ],
       "updated_ts": 22.0,

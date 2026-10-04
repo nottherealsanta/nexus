@@ -189,7 +189,8 @@ def _validate(category: str, item_id: str, body: str) -> None:
             from ..config.schema import ConfigV2
             msgspec.convert(values, type=ConfigV2, strict=False)
     elif category == "mcp":
-        document = json.loads(body)
+        from ..ext.manager import _strict_json_object
+        document = _strict_json_object(body)
         if not isinstance(document, dict):
             raise ConfigError("mcp.json root must be an object")
         servers = document.get("mcpServers", {})
@@ -221,6 +222,74 @@ def write(runtime: object, scope: str, category: str, item_id: str, body: str, e
     finally:
         if os.path.exists(temp_name): os.unlink(temp_name)
     return {"status": "written", "sha256": hashlib.sha256(data).hexdigest(), "loaded": [], "unloaded": [], "failed": [], "config_reloaded": category == "config"}
+
+
+def patch_mcp_loading(body: str, server: str, mode: str) -> str:
+    """Locate one JSONC object and replace/insert only its loading value.
+
+    A token scan preserves every original byte around the edit. Strict parsing
+    rejects duplicate keys and ambiguous aliases before any mutation.
+    """
+    from ..ext.manager import _strict_json_object
+
+    if mode not in ("search", "all"):
+        raise ConfigError("Invalid MCP tool loading mode")
+    try:
+        document = _strict_json_object(body)
+    except (ValueError, TypeError) as exc:
+        raise ConfigError("Cannot safely locate MCP server: invalid or ambiguous JSONC") from exc
+    if not isinstance(document, dict):
+        raise ConfigError("Cannot safely locate MCP server: root must be an object")
+    aliases = [key for key in ("servers", "mcpServers") if key in document]
+    if len(aliases) != 1 or not isinstance(document[aliases[0]], dict) or not isinstance(document[aliases[0]].get(server), dict):
+        raise ConfigError(f"Cannot safely locate MCP server {server!r}")
+    pattern = re.compile(r'\s+|//[^\r\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|[{}\[\]:,]|[^\s{}\[\]:,]+')
+    tokens = [(match.group(), match.start(), match.end()) for match in pattern.finditer(body)
+              if not match.group().isspace() and not match.group().startswith(("//", "/*"))]
+    spans = {}
+    cursor = 0
+
+    def value(path):
+        nonlocal cursor
+        token, start, end = tokens[cursor]
+        cursor += 1
+        if token in ("{", "["):
+            close = "}" if token == "{" else "]"
+            while tokens[cursor][0] != close:
+                if tokens[cursor][0] == ",":
+                    cursor += 1
+                    continue
+                if token == "{":
+                    key = json.loads(tokens[cursor][0])
+                    cursor += 2  # key and colon (syntax was already validated)
+                    value((*path, key))
+                else:
+                    value((*path, "[]"))
+            end = tokens[cursor][2]
+            cursor += 1
+        spans[path] = (start, end)
+
+    value(())
+    path = (aliases[0], server)
+    existing = spans.get((*path, "tool_loading"))
+    if existing:
+        start, end = existing
+        return body[:start] + json.dumps(mode) + body[end:]
+    start, _ = spans[path]
+    # Inserting immediately after { handles trailing comments and commas without
+    # moving them. Existing properties still keep their exact formatting.
+    comma = "," if document[aliases[0]][server] else ""
+    return body[:start+1] + '"tool_loading": ' + json.dumps(mode) + comma + body[start+1:]
+
+
+def set_mcp_loading(runtime, scope, server, mode, expected_sha256):
+    target = settings_target(runtime, scope, "mcp", "mcp.json")
+    old = _read_bounded(target.path)
+    current = hashlib.sha256(old).hexdigest()
+    if expected_sha256 != current:
+        return {"status": "conflict", "sha256": current}
+    body = patch_mcp_loading(old.decode("utf-8"), server, mode)
+    return write(runtime, scope, "mcp", "mcp.json", body, expected_sha256)
 
 
 def delete(runtime: object, scope: str, category: str, item_id: str) -> dict[str, Any]:
@@ -416,6 +485,13 @@ async def dispatch_settings(command: Any, runtime: object) -> Any | None:
         return msgspec.convert(inventory(runtime, command.scope), type=p.SettingsInventoryResult)
     if isinstance(command, p.SettingsRead):
         return p.SettingsReadResult(**read(runtime, command.scope, command.category, command.id))
+    if isinstance(command, p.SettingsMcpLoadingSet):
+        result = set_mcp_loading(runtime, command.scope, command.server, command.mode, command.expected_sha256)
+        if result.get("status") == "written":
+            reload = getattr(getattr(runtime, "extensions", None), "reload", None)
+            if callable(reload):
+                await reload(trigger="settings")
+        return p.SettingsWriteResult(**result)
     if isinstance(command, p.SettingsWrite):
         result = write(runtime, command.scope, command.category, command.id, command.body, command.expected_sha256)
         if result.get("status") == "written":

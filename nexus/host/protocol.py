@@ -96,6 +96,13 @@ class SettingsWrite(msgspec.Struct, tag=True, frozen=True):
     expected_sha256: str | None = None
 
 
+class SettingsMcpLoadingSet(msgspec.Struct, tag=True, frozen=True):
+    scope: Literal["global", "project"]
+    server: str
+    mode: Literal["search", "all"]
+    expected_sha256: str
+
+
 class SettingsReset(msgspec.Struct, tag=True, frozen=True):
     scope: Literal["global", "project"]
     category: str
@@ -466,6 +473,12 @@ class ContextExtensionSelect(msgspec.Struct, tag=True, frozen=True):
     enabled: bool
 
 
+class ContextMcpLoadingSelect(msgspec.Struct, tag=True, frozen=True):
+    session: str
+    server: str
+    mode: Literal["search", "all"] | None
+
+
 class ContextInspect(msgspec.Struct, tag=True, frozen=True):
     """Preview one session's next-turn standing context without starting a turn."""
 
@@ -651,6 +664,7 @@ Command = (
     | ProjectSessionOpen
     | SettingsInventory
     | SettingsRead
+    | SettingsMcpLoadingSet
     | SettingsWrite
     | SettingsDelete
     | SettingsReset
@@ -707,6 +721,7 @@ Command = (
     | AgentDefaultSet
     | ToolsList
     | ContextInspect
+    | ContextMcpLoadingSelect
     | ContextExtensionSelect
     | FileSearch
     | GitDiff
@@ -739,6 +754,7 @@ COMMANDS: tuple[type, ...] = (
     SessionList,
     SettingsInventory,
     SettingsRead,
+    SettingsMcpLoadingSet,
     SettingsWrite,
     SettingsDelete,
     SettingsReset,
@@ -795,6 +811,7 @@ COMMANDS: tuple[type, ...] = (
     AgentDefaultSet,
     ToolsList,
     ContextInspect,
+    ContextMcpLoadingSelect,
     ContextExtensionSelect,
     FileSearch,
     GitDiff,
@@ -1595,6 +1612,7 @@ __all__ = [
     "ArchivedSummary",
     "Command",
     "ContextInspect",
+    "ContextMcpLoadingSelect",
     "ContextExtensionSelect",
     "ContextInspectResult",
     "DaemonLogPage",
@@ -1705,6 +1723,7 @@ __all__ = [
     "SettingsItem",
     "SettingsRead",
     "SettingsReadResult",
+    "SettingsMcpLoadingSet",
     "SettingsWrite",
     "SettingsWriteResult",
     "SetupSave",

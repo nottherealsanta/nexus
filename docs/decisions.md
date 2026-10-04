@@ -320,3 +320,15 @@ a model hint must not break delegation. `agents.max_tier` stays as a user ceilin
 reaching `high`). Roles without `tiers` keep the old behaviour, so existing custom
 agents change nothing until their owner opts in. Tier names are checked for shape
 at parse time and resolved later, because custom tiers live in config, not here.
+
+## MCP tools default to search loading
+
+Use provider-neutral `McpSearch` and `McpCall` with fixed schemas to reduce the
+standing prompt cost of large MCP catalogues. Search results and resolved target
+identity remain in the durable transcript. Loading modes freeze at the first
+turn to preserve the prompt-cache prefix, matching existing extension choices.
+
+Anthropic-native `defer_loading`/`tool_addition` was not chosen: it is model
+and provider dependent and would need a second execution/recording path. A
+later provider-only optimization may map native calls to the same durable
+`McpCall` contract.

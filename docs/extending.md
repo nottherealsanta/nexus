@@ -172,8 +172,11 @@ is re-validated and re-gated; a block becomes an error result the model sees.
 
 Per server: `transport` (`stdio|http|sse`), `command`, `args`, `env`, `cwd`, `url`,
 `headers`, `*_timeout_s`; unknown keys are errors; only `${env:VAR}` interpolates.
-Edits apply live. Tools appear as `mcp__<server>__<tool>` in bundle `mcp`, gated
-like any tool; descriptions and results are untrusted.
+Edits apply live. Add `"tool_loading": "all"` to load a server's tools directly
+as `mcp__<server>__<tool>`; the default `"search"` keeps their schemas out of the
+request and the agent finds them with `McpSearch` and runs them with `McpCall`.
+All MCP tools live in bundle `mcp`, are gated like any tool by their target's
+name, and their descriptions and results are untrusted.
 
 ## Config and permissions
 

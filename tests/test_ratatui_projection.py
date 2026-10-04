@@ -122,7 +122,7 @@ def test_details_panel_matches_textual_sections(tmp_path, monkeypatch):
     labels = [label for label, _ in panel["session"]]
     assert labels[:8] == ["ID", "Title", "Status", "Agent", "Model", "Effort", "Turns", "Tool calls"]
     assert panel["files"] == [] and panel["files_summary"] == ""
-    assert panel["mcp"] == [["success", "cvc", "4 tools"]]
+    assert panel["mcp"] == [["success", "cvc", "4 tools · search"]]
 
 
 def test_task_card_links_child_and_hides_duplicate_agent_entry(tmp_path, monkeypatch):

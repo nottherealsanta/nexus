@@ -44,7 +44,7 @@ import math
 import re
 import threading
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Any, Protocol
 
@@ -339,7 +339,7 @@ _HUMAN_FENCE_RE = re.compile(
 class BridgeCaps:
     """Bounds applied while bridging one server, all fail-closed by omission."""
 
-    max_tools: int = 256
+    max_tools: int = 2000
     max_prompts: int = 256
     max_resources: int = 512
     max_description_chars: int = 4_000
@@ -848,7 +848,7 @@ def build_tools(
             )
             continue
         seen[qualified] = str(raw_name)
-        tools.append(tool)
+        tools.append(replace(tool, local_name=str(raw_name)))
     return tuple(tools), tuple(issues)
 
 
@@ -1728,3 +1728,151 @@ async def bridge_server(
         prompts=prompts,
         issues=tuple(issues),
     )
+
+
+MCP_SEARCH_SCHEMA = {
+    "type": "object", "properties": {
+        "queries": {"type": "array", "minItems": 1, "maxItems": 8, "items": {
+            "type": "object", "properties": {
+                "server": {"type": "string", "minLength": 1, "maxLength": 64},
+                "query": {"type": "string", "minLength": 1, "maxLength": 256}},
+            "required": ["query"], "additionalProperties": False}},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 10}},
+    "required": ["queries"], "additionalProperties": False,
+}
+MCP_CALL_SCHEMA = {
+    "type": "object", "properties": {
+        "tool": {"type": "string", "minLength": 1, "maxLength": 128},
+        "arguments": {"type": "object"}},
+    "required": ["tool", "arguments"], "additionalProperties": False,
+}
+
+
+def build_search_tools(manager, modes, *, disabled=(), allowed=None):
+    """Fixed proxy schemas; live targets remain bounded by caller authority.
+
+    ``allowed`` is a frozen target-name set, never a grant. Connecting uses the
+    manager's existing single-flight deadlines and disabled-server checks.
+    """
+    from difflib import get_close_matches
+
+    from ..tools.spec import ResolvedTarget
+    from .search import SearchIndex
+
+    ensure_mcp_bundle()
+    index_key = None
+    cached_index = None
+
+    def visible():
+        return {name: server for name, server in ((server.name, server) for server in manager.snapshot().servers)
+                if name not in disabled and modes.get(name, "search") == "search"
+                and manager.status(name).enabled}
+
+    def permitted(server):
+        return tuple(tool for tool in server.tools if allowed is None or tool.name in allowed)
+
+    def refuse_server(name):
+        if name in disabled:
+            raise ToolSpecError("This MCP server is switched off for this session.")
+        server = manager.server_snapshot(name)
+        if server is None:
+            raise ToolSpecError(f"Unknown MCP server {name!r}")
+        if not manager.status(name).enabled:
+            raise ToolSpecError("This MCP server is switched off for this session.")
+        if modes.get(name, "search") == "all":
+            raise ToolSpecError("This server's tools are loaded directly; call mcp__server__tool")
+        return server
+
+    async def search(arguments, ctx):
+        nonlocal index_key, cached_index
+        from dataclasses import replace
+
+        sections, names = [], []
+        for number, query in enumerate(arguments["queries"], 1):
+            server_name = query.get("server")
+            heading = f"Query {number} · server {server_name or 'all servers'} · {query['query']}"
+            errors = []
+            try:
+                if server_name is not None:
+                    refuse_server(server_name)
+                candidates = [server_name] if server_name else sorted(visible())[:64]
+                for name in candidates:
+                    server = refuse_server(name)
+                    if not server.connected:
+                        if await manager.connect(name) is None:
+                            errors.append(f"server {name} failed: {manager.server_snapshot(name).error}")
+                servers = {name: replace(server, tools=tuple(tool for tool in permitted(server)
+                               if ctx.tool_authority is None or tool.name in ctx.tool_authority))
+                           for name, server in visible().items()}
+                key = tuple((name, server.generation, tuple((tool.name, id(tool)) for tool in server.tools))
+                            for name, server in sorted(servers.items()))
+                if key != index_key:
+                    cached_index, index_key = SearchIndex(servers), key
+                result = cached_index.search(query["query"], server=server_name, limit=arguments.get("limit", 5))
+                rows = [f"{heading} · {len(result.matches)} of {result.total} tools"]
+                alone = query["query"].startswith("select:") and len(result.matches) == 1
+                for index, match in enumerate(result.matches, 1):
+                    spec = match.tool.spec
+                    schema = json.dumps(spec.input_schema, ensure_ascii=False)
+                    cap = 24000 if alone else 8000
+                    if len(schema) > cap:
+                        schema = schema[:cap] + f"\n[Schema clipped; call McpSearch with select:{match.name} to see this schema alone]"
+                    rows.extend([f"{index}. {match.name} ({'changes state' if spec.mutates else 'read only'})",
+                                 f"   Description: {spec.description}", f"   Input schema: {schema}"])
+                    names.append(match.name)
+                rows.extend((*errors, *result.errors))
+            except ToolSpecError as exc:
+                rows = [f"{heading} · {exc}"]
+            sections.append("\n".join(rows))
+        text = "\n\n".join(sections)
+        cap = max(1, getattr(getattr(getattr(ctx.config, "v2", None), "tools", None), "max_result_tokens", 25000) * 4 - 600)
+        if len(text) > cap:
+            text = text[:max(0, cap-80)] + "\n[Search result clipped; narrow the query or use select:<name>]"
+        return ToolExecutionResult.text(wrap_untrusted(text, server="search", kind="tool-search", limit=cap),
+            context_note="MCP tools found: " + ", ".join(dict.fromkeys(names))[:2000])
+
+    def resolve(arguments):
+        requested = arguments["tool"]
+        servers = {server.name: server for server in manager.snapshot().servers}
+        choices = []
+        for name, server in servers.items():
+            for tool in server.tools:
+                choices.append(tool.name)
+                if requested in (tool.name, f"{name}/{tool.local_name or tool.name.split('__', 2)[-1]}"):
+                    if modes.get(name, "search") == "all" and name not in disabled and manager.status(name).enabled:
+                        raise ToolSpecError(f"This tool is loaded directly; call {tool.name}")
+                    refuse_server(name)
+                    if allowed is not None and tool.name not in allowed:
+                        raise ToolSpecError(f"Target {tool.name} is not permitted by this agent's tool restrictions")
+                    return ResolvedTarget(msgspec_replace_timeout(tool.spec, server.call_timeout_s),
+                                          tool.run, dict(arguments["arguments"]),
+                                          lambda message: wrap_untrusted(message, server=name, kind="tool-validation", limit=24000))
+        # Report disabled/all servers even if their live catalogue is absent.
+        if "/" in requested:
+            refuse_server(requested.split("/", 1)[0])
+        closest = get_close_matches(requested, choices, n=3)
+        raise ToolSpecError("Tool not found; search again" + (f" (closest: {', '.join(closest)})" if closest else ""))
+
+    async def call(arguments, ctx):
+        target = resolve(arguments)
+        return await target.run(target.arguments, ctx)
+
+    mutating = tuple(tool.name for server in manager.snapshot().servers for tool in server.tools
+                     if tool.spec.mutates and (allowed is None or tool.name in allowed))
+    return (
+        RegisteredTool(ToolSpec(name="McpSearch", description="Find MCP tools by keyword or select:name. Search results include input schemas; call tools with McpCall.",
+            input_schema=MCP_SEARCH_SCHEMA, bundle="mcp", mutates=False), search, origin="mcp", deferred_targets=tuple(sorted(allowed if allowed is not None else
+                (tool.name for server in manager.snapshot().servers for tool in server.tools
+                 if server.name in visible()))), deferred_mutating=mutating),
+        RegisteredTool(ToolSpec(name="McpCall", description="Call a tool found by McpSearch using server/tool and its arguments. Permissions and validation follow the target.",
+            input_schema=MCP_CALL_SCHEMA, bundle="mcp", mutates=False), call, origin="mcp", resolve=resolve, deferred_targets=tuple(sorted(allowed if allowed is not None else
+                (tool.name for server in manager.snapshot().servers for tool in server.tools
+                 if server.name in visible()))), deferred_mutating=mutating),
+    )
+
+
+def msgspec_replace_timeout(spec, timeout):
+    """Keep the real target schema and authority, with its server deadline."""
+    import msgspec
+
+    return msgspec.structs.replace(spec, timeout_s=timeout)

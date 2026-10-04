@@ -143,6 +143,12 @@ class Client:
                                   expected_sha256=expected_sha256)
         return await self._request(command)  # type: ignore[return-value]
 
+    async def settings_mcp_loading_set(self, scope: str, server: str, mode: str, expected_sha256: str) -> p.SettingsWriteResult:
+        return await self._request(p.SettingsMcpLoadingSet(scope=scope, server=server, mode=mode, expected_sha256=expected_sha256))
+
+    async def select_context_mcp_loading(self, session: str, server: str, mode: str | None) -> p.ContextInspectResult:
+        return await self._request(p.ContextMcpLoadingSelect(session=session, server=server, mode=mode))
+
     async def settings_reset(self, scope: str, category: str) -> p.SettingsResetResult:
         return await self._request(p.SettingsReset(scope=scope, category=category))  # type: ignore[return-value]
 

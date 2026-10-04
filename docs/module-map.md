@@ -238,6 +238,7 @@ here, so add a row when you add a file.
 | `client.py` | MCP client: three transports behind one normalized, upstream-free boundary |
 | `errors.py` | Normalized MCP error taxonomy |
 | `manager.py` | MCP server lifecycle manager |
+| `search.py` | Pure bounded keyword ranking and exact MCP tool selection |
 
 ### `nexus/model/`
 

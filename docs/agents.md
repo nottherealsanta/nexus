@@ -191,3 +191,12 @@ CLI: `nexus worktrees list|inspect|review|acknowledge|integrate|discard`; chat:
 - Tests: `tests/test_agents_manager.py`, `test_agent_selection.py`,
   `test_agent_route_defaults.py`, `test_subagent_runner.py`, `test_subagent_worktrees.py`, `test_worktree_*.py`,
   `test_host_worktrees.py`.
+
+## Deferred MCP authority
+
+Agent intersections include deferred target names without advertising their
+schemas. `tools: [mcp__github__*]` and individual qualified names select only
+matching targets. The search/call proxies are included when a target survives
+the intersection; search results and preparation enforce that same ceiling.
+Children inherit the root session's frozen modes. Read-only roles strip mutating
+targets, and proxy execution cannot turn a deferred name into new authority.

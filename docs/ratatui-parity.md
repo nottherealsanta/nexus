@@ -597,3 +597,11 @@ base64 with labelled media/size information and exposes each image as a projecte
 preview operation. Both clients retain complete text and other content blocks.
 The daemon remains the source of draft image bytes. See [desktop.md](desktop.md)
 for bounds and native capture evidence.
+
+## MCP search loading
+
+The native MCP dialog displays loading mode and token estimates, with Search,
+Load all and Follow configuration actions before the first turn. Settings → MCP
+adds server rows above the raw editor. These use `ContextMcpLoadingSelect` and
+`SettingsMcpLoadingSet`; the web client gets no new controls. Search schemas
+render as labelled fields; proxy permissions and transcript rows show targets.

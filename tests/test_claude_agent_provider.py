@@ -331,3 +331,22 @@ async def test_enabled_claude_catalogue_initializes_on_model_reads_after_restart
         finally:
             await host.shutdown()
             await runtime.aclose()
+
+
+async def test_worker_exposes_mcp_proxy_tools_without_executing_them():
+    from nexus.mcp.bridge import MCP_CALL_SCHEMA, MCP_SEARCH_SCHEMA
+    seen = {}
+    class Options:
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+    class Result:
+        is_error, subtype, structured_output, usage = False, "success", result()["output"], result()["usage"]
+    async def query():
+        yield Result()
+    sdk = worker_sdk(Options, Result, query, seen)
+    req = ModelRequest(messages=[Message(role="user", content=[Text("find")])],
+                       tools=[ToolSchema("McpSearch", "search", MCP_SEARCH_SCHEMA), ToolSchema("McpCall", "call", MCP_CALL_SCHEMA)],
+                       system="Nexus system")
+    await worker.run(request_payload(req, "sonnet", None), sdk)
+    assert seen["allowed_tools"] == ["mcp__nexus__McpSearch", "mcp__nexus__McpCall"]
+    assert [tool[1] for tool in seen["mcp_servers"]["nexus"]["tools"]] == [MCP_SEARCH_SCHEMA, MCP_CALL_SCHEMA]

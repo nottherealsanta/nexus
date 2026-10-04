@@ -229,6 +229,13 @@ def test_context_dialog_toggle_keyboard_and_lock():
         assert not select.select([process.stdout], [], [], .2)[0]
         os.write(master, b"\r")
         assert action()["operation"]["kind"] == "tool_definition"
+        operation = {"kind": "context_mcp_loading", "name": "github", "mode": "all"}
+        process.stdin.write((json.dumps({"schema": 1, "status": "idle", "panel_title": "github", "panel_layout": "context",
+            "items": [{"label": "Load all tools into context (~1234 tokens)", "operation": operation}]}) + "\n").encode())
+        process.stdin.flush()
+        time.sleep(.2)
+        os.write(master, b"\r")
+        assert action()["operation"] == operation
     finally:
         process.kill()
         process.wait(timeout=3)

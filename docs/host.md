@@ -208,3 +208,15 @@ The daemon attaches its PID and socket path to the host doctor report as
 `daemon`. The native Logs header consumes this report through the existing
 host command, together with session and protocol identity. Embedded clients may
 have an empty daemon identity. The UI does not inspect daemon files or managers.
+
+## MCP loading commands
+
+`ContextMcpLoadingSelect(session, server, mode)` persists a per-session choice;
+`mode` is `search`, `all`, or null to follow config. Unknown servers and choices
+after the first turn are refused. It returns refreshed `ContextInspectResult`.
+
+`SettingsMcpLoadingSet(scope, server, mode, expected_sha256)` changes one
+server's loading key in the defining `mcp.json` through the Settings path policy.
+It preserves JSONC comments and surrounding formatting, refuses ambiguous
+objects, checks the supplied hash and returns `SettingsWriteResult`. Successful
+writes reload extensions. Existing sessions keep frozen modes.

@@ -122,6 +122,11 @@ class Workflows(TierPages, SpeakPages):
             rows = [(escape_controls(item.label) + (" · built-in" if item.builtin else " · edited" if getattr(item, "overrides_builtin", False) else ""),
                      {"kind": "settings_read", "scope": scope, "category": category, "id": item.id})
                     for item in items]
+            if category == "mcp":
+                preview = await self.client.inspect_context(self.shell.controller.session)
+                server_rows = [row for row in preview.mcp_servers if row.get("scope") == scope]
+                rows = [(f"{row['name']} · {row.get('config_tool_loading', 'search')} · {row.get('tool_count', 0)} tools · {scope} · {row.get('status', 'unknown')}",
+                    {"kind": "settings_mcp_loading", "scope": scope, "name": row["name"], "tokens": row.get("schema_tokens", 0)}) for row in server_rows] + rows
             if category == "agents":
                 rows.insert(0, ("New sessions start with…", {"kind": "default_agent"}))
             names = [item.id for item in items if not item.builtin and (category != "agents" or getattr(item, "overrides_builtin", False))]
@@ -450,6 +455,23 @@ class Workflows(TierPages, SpeakPages):
             group = next(g for g in tool_groups(list(self.shell.preview.tools)) if g.key == operation["group"])
             entry = group.entries[operation["index"]]
             self.menu(f"Tool · {entry.title} · ~{_compact_tokens(entry.tokens)} tokens", [("Back", {"kind": "back"})], entry.body.splitlines(), layout="context")
+        elif kind == "context_mcp_loading":
+            self.shell.preview = await self.client.select_context_mcp_loading(
+                self.shell.controller.session, operation["name"], operation["mode"])
+            self.shell.panel_title = ""
+            await self.context_extensions("mcp")
+        elif kind == "settings_mcp_loading":
+            file = await self.client.settings_read(operation["scope"], "mcp", "mcp.json")
+            self.menu(f"Tool loading · {operation['name']}", [
+                ("Find tools by search", {**operation, "kind": "settings_mcp_loading_set", "mode": "search", "sha256": file.sha256}),
+                (f"Load all tools into context (~{operation.get('tokens', 0)} tokens)", {**operation, "kind": "settings_mcp_loading_set", "mode": "all", "sha256": file.sha256})],
+                ["Applies to new sessions. Existing sessions keep their frozen loading mode."])
+        elif kind == "settings_mcp_loading_set":
+            result = await self.client.settings_mcp_loading_set(operation["scope"], operation["name"], operation["mode"], operation["sha256"])
+            if result.status == "conflict":
+                raise ValueError("MCP settings changed; reopen this page before saving")
+            await self.refresh_settings_pages(operation["scope"], "mcp")
+            await self.settings(operation["scope"], "mcp")
         elif kind == "context_toggle":
             self.shell.preview = await self.client.select_context_extension(self.shell.controller.session,
                 operation["category"], operation["name"], operation["enabled"])
@@ -468,7 +490,13 @@ class Workflows(TierPages, SpeakPages):
             preview = self.shell.preview
             rows = preview.skills_index if operation["category"] == "skills" else preview.mcp_servers
             row = next((row for row in rows if (row.get("name") or row.get("id")) == operation["name"]), {})
-            self.menu(str(operation["name"]), [("Back", {"kind": "back"})], labelled(row), layout="context")
+            actions = [("Back", {"kind": "back"})]
+            if operation["category"] == "mcp" and not preview.context_locked and not self.agent_page_id:
+                actions = [
+                    ("Find tools by search", {"kind": "context_mcp_loading", "name": operation["name"], "mode": "search"}),
+                    (f"Load all tools into context (~{row.get('schema_tokens', 0)} tokens)", {"kind": "context_mcp_loading", "name": operation["name"], "mode": "all"}),
+                    ("Follow configuration", {"kind": "context_mcp_loading", "name": operation["name"], "mode": None}), *actions]
+            self.menu(str(operation["name"]), actions, labelled(row), layout="context")
         elif kind == "context_extensions":
             await self.context_extensions(operation["category"])
         elif kind == "agent_page":
@@ -965,7 +993,7 @@ class Workflows(TierPages, SpeakPages):
         for row in ordered:
             name = row.get("name") or row.get("id")
             scope = row.get("scope", "project" if category == "mcp" else "global")
-            items.append((f"{scope:<8} {name}", {"kind": "context_extension_details", "category": category, "name": name}))
+            items.append((f"{scope:<8} {name}" + (f" · {row.get('tool_count', 0)} · {row.get('tool_loading', 'search')}" if category == "mcp" else ""), {"kind": "context_extension_details", "category": category, "name": name}))
         self.menu(category.upper(), items,
                   ["Context locked after first turn" if locked else "Click a right-side toggle or press Space to switch; Enter shows details."], layout="context")
         for item, row in zip(self.shell.items, ordered):

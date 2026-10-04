@@ -1277,6 +1277,8 @@ class SubagentRunner:
             return selection
         requested = frozenset(req.tools)
         selected = selection.selected & requested
+        if any(name.startswith("mcp__") for name in selected):
+            selected |= selection.selected & {"McpSearch", "McpCall"}
         dropped = selection.dropped | (requested - selection.selected)
         return replace(
             selection,

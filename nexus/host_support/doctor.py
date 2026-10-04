@@ -270,6 +270,10 @@ def _mcp_report(runtime: object) -> dict[str, Any] | None:
         return None
     try:
         servers = [_asdict(status) for status in statuses()]
+        for row in servers:
+            lookup = getattr(mcp, "server_snapshot", None)
+            snapshot = lookup(row["name"]) if callable(lookup) else None
+            row["tool_loading"] = getattr(snapshot, "tool_loading", "search")
     except Exception:  # noqa: BLE001 - health must never raise
         servers = []
     diagnostics = getattr(mcp, "diagnostics", None)

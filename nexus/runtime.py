@@ -35,6 +35,7 @@ import contextlib
 import copy
 import hashlib
 import inspect
+import json
 import re
 import subprocess
 import threading
@@ -357,8 +358,10 @@ class _PermissionGateAdapter:
         #: One unforgeable evidence scope per gate/turn. Managers can be shared
         #: across sessions, so cleanup must revoke only this gate's capabilities.
         self._evidence_scope = object()
+        self._proxy_calls = set()
 
     def plan(self, prepared):
+        self._proxy_calls = {entry.call.id for entry in prepared.entries if entry.target is not None}
         plan = self.engine.plan(
             prepared.calls(),
             prepared.spec_map(),
@@ -422,6 +425,8 @@ class _PermissionGateAdapter:
 
     def request_for(self, evaluation):
         request = self.engine.request_for(evaluation)
+        if evaluation.call.id in self._proxy_calls:
+            request = replace(request, preview="via McpCall\n" + (request.preview or ""))
         self._approval_evaluations[request.id] = evaluation
         return request
 
@@ -1275,29 +1280,24 @@ class _ManifestEnvironmentFactory:
             path_guard=self._path_guard,
         )
         if self._agent_definition is not None:
-            from .tools.bundles import BUNDLES, profile_tools
+            from .tools.bundles import BUNDLES
 
-            manager_names = manager.names
             profile = (
-                profile_tools(self._agent_definition.profile)
+                manager.authority_for_profile(self._agent_definition.profile)
                 if self._agent_definition.profile
-                else manager_names
+                else manager.authority_names
             )
             selected = runtime._agents.select_tools(
                 self._agent_definition,
-                available=manager_names,
+                available=manager.authority_names,
                 profile=profile,
                 bundle_map={name: bundle.tools for name, bundle in BUNDLES.items()},
-                mutating=tuple(
-                    spec.name
-                    for spec in manager.specs
-                    if getattr(spec, "mutates", False)
-                ),
+                mutating=manager.authority_mutating,
             )
             manager = runtime._build_iteration_manager(
                 config,
                 manifest,
-                restrict=tuple(name for name in manager_names if name in selected.selected),
+                restrict=tuple(selected.selected),
                 catalog=catalog,
                 path_guard=self._path_guard,
             )
@@ -1363,25 +1363,21 @@ class _ManifestEnvironmentFactory:
             catalog=(*base_catalog, build_task_tool(None)),
             path_guard=self._path_guard,
         )
-        parent_tools = list(provisional.names)
+        parent_tools = list(provisional.authority_names)
         if agent_definition is not None:
-            from .tools.bundles import BUNDLES, profile_tools
+            from .tools.bundles import BUNDLES
 
             root_profile = (
-                profile_tools(agent_definition.profile)
+                provisional.authority_for_profile(agent_definition.profile)
                 if agent_definition.profile
-                else provisional.names
+                else provisional.authority_names
             )
             root_selection = runtime._agents.select_tools(
                 agent_definition,
-                available=provisional.names,
+                available=provisional.authority_names,
                 profile=root_profile,
                 bundle_map={name: bundle.tools for name, bundle in BUNDLES.items()},
-                mutating=tuple(
-                    spec.name
-                    for spec in provisional.specs
-                    if getattr(spec, "mutates", False)
-                ),
+                mutating=provisional.authority_mutating,
             )
             parent_tools = [
                 name for name in parent_tools if name in root_selection.selected
@@ -2649,6 +2645,8 @@ class Runtime:
                 session, "reasoning_effort_selection", None
             )
             disabled_extensions = getattr(session, "disabled_extensions", {})
+            mcp_loading_choices = getattr(session, "mcp_loading_choices", {})
+            mcp_loading_frozen = getattr(session, "mcp_loading_frozen", None)
             attended = bool(getattr(session, "attended", False))
             # Only the durable selection fields are relevant to standing
             # context. Do not replay real-session events into preview setup.
@@ -2773,13 +2771,18 @@ class Runtime:
             if self._mcp is not None:
                 for status in self._mcp.statuses()[:64]:
                     snapshot = self._mcp.server_snapshot(status.name)
-                    names = list(snapshot.tool_names())[:256] if snapshot else []
+                    names = list(snapshot.tool_names())[:2000] if snapshot else []
                     mcp_servers.append({
                         "name": status.name,
                         "status": "connected" if status.connected else "disabled" if not status.enabled else "failed",
                         "scope": getattr(self._extensions, "mcp_scopes", {}).get(status.name, "project"),
                         "config_enabled": status.enabled,
                         "enabled": status.enabled and status.name not in session.disabled_extensions["mcp"],
+                        "tool_loading": (session.mcp_loading_frozen.get(status.name, "search")
+                            if session.mcp_loading_frozen is not None else session.mcp_loading_choices.get(status.name, getattr(snapshot, "tool_loading", "search"))),
+                        "tool_loading_source": "session" if status.name in session.mcp_loading_choices else getattr(snapshot, "tool_loading_source", "default"),
+                        "config_tool_loading": getattr(snapshot, "tool_loading", "search"),
+                        "schema_tokens": sum(len(json.dumps(tool.spec.to_schema().input_schema)) + len(tool.spec.description) for tool in getattr(snapshot, "tools", ())) // 4,
                         "tool_count": status.tool_count,
                         "tools": names,
                     })
@@ -3050,14 +3053,38 @@ class Runtime:
         skills = disabled.get("skills", ())
         servers = disabled.get("mcp", ())
         off_tools = disabled.get("tools", ())
-        if not skills and not servers and not off_tools:
-            return manifest
         disabled_tools = {
             tool.name for name, server in manifest.mcp.items() if name in servers
             for tool in getattr(server, "tools", ())
         } | set(off_tools)
         tools = {name: tool for name, tool in manifest.tools.items() if name not in disabled_tools}
-        selected_servers = {name: value for name, value in manifest.mcp.items() if name not in servers}
+        choices = getattr(session, "mcp_loading_choices", {})
+        frozen = getattr(session, "mcp_loading_frozen", None)
+        modes = {name: (frozen.get(name, "search") if frozen is not None else
+                       choices.get(name, getattr(value, "tool_loading", "search")))
+                 for name, value in manifest.mcp.items()}
+        if frozen is None and hasattr(session, "prepare_mcp_loading"):
+            session.prepare_mcp_loading(modes)
+        selected_servers = {
+            name: (replace(value, tool_loading=modes[name],
+                           tool_loading_source="session" if name in choices else getattr(value, "tool_loading_source", "default"))
+                   if not isinstance(value, Mapping) else
+                   {**value, "tool_loading": modes[name], "tool_loading_source": "session" if name in choices else "default"})
+            for name, value in manifest.mcp.items() if name not in servers}
+        enabled_servers = ({status.name for status in self._mcp.statuses() if status.enabled}
+                           if self._mcp is not None else set(selected_servers))
+        search_servers = {name: value for name, value in selected_servers.items()
+                          if modes[name] == "search" and name in enabled_servers}
+        for server in search_servers.values():
+            for target in getattr(server, "tools", ()):
+                tools.pop(target.name, None)
+        if search_servers and self._mcp is not None:
+            from .mcp.bridge import build_search_tools
+
+            for tool in build_search_tools(self._mcp, modes, disabled=servers,
+                    allowed={target.name for server in search_servers.values() for target in getattr(server, "tools", ())
+                             if target.name not in off_tools}):
+                tools[tool.name] = tool
         if not any(getattr(server, "resources", ()) or getattr(server, "resource_templates", ()) for server in selected_servers.values()):
             tools.pop("ReadMcpResource", None)
         resource_tool = tools.get("ReadMcpResource")
@@ -3432,21 +3459,19 @@ class Runtime:
             )
             self._track_tool_manager(manager)
         if agent_definition is not None:
-            from .tools.bundles import BUNDLES, profile_tools
+            from .tools.bundles import BUNDLES
 
             profile = (
-                profile_tools(agent_definition.profile)
+                manager.authority_for_profile(agent_definition.profile)
                 if agent_definition.profile
-                else manager.names
+                else manager.authority_names
             )
             selected = self._agents.select_tools(
                 agent_definition,
-                available=manager.names,
+                available=manager.authority_names,
                 profile=profile,
                 bundle_map={name: bundle.tools for name, bundle in BUNDLES.items()},
-                mutating=tuple(
-                    spec.name for spec in manager.specs if getattr(spec, "mutates", False)
-                ),
+                mutating=manager.authority_mutating,
             )
             if self._extensions is None:
                 manager = ToolManager(
@@ -3514,7 +3539,7 @@ class Runtime:
             authority = _ChildAuthority(engine=engine, path_guard=manager.path_guard)
             static_runner = self._make_subagent_runner(
                 session_id=session.id,
-                parent_tools=manager.names,
+                parent_tools=manager.authority_names,
                 parent_tier=parent_tier,
                 parent_model=(
                     f"{parent_provider}/{parent_model}"
@@ -3549,7 +3574,7 @@ class Runtime:
                 self._track_tool_manager(manager)
             runner = self._make_subagent_runner(
                 session_id=session.id,
-                parent_tools=manager.names,
+                parent_tools=manager.authority_names,
                 parent_tier=parent_tier,
                 parent_model=(
                     f"{parent_provider}/{parent_model}"
@@ -3606,6 +3631,10 @@ class Runtime:
                 model_selection=model_selection,
                 agent_definition=agent_definition,
             )
+        if manifest_ref is not None:
+            # Select the first-turn modes before the sink records turn.started.
+            # The sink persists them through both live event streams.
+            self._selected_manifest(manifest_ref.get(), session)
         return ToolTurn(
             manager=manager,
             engine=engine,
@@ -4450,12 +4479,29 @@ class Runtime:
             mapping.setdefault(bundle, [])
             if name not in mapping[bundle]:
                 mapping[bundle].append(name)
+            mapping[bundle].extend(getattr(tool, "deferred_targets", ()))
         return mapping
+
+    @staticmethod
+    def _catalog_profile_names(catalog, name):
+        from .tools.bundles import get_profile, profile_tools
+
+        profile = get_profile(name)
+        names = set(profile_tools(name))
+        for tool in catalog or ():
+            if tool.bundle not in profile.bundles or tool.name in profile.exclude:
+                continue
+            if not profile.read_only or not tool.mutates:
+                names.add(tool.name)
+            names.update(target for target in tool.deferred_targets
+                         if not profile.read_only or target not in tool.deferred_mutating)
+        return frozenset(names)
 
     @staticmethod
     def _mutating_names(catalog: Sequence[Any] | None = None) -> tuple[str, ...]:
         names: set[str] = set()
         for tool in catalog or ():
+            names.update(getattr(tool, "deferred_mutating", ()))
             spec = getattr(tool, "spec", tool)
             if getattr(spec, "mutates", False):
                 name = getattr(spec, "name", None)
@@ -4593,7 +4639,6 @@ class Runtime:
         if parent_provider and parent_model and "/" not in parent_model:
             parent_model = f"{parent_provider}/{parent_model}"
             parent_provider = None
-        from .tools.bundles import profile_tools
 
         max_tier = str(getattr(section, "max_tier", "high"))
         if self._tiers.rank(max_tier) is None:
@@ -4622,7 +4667,7 @@ class Runtime:
                 token_budget=getattr(section, "token_budget", None),
                 cost_budget=getattr(section, "cost_budget", None),
                 default_type=str(getattr(section, "default_type", "task")),
-                profile_for=profile_for or profile_tools,
+                profile_for=profile_for or (lambda name: self._catalog_profile_names(catalog, name)),
                 config=effective,
                 event_sink=event_sink,
                 bundle_map=self._bundle_map(catalog),
@@ -5120,6 +5165,7 @@ class Runtime:
             config,
             workspace=workspace,
             tools=catalog,
+            restrict=spec.tools,
             path_guard=path_guard,
             job_registry=self._job_registry,
             todo_store=self._effective_todo_store(),

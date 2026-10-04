@@ -125,6 +125,7 @@ def fs_definition(
         env.update(extra_env)
     raw = {
         "transport": "stdio",
+        "tool_loading": "all",  # These tests exercise directly loaded MCP tools.
         "command": sys.executable,
         "args": [str(FIXTURE), str(root)],
         "env": env,
@@ -807,6 +808,7 @@ async def test_benchmark_skill_and_relative_mcp_script_load_outside_workspace(
     shutil.copyfile(benchmark / "mcp_echo.py", server_dir / "mcp_echo.py")
     config_path = workspace / ".agents" / "mcp.json"
     definitions = json.loads(config_path.read_text())
+    definitions["servers"]["echo"]["tool_loading"] = "all"
     definitions["servers"]["echo"]["command"] = sys.executable
     if cwd is not None:
         definitions["servers"]["echo"]["cwd"] = (

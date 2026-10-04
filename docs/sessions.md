@@ -145,3 +145,10 @@ default) and `SessionManager.set_auto_title` stores the result (`auto`).
   Clients see the new title on their normal session-list refresh.
 - Settings → Session titles switches it off and shows which model titles go to.
 
+
+## Durable MCP loading
+
+`context.mcp_loading_selected {server, mode}` records a per-server choice; null
+removes the override. `context.mcp_loading_frozen {server: mode}` records the
+first-turn effective modes. Reopening or forking replays these events. Choices
+lock after the first turn, and subsequently added servers default to Search.

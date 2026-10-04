@@ -153,6 +153,10 @@ def group_tools(turn: TurnView) -> list[ToolGroup]:
 def tool_heading(tool: ToolCallView) -> str:
     """``$ command`` for shells, ``→ Read path`` style for everything else."""
     name = tool.name.casefold()
+    if name == "mcpcall":
+        target = tool.target or str(tool.input.get("tool", ""))
+        label = target.removeprefix("mcp__").replace("__", " · ").replace("/", " · ")
+        return "⚙ " + _text(label, 120) + " · via McpCall"
     args = format_arguments(tool)
     if name in {"bash", "bashoutput", "killshell"}:
         return f"$ {args}" if args else "$"
