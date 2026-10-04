@@ -19,13 +19,17 @@ def binary_path() -> Path:
         root = Path(__file__).resolve().parents[3]
         installed = shutil.which("nexus-desktop")
         candidates = [Path(sys.executable).parent / "nexus-desktop",
-                      *(root / f"rust/desktop/target/{profile}/nexus-desktop"
-                        for profile in ("release", "debug"))]
+                      root / "rust/desktop/target/release/nexus-desktop",
+                      root / "rust/desktop/target/debug/nexus-desktop"]
         if installed:
             candidates.append(Path(installed))
-        candidates.sort(key=lambda path: path.stat().st_mtime if path.is_file() else 0, reverse=True)
     for path in candidates:
         if path.is_file() and os.access(path, os.X_OK):
+            if not override and path == root / "rust/desktop/target/debug/nexus-desktop":
+                print(
+                    "Nexus desktop: using debug executable; build with `cargo build --release --manifest-path rust/desktop/Cargo.toml` for better performance.",
+                    file=sys.stderr,
+                )
             return path.resolve()
     raise RuntimeError("Desktop executable is missing. Build it with `cargo build --manifest-path rust/desktop/Cargo.toml` or set NEXUS_DESKTOP_BINARY.")
 

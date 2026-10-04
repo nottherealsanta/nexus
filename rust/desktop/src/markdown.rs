@@ -4,7 +4,7 @@ use crate::theme::Theme;
 use core::prelude::v1::test;
 use gpui::{prelude::*, *};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
-use std::ops::Range;
+use std::{collections::HashMap, ops::Range};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Span {
@@ -25,6 +25,79 @@ pub struct Block {
     pub rule: bool,
     pub cells: Vec<Block>,
     pub table_head: bool,
+}
+
+/// Parsed Markdown detached from any GPUI elements. Its exact source is its
+/// cache key, so streaming edits are reparsed while unchanged snapshots reuse
+/// the previously parsed blocks.
+#[derive(Clone, Debug)]
+pub struct ParsedDoc {
+    pub source: String,
+    pub blocks: Vec<Block>,
+}
+
+/// Bounded FIFO cache. Keeping this in the desktop state avoids parsing during
+/// each paint and caps retained revisions for large conversations.
+pub struct ParsedDocCache {
+    capacity: usize,
+    docs: HashMap<String, ParsedDoc>,
+    order: Vec<String>,
+    parsed_total: usize,
+}
+
+impl ParsedDocCache {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            capacity: capacity.max(1),
+            docs: HashMap::new(),
+            order: Vec::new(),
+            parsed_total: 0,
+        }
+    }
+
+    pub fn prepare(&mut self, source: &str) {
+        if self.docs.contains_key(source) {
+            return;
+        }
+        let doc = ParsedDoc {
+            source: source.to_owned(),
+            blocks: parse(source),
+        };
+        self.parsed_total += 1;
+        while self.docs.len() >= self.capacity {
+            if self.order.is_empty() {
+                break;
+            }
+            self.docs.remove(&self.order.remove(0));
+        }
+        self.order.push(source.to_owned());
+        self.docs.insert(source.to_owned(), doc);
+    }
+
+    pub fn get(&self, source: &str) -> Option<&ParsedDoc> {
+        self.docs.get(source)
+    }
+    pub fn len(&self) -> usize {
+        self.docs.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.docs.is_empty()
+    }
+    pub fn parse_count(&self) -> usize {
+        self.parsed_total
+    }
+
+    pub fn retain_sources<'a>(&mut self, sources: impl IntoIterator<Item = &'a str>) {
+        let live: std::collections::HashSet<&str> = sources.into_iter().collect();
+        self.docs.retain(|source, _| live.contains(source.as_str()));
+        self.order.retain(|source| self.docs.contains_key(source));
+    }
+
+    pub fn retain_sources_owned(&mut self, sources: &[String]) {
+        let live: std::collections::HashSet<&str> = sources.iter().map(String::as_str).collect();
+        self.docs.retain(|source, _| live.contains(source.as_str()));
+        self.order.retain(|source| self.docs.contains_key(source));
+    }
 }
 
 pub fn parse(text: &str) -> Vec<Block> {
@@ -217,10 +290,19 @@ pub fn render(
     text: &str,
     t: Theme,
     id: &str,
+    selectable: impl FnMut(&Block, SharedString, Theme) -> AnyElement,
+) -> AnyElement {
+    render_parsed(&parse(text), t, id, selectable)
+}
+
+pub fn render_parsed(
+    blocks: &[Block],
+    t: Theme,
+    id: &str,
     mut selectable: impl FnMut(&Block, SharedString, Theme) -> AnyElement,
 ) -> AnyElement {
     let mut rows = vec![];
-    for (i, block) in parse(text).into_iter().enumerate() {
+    for (i, block) in blocks.iter().enumerate() {
         let key = SharedString::from(format!("md-{id}-{i}"));
         if block.rule {
             rows.push(div().h(px(1.)).my_3().bg(t.border).into_any_element());
@@ -259,6 +341,7 @@ pub fn render(
         }
         if let Some(lang) = &block.code {
             let source = block.text.clone();
+            let line_count = source.lines().count();
             rows.push(
                 div()
                     .rounded(px(6.))
@@ -281,6 +364,7 @@ pub fn render(
                             } else {
                                 lang.to_uppercase()
                             })
+                            .child(format!("{} lines", line_count))
                             .child(
                                 div()
                                     .id(SharedString::from(format!("{key}-copy")))
@@ -301,6 +385,7 @@ pub fn render(
                         div()
                             .id(key.clone())
                             .overflow_x_scroll()
+                            .whitespace_nowrap()
                             .px_3()
                             .py_2()
                             .font_family("Menlo")
@@ -343,6 +428,22 @@ pub fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parsed_doc_cache_reuses_incremental_documents_and_obeys_bound() {
+        let mut cache = ParsedDocCache::new(2);
+        cache.prepare("# one");
+        let first = cache.get("# one").unwrap() as *const ParsedDoc;
+        cache.prepare("# one");
+        assert_eq!(first, cache.get("# one").unwrap() as *const ParsedDoc);
+        assert_eq!(cache.parse_count(), 1);
+        assert_eq!(cache.get("# one").unwrap().blocks, parse("# one"));
+        cache.prepare("# two");
+        cache.prepare("# three");
+        assert_eq!(cache.len(), 2);
+        assert!(cache.get("# one").is_none());
+        assert_eq!(cache.get("# three").unwrap().blocks, parse("# three"));
+    }
     #[test]
     fn markdown_preserves_unicode_styles_urls_and_literal_html() {
         let b = parse("**日本語** and [docs](https://example.com) <script>x</script>");

@@ -136,6 +136,18 @@ pub fn icon(name: &'static str, color: Hsla) -> Svg {
         .flex_shrink_0()
         .text_color(color)
 }
+
+/// Semantic file-diff marker, sharing tint choices with the diff palette.
+pub fn diff_marker(added: bool, theme: crate::theme::Theme) -> Svg {
+    icon(
+        if added { "plus" } else { "x" },
+        if added {
+            theme.diff_add
+        } else {
+            theme.diff_remove
+        },
+    )
+}
 /// Uniform icon slots retain visible labels for unfamiliar commands.
 pub fn button_label(label: &str) -> (Option<&'static str>, &str) {
     match label {

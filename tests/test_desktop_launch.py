@@ -50,7 +50,7 @@ async def test_desktop_passes_existing_client_to_shared_bridge(tmp_path, monkeyp
     assert launch.await_args.kwargs == {"client": client, "reconnect": reconnect, "desktop": True}
 
 
-def test_freshest_desktop_source_binary_wins(tmp_path, monkeypatch):
+def test_release_desktop_source_binary_wins_over_newer_debug(tmp_path, monkeypatch):
     import os
     import nexus.ui.desktop.run as desktop
 
@@ -65,4 +65,21 @@ def test_freshest_desktop_source_binary_wins(tmp_path, monkeypatch):
         path.write_text("#!/bin/sh\n")
         path.chmod(0o700)
         os.utime(path, (path.stat().st_mtime - age, path.stat().st_mtime - age))
-    assert binary_path() == (root / "rust/desktop/target/debug/nexus-desktop").resolve()
+    assert binary_path() == (root / "rust/desktop/target/release/nexus-desktop").resolve()
+
+
+def test_debug_desktop_binary_fallback_warns(tmp_path, monkeypatch, capsys):
+    import nexus.ui.desktop.run as desktop
+
+    root = tmp_path / "repo"
+    monkeypatch.delenv("NEXUS_DESKTOP_BINARY", raising=False)
+    monkeypatch.setattr(desktop, "__file__", str(root / "nexus/ui/desktop/run.py"))
+    monkeypatch.setattr(desktop.shutil, "which", lambda _: None)
+    monkeypatch.setattr(desktop.sys, "executable", str(tmp_path / "bin/python"))
+    debug = root / "rust/desktop/target/debug/nexus-desktop"
+    debug.parent.mkdir(parents=True)
+    debug.write_text("#!/bin/sh\n")
+    debug.chmod(0o700)
+
+    assert binary_path() == debug.resolve()
+    assert "using debug executable" in capsys.readouterr().err
