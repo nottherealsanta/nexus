@@ -668,6 +668,7 @@ class ToolContext:
     #: Stable identity within a session. Runtime root tools use ``"root"``;
     #: child adapters use the runner-assigned ChildSpec.agent_id.
     agent_id: str = "root"
+    tool_authority: tuple[str, ...] | None = None
 
     async def report(self, text: str, data: dict[str, Any] | None = None) -> None:
         """Emit a ``tool.progress`` event if a sink is attached."""
@@ -685,6 +686,16 @@ REGISTRATION_ORIGINS = ("builtin", "mcp", "ext", "skill")
 
 
 @dataclass(frozen=True)
+class ResolvedTarget:
+    """Frozen per-call execution authority (MCP_SEARCH_PLAN section 6)."""
+
+    spec: ToolSpec
+    run: ToolFn
+    arguments: dict[str, Any]
+    format_error: Callable[[str], str] | None = None
+
+
+@dataclass(frozen=True)
 class RegisteredTool:
     """A spec paired with its implementation and provenance."""
 
@@ -693,12 +704,18 @@ class RegisteredTool:
     origin: str = "builtin"
     source: str | None = None
     generation: int = 0
+    resolve: Callable[[dict[str, Any]], ResolvedTarget | ToolError] | None = None
+    deferred_targets: tuple[str, ...] = ()
+    deferred_mutating: tuple[str, ...] = ()
+    local_name: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.spec, ToolSpec):
             raise ToolSpecError("RegisteredTool.spec must be a ToolSpec")
         if not callable(self.run):
             raise ToolSpecError("RegisteredTool.run must be callable")
+        if self.resolve is not None and not callable(self.resolve):
+            raise ToolSpecError("RegisteredTool.resolve must be callable or None")
         if self.origin not in REGISTRATION_ORIGINS:
             raise ToolSpecError(
                 f"origin must be one of {', '.join(REGISTRATION_ORIGINS)}"
@@ -736,6 +753,7 @@ __all__ = [
     "ProgressEmitter",
     "QuestionServiceView",
     "RegisteredTool",
+    "ResolvedTarget",
     "SkillActivationSink",
     "SkillServiceView",
     "SubagentServiceView",

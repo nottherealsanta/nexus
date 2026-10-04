@@ -6,7 +6,10 @@ use serde_json::Value;
 pub struct Snapshot {
     pub schema: u32,
     pub revision: u64,
+    /// Monotonic live notification count, independent of transcript replay.
+    pub completion_bell: u64,
     pub generation: u64,
+    pub composer_key: String,
     pub title: String,
     pub status: String,
     pub lines: Vec<String>,
@@ -14,8 +17,12 @@ pub struct Snapshot {
     pub blocks_from: usize,
     pub context_lines: Vec<String>,
     pub panel_title: String,
+    /// Dim key hints on the bottom row of a list dialog (`Favorite ctrl+f`).
+    pub panel_hint: String,
     pub panel_layout: String,
     pub panel_format: String,
+    pub preview_image: String,
+    pub preview_image_media: String,
     pub panel_loading: bool,
     pub panel_lines: Vec<String>,
     /// One tone per panel line (`title`, `header`, `label`, `kv`, `add`, `del`, `hunk`); empty = plain.
@@ -44,6 +51,7 @@ pub struct Snapshot {
     pub context_tiers: Vec<u64>,
     pub attachments: usize,
     pub attachment_lines: Vec<String>,
+    pub inline_images: Vec<InlineImage>,
     /// Queued, steering and interrupt messages waiting for the running turn.
     pub queue_lines: Vec<String>,
     pub update_notice: String,
@@ -71,13 +79,32 @@ pub struct Snapshot {
 }
 #[derive(Clone, Default, Deserialize)]
 #[serde(default)]
+pub struct InlineImage {
+    pub id: String,
+    pub message: String,
+    pub draft_index: Option<usize>,
+    pub label: String,
+    pub media: String,
+    pub data: String,
+    pub operation: Option<Value>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+#[serde(default)]
 pub struct Item {
     pub label: String,
     pub command: String,
     pub operation: Option<Value>,
+    pub toggle_operation: Option<Value>,
+    pub toggle_enabled: Option<bool>,
+    pub toggle_locked: bool,
     /// Heading shown above the first item of each group (model picker); display only.
     #[serde(default)]
     pub group: String,
+    /// Dim text after the label (model picker: the provider/model ref).
+    pub detail: String,
+    /// The active choice: drawn with a leading `●` in the accent colour.
+    pub current: bool,
 }
 #[derive(Deserialize)]
 pub struct Prompt {
@@ -100,6 +127,7 @@ pub struct Form {
     pub body: String,
     pub secret: bool,
     pub autosave: bool,
+    pub can_delete: bool,
     pub status: String,
     pub revision: u64,
 }
@@ -110,6 +138,7 @@ impl Default for Form {
             body: String::new(),
             secret: false,
             autosave: false,
+            can_delete: false,
             status: String::new(),
             revision: 0,
         }
@@ -151,6 +180,8 @@ pub struct Content {
     pub chips: Vec<String>,
     pub chip_operation: Option<Value>,
     pub detail: String,
+    /// Full tool heading (`→ Read path`) shown on an expanded group member.
+    pub heading: String,
     pub status: String,
     /// Parallel-call marker occupies the left gutter, never the tool text.
     pub batch_glyph: String,
@@ -158,6 +189,8 @@ pub struct Content {
     pub rev: String,
     pub count: usize,
     pub failures: usize,
+    /// Header chip counts: `[total]`, or `[project, global]` for skills and MCP.
+    pub counts: Vec<usize>,
     pub members: Vec<Content>,
     pub output_operation: Option<Value>,
 }

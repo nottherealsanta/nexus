@@ -595,7 +595,7 @@ Bundles group tools; profiles compose bundles. Nothing in `core/` knows what
 | `task` | Task, TodoWrite, question |
 | `meta` | ReloadExtensions, ListExtensions, WriteTool |
 | `ext` | Skill |
-| `mcp` | Everything bridged from MCP |
+| `mcp` | Everything bridged from MCP, plus `McpSearch` / `McpCall` for servers in search mode (the default) |
 
 | Profile | Bundles | Notes |
 | --- | --- | --- |
@@ -801,6 +801,11 @@ connect lazily, with health checks, exponential backoff, and a circuit breaker.
 A dead server never fails a turn: its tools vanish from the manifest, an
 `mcp.failed` event is emitted, and every other server is unaffected. Editing
 `mcp.json` takes effect live.
+
+By default a server's tools are not sent with every request: the agent finds
+them with `McpSearch` and runs them with `McpCall`. Set `"tool_loading": "all"`
+on a server (or choose "Load all tools" in the context dialog before the first
+turn, or in Settings → MCP) to load its tools directly instead.
 
 MCP tool descriptions and results are **untrusted data**: they are wrapped in a
 delimiter with a standing no-authority instruction. The permission engine is the

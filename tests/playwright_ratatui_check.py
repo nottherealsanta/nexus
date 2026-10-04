@@ -31,6 +31,8 @@ def main():
                                          ("ratatui-agents", "tests/ratatui_browser_demo.py", "agents"), ("ratatui-markdown", "tests/ratatui_browser_demo.py", "markdown"),
                                          ("ratatui-usage", "tests/ratatui_browser_demo.py", "usage"), ("ratatui-completion", "tests/ratatui_browser_demo.py", "completion"),
                                          ("textual-subagent", "tests/visual_tui_demo.py --state subagent", ""), ("ratatui-subagent", "tests/ratatui_browser_demo.py", "subagent"))
+            captures += tuple((f"ratatui-mcp-{state}", f"tests/ratatui_browser_demo.py --bridge {sys.executable} tests/mcp_search_native_fixture.py --state {state}", "")
+                              for state in ("context", "details", "settings", "loading"))
             if os.environ.get("NEXUS_RATATUI_MATRIX"):
                 captures = [(f"redesign-{theme}-{sidebars}-{cols}", "tests/ratatui_browser_demo.py", f"redesign-{theme}-{sidebars}-Session")
                     for theme in ("dark","light") for sidebars in ("00","10","01","11") for cols in (80,120,200)]

@@ -22,7 +22,9 @@ __all__ = [
     "fold_into",
 ]
 
-def accumulate(blocks: list[BlockView], kind: str, text: str) -> list[BlockView]:
+def accumulate(
+    blocks: list[BlockView], kind: str, text: str, ts: float | None = None
+) -> list[BlockView]:
     """Append a delta to the trailing block of ``kind``, or start a new one.
 
     Returns a new list; the input is never mutated. A finalized block is never
@@ -33,7 +35,7 @@ def accumulate(blocks: list[BlockView], kind: str, text: str) -> list[BlockView]
         last = out[-1]
         out[-1] = replace(last, text=last.text + (text or ""), streamed=True)
     elif text:
-        out.append(BlockView(kind=kind, text=text, streamed=True))
+        out.append(BlockView(kind=kind, text=text, streamed=True, started_ts=ts))
     return out
 
 def finalize_text(blocks: list[BlockView], text: str) -> list[BlockView]:

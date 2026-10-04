@@ -29,6 +29,7 @@ STATIC_ARGUMENTS: dict[str, tuple[str, ...]] = {
     "/theme": ("dark", "light"),
     "/export": ("json", "markdown", "jsonl"),
     "/voice": ("status", "download", "on", "off"),
+    "/speak": ("download",),
     "/attach": ("clear",),
     "/diff": ("--staged",),
 }

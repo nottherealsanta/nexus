@@ -16,17 +16,21 @@ class VoiceTransport(FakeTransport):
     def __init__(self) -> None:
         super().__init__()
         self.voice_state = "absent"
+        self.cached = False
         self.prepare_calls = 0
+        self.prepare_allow_download: list[bool] = []
         self.transcribe_calls = 0
         self.cancel_calls = 0
 
     async def request(self, command):
         if isinstance(command, p.VoiceStatus):
-            return p.VoiceStatusResult(state=self.voice_state, enabled=True, auto_send=False)
+            return _voice_status(self.voice_state, enabled=True, auto_send=False, cached=self.cached)
         if isinstance(command, p.VoicePrepare):
             self.prepare_calls += 1
+            allow_download = getattr(command, "allow_download", True)
+            self.prepare_allow_download.append(allow_download)
             self.voice_state = "loading"
-            return p.VoiceStatusResult(state=self.voice_state, enabled=True)
+            return _voice_status(self.voice_state, enabled=True, cached=self.cached)
         if isinstance(command, p.VoiceTranscribe):
             self.transcribe_calls += 1
             self.voice_state = "ready"
@@ -42,6 +46,10 @@ class VoiceTransport(FakeTransport):
             self.settings_body = command.body
             return p.SettingsWriteResult(status="saved", sha256="voice-sha-2")
         return await super().request(command)
+
+
+def _voice_status(state: str, **values):
+    return p.VoiceStatusResult(state=state, **values)
 
 
 def test_voice_config_edit_is_valid_v2_toml_and_quotes_strings():
@@ -84,8 +92,9 @@ async def test_first_voice_use_waits_for_confirmation_and_ready_ack(monkeypatch)
         await pilot.click("#voice-confirm")
         await pilot.pause()
         assert transport.prepare_calls == 1
-        assert "downloading" not in app.screen.query_one("#voice-status").render().plain.lower()
-        assert "loading" not in app.screen.query_one("#voice-status").render().plain.lower()
+        assert transport.prepare_allow_download == [True]
+        assert "loading" in app.screen.query_one("#voice-status").render().plain.lower()
+        assert not app.screen.query_one("#voice-confirm").display
         transport.voice_state = "ready"
         await pilot.pause(1.1)
         assert "local voice model is available" in app.screen.query_one("#voice-status").render().plain
@@ -113,6 +122,7 @@ async def test_first_voice_use_waits_for_confirmation_and_ready_ack(monkeypatch)
         assert dot.region.x == bottom.region.x
         assert dot.region.y == bottom.region.y == context.region.y
         assert geometry() == before
+
         assert (dot.styles.color.r, dot.styles.color.g, dot.styles.color.b) == (245, 167, 66)
         await app.voice.stop()
         await pilot.pause()
@@ -134,6 +144,42 @@ async def test_first_voice_use_waits_for_confirmation_and_ready_ack(monkeypatch)
         assert geometry() == before
         assert transport.cancel_calls == 1
         assert transport.transcribe_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_cached_absent_voice_offers_load_and_disables_download():
+    from types import SimpleNamespace
+
+    class CachedClient:
+        def __init__(self):
+            self.prepared_with: list[bool] = []
+            self.state = "absent"
+
+        async def voice_status(self):
+            return SimpleNamespace(state=self.state, cached=True, message="failed to load")
+
+        async def voice_prepare(self, *, allow_download=True):
+            self.prepared_with.append(allow_download)
+            self.state = "error"
+            return SimpleNamespace(state="loading", cached=True)
+
+    client = CachedClient()
+    app = NexusTextualApp(_client(VoiceTransport()), session="voice-cached")
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.push_screen(VoiceConsentScreen(client, cached=True))
+        await pilot.pause()
+        assert isinstance(app.screen, VoiceConsentScreen)
+        assert app.screen.query_one("#voice-confirm").label == "Load model"
+        assert "cached local" in app.screen.query_one("#voice-title").render().plain.lower()
+        await pilot.click("#voice-confirm")
+        await pilot.pause()
+        assert client.prepared_with == [False]
+        assert "loading" in app.screen.query_one("#voice-status").render().plain.lower()
+        await pilot.pause(1.1)
+        assert app.screen.query_one("#voice-retry").display
+        await pilot.click("#voice-retry")
+        await pilot.pause()
+        assert client.prepared_with == [False, False]
 
 
 @pytest.mark.asyncio

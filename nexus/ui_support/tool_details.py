@@ -133,11 +133,44 @@ def _result_rows(result: Sequence[Any]) -> list[DetailRow]:
     return rows
 
 
+def _mcp_search_sections(tool: ToolCallView) -> list[DetailSection]:
+    """Decode our durable search text into labelled query and schema rows."""
+    import re
+
+    text = "\n".join(block.get("text", "") for block in tool.result if isinstance(block, Mapping))
+    sections = []
+    parts = re.split(r"(?m)^(Query [0-9]+ · [^\n]*)\n?", text)
+    for index in range(1, len(parts), 2):
+        rows = []
+        for line in parts[index+1].splitlines():
+            stripped = line.strip()
+            if stripped.startswith("Input schema: "):
+                payload = stripped.removeprefix("Input schema: ")
+                try:
+                    schema = json.loads(payload)
+                except ValueError:
+                    # A clipped schema remains inspectable and the missing tail
+                    # is explicitly announced by the producer.
+                    rows.append(_row("Input schema (clipped)", payload))
+                else:
+                    rows.extend(flatten(schema, "Input schema"))
+            elif re.match(r"[0-9]+\. ", stripped):
+                rows.append(_row("Tool", stripped.split(". ", 1)[1]))
+            elif stripped.startswith("Description: "):
+                rows.append(_row("Description", stripped.removeprefix("Description: ")))
+            elif stripped and stripped not in {"</untrusted-mcp-data>", "```"}:
+                rows.append(_row("Details", stripped))
+        sections.append(DetailSection(_clean(parts[index], 500), _bounded(rows)))
+    return sections
+
+
 def tool_detail_sections(tool: ToolCallView) -> list[DetailSection]:
     """Project one reducer tool call into sections; empty ones are omitted."""
     overview = [DetailRow("Status", tool_status(tool))]
     for label, value in (
         ("Tool", tool.name or None),
+        ("Target", tool.target),
+        ("Called through", "McpCall" if tool.name == "McpCall" else None),
         ("Bundle", tool.bundle),
         ("Duration", None if tool.duration_ms is None else f"{tool.duration_ms} ms"),
         ("Requested", _stamp(tool.requested_ts)),
@@ -161,7 +194,7 @@ def tool_detail_sections(tool: ToolCallView) -> list[DetailSection]:
     if tool.display:
         sections.append(DetailSection("Summary", (DetailRow("display", _clean(tool.display), True),)))
     if tool.result:
-        sections.append(DetailSection("Result", _bounded(_result_rows(tool.result))))
+        sections.extend((_mcp_search_sections(tool) if tool.name == "McpSearch" else []) or [DetailSection("Result", _bounded(_result_rows(tool.result)))])
     if tool.error:
         sections.append(DetailSection("Error", (DetailRow("error", _clean(tool.error), True),)))
     if tool.context_note:

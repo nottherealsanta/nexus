@@ -47,7 +47,7 @@ def _agent(*, tools=(), messages=(), **kwargs) -> AgentView:
     )
 
 
-def test_running_child_card_shows_latest_actual_tool_and_elapsed_activity():
+def test_running_child_card_shows_latest_actual_tool_without_elapsed_time():
     agent = _agent(
         spawned_ts=10.0,
         turn_updated_ts=13.25,
@@ -70,7 +70,7 @@ def test_running_child_card_shows_latest_actual_tool_and_elapsed_activity():
     )
 
     assert _latest_activity(agent) == "Bash: reading files"
-    assert _agent_metrics(agent) == "1 tool · 3.2s"
+    assert _agent_metrics(agent) == "1 tool"
 
 
 def test_completed_child_card_counts_finished_calls_from_event_timestamps():
@@ -293,7 +293,7 @@ async def test_nested_task_call_and_child_inspector_activity_refresh_live():
         assert "This must not replace tool activity" not in header
         assert "Glob" not in header
         metrics = task_widget.query_one("#task-metrics", Static)
-        assert "Read: src/main.py" in str(metrics.render())
+        assert "Read: src/main.py" not in str(metrics.render()), "only the latest call is shown"
         assert "Glob: pattern=src/**/*.py · checking source paths" in str(metrics.render())
         assert "explore" in task_widget._details_text()
 
@@ -352,7 +352,7 @@ async def test_completed_task_without_child_uses_result_without_metrics():
         await pilot.app.mount(widget)
         await widget.set_task(task, {})
         header = str(widget.query_one("#tool-header", Static).render())
-        assert header == "✓ General · Finished the requested scan."
+        assert header == "· General · Finished the requested scan."
         metrics = widget.query_one("#task-metrics", Static)
         assert str(metrics.render()) == "0 tool calls"
 

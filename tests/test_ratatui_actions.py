@@ -11,6 +11,14 @@ from nexus.view.model import PermissionView
 
 
 @pytest.mark.asyncio
+async def test_submit_defaults_to_steering():
+    client = SimpleNamespace(enqueue=AsyncMock())
+    shell = ShellActions(SimpleNamespace(client=client, session="s"))
+    await shell.submit("hello")
+    client.enqueue.assert_awaited_once_with("s", "hello", mode="steer", attachments=[], attachment_labels=[])
+
+
+@pytest.mark.asyncio
 async def test_submit_modes_attachments_and_cancel_queue(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
@@ -48,6 +56,31 @@ def test_permissions_have_daemon_choices_and_safe_text():
 
 
 @pytest.mark.asyncio
+async def test_session_switch_retains_images_and_stable_markers(tmp_path, monkeypatch):
+    shell = _shell(tmp_path, monkeypatch)
+    shell.refresh_preview = AsyncMock()
+    async def switch(session):
+        shell.controller.session = session
+    shell.controller.switch_session.side_effect = switch
+    first = SimpleNamespace(attachment_id="one", kind="image", name="one.png")
+    second = SimpleNamespace(attachment_id="two", kind="image", name="two.png")
+    shell.attachments.extend([first, second])
+    assert shell.attachment_marker(0) == "[image 1]"
+    assert shell.attachment_marker(1) == "[image 2]"
+    assert shell.attachments == []
+    assert shell.tabs[-1]["title"] == "New Session"
+    await shell.switch("s")
+    assert shell.attachments == [first, second]
+    assert shell.attachment_marker(1) == "[image 2]"
+    shell.reconcile_attachment_markers("hello [image 2]")
+    assert shell.attachments == [second]
+    shell.reconcile_attachment_markers("hello [image 1][image 2]")
+    assert shell.attachments == [first, second]  # editor undo restores pending bytes
+    assert project(shell.controller, 1, shell=shell)["composer_key"] != project(
+        SimpleNamespace(view=initial_state("other")), 1)["composer_key"]
+
+
+@pytest.mark.asyncio
 async def test_native_follow_reduces_after_terminal_event():
     from nexus.ui.ratatui.controller import NativeController
     from nexus.events import Event
@@ -73,6 +106,74 @@ def _shell(tmp_path, monkeypatch, **client):
     controller = SimpleNamespace(client=SimpleNamespace(**client), session="s", view=view,
                                  switch_session=AsyncMock(), bootstrap=AsyncMock())
     return ShellActions(controller)
+
+
+def test_background_tab_completion_notifies_once(tmp_path, monkeypatch):
+    shell = _shell(tmp_path, monkeypatch)
+    shell.controller.completion_bell = 0
+    row = dict(id="background", workspace=".", status="working", state="running")
+    shell.refresh_session_tabs([row])
+    assert shell.controller.completion_bell == 0
+    done = dict(row, status="done", state="complete")
+    shell.refresh_session_tabs([done])
+    assert shell.controller.completion_bell == 1
+    assert shell.tabs[0]["status"] == "done"
+    shell.refresh_session_tabs([done])
+    assert shell.controller.completion_bell == 1
+    shell.refresh_session_tabs([dict(done, status="idle")])
+    assert shell.tabs[0]["status"] == "idle"
+    shell.refresh_session_tabs([row])
+    shell.refresh_session_tabs([done])
+    assert shell.controller.completion_bell == 2
+
+
+def test_active_tab_refresh_does_not_duplicate_sound(tmp_path, monkeypatch):
+    shell = _shell(tmp_path, monkeypatch)
+    shell.controller.completion_bell = 0
+    row = dict(id="s", workspace=".", status="working", state="running")
+    shell.refresh_session_tabs([row])
+    shell.refresh_session_tabs([dict(row, status="done", state="complete")])
+    assert shell.controller.completion_bell == 0
+
+
+def test_completion_uses_generated_cue_once(tmp_path, monkeypatch):
+    from nexus.ui_support import voice_capture
+    calls = []
+    monkeypatch.setattr(voice_capture, "play_cue", calls.append)
+    shell = _shell(tmp_path, monkeypatch)
+    shell.controller.completion_bell = 0
+    shell.notify_completion()
+    assert calls == []
+    shell.controller.completion_bell = 1
+    shell.notify_completion()
+    shell.notify_completion()
+    assert calls == ["complete"]
+    shell.controller.completion_bell = 2
+    shell.notify_completion()
+    assert calls == ["complete", "complete"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("named", [True, False])
+async def test_new_session_reuses_agent_without_picker(tmp_path, monkeypatch, named):
+    shell = _shell(tmp_path, monkeypatch, select_agent=AsyncMock(), list_agents=AsyncMock())
+    shell.controller.agent_name = "plan"
+
+    async def switch(session):
+        shell.controller.session = session
+        shell.controller.agent_name = "default"
+
+    shell.switch = AsyncMock(side_effect=switch)
+    await shell.command("/new", ("fresh",) if named else ())
+    session = shell.controller.session
+    if named:
+        assert session == "fresh"
+    else:
+        assert len(session) == 12
+    shell.controller.client.select_agent.assert_awaited_once_with(session, "plan")
+    shell.controller.bootstrap.assert_awaited_once()
+    shell.controller.client.list_agents.assert_not_awaited()
+    assert shell.panel_title != "New session · choose root agent"
 
 
 @pytest.mark.asyncio
@@ -245,3 +346,89 @@ async def test_older_usage_reply_cannot_overwrite_the_newer_cache(tmp_path, monk
     await older
     assert "Newest" in shell.panel_lines
     assert shell.usage_cache["providers"][0]["label"] == "Newest"
+
+
+def test_reply_watched_live_is_not_unread_after_switching_away(tmp_path, monkeypatch):
+    from nexus.ui.ratatui.workflows import session_rows
+    shell = _shell(tmp_path, monkeypatch)
+    shell.controller.completion_bell = 0
+    shell.controller.completion_seq = 7  # the viewer received the whole reply while "s" was open
+    summary = lambda state, seq: SimpleNamespace(session=SimpleNamespace(
+        id="s", title="t", state=state, last_seq=seq, completion_seq=seq,
+        updated_at=0, last_activity=0), workspace=".")
+    result = lambda state, seq: SimpleNamespace(sessions=[summary(state, seq)], truncated=False)
+    shell.refresh_session_tabs(session_rows(result("running", 3), "s", shell.seen_seq))
+    shell.mark_current_seen()
+    shell.controller.session = "other"
+    shell.refresh_session_tabs(session_rows(result("complete", 7), "other", shell.seen_seq))
+    assert shell.tabs[0]["status"] != "done"
+    assert shell.controller.completion_bell == 0
+
+
+@pytest.mark.asyncio
+async def test_opening_finished_session_acknowledges_snapshot_before_switching_away(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from nexus.ui.ratatui.workflows import session_rows
+
+    shell = _shell(tmp_path, monkeypatch)
+    shell.controller.completion_bell = 0
+    shell.controller.cursor = 0
+    shell.controller.completion_seq = 0
+    shell.workspace = "."
+    shell.refresh_preview = AsyncMock()
+
+    def rows(state, seq):
+        summary = SimpleNamespace(session=SimpleNamespace(
+            id="finished", title="t", state=state, last_seq=seq, completion_seq=seq,
+            updated_at=0, last_activity=0), workspace=".")
+        return session_rows(SimpleNamespace(sessions=[summary], truncated=False),
+                            shell.controller.session, shell.seen_seq)
+
+    shell.refresh_session_tabs(rows("running", 3))
+    shell.refresh_session_tabs(rows("complete", 8))
+    assert shell.tabs[0]["status"] == "done"
+    assert shell.controller.completion_bell == 1
+
+    async def switch(session):
+        shell.controller.session = session
+        shell.controller.view = initial_state(session)
+
+    async def bootstrap():
+        # Snapshot replay does not advance the stream cursor.
+        shell.controller.view = replace(shell.controller.view, last_seq=8)
+        shell.controller.completion_seq = 8
+
+    shell.controller.switch_session.side_effect = switch
+    shell.controller.bootstrap.side_effect = bootstrap
+    await shell.switch("finished")
+    assert shell.seen_seq["finished"] == 8
+    await shell.switch("other")
+    shell.refresh_session_tabs(rows("complete", 8))
+    shell.refresh_session_tabs(rows("complete", 8))
+    assert shell.tabs[0]["status"] != "done"
+    assert shell.controller.completion_bell == 1
+
+    shell.refresh_session_tabs(rows("running", 9))
+    shell.refresh_session_tabs(rows("complete", 12))
+    assert shell.tabs[0]["status"] == "done"
+    assert shell.controller.completion_bell == 2
+
+
+def test_projected_attachment_operations_are_allowed_recursively():
+    from nexus.ui.ratatui.prototype import _block_operations
+
+    message = {"kind": "message_page", "id": "message-1"}
+    output = {"kind": "tool_output", "id": "tool-1"}
+    chip = {"kind": "message_page", "id": "message-2"}
+    blocks = [{"operation": message, "output_operation": output,
+               "members": [{"chip_operation": chip}, {"text": "not an operation"}]}]
+    assert list(_block_operations(blocks)) == [message, output, chip]
+    assert list(_block_operations([])) == []
+
+
+def test_form_delete_capability_is_limited_to_settings_files(tmp_path, monkeypatch):
+    shell = _shell(tmp_path, monkeypatch)
+    shell.workflows.edit("Settings", "body", {"kind": "settings_read"}, autosave=True)
+    assert project(shell.controller, 1, shell=shell)["form"]["can_delete"] is True
+    shell.workflows.edit("Provider key", "", {"kind": "provider_key"}, secret=True)
+    assert project(shell.controller, 2, shell=shell)["form"]["can_delete"] is False

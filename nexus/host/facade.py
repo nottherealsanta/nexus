@@ -53,6 +53,8 @@ from ..host_support.context_preview import (
 from ..host_support.context_preview import (
     safe_text as _worktree_text,
 )
+from ..host_support import model_settings
+from ..host_support.auto_title import AutoTitler
 from ..host_support.doctor import doctor_report
 from ..host_support.update_check import update_status
 from ..host_support.git_diff import git_diff
@@ -123,6 +125,7 @@ class HostFacade:
         self.runtime = runtime
         self.daemon_info: dict[str, Any] = {}
         self.attachments = AttachmentStore(runtime)
+        self.titles = AutoTitler(runtime)
         self.presence = Presence()
         self.supervisor = Supervisor(max_concurrent=max_concurrent_turns, emit=emit)
         self._owns_runtime = bool(owns_runtime)
@@ -552,6 +555,7 @@ class HostFacade:
                 "before deleting (delete never drops a queue)"
             )
         record = self.runtime.sessions.delete(session_id, force=force, reason=reason)
+        self.titles.cancel(session_id)
         self.presence.forget(session_id)
         # The handle is gone, so the scheduler must not retain it. This is a
         # no-op if the session still has an active/queued turn (which delete
@@ -624,7 +628,7 @@ class HostFacade:
         handle = self._session(session_id)
         return await self.supervisor.submit(session_id, handle, content)
 
-    async def enqueue(self, session_id: str, content: Any, *, mode: str = "queue") -> tuple[str, str]:
+    async def enqueue(self, session_id: str, content: Any, *, mode: str = "steer") -> tuple[str, str]:
         """Persist a submission and schedule its consumption at the boundary.
 
         Returns ``(queued_id, turn_id)``. The submission is durable through the
@@ -971,6 +975,20 @@ class HostFacade:
         info = registry.get(ref)
         return _asdict(info) if info is not None else None
 
+    def _tiers_result(self, *, restart_required: bool = False) -> p.ModelTiersResult:
+        """The tier table plus the Settings rows (refs, source, resolved model)."""
+        tiers = self.model_tiers()
+        rows = model_settings.tier_rows(self.runtime) if tiers["order"] else {"tiers": [], "max_tier": ""}
+        return p.ModelTiersResult(
+            order=tiers["order"],
+            default=tiers["default"],
+            builtin=tiers["builtin"],
+            overrides=tiers["overrides"],
+            tiers=rows["tiers"],
+            max_tier=rows["max_tier"],
+            restart_required=restart_required,
+        )
+
     def model_tiers(self) -> dict[str, Any]:
         """The tier table's ordering, default, curated map, and user overrides."""
         tiers = self.runtime.tiers
@@ -1233,6 +1251,7 @@ class HostFacade:
         if self._closed:
             return False
         self._closed = True
+        await self.titles.aclose()
         await self.supervisor.aclose()
         closer = getattr(self.runtime.sessions, "aclose_all", None)
         if callable(closer):
@@ -1255,6 +1274,21 @@ class HostFacade:
     async def _dispatch(self, command: p.Command) -> p.Result:
         if result := await dispatch_voice(command, self.runtime):
             return result
+        if isinstance(command, (p.SpeechStatus, p.SpeechPrepare)):
+            from ..host_support.speech import dispatch_speech  # lazy: it imports host.protocol
+
+            return await dispatch_speech(command, self.runtime, None)
+        if isinstance(command, p.SpeakStop):
+            from ..host_support.speech import dispatch_speech  # lazy: it imports host.protocol
+
+            return await dispatch_speech(command, self.runtime, None)
+        if isinstance(command, p.Speak):
+            # Only the latest completed answer of this session is spoken; the
+            # worker is an isolated subprocess (host_support/speech.py).
+            from ..host_support.speech import dispatch_speech  # lazy: it imports host.protocol
+
+            view, _ = self.state(command.session_id)
+            return await dispatch_speech(command, self.runtime, view)
         if result := await dispatch_settings(command, self.runtime):
             return result
         if result := await dispatch_mock(command, self):
@@ -1273,7 +1307,8 @@ class HostFacade:
                 workspace=row["workspace"], project_id=row["project_id"],
                 session=local[row["id"]] if row["workspace"] == str(self.runtime.workspace) and row["id"] in local else SessionSummary(
                     id=row["id"], title=row["title"], last_activity=row["last_activity"],
-                    last_seq=row["last_seq"], message_count=row["message_count"],
+                    last_seq=row["last_seq"], completion_seq=row["completion_seq"],
+                    message_count=row["message_count"],
                     created_at=row["created_at"], parent_id=row["parent_id"], fork_seq=row["fork_seq"],
                 ),
             ) for row in rows[:1000]], truncated=len(rows) > 1000)
@@ -1375,10 +1410,15 @@ class HostFacade:
             )
         if isinstance(command, p.AttachmentPrepare):
             return await self.attachments.prepare(command)
+        if isinstance(command, p.AttachmentPreview):
+            return await self.attachments.preview(command)
         if isinstance(command, p.SessionStart):
+            # Decided before the turn starts: the first message is not logged yet.
+            title_text = self.titles.candidate(command.session, command.content, list(command.attachment_labels or []))
             turn_id = await self.start_turn(
                 command.session, self.attachments.content(command.content, command.blocks, command.attachments, command.attachment_labels)
             )
+            self.titles.start(command.session, title_text)
             self.attachments.release(command.attachments)
             return p.SessionStartResult(session=command.session, turn_id=turn_id)
         if isinstance(command, p.SessionEnqueue):
@@ -1549,12 +1589,23 @@ class HostFacade:
             initializer = getattr(self.runtime, "ensure_models", None)
             if callable(initializer):
                 await initializer()
-            tiers = self.model_tiers()
-            return p.ModelTiersResult(
-                order=tiers["order"],
-                default=tiers["default"],
-                builtin=tiers["builtin"],
-                overrides=tiers["overrides"],
+            return self._tiers_result()
+        if isinstance(command, (p.ModelTierSet, p.ModelTierReset, p.AgentMaxTierSet)):
+            idle = not self.supervisor.running
+            if isinstance(command, p.ModelTierSet):
+                await model_settings.tier_set(self.runtime, command.tier, list(command.refs), reload=idle)
+            elif isinstance(command, p.ModelTierReset):
+                await model_settings.tier_reset(self.runtime, command.tier, reload=idle)
+            else:
+                await model_settings.agent_max_tier_set(self.runtime, command.tier, reload=idle)
+            return self._tiers_result(restart_required=not idle)
+        if isinstance(command, p.SessionTitleSettings):
+            return p.SessionTitleSettingsResult(**model_settings.session_title_settings(self.runtime))
+        if isinstance(command, p.SessionTitleSettingsSet):
+            return p.SessionTitleSettingsResult(
+                **await model_settings.session_title_settings_set(
+                    self.runtime, enabled=command.enabled, model=command.model
+                )
             )
         if isinstance(command, p.ModelSelect):
             selection = self.select_model(command.session, command.ref)
@@ -1619,12 +1670,19 @@ class HostFacade:
         if isinstance(command, p.ToolsList):
             tools = await self.list_tools()
             return p.ToolsListResult(count=len(tools), tools=tools)
+        if isinstance(command, p.ContextMcpLoadingSelect):
+            session = self._session(command.session, create=False, recover=False)
+            context = await self.inspect_context(command.session)
+            if not any(row.get("name") == command.server for row in context["mcp_servers"]):
+                raise ValueError("Unknown MCP server")
+            session.select_mcp_loading(command.server, command.mode)
+            return p.ContextInspectResult(session=command.session, **await self.inspect_context(command.session))
         if isinstance(command, p.ContextExtensionSelect):
             session = self._session(command.session, create=False, recover=False)
             if session.context_locked or session.active:
                 raise ValueError("Skills, MCP and agents are locked after the first turn to preserve the prompt cache. Start a new session to change them.")
             context = await self.inspect_context(command.session)
-            rows = context["skills_index" if command.category == "skills" else "mcp_servers"]
+            rows = context[{"skills": "skills_index", "mcp": "mcp_servers", "tools": "tools"}[command.category]]
             if not any(row.get("name") == command.name for row in rows):
                 raise ValueError("Unknown extension")
             session.select_extension(command.category, command.name, command.enabled)

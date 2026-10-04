@@ -1,13 +1,17 @@
 # Surfaces: what every client does the same way
 
-Three clients sit on the host contract: the Textual app (`nexus chat`,
-[textual.md](textual.md)), the browser app (`nexus web`, [web.md](web.md)) and
-the one-shot CLI/JSONL ([cli.md](cli.md)). This page holds the behavior that must
-be identical across them. **A feature or wording change in one surface goes into
-the other.** The web app mirrors the TUI: same places, same commands, same
-Control-key shortcuts; it may look more modern but must behave the same.
+Four surfaces sit on the host contract: the native Ratatui terminal app (`nexus
+chat`, Textual fallback), the GPUI desktop app (`nexus desktop`,
+[desktop.md](desktop.md)), the browser app (`nexus web`, [web.md](web.md)) and
+the one-shot CLI/JSONL ([cli.md](cli.md)). This page holds shared behavior and
+context contracts. The browser is being deprecated: preserve existing behavior,
+but new terminal/desktop features need not be ported unless requested.
 
 ## Principles
+
+The additional [GPUI desktop client](desktop.md) follows these host and context
+contracts while using desktop typography, native text input and window controls.
+It reuses the native terminal workflows; adding it does not require new web work.
 
 1. **Present context clearly.** Show everything that matters (every parameter,
    every output), labelled and readable, never a raw JSON dump, and never hide
@@ -100,7 +104,8 @@ footers share the same left inset in both surfaces.
   A **running shell** (Bash) additionally shows its latest four output lines
   under the call (`⎿`) with the earlier lines counted, until it completes.
 - **Subagent calls** use two lines: type and description, then recent tool calls
-  while running, or tool count and elapsed time when finished. Clicking opens the
+  while running (no elapsed time), or tool count and elapsed time when finished.
+  Subagent metrics elsewhere also omit duration while the child is working. Clicking opens the
   child's page, laid out like the root (its own context header showing the request
   it actually sent, a grey Task block, a read-only composer, details panel); Esc
   returns. All subagent activity stays inline at the initiating call.
@@ -131,7 +136,7 @@ footers share the same left inset in both surfaces.
   the estimated next request. For a tiered model it notes the price per tier.
 - **Skill and MCP controls.** Those two blocks show `Project N | Global N`
   counts of discovered entries (including ones switched off). Clicking opens
-  individual On/Off controls with their scope. Choices are saved for the session
+  individual On/Off controls with their scope (tools too; switched-off tools stay listed so they can be switched back on). Choices are saved for the session
   (`ContextExtensionSelect`), survive reconnect, and can change until the first
   turn; afterwards controls are disabled with a prompt-cache explanation. Root
   agent picking/cycling follows the same rule. Subagent headers are read-only.
@@ -143,8 +148,9 @@ footers share the same left inset in both surfaces.
 
 ## Messages during a turn
 
-Enter **queues** a message as a new turn. `Ctrl+Enter` **steers** the active turn
-at the next model step, after the current operation. `Alt+Enter` **interrupts**
+Enter **steers** the active turn at the next model step, after the current
+operation (or starts a new turn when idle). `Ctrl+Enter` explicitly **queues**
+a message as a new turn. `Alt+Enter` **interrupts**
 and sends first, keeping other queued messages. `Shift+Enter` and `Ctrl+J`
 insert a newline in the terminal (`Shift+Enter` only in the browser). Pending
 input is durable and visible after reconnecting ([loop.md](loop.md#steering-queue-interrupt)).
@@ -175,7 +181,7 @@ While an approval is pending the background is inert. Arbitration is daemon-side
 
 Settings is a full-screen page (TUI) or dialog (web) with the same sections:
 GENERAL (Appearance, Layout, Conversation detail, Keyboard, Workspace, Providers,
-Voice) and CONFIGURE (Agents, Tools, MCP, Skills, Hooks, Config, Soul). File
+Models, Session titles, Voice) and CONFIGURE (Agents, Tools, MCP, Skills, Hooks, Config, Soul). File
 categories share a global/project scope, a list and an editor over the `Settings*`
 commands ([extensions.md](extensions.md#settings-files-host)).
 
@@ -194,6 +200,26 @@ commands ([extensions.md](extensions.md#settings-files-host)).
 - **Agents page:** a "New sessions start with" row (`AgentDefaultSet`), one Model
   row and an ordered Fallbacks list above the prompt editor, each opening the
   shared model picker (provider, model and effort together).
+- **Models:** one row per tier (`low`, `medium`, `high`, custom): its source
+  (`your list` / `built-in` / `by price`), how many models, and the model it runs
+  on now (or "no runnable model"). A tier opens an ordered list of models: move up
+  or down, remove, `+ Add model` (the shared picker), *Reset to default*. Changes
+  save at once (`ModelTierSet`/`ModelTierReset`, global config); the daemon
+  reloads routes while no turn runs, otherwise the notice asks for a restart. The
+  last model cannot be removed (use Reset). A row "Highest tier for subagents"
+  sets `[agents] max_tier` (`AgentMaxTierSet`). Rows and help text come from
+  `ui_support/tier_settings.py`; Textual: `tui_models.py`, native:
+  `ui/ratatui/tier_pages.py`.
+- **Session titles:** an on/off row and a "Title model" row (a tier, recommended
+  `low`, or one model), under a two-line explanation that names the resolved model
+  and says that off keeps the first line of the first message. If the model cannot
+  run the page says titles use the first message. `SessionTitleSettings(Set)`.
+- **Agents → Tiers row** (subagents only): checkboxes per tier, the first checked
+  is the default (`Make default`), at least one stays checked. Conflicts are shown
+  under the row: a pinned model in an unchecked tier, `model: inherit` with tiers,
+  a tier above the global limit. No `tiers` reads "not set (uses the parent's
+  model)". New agents start with `tiers: [low, medium]`
+  (`tier_settings.new_agent_template`, one template for both clients).
 - **Providers:** cards for Codex (browser or device code), GitHub Copilot (device
   code), OpenCode Go (password field) and Claude (browser, then a password field
   for the code the sign-in page shows, sent with `ProviderLoginCode`); polls
@@ -251,3 +277,18 @@ Submitted messages separate the prompt sentence from numbered attachment rows.
 The browser shows labelled image thumbnails and expandable full document cards,
 also in request-context messages. The terminal shows compact labelled rows;
 clicking the message body opens the complete attached text and image metadata.
+
+## MCP tool loading
+
+Native context dialogs show per-server On/Off controls and Search/All mode.
+Enter opens details with Search, Load all (estimated tokens), and Follow
+configuration actions before the first turn. Settings → MCP shows structured
+server rows above the file editor; loading choices patch the defining scope
+and refresh the page. Desktop uses these same host-backed workflows. The MCP
+inspector shows the mode alongside counts. `/mcp` opens the server list.
+
+`McpSearch` disclosures label each query and display schema fields as rows.
+`McpCall` headings name the resolved server/tool; parameters remain fully
+inspectable. Permission requests use the target's rules and show “via McpCall”.
+The durable `tool.started.target` field preserves the target during replay.
+The deprecated web surface continues using generic rows and receives no new controls.

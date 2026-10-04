@@ -96,11 +96,12 @@ _TASK_SCHEMA: dict[str, Any] = {
         "model": {
             "type": "string",
             "description": (
-                "Optional concrete provider/model or bare model id override; a provider "
-                "name alone is not a model id. Omit it or leave it blank to use the role's configured "
-                "model, falling back to the parent's model. A tier name "
-                "('low'/'medium'/'high') does not override the role's configured model; "
-                "routing remains subject to the configured max tier."
+                "Optional. A tier name from the chosen agent's tier list "
+                "('low', 'medium' or 'high'), or a concrete provider/model. "
+                "Omit it to use the agent's default tier. A tier or model "
+                "outside the agent's list runs on the nearest allowed tier "
+                "instead, and the result says so. The configured max tier "
+                "still applies."
             ),
         },
         "description": {
@@ -129,6 +130,22 @@ _TASK_DESCRIPTION = (
     "authority and cannot exceed it."
 )
 
+#: Added when the agent roster is shown: how to choose a model tier. Each agent
+#: lists the tiers it may use; the first is its default (plan: Part 3).
+_TIER_GUIDANCE = (
+    "Choosing a tier: each agent lists the model tiers it may use; the first is "
+    "its default. Omit `model` to use the default. Pass a higher allowed tier "
+    "only when the job needs it:\n"
+    "- low: lookups, file searches, mechanical edits, short summaries, anything "
+    "you could specify exactly.\n"
+    "- medium: multi-step changes, debugging with a known reproduction, work "
+    "that needs judgment about the code.\n"
+    "- high: hard design decisions, bugs nobody can explain, reviewing risky or "
+    "wide-reaching changes. Use sparingly; it is the slowest and most expensive.\n"
+    "Prefer the cheapest tier that will do the job well. A tier outside an "
+    "agent's list is moved to the nearest allowed tier and the result says so."
+)
+
 
 def _describe(service: SubagentServiceView | None) -> str:
     """The tool description, with the live role roster when one is bound.
@@ -149,8 +166,8 @@ def _describe(service: SubagentServiceView | None) -> str:
         return _TASK_DESCRIPTION
     default = getattr(service, "default_type", DEFAULT_SUBAGENT_TYPE)
     return (
-        f"{_TASK_DESCRIPTION}\n\nAvailable agents (subagent_type), default "
-        f"{default!r}:\n{roster}"
+        f"{_TASK_DESCRIPTION}\n\n{_TIER_GUIDANCE}\n\n"
+        f"Available agents (subagent_type), default {default!r}:\n{roster}"
     )
 
 

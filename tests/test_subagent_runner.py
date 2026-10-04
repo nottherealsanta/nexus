@@ -20,6 +20,7 @@ The child runtime is always a fake: the runner is tested through its injected
 
 from __future__ import annotations
 
+import re
 import asyncio
 import subprocess
 from pathlib import Path
@@ -189,7 +190,9 @@ async def test_blank_model_uses_default_for_permission_and_execution(tmp_path, m
     )
     result = await task.run(request, ctx)
     assert not result.is_error
-    assert factory.specs[-1].model == (role_model or "codex/gpt-6-luna")
+    # The built-in task role declares tiers [low, medium], so with no model
+    # pinned the child runs its default tier instead of the parent's model.
+    assert factory.specs[-1].model == (role_model or "low")
 
 
 def test_model_reference_trims_surrounding_whitespace():
@@ -408,7 +411,12 @@ async def test_tampered_read_only_declaration_still_cannot_write(tmp_path):
 
 def test_permission_key_uses_type_and_effective_tier(tmp_path):
     runner = make_runner(tmp_path, Factory(), max_tier="medium")
-    assert runner.permission_key({"prompt": "x"}) == "task:medium"
+    # task's first tier is its default; "medium" is allowed but not chosen.
+    assert runner.permission_key({"prompt": "x"}) == "task:low"
+    assert (
+        runner.permission_key({"prompt": "x", "model": "medium"})
+        == "task:medium"
+    )
     assert (
         runner.permission_key({"prompt": "x", "model": "low"})
         == "task:low"
@@ -463,12 +471,17 @@ async def test_cap_is_configurable_and_never_widens(tmp_path):
 
 
 async def test_tier_hint_without_role_model_runs_the_parent_model(tmp_path):
-    # A bare tier routes to the first catalogue model for that tier, which may
-    # not be usable with the parent's account; the child inherits instead.
+    # A role without ``tiers`` keeps the earlier rule: a bare tier hint labels
+    # the spawn but never swaps the model, so the child inherits the parent's.
     factory = Factory()
+    agents = tmp_path / "ws" / ".agents" / "agents"
+    agents.mkdir(parents=True)
+    (agents / "worker.md").write_text(
+        "---\nname: worker\ndescription: no tiers\n---\nWork.\n", encoding="utf-8"
+    )
     runner = make_runner(tmp_path, factory, parent_model="codex/gpt-6-luna")
-    await runner.spawn(TaskRequest(prompt="x", subagent_type="quick", model="low"))
-    await runner.spawn(TaskRequest(prompt="x", subagent_type="quick"))
+    await runner.spawn(TaskRequest(prompt="x", subagent_type="worker", model="low"))
+    await runner.spawn(TaskRequest(prompt="x", subagent_type="worker"))
     await runner.spawn(TaskRequest(prompt="x", model="codex/gpt-5-mini"))
     assert [spec.model for spec in factory.specs] == [
         "codex/gpt-6-luna",
@@ -1090,7 +1103,7 @@ def test_role_index_lists_only_subagent_eligible_roles(tmp_path: Path) -> None:
     )
     runner = make_runner(tmp_path, Factory())
     lines = runner.role_index().splitlines()
-    names = {line.partition(":")[0] for line in lines}
+    names = {re.split(r"[ :]", line, maxsplit=1)[0] for line in lines}
     assert {"advisor", "task", "quick", "reviewer"} <= names
     assert "build" not in names and "lead" not in names
     assert "reviewer: Reviews a diff for bugs." in lines

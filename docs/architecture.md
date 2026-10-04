@@ -1,9 +1,9 @@
 # Architecture
 
 Nexus is a provider-agnostic agent harness. One **daemon per workspace** owns the
-runtime, sessions and turns. Three surfaces are pure clients of it: a Textual
-chat app (`nexus chat`), a one-shot CLI and JSONL stream (`nexus run`), and a
-plain-JS browser app (`nexus web`).
+runtime, sessions and turns. Four surfaces are pure clients of it: the native Ratatui terminal app (`nexus chat`,
+Textual fallback), a one-shot CLI and JSONL stream (`nexus run`), a plain-JS
+browser app (`nexus web`), and the GPUI desktop app (`nexus desktop`).
 
 The rule that keeps it modular: **`core/loop.py` knows only protocols.** It talks
 to a session view, a context assembler, a provider resolver, a tool dispatcher,
@@ -12,8 +12,12 @@ the loop testable with fakes and every manager replaceable.
 
 ## Request path
 
+The [GPUI desktop client](desktop.md) is another host client. Its Rust window
+receives owned presentation snapshots from the existing Python native bridge;
+it owns neither the runtime nor session persistence.
+
 ```
-client (TUI / CLI / browser)
+client (TUI / CLI / browser / desktop)
   └─ host/protocol.py command ──► host/daemon.py      one per workspace: UDS (+ loopback HTTP)
                                     └─ host/facade.py HostFacade   the only surface API
                                          ├─ host/supervisor.py     global turn cap, per-session FIFO

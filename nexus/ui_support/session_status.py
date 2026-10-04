@@ -21,7 +21,10 @@ def session_status(summary: Any, seen: Mapping[str, int], current: str) -> str:
     if state in {"awaiting_permission", "awaiting_input"}:
         return "input"
     last_seen = seen.get(summary.id)
-    if summary.id != current and last_seen is not None and summary.last_seq > last_seen:
+    # Current SessionSummary values always have this field. The fallback is
+    # only for third-party/legacy summary-like values without that schema.
+    activity_seq = getattr(summary, "completion_seq", summary.last_seq)
+    if summary.id != current and last_seen is not None and activity_seq > last_seen:
         return "done"
     return "idle"
 

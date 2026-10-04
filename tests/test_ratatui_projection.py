@@ -2,6 +2,8 @@
 from dataclasses import replace
 from types import SimpleNamespace
 
+import pytest
+
 from nexus.ui.ratatui.actions import ShellActions
 from nexus.ui.ratatui.prototype import project
 from nexus.view import initial_state
@@ -34,6 +36,13 @@ def _snapshot(tmp_path, monkeypatch, turns, literal=True, **shell_values):
     return project(controller, 1, shell=shell, literal=literal)
 
 
+@pytest.mark.parametrize("color", ["", "#ab12cd"])
+def test_user_border_matches_agent_color(tmp_path, monkeypatch, color):
+    snapshot = _snapshot(tmp_path, monkeypatch, [_turn(agent={"name": "review", "color": color})])
+    user = next(block for block in snapshot["blocks"] if block["kind"] == "user")
+    assert user["color"] == (color or snapshot["agent_color"])
+
+
 def test_parallel_markers_are_separate_from_tool_text(tmp_path, monkeypatch):
     tools = [
         ToolCallView(call_id="a", name="read", event_seq=2, iteration=1,
@@ -48,7 +57,8 @@ def test_parallel_markers_are_separate_from_tool_text(tmp_path, monkeypatch):
     assert [b["kind"] for b in blocks] == ["tool_group", "tool", "tool_group"]
     assert [b["count"] for b in blocks if b["kind"] == "tool_group"] == [1, 1]
     assert all(not b["text"].startswith(("┌", "│", "└")) for b in blocks)
-    assert blocks[1]["text"].splitlines()[1].startswith("  ")
+    assert blocks[1]["text"].splitlines() == [blocks[1]["text"]]  # one row
+    assert "Subagent — Scan" in blocks[1]["text"]
 
 
 def test_blocks_follow_event_order_with_textual_gaps(tmp_path, monkeypatch):
@@ -57,10 +67,28 @@ def test_blocks_follow_event_order_with_textual_gaps(tmp_path, monkeypatch):
     assert kinds == ["user", "tool_group", "markdown", "summary"]
     user, tool, reply, summary = blocks[:4]
     assert user["number"] == 1 and user["title"] == "hi there" and user["text"] == "second line"
-    assert tool["gap"] == 1 and "Read" in tool["text"]  # margin after the prompt card
+    assert tool["gap"] == 1 and tool["text"] == "Explored: 1 read"  # margin after the prompt card
     assert reply["gap"] == 1  # a reply after a tool call is set apart
     assert summary["gap"] == 0 and "3.3s" in summary["text"]  # reply bottom margin collapses with the footer's
     assert blocks[4]["id"].startswith("u:user") and blocks[4]["gap"] == 1  # turn margin-bottom
+
+
+@pytest.mark.parametrize("expanded", [False, True])
+def test_thought_and_tool_groups_have_blank_rows_between_them(tmp_path, monkeypatch, expanded):
+    thought = MessageView(id="thought", role="assistant", event_seq=3,
+                          blocks=[BlockView(kind="thinking", text="Consider the next step.")])
+    turn = replace(_turn(), messages=[_turn().messages[0], thought], tools=[
+        ToolCallView(call_id="before", name="Read", event_seq=2, status="completed",
+                     input={"path": "README.md"}),
+        ToolCallView(call_id="after", name="Read", event_seq=4, status="completed",
+                     input={"path": "docs/README.md"}),
+    ])
+    blocks = _snapshot(tmp_path, monkeypatch, [turn], verbose=expanded,
+                       expanded={"thoughtthinking"} if expanded else set())["blocks"]
+    transcript = [b for b in blocks if b["kind"] in {"tool_group", "thought"}]
+    assert [b["kind"] for b in transcript] == ["tool_group", "thought", "tool_group"]
+    assert transcript[1]["gap"] == 1
+    assert transcript[2]["gap"] == 1
 
 
 def test_collapsed_turn_keeps_prompt_and_counts_tools(tmp_path, monkeypatch):
@@ -94,7 +122,7 @@ def test_details_panel_matches_textual_sections(tmp_path, monkeypatch):
     labels = [label for label, _ in panel["session"]]
     assert labels[:8] == ["ID", "Title", "Status", "Agent", "Model", "Effort", "Turns", "Tool calls"]
     assert panel["files"] == [] and panel["files_summary"] == ""
-    assert panel["mcp"] == [["success", "cvc", "4 tools"]]
+    assert panel["mcp"] == [["success", "cvc", "4 tools · search"]]
 
 
 def test_task_card_links_child_and_hides_duplicate_agent_entry(tmp_path, monkeypatch):
@@ -112,10 +140,44 @@ def test_task_card_links_child_and_hides_duplicate_agent_entry(tmp_path, monkeyp
     shell.preferences.values["context_preview"] = False
     blocks = project(SimpleNamespace(view=view, session="s"), 1, shell=shell)["blocks"]
     card = next(block for block in blocks if block["id"] == "task-1")
-    assert " Explore · " in card["text"].splitlines()[0]
-    assert len(card["text"].splitlines()) == 2
+    assert card["text"] == "\ue000 Explore Subagent — Scan"  # spinner slot, one row
     assert card["operation"] == {"kind": "agent_page", "id": "a1"}
     assert [block["id"] for block in blocks if block["id"] in {"a1", "a2"}] == ["a2"]
+
+
+@pytest.mark.parametrize(
+    ("status", "spawned", "completed", "suffix"),
+    [
+        ("completed", 100.0, 165.0, " · 1m 5s"),
+        ("running", 100.0, None, ""),
+        ("completed", 100.0, 100.25, " · 250ms"),
+        ("completed", None, None, ""),
+        ("completed", 100.0, None, ""),
+        ("failed", 100.0, 105.0, " · 5.0s"),
+    ],
+)
+def test_subagent_elapsed_time_only_when_finished(tmp_path, monkeypatch, status, spawned, completed, suffix):
+    from nexus.view.model import AgentView
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    tool = ToolCallView(
+        call_id="tc", name="subagent", input={"description": "find code", "subagent_type": "explore"},
+        status="running" if status == "running" else "completed", child_agent_ids=["kid"],
+    )
+    child = AgentView(
+        id="kid", type="explore", status="spawned" if status == "running" else status,
+        model="openai/gpt-x", spawned_ts=spawned, completed_ts=completed,
+    )
+    child.body.turns = [TurnView(id="t", reasoning_effort="medium")]
+    view = initial_state("s")
+    view.turns = [replace(_turn(), tools=[tool])]
+    view.agents = {"kid": child}
+    controller = SimpleNamespace(view=view, session="s")
+    shell = ShellActions(controller)
+    shell.preferences.values["context_preview"] = False
+    row = next(row for row in project(controller, 1, shell=shell)["blocks"] if row["kind"] == "tool")
+    assert row["text"].endswith(f" · gpt-x (medium){suffix}")
 
 
 def test_details_mcp_accepts_doctor_report_dict_not_struct(tmp_path, monkeypatch):
@@ -179,12 +241,14 @@ def test_session_cards_carry_status_words_age_and_the_current_marker():
     def row(id, state, seq, title):
         return ProjectSession("/w", "p", SessionSummary(id=id, title=title, state=state, last_activity=1000.0, last_seq=seq, message_count=3))
 
-    result = ProjectSessionsListResult(sessions=[row("a", "running", 5, "Busy"), row("b", "idle", 5, "Quiet"), row("c", "awaiting_input", 5, "Asks")])
+    result = ProjectSessionsListResult(sessions=[row("a", "running", 5, "Busy"), row("b", "idle", 5, "Quiet"), row("c", "awaiting_input", 5, "Asks"), row("d", "idle", 0, "")])
     seen = {"b": 2}  # b finished something since it was last viewed
     rows = {r["id"]: r for r in session_rows(result, current="a", seen=seen, now=1000.0 + 300)}
     assert rows["a"]["status"] == "working" and rows["a"]["active"] is True and rows["a"]["sub"] == "3 · 5m"
     assert rows["b"]["status"] == "done" and rows["b"]["sub"] == "3 · 5m"
     assert rows["c"]["status"] == "input" and rows["c"]["sub"] == "3 · 5m"
+    assert rows["a"]["title"] == "Busy"
+    assert rows["d"]["title"] == "New Session"
 
 
 def test_tabs_mark_the_current_session_and_its_running_turn(tmp_path, monkeypatch):
@@ -293,14 +357,34 @@ def test_agent_page_uses_child_conversation_and_recorded_context(tmp_path, monke
     snapshot = project(controller, 1, shell=shell)
     assert snapshot["agent_page"] == "child" and snapshot["panel_title"] == ""
     assert not snapshot["sessions_sidebar"] and snapshot["prompt"] is None
-    assert snapshot["blocks"][0]["members"][0]["title"] == "System prompt"
-    assert snapshot["blocks"][0]["operation"] == {"kind": "context_menu"}
+    first = snapshot["blocks"][0]  # the task opens the page as a prompt card, no header strip
+    assert first["kind"] == "user" and first["title"] == "Inspect the UI" and first["color"]
+    assert all(b["kind"] != "context_header" for b in snapshot["blocks"])
     assert shell.workflows.agent_context["system_text"] == "Child instructions"
-    assert any(b["title"] == "Task" and b["text"] == "Inspect the UI"
-               for b in snapshot["blocks"] if "title" in b)
     assert any(b["kind"] == "markdown" and b["text"] == "Hello!" for b in snapshot["blocks"])
     shell.workflows.back()
     assert shell.workflows.agent_page_id is None
+
+
+@pytest.mark.parametrize("name, inputs, summary", [
+    ("Read", {"path": "private-file.txt"}, "Explored: 1 read"),
+    ("Bash", {"command": "echo private-output"}, "Bash · 1 call"),
+])
+def test_single_tool_keeps_group_summary_and_expands_details(tmp_path, monkeypatch, name, inputs, summary):
+    tool = ToolCallView(call_id="only", name=name, event_seq=2, status="completed",
+                        input=inputs, display="private-output")
+    turn = replace(_turn(), tools=[tool])
+    def group(expanded):
+        return next(b for b in _snapshot(tmp_path, monkeypatch, [turn], literal=False,
+                                        expanded=expanded)["blocks"] if b["kind"] == "tool_group")
+    closed = group(set())
+    assert closed["text"] == summary and closed["count"] == 1
+    assert closed["collapsed"] and closed["members"] == []
+    opened = group({"t:gonly", "only:detail"})
+    assert opened["text"] == summary and not opened["collapsed"]
+    assert len(opened["members"]) == 1
+    assert "private-output" in opened["members"][0]["detail"]
+    assert next(iter(inputs.values())) in opened["members"][0]["detail"]
 
 
 def test_groups_and_tool_detail_have_independent_expansion(tmp_path, monkeypatch):
@@ -318,3 +402,17 @@ def test_groups_and_tool_detail_have_independent_expansion(tmp_path, monkeypatch
     assert folded["output_operation"] == {"kind": "block_toggle", "id": "long:output"}
     all_output = group({"t:gshort", "long:detail", "long:output"})["members"][1]
     assert "line 29" in all_output["detail"]
+
+
+def test_explored_group_summarises_lookups_and_thought_carries_duration(tmp_path, monkeypatch):
+    thinking = BlockView(kind="thinking", text="**Plan**\nlook around", elapsed_ms=671)
+    messages = [_turn().messages[0], MessageView(id="a", role="assistant", event_seq=1, blocks=[thinking])]
+    tools = [ToolCallView(call_id="g", name="Grep", event_seq=2, status="completed", input={"pattern": "x"}),
+             ToolCallView(call_id="r", name="Read", event_seq=3, status="completed", input={"path": "a.py"})]
+    blocks = _snapshot(tmp_path, monkeypatch, [replace(_turn(), messages=messages, tools=tools)], literal=False,
+                       expanded={"t:gg"})["blocks"]
+    thought = next(b for b in blocks if b["kind"] == "thought")
+    assert thought["title"] == "Thought: 671ms"
+    group = next(b for b in blocks if b["kind"] == "tool_group")
+    assert group["text"] == "Explored: 1 search, 1 read"
+    assert [m["heading"].split(" ")[0] for m in group["members"]] == ["✱", "→"]

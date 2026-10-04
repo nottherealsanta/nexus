@@ -466,7 +466,7 @@ class SessionSidebar(Vertical):
         self.projects_truncated = False
         self._current_running = False
         self._layout: tuple[tuple[str, tuple[str, ...]], ...] | None = None
-        #: last_seq observed per session; a later seq on an idle session is "done".
+        #: completion_seq observed per session; a later terminal turn is "done".
         self.seen: dict[str, int] = {}
 
     def compose(self) -> ComposeResult:
@@ -484,7 +484,10 @@ class SessionSidebar(Vertical):
         self._archived = list(archived or ())
         for summary in summaries:
             if summary.id not in self.seen or summary.id == current:
-                self.seen[summary.id] = max(self.seen.get(summary.id, 0), summary.last_seq)
+                self.seen[summary.id] = max(
+                    self.seen.get(summary.id, 0),
+                    getattr(summary, "completion_seq", getattr(summary, "last_seq", 0)),
+                )
         self._render_rows()
 
     def set_projects(self, rows: list[Any], workspace: str, *, truncated: bool = False) -> None:

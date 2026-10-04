@@ -285,7 +285,7 @@ class AgentsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     max_depth: int = 3
     max_concurrent: int = 4
     max_fanout: int | None = 16
-    max_tier: str = "medium"
+    max_tier: str = "high"
     token_budget: int | None = None
     cost_budget: float | None = None
     seed_roles: bool = False
@@ -720,11 +720,29 @@ class SessionSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
 
 class SessionsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """``[sessions]``: archiving and automatic titles.
+
+    ``auto_title`` names a new session with one small side call to ``title_model``
+    (a tier name or a ``provider/model`` reference); off keeps the first line of
+    the first message as the title (plans/SESSION_TITLE_PLAN.md).
+    """
+
     auto_archive_days: int = 2
+    auto_title: bool = True
+    title_model: str = "low"
 
     def __post_init__(self) -> None:
         if type(self.auto_archive_days) is not int or not 0 <= self.auto_archive_days <= 3650:
             raise ValueError("sessions.auto_archive_days must be an integer from 0 to 3650")
+        if type(self.auto_title) is not bool:
+            raise ValueError("sessions.auto_title must be true or false")
+        if (
+            not isinstance(self.title_model, str)
+            or not self.title_model.strip()
+            or len(self.title_model) > 128
+            or any(char.isspace() for char in self.title_model)
+        ):
+            raise ValueError("sessions.title_model must be a tier or model reference")
 
 
 class SettingsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):

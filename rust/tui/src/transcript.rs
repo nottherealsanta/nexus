@@ -165,15 +165,17 @@ fn indented(
 
 fn user(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
     let base = Style::default().fg(p.text).bg(p.panel);
+    let rail = color(&b.color, p.blue, p);
     let bar = |_: ()| {
         vec![
             Span::styled("  ", Style::default().bg(p.background)),
-            Span::styled("│", Style::default().fg(p.blue).bg(p.panel)),
-            Span::styled(" ", base),
+            Span::styled("│", Style::default().fg(rail).bg(p.panel)),
+            Span::styled("  ", base),
         ]
     };
-    let inner = width.saturating_sub(6).max(1);
+    let inner = width.saturating_sub(7).max(1);
     let op = &b.operation;
+    out.push((line(bar(()), vec![], Some(width), base), op.clone()));
     let tag = if b.number > 0 {
         format!(" #{} ", b.number)
     } else {
@@ -188,19 +190,20 @@ fn user(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
     for (i, cells) in wrap(&head, room).into_iter().enumerate() {
         let mut row = line(
             if i == 0 {
-                vec![
-                    Span::styled("  ", Style::default().bg(p.background)),
-                    Span::styled(
-                        if b.collapsed { "▸ " } else { "▾ " },
-                        Style::default().fg(p.blue).bg(p.panel),
-                    ),
-                ]
+                // The fold chevron sits in the left margin, outside the card, barely visible;
+                // the rail stays unbroken.
+                let mut prefix = bar(());
+                prefix[0] = Span::styled(
+                    if b.collapsed { "▸ " } else { "▾ " },
+                    Style::default().fg(p.border).bg(p.background),
+                );
+                prefix
             } else {
                 bar(())
             },
             cells,
             Some(if i == 0 && !tag.is_empty() {
-                4 + room
+                5 + room
             } else {
                 width
             }),
@@ -240,16 +243,12 @@ fn user(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
             ));
             spans.push(Span::raw("  "));
         }
-        for cells in wrap(&spans, inner.saturating_sub(3)) {
-            let mut prefix = bar(());
-            prefix.push(Span::styled("   ", base));
-            out.push((line(prefix, cells, Some(width), base), chip_op.clone()));
+        for cells in wrap(&spans, inner) {
+            out.push((line(bar(()), cells, Some(width), base), chip_op.clone()));
         }
-        let mut prefix = bar(());
-        prefix.push(Span::styled("   ", base));
         out.push((
             line(
-                prefix,
+                bar(()),
                 wrap(
                     &[Span::styled(
                         "Click to inspect attached context",
@@ -264,6 +263,7 @@ fn user(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
             chip_op,
         ));
     }
+    out.push((line(bar(()), vec![], Some(width), base), op.clone()));
 }
 
 /// An inline file diff like textual-diff-view: `path (+a, -r)`, then split rows with
@@ -379,27 +379,71 @@ fn diff(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
 }
 
 pub fn build(b: &Content, width: u16, p: &Palette) -> Rows {
+    let padded = !matches!(
+        b.kind.as_str(),
+        "user" | "context_header" | "context" | "hints"
+    );
+    let mut rows = build_inner(b, width.saturating_sub(u16::from(padded)), p);
+    if padded {
+        for (line, _) in &mut rows {
+            line.spans.insert(0, Span::raw(" "));
+        }
+    }
+    rows
+}
+
+fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
     let width = usize::from(width).max(8);
     let mut out: Rows = (0..b.gap).map(|_| (Line::default(), None)).collect();
     let op = &b.operation;
     match b.kind.as_str() {
         "user" => user(&mut out, b, width, p),
         "context_header" => {
-            let mut spans = Vec::new();
-            for chip in &b.members {
-                spans.push(Span::styled(
-                    "▌",
-                    Style::default().fg(color(&chip.color, p.blue, p)),
-                ));
-                spans.push(Span::styled(
-                    format!("{} {}   ", chip.title, chip.status.replace(" tokens", "")),
-                    Style::default().fg(p.muted),
-                ));
-            }
-            for cells in wrap(&spans, width.saturating_sub(4)) {
+            // Compact, marker-free context rows. Counts sit beside their labels;
+            // project/global counts retain their distinct tones inside one bracket.
+            let lead = 5usize;
+            for (n, chip) in b.members.iter().enumerate() {
+                if n > 0 {
+                    out.push((Line::default(), None));
+                }
+                let mut parts = vec![Span::styled(
+                    chip.title.clone(),
+                    Style::default().fg(p.text).add_modifier(Modifier::BOLD),
+                )];
+                if !chip.counts.is_empty() {
+                    parts.push(Span::styled(" [", Style::default().fg(p.muted)));
+                    for (index, count) in chip.counts.iter().enumerate() {
+                        if index > 0 {
+                            parts.push(Span::raw(" "));
+                        }
+                        parts.push(Span::styled(
+                            count.to_string(),
+                            Style::default().fg(if chip.counts.len() == 2 && index == 0 {
+                                p.quiet
+                            } else {
+                                p.muted
+                            }),
+                        ));
+                    }
+                    parts.push(Span::styled("]", Style::default().fg(p.muted)));
+                }
+                let status = chip.status.replace(" tokens", "");
+                if !status.is_empty() {
+                    parts.push(Span::styled(
+                        format!("  {status}"),
+                        Style::default().fg(p.muted),
+                    ));
+                }
+                let w: usize = parts.iter().map(|s| s.content.width()).sum();
+                let row = serde_json::json!({"kind":"context_chips","chips":[
+                    {"start":lead,"end":lead + w,"operation":chip.operation}]});
                 out.push((
-                    line(vec![Span::raw("    ")], cells, None, Style::default()),
-                    op.clone(),
+                    Line::from(
+                        std::iter::once(Span::raw(" ".repeat(lead)))
+                            .chain(parts)
+                            .collect::<Vec<_>>(),
+                    ),
+                    Some(row),
                 ));
             }
         }
@@ -460,38 +504,53 @@ pub fn build(b: &Content, width: u16, p: &Palette) -> Rows {
                         Style::default().fg(c).add_modifier(Modifier::BOLD),
                     ),
                 ],
-                2,
+                4,
                 width,
                 op,
             );
         }
         "thought" => {
-            indented(
-                &mut out,
+            // `Thought: 671ms` in amber, then the reasoning dimmed behind a left rule.
+            let rule = |strong: bool| {
                 vec![
-                    Span::styled("◇", Style::default().fg(p.purple)),
-                    Span::raw(" "),
+                    Span::raw("    "),
                     Span::styled(
-                        b.title.clone(),
-                        Style::default().fg(p.muted).add_modifier(Modifier::ITALIC),
+                        "│",
+                        Style::default().fg(if strong { p.border_strong } else { p.border }),
                     ),
-                    Span::raw("  "),
-                    Span::styled(b.text.clone(), Style::default().fg(p.quiet)),
-                ],
-                2,
-                width,
-                op,
-            );
+                    Span::raw(" "),
+                ]
+            };
+            let mut head = vec![Span::styled(
+                b.title.clone(),
+                Style::default().fg(p.warning),
+            )];
+            if !b.text.is_empty() {
+                head.push(Span::raw("  "));
+                head.push(Span::styled(b.text.clone(), Style::default().fg(p.quiet)));
+            }
+            for cells in wrap(&head, width.saturating_sub(8)) {
+                out.push((line(rule(false), cells, None, Style::default()), op.clone()));
+            }
             if !b.detail.is_empty() {
                 out.push((Line::default(), op.clone()));
                 for text in b.detail.lines() {
-                    indented(
-                        &mut out,
-                        vec![Span::styled(text.to_string(), Style::default().fg(p.muted))],
-                        2,
-                        width,
-                        op,
-                    );
+                    let trimmed = text.trim();
+                    let heading = trimmed.len() > 4
+                        && trimmed.starts_with("**")
+                        && trimmed.ends_with("**")
+                        && !trimmed[2..trimmed.len() - 2].contains("**");
+                    let (shown, style) = if heading {
+                        (
+                            trimmed[2..trimmed.len() - 2].to_string(),
+                            Style::default().fg(p.muted).add_modifier(Modifier::BOLD),
+                        )
+                    } else {
+                        (text.replace("**", ""), Style::default().fg(p.quiet))
+                    };
+                    for cells in wrap(&[Span::styled(shown, style)], width.saturating_sub(8)) {
+                        out.push((line(rule(true), cells, None, Style::default()), op.clone()));
+                    }
                 }
             }
         }
@@ -518,67 +577,46 @@ pub fn build(b: &Content, width: u16, p: &Palette) -> Rows {
             }
         }
         "tool_group" => {
-            let glyph = if b.failures > 0 {
-                "✗"
-            } else if b.status == "running" {
-                "\u{e000}"
-            } else if b.failures > 0 {
-                "✗"
-            } else {
-                "✓"
-            };
-            let tone = if b.failures > 0 {
-                p.error
-            } else if b.status == "running" {
+            // No ✓/✗ and no failure count: failed calls recover on their own, and
+            // the expanded member still shows the error output in full.
+            let running = b.status == "running";
+            let glyph = if running { "\u{e000}" } else { "→" };
+            let tone = if running {
                 color(&b.color, p.blue, p)
             } else {
-                p.success
-            };
-            let count = if b.count > 1 {
-                format!("{:>2}", b.count.min(99))
-            } else {
-                "  ".into()
-            };
-            let suffix = if b.failures > 0 {
-                format!(" · {} failed", b.failures)
-            } else {
-                String::new()
+                p.muted
             };
             out.push((
                 Line::from(vec![
+                    Span::raw("    "),
                     Span::styled(glyph, Style::default().fg(tone)),
-                    Span::styled(count, Style::default().fg(p.muted)),
                     Span::raw(" "),
                     Span::styled(
-                        truncate(&b.text, width.saturating_sub(4 + suffix.width())),
-                        Style::default().fg(p.text),
+                        truncate(&b.text, width.saturating_sub(6)),
+                        Style::default().fg(p.muted),
                     ),
-                    Span::styled(suffix, Style::default().fg(p.error)),
                 ]),
                 op.clone(),
             ));
             for member in &b.members {
-                let text = format!("{:<8} {}", member.title, member.text);
+                let text = if member.heading.is_empty() {
+                    format!("{:<8} {}", member.title, member.text)
+                } else {
+                    member.heading.clone()
+                };
                 out.push((
                     Line::from(vec![
                         Span::styled(
-                            format!(
-                                "  {} ",
-                                if member.batch_glyph.is_empty() {
-                                    "▸"
-                                } else {
-                                    "∥"
-                                }
-                            ),
+                            if member.batch_glyph.is_empty() {
+                                "    "
+                            } else {
+                                "   ∥"
+                            },
                             Style::default().fg(p.muted),
                         ),
                         Span::styled(
                             truncate(&text, width.saturating_sub(4)),
-                            Style::default().fg(if member.status == "failed" {
-                                p.error
-                            } else {
-                                p.muted
-                            }),
+                            Style::default().fg(p.quiet),
                         ),
                     ]),
                     member.operation.clone(),
@@ -606,7 +644,7 @@ pub fn build(b: &Content, width: u16, p: &Palette) -> Rows {
                             // Preserve long parameter keys before the value.
                             out.push((
                                 line(
-                                    vec![Span::styled("  │ ", Style::default().fg(p.border))],
+                                    vec![Span::styled("    │ ", Style::default().fg(p.border))],
                                     cells.clone(),
                                     None,
                                     Style::default(),
@@ -622,7 +660,7 @@ pub fn build(b: &Content, width: u16, p: &Palette) -> Rows {
                         if label.width() > label_width {
                             out.push((
                                 line(
-                                    vec![Span::styled("  │ ", Style::default().fg(p.border))],
+                                    vec![Span::styled("    │ ", Style::default().fg(p.border))],
                                     labels.last().unwrap().clone(),
                                     None,
                                     Style::default(),
@@ -632,13 +670,13 @@ pub fn build(b: &Content, width: u16, p: &Palette) -> Rows {
                         }
                         for (i, cells) in wrap(
                             &[Span::styled(value.to_string(), Style::default().fg(p.text))],
-                            width.saturating_sub(4 + label_width),
+                            width.saturating_sub(6 + label_width),
                         )
                         .into_iter()
                         .enumerate()
                         {
                             let prefix = vec![
-                                Span::styled("  │ ", Style::default().fg(p.border)),
+                                Span::styled("    │ ", Style::default().fg(p.border)),
                                 Span::styled(
                                     if i == 0 {
                                         format!("{last_label:<label_width$}")
@@ -664,11 +702,11 @@ pub fn build(b: &Content, width: u16, p: &Palette) -> Rows {
                                     p.muted
                                 }),
                             )],
-                            width.saturating_sub(4),
+                            width.saturating_sub(6),
                         ) {
                             out.push((
                                 line(
-                                    vec![Span::styled("  │ ", Style::default().fg(p.border))],
+                                    vec![Span::styled("    │ ", Style::default().fg(p.border))],
                                     cells,
                                     None,
                                     Style::default(),
@@ -679,24 +717,20 @@ pub fn build(b: &Content, width: u16, p: &Palette) -> Rows {
                     }
                 }
                 for child in &member.members {
-                    out.extend(build(child, width as u16, p));
+                    out.extend(build_inner(child, width as u16, p));
                 }
             }
         }
         "tool" => {
-            let tone = if b.status == "failed" {
-                p.error
-            } else {
-                p.quiet
-            };
+            let tone = p.quiet;
             let gutter = match b.batch_glyph.as_str() {
-                "┌" | "│" | "└" => format!(" {}", b.batch_glyph),
-                _ => "  ".to_string(),
+                "┌" | "│" | "└" => format!("   {}", b.batch_glyph),
+                _ => "    ".to_string(),
             };
             for text in b.text.lines() {
                 out.push((
                     Line::styled(
-                        format!("{}{}", gutter, truncate(text, width.saturating_sub(4))),
+                        format!("{}{}", gutter, truncate(text, width.saturating_sub(6))),
                         Style::default().fg(tone),
                     ),
                     op.clone(),
@@ -706,7 +740,7 @@ pub fn build(b: &Content, width: u16, p: &Palette) -> Rows {
                 indented(
                     &mut out,
                     vec![Span::styled(text.to_string(), Style::default().fg(p.muted))],
-                    4,
+                    6,
                     width,
                     op,
                 );
@@ -737,7 +771,7 @@ pub fn build(b: &Content, width: u16, p: &Palette) -> Rows {
         "error" => indented(
             &mut out,
             vec![Span::styled(b.text.clone(), Style::default().fg(p.error))],
-            2,
+            4,
             width,
             op,
         ),
@@ -772,6 +806,49 @@ pub fn build(b: &Content, width: u16, p: &Palette) -> Rows {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_reply_padding_includes_double_digit_tool_counts_and_nested_content() {
+        let p = Palette::new(false);
+        for kind in [
+            "agent",
+            "thought",
+            "markdown",
+            "tool_group",
+            "tool",
+            "diff",
+            "summary",
+            "collapsed",
+            "error",
+        ] {
+            let block = Content {
+                kind: kind.into(),
+                title: "Agent".into(),
+                text: "reply".into(),
+                count: 12,
+                members: vec![Content {
+                    title: "read".into(),
+                    detail: "  path: file.txt".into(),
+                    members: vec![Content {
+                        kind: "markdown".into(),
+                        text: "nested reply".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            let expected = build_inner(&block, 39, &p);
+            let actual = build(&block, 40, &p);
+            assert_eq!(actual.len(), expected.len());
+            for ((line, op), (inner, inner_op)) in actual.iter().zip(&expected) {
+                assert_eq!(line.spans[0].content, " ");
+                assert_eq!(&line.spans[1..], inner.spans.as_slice());
+                assert_eq!(op, inner_op);
+                assert!(line.width() <= 40);
+            }
+        }
+    }
 
     fn text(rows: &[Vec<Cell>]) -> Vec<String> {
         rows.iter()
@@ -812,9 +889,9 @@ mod tests {
         };
         let rows = build(&block, 40, &p);
         assert!(rows.iter().all(|(line, _)| line.width() == 40));
-        let header: String = rows[0].0.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(header.starts_with("  ▾ "));
-        let number = rows[0]
+        let header: String = rows[1].0.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(header.starts_with("▾ │ "));
+        let number = rows[1]
             .0
             .spans
             .iter()
@@ -826,13 +903,37 @@ mod tests {
             Some(p.panel),
             "number blends into the card without a badge"
         );
-        assert!(header.starts_with("  ▾ hello") && header.trim_end().ends_with("#3"));
+        assert!(header.starts_with("▾ │  hello") && header.trim_end().ends_with("#3"));
         let all: String = rows
             .iter()
             .flat_map(|(l, _)| l.spans.iter())
             .map(|s| s.content.as_ref())
             .collect();
         assert!(all.contains("▣ image 1") && all.contains("Click to inspect attached context"));
+    }
+
+    #[test]
+    fn user_cards_have_top_and_bottom_padding_even_when_collapsed() {
+        let p = Palette::new(false);
+        for collapsed in [false, true] {
+            let block = Content {
+                kind: "user".into(),
+                title: "hello".into(),
+                collapsed,
+                operation: Some(serde_json::json!({"kind": "turn_toggle", "id": "t"})),
+                ..Default::default()
+            };
+            let rows = build(&block, 40, &p);
+            assert_eq!(rows.len(), 3);
+            for index in [0, rows.len() - 1] {
+                let (line, operation) = &rows[index];
+                assert_eq!(line.width(), 40);
+                let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+                assert_eq!(text.trim(), "│");
+                assert_eq!(line.spans.last().unwrap().style.bg, Some(p.panel));
+                assert_eq!(operation, &block.operation);
+            }
+        }
     }
 
     #[test]
@@ -850,13 +951,34 @@ mod tests {
                 let rows = build(&block, width, &p);
                 let first: String = rows[0].0.spans.iter().map(|s| s.content.as_ref()).collect();
                 let second: String = rows[1].0.spans.iter().map(|s| s.content.as_ref()).collect();
-                assert_eq!(first.chars().nth(2), Some('✓'));
-                assert_eq!(second.chars().nth(4), Some('0'));
+                assert_eq!(first.chars().nth(5), Some('✓'));
+                assert_eq!(second.chars().nth(7), Some('0'));
                 assert!(rows
                     .iter()
                     .all(|(line, op)| line.width() <= width as usize && op == &block.operation));
             }
         }
+    }
+
+    #[test]
+    fn thought_shows_amber_title_and_reasoning_behind_a_rule() {
+        let p = Palette::new(false);
+        let block = Content {
+            kind: "thought".into(),
+            title: "Thought: 671ms".into(),
+            detail: "**Exploring setup**\nneed to check".into(),
+            ..Default::default()
+        };
+        let rows = build(&block, 60, &p);
+        let lines: Vec<String> = rows
+            .iter()
+            .map(|(l, _)| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert!(lines[0].contains("│ Thought: 671ms"));
+        assert!(lines
+            .iter()
+            .any(|l| l.contains("│ Exploring setup") && !l.contains("**")));
+        assert_eq!(rows[0].0.spans.last().unwrap().style.fg, Some(p.warning));
     }
 
     #[test]
@@ -871,7 +993,11 @@ mod tests {
         };
         let rows = build(&tool, 30, &p);
         assert_eq!(rows.len(), 4);
-        assert_eq!(rows[2].0.style.fg, Some(p.error));
+        assert_eq!(
+            rows[2].0.style.fg,
+            Some(p.quiet),
+            "failed tools are not marked red"
+        );
         let context = Content {
             kind: "context".into(),
             title: "MCP".into(),
@@ -883,5 +1009,67 @@ mod tests {
         let rows = build(&context, 40, &p);
         assert_eq!(rows[0].0.spans[1].style.bg, Some(p.blue));
         assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn failed_tool_groups_carry_no_marks_and_header_chips_own_click_ranges() {
+        let p = Palette::new(false);
+        let group = Content {
+            kind: "tool_group".into(),
+            status: "completed".into(),
+            text: "Grep pattern=x".into(),
+            count: 3,
+            failures: 2,
+            ..Default::default()
+        };
+        let text: String = build(&group, 60, &p)[0]
+            .0
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(
+            !text.contains('✗') && !text.contains('✓') && !text.contains("failed"),
+            "{text}"
+        );
+        let chip = |title: &str, counts: Vec<usize>, key: &str| Content {
+            title: title.into(),
+            counts,
+            operation: Some(serde_json::json!({"kind":"context_show","key":key})),
+            ..Default::default()
+        };
+        let header = Content {
+            kind: "context_header".into(),
+            members: vec![
+                chip("Tools", vec![13], "tools"),
+                chip("Skills", vec![1, 3], "skills"),
+            ],
+            ..Default::default()
+        };
+        let rows = build(&header, 80, &p);
+        assert_eq!(rows.len(), 3, "one chip per row, a blank row between");
+        assert!(rows[1].0.spans.is_empty() || rows[1].1.is_none());
+        let line =
+            |i: usize| -> String { rows[i].0.spans.iter().map(|s| s.content.as_ref()).collect() };
+        // Marker-free labels share an inset; bracketed counts follow immediately.
+        assert!(line(0).starts_with("     Tools [13]"), "{}", line(0));
+        assert!(line(2).starts_with("     Skills [1 3]"), "{}", line(2));
+        assert!(line(2).contains("Skills [1 3]"), "{}", line(2));
+        assert!(rows[0].0.spans[1]
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD));
+        assert!(!line(0).contains(['◈', '·']));
+        for (i, key) in [(0, "tools"), (2, "skills")] {
+            let op = rows[i].1.clone().unwrap();
+            assert_eq!(op["kind"], "context_chips");
+            let chips = op["chips"].as_array().unwrap();
+            assert_eq!(chips.len(), 1);
+            assert_eq!(chips[0]["start"], 5);
+            assert!(chips[0]["end"].as_u64().unwrap() > 5);
+            assert_eq!(chips[0]["operation"]["key"], key);
+        }
+        let project = rows[2].0.spans.iter().find(|s| s.content == "1").unwrap();
+        assert_eq!(project.style.fg, Some(p.quiet), "project count is greyed");
     }
 }

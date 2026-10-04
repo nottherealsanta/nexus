@@ -12,6 +12,50 @@ pub struct Editor {
     redo: Vec<(String, usize)>,
 }
 impl Editor {
+    fn image_marker(content: &str) -> bool {
+        let number = content
+            .strip_prefix("image #")
+            .or_else(|| content.strip_prefix("image "))
+            .or_else(|| content.strip_prefix("document "));
+        number
+            .filter(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()))
+            .is_some_and(|number| number.bytes().any(|b| b != b'0'))
+    }
+
+    fn markers(&self) -> Vec<(usize, usize)> {
+        self.text
+            .match_indices('[')
+            .filter_map(|(start, _)| {
+                let close = self.text[start..].find(']')? + start;
+                Self::image_marker(&self.text[start + 1..close]).then_some((start, close + 1))
+            })
+            .collect()
+    }
+
+    fn expand_marker_selection(&self, (mut start, mut end): (usize, usize)) -> (usize, usize) {
+        for (marker_start, marker_end) in self.markers() {
+            if marker_start < end && marker_end > start {
+                start = start.min(marker_start);
+                end = end.max(marker_end);
+            }
+        }
+        (start, end)
+    }
+
+    fn marker_left(&self) -> Option<usize> {
+        self.markers()
+            .into_iter()
+            .find(|(start, end)| *start < self.cursor && self.cursor <= *end)
+            .map(|(start, _)| start)
+    }
+
+    fn marker_right(&self) -> Option<usize> {
+        self.markers()
+            .into_iter()
+            .find(|(start, end)| *start <= self.cursor && self.cursor < *end)
+            .map(|(_, end)| end)
+    }
+
     fn checkpoint(&mut self) {
         self.undo.push((self.text.clone(), self.cursor));
         self.redo.clear();
@@ -41,7 +85,10 @@ impl Editor {
             .unwrap_or("")
     }
     fn erase_selection(&mut self) -> bool {
-        if let Some((a, b)) = self.selection() {
+        if let Some((a, b)) = self
+            .selection()
+            .map(|range| self.expand_marker_selection(range))
+        {
             self.text.replace_range(a..b, "");
             self.cursor = a;
             self.anchor = None;
@@ -57,6 +104,10 @@ impl Editor {
         self.cursor += text.len();
     }
     pub fn left(&mut self) {
+        if let Some(start) = self.marker_left() {
+            self.cursor = start;
+            return;
+        }
         if self.cursor > 0 {
             self.cursor = self.text[..self.cursor]
                 .grapheme_indices(true)
@@ -66,6 +117,10 @@ impl Editor {
         }
     }
     pub fn right(&mut self) {
+        if let Some(end) = self.marker_right() {
+            self.cursor = end;
+            return;
+        }
         if self.cursor < self.text.len() {
             self.cursor += self.text[self.cursor..]
                 .graphemes(true)
@@ -140,6 +195,15 @@ impl Editor {
         if self.erase_selection() {
             return;
         }
+        if let Some((start, end)) = self
+            .markers()
+            .into_iter()
+            .find(|(start, end)| *start < self.cursor && self.cursor <= *end)
+        {
+            self.text.replace_range(start..end, "");
+            self.cursor = start;
+            return;
+        }
         let end = self.cursor;
         self.left();
         self.text.replace_range(self.cursor..end, "");
@@ -147,6 +211,15 @@ impl Editor {
     pub fn delete(&mut self) {
         self.checkpoint();
         if self.erase_selection() {
+            return;
+        }
+        if let Some((start, end)) = self
+            .markers()
+            .into_iter()
+            .find(|(start, end)| *start <= self.cursor && self.cursor < *end)
+        {
+            self.text.replace_range(start..end, "");
+            self.cursor = start;
             return;
         }
         let start = self.cursor;
@@ -237,5 +310,44 @@ mod tests {
         assert_eq!(e.text, "one\ntwo");
         e.redo();
         assert_eq!(e.text, "Xe\ntwo");
+    }
+
+    #[test]
+    fn image_and_document_markers_are_atomic_to_navigate_and_delete() {
+        let mut e = Editor::default();
+        e.insert("a[image 12]b[image #3][document 4]c");
+        e.cursor = 2;
+        e.left();
+        assert_eq!(e.cursor, 1);
+        e.right();
+        assert_eq!(e.cursor, 11);
+
+        e.cursor = 6;
+        e.backspace();
+        assert_eq!(e.text, "ab[image #3][document 4]c");
+        e.undo();
+        assert_eq!(e.text, "a[image 12]b[image #3][document 4]c");
+
+        e.cursor = 12;
+        e.delete();
+        assert_eq!(e.text, "a[image 12]b[document 4]c");
+    }
+
+    #[test]
+    fn partial_marker_selection_removes_whole_marker_but_invalid_tokens_are_text() {
+        let mut e = Editor::default();
+        e.insert("x[image 0] [document nope] [image 2]y");
+        let marker_start = e.text.find("[image 2]").unwrap();
+        e.cursor = marker_start + 3;
+        e.anchor = Some(marker_start + 1);
+        e.backspace();
+        assert_eq!(e.text, "x[image 0] [document nope] y");
+
+        e.cursor = e.text.find("[image 0]").unwrap() + 3;
+        e.left();
+        assert_eq!(e.cursor, e.text.find("[image 0]").unwrap() + 2);
+        e.cursor = e.text.find("[document nope]").unwrap() + 3;
+        e.delete();
+        assert_eq!(e.text, "x[image 0] [doument nope] y");
     }
 }

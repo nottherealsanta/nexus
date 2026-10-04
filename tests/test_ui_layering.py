@@ -37,7 +37,7 @@ ALLOWED_THIRD_PARTY: tuple[str, ...] = ("textual_diff_view",)
 TEXTUAL_SUPPORT_FILES = {
     "tui_widgets.py", "tui_panels.py", "tui_list.py", "tui_context_header.py",
     "tui_archived.py", "tui_diff.py", "tui_settings.py", "tui_setup.py",
-    "tui_providers.py", "tui_voice.py",
+    "tui_providers.py", "tui_voice.py", "tui_models.py", "tui_speech.py",
 }
 
 #: The interpreter's standard-library module names, for a precise allow-list.

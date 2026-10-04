@@ -53,6 +53,16 @@ pub fn completion(frame: &mut Frame, s: &Snapshot, transcript: Rect, selected: u
 }
 /// A shared rectangle for painting and input; legacy snapshots retain full pages.
 pub fn panel_area(transcript: Rect, s: &Snapshot) -> Rect {
+    if s.panel_layout == "context" {
+        let width = transcript.width.saturating_sub(4);
+        let height = transcript.height.saturating_sub(2);
+        return Rect::new(
+            transcript.x + (transcript.width - width) / 2,
+            transcript.y + (transcript.height - height) / 2,
+            width,
+            height,
+        );
+    }
     if s.nav.is_some() {
         let width = transcript
             .width
@@ -145,7 +155,8 @@ pub fn panel_item_at(
     } else {
         0
     };
-    let room = usize::from(inner.height).saturating_sub(header);
+    let room = usize::from(inner.height)
+        .saturating_sub(header + if s.panel_hint.is_empty() { 0 } else { 2 });
     let mut body = Vec::new();
     let mut selected_line = 0;
     let mut group = "";
@@ -171,6 +182,29 @@ pub fn panel_item_at(
     }
     body.get(start + row - header).copied().flatten()
 }
+/// True when a pointer is in the toggle affordance on an item row.
+pub fn panel_toggle_at(
+    s: &Snapshot,
+    area: Rect,
+    filter: &str,
+    selection: usize,
+    x: u16,
+    y: u16,
+) -> bool {
+    let Some(index) = panel_item_at(s, area, filter, selection, y) else {
+        return false;
+    };
+    let item = s
+        .items
+        .iter()
+        .filter(|item| item.label.to_lowercase().contains(&filter.to_lowercase()))
+        .nth(index);
+    item.is_some_and(|item| {
+        item.toggle_operation.is_some()
+            && !item.toggle_locked
+            && x >= area.right().saturating_sub(10)
+    })
+}
 /// Dialog background with an accent title and a rule (Textual modal look);
 /// returns the padded content area.
 pub fn dialog_frame(
@@ -183,36 +217,32 @@ pub fn dialog_frame(
     frame.render_widget(Clear, area);
     frame.render_widget(
         Block::default()
-            .borders(if borderless {
-                Borders::NONE
-            } else {
-                Borders::ALL
-            })
-            .border_style(Style::default().fg(p.border))
+            .borders(Borders::NONE)
             .style(Style::default().bg(p.dialog).fg(p.text)),
         area,
     );
+    let width = usize::from(area.width.saturating_sub(4));
+    let esc = if borderless { "" } else { "esc" };
+    let title: String = title
+        .chars()
+        .take(width.saturating_sub(esc.len() + 1))
+        .collect();
+    let gap = width.saturating_sub(title.chars().count() + esc.len());
     frame.render_widget(
-        Paragraph::new(vec![
-            Line::styled(
-                title.to_string(),
-                Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                title,
+                Style::default().fg(p.text).add_modifier(Modifier::BOLD),
             ),
-            Line::styled(
-                if borderless {
-                    String::new()
-                } else {
-                    "─".repeat(usize::from(area.width.saturating_sub(4)))
-                },
-                Style::default().fg(p.border),
-            ),
-        ])
+            Span::raw(" ".repeat(gap)),
+            Span::styled(esc, Style::default().fg(p.quiet)),
+        ]))
         .style(Style::default().bg(p.dialog)),
         Rect {
             x: area.x + 2,
             y: area.y + 1,
             width: area.width.saturating_sub(4),
-            height: 2.min(area.height),
+            height: 1.min(area.height),
         },
     );
     panel_inner(area, borderless)
@@ -370,6 +400,15 @@ mod tests {
         let area = panel_area(parent, &s);
         assert_eq!(area, Rect::new(7, 5, 116, 38));
         assert!(nav_rect(area).right() < area.right());
+    }
+    #[test]
+    fn context_layout_is_exact_transcript_inset_without_modal_caps() {
+        let parent = Rect::new(4, 6, 160, 52);
+        let mut s = Snapshot::default();
+        s.panel_layout = "context".into();
+        assert_eq!(panel_area(parent, &s), Rect::new(6, 7, 156, 50));
+        let tiny = Rect::new(3, 2, 4, 2);
+        assert_eq!(panel_area(tiny, &s), Rect::new(5, 3, 0, 0));
     }
     #[test]
     fn grouped_picker_mouse_rows_match_display_selection() {

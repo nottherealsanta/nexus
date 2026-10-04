@@ -36,12 +36,14 @@ class VoiceConsentScreen(ModalScreen[bool]):
 
     BINDINGS: ClassVar[list[tuple[str, str, str]]] = [("escape", "cancel", "Cancel")]
 
-    def __init__(self, client: Any, *, waiting: bool = False) -> None:
+    def __init__(self, client: Any, *, waiting: bool = False, cached: bool = False) -> None:
         super().__init__()
         self.client = client
         self.waiting = waiting
+        self.cached = cached
         self._started = waiting
         self._poll_task: asyncio.Task | None = None
+        self._progress_state = "loading"
 
     def compose(self) -> ComposeResult:
         with Vertical(id="voice-consent-dialog"):
@@ -53,7 +55,22 @@ class VoiceConsentScreen(ModalScreen[bool]):
             yield Button("Retry", id="voice-retry", variant="warning")
             yield Button("Start dictation", id="voice-ready")
 
+    def _update_prompt(self) -> None:
+        self.query_one("#voice-title", Static).update(
+            "Voice model · cached locally" if self.cached else "Voice model · about 178 MB"
+        )
+        self.query_one("#voice-confirm", Button).label = "Load model" if self.cached else "Download model"
+        if self.waiting:
+            label = "downloading" if self._progress_state == "downloading" else "loading"
+            text = f"Voice model {label}…"
+        elif self.cached:
+            text = "Load the cached local speech model to enable dictation? It runs on this device."
+        else:
+            text = "Download a local speech model to enable dictation? It runs on this device."
+        self.query_one("#voice-status", Static).update(text)
+
     def on_mount(self) -> None:
+        self._update_prompt()
         self._controls("progress" if self.waiting else "confirm")
         self._poll_task = asyncio.create_task(self._poll_loop())
 
@@ -68,9 +85,15 @@ class VoiceConsentScreen(ModalScreen[bool]):
             return
         self._started = True
         self.waiting = True
+        self._progress_state = "loading"
+        self._update_prompt()
         self._controls("progress")
         try:
-            status = await self.client.voice_prepare()
+            if self.cached:
+                status = await self.client.voice_prepare(allow_download=False)
+            else:
+                status = await self.client.voice_prepare()
+            self.cached = bool(getattr(status, "cached", False))
             if status.state == "ready":
                 self._controls("ready")
                 self.waiting = False
@@ -89,21 +112,25 @@ class VoiceConsentScreen(ModalScreen[bool]):
                     self._controls("retry")
                     self.waiting = False
             else:
+                self.cached = bool(getattr(result, "cached", False))
                 if result.state == "ready":
                     self.query_one("#voice-status", Static).update("The local voice model is available. Start dictation when you are ready.")
                     self._controls("ready")
                     self.waiting = False
+                elif result.state in {"downloading", "loading"}:
+                    self.waiting = True
+                    self._progress_state = result.state
+                    label = "downloading" if result.state == "downloading" else "loading"
+                    self.query_one("#voice-status", Static).update(f"Voice model {label}…")
+                    self._controls("progress")
                 elif result.state in {"error", "unsupported"}:
                     self.query_one("#voice-status", Static).update(sanitize(result.message or "Voice model could not be loaded.", 180))
                     self._controls("retry")
                     self.waiting = False
-                elif result.state in {"absent", "disabled"} and self.waiting:
-                    self.query_one("#voice-status", Static).update(
-                        sanitize(result.message, 180) if result.state == "unsupported" and result.message
-                        else "Voice model is not available yet. Retry to download it."
-                    )
-                    self._controls("retry")
+                elif result.state in {"absent", "disabled"}:
                     self.waiting = False
+                    self._update_prompt()
+                    self._controls("confirm")
             await asyncio.sleep(1)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -322,7 +349,11 @@ class VoiceController:
             self._start_recording()
             return
         waiting = status.state in {"downloading", "loading"}
-        screen = VoiceConsentScreen(self.app.controller.client, waiting=waiting)
+        screen = VoiceConsentScreen(
+            self.app.controller.client,
+            waiting=waiting,
+            cached=bool(getattr(status, "cached", False)),
+        )
         self.app.push_screen(screen, callback=self._consent_finished)
 
     def _consent_finished(self, ready: bool | None) -> None:
@@ -360,7 +391,11 @@ class VoiceController:
             if status.state == "ready":
                 await self._notice("Voice model is ready")
             else:
-                screen = VoiceConsentScreen(self.app.controller.client, waiting=status.state in {"downloading", "loading"})
+                screen = VoiceConsentScreen(
+                    self.app.controller.client,
+                    waiting=status.state in {"downloading", "loading"},
+                    cached=bool(getattr(status, "cached", False)),
+                )
                 self.app.push_screen(screen)
         elif action == "toggle":
             await self.toggle()

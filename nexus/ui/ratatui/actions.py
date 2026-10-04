@@ -42,6 +42,7 @@ class ShellActions:
         self.panel_layout = "modal"
         self.panel_format = "plain"
         self.panel_loading = False
+        self.panel_hint = ""
         self.panel_revision = 0
         self.usage_cache = None
         self.usage_task = None
@@ -51,10 +52,17 @@ class ShellActions:
         self.panel_tones = []
         self.attachments = []
         self.attachment_labels = {}
+        self.attachment_label_counters = {"image": 0, "document": 0}
+        self.attachment_drafts = {}
+        self.attachment_draft_key = None
+        self.marker_attachments = {}
         self.generation = 0
         self.items = []
         self.preview = None
         self.preview_at = None
+        self.preview_image = b""
+        self.preview_image_media = ""
+        self.preview_image_attachment_id = ""
         self.agent_definitions = {}
         self.notice = ""
         self.composer_restore = ""
@@ -72,13 +80,14 @@ class ShellActions:
         self.sessions = []
         self.workspace = ""
         self.tabs = []
+        self.last_completion_cue = 0
         self.breadcrumb = ""
         self.settings_nav: str | None = None  # selected Settings area while Settings is open
         self.model_sort = "updated"  # model picker order: updated|name (Ctrl+S)
         self.update_notice = ""  # "<version> available: <command>" shown in the footer
         self.sessions_truncated = False  # the host list hit its cap
         self.archived_label = ""  # "Archived · N" under the sessions list, "" when none
-        self.seen_seq: dict[str, int] = {}  # last sequence viewed per session, for "finished" status
+        self.seen_seq: dict[str, int] = {}  # completion sequence viewed per session
         self.open_files: set[str] = set()  # modified files expanded in the details sidebar
         self.reconnect = None
         from .preferences import Preferences
@@ -95,11 +104,32 @@ class ShellActions:
     def client(self):
         return self.controller.client
 
+    def refresh_session_tabs(self, rows):
+        """Notify once when a known background tab finishes, never on discovery."""
+        self.sessions = rows
+        for row in rows:
+            existing = next((tab for tab in self.tabs if tab["id"] == row["id"] and tab["workspace"] == row["workspace"]), None)
+            if existing:
+                if (row["id"] != self.controller.session and row["status"] == "done"
+                        and existing.get("status") != "done"):
+                    self.controller.completion_bell += 1
+                existing.update(row)
+            elif row["state"] in {"running", "awaiting_input", "awaiting_permission"}:
+                self.tabs.append(dict(row))
+
+    def notify_completion(self):
+        """Play the shared generated cue once per new completion counter."""
+        if self.controller.completion_bell > self.last_completion_cue:
+            self.last_completion_cue = self.controller.completion_bell
+            from nexus.ui_support.voice_capture import play_cue
+            play_cue("complete")
+
     def show(self, title, value, *, layout="modal", format="plain"):
         self.panel_revision += 1
         self.panel_layout = layout
         self.panel_format = format
         self.panel_loading = False
+        self.panel_hint = ""
         self.items = []
         if hasattr(self, "workflows"):
             self.workflows.form = None
@@ -113,8 +143,8 @@ class ShellActions:
         self.show(title, "")
         self.panel_lines, self.panel_tones = list(lines), list(tones)
 
-    def picker(self, title, rows, command, key):
-        self.show(title, rows, layout="drawer")
+    def picker(self, title, rows, command, key, layout="drawer"):
+        self.show(title, rows, layout=layout)
         self.items = [{"label": str(row.get("title") or row.get("name") or row.get(key)),
                        "command": f"{command} {row[key]}"} for row in rows if row.get(key)]
 
@@ -159,6 +189,8 @@ class ShellActions:
         self.usage_task = asyncio.create_task(refresh())
 
     async def switch_project(self, workspace, session):
+        if self.attachment_draft_key is None:
+            self.attachment_draft_key = (self.workspace, self.controller.session)
         if workspace != self.workspace:
             self.usage_cache = None
             if self.usage_task:
@@ -174,7 +206,17 @@ class ShellActions:
             await previous.aclose()
         await self.switch(session)
 
+    def mark_current_seen(self):
+        """Acknowledge both replayed snapshots and streamed events for this session."""
+        current = self.controller.session
+        if current:
+            self.seen_seq[current] = max(
+                self.seen_seq.get(current, 0),
+                getattr(self.controller, "completion_seq", 0),
+            )
+
     async def switch(self, session):
+        self.mark_current_seen()  # a reply watched live must not read as unseen after leaving
         await self.voice.discard()
         self.workflows.form = None
         self.workflows.stack.clear()
@@ -186,13 +228,20 @@ class ShellActions:
         self.generation += 1
         self.logs.reset_session()
         if not any(row["id"] == session and row["workspace"] == self.workspace for row in self.tabs):
-            self.tabs.append({"id": session, "title": session, "workspace": self.workspace, "state": "idle"})
-        self.attachments.clear(); self.attachment_labels.clear()
+            self.tabs.append({"id": session, "title": "New Session", "workspace": self.workspace, "state": "idle"})
+        old_key = self.attachment_draft_key or (self.workspace, self.controller.session)
+        self.attachment_drafts[old_key] = (self.attachments, self.attachment_labels,
+            self.attachment_label_counters, self.marker_attachments)
+        self.attachment_draft_key = (self.workspace, session)
+        (self.attachments, self.attachment_labels, self.attachment_label_counters,
+            self.marker_attachments) = self.attachment_drafts.pop(self.attachment_draft_key,
+                ([], {}, {"image": 0, "document": 0}, {}))
         self.items = []
         self.preview = None
         self.preview_at = None
         await self.controller.switch_session(session)
         await self.controller.bootstrap()
+        self.mark_current_seen()
         await self.refresh_preview(session)
         self.panel_title = ""
         self.panel_loading = False
@@ -259,7 +308,7 @@ class ShellActions:
         result = await self.controller.cancel()
         self.composer_restore = "\n\n".join(result.returned_messages)
 
-    async def submit(self, text, mode="queue"):
+    async def submit(self, text, mode="steer"):
         command = parse(text)
         if command:
             return await self.command(command.name, command.args)
@@ -273,15 +322,30 @@ class ShellActions:
         from ...ui_support.tui_history import append_history
         append_history(text)
         self.attachments.clear(); self.attachment_labels.clear()
+        self.marker_attachments.clear()
         return True
 
     def attachment_label(self, index):
         item = self.attachments[index]
         if item.attachment_id not in self.attachment_labels:
             kind = "image" if item.kind == "image" else "document"
-            number = 1 + sum(label.startswith(f"{kind} ") for label in self.attachment_labels.values())
+            self.attachment_label_counters[kind] += 1
+            number = self.attachment_label_counters[kind]
             self.attachment_labels[item.attachment_id] = f"{kind} {number}"
         return self.attachment_labels[item.attachment_id]
+
+    def attachment_marker(self, index):
+        item = self.attachments[index]
+        marker = f"[{self.attachment_label(index)}]"
+        self.marker_attachments[item.attachment_id] = (item, marker)
+        return marker
+
+    def reconcile_attachment_markers(self, text):
+        """Deleted references do not send hidden images; undo can restore them."""
+        unmanaged = [item for item in self.attachments
+            if item.attachment_id not in self.marker_attachments]
+        self.attachments = unmanaged + [item for item, marker in self.marker_attachments.values()
+            if marker in text]
 
     async def command(self, name, args):
         session = self.controller.session
@@ -302,8 +366,10 @@ class ShellActions:
             self.show("Keyboard shortcuts", "\n".join(KEYBOARD_SHORTCUTS))
         elif name == "/new":
             session_id = argument or uuid.uuid4().hex[:12]
-            self.workflows.menu("New session · choose root agent", [(row["name"], {"kind": "new_session", "id": session_id, "agent": row["name"]}) for row in root_agents(await self.client.list_agents())])
-            self.panel_layout = "drawer"
+            agent = self.controller.agent_name
+            await self.switch(session_id)
+            await self.client.select_agent(session_id, agent)
+            await self.controller.bootstrap()
         elif name == "/sessions":
             if argument:
                 rows = await self.client.list_sessions()
@@ -345,12 +411,13 @@ class ShellActions:
                 rows = []
                 for title, group in groups:
                     for row in group:
-                        mark = "★ " if row["ref"] in favorites else ""
-                        here = " ◀" if row["ref"] == current else ""
-                        rows.append({**row, "group": title, "name": f"{mark}{row.get('name') or row['ref']} · {row['ref']}{here}"})
-                self.picker(f"Models · {'Updated ↓' if self.model_sort == 'updated' else 'Name A–Z'} · Ctrl+S sort · Ctrl+F favorite · Ctrl+R refresh", rows, "/model", "ref")
+                        rows.append({**row, "group": title, "name": str(row.get("name") or row["ref"])})
+                self.picker("Select model", rows, "/model", "ref", layout="modal")
+                sort = "Updated ↓" if self.model_sort == "updated" else "Name A–Z"
+                self.panel_hint = f"Sort ctrl+s {sort}  Favorite ctrl+f  Refresh ctrl+r"
                 for item, row in zip(self.items, rows):
-                    item["group"] = row["group"]
+                    # The name leads; the provider/model ref trails it dimmed. `●` marks the active model.
+                    item.update(group=row["group"], detail=row["ref"], current=row["ref"] == current)
                     state = dict(current=current, current_effort=self.controller.reasoning_effort, stored_override=self.controller.stored_override)
                     from ...ui_support.model_choice import preselected_effort, selection_effort
                     keep, commit = selection_effort(row, effort_source=self.controller.reasoning_effort_source, pending=None, touched=False, **state)
@@ -436,6 +503,7 @@ class ShellActions:
         elif name == "/attach":
             if argument == "clear":
                 self.attachments.clear(); self.attachment_labels.clear()
+                self.attachment_label_counters = {"image": 0, "document": 0}
             elif argument:
                 if len(self.attachments) >= 8:
                     raise ValueError("At most eight attachments per message")
@@ -444,13 +512,18 @@ class ShellActions:
                 if generation != self.generation or len(self.attachments) >= 8:
                     return True  # the session changed while converting; never attach to another session
                 self.attachments.append(item)
-                self.composer_insert = self.attachment_label(len(self.attachments)-1)
+                self.composer_insert = self.attachment_marker(len(self.attachments)-1)
                 if item.kind == "markdown":  # Textual opens the converted preview immediately
                     self.workflows.menu("Attachment · " + item.name, [("Remove attachment", {"kind": "attachment_remove", "id": item.attachment_id})], labelled(item.preview))
             else:
                 self.workflows.menu("Attachments", [(self.attachment_label(i) + " · " + item.name, {"kind": "attachment_preview", "id": item.attachment_id}) for i,item in enumerate(self.attachments)], labelled(self.attachments))
         elif name in {"/review", "/commit"}:
             await self.client.enqueue(session, "Review the current workspace changes for correctness and report findings with file references." if name == "/review" else "Review the current workspace changes, then create a commit for the completed work. Follow normal tool permissions.")
+        elif name == "/speak":
+            if args not in ((), ("download",)):
+                self.notice = "Usage: /speak [download]"
+            else:
+                await self.workflows.speak_command(download_only=bool(args))
         elif name == "/voice":
             from ...ui_support.voice_settings import set_voice_config
             if argument in {"on", "off"}:

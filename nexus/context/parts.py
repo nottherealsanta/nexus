@@ -106,10 +106,10 @@ MCP_INDEX_HEADER = (
 )
 #: Bounds. The index is a discovery aid, not a listing: a hostile server cannot
 #: grow the prompt without limit.
-MCP_INDEX_MAX_SERVERS = 32
+MCP_INDEX_MAX_SERVERS = 64
 MCP_INDEX_MAX_ROOTS_PER_SERVER = 8
 MCP_INDEX_MAX_LINE_CHARS = 256
-MCP_INDEX_MAX_CHARS = 4_000
+MCP_INDEX_MAX_CHARS = 48_000
 
 #: Any attempt by an untrusted server name or resource URI to forge the index
 #: fence is replaced, exactly as the MCP bridge neutralises its own delimiters.
@@ -431,13 +431,9 @@ def _safe_uri(uri: Any) -> str:
 def freeze_mcp_index(snapshot: Any) -> str:
     """Freeze a manifest MCP view into a bounded, untrusted-data text block.
 
-    Only *connected* servers contribute, and only their name plus the URIs of
-    their resources and resource templates. Tool descriptions, prompt text,
-    server instructions, capabilities, and credentials are never read. The
-    result is deterministic (servers sorted, roots deduplicated/sorted), bounded,
-    and fenced as untrusted data; an empty/absent snapshot returns ``""``. A
-    string input is treated as an already-frozen block and returned stripped,
-    which lets a caller carry a frozen index through a snapshot clone.
+    Connected server health, mode, counts, bounded instructions and resource
+    roots are shown. Search-mode tools contribute names only; schemas arrive
+    through McpSearch. The index is deterministic and fenced as untrusted data.
     """
     if isinstance(snapshot, str):
         return snapshot.strip()
@@ -462,7 +458,22 @@ def freeze_mcp_index(snapshot: Any) -> str:
                 uri = _safe_uri(_entry_field(item, "uri") or _entry_field(item, "uriTemplate"))
                 if uri:
                     roots.add(uri)
-        lines.append(f"- server: {safe_name}")
+        mode = _entry_field(entry, "tool_loading", "all")
+        tools = _entry_field(entry, "tools", ())
+        lines.append(f"- server: {safe_name} · health: {_entry_field(entry, 'health', 'ready')} · mode: {mode} · {len(tools)} tools")
+        instructions = _entry_field(entry, "instructions", "")
+        if instructions:
+            lines.append("  instructions: " + _sanitize_index_text(_neutralize_index_fence(instructions), max_chars=600))
+        if mode == "search":
+            shown, length = [], 0
+            for tool in tools:
+                local = getattr(tool, "name", "").split("__", 2)[-1]
+                if length + len(local) + 2 > 600:
+                    break
+                shown.append(local)
+                length += len(local) + 2
+            suffix = f"; +{len(tools)-len(shown)} more; use McpSearch" if len(shown) < len(tools) else "; use McpSearch"
+            lines.append("  tools: " + _sanitize_index_text(", ".join(shown) + suffix, max_chars=700))
         for uri in sorted(roots)[:MCP_INDEX_MAX_ROOTS_PER_SERVER]:
             lines.append(f"  resource: {uri}")
     if not lines:

@@ -15,6 +15,12 @@ this page and the code win.
 | **First run only asks to connect a provider**, then picks that provider's newest tool-calling model. | Minimum steps to a working chat; credentials never enter setup commands. | `host_support/setup.py` |
 | **Skill, MCP and root-agent choices lock after a session's first turn.** | Changing the prompt prefix would invalidate the prompt cache and confuse the record. | `session/session.py:context_locked` |
 
+The desktop's latest visual direction uses neutral greys, curved controls and
+compact activity trees, following the supplied native references. Its composer
+retains Ratatui's editor/controls/context ordering. Image previews are bounded
+presentation data from the existing host; custom clients never read local image
+paths themselves. See [desktop.md](desktop.md).
+
 ## Architecture
 
 | Decision | Why | Where |
@@ -260,3 +266,69 @@ reuse wrapped history and indexed row ranges. Terminal output is buffered to
 reduce per-cell system calls. The synthetic PTY benchmark meets latency budgets,
 but streaming CPU remains above its target; it is not evidence of live-provider
 end-to-end latency.
+
+## Tool failures are not marked in the timeline
+
+A failed tool call does not turn its group red, show `✗`, or add `· N failed`:
+the loop recovers on its own, so the mark is noise. The error text stays in the
+expanded call detail (nothing the agent saw is hidden). Header chips for skills
+and MCP show unlabelled `project global` counts for the same reason: the order is
+fixed and the section dialog names the scopes.
+
+## Native transcript copies the OpenCode row layout
+
+Thought duration comes from event timestamps in the reducer rather than from the
+UI, so every surface and a replay agree. Subagent pages drop the context header
+for a task prompt card to match the reference design; inspecting a child's
+context chips from its page is the cost of that choice.
+
+## Session titles are a side call, not a tool or a tag
+
+A new session is named by one small request to a cheap model (the `low` tier by
+default), started in the background after the first message. A title tool in the
+session would run on the expensive model, pollute the agent's context and tools,
+and break prompt caching; a title tag in the main reply leaks into the stream and
+varies by provider. The side call is a plain request: no loop, no tools, bounded
+input and output, a timeout, and any failure keeps the first-message title.
+
+The title is metadata on the session row (`title_source`), not an event in the
+log: it is not part of the conversation, and replaying it would change nothing the
+agent sees. It is on by default, visible and switchable in Settings → Session
+titles, which names the model the first message goes to (it can be another
+provider than the session's). Cost: schema 2 means an older Nexus refuses the
+shared database. Not done: re-titling later, manual rename (`user` is reserved).
+
+## GPUI desktop reuses native host workflows
+
+The desktop client is a separate Rust crate in `rust/desktop/`, using GPUI for
+windowing, layout, rendering and native text input. It reuses the Ratatui
+presentation bridge and includes its wire structs, so approvals, settings,
+sessions, context and subagents keep one host-only implementation. UI geometry
+and native input stay in Rust; providers and durable reduction stay in Python.
+This avoids maintaining a second agent harness or copying the host protocol into
+Rust. The cost is a Python presentation process and GPUI's pre-1.0 dependency;
+GPUI is pinned and desktop packaging is separate from the terminal wheel.
+
+## Subagent roles own their allowed tiers
+
+Each subagent role lists the tiers it may use (`tiers:`, default first) so a quick
+lookup cannot spin up a flagship and an advisor is never given the cheapest model.
+The calling agent is told this in the `subagent` tool description. A request
+outside the list moves to the nearest allowed tier with a note, never an error:
+a model hint must not break delegation. `agents.max_tier` stays as a user ceiling
+(default `high`; it was `medium`, which would have stopped the advisor ever
+reaching `high`). Roles without `tiers` keep the old behaviour, so existing custom
+agents change nothing until their owner opts in. Tier names are checked for shape
+at parse time and resolved later, because custom tiers live in config, not here.
+
+## MCP tools default to search loading
+
+Use provider-neutral `McpSearch` and `McpCall` with fixed schemas to reduce the
+standing prompt cost of large MCP catalogues. Search results and resolved target
+identity remain in the durable transcript. Loading modes freeze at the first
+turn to preserve the prompt-cache prefix, matching existing extension choices.
+
+Anthropic-native `defer_loading`/`tool_addition` was not chosen: it is model
+and provider dependent and would need a second execution/recording path. A
+later provider-only optimization may map native calls to the same durable
+`McpCall` contract.

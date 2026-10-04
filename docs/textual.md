@@ -1,5 +1,9 @@
 # Textual app (`nexus chat`)
 
+Live agent turns emit the terminal notification bell on completion or failure.
+Replayed history, duplicate events, subagent activity, and cancelled turns do not
+ring. Audibility (or a visual bell instead) is controlled by the terminal emulator.
+
 Parallel tool markers occupy one cell of the left padding, keeping tool text
 aligned with standalone calls.
 
@@ -35,11 +39,11 @@ use `nexus run` or JSONL. Textual is pinned (`textual==8.2.8`,
 | `ui/tui/agent_transcript.py` | `AgentTranscriptScreen`: a live child page laid out like the root |
 | `ui/tui/agent_row.py` | selectable row for one `AgentView` |
 | `ui/tui/permission.py` | `PermissionScreen`, `QuestionScreen` (list prompts docked above the composer), `ask_pending_question` |
-| `ui/tui/new_session.py` | `/new`: pick the root agent a session starts with |
+| `ui/tui/new_session.py` | `/new` and `Ctrl+N`: open a session and persist the current root agent |
 | `ui/tui/extras.py` | host-backed informational and Git chat commands kept out of the controller |
 | `ui/tui/mock.py` | `/mock` (dev mode) |
 | `ui/tui/messages.py` | typed Textual messages (`EventReceived`, `TurnFinished`, `PermissionRequested`, `AgentPickerRequested`, …) |
-| `ui/tui/keys.py` | `NexusDriver`: xterm `modifyOtherKeys` / Kitty CSI-u decoding so Shift+Enter/Ctrl+J insert newlines and Ctrl/Alt+Enter steer/interrupt |
+| `ui/tui/keys.py` | `NexusDriver`: xterm `modifyOtherKeys` / Kitty CSI-u decoding so Shift+Enter/Ctrl+J insert newlines and Ctrl/Alt+Enter queue/interrupt |
 | `ui/tui/keychord.py` | `LeaderKeys` (Ctrl+X leader) and the "any key stops dictation" rule; runs from `on_event` |
 | `ui/tui/theme.py` | `NEXUS_DARK` / `NEXUS_LIGHT` (opencode palette), defining the `nx-*` variables (`$nx-bg`, `$nx-panel`, `$nx-element`, `$nx-accent`, `$nx-blue`, …) |
 | `ui/tui/app.tcss` | all CSS; colors only through `$nx-*` so both themes work |
@@ -141,7 +145,10 @@ literal system-prompt text, so terminal escape sequences cannot affect display.
 `/attach <path>` attaches a local file (`/attach clear` removes pending
 attachments). The browser also has an Attach file button and accepts image/file
 paste and drag/drop in the composer. Expand an attachment to inspect it before
-sending; the TUI opens converted documents in a scrollable Markdown preview.
+sending; the TUI renders prepared images inline in its attachment panel and
+opens converted documents in a scrollable Markdown preview. Image preview
+bytes are retrieved from the daemon's expiring prepared-attachment store and
+limited to 4 MiB for terminal rendering.
 Ctrl+V in the terminal editor reads a local clipboard image on macOS, or on
 Linux with `wl-paste` (Wayland) or `xclip` (X11), and shows a pending
 `clipboard.png` attachment. Text paste retains its existing behavior. This
@@ -152,6 +159,11 @@ covered with fakes and has not been verified with a live image.
 
 Enter submits attachments even without prompt text; queue, steer, and interrupt
 use the same attachment path. Switching sessions clears pending attachments.
+
+`/new [session-id]` and `Ctrl+N` open a session directly, then select the
+current root agent in that session so the choice is durable host-side; neither
+opens an agent picker. Use `Ctrl+G` or `/agent` to change the root agent
+explicitly.
 
 PNG, JPEG, GIF, and WebP stay image blocks for vision-capable models (labelled
 metadata in the terminal, visible previews in the browser, also after
@@ -206,7 +218,7 @@ paging boundary, keeps separate daemon/session cursors, bounds retained rows,
 and folds routine entries while showing problems. Native controls are Ctrl+E
 open/close, Ctrl+A fold/unfold, PageUp/PageDown or wheel to scroll, and Escape
 return to the conversation. Migration progress lives in
-[../plans/RATATUI_PLAN.md](../plans/RATATUI_PLAN.md).
+[ratatui-parity.md](ratatui-parity.md).
 
 ## Provider usage refresh
 

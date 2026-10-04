@@ -23,7 +23,8 @@ class FakeVoice:
     def status(self) -> VoiceState:
         return self.state
 
-    def schedule_prepare(self, force: bool = False) -> VoiceState:
+    def schedule_prepare(self, force: bool = False, *, allow_download: bool = True) -> VoiceState:
+        self.allow_download = allow_download
         return self.state
 
     async def transcribe(
@@ -68,6 +69,10 @@ async def test_voice_status_prepare_cancel_remove_and_doctor() -> None:
     facade = facade_for(voice)
     assert isinstance(await facade.handle(p.VoiceStatus()), p.VoiceStatusResult)
     assert isinstance(await facade.handle(p.VoicePrepare()), p.VoiceStatusResult)
+    voice.state = VoiceState(state="absent", cached=True)
+    status = await facade.handle(p.VoicePrepare(allow_download=False))
+    assert status.cached
+    assert voice.allow_download is False
     cancelled = await facade.handle(p.VoiceCancel(request_id="req_3"))
     assert isinstance(cancelled, p.VoiceCancelResult) and cancelled.cancelled
     assert voice.cancelled == ["req_3"]

@@ -129,3 +129,15 @@ applies when the prompt exceeds its `context` tokens). It comes from
 `Capabilities.pricing` (the registry's `Cost.pricing()`), so the context manager
 never imports the registry. Both UIs use it to mark where the price rises on the
 context meter. See [models.md](models.md).
+
+## MCP discovery context
+
+Search-mode MCP schemas are deferred. The fixed `McpSearch`/`McpCall` pair
+remains in the built-in tool group through searches. The untrusted `mcp_index`
+shows connected server health, loading mode, tool count, bounded instructions,
+resource roots and, for Search, names only (600 characters per server). Omitted
+names are announced with a count and a `McpSearch` hint. The total index caps
+at 48,000 characters across 64 servers. Inspection lists the full server
+catalogue and adds effective `tool_loading`, its source, and approximate
+`schema_tokens`. Header totals charge actual schemas and disclose deferred
+tokens separately.

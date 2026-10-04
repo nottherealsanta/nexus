@@ -96,6 +96,13 @@ class SettingsWrite(msgspec.Struct, tag=True, frozen=True):
     expected_sha256: str | None = None
 
 
+class SettingsMcpLoadingSet(msgspec.Struct, tag=True, frozen=True):
+    scope: Literal["global", "project"]
+    server: str
+    mode: Literal["search", "all"]
+    expected_sha256: str
+
+
 class SettingsReset(msgspec.Struct, tag=True, frozen=True):
     scope: Literal["global", "project"]
     category: str
@@ -202,6 +209,19 @@ class AttachmentPrepareResult(msgspec.Struct, tag=True, frozen=True):
     preview: str
 
 
+class AttachmentPreview(msgspec.Struct, tag=True, frozen=True):
+    """Retrieve bounded daemon-owned image bytes for local terminal rendering."""
+
+    attachment_id: str
+    max_bytes: int = 4 * 1024 * 1024
+
+
+class AttachmentPreviewResult(msgspec.Struct, tag=True, frozen=True):
+    attachment_id: str
+    media_type: str
+    data: bytes
+
+
 class SessionStart(msgspec.Struct, tag=True, frozen=True):
     session: str
     content: str = ""
@@ -212,7 +232,7 @@ class SessionStart(msgspec.Struct, tag=True, frozen=True):
 
 class SessionEnqueue(msgspec.Struct, tag=True, frozen=True):
     session: str
-    mode: str = "queue"  # queue | steer | interrupt
+    mode: str = "steer"  # queue | steer | interrupt
     content: str = ""
     blocks: list[dict[str, Any]] = msgspec.field(default_factory=list)
     attachments: list[str] = msgspec.field(default_factory=list)
@@ -366,6 +386,39 @@ class ModelTiers(msgspec.Struct, tag=True, frozen=True):
     """The tier table: ordering, default, curated map, and user overrides."""
 
 
+class ModelTierSet(msgspec.Struct, tag=True, frozen=True):
+    """Settings -> Models: save the ordered models of one tier (global config).
+
+    The first model whose provider can run is used. Returns the refreshed rows.
+    """
+
+    tier: str
+    refs: list[str]
+
+
+class ModelTierReset(msgspec.Struct, tag=True, frozen=True):
+    """Remove the user's list for ``tier`` (back to the built-in or price rule)."""
+
+    tier: str
+
+
+class AgentMaxTierSet(msgspec.Struct, tag=True, frozen=True):
+    """Set ``[agents] max_tier``: subagents never run above this tier."""
+
+    tier: str
+
+
+class SessionTitleSettings(msgspec.Struct, tag=True, frozen=True):
+    """Read the automatic session-title settings (Settings -> Session titles)."""
+
+
+class SessionTitleSettingsSet(msgspec.Struct, tag=True, frozen=True):
+    """Switch automatic titles on or off and/or choose the title model."""
+
+    enabled: bool | None = None
+    model: str | None = None
+
+
 class ModelSelect(msgspec.Struct, tag=True, frozen=True):
     """Select and persist one session's model for its subsequent turns.
 
@@ -415,9 +468,15 @@ class ToolsList(msgspec.Struct, tag=True, frozen=True):
 
 class ContextExtensionSelect(msgspec.Struct, tag=True, frozen=True):
     session: str
-    category: Literal["skills", "mcp"]
+    category: Literal["skills", "mcp", "tools"]
     name: str
     enabled: bool
+
+
+class ContextMcpLoadingSelect(msgspec.Struct, tag=True, frozen=True):
+    session: str
+    server: str
+    mode: Literal["search", "all"] | None
 
 
 class ContextInspect(msgspec.Struct, tag=True, frozen=True):
@@ -485,12 +544,47 @@ class WorktreeDiscard(msgspec.Struct, tag=True, frozen=True):
     confirmation_token: str = ""
 
 
+class Speak(msgspec.Struct, tag=True, frozen=True):
+    """Speak only the latest completed assistant answer on the daemon host."""
+
+    session_id: str
+    download: bool = False
+
+
+class SpeakStop(msgspec.Struct, tag=True, frozen=True):
+    """Stop the speech that is playing now (Esc); a no-op when nothing is playing."""
+
+
+class SpeakResult(msgspec.Struct, tag=True, frozen=True):
+    message: str
+    backend: str
+
+
+class SpeechStatus(msgspec.Struct, tag=True, frozen=True):
+    """Read the local speech model status (what ``/speak download`` fetches)."""
+
+
+class SpeechPrepare(msgspec.Struct, tag=True, frozen=True):
+    """Start the one-time speech model download (after the user consented)."""
+
+
+class SpeechStatusResult(msgspec.Struct, tag=True, frozen=True):
+    """``state``: unsupported (packages missing), absent, downloading, ready or error."""
+
+    state: str
+    progress: float = 0.0
+    bytes_done: int = 0
+    bytes_total: int = 0
+    message: str = ""
+
+
 class VoiceStatus(msgspec.Struct, tag=True, frozen=True):
     """Read the bounded local voice model status."""
 
 
 class VoicePrepare(msgspec.Struct, tag=True, frozen=True):
     force: bool = False
+    allow_download: bool = True
 
 
 class VoiceTranscribe(msgspec.Struct, tag=True, frozen=True, repr_omit_defaults=True):
@@ -570,6 +664,7 @@ Command = (
     | ProjectSessionOpen
     | SettingsInventory
     | SettingsRead
+    | SettingsMcpLoadingSet
     | SettingsWrite
     | SettingsDelete
     | SettingsReset
@@ -590,6 +685,7 @@ Command = (
     | SessionSearch
     | SessionOpen
     | AttachmentPrepare
+    | AttachmentPreview
     | SessionStart
     | SessionEnqueue
     | SessionCancel
@@ -611,6 +707,11 @@ Command = (
     | ModelsList
     | ModelShow
     | ModelTiers
+    | ModelTierSet
+    | ModelTierReset
+    | AgentMaxTierSet
+    | SessionTitleSettings
+    | SessionTitleSettingsSet
     | ModelSelect
     | ReasoningEffortSelect
     | AgentsList
@@ -620,6 +721,7 @@ Command = (
     | AgentDefaultSet
     | ToolsList
     | ContextInspect
+    | ContextMcpLoadingSelect
     | ContextExtensionSelect
     | FileSearch
     | GitDiff
@@ -629,6 +731,10 @@ Command = (
     | WorktreeAcknowledge
     | WorktreeIntegrate
     | WorktreeDiscard
+    | Speak
+    | SpeakStop
+    | SpeechStatus
+    | SpeechPrepare
     | VoiceStatus
     | VoicePrepare
     | VoiceTranscribe
@@ -648,6 +754,7 @@ COMMANDS: tuple[type, ...] = (
     SessionList,
     SettingsInventory,
     SettingsRead,
+    SettingsMcpLoadingSet,
     SettingsWrite,
     SettingsDelete,
     SettingsReset,
@@ -668,6 +775,7 @@ COMMANDS: tuple[type, ...] = (
     SessionSearch,
     SessionOpen,
     AttachmentPrepare,
+    AttachmentPreview,
     SessionStart,
     SessionEnqueue,
     SessionCancel,
@@ -689,6 +797,11 @@ COMMANDS: tuple[type, ...] = (
     ModelsList,
     ModelShow,
     ModelTiers,
+    ModelTierSet,
+    ModelTierReset,
+    AgentMaxTierSet,
+    SessionTitleSettings,
+    SessionTitleSettingsSet,
     ModelSelect,
     ReasoningEffortSelect,
     AgentsList,
@@ -698,6 +811,7 @@ COMMANDS: tuple[type, ...] = (
     AgentDefaultSet,
     ToolsList,
     ContextInspect,
+    ContextMcpLoadingSelect,
     ContextExtensionSelect,
     FileSearch,
     GitDiff,
@@ -707,6 +821,10 @@ COMMANDS: tuple[type, ...] = (
     WorktreeAcknowledge,
     WorktreeIntegrate,
     WorktreeDiscard,
+    Speak,
+    SpeakStop,
+    SpeechStatus,
+    SpeechPrepare,
     VoiceStatus,
     VoicePrepare,
     VoiceTranscribe,
@@ -1001,10 +1119,28 @@ class ModelShowResult(msgspec.Struct, tag=True, frozen=True):
 
 
 class ModelTiersResult(msgspec.Struct, tag=True, frozen=True):
+    """The tier table. ``tiers`` rows: ``name``, ``refs`` (ordered models in
+    effect), ``source`` (``your list`` / ``built-in`` / ``by price``),
+    ``resolved`` (the model it runs on now, ``""`` when none can run),
+    ``runnable`` and ``editable``. ``max_tier`` is the subagent ceiling."""
+
     order: list[str] = msgspec.field(default_factory=list)
     default: str = ""
     builtin: dict[str, str] = msgspec.field(default_factory=dict)
     overrides: dict[str, str] = msgspec.field(default_factory=dict)
+    tiers: list[dict[str, Any]] = msgspec.field(default_factory=list)
+    max_tier: str = ""
+    restart_required: bool = False
+
+
+class SessionTitleSettingsResult(msgspec.Struct, tag=True, frozen=True):
+    """``model`` is the setting (a tier or reference); ``resolved`` the concrete
+    model it runs on now, ``""`` with ``message`` saying why when none can."""
+
+    enabled: bool = True
+    model: str = "low"
+    resolved: str = ""
+    message: str = ""
 
 
 class ModelSelectResult(msgspec.Struct, tag=True, frozen=True):
@@ -1188,6 +1324,7 @@ class DoctorResult(msgspec.Struct, tag=True, frozen=True):
 class VoiceStatusResult(msgspec.Struct, tag=True, frozen=True):
     state: str = "absent"
     progress: float = 0.0
+    cached: bool = False
     bytes_done: int = 0
     bytes_total: int = 0
     device: str = ""
@@ -1298,6 +1435,7 @@ Result = (
     | SessionSearchResult
     | SessionOpenResult
     | AttachmentPrepareResult
+    | AttachmentPreviewResult
     | SessionStartResult
     | SessionEnqueueResult
     | SessionCancelResult
@@ -1319,6 +1457,7 @@ Result = (
     | ModelsListResult
     | ModelShowResult
     | ModelTiersResult
+    | SessionTitleSettingsResult
     | ModelSelectResult
     | ReasoningEffortSelectResult
     | AgentsListResult
@@ -1335,6 +1474,8 @@ Result = (
     | WorktreeAcknowledgeResult
     | WorktreeMutationResult
     | DoctorResult
+    | SpeakResult
+    | SpeechStatusResult
     | VoiceStatusResult
     | VoiceTranscribeResult
     | VoiceCancelResult
@@ -1373,6 +1514,7 @@ RESULTS: tuple[type, ...] = (
     SessionSearchResult,
     SessionOpenResult,
     AttachmentPrepareResult,
+    AttachmentPreviewResult,
     SessionStartResult,
     SessionEnqueueResult,
     SessionCancelResult,
@@ -1394,6 +1536,7 @@ RESULTS: tuple[type, ...] = (
     ModelsListResult,
     ModelShowResult,
     ModelTiersResult,
+    SessionTitleSettingsResult,
     ModelSelectResult,
     ReasoningEffortSelectResult,
     AgentsListResult,
@@ -1410,6 +1553,8 @@ RESULTS: tuple[type, ...] = (
     WorktreeAcknowledgeResult,
     WorktreeMutationResult,
     DoctorResult,
+    SpeakResult,
+    SpeechStatusResult,
     VoiceStatusResult,
     VoiceTranscribeResult,
     VoiceCancelResult,
@@ -1467,6 +1612,7 @@ __all__ = [
     "ArchivedSummary",
     "Command",
     "ContextInspect",
+    "ContextMcpLoadingSelect",
     "ContextExtensionSelect",
     "ContextInspectResult",
     "DaemonLogPage",
@@ -1505,6 +1651,12 @@ __all__ = [
     "ModelShowResult",
     "ModelTiers",
     "ModelTiersResult",
+    "ModelTierSet",
+    "ModelTierReset",
+    "AgentMaxTierSet",
+    "SessionTitleSettings",
+    "SessionTitleSettingsSet",
+    "SessionTitleSettingsResult",
     "ModelsList",
     "ModelsListResult",
     "ModelsRefresh",
@@ -1571,6 +1723,7 @@ __all__ = [
     "SettingsItem",
     "SettingsRead",
     "SettingsReadResult",
+    "SettingsMcpLoadingSet",
     "SettingsWrite",
     "SettingsWriteResult",
     "SetupSave",
@@ -1587,6 +1740,12 @@ __all__ = [
     "VoiceCancelResult",
     "VoicePrepare",
     "VoiceRemove",
+    "Speak",
+    "SpeakResult",
+    "SpeakStop",
+    "SpeechPrepare",
+    "SpeechStatus",
+    "SpeechStatusResult",
     "VoiceStatus",
     "VoiceStatusResult",
     "VoiceTranscribe",

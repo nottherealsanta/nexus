@@ -13,6 +13,7 @@ With no subcommand, `nexus` opens `chat`. Bare `nexus voice` shows voice status.
 | Command | What it does |
 | --- | --- |
 | `chat` | Textual chat; needs stdin/stdout TTYs and never falls back to a line reader ([textual.md](textual.md)) |
+| `desktop [--session ID]` | native Rust GPUI window; no TTY required, separate source build ([desktop.md](desktop.md)) |
 | `web [--no-browser]` | `WebLaunch` → one-use browser URL ([web.md](web.md)) |
 | `run MESSAGE [--session ID] [--json]` | one turn (session defaults to `default`) over the daemon; `-` reads stdin; human rendering with terminal approvals, or `--json` JSONL event envelopes (unattended) |
 | `replay SESSION [--json]` / `sessions replay` | re-render a session from its log through the reducer |
@@ -84,11 +85,12 @@ names, usage, summaries, aliases). `parse` resolves aliases to the canonical nam
 | `/theme` | `[dark\|light]` | | switch theme |
 | `/settings` | | | open Settings |
 | `/verbose` | | | toggle full tool output previews |
-| `/mcp`, `/skills`, `/tasks` | | | MCP servers, active skills, background agent tasks |
+| `/mcp`, `/skills`, `/tasks` | | | MCP servers (with each server's tool loading mode in the Ratatui dialog), active skills, background agent tasks |
 | `/reload` | | | reload extensions and MCP |
 | `/review`, `/commit` | | | ask the agent to review / commit changes |
 | `/archived` | | `/resume` | browse archived sessions |
 | `/voice` | `[status\|download\|on\|off]` | | dictation |
+| `/speak` | `[download]` | | speak the latest completed answer with local Kokoro; a missing model opens the consent and download dialog (`download` runs only that) |
 | `/mock` | | | dev mode only (`DEV_SPECS`) |
 
 Multiline input: a trailing backslash or an unclosed triple quote continues the

@@ -69,6 +69,7 @@ from .bridge import (
     build_read_resource_tool,
     build_resource_descriptors,
     build_tools,
+    sanitize_controls,
 )
 from .client import MCPServerConfig, parse_server_config, redact_secrets
 from .errors import (
@@ -159,6 +160,8 @@ def _config_fingerprint(config: MCPServerConfig) -> str:
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     payload = {
+        "tool_loading": config.tool_loading,
+        "tool_loading_source": config.tool_loading_source,
         "transport": config.transport,
         "command": config.command,
         "args": list(config.args),
@@ -261,6 +264,10 @@ class MCPServerSnapshot:
     generation: int = 0
     cached: bool = False
     error: str = ""
+    tool_loading: str = "search"
+    tool_loading_source: str = "default"
+    call_timeout_s: float = 60
+    instructions: str = ""
 
     @property
     def connected(self) -> bool:
@@ -1424,10 +1431,13 @@ class MCPManager:
     def _snapshot_for(self, state: _ServerState) -> MCPServerSnapshot:
         return MCPServerSnapshot(
             name=state.name,
+            tool_loading=state.config.tool_loading,
+            tool_loading_source=state.config.tool_loading_source,
+            call_timeout_s=state.config.call_timeout_s,
             health=state.health,
             version=self._version(state),
-            tools=state.tools,
-            resources=state.resources,
+            instructions=sanitize_controls(str(getattr(state.info, "instructions", "")))[:2000],
+            tools=state.tools,            resources=state.resources,
             resource_templates=state.resource_templates,
             prompts=state.prompts,
             issues=state.issues,
@@ -1442,6 +1452,9 @@ class MCPManager:
         version = self._version(state)
         return MCPServerSnapshot(
             name=state.name,
+            tool_loading=state.config.tool_loading,
+            tool_loading_source=state.config.tool_loading_source,
+            call_timeout_s=state.config.call_timeout_s,
             health=state.health if health is None else health,
             version=version,
             generation=state.generation,

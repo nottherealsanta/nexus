@@ -132,7 +132,7 @@ def tool_detail_lines(groups: Mapping[str, list[dict]]) -> list[str]:
 def header_blocks(result: Any, color: str) -> list[HeaderBlock]:
     """The five header blocks of an inspected request, in display order."""
     prompt = header_system_prompt(result)
-    groups, mcp_tools = group_tools(result.tools)
+    groups, mcp_tools = group_tools([t for t in result.tools if not isinstance(t, Mapping) or t.get('enabled') is not False])
     labels = [f"{group}({len(rows)})" if len(rows) > 1 else group for group, rows in groups.items()]
     builtin = [tool for rows in groups.values() for tool in rows]
     agents = next(
@@ -145,11 +145,15 @@ def header_blocks(result: Any, color: str) -> list[HeaderBlock]:
                                             for row in skills if row.get("enabled") is not False))
     servers = list(getattr(result, "mcp_servers", ()) or ())
     if servers:
-        mcp_labels = [f"{row.get('name')}({row.get('tool_count', 0)})" + (" (off)" if row.get("enabled") is False else "") for row in servers]
-        mcp_detail = "\n".join(f"{row.get('name')} · {row.get('status')}\n  " + ", ".join(row.get("tools", ())) for row in servers)
+        mcp_labels = [f"{row.get('name')}({row.get('tool_count', 0)} · {row.get('tool_loading', 'all')})" + (" (off)" if row.get("enabled") is False else "") for row in servers]
+        mcp_detail = "\n".join(f"{row.get('name')} · {row.get('status')} · {row.get('tool_loading', 'all')}\n  " + ", ".join(row.get("tools", ())) for row in servers)
     else:
         mcp_labels = [f"{name}({len(rows)})" for name, rows in mcp_tools.items()]
         mcp_detail = result.mcp_index or "(none)"
+    deferred = sum(row.get("schema_tokens", 0) for row in servers
+                   if row.get("enabled") is not False and row.get("tool_loading") == "search")
+    if deferred:
+        mcp_detail += f"\n~{deferred} tokens deferred"
     mcp_tokens = sum(tool_entry(tool).tokens for rows in mcp_tools.values() for tool in rows)
     def block(key, label, body, detail, tokens, paint=color):
         return HeaderBlock(key, label, body, detail, tokens, paint if body else NEUTRAL)
@@ -160,6 +164,7 @@ def header_blocks(result: Any, color: str) -> list[HeaderBlock]:
         block("agents", "AGENTS.md", one_line_preview(agents), agents or "(none)", estimate_tokens(agents)),
         block("skills", "Skills", scope_counts(skills) + ("\n" + render_columns(skill_names) if skills else ""),
               "\n\n".join(skill_details) or "(none)", skill_tokens, color if skills else NEUTRAL),
-        block("mcp", "MCP", scope_counts(servers) + ("\n" + render_columns(mcp_labels) if mcp_labels else ""), mcp_detail, mcp_tokens,
+        block("mcp", "MCP", scope_counts(servers) + ("\n" + render_columns(mcp_labels) if mcp_labels else "")
+              + (f"\n~{deferred} tokens deferred" if deferred else ""), mcp_detail, mcp_tokens,
               color if servers or mcp_labels else NEUTRAL),
     ]

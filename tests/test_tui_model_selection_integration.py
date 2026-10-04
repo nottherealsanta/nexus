@@ -15,6 +15,7 @@ from nexus.config.schema import (
     ModelSection,
     ModelsSection,
     PermissionsSection,
+    SessionsSection,
     ToolsSection,
 )
 from nexus.host import HostFacade
@@ -84,6 +85,9 @@ def _make_runtime(tmp_path, provider: ScriptedProvider) -> Runtime:
                 models=ModelsSection(offline=True),
                 permissions=PermissionsSection(mode="allow"),
                 tools=ToolsSection(),
+                # These tests count exact provider requests; a title call is a
+                # second request to the same scripted provider.
+                sessions=SessionsSection(auto_title=False),
             ),
         ),
         providers={"openai": provider},

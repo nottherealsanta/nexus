@@ -35,12 +35,17 @@ from .agent_frontmatter import (
     agent_fields,
     fallback_items,
     set_agent_fields,
+    tier_items,
 )
+from . import speech_download, tier_settings
 from .text import sanitize
 from .tui_model_picker import ModelPickerScreen
 from .tui_panels import SettingsScreen, TuiPreferences
+from .tui_models import AgentTiersScreen, ModelsPane, TitlesPane
 from .tui_providers import ProvidersPane
+from .tui_speech import SpeechConsentScreen
 from .tui_voice import VoiceConsentScreen, set_voice_config
+from .speech_settings import SPEECH_DEFAULTS, SPEECH_CHOICES, compatible_voices, read_speech_settings, reset_speech_config, set_speech_config
 
 
 def _field(value: Any, key: str, default: Any = None) -> Any:
@@ -81,12 +86,17 @@ class SettingsConsole(SettingsScreen):
         (None, ""),
         (None, "CONFIGURE"),
         ("providers", "Providers"),
+        ("models", "Models"),
+        ("titles", "Session titles"),
         ("voice", "Voice"),
+        ("speech", "Speech"),
         ("agents", "Agents"), ("tools", "Tools"), ("mcp", "MCP servers"),
         ("skills", "Skills"), ("hooks", "Hooks"), ("config", "Config"),
         ("soul", "Soul"),
     )
     GENERAL = ("appearance", "layout", "keys", "workspace")
+    NAV_AREAS = {"appearance": "appearance", "layout": "layout", "keys": "keys", "workspace": "workspace",
+                 "providers": "providers", "voice": "voice", "speech": "speech", "models": "models", "titles": "titles"}
     FILE_CATEGORIES = ("agents", "tools", "mcp", "skills", "hooks", "config", "soul")
     BINDINGS: ClassVar[list[tuple[str, str, str]]] = [
         ("escape", "attempt_close", "Close")
@@ -143,6 +153,10 @@ class SettingsConsole(SettingsScreen):
         self._voice_values: dict[str, object] = {}
         self._loading_voice = False
         self._voice_controls_active = False
+        self._speech_values: dict[str, object] = dict(SPEECH_DEFAULTS)
+        self._loading_speech = False
+        #: The tier order, subagent ceiling and the pinned model's tier, for the Tiers notes.
+        self._tier_state: dict[str, Any] = {"order": ["low", "medium", "high"], "ceiling": "high", "model_tier": ""}
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="settings-console"):
@@ -154,6 +168,8 @@ class SettingsConsole(SettingsScreen):
             with ContentSwitcher(initial="appearance", id="settings-panes"):
                 yield from self.compose_general_panes()
                 yield ProvidersPane(self._providers)
+                yield ModelsPane(self._providers, self._list_models)
+                yield TitlesPane(self._providers, self._list_models)
                 with VerticalScroll(id="voice"):
                     with Horizontal(classes="settings-heading-row"):
                         yield Static("Voice", classes="settings-heading", markup=False)
@@ -179,6 +195,24 @@ class SettingsConsole(SettingsScreen):
                     with Horizontal(id="settings-voice-actions"):
                         yield Button("Download / Retry", id="settings-voice-download")
                         yield Button("Remove model", id="settings-voice-remove")
+                with VerticalScroll(id="speech-pane"):
+                    with Horizontal(classes="settings-heading-row"):
+                        yield Static("Speech", classes="settings-heading", markup=False)
+                        yield Button("Reset to default", id="settings-reset-speech")
+                    yield Static(
+                        "Local Kokoro text-to-speech for /speak. Choosing settings never downloads a model; /speak explains the download and asks for consent before any download.",
+                        classes="settings-help", markup=False,
+                    )
+                    for key, label in (("language", "Language"), ("voice", "Voice"), ("speed", "Speed"), ("device", "Device")):
+                        choices = SPEECH_CHOICES[key]
+                        with Horizontal(classes="settings-row"):
+                            yield Static(label, classes="settings-label", markup=False)
+                            yield Static("", classes="settings-key", markup=False)
+                            yield Select(((str(value), value) for value in choices), value=SPEECH_DEFAULTS[key], id=f"settings-speech-{key}")
+                    yield Static("", id="settings-speech-model", markup=False)
+                    with Horizontal(id="settings-speech-actions"):
+                        yield Button("Download model", id="settings-speech-download")
+                    yield Static("Loading speech settings…", id="settings-speech-status", markup=False)
                 with Vertical(id="settings-file-pane"):
                     with Horizontal(classes="settings-heading-row"):
                         yield Static("", id="settings-file-heading", classes="settings-heading", markup=False)
@@ -212,6 +246,10 @@ class SettingsConsole(SettingsScreen):
                                 with Horizontal(classes="agent-form-row", id="agent-fallback-add-row"):
                                     yield Static("", id="agent-fallback-add-label", classes="agent-form-label", markup=False)
                                     yield Button("+ Add fallback", id="agent-fallback-add", classes="agent-form-pick")
+                                with Horizontal(classes="agent-form-row", id="agent-tiers-row"):
+                                    yield Static("Tiers", classes="agent-form-label", markup=False)
+                                    yield Button("", id="agent-tiers", classes="agent-form-pick")
+                                yield Static("", id="agent-tiers-note", markup=False)
                             yield TextArea(id="settings-file-editor", soft_wrap=True)
                             yield Static("", id="settings-file-status", markup=False)
                             with Horizontal(id="settings-file-actions"):
@@ -227,6 +265,11 @@ class SettingsConsole(SettingsScreen):
         self.query_one("#settings-new-name", Input).display = False
         self._show_category(self.category)
         self.run_worker(self._load_inventory(), group="settings-inventory", exclusive=True)
+
+    @classmethod
+    def speech_navigation(cls) -> dict[str, str]:
+        """Stable target used by the shell Settings sidebar for Speech."""
+        return {"category": "speech", "area": "speech"}
 
     def initial_section_index(self) -> int:
         return self._section_index(self.category)
@@ -248,7 +291,7 @@ class SettingsConsole(SettingsScreen):
         self._voice_controls_active = category == "voice"
         file_area = category in self.FILE_CATEGORIES
         self.query_one("#settings-panes", ContentSwitcher).current = (
-            "settings-file-pane" if file_area else category
+            "settings-file-pane" if file_area else "speech-pane" if category == "speech" else category
         )
         if file_area:
             label = {k: v for k, v in self.SECTIONS if k}[category]
@@ -257,8 +300,14 @@ class SettingsConsole(SettingsScreen):
             self._clear_editor()
         if category == "providers":
             self.query_one(ProvidersPane).reload()
+        if category == "models":
+            self.query_one(ModelsPane).reload()
+        if category == "titles":
+            self.query_one(TitlesPane).reload()
         if category == "voice":
             self.run_worker(self._load_voice(), group="settings-voice", exclusive=True)
+        if category == "speech":
+            self.run_worker(self._load_speech(), group="settings-speech", exclusive=True)
         row = self.query_one("#settings-default-agent-row")
         row.display = category == "agents" and self._default_agent is not None
         if row.display:
@@ -371,6 +420,110 @@ class SettingsConsole(SettingsScreen):
             f"{status.state} · {status.device or status.configured_device} · {status.revision or 'model not downloaded'}"
         )
 
+    async def _load_speech(self) -> None:
+        if self._providers is None:
+            self.query_one("#settings-speech-status", Static).update("Speech settings unavailable")
+            return
+        try:
+            values = await read_speech_settings(self._providers)
+        except Exception as exc:  # noqa: BLE001 - host/transport errors belong in the page
+            self.query_one("#settings-speech-status", Static).update(sanitize(str(exc), 160))
+            await self._load_speech_model()
+            return
+        if not self.is_mounted:
+            return
+        self._speech_values = values
+        self._loading_speech = True
+        try:
+            self.query_one("#settings-speech-language", Select).value = values["language"]
+            self._update_speech_choices()
+            for key in ("voice", "speed", "device"):
+                self.query_one(f"#settings-speech-{key}", Select).value = self._speech_values[key]
+        finally:
+            self._loading_speech = False
+        self.query_one("#settings-speech-status", Static).update(
+            "Saved in nexus.toml · Kokoro runs locally · the model downloads only after you confirm"
+        )
+        await self._load_speech_model()
+
+    async def _load_speech_model(self) -> None:
+        """Show whether the Kokoro model is downloaded, with a Download button when it is not."""
+        try:
+            status = await self._providers.speech_status()
+        except Exception as exc:  # noqa: BLE001 - host/transport errors belong in the page
+            self.query_one("#settings-speech-model", Static).update(sanitize(f"Model status unavailable · {exc}", 160))
+            self.query_one("#settings-speech-download", Button).display = False
+            return
+        if not self.is_mounted:
+            return
+        state = str(_field(status, "state", ""))
+        text = (speech_download.progress_text(status) if state == "downloading"
+                else speech_download.ready_text() if state == "ready"
+                else sanitize(str(_field(status, "message", "")) or "The speech model is not downloaded yet.", 240))
+        self.query_one("#settings-speech-model", Static).update(f"Model · {text}")
+        button = self.query_one("#settings-speech-download", Button)
+        button.display = state in {"absent", "error", "downloading"}
+        button.label = "Show download progress" if state == "downloading" else "Download model"
+
+    @on(Button.Pressed, "#settings-speech-download")
+    def _speech_download_pressed(self) -> None:
+        self.run_worker(self._speech_download(), group="settings-speech-download", exclusive=True)
+
+    async def _speech_download(self) -> None:
+        try:
+            status = await self._providers.speech_status()
+        except Exception as exc:  # noqa: BLE001 - host/transport errors belong in the page
+            self.query_one("#settings-speech-model", Static).update(sanitize(f"Model status unavailable · {exc}", 160))
+            return
+        await self.app.push_screen_wait(SpeechConsentScreen(self._providers, status=status, speak_after=False))
+        await self._load_speech_model()
+
+    def _update_speech_choices(self) -> None:
+        language = str(self._speech_values.get("language", "a"))
+        voice = self.query_one("#settings-speech-voice", Select)
+        choices = compatible_voices(language)
+        was_loading = self._loading_speech
+        self._loading_speech = True
+        try:
+            voice.set_options((item, item) for item in choices)
+            if self._speech_values.get("voice") not in choices:
+                self._speech_values["voice"] = choices[0]
+                voice.value = choices[0]
+        finally:
+            self._loading_speech = was_loading
+
+    @on(Select.Changed, "#settings-speech-language")
+    @on(Select.Changed, "#settings-speech-voice")
+    @on(Select.Changed, "#settings-speech-speed")
+    @on(Select.Changed, "#settings-speech-device")
+    def _speech_select_changed(self, event: Select.Changed) -> None:
+        if self._loading_speech or event.value is Select.BLANK:
+            return
+        key = (event.select.id or "").removeprefix("settings-speech-")
+        if key not in SPEECH_CHOICES:
+            return
+        value = event.value
+        if self._speech_values.get(key) == value:
+            return
+        previous = dict(self._speech_values)
+        self._speech_values[key] = value
+        if key == "language":
+            choices = compatible_voices(str(value))
+            if self._speech_values.get("voice") not in choices:
+                self._speech_values["voice"] = choices[0]
+        updates = {key: value}
+        if key == "language" and previous.get("voice") != self._speech_values.get("voice"):
+            updates["voice"] = self._speech_values["voice"]
+        self.run_worker(self._save_speech(updates), group="settings-speech-save", exclusive=True)
+
+    async def _save_speech(self, updates: Mapping[str, object]) -> None:
+        try:
+            await set_speech_config(self._providers, **updates)
+            await self._load_speech()
+        except Exception as exc:  # noqa: BLE001 - keep invalid/conflicting save visible
+            self._speech_values = await read_speech_settings(self._providers)
+            self.query_one("#settings-speech-status", Static).update(sanitize(str(exc), 160))
+
     @on(Switch.Changed, "#settings-voice-enabled")
     @on(Switch.Changed, "#settings-voice-auto-send")
     def _voice_switch_changed(self, event: Switch.Changed) -> None:
@@ -477,6 +630,8 @@ class SettingsConsole(SettingsScreen):
         editor.text = self._saved_body
         self.query_one("#settings-file-title", Static).update(str(_field(result, "rel_path", item_id)))
         self._sync_agent_form()
+        if self.category == "agents" and self._providers is not None:
+            self.run_worker(self._load_tier_state(), group="settings-tier-state", exclusive=True)
         self._sync_actions()
         where = "~/.nexus" if self.scope == "global" else "<project>/.agents"
         self._status(f"Built-in default · saving writes an override to {where}" if self._builtin else "")
@@ -502,6 +657,17 @@ class SettingsConsole(SettingsScreen):
                 self.query_one(f"#agent-fallback-{index}", Button).label = sanitize(fallbacks[index], 120)
         self.query_one("#agent-fallback-add-label", Static).update("" if fallbacks else "Fallbacks")
         self.query_one("#agent-fallback-add-row").display = len(fallbacks) < MAX_FALLBACKS
+        subagent = "subagent" in fields.get("contexts", "subagent")
+        self.query_one("#agent-tiers-row").display = subagent
+        note = self.query_one("#agent-tiers-note", Static)
+        note.display = subagent
+        if subagent:
+            body = self.query_one("#settings-file-editor", TextArea).text
+            self.query_one("#agent-tiers", Button).label = sanitize(tier_settings.agent_tiers_label(body).removeprefix("Tiers · "), 120)
+            state = self._tier_state
+            lines = [tier_settings.TIERS_HELP, *tier_settings.agent_tiers_notes(
+                body, state["order"], state["ceiling"], state["model_tier"])]
+            note.update("\n".join(lines))
 
     @staticmethod
     def _model_reference(fields: Mapping[str, str]) -> str:
@@ -564,6 +730,36 @@ class SettingsConsole(SettingsScreen):
             fallbacks.append(ref)
         self._set_fields({"fallback": ", ".join(fallbacks[:MAX_FALLBACKS])})
 
+    async def _load_tier_state(self) -> None:
+        """Fetch what the Tiers row needs to explain conflicts; the row works without it."""
+        state = {"order": ["low", "medium", "high"], "ceiling": "high", "model_tier": ""}
+        client = self._providers
+        try:
+            result = await client.model_tiers()
+            state["order"] = list(_field(result, "order", state["order"])) or state["order"]
+            state["ceiling"] = _field(result, "max_tier", "") or "high"
+            model = agent_fields(self.query_one("#settings-file-editor", TextArea).text).get("model", "")
+            if model and model != "inherit" and model not in state["order"]:
+                shown = await client.show_model(model)
+                info = _field(shown, "model")
+                state["model_tier"] = str(_field(info, "tier", "") or "") if info is not None else ""
+        except Exception:  # noqa: BLE001 - advisory only
+            pass
+        if self.is_mounted:
+            self._tier_state = state
+            self._sync_agent_form()
+
+    async def _edit_tiers(self) -> None:
+        """Open the tiers dialog and write the chosen list to the agent file."""
+        if not self._current_id:
+            return
+        await self._load_tier_state()
+        text = self.query_one("#settings-file-editor", TextArea).text
+        current = tier_items(agent_fields(text).get("tiers", ""))
+        chosen = await self.app.push_screen_wait(AgentTiersScreen(self._tier_state["order"], current))
+        if chosen and self.is_mounted and self._current_id:
+            self._set_fields({"tiers": ", ".join(chosen)})
+
     def _agent_form_pressed(self, button_id: str) -> bool:
         """Handle an agent form button; ``False`` when ``button_id`` is not one."""
         if button_id == "agent-model-clear":
@@ -575,6 +771,9 @@ class SettingsConsole(SettingsScreen):
             if index < len(fallbacks):
                 del fallbacks[index]
                 self._set_fields({"fallback": ", ".join(fallbacks)})
+            return True
+        if button_id == "agent-tiers":
+            self.run_worker(self._edit_tiers(), group="settings-agent-tiers", exclusive=True)
             return True
         if button_id == "agent-model":
             target = "model"
@@ -715,6 +914,8 @@ class SettingsConsole(SettingsScreen):
             next(iter(self.query_one(ProvidersPane).query("Button, Input"))).focus()
         elif key == "voice":
             self.query_one("#settings-voice-enabled", Switch).focus()
+        elif key == "speech":
+            self.query_one("#settings-speech-language", Select).focus()
         elif key in self.GENERAL:
             pane = self.query_one(f"#{key}")
             target = next(iter(pane.query("RadioSet, Switch")), None)
@@ -767,9 +968,7 @@ class SettingsConsole(SettingsScreen):
         editor = self.query_one("#settings-file-editor", TextArea)
         editor.read_only = False
         editor.text = (
-            f"---\nname: {name}\ndescription: Describe when the root agent should use {name}.\n"
-            "contexts: [subagent]\n---\nYou are a subagent. Do the task you are given and "
-            "finish with a report that lists every file you changed.\n"
+            tier_settings.new_agent_template(name)
             if self.category == "agents" else (
                 f"---\nname: {name}\ndescription: Describe this skill.\n---\nInstructions.\n"
                 if self.category == "skills" else '{"mcpServers": {}}\n' if self.category == "mcp" else ""
@@ -791,6 +990,17 @@ class SettingsConsole(SettingsScreen):
         if names:
             prompt += "\n" + ", ".join(names)
         if not await self.app.push_screen_wait(ConfirmSettingsAction(prompt)):
+            return
+        if category == "speech":
+            if self._providers is None:
+                self.query_one("#settings-speech-status", Static).update("Speech settings unavailable")
+                return
+            try:
+                await reset_speech_config(self._providers)
+                await self._load_speech()
+                self.query_one("#settings-speech-status", Static).update("Reset speech settings to defaults")
+            except Exception as exc:  # noqa: BLE001 - keep failed reset visible
+                self.query_one("#settings-speech-status", Static).update(sanitize(str(exc), 160))
             return
         if category in {"appearance", "layout"}:
             keys = ("theme",) if category == "appearance" else ("sessions_sidebar", "details_sidebar", "context_preview")

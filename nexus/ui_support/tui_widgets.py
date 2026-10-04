@@ -130,7 +130,7 @@ class ChatEditor(TextArea):
     class SubmitRequested(Message):
         """Enter was pressed with a non-empty draft."""
 
-        def __init__(self, content: str, mode: str = "queue") -> None:
+        def __init__(self, content: str, mode: str = "steer") -> None:
             super().__init__()
             self.content = content
             self.mode = mode
@@ -172,7 +172,7 @@ class ChatEditor(TextArea):
             event.prevent_default()
             if self.text.strip() or getattr(self.app, "_attachments", []):
                 self.post_message(self.SubmitRequested(self.text,
-                    {"ctrl+enter": "steer", "alt+enter": "interrupt"}.get(event.key, "queue")))
+                    {"ctrl+enter": "queue", "alt+enter": "interrupt"}.get(event.key, "steer")))
                 self.clear()
         elif event.key in self.NEWLINE_KEYS:
             event.stop()

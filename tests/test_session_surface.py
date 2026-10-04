@@ -332,8 +332,7 @@ async def test_enqueue_is_fifo_and_consumed_at_next_boundary(tmp_path):
     release = asyncio.Event()
     provider = ScriptedProvider(
         parked_script(release),
-        text_response("two"),
-        text_response("three"),
+        text_response("combined reply"),
     )
     session, _ = make_session(tmp_path, provider)
 
@@ -351,12 +350,38 @@ async def test_enqueue_is_fifo_and_consumed_at_next_boundary(tmp_path):
     assert session.queue_depth == 0
     consumed = [e for e in session.events if e.type == "input.consumed"]
     assert [e.data["queued_id"] for e in consumed] == [first, second]
+    assert len({e.data["turn"] for e in consumed}) == 1
     user_texts = [
-        m.content[0].text
+        "".join(block.text for block in m.content if isinstance(block, Text))
         for m in session.messages
         if m.role == "user" and isinstance(m.content[0], Text)
     ]
-    assert user_texts == ["one", "two", "three"]
+    assert user_texts == ["one", "two\n\nthree"]
+
+
+@pytest.mark.parametrize("attached", [False, True])
+async def test_manual_queue_turn_combines_content_blocks(tmp_path, attached):
+    session, _ = make_session(tmp_path, ScriptedProvider(text_response("reply")))
+    image = Image(media_type="image/png", data=b"img")
+    document = Document(media_type="text/plain", data=b"doc")
+    first = session.enqueue([Text(text="first"), image])
+    second = session.enqueue([Text(text="second"), document])
+
+    if attached:
+        events = [event async for event in session.send(None)]
+        assert any(event.type == "turn.completed" for event in events)
+    else:
+        await session.start_turn(None)
+        await session.wait_turn()
+
+    user = next(message for message in session.messages if message.role == "user")
+    assert user.content == [
+        Text(text="first"), image, Text(text="\n\n"), Text(text="second"), document,
+    ]
+    consumed = [event for event in session.events if event.type == "input.consumed"]
+    assert [event.data["queued_id"] for event in consumed] == [first, second]
+    assert len({event.data["turn"] for event in consumed}) == 1
+    assert session.queue_depth == 0
 
 
 async def test_cancel_drops_queued_inputs(tmp_path):

@@ -97,7 +97,7 @@ async def test_discovery_selection_replay_and_cache_lock(tmp_path):
     try:
         handle = reopened.session("s")
         assert handle.context_locked
-        assert handle.disabled_extensions == {"skills": {"project-skill"}, "mcp": {"project-server"}}
+        assert handle.disabled_extensions == {"skills": {"project-skill"}, "mcp": {"project-server"}, "tools": set()}
     finally:
         await reopened.aclose()
 
@@ -153,3 +153,33 @@ async def test_tui_individual_controls(category, locked):
         await pilot.press("escape")
         await pilot.pause()
         assert app.screen is app.screen_stack[0]
+
+
+async def test_a_single_tool_can_be_switched_off_and_back_on_until_the_first_turn(tmp_path):
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    provider = ScriptedProvider(text_response("ok"))
+    runtime = Runtime(workspace, home=tmp_path / "home", config=_config(), providers={"scripted": provider})
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+    try:
+        before = await facade.handle(p.ContextInspect(session="s"))
+        name = next(row["name"] for row in before.tools if row["name"] not in {"Task", "ReadMcpResource"})
+        assert all(row["enabled"] for row in before.tools)
+        off = await facade.handle(p.ContextExtensionSelect(session="s", category="tools", name=name, enabled=False))
+        assert isinstance(off, p.ContextInspectResult), off
+        row = next(row for row in off.tools if row["name"] == name)
+        assert row["enabled"] is False, "a switched-off tool stays listed so it can be switched back on"
+        assert len([r for r in off.tools if r["name"] == name]) == 1
+        assert runtime.session("s").disabled_extensions["tools"] == {name}
+        unknown = await facade.handle(p.ContextExtensionSelect(session="s", category="tools", name="nope", enabled=False))
+        assert isinstance(unknown, p.ErrorResult)
+        on = await facade.handle(p.ContextExtensionSelect(session="s", category="tools", name=name, enabled=True))
+        assert next(row for row in on.tools if row["name"] == name)["enabled"] is True
+        await facade.handle(p.ContextExtensionSelect(session="s", category="tools", name=name, enabled=False))
+        [event async for event in runtime.session("s").send("hello")]
+        assert name not in {tool.name for tool in provider.requests[-1].tools}
+        denied = await facade.handle(p.ContextExtensionSelect(session="s", category="tools", name=name, enabled=True))
+        assert isinstance(denied, p.ErrorResult)
+    finally:
+        await runtime.aclose()

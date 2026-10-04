@@ -153,6 +153,10 @@ def group_tools(turn: TurnView) -> list[ToolGroup]:
 def tool_heading(tool: ToolCallView) -> str:
     """``$ command`` for shells, ``→ Read path`` style for everything else."""
     name = tool.name.casefold()
+    if name == "mcpcall":
+        target = tool.target or str(tool.input.get("tool", ""))
+        label = target.removeprefix("mcp__").replace("__", " · ").replace("/", " · ")
+        return "⚙ " + _text(label, 120) + " · via McpCall"
     args = format_arguments(tool)
     if name in {"bash", "bashoutput", "killshell"}:
         return f"$ {args}" if args else "$"
@@ -470,9 +474,9 @@ def _task_header(tool: ToolCallView, agent: AgentView | None, spinner_index: int
     ) or "General"
     kind = redact(_text(str(kind), 32)).title()
     running = marker == "running" and (agent is None or agent.status == "spawned")
-    phrase = _task_phrase(tool, agent) or ("failed" if marker == "failed" else "completed")
+    phrase = _task_phrase(tool, agent) or "completed"
     spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-    mark = spinner[spinner_index] if running else "✗" if marker == "failed" else "✓"
+    mark = spinner[spinner_index] if running else "·"
     return f"{mark} {kind} · {phrase}", running
 
 
@@ -484,7 +488,7 @@ def _task_child_activity(agent: AgentView) -> str:
     if not tools:
         return "Starting…"
     calls = []
-    for tool in tools[-2:]:
+    for tool in tools[-1:]:
         name = redact(_text(tool.name or "tool", 32))
         target = "" if tool.name.casefold() in {"task", "subagent"} else format_arguments(tool)
         progress = tool.progress[-1] if tool.progress else ""
@@ -539,6 +543,8 @@ def _agent_metrics(agent: AgentView) -> str:
     tools = [tool for turn in agent.body.turns for tool in turn.tools]
     completed = sum(tool.status in {"completed", "failed"} for tool in tools)
     label = f"{completed} tool{'s' if completed != 1 else ''}"
+    if agent.status == "spawned":
+        return label
     starts = [stamp for value in (agent.spawned_ts, *(turn.started_ts for turn in agent.body.turns))
               if (stamp := _timestamp(value)) is not None]
     if not starts:
@@ -648,7 +654,7 @@ def tool_row_text(tool: ToolCallView, spinner_index: int = 0, gutter: str = "") 
     if summary.casefold().startswith(f"{tool.name.casefold()}:"):
         summary = summary[len(tool.name) + 1 :].strip()
     summary = redact(summary)
-    suffix = f" · {summary}" if summary else (f" · {marker}" if marker != "completed" else "")
+    suffix = f" · {summary}" if summary else (f" · {marker}" if marker not in {"completed", "failed"} else "")
     rows = todo_preview(tool)
     heading = "☐ Todo " + rows[0] if rows else tool_heading(tool)
     text = f"{gutter}{indicator}{heading}{suffix}"

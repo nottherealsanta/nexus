@@ -12,13 +12,16 @@ import uuid
 
 from ...ui_support.text import escape_controls, redact
 from .actions import labelled
+from .speak_pages import SpeakPages
+from .tier_pages import TierPages
+from ...ui_support.tier_settings import TIERS_HELP, new_agent_template
 
 
 def field(value, key, default=None):
     return value.get(key, default) if isinstance(value, dict) else getattr(value, key, default)
 
 
-class Workflows:
+class Workflows(TierPages, SpeakPages):
     def __init__(self, shell):
         self.shell = shell
         self.form = None
@@ -54,11 +57,11 @@ class Workflows:
         agent = self.selected_agent
         return agent.body if agent is not None else self.shell.controller.view
 
-    def menu(self, title, rows, lines=()):
+    def menu(self, title, rows, lines=(), layout="drawer"):
         if self.shell.panel_title and title != self.shell.panel_title:
             self.stack.append((self.shell.panel_title, self.shell.panel_lines, self.shell.items, self.form, self.form_target, self.shell.panel_layout, self.shell.panel_format, self.shell.panel_tones))
             self.stack = self.stack[-20:]
-        self.shell.show(title, list(lines), layout="drawer")
+        self.shell.show(title, list(lines), layout=layout)
         self.shell.panel_lines = list(lines)
         self.shell.panel_tones = []
         self.shell.items = [{"label": label, "command": "", "operation": operation}
@@ -93,13 +96,18 @@ class Workflows:
 
     async def settings_menu(self, scope="global", category=""):
         """Title, rows and lines of one Settings page (also used to refresh stale stack entries)."""
+        if category == "speech":
+            await self.speech_settings()
+            return "Speech · local Kokoro", self.shell.items, self.shell.panel_lines
         if category == "agents":
             scope = "global"
         inventory = await self.client.settings_inventory(scope)
         if not category:
             rows = [(item.label, {"kind": "settings", "scope": scope, "category": item.key})
                     for item in inventory.categories]
-            rows += [("Providers", {"kind": "providers"}), ("Voice", {"kind": "voice_settings"}),
+            rows += [("Providers", {"kind": "providers"}), ("Models", {"kind": "models_settings"}),
+                     ("Session titles", {"kind": "title_settings"}), ("Voice", {"kind": "voice_settings"}),
+                     ("Speech · local Kokoro", {"kind": "speech_settings"}),
                      ("Appearance", {"kind": "appearance"}),
                      ("Layout", {"kind": "layout"}),
                      ("Keyboard", {"kind": "keyboard"}),
@@ -114,6 +122,11 @@ class Workflows:
             rows = [(escape_controls(item.label) + (" · built-in" if item.builtin else " · edited" if getattr(item, "overrides_builtin", False) else ""),
                      {"kind": "settings_read", "scope": scope, "category": category, "id": item.id})
                     for item in items]
+            if category == "mcp":
+                preview = await self.client.inspect_context(self.shell.controller.session)
+                server_rows = [row for row in preview.mcp_servers if row.get("scope") == scope]
+                rows = [(f"{row['name']} · {row.get('config_tool_loading', 'search')} · {row.get('tool_count', 0)} tools · {scope} · {row.get('status', 'unknown')}",
+                    {"kind": "settings_mcp_loading", "scope": scope, "name": row["name"], "tokens": row.get("schema_tokens", 0)}) for row in server_rows] + rows
             if category == "agents":
                 rows.insert(0, ("New sessions start with…", {"kind": "default_agent"}))
             names = [item.id for item in items if not item.builtin and (category != "agents" or getattr(item, "overrides_builtin", False))]
@@ -164,8 +177,13 @@ class Workflows:
             (f"Send transcript automatically · {'on' if status.auto_send else 'off'}", {"kind": "voice_setting", "key": "auto_send", "value": not status.auto_send}),
             (f"Processing device · {status.configured_device}", {"kind": "voice_choices", "key": "device", "current": status.configured_device}),
             (f"Recording limit · {status.max_seconds} seconds", {"kind": "voice_choices", "key": "max_seconds", "current": status.max_seconds}),
-            ("Download / prepare local model…", {"kind": "confirm", "label": "Download the local voice model (~179 MB)?", "next": {"kind": "voice_settings_prepare"}}),
         ]
+        if status.state in {"loading", "downloading"}:
+            rows.append(("Refresh model status", {"kind": "voice_settings"}))
+        elif status.cached or status.state in {"ready", "transcribing"}:
+            rows.append(("Load / prepare local model", {"kind": "voice_settings_prepare", "allow_download": False}))
+        else:
+            rows.append(("Download local model…", {"kind": "confirm", "label": "Download the local voice model (~179 MB)?", "next": {"kind": "voice_settings_prepare"}}))
         self.menu("Voice · local dictation", rows, [
             f"Model: {status.state} · {status.message or 'Audio is transcribed locally.'}",
             "Auto-send submits immediately; turn it off to review the transcript in the composer.",
@@ -174,17 +192,45 @@ class Workflows:
         for index, item in enumerate(self.shell.items):
             item["group"] = "Input and transcript" if index < 2 else "Local transcription" if index < 4 else "Model setup"
 
+    async def speech_settings(self):
+        """Show saved local Kokoro /speak configuration and the model's download state."""
+        from ...ui_support import speech_download as sd
+        from ...ui_support.speech_settings import read_speech_settings
+        values = await read_speech_settings(self.client)
+        status = await self.client.speech_status()
+        rows = []
+        for key, label in (("language", "Language"), ("voice", "Voice"), ("speed", "Speed"), ("device", "Device")):
+            rows.append((f"{label} · {values[key]}", {"kind": "speech_choices", "key": key, "current": values[key]}))
+        rows.append(("Reset to default", {"kind": "speech_reset"}))
+        state = status.state
+        if state in {"absent", "error"}:
+            rows.append(("Download speech model…", {"kind": "confirm", "label": f"{sd.CONSENT_TITLE}. Download it now?",
+                                                    "lines": [sd.CONSENT_PROMPT], "next": {"kind": "speak_settings_prepare"}}))
+        elif state == "downloading":
+            rows.append(("Refresh download status", {"kind": "speech_settings"}))
+        model_line = (sd.progress_text(status) if state == "downloading" else sd.ready_text() if state == "ready"
+                      else status.message or "The speech model is not downloaded yet.")
+        self.menu("Speech · local Kokoro", rows, [
+            "/speak generates speech locally using Kokoro. Settings are saved to nexus.toml [speech].",
+            "No automatic downloads: the model is fetched only after you confirm the download.",
+            f"Model: {model_line}",
+        ])
+        for item in self.shell.items:
+            item["group"] = "Kokoro speech"
+
     #: Operation kinds that open or navigate Settings pages, and the area each selects.
     NAV_AREAS = {"appearance": "appearance", "layout": "layout", "keyboard": "keys", "workspace": "workspace",
-                 "providers": "providers", "voice_settings": "voice"}
-    NAV_KEEP = ("settings", "provider", "voice", "toggle_pref", "reset_prefs", "theme", "default_agent",
+                 "providers": "providers", "voice_settings": "voice", "speech_settings": "speech",
+                 "models_settings": "models", "title_settings": "titles"}
+    NAV_KEEP = ("settings", "provider", "voice", "speech", "models", "tier", "title", "toggle_pref", "reset_prefs", "theme", "default_agent",
                 "confirm", "back", "discard_form", "setup", "agent_", "default_agent_save")
 
     async def settings_area(self, key):
         """Switch Settings to ``key`` (the left list): a fresh page with Escape closing Settings."""
         self.stack.clear()
         self.shell.panel_title = ""
-        operation = {"keys": {"kind": "keyboard"}, "providers": {"kind": "providers"}, "voice": {"kind": "voice_settings"}}.get(
+        operation = {"keys": {"kind": "keyboard"}, "providers": {"kind": "providers"}, "voice": {"kind": "voice_settings"}, "speech": {"kind": "speech_settings"},
+                     "models": {"kind": "models_settings"}, "titles": {"kind": "title_settings"}}.get(
             key, {"kind": key} if key in ("appearance", "layout", "workspace") else {"kind": "settings", "scope": self.settings_scope, "category": key})
         await self.operate(operation)
 
@@ -199,7 +245,16 @@ class Workflows:
             self.shell.settings_nav = operation.get("category", "")
         elif not kind.startswith(self.NAV_KEEP):
             self.shell.settings_nav = None
-        if kind == "back":
+        if kind.startswith(("tier_", "models_", "title_", "agent_tier")) and await self.tier_operate(operation):
+            return
+        if kind.startswith("speak_") and await self.speak_operate(operation):
+            return
+        if kind == "close_panel":
+            self.shell.panel_title = ""
+            self.shell.panel_format = "plain"
+            self.shell.preview_image = b""
+            self.shell.preview_image_media = ""
+        elif kind == "back":
             self.back()
         elif kind == "discard_form":
             self.stack.clear()
@@ -254,6 +309,7 @@ class Workflows:
             target = {**operation, "sha256": result.sha256, "builtin": bool(result.builtin), "overrides_builtin": overrides}
             if operation["category"] == "agents" and result.body.lstrip("\ufeff").startswith("---"):
                 self.agent_draft = {"target": target, "body": result.body, "path": result.rel_path}
+                await self.load_tier_cache(result.body)
                 self.agent_page()
             else:
                 self.edit(result.rel_path, result.body, target, autosave=True)
@@ -364,16 +420,18 @@ class Workflows:
                     self.shell.notice = "Showing the last successful context preview from before the running turn"
             key = operation["key"]
             if key == "system":
-                self.shell.show("System prompt · literal", preview.system_text or "(empty)")
+                from ...ui_support.context import header_system_prompt
+                self.shell.show("System prompt · literal", header_system_prompt(preview) or "(empty)", layout="context")
             elif key == "agents":
                 parts = [part for part in preview.included_parts if part.get("name") == "agents_md"]
                 source = field(preview.system_files.get("agents", {}), "source", "AGENTS.md") or "AGENTS.md"
                 body = "\n\n---\n\n".join(str(part.get("text") or "") for part in parts)
                 if field(preview.system_files.get("agents", {}), "truncated", False):
                     body += "\n\n---\n\nContent truncated by the host."
-                self.shell.show(f"AGENTS.md · {source}", body or "No AGENTS.md content is included in this request.", format="markdown")
+                self.shell.show(f"AGENTS.md · {source}", body or "No AGENTS.md content is included in this request.", layout="context", format="markdown")
             elif key == "tools":
-                self.tools_expanded = set()
+                from ...ui_support.context import tool_groups
+                self.tools_expanded = {group.key for group in tool_groups(list(preview.tools))}
                 self.tools_modal()
             elif key in {"skills", "mcp"}:
                 await self.context_extensions(key)
@@ -396,11 +454,49 @@ class Workflows:
             from ...ui_support.context import _compact_tokens, tool_groups
             group = next(g for g in tool_groups(list(self.shell.preview.tools)) if g.key == operation["group"])
             entry = group.entries[operation["index"]]
-            self.menu(f"Tool · {entry.title} · ~{_compact_tokens(entry.tokens)} tokens", [("Back", {"kind": "back"})], entry.body.splitlines())
+            self.menu(f"Tool · {entry.title} · ~{_compact_tokens(entry.tokens)} tokens", [("Back", {"kind": "back"})], entry.body.splitlines(), layout="context")
+        elif kind == "context_mcp_loading":
+            self.shell.preview = await self.client.select_context_mcp_loading(
+                self.shell.controller.session, operation["name"], operation["mode"])
+            self.shell.panel_title = ""
+            await self.context_extensions("mcp")
+        elif kind == "settings_mcp_loading":
+            file = await self.client.settings_read(operation["scope"], "mcp", "mcp.json")
+            self.menu(f"Tool loading · {operation['name']}", [
+                ("Find tools by search", {**operation, "kind": "settings_mcp_loading_set", "mode": "search", "sha256": file.sha256}),
+                (f"Load all tools into context (~{operation.get('tokens', 0)} tokens)", {**operation, "kind": "settings_mcp_loading_set", "mode": "all", "sha256": file.sha256})],
+                ["Applies to new sessions. Existing sessions keep their frozen loading mode."])
+        elif kind == "settings_mcp_loading_set":
+            result = await self.client.settings_mcp_loading_set(operation["scope"], operation["name"], operation["mode"], operation["sha256"])
+            if result.status == "conflict":
+                raise ValueError("MCP settings changed; reopen this page before saving")
+            await self.refresh_settings_pages(operation["scope"], "mcp")
+            await self.settings(operation["scope"], "mcp")
         elif kind == "context_toggle":
             self.shell.preview = await self.client.select_context_extension(self.shell.controller.session,
                 operation["category"], operation["name"], operation["enabled"])
-            await self.context_extensions(operation["category"])
+            if operation["category"] == "tools":
+                self.shell.panel_title = ""  # same dialog, new counts: replace it rather than stacking
+                self.tools_modal()
+            else:
+                self.shell.panel_title = ""  # refresh without growing the Back stack
+                await self.context_extensions(operation["category"])
+        elif kind == "tool_definitions":
+            from ...ui_support.context import tool_groups
+            groups = tool_groups(list(self.shell.preview.tools))
+            self.menu("Tool definitions", [(f"{g.title.removeprefix('MCP · ')} · {e.title}", {"kind": "tool_definition", "group": g.key, "index": i})
+                                           for g in groups for i, e in enumerate(g.entries)], layout="context")
+        elif kind == "context_extension_details":
+            preview = self.shell.preview
+            rows = preview.skills_index if operation["category"] == "skills" else preview.mcp_servers
+            row = next((row for row in rows if (row.get("name") or row.get("id")) == operation["name"]), {})
+            actions = [("Back", {"kind": "back"})]
+            if operation["category"] == "mcp" and not preview.context_locked and not self.agent_page_id:
+                actions = [
+                    ("Find tools by search", {"kind": "context_mcp_loading", "name": operation["name"], "mode": "search"}),
+                    (f"Load all tools into context (~{row.get('schema_tokens', 0)} tokens)", {"kind": "context_mcp_loading", "name": operation["name"], "mode": "all"}),
+                    ("Follow configuration", {"kind": "context_mcp_loading", "name": operation["name"], "mode": None}), *actions]
+            self.menu(str(operation["name"]), actions, labelled(row), layout="context")
         elif kind == "context_extensions":
             await self.context_extensions(operation["category"])
         elif kind == "agent_page":
@@ -421,16 +517,57 @@ class Workflows:
             item = next((item for item in self.shell.attachments if item.attachment_id == operation["id"]), None)
             if item is None:
                 raise ValueError("Attachment is no longer attached")
-            self.menu("Attachment · " + item.name, [("Remove attachment", {"kind": "attachment_remove", "id": item.attachment_id})], labelled(item.preview))
+            if item.kind == "image":
+                preview = await self.client.preview_attachment(item.attachment_id)
+                self.shell.preview_image = preview.data
+                self.shell.preview_image_media = preview.media_type
+                self.shell.preview_image_attachment_id = item.attachment_id
+                self.shell.panel_title = "Attachment · " + item.name
+                self.shell.panel_format = "image"
+                self.shell.panel_lines = [f"Name: {item.name}", f"Media type: {preview.media_type}",
+                    f"Size: {len(preview.data):,} bytes"]
+                self.shell.items = [{"label": "Remove attachment", "command": "", "operation": {"kind": "attachment_remove", "id": item.attachment_id}}]
+            else:
+                self.menu("Attachment · " + item.name, [("Remove attachment", {"kind": "attachment_remove", "id": item.attachment_id})], labelled(item.preview))
         elif kind == "attachment_remove":
             # Labels stay assigned, so the remaining references (and their numbers) keep their meaning.
+            self.shell.marker_attachments.pop(operation["id"], None)
             self.shell.attachments = [item for item in self.shell.attachments if item.attachment_id != operation["id"]]
+            if self.shell.preview_image_attachment_id == operation["id"]:
+                self.shell.preview_image = b""
+                self.shell.preview_image_media = ""
+                self.shell.preview_image_attachment_id = ""
             self.shell.panel_title = ""
+            self.shell.attachment_labels.pop(operation["id"], None)
             self.stack.clear()
             await self.shell.command("/attach", ())
+        elif kind == "submitted_image":
+            from ...ui_support.native_images import decode_image_url
+            message = next(message for turn in self.active_view.turns for message in turn.messages if message.id == operation["id"])
+            value = decode_image_url(message.blocks[operation["index"]].image_url)
+            if value is None:
+                raise ValueError("Image preview is unavailable")
+            media, data = value
+            self.shell.show("Submitted image", {"Media type": media, "Size": f"{len(data):,} bytes"})
+            self.shell.preview_image, self.shell.preview_image_media = data, media
+            self.shell.panel_format = "image"
         elif kind == "message_page":
             message = next(message for turn in self.active_view.turns for message in turn.messages if message.id == operation["id"])
-            self.shell.show("Submitted message · every content block", message.to_dict())
+            from ...ui_support.native_images import decode_image_url
+            body = message.to_dict()
+            images = []
+            for index, block in enumerate(message.blocks):
+                if block.kind == "image" and (value := decode_image_url(block.image_url)):
+                    media, data = value
+                    images.append((index, media, data))
+                    body["blocks"][index]["image_url"] = f"Embedded {media} · {len(data):,} bytes · preview available"
+            self.shell.show("Submitted message · every content block", body)
+            if images:
+                _, media, data = images[0]
+                self.shell.preview_image, self.shell.preview_image_media = data, media
+                self.shell.panel_format = "image"
+                self.shell.items = [{"label": f"Preview image {index + 1}", "command": "",
+                    "operation": {"kind": "submitted_image", "id": message.id, "index": index}} for index, _, _ in images]
         elif kind == "turn_toggle":
             if operation["id"] in self.shell.collapsed_turns:
                 self.shell.collapsed_turns.remove(operation["id"])
@@ -505,6 +642,29 @@ class Workflows:
                 await self.worktree_outcome(result)
         elif kind == "voice_settings":
             await self.voice_settings()
+        elif kind == "speech_settings":
+            await self.speech_settings()
+        elif kind == "speech_choices":
+            from ...ui_support.speech_settings import SPEECH_CHOICES, compatible_voices, read_speech_settings
+            key = operation["key"]
+            choices = SPEECH_CHOICES[key]
+            if key == "voice":
+                choices = compatible_voices(str((await read_speech_settings(self.client))["language"]))
+            self.menu(f"Speech · {key.title()}", [
+                (f"{value}{' · selected' if value == operation['current'] else ''}", {"kind": "speech_setting", "key": key, "value": value})
+                for value in choices
+            ], ["Choose a local Kokoro setting. This does not download a model."])
+        elif kind == "speech_setting":
+            from ...ui_support.speech_settings import set_speech_config
+            await set_speech_config(self.client, **{operation["key"]: operation["value"]})
+            if operation["key"] == "language":
+                self.stack.clear()
+                self.shell.panel_title = ""
+            await self.speech_settings()
+        elif kind == "speech_reset":
+            from ...ui_support.speech_settings import reset_speech_config
+            await reset_speech_config(self.client)
+            await self.speech_settings()
         elif kind == "voice_choices":
             key = operation["key"]
             values = ("auto", "cpu", "mps", "cuda") if key == "device" else (15, 30, 60, 90, 120)
@@ -519,7 +679,7 @@ class Workflows:
             self.shell.panel_title = ""
             await self.voice_settings()
         elif kind == "voice_settings_prepare":
-            await self.client.voice_prepare()
+            await self.client.voice_prepare(allow_download=operation.get("allow_download", True))
             await self.voice_settings()
         elif kind == "voice":
             await self.shell.voice.open()
@@ -530,7 +690,7 @@ class Workflows:
         elif kind == "voice_start":
             await self.shell.voice.start()
         elif kind == "voice_prepare":
-            await self.client.voice_prepare()
+            await self.client.voice_prepare(allow_download=operation.get("allow_download", True))
             await self.shell.voice.open()
         elif kind == "setup":
             status = await self.client.setup_status()
@@ -723,16 +883,21 @@ class Workflows:
         rows = [(f"Model · {model or 'inherit the session model'}", {"kind": "agent_pick", "field": "model"})]
         if model:
             rows.append(("  × Clear model", {"kind": "agent_clear", "field": "model"}))
+        tier_rows, tier_notes = self.agent_tier_rows(draft["body"])
+        if "subagent" in fields.get("contexts", "subagent"):
+            rows += tier_rows
         for index, ref in enumerate(fallbacks):
             rows.append((f"Fallback {index + 1} · {ref}", {"kind": "agent_pick", "field": "fallback", "index": index}))
             rows.append((f"  × Remove fallback {index + 1}", {"kind": "agent_clear", "field": "fallback", "index": index}))
         if len(fallbacks) < MAX_FALLBACKS:
             rows.append(("+ Add fallback", {"kind": "agent_pick", "field": "fallback", "index": len(fallbacks)}))
         rows.append(("Edit prompt file…", {"kind": "agent_edit_file"}))
+        help_lines = ["Blank model fields inherit the session model. Fallbacks are tried in order when the model fails before replying."]
+        if "subagent" in fields.get("contexts", "subagent"):
+            help_lines.append("Tiers: " + TIERS_HELP)
+            help_lines += tier_notes
         self.menu(f"Agent · {draft['target']['id']}", rows,
-                  ["Blank model fields inherit the session model. Fallbacks are tried in order when the model fails before replying.",
-                   str(fields.get("description", ""))] if fields.get("description") else
-                  ["Blank model fields inherit the session model. Fallbacks are tried in order when the model fails before replying."])
+                  [*help_lines, str(fields.get("description", ""))] if fields.get("description") else help_lines)
 
     async def agent_model_picker(self, field, index):
         from ...ui_support.model_choice import model_groups, recent_models
@@ -746,7 +911,7 @@ class Workflows:
 
     async def agent_write(self, field, index, ref):
         """Set (or clear) one agent field and save the file at once, like the Textual form."""
-        from ...ui_support.agent_frontmatter import agent_fields, fallback_items, set_agent_fields
+        from ...ui_support.agent_frontmatter import agent_fields, fallback_items
         draft = self.agent_draft
         fields = agent_fields(draft["body"])
         if field == "model":
@@ -758,6 +923,12 @@ class Workflows:
             elif index < len(current):
                 del current[index]
             updates = {"fallback": ", ".join(current)}
+        await self.agent_save(updates)
+
+    async def agent_save(self, updates):
+        """Write frontmatter ``updates`` to the agent file at once and re-show the agent page."""
+        from ...ui_support.agent_frontmatter import set_agent_fields
+        draft = self.agent_draft
         body = set_agent_fields(draft["body"], updates)
         target = draft["target"]
         result = await self.client.settings_write(target["scope"], target["category"], target["id"], body,
@@ -770,46 +941,66 @@ class Workflows:
                 target["sha256"] = result.sha256
             self.shell.notice = f"Saved · {len(result.loaded)} loaded · {len(result.failed)} failed"
             await self.refresh_settings_pages(target["scope"], target["category"])
+            await self.load_tier_cache(body)
         if self.shell.panel_title.startswith("Agent ") and self.shell.panel_title != f"Agent · {target['id']}":
             self.back()
         self.agent_page()
 
     def tools_modal(self):
-        """The Tools dialog: families (and MCP servers) with their tools and token estimates.
-
-        A family row expands to its tools; a tool row opens everything the model is
-        given for it (Textual's ``ToolsModal``).
-        """
+        """Expand families for definitions; right-side controls select session tools."""
         from ...ui_support.context import _compact_tokens, tool_groups
         preview = self.shell.preview
         groups = tool_groups(list(preview.tools))
-        count = sum(len(group.entries) for group in groups)
-        tokens = sum(group.tokens for group in groups)
-        names = [group.title.removeprefix("MCP · ") for group in groups]
-        width = min(max((len(name) for name in names), default=8), 24)
-        rows = []
-        for group, name in zip(groups, names):
+        state = {str(row.get("name")): row.get("enabled") is not False for row in preview.tools if isinstance(row, dict)}
+        locked = bool(getattr(preview, "context_locked", False)) or bool(self.agent_page_id)
+        rows, toggles = [], []
+        count = tokens = total = 0
+        for group in groups:
+            live = [entry for entry in group.entries if state.get(entry.title, True)]
+            count += len(live)
+            total += len(group.entries)
+            tokens += sum(entry.tokens for entry in live)
             mark = "▾" if group.key in self.tools_expanded else "▸"
-            tools = "  ".join(entry.title for entry in group.entries)
-            rows.append((f"{mark} ■ {name[:width]:<{width}}  {tools[:70]}  ~{_compact_tokens(group.tokens)}", {"kind": "tools_toggle", "key": group.key}))
-            if group.key in self.tools_expanded:
-                for index, entry in enumerate(group.entries):
-                    rows.append((f"      {entry.title}  {entry.detail[:60]}  ~{_compact_tokens(entry.tokens)}",
-                                 {"kind": "tool_definition", "group": group.key, "index": index}))
+            rows.append((f"{mark} {group.title} · {len(live)}/{len(group.entries)} · ~{_compact_tokens(sum(e.tokens for e in live))} tokens",
+                         {"kind": "tools_toggle", "key": group.key}))
+            toggles.append(None)
+            # Families start expanded; users may fold them explicitly.
+            if group.key not in self.tools_expanded:
+                continue
+            for index, entry in enumerate(group.entries):
+                enabled = state.get(entry.title, True)
+                rows.append((f"    {entry.title} · {entry.detail[:60]} · ~{_compact_tokens(entry.tokens)}",
+                             {"kind": "tool_definition", "group": group.key, "index": index}))
+                toggles.append((enabled, {"kind": "context_toggle", "category": "tools", "name": entry.title, "enabled": not enabled}))
         rows.append(("Edit tools…", {"kind": "settings", "scope": "global", "category": "tools"}))
-        note = [] if getattr(preview, "tools_supported", True) is not False else ["The selected model does not support tools; none are sent."]
-        self.menu(f"Tools · {count} definition{'s' if count != 1 else ''} · ~{_compact_tokens(tokens)} tokens", rows,
-                  note + ([] if groups else ["(none)"]))
+        toggles.append(None)
+        note = ["Context locked after first turn" if locked else "Click a right-side toggle or press Space to switch a tool; Enter reads its definition."]
+        if getattr(preview, "tools_supported", True) is False:
+            note.append("The selected model does not support tools; none are sent.")
+        self.menu(f"Tools · {count} of {total} definitions · ~{_compact_tokens(tokens)} tokens", rows,
+                  note + ([] if groups else ["(none)"]), layout="context")
+        for item, toggle in zip(self.shell.items, toggles):
+            if toggle is not None:
+                item.update(toggle_enabled=toggle[0], toggle_operation=toggle[1], toggle_locked=locked)
 
     async def context_extensions(self, category):
         self.shell.preview = await self.client.inspect_context(self.shell.controller.session)
         preview = self.shell.preview
-        rows = preview.skills_index if category == "skills" else preview.mcp_servers
-        self.menu(category.upper(), [(str(row.get("name") or row.get("id")) + (" · disabled" if row.get("enabled") is False else " · enabled"),
-            {"kind": "context_toggle", "category": category, "name": row.get("name") or row.get("id"), "enabled": row.get("enabled") is False})
-            for row in rows if row.get("config_enabled") is not False], labelled(rows) + (["Context locked after first turn"] if preview.context_locked else []))
-        if preview.context_locked:
-            self.shell.items = []
+        rows = [row for row in (preview.skills_index if category == "skills" else preview.mcp_servers) if row.get("config_enabled") is not False]
+        locked = bool(getattr(preview, "context_locked", False)) or bool(self.agent_page_id)
+        ordered = sorted(rows, key=lambda row: (row.get("scope", "global"), str(row.get("name") or row.get("id"))))
+        items = []
+        for row in ordered:
+            name = row.get("name") or row.get("id")
+            scope = row.get("scope", "project" if category == "mcp" else "global")
+            items.append((f"{scope:<8} {name}" + (f" · {row.get('tool_count', 0)} · {row.get('tool_loading', 'search')}" if category == "mcp" else ""), {"kind": "context_extension_details", "category": category, "name": name}))
+        self.menu(category.upper(), items,
+                  ["Context locked after first turn" if locked else "Click a right-side toggle or press Space to switch; Enter shows details."], layout="context")
+        for item, row in zip(self.shell.items, ordered):
+            enabled = row.get("enabled") is not False
+            item.update(toggle_enabled=enabled, toggle_locked=locked,
+                        toggle_operation={"kind": "context_toggle", "category": category,
+                                          "name": row.get("name") or row.get("id"), "enabled": not enabled})
 
     async def sessions(self):
         result = await self.client.project_sessions()
@@ -837,9 +1028,7 @@ def login_result(login):
 def new_file_body(category, name):
     """Starter text for a new settings file (same templates as Textual)."""
     if category == "agents":
-        return (f"---\nname: {name}\ndescription: Describe when the root agent should use {name}.\n"
-                "contexts: [subagent]\n---\nYou are a subagent. Do the task you are given and "
-                "finish with a report that lists every file you changed.\n")
+        return new_agent_template(name)
     if category == "skills":
         return f"---\nname: {name}\ndescription: Describe this skill.\n---\nInstructions.\n"
     return '{"mcpServers": {}}\n' if category == "mcp" else ""
@@ -848,8 +1037,8 @@ def new_file_body(category, name):
 def session_rows(result, current: str = "", seen: dict | None = None, now: float | None = None):
     """Project session cards: ``status``/``sub`` come from the helpers Textual's cards use.
 
-    ``seen`` records the last sequence viewed per session so a finished background
-    session reads "finished" until it is opened (the Textual sidebar's rule).
+    ``seen`` records the last terminal-turn sequence viewed per session, so
+    presence-only log activity cannot make a session appear newly finished.
     """
     from ...ui_support.session_groups import _session_groups
     from ...ui_support.session_status import session_status, session_subline
@@ -861,9 +1050,12 @@ def session_rows(result, current: str = "", seen: dict | None = None, now: float
     for group, members in groups:
         for row in members:
             if row.id not in seen or row.id == current:
-                seen[row.id] = max(seen.get(row.id, 0), getattr(row, "last_seq", 0))
+                seen[row.id] = max(
+                    seen.get(row.id, 0),
+                    getattr(row, "completion_seq", getattr(row, "last_seq", 0)),
+                )
             status = session_status(row, seen, current)
-            rows.append({"id": row.id, "title": redact(escape_controls(row.title or row.id)),
+            rows.append({"id": row.id, "title": redact(escape_controls(row.title or "New Session")),
                          "workspace": workspace_for[id(row)], "state": row.state, "group": redact(escape_controls(group)),
                          "status": status, "sub": redact(escape_controls(session_subline(row, status, now, compact=True))),
                          "active": row.id == current})

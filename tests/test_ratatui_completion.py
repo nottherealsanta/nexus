@@ -79,12 +79,12 @@ async def test_native_model_picker_orders_and_commits_effort(tmp_path, monkeypat
     shell = ShellActions(controller)
     shell.preferences.set("model_favorites", ["a/mid"])
     await shell.submit("/model")
-    assert [i["label"].split(" · ")[1] for i in shell.items][0] == "a/mid"
-    assert shell.panel_layout == "drawer"
+    assert [i["detail"] for i in shell.items][0] == "a/mid"
+    assert shell.panel_title == "Select model" and shell.panel_layout == "modal"
     assert shell.items[0]["group"] == "Favorites"  # shown as a heading above the first favorite
-    first = next(i for i in shell.items if "a/old" in i["label"])
-    assert "◀" in first["label"] and first["operation"]["selected"] == "high"
-    assert any("b/new" in i["label"] for i in shell.items)
+    first = next(i for i in shell.items if i["detail"] == "a/old")
+    assert first["current"] and first["operation"]["selected"] == "high"
+    assert any(i["detail"] == "b/new" and not i["current"] for i in shell.items)
 
 
 @pytest.mark.asyncio
@@ -96,10 +96,10 @@ async def test_model_picker_sort_toggle_is_named_in_the_title(tmp_path, monkeypa
         stored_override=None, reasoning_effort_source=None, supported_levels=[], select_model_and_effort=AsyncMock())
     shell = ShellActions(controller)
     await shell.submit("/model")
-    assert "Updated ↓" in shell.panel_title
+    assert "Updated ↓" in shell.panel_hint
     shell.model_sort = "name"
     await shell.submit("/model")
-    assert "Name A–Z" in shell.panel_title and all("group" in item for item in shell.items)
+    assert "Name A–Z" in shell.panel_hint and all("group" in item for item in shell.items)
 
 
 @pytest.mark.asyncio

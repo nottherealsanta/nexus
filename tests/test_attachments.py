@@ -67,6 +67,20 @@ async def test_image_bytes_and_provider_payloads(store):
     assert _responses_part(image, text_type="input_text")["image_url"] == url
 
 
+async def test_attachment_preview_is_bounded_daemon_owned_image_only(store):
+    item = await store.prepare(p.AttachmentPrepare(name="photo.png", data=PNG))
+    result = await store.preview(p.AttachmentPreview(item.attachment_id, max_bytes=len(PNG)))
+    assert result.attachment_id == item.attachment_id
+    assert result.media_type == "image/png" and result.data == PNG
+    with pytest.raises(ValueError, match="byte limit"):
+        await store.preview(p.AttachmentPreview(item.attachment_id, max_bytes=len(PNG) - 1))
+    with pytest.raises(ValueError, match="between"):
+        await store.preview(p.AttachmentPreview(item.attachment_id, max_bytes=0))
+    document = await store.prepare(p.AttachmentPrepare(name="note.txt", data=b"hello"))
+    with pytest.raises(ValueError, match="Only prepared images"):
+        await store.preview(p.AttachmentPreview(document.attachment_id))
+
+
 async def test_path_read_limits_denied_symlinks_and_expiry(store, tmp_path):
     (tmp_path / "note.txt").write_text("local note")
     item = await store.prepare(p.AttachmentPrepare(path="note.txt"))
@@ -187,6 +201,8 @@ async def test_protocol_attachment_roundtrip():
         ),
         p.SessionEnqueue,
     )
+    preview = p.AttachmentPreview("attachment", 1024)
+    assert p.decode_command(msgspec.json.encode(preview)) == preview
 
 
 def test_large_text_redaction_does_not_scan_every_possible_scheme_start():

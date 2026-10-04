@@ -137,7 +137,7 @@ def mcp_rows(report: Mapping[str, Any] | None, *, error: str | None = None) -> l
             f"{row[key]} {label}" for key, label in (("tool_count", "tools"), ("resource_count", "res"))
             if isinstance(row.get(key), int) and row[key]
         )
-        rows.append((tone, sanitize(str(row.get("name") or "server"), 40), counts or health))
+        rows.append((tone, sanitize(str(row.get("name") or "server"), 40), (counts or health) + " · " + str(row.get("tool_loading", "search"))))
         if row.get("last_error") and not row.get("connected"):
             rows.append(("plain-error", "  " + sanitize(str(row["last_error"]), 80), ""))
     return rows

@@ -326,6 +326,20 @@ def test_thinking_final_carries_signature_and_stays_ordered():
     assert message.text == "answer"
 
 
+def test_thinking_run_records_its_duration_from_event_timestamps():
+    view = fold(
+        [
+            _ev(1, "turn.started", {}, turn="t", ts=10.0),
+            _ev(2, "model.started", {}, turn="t", ts=10.1),
+            _ev(3, "thinking.delta", {"text": "pon"}, turn="t", ts=10.2),
+            _ev(4, "thinking.delta", {"text": "der"}, turn="t", ts=10.5),
+            _ev(5, "thinking.end", {"signature": "sig"}, turn="t", ts=10.871),
+            _ev(6, "thinking", {"text": "ponder", "signature": "sig"}, turn="t", ts=11.0),
+        ]
+    )
+    assert view.messages[0].thinking_ms == 671
+
+
 def test_tool_lifecycle_status_transitions():
     view = fold(
         [

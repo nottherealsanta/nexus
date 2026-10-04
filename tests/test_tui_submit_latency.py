@@ -12,6 +12,7 @@ from nexus.events import Event
 from nexus.ui.tui.app import NexusTextualApp
 from nexus.ui.tui.timeline import ConversationTimeline, TurnWidget
 from nexus.view import apply_many, initial_state
+from nexus.ui_support.session_controller import SessionController
 
 
 def _turn_events(turn: str, seq: int, prompt: str) -> list[Event]:
@@ -51,6 +52,40 @@ async def test_unchanged_turns_are_not_reconciled_again(monkeypatch):
         grown = apply_many(view, _turn_events("t5", 61, "prompt 5")[:3])
         await timeline.set_view(grown)
         assert calls == ["t5"]
+
+
+@pytest.mark.parametrize("kind", ["turn.completed", "turn.failed"])
+def test_completion_bell_is_live_only_and_session_scoped(kind):
+    controller = SessionController(_client(FakeTransport()), "s")
+    history = _turn_events("old", 1, "old prompt")
+    controller.view = apply_many(initial_state("s"), history)
+    controller.cursor = controller.view.last_seq
+    assert controller.completion_bell == 0
+    controller.ingest(history[-1])
+    controller.ingest(Event(type=kind, seq=6, session="other", turn="other"))
+    assert controller.completion_bell == 0
+    controller.ingest(Event(type="turn.started", seq=10, session="s", turn="live"))
+    done = Event(type=kind, seq=11, session="s", turn="live")
+    controller.ingest(done)
+    controller.ingest(done)
+    assert controller.completion_bell == 1
+    controller.ingest(Event(type="turn.started", seq=12, session="s", turn="cancel"))
+    controller.ingest(Event(type="turn.cancelled", seq=13, session="s", turn="cancel"))
+    assert controller.completion_bell == 1
+
+
+@pytest.mark.asyncio
+async def test_live_completion_rings_textual_bell(monkeypatch):
+    app = NexusTextualApp(_client(FakeTransport()), session="s")
+    bells = []
+    monkeypatch.setattr(app, "bell", lambda: bells.append(True))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        for event in _turn_events("live", 100, "hello"):
+            await asyncio.wait_for(app._post_event(event), 5)
+        assert bells == [True]
+        await asyncio.wait_for(app._post_event(_turn_events("live", 100, "hello")[-1]), 5)
+        assert bells == [True]
 
 
 @pytest.mark.asyncio

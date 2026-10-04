@@ -966,15 +966,6 @@ def _check_logs_reasoning_and_sessions(playwright, browser: Browser, port: int, 
         page.keyboard.press("Control+n")
         rows = _wait_acceptance_rows(
             command_log,
-            lambda current: sum(row["command"] == "AgentsList" for row in current)
-            > agent_list_count,
-        )
-        assert sum(row["command"] == "AgentsList" for row in rows) == agent_list_count + 1, (
-            f"Ctrl+N did not open the new-session agent picker: {rows!r}"
-        )
-        page.keyboard.press("Enter")  # confirm the preselected current agent
-        rows = _wait_acceptance_rows(
-            command_log,
             lambda current: any(
                 row["command"] == "SessionOpen"
                 and str(row.get("active_session", "")).startswith("session-")
@@ -986,6 +977,9 @@ def _check_logs_reasoning_and_sessions(playwright, browser: Browser, port: int, 
             and str(row.get("active_session", "")).startswith("session-")
             for row in rows
         ), f"Ctrl+N did not open a new host session: {rows!r}"
+        assert sum(row["command"] == "AgentsList" for row in rows) == agent_list_count, (
+            f"Ctrl+N unexpectedly opened an agent picker: {rows!r}"
+        )
         print("logs/reasoning/session: Ctrl+E open/close, Ctrl+T cycled effort low -> medium, Ctrl+O listed sessions, Ctrl+N opened a new host session")
     finally:
         page.close()

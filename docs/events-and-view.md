@@ -14,6 +14,10 @@ persists them, and a pure reducer turns them into the tree every UI renders.
   records replayable, and SSE `Last-Event-ID` map one-to-one onto the log.
 - `data` is JSON-serializable and bounded. UIs **must tolerate unknown types**.
 - Emitters persist first, then fan out (`EventSink` contract in `core/loop.py`).
+- The session summary's `last_seq` is the cursor for all durable log records;
+  its `completion_seq` is a separate durable watermark for terminal turn events
+  (`turn.completed`, `turn.failed`, `turn.cancelled`). Use the latter for unread
+  completion indicators, since presence and detach events also consume sequences.
 
 ## Catalogue
 

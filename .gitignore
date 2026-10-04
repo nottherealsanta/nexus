@@ -13,3 +13,5 @@ artifacts/
 
 # Native prototype build output
 rust/tui/target/
+rust/desktop/target/
+rust/desktop/Nexus.app/

@@ -261,3 +261,7 @@ The native Voice section configures enabled input, auto-send, processing device
 and recording duration through host Settings commands without starting capture.
 Provider pages group sign-in options and connection management beneath a labelled
 connection status. Model downloads remain explicitly confirmed.
+
+Normal composer sends steer an active turn at the next model step after the
+current operation. Ctrl+Enter queues a new turn; Alt+Enter interrupts. Idle
+sends start a new turn regardless of the chosen mode.

@@ -34,6 +34,7 @@
           "finalized": true,
           "kind": "text",
           "signature": null,
+          "started_ts": null,
           "streamed": false,
           "text": "run ls"
         }
@@ -52,6 +53,7 @@
           "finalized": true,
           "kind": "text",
           "signature": null,
+          "started_ts": null,
           "streamed": true,
           "text": "I will run that."
         }
@@ -70,6 +72,7 @@
           "finalized": true,
           "kind": "text",
           "signature": null,
+          "started_ts": null,
           "streamed": false,
           "text": "Done."
         }
@@ -88,6 +91,7 @@
           "finalized": true,
           "kind": "text",
           "signature": null,
+          "started_ts": null,
           "streamed": false,
           "text": "Second turn."
         }
@@ -167,6 +171,7 @@
               "finalized": true,
               "kind": "text",
               "signature": null,
+              "started_ts": null,
               "streamed": false,
               "text": "run ls"
             }
@@ -185,6 +190,7 @@
               "finalized": true,
               "kind": "text",
               "signature": null,
+              "started_ts": null,
               "streamed": true,
               "text": "I will run that."
             }
@@ -203,6 +209,7 @@
               "finalized": true,
               "kind": "text",
               "signature": null,
+              "started_ts": null,
               "streamed": false,
               "text": "Done."
             }
@@ -240,7 +247,8 @@
           ],
           "requested_ts": 12.0,
           "started_ts": 15.0,
-          "status": "completed"
+          "status": "completed",
+          "target": null
         }
       ],
       "updated_ts": 22.0,
@@ -269,6 +277,7 @@
               "finalized": true,
               "kind": "text",
               "signature": null,
+              "started_ts": null,
               "streamed": false,
               "text": "Second turn."
             }

@@ -94,7 +94,9 @@ class SessionSummary(msgspec.Struct, frozen=True):
     wire protocol, rendered in a terminal, or compared in a test with no
     dependency on the live handle. ``last_seq`` lets a view diff what it has
     already rendered against the current log; ``viewers`` and ``state`` make
-    background work legible without polling the session itself.
+    background work legible without polling the session itself. ``completion_seq``
+    identifies the latest durable terminal turn event for unread tracking and
+    ignores unrelated log activity such as presence changes.
     """
 
     id: str
@@ -102,6 +104,7 @@ class SessionSummary(msgspec.Struct, frozen=True):
     state: SessionState = "idle"
     last_activity: float = 0.0
     last_seq: int = 0
+    completion_seq: int = 0
     viewers: int = 0
     message_count: int = 0
     created_at: float = 0.0
@@ -422,6 +425,25 @@ class SessionManager:
                 session_id=row["session_id"], archived_at=row["archived_at"], reason=row["reason"]
             )
 
+    def set_auto_title(self, session_id: str, title: str) -> bool:
+        """Store a model-written title if the title is still the derived one.
+
+        A title the user set, or one already written, is never overwritten.
+        Returns whether the title changed.
+        """
+        session_id = validate_session_id(session_id)
+        if not self.store.exists(session_id):
+            raise SessionError(f"Session {session_id!r} does not exist")
+        return self.store.set_auto_title(session_id, title)
+
+    def title_source(self, session_id: str) -> str:
+        """Where the title came from: ``''`` (not set yet), ``first_message``, ``auto``, ``user``."""
+        session_id = validate_session_id(session_id)
+        row = self.store.session_row(session_id)
+        if row is None:
+            raise SessionError(f"Session {session_id!r} does not exist")
+        return row.get("title_source") or ""
+
     def unarchive(self, session_id: str) -> bool:
         """Remove one archive marker; return whether a marker was present."""
         session_id = validate_session_id(session_id)
@@ -522,6 +544,7 @@ class SessionManager:
             state=_state_for(handle),
             last_activity=row["last_activity"] or 0.0,
             last_seq=row["last_seq"] or 0,
+            completion_seq=row["completion_seq"] or 0,
             viewers=handle.viewers if handle is not None else 0,
             message_count=row["message_count"] or 0,
             created_at=row["created_at"] or 0.0,

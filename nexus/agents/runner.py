@@ -58,6 +58,7 @@ from .manager import AgentManager, AgentToolSelection
 from .model import (
     MODEL_INHERIT,
     MUTATING_FS_TOOLS,
+    AgentDef,
     AgentIndex,
     AgentNotFoundError,
 )
@@ -72,6 +73,7 @@ __all__ = [
     "DEFAULT_MAX_DEPTH",
     "DEFAULT_MAX_FANOUT",
     "DEFAULT_MAX_TIER",
+    "TierDecision",
     "MAX_REPORTED_FILES",
     "MAX_ROLE_INDEX_CHARS",
     "WORKTREE_CHILD_TOOLS",
@@ -99,7 +101,7 @@ AGENT_COMPLETED = "agent.completed"
 AGENT_CLAMPED = "agent.clamped"
 
 #: Defaults for the four bounding rules (plan section 15.8).
-DEFAULT_MAX_TIER = "medium"
+DEFAULT_MAX_TIER = "high"
 DEFAULT_MAX_CONCURRENT = 4
 DEFAULT_MAX_DEPTH = 3
 DEFAULT_MAX_FANOUT = 16
@@ -341,6 +343,8 @@ class SubagentOutcome:
     clamped: bool = False
     tier: str | None = None
     requested_tier: str | None = None
+    #: Model-facing note describing a tier the role or ``max_tier`` moved.
+    clamp_note: str = ""
     error: str | None = None
     metrics: Mapping[str, Any] = field(default_factory=dict)
     worktree: Mapping[str, Any] | None = None
@@ -381,7 +385,9 @@ class SubagentOutcome:
         """The model-facing body: child text plus clamp/drop notes."""
         lines: list[str] = []
         label = f"{self.agent} (session {self.session_id})" if self.session_id else self.agent
-        if self.clamped and self.requested_tier and self.tier:
+        if self.clamp_note:
+            lines.append(self.clamp_note)
+        elif self.clamped and self.requested_tier and self.tier:
             lines.append(
                 f"[note: requested tier {self.requested_tier!r} was clamped to "
                 f"{self.tier!r} by max_tier]"
@@ -741,6 +747,8 @@ class ChildSpec:
     root_turn_id: str = ""
     #: The role's ordered fallback model references (tried before the global chain).
     fallback: tuple[str, ...] = ()
+    #: Model-facing note when the role's tiers or ``max_tier`` moved the request.
+    clamp_note: str = ""
 
 
 class ChildRuntime(Protocol):
@@ -886,6 +894,36 @@ class _ChildRelay:
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class TierDecision:
+    """Which tier a child runs on and how the request was adjusted.
+
+    ``allowed`` is the role's usable ``tiers`` (empty when the role sets none),
+    ``requested`` what the call asked for, ``role_clamped`` whether the role's
+    list moved the request, and ``concrete`` a concrete model the call named.
+    """
+
+    resolution: TierResolution
+    allowed: tuple[str, ...] = ()
+    requested: str | None = None
+    role_clamped: bool = False
+    concrete: str | None = None
+
+    @property
+    def tier(self) -> str:
+        return str(self.resolution.tier)
+
+    @property
+    def clamped(self) -> bool:
+        return bool(self.resolution.clamped) or self.role_clamped
+
+    @property
+    def reason(self) -> str:
+        if self.role_clamped:
+            return "role"
+        return "max_tier" if self.resolution.clamped else ""
+
+
 class SubagentRunner:
     """Compute child authority, bound the tree, and run children via a factory."""
 
@@ -928,6 +966,7 @@ class SubagentRunner:
         worktree_root_for: Callable[[str | Path], str | Path] | None = None,
         runtime_supports_workspace: bool = False,
         worktree_scope: bool = False,
+        tier_probe: Callable[[str], bool] | None = None,
     ) -> None:
         if not callable(runtime_factory):
             raise SubagentError("runtime_factory must be callable")
@@ -970,6 +1009,9 @@ class SubagentRunner:
                 f"unknown max_tier {max_tier!r} (known: {self._tiers.order})"
             )
         self._max_tier = max_tier
+        #: Says whether a tier currently resolves to a runnable model. Absent
+        #: (tests, static wiring) every tier is assumed runnable.
+        self._tier_probe = tier_probe
         self._sessions: SessionFacade = (
             sessions if sessions is not None else DefaultSessionFacade(
                 segment=child_session_segment
@@ -1096,16 +1138,99 @@ class SubagentRunner:
             return req.model.split("/", 1)[0]
         return role.provider
 
+    def _role_for(self, req: TaskRequest) -> AgentDef | None:
+        try:
+            return self._agents.resolve(req.subagent_type, context="subagent")
+        except AgentNotFoundError:
+            return None
+
+    def allowed_tiers(self, role: object) -> tuple[str, ...]:
+        """The role's ``tiers`` that name a tier this table knows, in order."""
+        declared = tuple(getattr(role, "tiers", ()) or ())
+        return tuple(tier for tier in declared if tier in self._tiers.order)
+
+    def _nearest_allowed(self, tier: str, allowed: tuple[str, ...]) -> str:
+        """The allowed tier closest to ``tier`` (ties go to the cheaper one)."""
+        want = self._tiers.rank(tier)
+        if want is None:
+            return allowed[0]
+        return min(
+            allowed,
+            key=lambda name: (abs((self._tiers.rank(name) or 0) - want), self._tiers.rank(name) or 0),
+        )
+
+    def _runnable(self, tier: str) -> bool:
+        probe = self._tier_probe
+        if probe is None:
+            return True
+        try:
+            return bool(probe(tier))
+        except Exception:  # noqa: BLE001 - a broken probe must not block delegation
+            return True
+
+    def tier_decision(self, request: object) -> TierDecision:
+        """The tier a child runs on, with what was asked and why it moved.
+
+        Order (first match wins): a tier named by the call; the tier of a
+        concrete model named by the call; the role's pinned model; the role's
+        first tier. A tier outside the role's ``tiers`` moves to the nearest
+        allowed one (``role_clamped``); the global ``max_tier`` applies last.
+        A role with no ``tiers`` keeps the earlier behavior unchanged.
+        """
+        req = TaskRequest.from_value(request)
+        role = self._role_for(req)
+        allowed = self.allowed_tiers(role) if role is not None else ()
+        if not allowed:
+            reference = self.role_model_reference(req)
+            if reference is None or reference == MODEL_INHERIT:
+                resolution = self._tiers.resolve(
+                    None, parent=self._parent_tier, max_tier=self._max_tier
+                )
+            else:
+                resolution = self._tiers.resolve(
+                    reference, parent=self._parent_tier, max_tier=self._max_tier
+                )
+            return TierDecision(resolution=resolution)
+
+        asked = req.model if req.model and req.model != MODEL_INHERIT else None
+        requested: str | None = None
+        if asked is not None:
+            requested = (
+                asked if asked in self._tiers.order else self._tiers.resolve(asked).tier
+            )
+        pinned = role.model if role.model and role.model != MODEL_INHERIT else None
+        if requested is not None:
+            chosen = requested
+        elif pinned is not None:
+            chosen = (
+                pinned if pinned in self._tiers.order else self._tiers.resolve(pinned).tier
+            )
+        else:
+            chosen = allowed[0]
+        role_clamped = chosen not in allowed
+        if role_clamped:
+            chosen = self._nearest_allowed(chosen, allowed)
+        # A tier with no runnable model falls through to the role's other tiers
+        # (the cheaper ones first), so a misconfigured tier never blocks work.
+        if not self._runnable(chosen):
+            for other in allowed:
+                if other != chosen and self._runnable(other):
+                    chosen = other
+                    break
+        resolution = self._tiers.resolve(
+            chosen, parent=self._parent_tier, max_tier=self._max_tier
+        )
+        return TierDecision(
+            resolution=resolution,
+            allowed=allowed,
+            requested=requested or asked,
+            role_clamped=role_clamped,
+            concrete=asked if asked is not None and asked not in self._tiers.order else None,
+        )
+
     def resolve_tier(self, request: object) -> TierResolution:
         """Resolve and clamp the effective tier for a request."""
-        reference = self.role_model_reference(request)
-        if reference is None or reference == MODEL_INHERIT:
-            return self._tiers.resolve(
-                None, parent=self._parent_tier, max_tier=self._max_tier
-            )
-        return self._tiers.resolve(
-            reference, parent=self._parent_tier, max_tier=self._max_tier
-        )
+        return self.tier_decision(request).resolution
 
     def permission_key(self, request: object) -> str:
         """The gate key ``"<subagent_type>:<tier>"`` (plan section 15.6)."""
@@ -1152,6 +1277,8 @@ class SubagentRunner:
             return selection
         requested = frozenset(req.tools)
         selected = selection.selected & requested
+        if any(name.startswith("mcp__") for name in selected):
+            selected |= selection.selected & {"McpSearch", "McpCall"}
         dropped = selection.dropped | (requested - selection.selected)
         return replace(
             selection,
@@ -1172,6 +1299,53 @@ class SubagentRunner:
             # the child runtime's router then resolves to a runnable model.
             return resolution.tier
         return reference
+
+    def _tiered_child_model(
+        self,
+        role: AgentDef,
+        req: TaskRequest,
+        reference: str | None,
+        decision: TierDecision,
+    ) -> str | None:
+        """The child's model for a role that declares ``tiers``.
+
+        An explicit concrete model (named by the call, or pinned by the role
+        when the call names nothing) is kept while its tier is allowed. Any
+        other case runs the tier, which the router resolves to the first
+        runnable model of that tier (Settings -> Models). A tier with no
+        runnable model runs on the parent's model instead of failing.
+        """
+        pinned = role.model if role.model and role.model != MODEL_INHERIT else None
+        call_named = bool(req.model) and req.model != MODEL_INHERIT
+        concrete = (
+            decision.concrete
+            if call_named
+            else (pinned if pinned and pinned not in self._tiers.order else None)
+        )
+        if concrete and not decision.clamped and reference:
+            return reference
+        if not self._runnable(decision.tier) and self._parent_model:
+            return self._parent_model
+        return decision.tier
+
+    def _clamp_note(self, role: AgentDef, decision: TierDecision) -> str:
+        """The model-facing explanation of a role or ``max_tier`` adjustment."""
+        if not decision.clamped:
+            return ""
+        asked = decision.requested or decision.resolution.reference or ""
+        if decision.role_clamped:
+            listed = ", ".join(decision.allowed)
+            note = (
+                f"[note: {role.name} runs on {listed} only; requested "
+                f"{asked!r} ran on {decision.tier!r}"
+            )
+            if decision.resolution.clamped:
+                note += f", capped by max_tier {self._max_tier!r}"
+            return note + "]"
+        return (
+            f"[note: requested tier {asked!r} was clamped to "
+            f"{decision.tier!r} by max_tier]"
+        )
 
     # -- child session -----------------------------------------------------
 
@@ -1245,7 +1419,8 @@ class SubagentRunner:
             )
 
         selection = self.select_tools(role, req)
-        resolution = self.resolve_tier(req)
+        decision = self.tier_decision(req)
+        resolution = decision.resolution
         tier = resolution.tier
         reference = self.role_model_reference(req)
         child_model = self._child_model(reference, resolution)
@@ -1253,7 +1428,9 @@ class SubagentRunner:
         # runs the root's model. A bare tier hint still gates and labels the
         # spawn, but it never swaps the model: routing a tier picks the first
         # catalogue entry, which may not be usable with the parent's account.
-        if (
+        if decision.allowed:
+            child_model = self._tiered_child_model(role, req, reference, decision)
+        elif (
             self._parent_model
             and (
                 req.model is None
@@ -1270,7 +1447,8 @@ class SubagentRunner:
         child_provider = self.role_provider(req)
         if child_model in self._tiers.order:
             child_provider = None
-        clamped = bool(resolution.clamped)
+        clamped = decision.clamped
+        clamp_note = self._clamp_note(role, decision)
         dropped = tuple(sorted(selection.dropped))
 
         sink = emit if emit is not None else self._event_sink
@@ -1365,7 +1543,10 @@ class SubagentRunner:
                     **meta,
                     "description": req.description or role.description,
                     "model": child_model,
-                    "requested_tier": resolution.reference or self._parent_tier,
+                    "requested_tier": (
+                        decision.requested or resolution.reference or self._parent_tier
+                    ),
+                    "allowed_tiers": list(decision.allowed),
                     "clamped": clamped,
                     "tools": sorted(selection.selected),
                     "dropped_tools": list(dropped),
@@ -1380,7 +1561,11 @@ class SubagentRunner:
                     {
                         "agent": dict(meta),
                         **meta,
-                        "requested_tier": resolution.reference or self._parent_tier,
+                        "requested_tier": (
+                            decision.requested or resolution.reference or self._parent_tier
+                        ),
+                        "reason": decision.reason,
+                        "allowed_tiers": list(decision.allowed),
                         "max_tier": self._max_tier,
                         "diagnostics": list(resolution.diagnostics),
                     },
@@ -1413,8 +1598,11 @@ class SubagentRunner:
                 reasoning_effort=role.reasoning_effort,
                 fallback=tuple(role.fallback),
                 tier=tier,
-                requested_tier=resolution.reference or self._parent_tier,
+                requested_tier=(
+                    decision.requested or resolution.reference or self._parent_tier
+                ),
                 clamped=clamped,
+                clamp_note=clamp_note,
                 max_iterations=role.max_iterations or 0,
                 context_tokens=role.context_tokens,
                 workspace=child_workspace,
@@ -1847,6 +2035,7 @@ def _coerce_outcome(value: object, spec: ChildSpec) -> SubagentOutcome:
             session_id=value.session_id or spec.session_id,
             dropped_tools=value.dropped_tools or spec.dropped_tools,
             clamped=value.clamped or spec.clamped,
+            clamp_note=value.clamp_note or spec.clamp_note,
             tier=value.tier or spec.tier,
             requested_tier=value.requested_tier or spec.requested_tier,
             worktree_scope=value.worktree_scope or spec.worktree_scope,
@@ -1875,6 +2064,7 @@ def _coerce_outcome(value: object, spec: ChildSpec) -> SubagentOutcome:
         stop_reason=getattr(value, "stop_reason", None),
         dropped_tools=spec.dropped_tools,
         clamped=spec.clamped,
+        clamp_note=spec.clamp_note,
         tier=spec.tier,
         requested_tier=spec.requested_tier,
         error=getattr(value, "error", None),
