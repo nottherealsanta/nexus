@@ -1,4 +1,3 @@
-// Live dictation strip: the web twin of ui_support/tui_voice.py:VoiceStrip.
 // A floating card above the composer with the elapsed time, an audio-reactive
 // canvas waveform (newest sample on the right) and the running transcript.
 // Words that are new since the previous preview fade in; while the final

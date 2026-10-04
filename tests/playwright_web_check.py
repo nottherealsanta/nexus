@@ -707,7 +707,7 @@ async def main() -> None:
                 await page.locator("#toast-region .toast").last.get_by_role("button", name="Undo").click()
                 await archived_row.wait_for(timeout=5_000)
                 # Like the terminal, every conversation opens on the four-block
-                # request header (ui_support/tui_context_header.py).
+                # request header (ui_support/context_header.py).
                 header = page.locator("#timeline > .context-header")
                 await header.get_by_text(f"Session marker {session}", exact=False).wait_for(timeout=5_000)
                 assert await page.locator("#timeline > *").first.evaluate("n => n.classList.contains('context-header')")
@@ -804,7 +804,7 @@ async def main() -> None:
                 await page.locator("#composer-input").fill("must remain an unsent draft")
 
                 started_at = time.monotonic()
-                result = await terminal.call(p.SessionStart(session=session, content="Started in Textual"))
+                result = await terminal.call(p.SessionStart(session=session, content="Started in native terminal"))
                 assert isinstance(result, p.SessionStartResult)
                 await page.wait_for_function("() => document.querySelector('#context-meter').textContent.includes('Thinking · Checking candidates')")
                 assert 'Thinking · Checking candidates' in await page.locator('#inspector-content').inner_text()
@@ -1560,7 +1560,7 @@ async def main() -> None:
                 assert await tool_rows.nth(0).evaluate("e=>e.getBoundingClientRect().height") <= 24
                 assert await tool_rows.nth(0).locator(".tool-preview,.tool-details,.tool-inline-diff").count() == 0
                 assert await page.get_by_text("Result for read-1", exact=True).count() == 0
-                # Edit and Patch rows carry their diff inline, like textual-diff-view in the TUI.
+                # Edit and Patch rows carry their diff inline, like native split diffs in the TUI.
                 edit_diff = page.locator('#timeline .tool-card[data-call-id="edit-1"] .tool-inline-diff')
                 assert "Result for read-1" not in await tool_rows.nth(0).inner_text()
                 assert await edit_diff.count() == 1

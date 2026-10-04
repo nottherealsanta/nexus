@@ -10,7 +10,7 @@
 }
 
 /* Design tokens: the "Signal" finish (design.md). Role names map one to one
-   to nexus/ui/tui/theme.py (nx-accent -> --accent, nx-blue -> --info, ...); the
+   to rust/tui/src/render.rs (nx-accent -> --accent, nx-blue -> --info, ...); the
    values are the web's five signal colors on a near-black canvas. Dark is
    the default; light mirrors every role. */
 :root {

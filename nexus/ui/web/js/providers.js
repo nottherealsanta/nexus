@@ -1,4 +1,3 @@
-// Settings → Providers: mirrors the TUI pane (nexus/ui_support/tui_providers.py).
 // Every action is a host command; the daemon keeps credentials in its private credential file.
 // A browser or device sign-in shows a link and code here, then this page polls
 // ProviderLoginPoll until the daemon reports the outcome. First-run setup

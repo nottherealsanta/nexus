@@ -644,7 +644,6 @@ export function renderSystemPrompt({result}) {
   return root;
 }
 
-// Tools dialog (twin of tui_context_header.ToolsModal): built-in tools then MCP servers, one
 // row per family with every tool name and its tokens; a row expands to its tools, a tool to
 // everything the model is given for it.
 export function renderToolsReport({result}) {
@@ -688,7 +687,6 @@ export function renderToolsReport({result}) {
   return root;
 }
 
-// Twin of tui_context_header.one_line_preview: the first non-empty line, the rest counted.
 export function oneLinePreview(text, limit = 100) {
   const lines = String(text || '').split('\n').filter(line => line.trim());
   if (!lines.length) return '';

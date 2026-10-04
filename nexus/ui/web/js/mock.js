@@ -1,4 +1,3 @@
-// Dev-mode `/mock` command (MOCK_PLAN §3.2). Mirrors ui/tui/mock.py and
 // ui_support/mock_args.py. Registered only when the daemon reports `dev: true`,
 // so a normal daemon never shows the command.
 export function parseMockArgs(args) {

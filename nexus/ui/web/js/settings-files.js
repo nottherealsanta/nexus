@@ -1,5 +1,4 @@
 // Settings → Agents/Tools/MCP servers/Skills/Hooks/Config/Soul: the list + editor
-// pane of the terminal's SettingsConsole (ui_support/tui_settings.py), over the
 // same SettingsInventory/Read/Write/Delete/Reset host commands. Edits autosave
 // 700 ms after typing stops; agent model/fallbacks are a form over the frontmatter
 // (port of ui_support/agent_frontmatter.py).

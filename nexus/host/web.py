@@ -1,7 +1,7 @@
 """Browser-only HTTP routes and short-lived launch/session credentials.
 
 The peer API remains bearer authenticated. This module handles only the local
-browser surface and is intentionally independent of Textual and the runtime.
+browser surface and is intentionally independent of terminal and the runtime.
 """
 from __future__ import annotations
 
