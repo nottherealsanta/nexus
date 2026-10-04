@@ -3,7 +3,7 @@
 Mirrors the ``/voice download`` flow: check the host's status, show the size and
 ask for consent, start the download, show progress, then speak. Nothing here
 touches a widget or the host; it turns a ``SpeechStatusResult`` into the next
-step and its wording so Ratatui and Textual say the same thing.
+step and its wording so native speech flows use consistent wording.
 """
 from __future__ import annotations
 

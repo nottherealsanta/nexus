@@ -124,6 +124,10 @@ class VoiceManager:
         if self._closed or self._removing:
             return self._set_error("Voice manager is shutting down")
         if self._prepare_task is None or self._prepare_task.done():
+            # Publish before yielding: the task has not run yet, and returning
+            # the old absent/error snapshot makes clients show a retry action.
+            if self._state.state != "ready" or self._engine is None:
+                self._state = self._new_state("loading")
             self._prepare_task = asyncio.create_task(
                 self._prepare(allow_download=allow_download),
                 name="nexus-voice-prepare",
@@ -162,19 +166,18 @@ class VoiceManager:
                 # confirmed prepare actually starts fetching missing weights.
                 self._state = self._new_state("loading")
                 self._last_activity = time.monotonic()
-                if allow_download:
-                    factory = self.engine_factory
-                    availability = getattr(factory, "available", None)
-                    if not callable(availability):
-                        availability = getattr(
-                            getattr(factory, "func", None), "available", None
-                        )
-                    if callable(availability) and not availability():
-                        self._state = self._new_state(
-                            "unsupported",
-                            message="Voice runtime is not installed. Install the voice extra (nexus-harness[voice]; uv sync --extra voice for source checkouts; not available on musl/Alpine) and restart the daemon.",
-                        )
-                        return self._state
+                factory = self.engine_factory
+                availability = getattr(factory, "available", None)
+                if not callable(availability):
+                    availability = getattr(
+                        getattr(factory, "func", None), "available", None
+                    )
+                if callable(availability) and not availability():
+                    self._state = self._new_state(
+                        "unsupported",
+                        message="Voice runtime is not installed. Install the voice extra (nexus-harness[voice]; uv sync --extra voice for source checkouts; not available on musl/Alpine) and restart the daemon.",
+                    )
+                    return self._state
                 path = await self.store.ensure(
                     self._progress, allow_download=allow_download
                 )
