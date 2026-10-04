@@ -220,3 +220,14 @@ The compact neutral/image-preview follow-up passed 20 desktop Rust tests,
 failures deselected). Native captures cover both themes, expanded tool rows,
 draft and sent thumbnails, full previews and keyboard attachment removal.
 The final composer context-label rebuild passed all 20 desktop tests again.
+
+## Large session lists
+
+The session sidebar uses GPUI's variable-height virtual list with 100 px of
+overscan. Only visible session rows and their workspace/date headings create
+controls. Search still covers every host-projected session (up to the host's
+1,000-session limit), and filtering resets list measurements. Ordinary redraws
+retain the list's scroll position. A native rendering regression loads 1,000
+sessions, verifies fewer than 100 rows are instantiated for a frame, and checks
+that searching reaches session 999. This addresses the previously eager sidebar;
+it does not establish a frame-rate guarantee for every conversation or machine.

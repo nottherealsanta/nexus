@@ -329,40 +329,52 @@ impl Desktop {
         )
         .into_any_element()
     }
-    pub(crate) fn sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn session_row(&self, row: usize, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        #[cfg(test)]
+        self.session_render_count.set(self.session_render_count.get() + 1);
         let t = self.theme();
-        let query = self.search.read(cx).content.to_lowercase();
-        let mut cards = vec![];
-        let mut group = String::new();
-        for (i, s) in self.snapshot.sessions.iter().enumerate().filter(|(_, s)| {
-            format!("{} {} {}", s.title, s.id, s.workspace)
-                .to_lowercase()
-                .contains(&query)
-        }) {
-            if s.group != group {
-                group = s.group.clone();
-                cards.push(
-                    div()
-                        .mt_5()
-                        .mb_2()
-                        .px_3()
-                        .text_size(px(10.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(t.muted)
-                        .child(group.to_uppercase())
-                        .into_any_element(),
-                );
-            }
+        let Some((i, heading)) = self.session_rows.borrow().get(row).copied() else {
+            return div().into_any_element();
+        };
+        let Some(s) = self.snapshot.sessions.get(i) else {
+            return div().into_any_element();
+        };
             let id = s.id.clone();
             let workspace = s.workspace.clone();
-            cards.push(div().id(("session", i)).focusable().tab_stop(self.snapshot.panel_title.is_empty() && self.snapshot.prompt.is_none()).focus(move |s| s.bg(t.raised)).flex().flex_col().gap_1().px_2().py_1().rounded(px(8.)).mb_0().cursor(CursorStyle::Arrow)
+            let card = div().id(("session", i)).focusable().tab_stop(self.snapshot.panel_title.is_empty() && self.snapshot.prompt.is_none()).focus(move |s| s.bg(t.raised)).flex().flex_col().gap_1().px_2().py_1().rounded(px(8.)).mb_0().cursor(CursorStyle::Arrow)
                 .bg(if s.active { t.raised } else { t.sidebar }).hover(move |style| style.bg(t.raised))
                 .child(div().flex().items_center().gap_2()
                     .child(div().flex_1().min_w_0().font_weight(if s.active { FontWeight::SEMIBOLD } else { FontWeight::NORMAL }).truncate().child(s.title.clone()))
                     .child(self.button(("session-more",i), "···", json!({"type":"session_actions","text":s.id,"workspace":s.workspace}), cx).px_1().py_0()))
                 .child(div().text_size(px(11.)).text_color(t.muted).truncate().child(if s.sub.is_empty() { s.status.clone() } else if let Some((count, age)) = s.sub.split_once(" · ") { format!("{}{} message{} · active {}", if s.status == "working" { "Working · " } else if s.status == "input" { "Needs input · " } else { "" }, count, if count == "1" { "" } else { "s" }, age) } else { format!("{} messages", s.sub) }))
-                .on_click(cx.listener(move |this, _, w, cx| this.dispatch(json!({"type":"session_open","text":id,"workspace":workspace}), w, cx))).into_any_element());
+                .on_click(cx.listener(move |this, _, w, cx| this.dispatch(json!({"type":"session_open","text":id,"workspace":workspace}), w, cx))).into_any_element();
+        div().when(heading, |d| d.child(div().mt_5().mb_2().px_3()
+            .text_size(px(10.)).font_weight(FontWeight::SEMIBOLD)
+            .text_color(t.muted).child(s.group.to_uppercase())))
+            .child(card).into_any_element()
+    }
+    pub(crate) fn sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme();
+        let query = self.search.read(cx).content.to_lowercase();
+        let mut rows = vec![];
+        let mut group = String::new();
+        for (i, session) in self.snapshot.sessions.iter().enumerate().filter(|(_, session)| {
+            format!("{} {} {}", session.title, session.id, session.workspace)
+                .to_lowercase().contains(&query)
+        }) {
+            let heading = session.group != group;
+            group = session.group.clone();
+            rows.push((i, heading));
         }
+        if *self.session_rows.borrow() != rows {
+            self.session_list.reset(rows.len());
+            *self.session_rows.borrow_mut() = rows;
+        }
+        let view = cx.entity().downgrade();
+        let sessions = list(self.session_list.clone(), move |row, window, cx| {
+            view.update(cx, |this, cx| this.session_row(row, window, cx))
+                .unwrap_or_else(|_| div().into_any_element())
+        }).size_full();
         div()
             .w(px(252.))
             .flex_shrink_0()
@@ -407,9 +419,8 @@ impl Desktop {
                     .id("session-list")
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
                     .px_3()
-                    .children(cards),
+                    .child(sessions),
             )
             .when(!self.snapshot.archived_label.is_empty(), |d| {
                 d.child(

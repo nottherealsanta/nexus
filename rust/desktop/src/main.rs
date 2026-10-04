@@ -78,6 +78,10 @@ pub struct Desktop {
     inline_images: HashMap<String, std::sync::Arc<Image>>,
     focus: FocusHandle,
     transcript: ListState,
+    session_list: ListState,
+    #[cfg(test)]
+    session_render_count: std::cell::Cell<usize>,
+    session_rows: std::cell::RefCell<Vec<(usize, bool)>>,
     picker_scroll: ScrollHandle,
     logs_visible: bool,
     compact_pane: Option<String>,
@@ -291,6 +295,10 @@ impl Desktop {
             inline_images: HashMap::new(),
             focus: cx.focus_handle(),
             transcript,
+            #[cfg(test)]
+            session_render_count: std::cell::Cell::new(0),
+            session_list: ListState::new(0, ListAlignment::Top, px(100.)),
+            session_rows: std::cell::RefCell::new(Vec::new()),
             picker_scroll: ScrollHandle::new(),
             logs_visible: false,
             compact_pane: None,
@@ -1322,6 +1330,32 @@ mod native_tests {
             completion_text("other bu", "/agent bu", "bu", "build"),
             None
         );
+    }
+    #[gpui::test]
+    fn thousand_sessions_only_render_visible_rows_and_search_reaches_the_last(cx: &mut TestAppContext) {
+        let window = cx.add_window(|w, cx| Desktop::new(w, cx, true));
+        window.update(cx, |this, _, cx| {
+            this.snapshot.sessions_sidebar = true;
+            this.snapshot.sessions = (0..1000).map(|i| bridge::Session {
+                id: format!("session-{i}"), title: format!("Conversation {i}"),
+                group: format!("Workspace {}", i / 100), workspace: "/tmp/review".into(),
+                state: "idle".into(), status: "Ready".into(), sub: "1 · now".into(), active: false,
+            }).collect();
+            cx.notify();
+        }).unwrap();
+        cx.update(|cx| cx.update_window(window.into(), |_, w, cx| { let _ = w.draw(cx); }).unwrap());
+        window.update(cx, |this, _, cx| {
+            assert_eq!(this.session_rows.borrow().len(), 1000);
+            assert!(this.session_render_count.get() < 100, "offscreen rows must not create controls");
+            assert!(this.session_render_count.get() > 0);
+            eprintln!("1,000-session initial frame created {} rows", this.session_render_count.get());
+            this.search.update(cx, |input, cx| input.set("Conversation 999".into(), cx));
+            cx.notify();
+        }).unwrap();
+        cx.update(|cx| cx.update_window(window.into(), |_, w, cx| { let _ = w.draw(cx); }).unwrap());
+        window.update(cx, |this, _, _| {
+            assert_eq!(*this.session_rows.borrow(), vec![(999, true)]);
+        }).unwrap();
     }
     #[gpui::test]
     fn escape_keeps_pending_decisions_focused_instead_of_the_composer(cx: &mut TestAppContext) {
