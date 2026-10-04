@@ -69,7 +69,7 @@ class Workflows(TierPages, SpeakPages):
         self.form = None
 
     def edit(self, title, body, target, *, secret=False, autosave=False, replace=False):
-        """Open an editor; Escape returns to the menu that opened it (Textual keeps the list)."""
+        """Open an editor; Escape returns to the menu that opened it."""
         if self.shell.panel_title and not replace:
             self.stack.append((self.shell.panel_title, self.shell.panel_lines, self.shell.items, self.form, self.form_target, self.shell.panel_layout, self.shell.panel_format, self.shell.panel_tones))
             self.stack = self.stack[-20:]
@@ -117,7 +117,7 @@ class Workflows(TierPages, SpeakPages):
         else:
             items = [item for item in inventory.items if item.category == category]
             order = {"build": 0, "orchestrator": 1, "advisor": 2, "task": 3, "quick": 4}
-            if category == "agents":  # build first, built-in subagents, then custom (Textual order)
+            if category == "agents":  # build first, built-in subagents, then custom
                 items.sort(key=lambda item: (order.get(item.id, 9), item.id.casefold()))
             rows = [(escape_controls(item.label) + (" · built-in" if item.builtin else " · edited" if getattr(item, "overrides_builtin", False) else ""),
                      {"kind": "settings_read", "scope": scope, "category": category, "id": item.id})
@@ -324,7 +324,7 @@ class Workflows(TierPages, SpeakPages):
         elif kind == "confirm":
             label, lines = operation["label"], list(operation.get("lines") or [])
             following = operation["next"]
-            if following.get("kind") == "settings_delete":  # same wording as Textual
+            if following.get("kind") == "settings_delete":  # Keep confirmation wording consistent
                 if following.get("builtin"):
                     raise ValueError("Built-in defaults cannot be deleted; edit and save to override them")
                 label = (f"Reset {following['id']} to the built-in default? Your edits move to trash."
@@ -663,7 +663,7 @@ class Workflows(TierPages, SpeakPages):
             await self.shell.voice.start()
         elif kind == "voice_prepare":
             await self.client.voice_prepare(allow_download=operation.get("allow_download", True))
-            await self.shell.voice.open()
+            await self.shell.voice.open(prepare=False)
         elif kind == "setup":
             status = await self.client.setup_status()
             rows = [(f"Use {row.get('label', row['id'])} · newest model", {"kind": "setup_save", "provider": row["id"], "model": ""})
@@ -724,7 +724,7 @@ class Workflows(TierPages, SpeakPages):
         return {"child_id": r.child_id, "review_id": r.review_id, "digest": r.digest}
 
     async def review_pages(self, child_id):
-        """Load every review page for one pinned review identity (Textual pages by 8 files)."""
+        """Load every review page for one pinned review identity."""
         import re
         first = await self.client.review_worktree(child_id, limit=REVIEW_PAGE_LIMIT)
         for value, pattern in ((first.review_id, r"[0-9a-f]{32}"), (first.digest, r"[0-9a-f]{64}")):
@@ -847,7 +847,7 @@ class Workflows(TierPages, SpeakPages):
             self.form["status"] = f"Built-in default · saving writes an override to {where}"
 
     def agent_page(self):
-        """An agent file as form rows (model and fallbacks) beside the prompt file (Textual's agent form)."""
+        """An agent file as form rows (model and fallbacks) beside the prompt file."""
         from ...ui_support.agent_frontmatter import MAX_FALLBACKS, agent_fields, fallback_items
         draft = self.agent_draft
         fields = agent_fields(draft["body"])
@@ -882,7 +882,7 @@ class Workflows(TierPages, SpeakPages):
             item["group"] = title
 
     async def agent_write(self, field, index, ref):
-        """Set (or clear) one agent field and save the file at once, like the Textual form."""
+        """Set (or clear) one agent field and save the file at once,."""
         from ...ui_support.agent_frontmatter import agent_fields, fallback_items
         draft = self.agent_draft
         fields = agent_fields(draft["body"])
@@ -998,7 +998,7 @@ def login_result(login):
 
 
 def new_file_body(category, name):
-    """Starter text for a new settings file (same templates as Textual)."""
+    """Starter text for a new settings file."""
     if category == "agents":
         return new_agent_template(name)
     if category == "skills":
@@ -1007,7 +1007,7 @@ def new_file_body(category, name):
 
 
 def session_rows(result, current: str = "", seen: dict | None = None, now: float | None = None):
-    """Project session cards: ``status``/``sub`` come from the helpers Textual's cards use.
+    """Project session cards: ``status``/``sub`` come from shared presentation helpers.
 
     ``seen`` records the last terminal-turn sequence viewed per session, so
     presence-only log activity cannot make a session appear newly finished.

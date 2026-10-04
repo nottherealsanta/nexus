@@ -1,6 +1,6 @@
-//! Markdown to styled rows, following the Textual assistant text
-//! (`app.tcss` `.timeline-assistant ...`): coloured headings, inline code on a
-//! raised background, fences and quotes on the panel colour with a quote bar,
+//! Markdown to styled rows, following the canonical assistant text
+//! (`app.tcss` `.timeline-assistant ...`): coloured headings, colour-only inline
+//! code, fences and quotes on the panel colour with a quote bar,
 //! hanging-indent lists and aligned tables. HTML is literal; URLs stay visible.
 use crate::render::Palette;
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
@@ -366,7 +366,7 @@ pub fn lines(text: &str, p: &Palette, width: usize) -> Vec<Row> {
                 if w.table.is_some() {
                     w.text(&value, Style::default());
                 } else {
-                    let mut style = Style::default().fg(p.warning).bg(p.element_hi);
+                    let mut style = Style::default().fg(p.warning);
                     if w.bold > 0 {
                         style = style.add_modifier(Modifier::BOLD);
                     }
@@ -436,7 +436,7 @@ mod tests {
         assert!(rows[0].spans[0].style.add_modifier.contains(Modifier::BOLD));
     }
     #[test]
-    fn headings_use_textual_level_colours() {
+    fn headings_use_level_colours() {
         let p = Palette::new(false);
         let rows = lines("# one\n\n## two\n\n### three", &p, 60);
         let colours: Vec<_> = rows
@@ -471,9 +471,21 @@ mod tests {
         assert_eq!(table, vec!["a   │ bb", "────┼───", "ccc │ d "]);
     }
     #[test]
-    fn inline_code_has_its_own_background() {
-        let p = Palette::new(false);
-        let rows = lines("use `x` here", &p, 60);
-        assert_eq!(rows[0].spans[1].style.bg, Some(p.element_hi));
+    fn inline_code_changes_colour_without_a_background() {
+        for light in [false, true] {
+            let p = Palette::new(light);
+            let rows = lines("use `x` here", &p, 60);
+            let style = rows[0].spans[1].style;
+            assert_eq!(style.fg, Some(p.warning));
+            assert_eq!(style.bg, None);
+            assert_eq!(rows[0].bg, None);
+
+            let rows = lines("> use **`x`** here", &p, 60);
+            let style = rows[0].spans[1].style;
+            assert_eq!(style.fg, Some(p.warning));
+            assert_eq!(style.bg, None);
+            assert!(style.add_modifier.contains(Modifier::BOLD));
+            assert_eq!(rows[0].bg, Some(p.panel));
+        }
     }
 }

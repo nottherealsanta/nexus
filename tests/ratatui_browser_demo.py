@@ -1,9 +1,4 @@
-"""Native reference fixture and PTY bridge for the existing browser test server.
-
-The browser server speaks Textual's framed development protocol. This adapter
-owns a real controlling PTY and forwards its bytes; no production code imports
-Textual. Only deterministic recorded events enter the native client.
-"""
+"""Native deterministic fixture and framed controlling-PTY bridge."""
 from __future__ import annotations
 
 import asyncio
@@ -13,6 +8,7 @@ import os
 from pathlib import Path
 import pty
 import select
+import signal
 import struct
 import subprocess
 import sys
@@ -22,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 async def fixture():
-    from visual_tui_demo import DemoTransport
+    from ratatui_fixture import DemoTransport
     from nexus.ui.cli.client import Client
     from nexus.ui.ratatui.controller import NativeController
     from nexus.ui.ratatui.actions import ShellActions
@@ -41,7 +37,10 @@ async def fixture():
     process = await asyncio.create_subprocess_exec(str(binary_path()), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
     snapshot = project(controller, 1, shell=shell)
     state = os.environ.get("NEXUS_RATATUI_STATE", "")
-    if state.startswith("redesign-"):
+    if state == "local_disclosure":
+        shell.local_transcript = True
+        snapshot = project(controller, 1, shell=shell, literal=False)
+    elif state.startswith("redesign-"):
         _, theme, sidebars, mode = state.split("-", 3)
         shell.preferences.values.update(theme=f"nexus-{theme}", sessions_sidebar=sidebars[0]=="1", details_sidebar=sidebars[1]=="1", details_tab=mode if mode in {"Session","Files","MCP","Logs"} else "Session")
         shell.workspace = str(ROOT)
@@ -63,7 +62,7 @@ async def fixture():
         if mode=="Logs":
             snapshot["logs"]=["12:04:20 [ERROR] session · tool.failed · Parse failed", "4 routine entries folded · Ctrl+A toggle"]
     elif state == "subagent":
-        from visual_tui_demo import subagent_fixture
+        from ratatui_fixture import subagent_fixture
         agent, context = subagent_fixture()
         controller.view.agents[agent.id] = agent
         shell.workflows.agent_page_id = agent.id
@@ -136,6 +135,9 @@ async def fixture():
 
 
 def bridge(command=None):
+    def stop(signum, frame):
+        raise SystemExit(0)
+    signal.signal(signal.SIGTERM, stop)
     master, slave = pty.openpty()
     def resize(width, height):
         fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", height, width, 0, 0))

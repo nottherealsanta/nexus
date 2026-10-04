@@ -20,10 +20,17 @@ pub fn action(kind: &str, text: &str) -> io::Result<()> {
 pub fn edit(editor: &mut Editor, key: KeyEvent, multiline: bool) {
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     let control = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    // Option (Alt) and Control both move by word, as in other terminals; Shift extends.
+    let by_word = control || alt;
     match key.code {
+        KeyCode::Char(c @ ('b' | 'f')) if alt && !control => {
+            editor.select_move(shift);
+            editor.word(c == 'f')
+        }
         KeyCode::Left => {
             editor.select_move(shift);
-            if control {
+            if by_word {
                 editor.word(false)
             } else {
                 editor.left()
@@ -31,7 +38,7 @@ pub fn edit(editor: &mut Editor, key: KeyEvent, multiline: bool) {
         }
         KeyCode::Right => {
             editor.select_move(shift);
-            if control {
+            if by_word {
                 editor.word(true)
             } else {
                 editor.right()
@@ -85,12 +92,7 @@ pub fn edit(editor: &mut Editor, key: KeyEvent, multiline: bool) {
     }
 }
 pub fn pick(s: &Snapshot, index: usize, filter: &str) -> io::Result<()> {
-    if let Some(item) = s
-        .items
-        .iter()
-        .filter(|row| row.label.to_lowercase().contains(&filter.to_lowercase()))
-        .nth(index)
-    {
+    if let Some(item) = s.items.iter().filter(|row| row.matches(filter)).nth(index) {
         if let Some(operation) = &item.operation {
             send(json!({"type":"operation","operation":operation,"generation":s.generation}))
         } else {
@@ -104,7 +106,7 @@ pub fn toggle(s: &Snapshot, index: usize, filter: &str) -> io::Result<()> {
     if let Some(item) = s
         .items
         .iter()
-        .filter(|row| row.label.to_lowercase().contains(&filter.to_lowercase()))
+        .filter(|row| row.matches(filter))
         .nth(index)
         .filter(|item| item.toggle_operation.is_some() && !item.toggle_locked)
     {
@@ -172,5 +174,22 @@ mod base64_tests {
         assert_eq!(super::base64(b"fo"), "Zm8=");
         assert_eq!(super::base64(b"foo"), "Zm9v");
         assert_eq!(super::base64("héllo".as_bytes()), "aMOpbGxv");
+    }
+}
+
+#[cfg(test)]
+mod edit_tests {
+    use super::*;
+    #[test]
+    fn shift_with_option_or_control_selects_by_word() {
+        for modifier in [KeyModifiers::ALT, KeyModifiers::CONTROL] {
+            let mut editor = Editor::default();
+            editor.insert("one two three");
+            let key = KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT | modifier);
+            edit(&mut editor, key, true);
+            assert_eq!(editor.selected(), "three");
+            edit(&mut editor, key, true);
+            assert_eq!(editor.selected(), "two three");
+        }
     }
 }

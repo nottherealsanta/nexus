@@ -26,26 +26,50 @@ impl Trace {
         self.samples
             .push_back((name, elapsed.as_secs_f64() * 1000.0));
     }
+    pub fn record_count(&mut self, name: &'static str, value: usize) {
+        if self.enabled {
+            if self.samples.len() >= 16000 {
+                self.samples.pop_front();
+            }
+            self.samples.push_back((name, value as f64));
+        }
+    }
     pub fn summary(&self) -> Vec<String> {
         let mut groups: BTreeMap<&str, Vec<f64>> = BTreeMap::new();
         for (name, elapsed) in &self.samples {
             groups.entry(name).or_default().push(*elapsed);
         }
-        groups
-            .into_iter()
-            .map(|(name, mut times)| {
-                times.sort_by(f64::total_cmp);
-                let percentile =
-                    |fraction: f64| times[((times.len() - 1) as f64 * fraction).ceil() as usize];
-                format!(
-                    "{name}: p50 {:.3} · p95 {:.3} · max {:.3} ms (n={})",
-                    percentile(0.50),
-                    percentile(0.95),
-                    times[times.len() - 1],
-                    times.len()
-                )
-            })
-            .collect()
+        let raw = std::env::var("NEXUS_TUI_TRACE_RAW").as_deref() == Ok("1");
+        let mut lines: Vec<String> = Vec::new();
+        if raw {
+            let ordered: Vec<String> = self
+                .samples
+                .iter()
+                .filter(|(name, _)| *name == "event→frame")
+                .map(|(_, ms)| format!("{ms:.0}"))
+                .collect();
+            lines.push(format!("event→frame in order (ms): {}", ordered.join(" ")));
+        }
+        lines.extend(groups.into_iter().map(|(name, mut times)| {
+            times.sort_by(f64::total_cmp);
+            let percentile =
+                |fraction: f64| times[((times.len() - 1) as f64 * fraction).ceil() as usize];
+            format!(
+                "{name}: p50 {:.3} · p95 {:.3} · max {:.3} {} (n={})",
+                percentile(0.50),
+                percentile(0.95),
+                times[times.len() - 1],
+                if name == "layout_blocks" {
+                    "blocks"
+                } else if name == "layout_reset" {
+                    "resets"
+                } else {
+                    "ms"
+                },
+                times.len()
+            )
+        }));
+        lines
     }
     pub fn publish(&mut self) -> Option<Vec<String>> {
         if !self.enabled

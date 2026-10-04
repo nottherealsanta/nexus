@@ -1,7 +1,9 @@
 //! Presentation-only terminal client. Python owns all host commands/reduction.
 mod bridge;
+mod disclosure;
 mod editor;
 mod input;
+mod local_ui;
 mod markdown;
 mod render;
 mod trace;
@@ -90,7 +92,7 @@ impl Drop for Cleanup {
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().any(|arg| arg == "--version") {
-        println!("Nexus Ratatui · bridge 2 (schema 1 compatible)");
+        println!("Nexus Ratatui · bridge 3 (schema 1/2 compatible)");
         return Ok(());
     }
     let (tx, rx) = mpsc::sync_channel(2);
@@ -161,6 +163,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut cache = render::Cache::default();
     let mut drawn_regions = render::Regions::default();
     let mut logs_open = false;
+    let mut local_ui = local_ui::LocalUi::default();
     let mut details_focus = false;
     let mut details_visible = false;
     let mut details_index = 0usize;
@@ -195,9 +198,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             snapshot_received.get_or_insert(received_at);
             let parsed_at = Instant::now();
-            let mut next: Snapshot = serde_json::from_str(&line)?;
+            let mut fields: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_str(&line)?;
+            let transcript_changed = fields.contains_key("blocks");
+            // Deserialize changed content once, then move omitted sections from the mirror.
+            let block_value = fields.remove("blocks");
+            let mut next: Snapshot =
+                serde_json::from_value(serde_json::Value::Object(fields.clone()))?;
+            if let Some(value) = block_value {
+                next.blocks = serde_json::from_value(value)?;
+            }
+            if next.schema == 3 && !next.reset && next.generation != s.generation {
+                return Err("section patch crosses session".into());
+            }
+            if next.revision < s.revision {
+                continue;
+            }
+            next.merge_missing(&mut s, &fields);
+            if next.schema == 3 && !transcript_changed {
+                next.blocks_from = s.blocks.len();
+            }
+            next.transcript_changed_from = if next.schema == 1 || next.reset {
+                Some(0)
+            } else if transcript_changed {
+                Some(next.blocks_from)
+            } else {
+                None
+            };
             timings.record("parse", parsed_at.elapsed());
-            if next.schema != 1 && next.schema != 2 {
+            if !matches!(next.schema, 1 | 2 | 3) {
                 return Err("unsupported bridge schema".into());
             }
             if next.revision < s.revision {
@@ -235,6 +264,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 nav = None;
             }
+            cache.disclosure.scope = format!("{}|{}", next.composer_key, next.agent_page);
             if next.theme != s.theme {
                 cache.reset();
             }
@@ -303,6 +333,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     )?;
                 }
             }
+            if history_loaded
+                && (fields.contains_key("history") || fields.contains_key("history_append"))
+                && !next.history.is_empty()
+            {
+                // The canonical prompt history is bounded; keep local editor history bounded too.
+                draft.history = next.history.clone();
+                draft.history_index = draft.history.len();
+            }
             if !history_loaded {
                 draft.history = next.history.clone();
                 draft.history_index = draft.history.len();
@@ -338,7 +376,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     completion_cache.remove(0);
                 }
             }
+            cache.note_patch(next.transcript_changed_from);
+            cache.disclosure.verbose = next.transcript_verbose;
             next.restore_blocks(&mut s)?;
+            local_ui.reconcile(&mut next, &s);
             logs_open = next.details_sidebar && next.details_panel.tab == "Logs";
             if next.details_panel.tab != s.details_panel.tab {
                 details_scroll = 0;
@@ -366,7 +407,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut completion = Snapshot::default();
         completion.theme = s.theme.clone();
         completion.completion_query = token.to_string();
-        completion.completions = completion_candidates(&completion_cache, prefix);
+        completion.completions =
+            if token.starts_with('/') && !prefix.contains(' ') && !s.commands.is_empty() {
+                let needle = token.to_lowercase();
+                completion.completions = s
+                    .commands
+                    .iter()
+                    .filter(|(name, aliases)| {
+                        name.to_lowercase().starts_with(&needle)
+                            || aliases
+                                .iter()
+                                .any(|alias| alias.to_lowercase().starts_with(&needle))
+                    })
+                    .map(|(name, _)| name.clone())
+                    .collect();
+                completion.completions.sort();
+                completion.completions
+            } else {
+                completion_candidates(&completion_cache, prefix)
+            };
         if dirty {
             cache.focus = nav.and_then(|index| render::targets(&cache).get(index).copied());
             let drawing_at = Instant::now();
@@ -412,10 +471,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 send(json!({"type":"details_visible","open":visible}))?;
             }
             timings.record("update_content", cache.content_elapsed);
+            timings.record_count("layout_blocks", cache.content_blocks);
+            timings.record_count("layout_reset", usize::from(cache.content_reset));
             timings.record("draw", drawn_at.duration_since(drawing_at));
             timings.record("flush", drawn_at.elapsed());
             if let Some(at) = input_received.take() {
                 timings.record(input_kind, at.elapsed());
+            }
+            if s.event_sent_at > 0.0 {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)?
+                    .as_secs_f64();
+                if now >= s.event_sent_at {
+                    let elapsed = Duration::from_secs_f64(now - s.event_sent_at);
+                    timings.record("event→frame", elapsed);
+                    if matches!(s.event_kind.as_str(), "text.delta" | "thinking.delta") {
+                        timings.record("stream→frame", elapsed);
+                    }
+                }
+                s.event_sent_at = 0.0;
             }
             if let Some(at) = snapshot_received.take() {
                 timings.record("snapshot→frame", at.elapsed());
@@ -425,9 +499,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             dirty = false;
         }
-        // As-you-type completion (Textual `refresh_completion`): a `/command`,
+        // As-you-type completion : a `/command`,
         // an `@file`, or a command argument asks the host after a 120 ms pause.
-        if typed != (draft.text.clone(), draft.cursor) {
+        if typed.0 != draft.text || typed.1 != draft.cursor {
             if typed.0 != draft.text
                 && (s.attachments > 0
                     || typed.0.contains("[image ")
@@ -446,7 +520,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .next()
                 .unwrap_or("");
             let argument = draft.text.starts_with('/') && draft.text[..draft.cursor].contains(' ');
-            let triggers = s.panel_title.is_empty()
+            let local_command = query.starts_with('/') && !argument && !s.commands.is_empty();
+            let triggers = !local_command
+                && s.panel_title.is_empty()
                 && s.prompt.is_none()
                 && (query.starts_with('/') || query.starts_with('@') || argument);
             if !triggers {
@@ -492,6 +568,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         input_kind = if events.iter().any(|event| matches!(event,Event::Key(_))) { "key→frame" }
             else if events.iter().any(|event| matches!(event,Event::Mouse(mouse) if matches!(mouse.kind,MouseEventKind::ScrollUp|MouseEventKind::ScrollDown))) { "wheel→frame" }
+            else if events.iter().any(|event| matches!(event,Event::Mouse(mouse) if matches!(mouse.kind,MouseEventKind::Up(_)))) { "click→frame" }
             else { "input→frame" };
         // Consume the queued burst in order; scrolling accumulates before one draw.
         for queued_event in events {
@@ -519,7 +596,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         && drawn_regions.details.width > 0
                         && drawn_regions.details.x < drawn_regions.transcript.right()
                     {
-                        send(json!({"type":"toggle","key":"details_sidebar"}))?;
+                        local_ui
+                            .dispatch(json!({"type":"toggle","key":"details_sidebar"}), &mut s)?;
                         details_focus = false;
                         dirty = true;
                         continue;
@@ -538,13 +616,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 } else {
                                     (index + 3) % 4
                                 };
-                                action("details_tab", tabs[next])?;
+                                local_ui.dispatch(
+                                    json!({"type":"details_tab","text":tabs[next]}),
+                                    &mut s,
+                                )?;
                                 continue;
                             }
                             KeyCode::Esc => {
                                 details_focus = false;
                                 if drawn_regions.details.x < drawn_regions.transcript.right() {
-                                    send(json!({"type":"toggle","key":"details_sidebar"}))?;
+                                    local_ui.dispatch(
+                                        json!({"type":"toggle","key":"details_sidebar"}),
+                                        &mut s,
+                                    )?;
                                 }
                                 continue;
                             }
@@ -563,7 +647,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             KeyCode::Enter if s.details_panel.tab == "Files" => {
                                 if let Some(file) = s.details_panel.files.get(details_index) {
-                                    action("file_toggle", &file.path)?;
+                                    local_ui.dispatch(
+                                        json!({"type":"file_toggle","text":file.path}),
+                                        &mut s,
+                                    )?;
                                 }
                                 continue;
                             }
@@ -654,9 +741,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     .and_then(|(first, _)| cache.operations.get(*first))
                                     .and_then(|operation| resolve_operation(operation, None))
                                 {
-                                    send(
-                                        json!({"type":"operation","operation":&operation,"generation":s.generation}),
-                                    )?;
+                                    if cache.disclosure.toggle(&operation, &s.blocks) {
+                                        cache.invalidate_disclosure();
+                                        dirty = true;
+                                    } else {
+                                        send(
+                                            json!({"type":"operation","operation":&operation,"generation":s.generation}),
+                                        )?;
+                                    }
                                 }
                                 continue;
                             }
@@ -703,19 +795,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         action("command", "/sessions")?;
                                     } else {
                                         s.last_opened = "sessions".into();
-                                        send(json!({"type":"toggle","key":"sessions_sidebar"}))?;
+                                        local_ui.dispatch(
+                                            json!({"type":"toggle","key":"sessions_sidebar"}),
+                                            &mut s,
+                                        )?;
                                     }
                                 }
                                 KeyCode::Char('l') => {
                                     s.last_opened = "details".into();
                                     details_focus = true;
-                                    send(json!({"type":"toggle","key":"details_sidebar"}))?;
+                                    local_ui.dispatch(
+                                        json!({"type":"toggle","key":"details_sidebar"}),
+                                        &mut s,
+                                    )?;
                                 }
                                 KeyCode::Char('e') => {
                                     logs_open = !logs_open;
                                     details_focus = logs_open;
                                     s.last_opened = "details".into();
-                                    send(json!({"type":"logs","open":logs_open}))?;
+                                    local_ui.dispatch(
+                                        json!({"type":"logs","open":logs_open}),
+                                        &mut s,
+                                    )?;
                                 }
                                 KeyCode::Char('t') => action("cycle_effort", "")?,
                                 _ => {}
@@ -793,14 +894,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 && key.modifiers.contains(KeyModifiers::CONTROL)
                         {
                             logs_open = false;
-                            send(json!({"type":"logs","open":false}))?;
+                            local_ui.dispatch(json!({"type":"logs","open":false}), &mut s)?;
                             dirty = true;
                             continue;
                         }
                         if key.code == KeyCode::Char('a')
                             && key.modifiers.contains(KeyModifiers::CONTROL)
                         {
-                            action("logs_fold", "")?;
+                            local_ui.dispatch(json!({"type":"logs_fold"}), &mut s)?;
                             continue;
                         }
                     }
@@ -897,13 +998,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         {
                             action("dismiss", "")?;
                         } else if !s.items.is_empty() && !panel_detail {
-                            let count = s
-                                .items
-                                .iter()
-                                .filter(|row| {
-                                    row.label.to_lowercase().contains(&filter.to_lowercase())
-                                })
-                                .count();
+                            let count = s.items.iter().filter(|row| row.matches(&filter)).count();
                             match key.code {
                                 KeyCode::Up => selection = selection.saturating_sub(1),
                                 KeyCode::Down => {
@@ -982,7 +1077,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 dirty = true;
                                 continue;
                             }
-                            // Textual: Enter on a standalone `/command` runs the highlighted
+                            // The terminal: Enter on a standalone `/command` runs the highlighted
                             // command; on an argument that is already complete it submits.
                             KeyCode::Enter
                                 if draft.text.starts_with('/')
@@ -1080,21 +1175,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     action("command", "/sessions")?;
                                 } else {
                                     s.last_opened = "sessions".into();
-                                    send(json!({"type":"toggle","key":"sessions_sidebar"}))?;
+                                    local_ui.dispatch(
+                                        json!({"type":"toggle","key":"sessions_sidebar"}),
+                                        &mut s,
+                                    )?;
                                 }
                                 continue;
                             }
                             KeyCode::Char('l') => {
                                 s.last_opened = "details".into();
                                 details_focus = true;
-                                send(json!({"type":"toggle","key":"details_sidebar"}))?;
+                                local_ui.dispatch(
+                                    json!({"type":"toggle","key":"details_sidebar"}),
+                                    &mut s,
+                                )?;
                                 continue;
                             }
                             KeyCode::Char('e') => {
                                 logs_open = !logs_open;
                                 details_focus = logs_open;
                                 s.last_opened = "details".into();
-                                send(json!({"type":"logs","open":logs_open}))?;
+                                local_ui
+                                    .dispatch(json!({"type":"logs","open":logs_open}), &mut s)?;
                                 dirty = true;
                                 continue;
                             }
@@ -1289,7 +1391,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     if let Some(tab) =
                                         render::details_tab_at(r.details, mouse.column)
                                     {
-                                        action("details_tab", tab)?;
+                                        local_ui.dispatch(
+                                            json!({"type":"details_tab","text":tab}),
+                                            &mut s,
+                                        )?;
                                     }
                                     dirty = true;
                                     continue;
@@ -1396,9 +1501,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             resolve_operation(operation, Some(column))
                                         })
                                     {
-                                        send(
-                                            json!({"type":"operation","operation":&operation,"generation":s.generation}),
-                                        )?;
+                                        if cache.disclosure.toggle(&operation, &s.blocks) {
+                                            cache.invalidate_disclosure();
+                                        } else {
+                                            send(
+                                                json!({"type":"operation","operation":&operation,"generation":s.generation}),
+                                            )?;
+                                        }
                                     }
                                 } else {
                                     // OSC 52 reaches the user's terminal even over SSH; Python also tries the desktop clipboard.
@@ -1535,7 +1644,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     if let Some(tab) =
                                         render::details_tab_at(r.details, mouse.column)
                                     {
-                                        action("details_tab", tab)?;
+                                        local_ui.dispatch(
+                                            json!({"type":"details_tab","text":tab}),
+                                            &mut s,
+                                        )?;
                                     }
                                     dirty = true;
                                     continue;
@@ -1561,8 +1673,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     .flatten()
                                     .and_then(|i| s.details_panel.files.get(i))
                                 {
-                                    send(
-                                        json!({"type":"file_toggle","text":file.path,"generation":s.generation}),
+                                    local_ui.dispatch(
+                                        json!({"type":"file_toggle","text":file.path}),
+                                        &mut s,
                                     )?;
                                 }
                             } else if r.sessions.contains((mouse.column, mouse.row).into()) {
@@ -1574,7 +1687,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                                 if mouse.row == r.sessions.y {
                                     if mouse.column < r.sessions.x + 4 {
-                                        send(json!({"type":"toggle","key":"sessions_sidebar"}))?;
+                                        local_ui.dispatch(
+                                            json!({"type":"toggle","key":"sessions_sidebar"}),
+                                            &mut s,
+                                        )?;
                                     } else if mouse.column >= r.sessions.right().saturating_sub(4) {
                                         action("command", "/new")?;
                                     }
@@ -1671,15 +1787,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             action("command", "/sessions")?;
                                         } else {
                                             s.last_opened = "sessions".into();
-                                            send(
+                                            local_ui.dispatch(
                                                 json!({"type":"toggle","key":"sessions_sidebar"}),
+                                                &mut s,
                                             )?;
                                         }
                                     }
                                     Some((render::TabHit::Details, _)) => {
                                         s.last_opened = "details".into();
                                         details_focus = true;
-                                        send(json!({"type":"toggle","key":"details_sidebar"}))?;
+                                        local_ui.dispatch(
+                                            json!({"type":"toggle","key":"details_sidebar"}),
+                                            &mut s,
+                                        )?;
                                     }
                                     _ => {}
                                 }

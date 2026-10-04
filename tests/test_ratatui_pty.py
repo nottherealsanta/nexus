@@ -70,7 +70,7 @@ def test_native_bridge_keyboard_and_terminal_restoration():
             assert time.monotonic() < deadline
             time.sleep(.01)
         os.write(master, b"hello\r")
-        assert read_action() == {"type": "submit", "text": "hello", "mode": "queue", "generation": 0}
+        assert read_action() == {"type": "submit", "text": "hello", "mode": "steer", "generation": 0}
         # Drafts belong to workspace/session, not to the currently visible tab.
         def session_snapshot(key, generation, revision):
             process.stdin.write((json.dumps({"schema": 1, "revision": revision,
@@ -82,10 +82,10 @@ def test_native_bridge_keyboard_and_terminal_restoration():
         time.sleep(.15)
         session_snapshot("workspace/b", 2, 1)
         os.write(master, b"other\r")
-        assert read_action() == {"type": "submit", "text": "other", "mode": "queue", "generation": 2}
+        assert read_action() == {"type": "submit", "text": "other", "mode": "steer", "generation": 2}
         session_snapshot("workspace/a", 3, 1)
         os.write(master, b"\r")
-        assert read_action() == {"type": "submit", "text": "keep my draft", "mode": "queue", "generation": 3}
+        assert read_action() == {"type": "submit", "text": "keep my draft", "mode": "steer", "generation": 3}
         session_snapshot("", 0, 1)
         os.write(master, b"/m")  # no Tab: completion is requested after a short pause
         assert read_action() == {"type": "complete", "text": "/m", "prefix": "/m", "generation": 0}
@@ -95,17 +95,17 @@ def test_native_bridge_keyboard_and_terminal_restoration():
             "completion_query": "/m", "completions": ["/model", "/mcp"]}) + "\n").encode())
         process.stdin.flush()
         time.sleep(.1)
-        os.write(master, b"\x1b[B\r")  # Enter on a standalone /command runs the highlighted one, like Textual
-        assert read_action() == {"type": "submit", "text": "/mcp", "mode": "queue", "generation": 0}
+        os.write(master, b"\x1b[B\r")  # Enter on a standalone /command runs the highlighted one, like native terminal
+        assert read_action() == {"type": "submit", "text": "/mcp", "mode": "steer", "generation": 0}
         # Keyboard focus: Tab on an empty draft focuses the last clickable block; Enter opens it.
-        process.stdin.write((json.dumps({"schema": 1, "revision": 3, "title": "Nexus PTY", "status": "idle",
+        process.stdin.write((json.dumps({"schema": 3, "revision": 3, "title": "Nexus PTY", "status": "idle",
             "blocks": [{"id": "t1", "kind": "tool", "text": "Read a.py", "operation": {"kind": "tool_page", "id": "t1"}},
                        {"id": "t2", "kind": "tool", "text": "Read b.py", "operation": {"kind": "tool_page", "id": "t2"}}]}) + "\n").encode())
         process.stdin.flush()
         time.sleep(.2)
         assert not bells
-        for revision in (3, 3):
-            process.stdin.write((json.dumps({"schema": 1, "revision": revision,
+        for revision in (4, 5):
+            process.stdin.write((json.dumps({"schema": 3, "revision": revision,
                 "completion_bell": 1, "blocks": [
                     {"id": "t1", "kind": "tool", "text": "Read a.py", "operation": {"kind": "tool_page", "id": "t1"}},
                     {"id": "t2", "kind": "tool", "text": "Read b.py", "operation": {"kind": "tool_page", "id": "t2"}}]}) + "\n").encode())
@@ -167,7 +167,7 @@ def test_native_bridge_keyboard_and_terminal_restoration():
         process.stdin.flush()
         time.sleep(.1)
         os.write(master, b"\r")
-        assert read_action() == {"type": "submit", "text": "keep this draft", "mode": "queue", "generation": 0}
+        assert read_action() == {"type": "submit", "text": "keep this draft", "mode": "steer", "generation": 0}
         os.write(master, b"\x1b[<0;90;21M")  # controls row: above padding, workspace and meter rows
         assert read_action() == {"type": "context_popover", "text": ""}
         os.write(master, b"\x18c")
@@ -238,3 +238,78 @@ def test_context_dialog_toggle_keyboard_and_lock():
         thread.join(timeout=.5)
         os.close(master)
         os.close(slave)
+
+
+@pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
+def test_local_disclosure_without_python_reply():
+    from ratatui_latency_probe import NativeProbe
+    probe = NativeProbe(BINARY)
+    block = {"id":"g", "kind":"tool_group", "text":"Bash · 1 call", "local_ui":True,
+             "operation":{"kind":"block_toggle","id":"g"}, "members":[
+                 {"id":"c", "kind":"tool", "heading":"Bash ls", "local_ui":True,
+                  "operation":{"kind":"block_toggle","id":"c:detail"},
+                  "output_operation":{"kind":"block_toggle","id":"c:output"},
+                  "fold_lines":2, "local_detail":"  command: ls\nResult:\nUNIQUE LOCAL RESULT"}]}
+    try:
+        probe.send({"schema":3,"reset":True,"revision":1,"generation":1,"blocks":[block],"sessions_sidebar":False,"details_sidebar":False})
+        deadline=time.monotonic()+4
+        while b"Bash" not in probe.output and probe.process.poll() is None and time.monotonic()<deadline:
+            time.sleep(.02)
+        assert probe.process.poll() is None, bytes(probe.output[-1000:])
+        probe.keys(b"\t\r")
+        time.sleep(.1)
+        assert not probe.read_actions()
+        assert b"Bash ls" in probe.output
+        probe.keys(b"\t\r")
+        time.sleep(.1)
+        assert not probe.read_actions()
+        assert b"command" in probe.output
+        # Mouse on the output label opens the rest without a Python snapshot.
+        probe.keys(b"\x1b[<0;12;4M\x1b[<0;12;4m")
+        time.sleep(.1)
+        assert not probe.read_actions()
+        assert b"UNIQUE LOCAL RESULT" in probe.output
+        # Ordered patches preserve local expansion state.
+        updated = json.loads(json.dumps(block))
+        updated["members"][0]["local_detail"] += "\nSTREAMED RESULT"
+        probe.send({"schema":3,"revision":2,"generation":1,"blocks_from":0,"blocks":[updated]})
+        time.sleep(.1)
+        assert not probe.read_actions()
+        assert b"STREAMED RESULT" in probe.output
+        assert probe.process.poll() is None
+    finally:
+        probe.close()
+
+
+@pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
+def test_static_completion_and_optimistic_toggle_ignore_stale_echo():
+    from ratatui_latency_probe import NativeProbe
+    probe=NativeProbe(BINARY)
+    try:
+        probe.send({"schema":3,"reset":True,"revision":1,"generation":1,"status":"idle",
+                    "local_ui_enabled":True,"sessions_sidebar":False,"details_sidebar":False,
+                    "commands":[["/model",[]],["/mock",[]]],"blocks":[{"id":"a","kind":"markdown","text":"READY"}]})
+        deadline=time.monotonic()+4
+        while b"READY" not in probe.output and probe.process.poll() is None and time.monotonic()<deadline: time.sleep(.02)
+        probe.keys(b"/m")
+        time.sleep(.15)
+        assert not probe.read_actions()
+        assert b"/model" in probe.output
+        probe.keys(b"\x02")
+        time.sleep(.08)
+        first=probe.read_actions()
+        assert first[0]["type"]=="toggle" and first[0]["value"] is True
+        probe.keys(b"\x02")
+        time.sleep(.08)
+        second=probe.read_actions()
+        assert second[0]["value"] is False
+        # Delayed persistence echo from the first click must not reopen the sidebar.
+        probe.send({"schema":3,"revision":2,"generation":1,"sessions_sidebar":True,"ui_ack":first[0]["ui_sequence"]})
+        time.sleep(.08)
+        probe.keys(b"\x02")
+        time.sleep(.08)
+        third=probe.read_actions()
+        assert third[0]["value"] is True
+        assert third[0]["ui_sequence"]>second[0]["ui_sequence"]
+    finally:
+        probe.close()

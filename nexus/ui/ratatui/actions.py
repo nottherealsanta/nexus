@@ -82,6 +82,7 @@ class ShellActions:
         self.tabs = []
         self.last_completion_cue = 0
         self.breadcrumb = ""
+        self.model_names: dict[tuple[str, str], str] = {}  # (provider, id) -> catalogue display name
         self.settings_nav: str | None = None  # selected Settings area while Settings is open
         self.model_sort = "updated"  # model picker order: updated|name (Ctrl+S)
         self.update_notice = ""  # "<version> available: <command>" shown in the footer
@@ -319,7 +320,7 @@ class ShellActions:
         except Exception:
             self.composer_restore = text
             raise
-        from ...ui_support.tui_history import append_history
+        from ...ui_support.prompt_history import append_history
         append_history(text)
         self.attachments.clear(); self.attachment_labels.clear()
         self.marker_attachments.clear()
@@ -496,7 +497,7 @@ class ShellActions:
             await self.workflows.operate({"kind": "archived", "query": argument})
         elif name == "/settings":
             self.workflows.settings_scope = argument if argument in {"project", "global"} else "global"
-            await self.workflows.operate({"kind": "appearance"})  # Textual opens Settings on Appearance
+            await self.workflows.operate({"kind": "appearance"})
         elif name == "/reload":
             self.show("Extensions reloaded", await self.client.reload_extensions(trigger="chat"))
             self.mcp_due = 0.0
@@ -513,7 +514,7 @@ class ShellActions:
                     return True  # the session changed while converting; never attach to another session
                 self.attachments.append(item)
                 self.composer_insert = self.attachment_marker(len(self.attachments)-1)
-                if item.kind == "markdown":  # Textual opens the converted preview immediately
+                if item.kind == "markdown":
                     self.workflows.menu("Attachment · " + item.name, [("Remove attachment", {"kind": "attachment_remove", "id": item.attachment_id})], labelled(item.preview))
             else:
                 self.workflows.menu("Attachments", [(self.attachment_label(i) + " · " + item.name, {"kind": "attachment_preview", "id": item.attachment_id}) for i,item in enumerate(self.attachments)], labelled(self.attachments))

@@ -163,7 +163,7 @@ pub fn panel_item_at(
     for (i, item) in s
         .items
         .iter()
-        .filter(|item| item.label.to_lowercase().contains(&filter.to_lowercase()))
+        .filter(|item| item.matches(filter))
         .enumerate()
     {
         if !item.group.is_empty() && item.group != group {
@@ -197,7 +197,7 @@ pub fn panel_toggle_at(
     let item = s
         .items
         .iter()
-        .filter(|item| item.label.to_lowercase().contains(&filter.to_lowercase()))
+        .filter(|item| item.matches(filter))
         .nth(index);
     item.is_some_and(|item| {
         item.toggle_operation.is_some()
@@ -205,7 +205,7 @@ pub fn panel_toggle_at(
             && x >= area.right().saturating_sub(10)
     })
 }
-/// Dialog background with an accent title and a rule (Textual modal look);
+/// Dialog background with an accent title and a rule (The terminal modal look);
 /// returns the padded content area.
 pub fn dialog_frame(
     frame: &mut Frame,
@@ -247,7 +247,7 @@ pub fn dialog_frame(
     );
     panel_inner(area, borderless)
 }
-/// Panel lines coloured by tone like the Textual tool-details modal: bold section
+/// Panel lines coloured by tone like the The terminal tool-details modal: bold section
 /// titles, dim labels (`label: ` before a value), green/red/magenta diff lines.
 /// Wrapped rows keep the line's leading indent plus two columns.
 pub fn toned_lines(

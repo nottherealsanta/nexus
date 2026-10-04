@@ -1,8 +1,8 @@
 """Settings -> Models, Session titles, and an agent's Tiers row (Ratatui).
 
 A mixin for ``Workflows``: the pages are built from the shared rows, labels and
-help text in ``ui_support/tier_settings.py`` so the Textual client says the same
-thing, and every change goes through the host commands (``ModelTierSet``,
+help text in ``ui_support/tier_settings.py`` so native clients use consistent
+wording, and every change goes through the host commands (``ModelTierSet``,
 ``AgentMaxTierSet``, ``SessionTitleSettingsSet`` and the agent file write).
 """
 from __future__ import annotations

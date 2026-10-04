@@ -19,11 +19,10 @@ from ...ui_support.prompts import approval_choices, pending_questions
 from .actions import ShellActions, labelled
 from ...ui_support.context import context_usage, context_measure, price_tier_thresholds
 from ...ui_support.completion import root_agents
-from ...ui_support.tui_history import load_history
-from ...ui_support.clipboard import read_clipboard_image
+from ...ui_support.prompt_history import load_history
 from .controller import NativeController as TuiController
 from ...ui_support.text import escape_controls, redact, sanitize
-from ...ui_support.tool_details import sections_to_text, tool_detail_sections
+from ...ui_support.tool_details import sections_to_text
 
 
 _OUTPUT_SECTIONS = frozenset({"Result", "Summary", "Error", "Progress"})
@@ -72,7 +71,7 @@ def _revision(block):
 def _safe_blocks(blocks):
     result = []
     for block in blocks:
-        safe = {**block, **{key: redact(escape_controls(block[key])) for key in ("title", "text", "path", "detail", "color") if key in block}}
+        safe = {**block, **{key: redact(escape_controls(block[key])) for key in ("title", "text", "path", "detail", "color", "local_detail", "local_preview", "fold_summary", "heading") if key in block}}
         if block.get("chips"):
             safe["chips"] = [redact(escape_controls(chip)) for chip in block["chips"]]
         if "members" in block:
@@ -82,17 +81,32 @@ def _safe_blocks(blocks):
     return result
 
 
+def _fold_summary(turn) -> str:
+    """The muted line under a folded turn's prompt: tool calls, tokens, model."""
+    from ...ui_support.context import _compact_tokens
+    from ...ui_support.timeline import _turn_models
+    count = len(turn.tools)
+    parts = [f"{count} tool{'s' if count != 1 else ''}"]
+    if turn.usage.total_tokens:
+        parts.append(f"{_compact_tokens(turn.usage.total_tokens)} tokens")
+    model = _turn_models(turn).split(", ")[0].rsplit("/", 1)[-1]
+    if model != "unknown":
+        parts.append(model)
+    return " · ".join(parts)
+
+
 def _project_turn(turn, shell, agents=None, literal=True):
-    """Blocks of one turn in Textual's order and spacing (ui/tui/timeline.py).
+    """Blocks of one turn in canonical transcript order and spacing.
 
     Each block carries ``gap`` (blank rows before it, after margin collapsing),
     so Rust only draws. Reply/tool/thought order follows the durable event seq.
     """
     from ...ui_support.timeline import (
         BATCH_GLYPHS, _has_message_content, _literal, submitted_attachment_summary,
-        thought_title, tool_batches, tool_row_text, tool_status, turn_footer_text,
+        thought_title, tool_batches, tool_status, turn_footer_text,
         _turn_duration, _text, turn_agent_label)
-    collapsed = bool(shell and turn.id in shell.collapsed_turns)
+    local_ui = bool(shell and getattr(shell, "local_transcript", False))
+    collapsed = bool(not local_ui and shell and turn.id in shell.collapsed_turns)
     lines = [f"\nTurn {turn.index} · {turn.phase}"] if literal else []
     emit = lines.append if literal else (lambda _line: None)
     entries = []  # (seq, rank, block, top_margin, bottom_margin)
@@ -122,7 +136,7 @@ def _project_turn(turn, shell, agents=None, literal=True):
         if message.role == "assistant" and any(block.kind == "thinking" for block in message.blocks):
             thinking = message.thinking
             if thinking.strip():
-                expanded = bool(shell and message.id + "thinking" in shell.expanded)
+                expanded = bool(not local_ui and shell and message.id + "thinking" in shell.expanded)
                 count = len([line for line in thinking.splitlines() if line.strip()])
                 # `Thought: 671ms`; the reasoning opens beneath it. Collapsed, the first
                 # sentence and the line count announce what is hidden.
@@ -130,7 +144,8 @@ def _project_turn(turn, shell, agents=None, literal=True):
                 title = "Thought" if took is None else f"Thought: {_thought_took(took)}"
                 suffix = "" if expanded else (f"{thought_title(thinking)} · {count} lines ▸" if count > 1 else f"{thought_title(thinking)} ▸")
                 block = {"id": message.id + "thinking", "kind": "thought", "title": title,
-                         "text": suffix, "detail": _literal(thinking) if expanded else "",
+                         "text": suffix, "detail": _literal(thinking) if expanded and not local_ui else "",
+                         **({"local_ui": True, "local_detail": _literal(thinking), "local_open": False} if local_ui else {}),
                          "operation": {"kind": "block_toggle", "id": message.id + "thinking"}}
                 entries.append((message.event_seq, 0, block, 1, 1, "thought"))
                 emit(f"assistant · thinking\n{thinking}")
@@ -142,15 +157,21 @@ def _project_turn(turn, shell, agents=None, literal=True):
     for tool in turn.tools:
         # Rows open nothing by default; only a long output expands in place (`out_id`),
         # and only a spawned subagent opens a page of its own.
-        status = tool_status(tool)
-        sections = tool_detail_sections(tool)
+        from .transcript_data import tool_presentation
+        sections, cached_row, cached_heading, cached_summary = tool_presentation(tool, shell)
         out_lines = sum(len(row.value.splitlines()) or 1 for section in sections
                         if section.title in _OUTPUT_SECTIONS for row in section.rows)
         out_id = tool.call_id + ":output"
         expandable = out_lines > _EXPAND_AFTER_LINES
-        expanded = bool(shell and (shell.verbose or out_id in shell.expanded))
-        detail_open = bool(shell and (shell.verbose or tool.call_id + ":detail" in shell.expanded))
-        body = sections_to_text(sections) if literal or detail_open else ""
+        expanded = bool(not local_ui and shell and (shell.verbose or out_id in shell.expanded))
+        detail_open = bool(not local_ui and shell and (shell.verbose or tool.call_id + ":detail" in shell.expanded))
+        body = sections_to_text(sections) if local_ui or literal or detail_open else ""
+        full_body = body
+        output_end = 0
+        if local_ui and out_lines > _EXPAND_AFTER_LINES:
+            rows = body.splitlines()
+            output_start = next((i for i, row in enumerate(rows) if row.strip().rstrip(":").title() in _OUTPUT_SECTIONS), len(rows))
+            output_end = min(len(rows), output_start + _EXPAND_AFTER_LINES + 1)
         if detail_open and not expanded and out_lines > _EXPAND_AFTER_LINES:
             body_rows = body.splitlines()
             output_start = next((i for i, row in enumerate(body_rows) if row.strip().rstrip(":").title() in _OUTPUT_SECTIONS), len(body_rows))
@@ -180,7 +201,7 @@ def _project_turn(turn, shell, agents=None, literal=True):
                     text += f" · {_thought_took(elapsed_ms)}"
             operation = {"kind": "agent_page", "id": child.id} if child is not None else None
         else:
-            text = tool_row_text(tool, 0)
+            text = cached_row
             if expandable:
                 first, _, rest = text.partition("\n")
                 text = f"{first} · {out_lines} lines {'▾' if expanded else '▸'}" + (f"\n{rest}" if rest else "")
@@ -189,10 +210,12 @@ def _project_turn(turn, shell, agents=None, literal=True):
         block = {"id": tool.call_id, "kind": "tool", "status": tool_status(tool), "text": text,
                  "batch_glyph": glyph or "",
                  "detail": body if detail_open else "", "operation": operation,
-                 "output_operation": {"kind": "block_toggle", "id": out_id} if detail_open and expandable else None}
+                 "output_operation": {"kind": "block_toggle", "id": out_id} if (detail_open or local_ui) and expandable else None}
+        if local_ui:
+            block.update(local_ui=True, local_detail=full_body, fold_lines=output_end, local_open=False)
         # A subagent row stands apart: one blank row above and below.
         entries.append((tool.event_seq, 3, block, 0, 0, "tool"))
-        if tool.diff and (literal or detail_open):
+        if tool.diff and (local_ui or literal or detail_open):
             from ...ui_support.timeline import diff_sections, diff_split_rows, split_diff_files
             hunks = dict(split_diff_files(tool.diff))
             for diff in diff_sections(tool.diff):
@@ -206,48 +229,78 @@ def _project_turn(turn, shell, agents=None, literal=True):
                         {"id": turn.id + ":error", "kind": "error", "text": "Error: " + _text(turn.error)}, 1, 0, "error"))
         emit(f"Error: {turn.error}")
     entries.sort(key=lambda entry: (entry[0], entry[1]))
-    from ...ui_support.timeline import group_tools, tool_heading, tool_summary
-    group_map = {tool.call_id: group for group in group_tools(turn) for tool in group.members
-                 if tool.name.casefold() not in {"task", "subagent"}}
-    emitted, grouped = set(), []
-    for entry in entries:
-        seq, rank, block, top, bottom, role = entry
-        group = group_map.get(block["id"]) if role == "tool" else None
-        if group is None:
-            # Diffs belong to expanded member detail, rather than the collapsed transcript.
-            if role != "diff":
-                grouped.append(entry)
-            continue
-        if group.id in emitted:
-            continue
-        emitted.add(group.id)
-        opened = bool(shell and (shell.verbose or group.id in shell.expanded))
-        members = []
-        for tool in group.members:
-            member = next(row[2] for row in entries if row[2]["id"] == tool.call_id)
-            heading_full = tool_heading(tool)
-            heading = heading_full.split(" ", 1)[-1]
-            summary = tool_summary(tool)
-            if tool.diff:
-                from ...ui_support.timeline import diff_sections
-                diffs = diff_sections(tool.diff)
-                summary = f"+{sum(d.added for d in diffs)} −{sum(d.removed for d in diffs)}"
-            member = {**member, "heading": heading_full + (f" · {summary}" if summary else ""), "title": tool.name.title(), "text": heading.removeprefix(tool.name.title()).strip() + (f" · {summary}" if summary else ""),
-                      "batch_glyph": "∥" if member.get("batch_glyph") else ""}
-            member["members"] = [row[2] for row in entries if row[5] == "diff" and row[2]["id"].startswith(tool.call_id)]
+    # Activity runs are delimited by visible replies, not by tool name or reasoning.
+    # Identity follows the first durable member, so streaming additions do not
+    # reset local disclosure. Diffs stay attached to their tool's full detail.
+    tools_by_id = {tool.call_id: tool for tool in turn.tools}
+    diff_members = {tool.call_id: [row[2] for row in entries
+        if row[5] == "diff" and row[0] == tool.event_seq
+        and row[2]["id"].startswith(tool.call_id)] for tool in turn.tools}
+    grouped, pending = [], []
+
+    def flush_activity():
+        if not pending:
+            return
+        seq, rank, first, _, _, _ = pending[0]
+        group_id = turn.id + ":activity:" + first["id"]
+        opened = bool(not local_ui and shell and (shell.verbose or group_id in shell.expanded))
+        members, counts = [], {}
+        for _, _, block, _, _, role in pending:
+            member = block
+            if role == "thought":
+                category = ("Thought", "time", "times")
+            else:
+                tool = tools_by_id[block["id"]]
+                name = tool.name.casefold()
+                category = {
+                    "bash": ("Ran", "command", "commands"),
+                    "run": ("Ran", "command", "commands"),
+                    "read": ("Read", "file", "files"),
+                    "edit": ("Edited", "file", "files"),
+                    "write": ("Wrote", "file", "files"),
+                    "apply_patch": ("Applied", "patch", "patches"),
+                    "grep": ("Searched", "time", "times"),
+                    "glob": ("Searched", "time", "times"),
+                }.get(name, (tool.name.title(), "call", "calls"))
+                _, _, heading_full, summary = tool_presentation(tool, shell)
+                heading = heading_full.split(" ", 1)[-1]
+                if tool.diff:
+                    from ...ui_support.timeline import diff_sections
+                    diffs = diff_sections(tool.diff)
+                    summary = f"+{sum(d.added for d in diffs)} −{sum(d.removed for d in diffs)}"
+                if name not in {"task", "subagent"}:
+                    member = {**block, "heading": heading_full + (f" · {summary}" if summary else ""),
+                        "title": tool.name.title(), "text": heading.removeprefix(tool.name.title()).strip() + (f" · {summary}" if summary else ""),
+                        "batch_glyph": "∥" if block.get("batch_glyph") else ""}
+                member = {**member, "members": diff_members[tool.call_id]}
+            counts[category] = counts.get(category, 0) + 1
             members.append(member)
-        status = "running" if group.running else "completed"
-        # Name each tool once, even for a singleton, without exposing member detail.
-        names = list(dict.fromkeys(row["title"] for row in members))
-        explored = _explored_summary(group.members)
-        if explored:
-            text = f"Explored: {explored}"
-        else:
-            text = " ─ ".join(names) + f" · {len(members)} {'call' if len(members) == 1 else 'calls'}"
-        grouped.append((seq, rank, {"id": group.id, "kind": "tool_group", "text": text,
+        text = " · ".join(f"{verb} {count} {one if count == 1 else many}"
+                          for (verb, one, many), count in counts.items())
+        running = any(member.get("status") == "running" for member in members)
+        grouped.append((seq, rank, {"id": group_id, "kind": "tool_group", "text": text,
             "color": _agent_color(shell, getattr(getattr(shell, "controller", None), "agent_name", "build")),
-            "status": status, "count": len(group.members), "collapsed": not opened,
-            "members": members if opened else [], "operation": {"kind": "block_toggle", "id": group.id}}, top, bottom, role))
+            "status": "running" if running else "completed", "count": len(members), "collapsed": not opened,
+            "members": members if opened or local_ui else [],
+            **({"local_ui": True, "local_open": False} if local_ui else {}),
+            "operation": {"kind": "block_toggle", "id": group_id}}, 1, 1, "tool"))
+        pending.clear()
+
+    for entry in entries:
+        if entry[5] == "diff":
+            continue
+        if entry[5] in {"tool", "thought"} and not (
+            entry[5] == "tool" and tools_by_id[entry[2]["id"]].name.casefold() in {"task", "subagent"}
+        ):
+            pending.append(entry)
+        else:
+            flush_activity()
+            grouped.append(entry)
+    flush_activity()
+    # Only the trailing activity of an active turn previews automatically. Replies
+    # close the previous run; explicit local expansion still reveals every item.
+    if grouped and grouped[-1][2]["kind"] == "tool_group" and not turn.terminal:
+        grouped[-1][2]["preview_limit"] = 5
     entries = grouped
     if collapsed:
         entries = [entry for entry in entries if entry[5] == "user"]
@@ -272,6 +325,12 @@ def _project_turn(turn, shell, agents=None, literal=True):
             last, bottom = previous if previous else ("", 0)
             top = 0 if last in {"assistant", "diff"} else 1
             blocks.append({"id": turn.id + ":summary", "kind": "summary", "text": footer, "gap": max(top, bottom)})
+    if local_ui:
+        summary = _fold_summary(turn)
+        for block in blocks:
+            block["turn_id"] = turn.id
+            if block["kind"] == "user":
+                block.update(local_ui=True, fold_summary=summary)
     return [redact(escape_controls(line)) for line in lines], _safe_blocks(blocks)
 
 
@@ -283,7 +342,7 @@ def _agent_color(shell, name):
 
 
 def _context_blocks(shell, view):
-    """The request-context header that opens every conversation (Textual ContextHeader)."""
+    """The request-context header that opens every conversation."""
     from ...ui_support.context_header import NEUTRAL, HeaderBlock, header_blocks
     from ...ui_support.context import _compact_tokens
     preview = shell.preview
@@ -323,13 +382,30 @@ def _compact_header(shell, view):
             {"id": "context:total", "kind": "summary", "text": total}]
 
 
+def _modified_files_memo(shell, view, modified_files):
+    """``modified_files`` walks every tool of the session; reuse it until a turn changes.
+
+    Turns are replaced, never mutated, so the identity of each turn (the root's and
+    one level of subagents') is the change key.
+    """
+    if shell is None:
+        return modified_files(view)
+    turns = (*view.turns, *(turn for agent in view.agents.values() for turn in agent.body.turns))
+    memo = getattr(shell, "files_memo", None)
+    if memo and len(memo[0]) == len(turns) and all(a is b for a, b in zip(memo[0], turns)):
+        return memo[1]
+    files = modified_files(view)
+    shell.files_memo = (turns, files)
+    return files
+
+
 def _details_panel(controller, view, shell):
-    """The Textual details sidebar (SESSION, MODIFIED FILES, MCP SERVERS) as data."""
+    """The terminal details sidebar (SESSION, MODIFIED FILES, MCP SERVERS) as data."""
     from ...ui_support.details import diff_preview_lines, mcp_rows, modified_files, session_rows
     rows = session_rows(view, phase=view.phase, agent=getattr(controller, "agent_name", "build"),
                         model=getattr(controller, "model", None) or "default",
                         effort=getattr(controller, "reasoning_effort", None))
-    files = modified_files(view)
+    files = _modified_files_memo(shell, view, modified_files)
     added, removed = sum(f.added for f in files), sum(f.removed for f in files)
     report = getattr(shell, "mcp_report", None) or {}
     daemon = report.get("daemon") or {}
@@ -354,12 +430,12 @@ def _details_panel(controller, view, shell):
         "logs_header": [["Session", str(getattr(controller, "session", view.session_id))], ["Daemon pid", str(daemon.get("pid") or "unavailable")],
                         ["Socket", redact(escape_controls(str(daemon.get("socket") or "unavailable")))],
                         ["Client", str(getattr(getattr(getattr(controller, "client", None), "health", None), "version", "unavailable"))],
-                        ["Bridge", "2 (schema 1 compatible)"], ["Nexus", version("nexus-harness")],
-                        *[["Timing", line] for line in getattr(getattr(shell, "logs", None), "trace", [])]],
+                        ["Bridge", "3 (schema 1/2 compatible)" if shell and getattr(shell, "local_transcript", False) else "Desktop schema 3"], ["Nexus", version("nexus-harness")],
+                        *[["Timing", line] for line in (getattr(getattr(shell, "logs", None), "trace", []) + getattr(getattr(shell, "logs", None), "python_trace", []))]],
         "session": [[label, redact(escape_controls(value))] for label, value in rows],
         "files": [{"path": redact(escape_controls(f.path)), "added": f.added, "removed": f.removed, "created": f.created,
                    "open": (is_open := bool(shell and f.path in shell.open_files)),
-                   "diff": [redact(escape_controls(line)) for line in diff_preview_lines(f.hunks)] if is_open else []} for f in files],
+                   "diff": [redact(escape_controls(line)) for line in diff_preview_lines(f.hunks)] if is_open or bool(shell and getattr(shell, "local_transcript", False)) else []} for f in files],
         "files_summary": f"+{added} -{removed} across {len(files)} file{'s' if len(files) != 1 else ''}" if files else "",
         "mcp": [[tone, redact(escape_controls(text)), redact(escape_controls(note))]
                 for tone, text, note in mcp_rows(getattr(shell, "mcp_report", None), error=getattr(shell, "mcp_error", None))],
@@ -416,7 +492,7 @@ def _context_tiers(view):
 
 
 def _queue_lines(view):
-    """Messages waiting for the running turn, like Textual's input-queue preview."""
+    """Messages waiting for the running turn,."""
     from ...ui_support.text import sanitize
     queue = list(view.input_queue)
     rows = [f"{'Queued' if item.mode == 'queue' else item.mode.title()} · " + sanitize("".join(
@@ -449,6 +525,33 @@ def _guarded(failures: list[str], label: str, build, fallback):
         return fallback
 
 
+def _child_turn_blocks(shell, agent, turn, flags):
+    """Control-safe, hashed blocks of one subagent turn, reused until the turn changes.
+
+    Shares the root's bounded ``turn_cache`` (keys are namespaced by agent id), so a
+    streamed child token re-projects one turn rather than the whole child page.
+    """
+    body = agent.body
+    deps = tuple((tool.call_id, tuple(id(body.agents.get(child)) for child in tool.child_agent_ids))
+                 for tool in turn.tools if tool.child_agent_ids)
+    key, turn_flags = f"{agent.id}\x00{turn.id}", (*flags, deps)
+    cached = shell.turn_cache.get(key)
+    if cached and cached[0] is turn and cached[1] == turn_flags:
+        return cached[3]
+    _, projected = _project_turn(turn, shell, body.agents, literal=False)
+    blocks = _safe_blocks([b for b in projected if b.get("kind") != "user"])
+    if cached:
+        shell.turn_cache_bytes -= cached[4]
+    size = len(json.dumps(blocks, ensure_ascii=False).encode())
+    shell.turn_cache[key] = (turn, turn_flags, [], blocks, size)
+    shell.turn_cache.move_to_end(key)
+    shell.turn_cache_bytes += size
+    while len(shell.turn_cache) > 4096 or shell.turn_cache_bytes > 8 * 1024 * 1024:
+        _, removed = shell.turn_cache.popitem(last=False)
+        shell.turn_cache_bytes -= removed[4]
+    return blocks
+
+
 def project(controller: TuiController, revision: int, error: str = "", shell=None, literal: bool = True) -> dict:
     """Project labelled, control-safe context and transcript from canonical state.
 
@@ -460,34 +563,47 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
     lines = []
     blocks = []
     context_lines = []
-    if shell and shell.preferences.values["context_preview"]:
+    # An open subagent page replaces every root block and the details panel below,
+    # so the live (non-literal) projection does not build them.
+    on_agent_page = bool(not literal and shell and shell.workflows.agent_page_id and shell.workflows.selected_agent is not None)
+    if shell and shell.preferences.values["context_preview"] and not on_agent_page:
         blocks.extend(_guarded(failures, "Context header", lambda: _safe_blocks(_compact_header(shell, view)), []))
-    flags = (_agent_color(shell, getattr(controller, "agent_name", "build")), bool(shell and shell.verbose), frozenset(shell.expanded) if shell else frozenset(), frozenset(shell.collapsed_turns) if shell else frozenset(), id(view.agents), literal)
-    for turn in view.turns:
+    flags = (_agent_color(shell, getattr(controller, "agent_name", "build")), bool(shell and shell.verbose and not getattr(shell, "local_transcript", False)), frozenset(shell.expanded) if shell and not getattr(shell, "local_transcript", False) else frozenset(), frozenset(shell.collapsed_turns) if shell and not getattr(shell, "local_transcript", False) else frozenset(), bool(shell and getattr(shell, "local_transcript", False)), literal)
+    dependencies = {}
+    for agent in view.agents.values():
+        dependencies.setdefault(agent.parent_call_id, []).append(id(agent))
+    for turn in () if on_agent_page else view.turns:
+        turn_flags = (*flags, tuple((tool.call_id, tuple(dependencies.get(tool.call_id, ())),
+                                    tuple(id(view.agents.get(child)) for child in tool.child_agent_ids))
+                                   for tool in turn.tools if tool.child_agent_ids or tool.call_id in dependencies))
         cached = shell.turn_cache.get(turn.id) if shell else None
-        if cached and cached[0] is turn and cached[1] == flags:
+        if cached and cached[0] is turn and cached[1] == turn_flags:
             turn_lines, turn_blocks = cached[2], cached[3]
         else:
             turn_lines, turn_blocks = _guarded(failures, f"Turn {turn.id}", lambda: _project_turn(turn, shell, view.agents, literal),
                                                ([], [{"id": turn.id, "title": "Turn", "text": "This turn could not be rendered", "kind": "literal"}]))
+            if blocks and turn_blocks and turn_blocks[0].get("gap", 0) < 1:
+                first = {**turn_blocks[0], "gap": 1}
+                first["rev"] = _revision(first)
+                turn_blocks = [first, *turn_blocks[1:]]
             if shell and not any(f.startswith(f"Turn {turn.id} ") for f in failures):
                 if cached:
                     shell.turn_cache_bytes -= cached[4]
                 size = len(json.dumps([turn_lines, turn_blocks], ensure_ascii=False).encode())
-                shell.turn_cache[turn.id] = (turn, flags, turn_lines, turn_blocks, size)
+                shell.turn_cache[turn.id] = (turn, turn_flags, turn_lines, turn_blocks, size)
                 shell.turn_cache.move_to_end(turn.id)
                 shell.turn_cache_bytes += size
                 while len(shell.turn_cache) > 4096 or shell.turn_cache_bytes > 8 * 1024 * 1024:
                     _, removed = shell.turn_cache.popitem(last=False)
                     shell.turn_cache_bytes -= removed[4]
         lines.extend(turn_lines)
-        if blocks and turn_blocks:  # Textual's .turn margin-bottom: one blank row between turns
+        if blocks and turn_blocks and turn_blocks[0].get("gap", 0) < 1:  # One blank row between turns
             first = {**turn_blocks[0], "gap": max(1, turn_blocks[0].get("gap", 0))}
             first["rev"] = _revision(first)
             turn_blocks = [first, *turn_blocks[1:]]
         blocks.extend(turn_blocks)
     linked = {agent_id for turn in view.turns for tool in turn.tools for agent_id in tool.child_agent_ids}
-    for agent in view.agents.values():
+    for agent in () if on_agent_page else view.agents.values():
         if agent.id in linked:  # shown by its Task card
             continue
         blocks.append({"id": agent.id, "title": redact(escape_controls(f"Agent {agent.id} · {agent.status}")), "text": redact(escape_controls(agent.description)),
@@ -518,7 +634,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
         prompt["lines"] = [redact(escape_controls(line)) for line in prompt["lines"]]
         for choice in prompt["choices"]:
             choice["label"] = redact(escape_controls(choice["label"]))
-    details_panel = _guarded(failures, "Details sidebar", lambda: _details_panel(controller, view, shell), {})
+    details_panel = {} if on_agent_page else _guarded(failures, "Details sidebar", lambda: _details_panel(controller, view, shell), {})
     notice = "\n".join(part for part in [error or (shell.notice if shell else ""), *failures] if part)
     if notice:
         lines.append(redact(escape_controls(f"Error: {notice}")))
@@ -533,6 +649,10 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "preview_image_media": shell.preview_image_media if shell else "",
             "panel_loading": bool(shell and shell.panel_loading),
             "blocks": blocks,
+            "transcript_verbose": bool(shell and shell.verbose),
+            "local_ui_enabled": bool(shell and getattr(shell, "local_transcript", False)),
+            "ui_ack": getattr(shell, "ui_ack", 0) if shell else 0,
+            "commands": getattr(shell, "static_commands", []) if shell else [],
             "context_lines": [redact(escape_controls(line)) for line in context_lines],
             "context_used": used,
             "context_window": window,
@@ -545,6 +665,9 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "composer_key": json.dumps([shell.workspace if shell else "", getattr(controller, "session", view.session_id)]),
             "nav": _settings_nav(shell),
             "update_notice": redact(escape_controls(shell.update_notice)) if shell else "",
+            "disconnected": bool(
+                shell and str(getattr(shell, "notice", "")).startswith("Disconnected")
+            ),
             "provider": getattr(controller, "provider", None) or "",
             "effort": getattr(controller, "reasoning_effort", None) or "default",
             "theme": shell.preferences.values["theme"] if shell else "nexus-dark",
@@ -558,6 +681,8 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "breadcrumb": redact(escape_controls(shell.breadcrumb)) if shell else "",
             "details_panel": details_panel,
             "logs": shell.logs.lines() if shell else [],
+            **({"logs_all": shell.logs.lines(show_all=True), "logs_folded": shell.logs.lines(show_all=False),
+                "logs_show_all": shell.logs.show_all} if shell and getattr(shell, "local_transcript", False) else {}),
             "attachment_lines": [f"{shell.attachment_label(i)}: {redact(escape_controls(item.name))}" for i,item in enumerate(shell.attachments)] if shell else [],
             "form": {**shell.workflows.form, "can_delete": bool(shell.workflows.form_target and shell.workflows.form_target.get("kind") == "settings_read"), "status": redact(escape_controls(shell.workflows.form["status"]))} if shell and shell.workflows.form else None,
             "history": getattr(shell, "history", []) if shell else [],
@@ -580,7 +705,9 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "prompt": prompt,
             "restore": shell.composer_restore if shell else "",
             "agent": getattr(controller, "agent_name", "build"),
-            "model": redact(escape_controls(getattr(controller, "model", None) or "default")),
+            "model": redact(escape_controls(
+                (shell.model_names.get((getattr(controller, "provider", None) or "", getattr(controller, "model", None) or "")) if shell else None)
+                or getattr(controller, "model", None) or "default")),
             "attachments": len(shell.attachments) if shell else 0,
             "lines": lines}
     if shell and shell.workflows.agent_page_id:
@@ -606,12 +733,12 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
                              "text": _literal(rest), "color": rail, "gap": 0}]
             if not context and agent.status == "spawned":
                 child_blocks.append({"id": agent.id + ":wait", "kind": "literal", "text": "Waiting for the first request…", "gap": 1})
+            child_blocks = _safe_blocks(child_blocks)
             for turn in agent.body.turns:
-                _, projected = _project_turn(turn, shell, agent.body.agents, literal=False)
-                child_blocks.extend(b for b in projected if b.get("kind") != "user")
+                child_blocks.extend(_child_turn_blocks(shell, agent, turn, flags))
             from dataclasses import replace
             agent_status = "failed" if agent.is_error or agent.ok is False else agent.status
-            snapshot.update(blocks=_safe_blocks(child_blocks), agent_page=agent.id,
+            snapshot.update(blocks=child_blocks, agent_page=agent.id,
                 status="running" if agent.status == "spawned" else "done",
                 sessions_sidebar=False, sessions=[], tabs=[], prompt=None, queue_lines=[],
                 completions=[], voice_phase="idle", voice_preview="",
@@ -635,6 +762,10 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
     client = client or await open_client(workspace)
     controller = TuiController(client, session)
     shell = ShellActions(controller)
+    from ..cli.commands import SPECS
+    shell.static_commands = sorted((spec.name, list(spec.aliases)) for spec in SPECS if not spec.hidden)
+    shell.local_transcript = not desktop
+    shell.ui_ack = 0
     shell.inline_images_enabled = desktop
     shell.workspace = str(workspace)
     shell.tabs = [{"id": session, "title": session, "workspace": str(workspace), "state": "idle"}]
@@ -644,11 +775,44 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
     process = None
     write_lock = asyncio.Lock()
     revision = 0
-    last_sent = [""]
-    sent_blocks = []
-    sent_identity = None
-    async def update(event=False):
-        nonlocal revision, sent_blocks, sent_identity
+    from .trace import BridgeTrace
+    trace = BridgeTrace()
+    from .stream_projection import StreamProjection, STREAM_EVENTS
+    stream_projection = StreamProjection()
+    stream_turn = None
+    event_sent_at = 0.0
+    event_kind = ""
+    allowed_operations = set()
+    displayed_prompt = None
+    from .wire import TerminalWire
+    terminal_wire = TerminalWire()
+    desktop_wire = None
+    update_coalescer = None
+    async def update(event=False, *, immediate=True, _scheduled=False):
+        nonlocal revision, desktop_wire, event_sent_at, event_kind, allowed_operations, displayed_prompt, stream_turn
+        if event is not False and event is not None:
+            event_kind = event.type
+            stream_turn = event.turn if event.type in STREAM_EVENTS and (stream_turn in {None, event.turn}) else False
+        elif not _scheduled:
+            stream_turn = False
+        if event is not False and event is not None and not desktop:
+            immediate = event.type in {"permission.requested", "permission.resolved", "question.requested", "question.answered", "question.resolved", "tool.requested", "turn.completed", "turn.failed"}
+        if not immediate and event is not None:
+            if event is not False and event is not None:
+                controller.ingest(event)
+                shell.mark_current_seen()
+                event_sent_at = event.ts if isinstance(getattr(event, "ts", None), (int, float)) and abs(time.time() - event.ts) < 60 else time.time()
+            update_coalescer.schedule()
+            return
+        if update_coalescer is not None and not _scheduled:
+            await update_coalescer.flush()
+        if event is not False and event is not None:
+            controller.ingest(event)
+            shell.mark_current_seen()
+            shell.notice = ""
+            event_sent_at = event.ts if isinstance(getattr(event, "ts", None), (int, float)) and abs(time.time() - event.ts) < 60 else time.time()
+            event = False
+        # An explicit immediate flush incorporates all events already ingested.
         if event is None:
             shell.notice = "Disconnected: use /reconnect to replay and reattach"
         elif event is False and shell.notice.startswith("Disconnected"):
@@ -664,31 +828,72 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
             if desktop:
                 from ...ui_support.native_images import refresh_draft_images
                 await refresh_draft_images(shell)
-            snapshot = project(controller, revision, shell=shell, literal=False)
+            started = time.perf_counter()
+            snapshot = stream_projection.project(controller, shell, revision, stream_turn, _project_turn) if not desktop and stream_turn else None
+            full_projection = snapshot is None
+            if full_projection:
+                snapshot = project(controller, revision, shell=shell, literal=False)
+                stream_projection.remember(snapshot, controller, shell)
+            stream_turn = None
+            trace.elapsed("project", started)
+            snapshot["event_sent_at"] = event_sent_at if trace.enabled else 0
+            snapshot["event_kind"] = event_kind if trace.enabled else ""
+            displayed_prompt = snapshot["prompt"]
+            if full_projection:
+                allowed_operations = {json.dumps(op, sort_keys=True) for op in [
+                *[item["operation"] for item in snapshot.get("inline_images", [])],
+                *[item.get("operation") for item in shell.items],
+                *[item.get("toggle_operation") for item in shell.items if not item.get("toggle_locked")],
+                *_block_operations(snapshot["blocks"])] if op}
             snapshot["completion_bell"] = controller.completion_bell
             shell.notify_completion()
             # Poll ticks that change nothing are not resent; one-shot composer
             # fields (restore/insert) always are, since they repeat legitimately.
-            fingerprint = json.dumps({**snapshot, "revision": 0, "blocks": [(block["id"], block["rev"]) for block in snapshot["blocks"]]}, ensure_ascii=False)
-            one_shot = snapshot.get("restore") or snapshot.get("insert")
-            if fingerprint == last_sent[0] and not one_shot:
-                return
-            last_sent[0] = fingerprint
-            identity = (snapshot["generation"], snapshot.get("agent_page", ""))
-            current = [(block["id"], block["rev"]) for block in snapshot["blocks"]]
-            start = 0
-            if identity == sent_identity:
-                while start < min(len(current), len(sent_blocks)) and current[start] == sent_blocks[start]:
-                    start += 1
-            wire = {**snapshot, "schema": 2, "blocks_from": start, "blocks": snapshot["blocks"][start:]}
+            started = time.perf_counter()
+            if desktop:
+                if desktop_wire is None:
+                    from ..desktop.wire import DesktopWire
+                    desktop_wire = DesktopWire()
+                wire = desktop_wire.encode(snapshot)
+                if wire is None:
+                    return
+            else:
+                wire = terminal_wire.encode(snapshot)
+                if wire is None:
+                    return
+            trace.elapsed("fingerprint", started)
+            started = time.perf_counter()
             encoded = json.dumps(wire, ensure_ascii=False, separators=(",", ":"))
+            trace.elapsed("encode", started)
+            trace.record("snapshot_bytes", len(encoded.encode()))
+            started = time.perf_counter()
             process.stdin.write((encoded + "\n").encode())
-            sent_blocks, sent_identity = current, identity
-            shell.composer_restore = ""
-            shell.composer_insert = ""
-            shell.composer_auto_send = False
-            shell.composer_insert_kind = ""
+            event_sent_at = 0.0
+            event_kind = ""
+            # Reset one-shot fields only after their snapshot has reached the
+            # pipe. Event flushes may coalesce; they must not consume them.
             await process.stdin.drain()
+            trace.elapsed("write+drain", started)
+            trace.publish(shell.logs)
+            if shell.composer_restore == snapshot.get("restore", ""):
+                shell.composer_restore = ""
+            sent_insert = snapshot.get("insert", "")
+            if sent_insert and shell.composer_insert.startswith(sent_insert):
+                shell.composer_insert = shell.composer_insert[len(sent_insert):]
+            if not shell.composer_insert:
+                shell.composer_auto_send = False
+                shell.composer_insert_kind = ""
+    async def emit_scheduled_update():
+        try:
+            await update(False, _scheduled=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            shell.notice = f"Display update failed: {type(exc).__name__}: {exc}"
+    from ...ui_support.native_schedule import UpdateCoalescer
+    update_coalescer = UpdateCoalescer(emit_scheduled_update, delay=0.016)
+    from .background import BackgroundActions
+    background = BackgroundActions(shell, update)
     shell.on_update = update
     poll_task = None
     async def poll():
@@ -720,7 +925,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                         shell.workflows.agent_context = result.get("context") or {}
             async def dictation():
                 if shell.panel_title == "Local dictation":
-                    await shell.voice.open()
+                    await shell.voice.open(prepare=False)
             async def health():
                 if time.monotonic() < shell.mcp_due:
                     return
@@ -761,7 +966,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
             if failures:
                 shell.notice = "; ".join(failures)
             try:
-                await update()
+                await update(immediate=False)
             except Exception as exc:
                 shell.notice = f"Display update failed: {type(exc).__name__}: {exc}"
     try:
@@ -773,6 +978,11 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
             shell.breadcrumb = str(workspace) + (" › " + str(git.get("branch")) if git.get("branch") else "")
         except Exception:
             shell.breadcrumb = str(workspace)
+        try:  # full catalogue names for the composer controls; ids remain the fallback
+            shell.model_names = {(str(row.get("provider") or ""), str(row.get("id") or "")): str(row["name"])
+                                 for row in await client.list_models() if row.get("name")}
+        except Exception:  # noqa: BLE001 - display names are advisory
+            shell.model_names = {}
         process = await asyncio.create_subprocess_exec(
             str(binary), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             limit=16 * 1024 * 1024)
@@ -795,6 +1005,10 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     if action["type"] == "submit":
                         shell.composer_restore = action["text"]
                         shell.notice = "Session changed: the old draft was returned and was not sent"
+                        await update()
+                    continue
+                if action["type"] in background.KINDS:
+                    if not background.start(action):
                         await update()
                     continue
                 if action["type"] == "submit":
@@ -825,7 +1039,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                             shell.items = []
                             await shell.submit(item["command"])
                 elif action["type"] == "answer":
-                    current = project(controller, revision, shell=shell, literal=False)["prompt"]
+                    current = displayed_prompt
                     if current and current["id"] == action["text"]:
                         value = action.get("value", "")
                         allowed = [choice["value"] for choice in current["choices"] if not choice["disabled"]]
@@ -843,9 +1057,9 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                                 shell.notice = "Question already answered by another client"
                 elif action["type"] == "operation":
                     operation = action.get("operation")
-                    image_operations = [item["operation"] for item in project(controller, revision, shell=shell, literal=False).get("inline_images", [])]
-                    allowed_operations = image_operations + [item.get("operation") for item in shell.items] + [item.get("toggle_operation") for item in shell.items if not item.get("toggle_locked")] + list(_block_operations(project(controller, revision, shell=shell, literal=False)["blocks"]))
-                    if operation and operation in allowed_operations:
+                    if operation and json.dumps(operation, sort_keys=True) in allowed_operations:
+                        if operation["kind"] in {"block_toggle", "turn_toggle"} and shell.local_transcript:
+                            continue  # disclosure belongs exclusively to Rust
                         if operation["kind"] == "block_toggle":
                             if operation["id"] in shell.expanded: shell.expanded.remove(operation["id"])
                             elif len(shell.expanded) < 4096: shell.expanded.add(operation["id"])
@@ -881,11 +1095,11 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                 elif action["type"] == "toggle":
                     key = action.get("key")
                     if key in {"sessions_sidebar", "details_sidebar", "context_preview"}:
-                        shell.preferences.set(key, not shell.preferences.values[key])
+                        shell.preferences.set(key, bool(action.get("value", not shell.preferences.values[key])))
                         shell.logs.open = shell.preferences.values["details_sidebar"] and shell.preferences.values["details_tab"] == "Logs"
                 elif action["type"] == "file_toggle":
                     path = action["text"]
-                    if path in shell.open_files:
+                    if not action.get("value", path not in shell.open_files):
                         shell.open_files.discard(path)
                     elif len(shell.open_files) < 256:
                         shell.open_files.add(path)
@@ -899,7 +1113,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                 elif action["type"] == "details_visible":
                     shell.logs.visible = bool(action.get("open"))
                 elif action["type"] == "ui_trace":
-                    shell.logs.trace = [sanitize(line, 256) for line in action.get("lines", [])[:12]]
+                    shell.logs.trace = [sanitize(line, 256) for line in action.get("lines", [])[:16]]
                 elif action["type"] == "update_help":
                     shell.show("Nexus update", (shell.update_notice or "Run nexus update to check and install the current release.") + "\nRun this command in your terminal. Esc closes this help.")
                 elif action["type"] == "context_popover":
@@ -911,31 +1125,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     if shell.logs.open and shell.logs.visible:
                         await shell.logs.poll()
                 elif action["type"] == "logs_fold":
-                    shell.logs.show_all = not shell.logs.show_all
-                elif action["type"] == "clipboard":
-                    if len(shell.attachments) >= 8:
-                        raise ValueError("At most eight attachments are allowed")
-                    image = await asyncio.to_thread(read_clipboard_image)
-                    if image:
-                        shell.attachments.append(await shell.client.prepare_attachment(name="clipboard.png", data=image))
-                        shell.composer_insert = shell.attachment_marker(len(shell.attachments)-1)
-                elif action["type"] == "copy_selection":
-                    from .desktop import copy_text
-                    text = str(action["text"])[:1_000_000]
-                    try:
-                        await copy_text(text)
-                        shell.notice = f"Copied {len(text)} characters"
-                    except ValueError as exc:  # e.g. over SSH: the terminal's OSC 52 copy already ran
-                        shell.notice = f"Copied {len(text)} characters via the terminal ({exc})"
-                elif action["type"] == "copy_text":
-                    from .desktop import copy_text
-                    await copy_text(action["text"])
-                elif action["type"] == "complete":
-                    from ...ui_support.completion import complete
-                    query = shell.completion_query = action["text"]
-                    shell.completion_prefix = action.get("prefix", query)
-                    shell.completions = await complete(
-                        shell.client, action.get("prefix", query), query, efforts=controller.supported_levels)
+                    shell.logs.show_all = bool(action.get("value", not shell.logs.show_all))
                 elif action["type"] == "nav_select":
                     from ...ui_support.settings_help import SETTINGS_SECTIONS
                     index = int(action["text"])
@@ -944,9 +1134,6 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                         await shell.workflows.settings_area("speech" if key == "speech" else key)
                 elif action["type"] == "model_sort":
                     shell.model_sort = "name" if shell.model_sort == "updated" else "updated"
-                    await shell.command("/model", ())
-                elif action["type"] == "refresh_models":
-                    await shell.client.refresh_models()
                     await shell.command("/model", ())
                 elif action["type"] == "favorite":
                     items = [item for item in shell.items if action["filter"].lower() in item["label"].lower()]
@@ -988,6 +1175,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                 elif action["type"] == "session_open":
                     if any(row["id"] == action["text"] and row["workspace"] == action["workspace"] for row in [*shell.sessions, *shell.tabs]):
                         await shell.switch_project(action["workspace"], action["text"])
+                shell.ui_ack = max(shell.ui_ack, int(action.get("ui_sequence", 0)))
                 if not controller.running:
                     controller.resume(update)
                 await update()
@@ -996,6 +1184,9 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                 await update()
         return await process.wait()
     finally:
+        await background.close()
+        await shell.preferences.flush()
+        trace.finish()
         if shell.usage_task:
             shell.usage_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -1006,6 +1197,9 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                 await poll_task
         with contextlib.suppress(Exception):
             await shell.voice.discard()
+        if update_coalescer is not None:
+            with contextlib.suppress(Exception):
+                await update_coalescer.flush()
         with contextlib.suppress(Exception):
             await controller.close()
         if process is not None and process.returncode is None:

@@ -18,6 +18,7 @@ class Logs:
         self.open = False
         self.visible = False
         self.trace = []
+        self.python_trace = []
         self.show_all = False
         self.rows = {"daemon": [], "session": []}
         self.cursors = {"daemon": None, "session": None}
@@ -55,11 +56,12 @@ class Logs:
         except Exception as exc:
             self.error = str(exc)
 
-    def lines(self):
+    def lines(self, *, show_all=None):
+        show_all = self.show_all if show_all is None else show_all
         rows = sorted([*self.rows["daemon"], *self.rows["session"]], key=lambda row: row.ts)
         problems = [row for row in rows if row.level != "info"]
         routine = [row for row in rows if row.level == "info"]
-        selected = sorted(problems + (routine if self.show_all else []), key=lambda row: row.ts)
+        selected = sorted(problems + (routine if show_all else []), key=lambda row: row.ts)
         lines = []
         if self.truncated:
             lines.append("[Earlier log entries clipped · " + ", ".join(sorted(self.truncated)) + "]")
@@ -69,7 +71,7 @@ class Logs:
             except (ValueError, OverflowError, OSError):
                 stamp = "Unknown time"
             lines.append(f"{stamp} [{row.level.upper()}] {row.source} · {row.kind} · {row.summary}")
-        lines.append(f"{len(routine)} routine entries {'shown' if self.show_all else 'folded'} · Ctrl+A toggle")
+        lines.append(f"{len(routine)} routine entries {'shown' if show_all else 'folded'} · Ctrl+A toggle")
         if self.error:
             lines.append("Log read failed: " + self.error)
         return [redact(escape_controls(line)) for line in lines]
