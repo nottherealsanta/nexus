@@ -251,6 +251,37 @@ async def test_endpoint_fallback_retries_once_on_the_other_dialect_and_remembers
     await provider.aclose()
 
 
+async def test_opencode_go_unknown_protocol_retries_on_the_other_dialect():
+    """OpenCode Go rejects a model with a generic message; retry the other endpoint."""
+    from nexus.model.providers.openai import EndpointFallback
+
+    urls: list[str] = []
+    responses_body = _sse(
+        ("response.created", {"type": "response.created", "response": {"id": "r", "model": "gpt-6-luna", "status": "in_progress"}}),
+        ("response.completed", {"type": "response.completed", "response": {"id": "r", "status": "completed"}}),
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        urls.append(request.url.path)
+        if request.url.path.endswith("/chat/completions"):
+            return httpx.Response(400, json={"error": {"message": "Model does not support this protocol."}})
+        return httpx.Response(200, content=responses_body, headers={"content-type": "text/event-stream"})
+
+    provider = OpenAIProvider(
+        api_key="k", model="gpt-6-luna", api="chat", base_url="https://opencode.ai/zen/go/v1", environ={},
+        http_transport=httpx.MockTransport(handler), api_selector=EndpointFallback("chat"),
+    )
+    req = ModelRequest(model="gpt-6-luna", messages=[Message(role="user", content=[Text(text="hi")])])
+    async for _ in provider.stream(req):
+        pass
+    assert urls == ["/zen/go/v1/chat/completions", "/zen/go/v1/responses"]
+    urls.clear()
+    async for _ in provider.stream(req):
+        pass
+    assert urls == ["/zen/go/v1/responses"]  # learned; no rejected call again
+    await provider.aclose()
+
+
 @pytest.mark.parametrize("model", ["gpt-6-luna", "gpt-6-sol", "gpt-6-astra", "gpt-5.6-luna", "gpt-5.6-sol"])
 async def test_copilot_responses_only_models_request_thinking_summaries(model):
     from nexus.model.providers.openai import EndpointFallback
@@ -301,3 +332,32 @@ async def test_explicit_stream_overload_is_retryable(error_type, code):
     with pytest.raises(ProviderOverloaded):
         async for _ in provider.stream(ModelRequest(messages=[Message(role="user", content=[Text(text="hi")])])):
             pass
+
+
+@pytest.mark.parametrize(
+    ("base_url", "expected"),
+    [("https://opencode.ai/zen/go/v1", "sess-1"), ("https://api.example.com/v1", None)],
+)
+async def test_opencode_session_header_only_for_opencode_hosts(base_url, expected):
+    seen: list[str | None] = []
+    done = _sse(
+        ("response.created", {"type": "response.created", "response": {"id": "r", "model": "m", "status": "in_progress"}}),
+        ("response.completed", {"type": "response.completed", "response": {"id": "r", "status": "completed"}}),
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("x-opencode-session"))
+        return httpx.Response(200, content=done, headers={"content-type": "text/event-stream"})
+
+    provider = OpenAIProvider(
+        api_key="k", model="m", api="responses", base_url=base_url, environ={},
+        http_transport=httpx.MockTransport(handler),
+    )
+    req = ModelRequest(
+        model="m", messages=[Message(role="user", content=[Text(text="hi")])],
+        metadata={"session_id": "sess-1"},
+    )
+    async for _ in provider.stream(req):
+        pass
+    assert seen == [expected]
+    await provider.aclose()

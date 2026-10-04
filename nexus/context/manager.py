@@ -1509,6 +1509,10 @@ class ContextManager:
             metadata["agent_fallback"] = [
                 str(ref) for ref in agent_fallback[:8] if isinstance(ref, str)
             ]
+        tier_name = getattr(self, "_tier_name", None)
+        if tier_name is not None:
+            metadata["tier"] = tier_name
+            metadata["reasoning_effort_explicit"] = bool(getattr(self, "_effort_explicit", False))
         agent_effort = getattr(
             getattr(self, "agent_definition", None), "reasoning_effort", None
         )

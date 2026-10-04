@@ -1906,6 +1906,9 @@ async def run_turn(
             ) or hooks
 
             request = await _maybe_await(_call_assembler(iteration_assemble, session))
+            if isinstance(request.metadata, dict):
+                # One stable id per conversation; gateways use it for routing/caching.
+                request.metadata.setdefault("session_id", session_id)
             request_metadata = (
                 request.metadata if isinstance(request.metadata, dict) else {}
             )
@@ -1997,6 +2000,15 @@ async def run_turn(
                     provider=candidate.provider.name,
                     tools=effective_tools,
                 )
+                tier_effort = getattr(provider_for, "tier_effort", None)
+                if callable(tier_effort):
+                    streaming_request = msgspec.structs.replace(
+                        streaming_request,
+                        params=msgspec.structs.replace(
+                            streaming_request.params,
+                            reasoning_effort=tier_effort(request, candidate),
+                        ),
+                    )
                 if (
                     previous_provider is not None
                     and previous_provider != candidate.provider.name

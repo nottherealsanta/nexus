@@ -1230,6 +1230,30 @@ async def test_default_vendored_snapshot_loads_and_is_labeled(tmp_path):
     assert reg.get("anthropic/claude-opus-5").source == "builtin"
 
 
+async def test_vendored_snapshot_covers_signed_in_providers(tmp_path):
+    """A connected provider stays listable when the catalogue cannot be fetched.
+
+    The packaged fallback must carry the providers Nexus can sign in to
+    (OpenCode Go, GitHub Copilot); otherwise a connection with no cache and no
+    reachable catalogue shows an empty model list for them.
+    """
+    reg = ModelRegistry(
+        providers={"opencode-go": {}, "github-copilot": {}, "claude-agent": {}},
+        env={},
+        cache_path=tmp_path / "absent.json",
+        offline=True,
+        provider_aliases={"claude-agent": "anthropic"},
+    )
+    status = await reg.load()
+    assert status.source == "snapshot"
+    go = [row.id for row in reg.list(provider="opencode-go")]
+    copilot = [row.id for row in reg.list(provider="github-copilot")]
+    assert "kimi-k3" in go
+    assert copilot
+    selectable = {row.provider for row in reg.list(selectable_only=True)}
+    assert {"opencode-go", "github-copilot"} <= selectable
+
+
 async def test_snapshot_can_be_disabled(tmp_path):
     reg = ModelRegistry(
         env=ANTHROPIC,

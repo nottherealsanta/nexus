@@ -1067,3 +1067,32 @@ async def test_signature_only_thinking_carrier_preserves_wire_order_and_replay()
     assert blocks[1].signature == "carrier"
     replay_blocks = fold(record.event for record in sink.events).turns[0].messages[-1].blocks
     assert [(block.kind, block.text) for block in replay_blocks] == [("text", "answer"), ("thinking", "")]
+
+
+async def test_fallback_request_uses_its_route_effort():
+    """A medium tier's max-effort fallback must not inherit primary low."""
+    from nexus.model.router import ModelRouter
+    from nexus.model.request import SamplingParams
+
+    primary = ScriptedProvider([ProviderError("unavailable")])
+    primary.name = "codex"
+    fallback = ScriptedProvider(text_response("recovered"))
+    fallback.name = "opencode-go"
+    router = ModelRouter({"codex": primary, "opencode-go": fallback})
+
+    class Resolver:
+        tier_effort = router.tier_effort
+
+        def resolve(self, request):
+            return ResolvedModel(primary, "gpt-6.1-sol", primary.capabilities("gpt-6.1-sol"))
+
+        def fallbacks(self, request):
+            return [ResolvedModel(fallback, "deepseek-v4.1-flash", fallback.capabilities("deepseek-v4.1-flash"))]
+
+    def assemble(session):
+        return ModelRequest(messages=session.messages, model="gpt-6.1-sol", provider="codex", metadata={"tier": "medium"}, params=SamplingParams(reasoning_effort="low"))
+
+    outcome = await run_turn(session=FakeSession(), user_input="hello", assemble=assemble, provider_for=Resolver(), emit=FakeSink(), lease=FakeLease("effort-fallback"))
+    assert outcome.ok
+    assert primary.requests[0].params.reasoning_effort == "low"
+    assert fallback.requests[0].params.reasoning_effort == "max"

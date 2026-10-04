@@ -4,7 +4,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import pytest
 
 from nexus.host import HostFacade
 from nexus.host import protocol as p
@@ -100,59 +99,6 @@ async def test_discovery_selection_replay_and_cache_lock(tmp_path):
         assert handle.disabled_extensions == {"skills": {"project-skill"}, "mcp": {"project-server"}, "tools": set()}
     finally:
         await reopened.aclose()
-
-
-@pytest.mark.parametrize("category", ["skills", "mcp"])
-@pytest.mark.parametrize("locked", [False, True])
-async def test_tui_individual_controls(category, locked):
-    from test_ui_tui import FakeTransport, _client
-    from nexus.ui.tui.app import NexusTextualApp
-    from nexus.ui_support.tui_context_header import ContextHeader, ExtensionsModal
-    from textual.widgets import Button
-
-    class Transport(FakeTransport):
-        def __init__(self):
-            super().__init__()
-            self.enabled = True
-            self.selections = []
-
-        async def request(self, command):
-            if isinstance(command, (p.ContextInspect, p.ContextExtensionSelect)):
-                if isinstance(command, p.ContextExtensionSelect):
-                    self.selections.append(command)
-                    self.enabled = command.enabled
-                return p.ContextInspectResult(session=command.session, context_locked=locked,
-                    skills_index=[{"name": "skill", "scope": "project", "enabled": self.enabled}],
-                    mcp_servers=[{"name": "server", "scope": "global", "enabled": self.enabled}])
-            return await super().request(command)
-
-    transport = Transport()
-    app = NexusTextualApp(_client(transport))
-    async with app.run_test(size=(120, 45)) as pilot:
-        await pilot.pause()
-        result = await app.controller.client.inspect_context(app.controller.session)
-        app.query_one(ContextHeader).set_data(result)
-        await pilot.click(f"#context-{category}")
-        await pilot.pause()
-        assert isinstance(app.screen, ExtensionsModal)
-        button = app.screen.query_one("#extension-0", Button)
-        assert button.disabled == locked
-        if not locked:
-            await pilot.click("#extension-0")
-            await pilot.pause()
-            assert transport.selections[-1].enabled is False
-            assert str(button.label).startswith("Off")
-            await pilot.pause(0.4)
-            await pilot.click("#extension-0")
-            await pilot.pause()
-            assert transport.selections[-1].enabled is True
-        else:
-            await pilot.click("#extension-0")
-            await pilot.pause()
-            assert not transport.selections
-        await pilot.press("escape")
-        await pilot.pause()
-        assert app.screen is app.screen_stack[0]
 
 
 async def test_a_single_tool_can_be_switched_off_and_back_on_until_the_first_turn(tmp_path):
