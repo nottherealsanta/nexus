@@ -12,7 +12,7 @@ With no subcommand, `nexus` opens `chat`. Bare `nexus voice` shows voice status.
 
 | Command | What it does |
 | --- | --- |
-| `chat` | Textual chat; needs stdin/stdout TTYs and never falls back to a line reader ([textual.md](textual.md)) |
+| `chat` | Native Ratatui chat; needs stdin/stdout TTYs and never falls back to a line reader |
 | `desktop [--session ID]` | native Rust GPUI window; no TTY required, separate source build ([desktop.md](desktop.md)) |
 | `web [--no-browser]` | `WebLaunch` → one-use browser URL ([web.md](web.md)) |
 | `run MESSAGE [--session ID] [--json]` | one turn (session defaults to `default`) over the daemon; `-` reads stdin; human rendering with terminal approvals, or `--json` JSONL event envelopes (unattended) |
@@ -99,20 +99,17 @@ prompt (`is_continuation`).
 ## Adding a command
 
 - **Slash command:** add a `CommandSpec` in `commands.py`; add a branch in
-  `NexusTextualApp._dispatch_chat_command` ([textual.md](textual.md)) **and** in
+  `nexus/ui/ratatui/actions.py`. Existing browser behavior lives in
   the web client's `SLASH_COMMANDS` / `runSlash` ([web.md](web.md)). The palette
   reads `SPECS`.
 - **Subcommand:** add the parser in `build_parser`, call the host command through
   `Client`, render with the shared pure helpers. Tests: `tests/test_cli.py`,
   `tests/test_chat_command_aliases.py`.
 
-### Native terminal migration
+### Native terminal client
 
-`nexus chat --renderer ratatui|textual` chooses the terminal renderer. The default is
-the native Rust client (`nexus-ratatui`); when its executable is not installed for
-the platform, `nexus chat` prints a one-line note and uses Textual so installs keep
-working. `--renderer ratatui` fails instead of falling back, `--renderer textual`
-forces the old client, and `auto` is accepted as an alias of the default. Installed native wheels
-include `nexus-ratatui`; source checkouts build it with
-`cargo build --manifest-path rust/tui/Cargo.toml`. `NEXUS_TUI_BINARY` explicitly
-overrides executable discovery. See [ratatui-parity.md](ratatui-parity.md).
+`nexus chat` launches the Rust/Ratatui client. `--renderer ratatui` is explicit;
+`auto` is an alias. Missing native executables cause an actionable error.
+Installed native wheels include `nexus-ratatui`; source checkouts build it with
+`cargo build --locked --manifest-path rust/tui/Cargo.toml`.
+`NEXUS_TUI_BINARY` overrides executable discovery. See [ratatui-parity.md](ratatui-parity.md).

@@ -35,7 +35,7 @@ jobs:
             sh -s -- -y --profile minimal --default-toolchain 1.88.0
           CIBW_ENVIRONMENT_LINUX: 'PATH=$HOME/.cargo/bin:$PATH'
           # The installed wheel must launch the native binary and import the native
-          # surface without pulling in Textual (the replacement's dependency goal).
+          # surface without loading an obsolete terminal toolkit.
           CIBW_TEST_COMMAND: >-
             nexus-ratatui --version &&
             python -c "import sys; import nexus.ui.ratatui.prototype as p, nexus.ui.ratatui.run as r; assert 'textual' not in sys.modules, 'native import pulled in textual'; print(r.binary_path())"

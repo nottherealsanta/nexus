@@ -6,7 +6,7 @@ import asyncio
 from contextlib import aclosing
 
 import pytest
-from mock_llm_serve import (
+from mock_llm_fixture import (
     CHILD_AGENT_ID,
     CHILD_TRANSCRIPT,
     FINAL_RESPONSE,
@@ -77,10 +77,10 @@ async def test_real_runtime_mock_model_tools_and_task_activity(tmp_path):
         await runtime.aclose()
 
 
-def test_mock_app_and_browser_driver_are_test_only_and_never_claim_real_model_identity():
+def test_mock_fixture_is_test_only_and_never_claim_real_model_identity():
     from pathlib import Path
 
-    source = Path(__file__).with_name("mock_llm_serve.py").read_text(encoding="utf-8")
+    source = Path(__file__).with_name("mock_llm_fixture.py").read_text(encoding="utf-8")
     assert "nexus-e2e-model" in source
     assert "GPT-6" not in source
     assert "ANTHROPIC_API_KEY" not in source

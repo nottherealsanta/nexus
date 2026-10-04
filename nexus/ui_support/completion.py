@@ -1,6 +1,6 @@
 """Toolkit-free composer completion shared by the native shell (PLAN §14.11).
 
-Mirrors what the Textual composer completes: ``/`` completes visible command
+Mirrors what the terminal composer completes: ``/`` completes visible command
 names by case-insensitive prefix, ``@`` completes workspace files through the
 host (30 results), and ``/model`` and ``/agent`` complete their arguments
 (models as ``provider/id``, capped at 100). The native shell adds static
@@ -36,7 +36,7 @@ STATIC_ARGUMENTS: dict[str, tuple[str, ...]] = {
 
 
 def command_matches(token: str) -> list[str]:
-    """Visible command names whose name or alias starts with ``token`` (sorted, like Textual)."""
+    """Visible command names whose name or alias starts with ``token`` (sorted)."""
     needle = token.casefold()
     return sorted(spec.name for spec in commands.SPECS
                   if not spec.hidden and any(n.casefold().startswith(needle) for n in (spec.name, *spec.aliases)))

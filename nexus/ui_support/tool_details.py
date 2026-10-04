@@ -215,7 +215,7 @@ def sections_to_text(sections: Sequence[DetailSection]) -> str:
 def styled_lines(sections: Sequence[DetailSection]) -> tuple[list[str], list[str]]:
     """``sections`` as text lines plus one tone per line, for shells that colour them.
 
-    Tones follow the Textual modal: ``title`` (bold section name), ``header`` (bold),
+    Tones follow the terminal modal: ``title`` (bold section name), ``header`` (bold),
     ``label`` (dim block label), ``kv`` (dim ``label: `` then the value), ``add``,
     ``del`` and ``hunk`` (diff blocks), and ``""`` for plain text. Joined with
     newlines the lines equal :func:`sections_to_text`.

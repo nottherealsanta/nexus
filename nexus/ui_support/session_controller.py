@@ -6,7 +6,6 @@ import asyncio
 import contextlib
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import aclosing
-from dataclasses import replace
 from typing import Any
 
 from ..client.protocol import Client, ClientError
@@ -113,11 +112,10 @@ class SessionController:
         summary = await self.client.open_session(session)
         if not self._bootstrap_is_current(session, bootstrap_revision):
             return "", summary
-        _baseline, seq = await self.client.state(session, 0)
-        if not self._bootstrap_is_current(session, bootstrap_revision):
-            return "", summary
-        # The host projection establishes the baseline seq; hydrate the typed
-        # reducer through the same append-only event protocol before tailing.
+        # The typed reducer is hydrated from the append-only event stream, which
+        # carries its own last seq. The host's full-view baseline used to be fetched
+        # first and only its seq kept: a whole-session fold, serialization and
+        # transfer on every session open, thrown away.
         view = initial_state(session)
         completion_seq = 0
         async with aclosing(self.client.stream(session, 0, follow=False)) as events:
@@ -129,9 +127,7 @@ class SessionController:
                     completion_seq = max(completion_seq, event.seq)
         if not self._bootstrap_is_current(session, bootstrap_revision):
             return "", summary
-        cursor = max(max(0, int(seq)), view.last_seq)
-        if view.last_seq < cursor:
-            view = replace(view, last_seq=cursor)
+        cursor = view.last_seq
         self.view = view
         self.cursor = cursor
         self.completion_seq = completion_seq

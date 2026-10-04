@@ -29,6 +29,8 @@ def redact(text: str) -> str:
 def _escaped(text: str) -> str:
     """Escape controls (tab/newline excepted) and Unicode format characters."""
     text = _CONTROL.sub(lambda match: f"\\x{ord(match.group()):02x}", text)
+    if text.isascii():  # no ASCII character is a Unicode format character (Cf)
+        return text
     return "".join(
         f"\\u{ord(char):04x}" if unicodedata.category(char) == "Cf" else char
         for char in text

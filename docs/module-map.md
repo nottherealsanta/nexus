@@ -11,7 +11,7 @@ here, so add a row when you add a file.
 | Path | Contents |
 | --- | --- |
 | `nexus/` | the package (below) |
-| `rust/desktop/` | GPUI desktop executable, native editor/transcript/panels and visual fixtures ([desktop.md](desktop.md)) |
+| `rust/desktop/` | GPUI desktop executable, native editor/transcript/panels, declarative `src/keymap.rs`, bounded toast stack in `src/notice.rs`, turn minimap derivation in `src/minimap.rs`, bounded opt-in CPU timing in `src/trace.rs`, and visual fixtures ([desktop.md](desktop.md)) |
 | `skills/gpui-nexus/` | version-aware GPUI implementation/design guidance, reviewed upstream references and licenses |
 | `skills/native-app-review/` | reusable native screenshot/review skill and local macOS bundling helper |
 | `docs/` | this documentation |
@@ -35,7 +35,6 @@ here, so add a row when you add a file.
 | `nexus/model/data/models.min.json`, `NOTICE` | vendored models.dev snapshot and MIT attribution |
 | `nexus/auth/NOTICE`, `nexus/voice/NOTICE` | third-party attributions |
 | `nexus/host_support/searchserver/` | packaged SearXNG `compose.yaml` and `searxng/settings.yml` |
-| `nexus/ui/tui/app.tcss` | all Textual CSS |
 | `nexus/ui/web/index.html`, `js/*.js`, `styles/*.css`, `assets/*` | the browser app ([web.md](web.md#file-map)) |
 
 ## Python modules
@@ -386,33 +385,6 @@ here, so add a row when you add a file.
 | `stream.py` | Turn streaming helpers shared by the one-shot and interactive surfaces |
 | `uds.py` | Unix-socket transport for the CLI, over the canonical host wire |
 
-### `nexus/ui/tui/`
-
-| File | Purpose |
-| --- | --- |
-| `attachments.py` | Pending file and clipboard image attachments, previews, and submission |
-| `__init__.py` | Optional Textual shell for the daemon-backed Nexus client |
-| `attachments.py` | TUI attachment preparation and Markdown preview through the host |
-| `agent_picker.py` | Searchable picker for root agents and selectable models |
-| `agent_row.py` | Keyboard and mouse selectable row for one reducer-owned AgentView |
-| `agent_transcript.py` | Live sub agent page: the child's session laid out exactly like the root |
-| `app.py` | Textual shell |
-| `controller.py` | Daemon-client event bridge and reducer seam for the Textual shell |
-| `extras.py` | Small, host-backed chat commands kept outside the shell controller |
-| `keychord.py` | Ctrl+X leader keys and the "any key stops dictation" rule for the Textual shell |
-| `keys.py` | Terminal key-protocol compatibility for the Nexus Textual shell |
-| `messages.py` | Typed messages between the event bridge and Textual widgets |
-| `mock.py` | `/mock` in the Textual shell (dev mode only) |
-| `new_session.py` | `/new`: pick the root agent a new session starts with |
-| `panels.py` | Side panels, Sessions dialog, and Settings wiring for the Textual shell |
-| `permission.py` | Attended approval and question prompts; arbitration stays daemon-side |
-| `run.py` | Small runtime-free entry seam for launching the optional Textual app |
-| `theme.py` | Nexus Textual themes: an opencode-style dark workbench and its light twin |
-| `timeline.py` | Reducer-backed conversation timeline and compact tool activity rows |
-| `tool_details.py` | Modal inspection for a single reducer-backed tool call |
-| `usage.py` | Provider usage modal: plan limits for every connected provider (Ctrl+U, `/usage`) |
-| `widgets.py` | Compatibility exports for the Textual widget toolkit |
-
 ### `nexus/ui/web/`
 
 | File | Purpose |
@@ -439,6 +411,7 @@ here, so add a row when you add a file.
 | --- | --- |
 | `__init__.py` | Pure presentation helpers shared by terminal surfaces |
 | `agent_frontmatter.py` | Read and rewrite the simple `key: value` frontmatter of an agent `*.md` |
+| `native_schedule.py` | `UpdateCoalescer`: frame-rate coalescing of native bridge updates; user actions flush immediately |
 | `native_images.py` | Bounded host-backed draft and submitted image previews for the desktop; no path or remote URL reads |
 | `clipboard.py` | Bounded local system clipboard image reading for terminal attachment uploads |
 | `context.py` | Pure display projections for context preview and session usage |
@@ -446,30 +419,16 @@ here, so add a row when you add a file.
 | `fuzzy.py` | Shared fuzzy matcher (score and match positions) for the command palette and model picker |
 | `mock_args.py` | Shared `/mock` argument handling for the chat surfaces |
 | `mock_cli.py` | `nexus mock list\|run\|clean` (dev mode only) |
+| `prompt_history.py` | Bounded durable prompt history for the native composer |
 | `prompts.py` | UI-neutral choices for operator prompts: approvals and agent questions |
 | `text.py` | Control-safe, credential-redacted text for terminal presentation |
 | `timeline.py` | Pure formatting and filtering for reducer-backed conversation timelines |
 | `tool_details.py` | Presentable tool call details: every parameter and output, none of the JSON |
 | `usage.py` | Provider usage formatting shared by surfaces (`ProvidersUsageResult`) |
-| `tui_archived.py` | Search and resume durable archived sessions through host callbacks |
-| `tui_command_palette.py` | Textual command-palette entries and the keyboard shortcut reference |
-| `tui_context_header.py` | Scrollable request-context header and read-only detail dialogs |
-| `tui_diff.py` | Inline file diffs under Edit and Patch activity rows (textual-diff-view) |
-| `tui_history.py` | Bounded per-user prompt history for the terminal composer |
-| `tui_list.py` | Shared list presentation for inline completions and pickers |
 | `details.py` | Toolkit-free details sidebar data (session rows, modified files, MCP rows) shared by both shells |
 | `context_header.py` | Toolkit-free context header blocks, agent colors and tool grouping shared by both shells |
 | `completion.py` | Toolkit-free composer completion shared by the native shell |
 | `model_choice.py` | Toolkit-free model picker sort, fuzzy rank, grouping and effort rules |
-| `tui_model_picker.py` | Searchable, grouped terminal model selector |
-| `tui_speech.py` | `/speak` model consent, download progress and the `/speak` entry point for the Textual shell |
-| `tui_models.py` | Settings → Models and Session titles panes, and the agent Tiers dialog |
-| `tui_panels.py` | Side panels and the Settings screen for the Textual shell |
-| `tui_providers.py` | Settings → Providers pane: sign in to Codex, GitHub Copilot and OpenCode Go |
-| `tui_settings.py` | Full-screen Settings page backed entirely by host inventory commands |
-| `tui_setup.py` | First-run setup: connect a provider, then chat |
-| `tui_voice.py` | Textual dictation controls and consent flow |
-| `tui_widgets.py` | Small Textual-only presentation widgets for the Nexus shell |
 | `voice_capture.py` | Bounded 16 kHz microphone capture for TUI dictation |
 
 ### `nexus/view/`
@@ -498,6 +457,8 @@ here, so add a row when you add a file.
 | File | Contract |
 | --- | --- |
 | `run.py` | GPUI executable discovery and host-only native presentation bridge launch. |
+| `wire.py` | Topic-fingerprinted incremental desktop snapshot serialization and transcript block deltas. |
+| `wire_schedule.py` | Import shim re-exporting the shared `UpdateCoalescer` for the desktop bridge. |
 
 ### `nexus/ui/ratatui/`
 
@@ -505,6 +466,11 @@ here, so add a row when you add a file.
 | --- | --- |
 | `__init__.py` | Experimental native surface package |
 | `prototype.py` | Host adapter and labelled snapshot projection |
+| `wire.py` | Terminal schema-3 section deltas and ordered transcript suffixes |
+| `stream_projection.py` | Changed-tail projection for ordinary root text/thought deltas |
+| `transcript_data.py` | Bounded immutable-tool presentation cache |
+| `background.py` | Bounded independent completion/model/clipboard tasks with stale guards |
+| `trace.py` | Bounded, body-free Python bridge timings and exit report |
 
 The Rust client lives in `rust/tui/src/`: `main.rs` (terminal loop, key and mouse
 handling), `input.rs` (action writers, editor keys, picking, OSC 52 base64),
@@ -516,7 +482,7 @@ panel text, Settings area list, prompt and logs regions, completion popup),
 loop over local state; splitting it further needs a state struct and is not done.
 | `actions.py` | Native shell slash dispatch, attachments and host-backed panels |
 | `controller.py` | Continuous native subscription using canonical bootstrap and reduction |
-| `preferences.py` | Textual-compatible native shell preferences |
+| `preferences.py` | Native shell preferences |
 | `workflows.py` | Settings, provider, context, session and worktree workflows |
 | `speak_pages.py` | `/speak` consent, download progress and speaking in the native client |
 | `tier_pages.py` | Settings → Models, Session titles and an agent's Tiers row |
@@ -528,6 +494,8 @@ loop over local state; splitting it further needs a state struct and is not done
 
 | Native module | Contract |
 | --- | --- |
+| `rust/tui/src/disclosure.rs` | Rust-local transcript disclosure, session/page LRU choices and borrowed presentation |
+| `rust/tui/src/local_ui.rs` | Optimistic sidebar/tab/file/log toggles with ordered acknowledgements |
 | `rust/tui/src/trace.rs` | Bounded opt-in native timing samples, percentile summaries and exit report |
 
 The manual `tests/ratatui_performance_check.py` script measures controlling-PTY

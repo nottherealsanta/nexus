@@ -5,7 +5,7 @@
 client out of ``nexus.runtime``, ``nexus.session``, ``nexus.model``,
 ``nexus.tools``, and ``nexus.core``. A surface may import ``nexus.host``,
 ``nexus.view``, ``nexus.events``, the standard library, and nothing else —
-Textual/Rich imports are permitted only in the first-class TUI package.
+Presentation toolkits must stay outside the Python clients.
 """
 from __future__ import annotations
 
@@ -22,22 +22,15 @@ UI_ROOT = REPO_ROOT / "nexus" / "ui"
 #: The pure-client surface this phase owns. ``ui/native.py`` is the retired
 #: pre-Phase-8 adapter and is deliberately out of scope until the root CLI is
 #: rewired.
-CLIENT_FILES = sorted((UI_ROOT / "cli").rglob("*.py")) + [UI_ROOT / "jsonl.py", UI_ROOT / "tui" / "app.py"]
-TUI_FILES = sorted((UI_ROOT / "tui").rglob("*.py")) + [UI_ROOT / "turn_stream.py"]
-
-#: Host protocol clients and pure terminal projections sit beside (not inside)
-#: the Textual/CLI package and are valid UI dependencies.
+CLIENT_FILES = sorted(UI_ROOT.rglob("*.py"))
+TUI_FILES = sorted((REPO_ROOT / "nexus/ui_support").rglob("*.py"))
 ALLOWED_NEXUS_PREFIXES = (
     "nexus.host", "nexus.view", "nexus.events", "nexus.ui",
     "nexus.client", "nexus.host_support", "nexus.ui_support",
 )
-
-#: Only the first-class TUI is permitted to import these presentation packages.
-ALLOWED_THIRD_PARTY: tuple[str, ...] = ("textual_diff_view",)
-TEXTUAL_SUPPORT_FILES = {
-    "tui_widgets.py", "tui_panels.py", "tui_list.py", "tui_context_header.py",
-    "tui_archived.py", "tui_diff.py", "tui_settings.py", "tui_setup.py",
-    "tui_providers.py", "tui_voice.py", "tui_models.py", "tui_speech.py",
+ALLOWED_THIRD_PARTY = {
+    "context.py": {"rich"},
+    "voice_capture.py": {"sounddevice"},
 }
 
 #: The interpreter's standard-library module names, for a precise allow-list.
@@ -95,10 +88,10 @@ def test_client_files_exist():
     assert CLIENT_FILES, "expected UI client modules to lint"
     names = {path.name for path in CLIENT_FILES}
     assert "client.py" in names
-    assert "app.py" in names
+    assert "prototype.py" in names
 
 
-@pytest.mark.parametrize("path", CLIENT_FILES + TUI_FILES, ids=lambda p: str(p.relative_to(UI_ROOT)))
+@pytest.mark.parametrize("path", CLIENT_FILES + TUI_FILES, ids=lambda p: str(p.relative_to(REPO_ROOT)))
 def test_ui_client_imports_only_allowed_layers(path: Path):
     for module in _imports(path):
         top = module.split(".")[0]
@@ -106,18 +99,14 @@ def test_ui_client_imports_only_allowed_layers(path: Path):
             assert module.startswith(ALLOWED_NEXUS_PREFIXES), (
                 f"{path.relative_to(REPO_ROOT)} imports {module}"
             )
-        elif top in {"textual", "rich"}:
-            assert path in TUI_FILES or (path.parent.name == "ui_support" and path.name in TEXTUAL_SUPPORT_FILES), (
-                f"{path.relative_to(REPO_ROOT)} imports {module} outside ui/tui"
-            )
-        elif top not in ALLOWED_THIRD_PARTY:
+        elif top not in ALLOWED_THIRD_PARTY.get(path.name, set()):
             # Everything else must be the standard library.
             assert top in STDLIB, (
                 f"{path.relative_to(REPO_ROOT)} imports non-stdlib {module}"
             )
 
 
-@pytest.mark.parametrize("path", CLIENT_FILES + TUI_FILES, ids=lambda p: str(p.relative_to(UI_ROOT)))
+@pytest.mark.parametrize("path", CLIENT_FILES + TUI_FILES, ids=lambda p: str(p.relative_to(REPO_ROOT)))
 def test_ui_client_never_imports_the_runtime_or_managers(path: Path):
     violations = sorted(
         module for module in _imports(path) if module.startswith(FORBIDDEN_PREFIXES)
@@ -153,3 +142,10 @@ def test_prompt_toolkit_is_absent_from_runtime_and_lockfile():
     root = REPO_ROOT
     assert "prompt_toolkit" not in (root / "pyproject.toml").read_text(encoding="utf-8")
     assert "prompt-toolkit" not in (root / "uv.lock").read_text(encoding="utf-8")
+
+
+def test_removed_terminal_toolkit_is_absent():
+    assert not (UI_ROOT / "tui").exists()
+    assert not list((REPO_ROOT / "nexus/ui_support").glob("tui_*.py"))
+    for name in ("pyproject.toml", "uv.lock"):
+        assert "textual" not in (REPO_ROOT / name).read_text()

@@ -16,7 +16,7 @@ boundary is enforced by tests (`tests/test_layering.py`,
 `tests/test_ui_layering.py`), not by convention.
 
 ```
-    L5  ui/            Textual chat, one-shot CLI, JSONL     <- surfaces
+    L5  ui/            Ratatui chat, one-shot CLI, JSONL     <- surfaces
         ----------------------------------------------------
     L4½ host/          facade, protocol, supervisor, presence, transports
         ----------------------------------------------------
@@ -349,7 +349,7 @@ pure function of the reduced `ConversationView` — it formats the phase, the
 `model.selected` until the next turn reports the actual one), token usage,
 context occupancy (the provider-measured prompt when reported, else the
 assembler's estimate) against the context window, viewers, queued inputs,
-and the subagent tree. The Textual status line and `/details` render from it, so
+and the subagent tree. The native status line and `/details` render from it, so
 they cannot disagree. Every session,
 model, and agent label is sanitized before it is shown. The renderer escapes
 control characters and redacts credential shapes before any tool name, key,
@@ -361,10 +361,7 @@ size, and ANSI is enabled only on a TTY (`NO_COLOR` by presence or `TERM=dumb`
 disable it; `FORCE_COLOR` overrides). Its
 replay dedup is tracked **per session**, so switching to a new or forked session
 renders its lower `seq` events instead of suppressing them as repeats.
-Textual, Rich, and `textual-diff-view` imports are confined to `nexus/ui/tui`. The host client and
-one-shot/JSONL modules remain importable without loading Textual at module import
-time; Textual and `textual-diff-view` are normal runtime dependencies because
-Textual is the only chat shell. The shell projects `ConversationView` as a
+The native Ratatui shell projects `ConversationView` as a
 single-column chronological timeline keyed by turn/message/call IDs, and keeps
 all Task/subagent activity inline at the initiating call. It never reads files
 to render an Edit: the bounded durable `ToolCallView.diff` is the only source

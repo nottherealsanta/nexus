@@ -2,7 +2,7 @@
 
 Nexus is a provider-agnostic agent harness. One **daemon per workspace** owns the
 runtime, sessions and turns. Four surfaces are pure clients of it: the native Ratatui terminal app (`nexus chat`,
-Textual fallback), a one-shot CLI and JSONL stream (`nexus run`), a plain-JS
+sole terminal client), a one-shot CLI and JSONL stream (`nexus run`), a plain-JS
 browser app (`nexus web`), and the GPUI desktop app (`nexus desktop`).
 
 The rule that keeps it modular: **`core/loop.py` knows only protocols.** It talks
@@ -15,6 +15,23 @@ the loop testable with fakes and every manager replaceable.
 The [GPUI desktop client](desktop.md) is another host client. Its Rust window
 receives owned presentation snapshots from the existing Python native bridge;
 it owns neither the runtime nor session persistence.
+
+The terminal mirror receives schema-3 section deltas and ordered transcript suffixes.
+Python reduces canonical session events, prepares labelled/control-safe content and
+executes host actions. Rust owns disclosure, navigation, viewport and drawing.
+Sidebar/tab/file/log toggles apply locally and send sequenced persistence actions;
+stale echoes cannot undo newer local choices. Ordinary root text/thought updates
+project only the changed tail. Other events and child pages use full projection.
+
+| Terminal concern | Owner |
+| --- | --- |
+| Sessions, agent execution, durable reduction and host commands | Python / daemon |
+| Labelled content, redaction and canonical ordering | Python projection |
+| Tool/group/output/thought/turn disclosure and static command completion | Rust |
+| Sidebar/tab/file/log presentation | Rust, asynchronously mirrored to Python |
+| Preference persistence | Python, debounced off the event loop |
+| Wrapping, viewport, selection and drawing | Rust |
+
 
 ```
 client (TUI / CLI / browser / desktop)
@@ -37,7 +54,7 @@ loop events ─► session records (SQLite) ─► view/reduce.py (pure) ─► 
 Strict one-way imports: a lower layer never imports a higher one.
 
 ```
-L5   ui/ ui_support/ client/     surfaces (Textual, CLI, JSONL, browser)
+L5   ui/ ui_support/ client/     surfaces (Ratatui, GPUI, CLI, JSONL, browser)
 L4½  host/ host_support/ observability/   facade, protocol, daemon, transports
 L4   runtime.py                  composition root: managers, providers, router, reload
 L3   session/ context/ tools/ skills/ mcp/ agents/ hooks/ ext/ voice/ auth/ net/   managers
@@ -56,7 +73,7 @@ Enforced by tests, not convention:
 | Rule | Test |
 | --- | --- |
 | `nexus/model/**` never imports `core`, `session`, `context`, `runtime`, `tools`, `agent`, `cli` | `tests/test_layering.py` |
-| `nexus/ui/**` imports only `nexus.host`, `view`, `events`, `client`, `host_support`, `ui_support`, `ui` and the stdlib; Textual/Rich stay in `ui/tui/` and ten `ui_support/tui_*.py` files | `tests/test_ui_layering.py` |
+| `nexus/ui/**` imports only `nexus.host`, `view`, `events`, `client`, `host_support`, `ui_support`, `ui` and the stdlib; Rich is confined to `ui_support/context.py` | `tests/test_ui_layering.py` |
 | No line caps. Line counts are recorded for information | `tests/test_phase3_exit.py` |
 
 If something wants to be both core and live-reloadable, widen an interface; do
@@ -92,7 +109,7 @@ Details: [models.md](models.md), [tools.md](tools.md), [events-and-view.md](even
 | `net/` | pinned public-address-only HTTP | [security.md](security.md) |
 | `runtime.py` | composition root | below |
 | `host/`, `host_support/`, `observability/` | facade, protocol, daemon, transports, projections | [host.md](host.md) |
-| `client/`, `ui/`, `ui_support/` | surfaces | [cli.md](cli.md), [surfaces.md](surfaces.md), [textual.md](textual.md), [web.md](web.md) |
+| `client/`, `ui/`, `ui_support/` | surfaces | [cli.md](cli.md), [surfaces.md](surfaces.md), [ratatui-parity.md](ratatui-parity.md), [web.md](web.md) |
 | `devtools/` | mock provider and scenarios (dev mode) | [devtools.md](devtools.md) |
 
 ## Runtime (`runtime.py`)

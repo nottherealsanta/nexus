@@ -114,7 +114,7 @@ def tool_batches(tools: Sequence[ToolCallView]) -> dict[str, str]:
 
 @dataclass(frozen=True)
 class ToolGroup:
-    """A stable native activity group; shared Textual formatting stays unchanged."""
+    """A stable native activity group; canonical formatting stays stable."""
     id: str
     members: tuple[ToolCallView, ...]
     failures: int
@@ -376,6 +376,69 @@ def diff_split_rows(hunk: str, limit: int = 400) -> list[DiffRow]:
     return rows
 
 
+_REVIEW_ROW_LIMIT = 4000
+
+
+def structured_diff(diff: Mapping[str, object]) -> dict:
+    """Structured per-file unified diff for the desktop Review pane (plan D3).
+
+    Returns ``{"files": [{"path", "added", "removed", "hunks": [{"header",
+    "rows": [{"kind", "old_no", "new_no", "text"}]}]}], "truncated": bool}``.
+    ``kind`` is ``ctx``, ``add`` or ``del``; ``0`` means no line number. The row
+    budget is announced through ``truncated`` rather than silently clipped.
+    """
+    files: list[dict] = []
+    budget = _REVIEW_ROW_LIMIT
+    truncated = bool(diff.get("truncated"))
+    for path, hunk in split_diff_files(diff):
+        hunks: list[dict] = []
+        added = removed = 0
+        current: dict | None = None
+        old = new = 0
+        for line in hunk.splitlines():
+            header = _HUNK_START.match(line)
+            if header:
+                if current is not None:
+                    hunks.append(current)
+                old, new = int(header.group(1)), int(header.group(2))
+                current = {"header": line, "rows": []}
+                continue
+            if current is None or line.startswith("\\"):
+                continue
+            if budget <= 0:
+                truncated = True
+                break
+            if line.startswith("+"):
+                current["rows"].append(
+                    {"kind": "add", "old_no": 0, "new_no": new, "text": line[1:]}
+                )
+                new += 1
+                added += 1
+            elif line.startswith("-"):
+                current["rows"].append(
+                    {"kind": "del", "old_no": old, "new_no": 0, "text": line[1:]}
+                )
+                old += 1
+                removed += 1
+            else:
+                text = line[1:] if line.startswith(" ") else line
+                current["rows"].append(
+                    {"kind": "ctx", "old_no": old, "new_no": new, "text": text}
+                )
+                old += 1
+                new += 1
+            budget -= 1
+        if current is not None:
+            hunks.append(current)
+        if hunks:
+            files.append(
+                {"path": path, "added": added, "removed": removed, "hunks": hunks}
+            )
+        if budget <= 0:
+            break
+    return {"files": files, "truncated": truncated}
+
+
 def diff_sections(diff: Mapping[str, object]) -> list[DiffSection]:
     """Per-file before/after text for a (possibly multi-file) ``diff`` artifact."""
     sections: list[DiffSection] = []
@@ -614,9 +677,9 @@ def turn_footer_text(turn: TurnView) -> str:
     # request size shown by the composer context meter.
     tokens = f"turn ↑{_compact_tokens(prompt)} ↓{_compact_tokens(usage.output_tokens)}" if prompt or usage.output_tokens else ""
     cached = f"{round(usage.cache_read_tokens / prompt * 100)}% cached" if prompt and usage.cache_read_tokens else ""
-    shown = any(block.kind == "thinking" and block.text.strip() for message in turn.messages for block in message.blocks)
-    reasoning = (f"{_compact_tokens(usage.reasoning_tokens)} reasoning" + ("" if shown else " (not shown)")
-                 if usage.reasoning_tokens else "")
+    # ``r`` is reasoning tokens; the count is additive provider usage for the
+    # whole turn and does not distinguish shared from hidden reasoning.
+    reasoning = f"{_compact_tokens(usage.reasoning_tokens)} r" if usage.reasoning_tokens else ""
     return " · ".join(part for part in (model if model != "unknown" else "", _turn_duration(turn) or "", tokens, cached, reasoning) if part)
 
 
@@ -695,6 +758,7 @@ __all__ = [
     "diff_sections",
     "diff_split_rows",
     "format_arguments",
+    "structured_diff",
     "split_diff_files",
     "thought_title",
     "tool_heading",

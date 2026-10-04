@@ -211,14 +211,13 @@ async def test_claude_init_saves_provider_through_the_host(monkeypatch, tmp_path
 
 def test_chat_starts_a_new_session_unless_one_is_named(monkeypatch):
     seen: list[str] = []
-    monkeypatch.setattr(cli, "_chat_entry", lambda workspace, *, session, renderer="textual": seen.append(session) or 0)
+    monkeypatch.setattr(cli, "_chat_entry", lambda workspace, *, session, renderer="ratatui": seen.append(session) or 0)
     class Tty(io.StringIO):
         def isatty(self):
             return True
 
     monkeypatch.setattr(cli.sys, "stdin", Tty())
     monkeypatch.setattr(cli.sys, "stdout", Tty())
-    monkeypatch.setattr(cli.importlib.util, "find_spec", lambda name: object())
     monkeypatch.setenv("TERM", "xterm")
     assert cli.main([]) == 0
     assert cli.main(["chat"]) == 0
@@ -248,7 +247,7 @@ def test_chat_non_tty_fails_without_opening_client(monkeypatch, argv):
     monkeypatch.setattr(cli.sys, "stdout", out)
     monkeypatch.setattr(cli.sys, "stderr", err)
     monkeypatch.setenv("TERM", "xterm-256color")
-    monkeypatch.setattr(cli, "_chat_entry", lambda *_args, **_kwargs: pytest.fail("must not launch Textual"))
+    monkeypatch.setattr(cli, "_chat_entry", lambda *_args, **_kwargs: pytest.fail("must not launch chat"))
     assert cli.main(argv) == 2
     assert "interactive terminal" in err.getvalue()
     assert "nexus run" in err.getvalue()
@@ -742,45 +741,40 @@ def test_no_codex_binary_or_acp_is_needed_for_regular_commands():
     assert not (REPO_ROOT / "nexus" / "ui" / "native.py").exists()
 
 
-def test_chat_renderer_auto_prefers_native_when_installed(monkeypatch):
-    chosen: list[str] = []
-    monkeypatch.setattr(cli, "_chat_entry", lambda workspace, *, session, renderer="textual": chosen.append(renderer) or 0)
-
+def test_chat_requires_native_renderer(monkeypatch, capsys):
+    import nexus.ui.ratatui.run as native
+    chosen = []
+    monkeypatch.setattr(cli, "_chat_entry", lambda workspace, *, session, renderer="ratatui": chosen.append(renderer) or 0)
     class Tty(io.StringIO):
         def isatty(self):
             return True
-
     monkeypatch.setattr(cli.sys, "stdin", Tty())
     monkeypatch.setattr(cli.sys, "stdout", Tty())
-    monkeypatch.setattr(cli.importlib.util, "find_spec", lambda name: object())
-    monkeypatch.setenv("TERM", "xterm")
-    import nexus.ui.ratatui.run as native
-
-    monkeypatch.setattr(native, "available", lambda: True)
-    assert cli.main(["chat"]) == 0
-    monkeypatch.setattr(native, "available", lambda: False)
-    assert cli.main(["chat"]) == 0
-    assert cli.main(["chat", "--renderer", "ratatui"]) == 0
-    assert chosen == ["ratatui", "textual", "ratatui"]
-
-
-def test_chat_defaults_to_the_native_renderer_and_falls_back_visibly(monkeypatch, capsys):
-    import nexus.ui.ratatui.run as native
-
-    seen: list[str] = []
-    monkeypatch.setattr(cli, "_chat_entry", lambda workspace, *, session, renderer="textual": seen.append(renderer) or 0)
-
-    class Tty(io.StringIO):
-        def isatty(self):
-            return True
-
-    monkeypatch.setattr(cli.sys, "stdin", Tty())
-    monkeypatch.setattr(cli.sys, "stdout", Tty())
-    monkeypatch.setattr(cli.importlib.util, "find_spec", lambda name: object())
     monkeypatch.setenv("TERM", "xterm")
     monkeypatch.setattr(native, "available", lambda: True)
-    assert cli.main(["chat"]) == 0 and seen == ["ratatui"]
-    assert cli.main(["chat", "--renderer", "textual"]) == 0 and seen[-1] == "textual"
+    for args in (["chat"], ["chat", "--renderer", "auto"], ["chat", "--renderer", "ratatui"]):
+        assert cli.main(args) == 0
+    assert chosen == ["ratatui"] * 3
     monkeypatch.setattr(native, "available", lambda: False)
-    assert cli.main(["chat"]) == 0 and seen[-1] == "textual"
+    assert cli.main(["chat"]) == 1
     assert "native terminal client is not installed" in capsys.readouterr().err
+    assert chosen == ["ratatui"] * 3
+
+
+def test_chat_rejects_removed_renderer():
+    import pytest
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["chat", "--renderer", "textual"])
+
+
+def test_model_count_reads_both_status_shapes():
+    """``models refresh`` and ``doctor`` printed 0 because they read ``models``.
+
+    ``RegistryStatus`` serializes as ``model_count`` while the ``registry.*``
+    lifecycle events use ``models``; the helper accepts either.
+    """
+    assert cli._model_count({"model_count": 134, "source": "network"}) == 134
+    assert cli._model_count({"models": 7}) == 7
+    assert cli._model_count({}) == 0
+    assert cli._model_count(None) == 0
+    assert cli._model_count({"model_count": True}) == 0

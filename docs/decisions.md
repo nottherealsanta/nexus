@@ -88,7 +88,7 @@ paths themselves. See [desktop.md](desktop.md).
 | **Claude subscription via the official Agent SDK in an isolated worker,** SDK tools/hooks/settings/persistence disabled; text-only, buffered. | Nexus keeps logging, permissions and execution. | `model/providers/claude_agent.py` |
 | **Provider usage reuses the credentials Nexus already holds;** Claude's comes from `claude -p /usage`, not the `api/oauth/usage` endpoint CodexBar calls. | Reading Claude Code's OAuth token from its keychain item would break "the CLI owns the credential store"; `/usage` is a local command that costs no tokens. Its text format is unversioned, so a CLI change shows as a row error rather than wrong numbers. | `host_support/provider_usage.py` |
 | **Claude sign-in runs `claude auth login` headless and takes a pasted code;** Settings never signs Claude out. | The daemon never opens a browser, and the login is shared with Claude Code, so a Nexus "Disconnect" would surprise the user. | `host_support/provider_auth.py` |
-| **`Ctrl+U` opens usage even in the composer.** | One direct key in both surfaces; the TUI composer loses readline's delete-to-line-start (`Cmd+Backspace` still works). | `ui/tui/app.py:on_event` |
+| **`Ctrl+U` opens usage even in the composer.** | One direct key in both surfaces; the TUI composer loses readline's delete-to-line-start (`Cmd+Backspace` still works). | `ui/ratatui/actions.py` |
 | **Thinking summaries are provider-supplied and never invented;** no duration is fabricated. | Honest presentation. | [loop.md](loop.md#thinking) |
 | **Voice uses Kestrel's internal Parakeet runtime, not Photon** (telemetry, no opt-out). Model download is consent-gated and never implicit. | Privacy. Real inference is unverified. | [voice.md](voice.md) |
 | **Live dictation re-transcribes the growing recording as non-queueing `partial` previews; the final transcript still comes from one pass over the whole recording.** | Parakeet TDT here is offline, not streaming; whole-recording passes avoid word-boundary seams between chunks, and previews can never delay or replace the final text. Cost grows with length, bounded by `max_seconds`. | [voice.md](voice.md#flow) |
@@ -106,7 +106,7 @@ paths themselves. See [desktop.md](desktop.md).
 
 | Decision | Why | Where |
 | --- | --- | --- |
-| **No line caps;** new Textual behavior still gets its own module. | Caps produced contortions; layering is what matters. | `tests/test_phase3_exit.py` |
+| **No line caps;** new terminal behavior still gets its own module. | Caps produced contortions; layering is what matters. | `tests/test_phase3_exit.py` |
 | **Conventional Commits drive versions; never edit `version` or `CHANGELOG.md` by hand.** A version-bump request defaults to the next patch and authorises the full release; a minor bump needs explicit approval. | release-please owns the files; patch releases should be cheap. | [release.md](release.md) |
 | **Docs are the source of truth; code wins over plans.** | Agents need one place to look. | [README.md](README.md) |
 
@@ -169,8 +169,7 @@ Notable choices and why:
 - **Thought headline** labels reasoning the provider did not share instead of
   showing nothing, so the user sees the model did reason.
 - **Fuzzy search** (`ui_support/fuzzy.py` + `js/fuzzy.js`, same constants) for the
-  model picker and web palette; the Textual palette already uses Textual's fuzzy
-  matcher.
+  model picker and web palette; the native palette uses the shared fuzzy matcher.
 
 Provider credentials use `~/.nexus/credentials.json` instead of the OS keychain to
 avoid backend errors and access prompts. The file is plaintext with owner-only
@@ -191,42 +190,13 @@ implementation remains separate from this navigation feature.
 
 ## Ratatui prototype boundary
 
-The authorized terminal migration begins with an isolated experimental Rust
-subprocess and Python host adapter (`ui/ratatui/prototype.py`). This keeps the
-current install backend stable while testing presentation and input. Production
-Textual removal waits for feature parity; the subprocess is a prototype choice,
-not a final decision against the feasibility report's PyO3/maturin boundary.
-
 The native subprocess ships through `setuptools-rust` alongside the Python
 console script; the existing setuptools package-data declarations remain intact.
 This keeps crash isolation and avoids an unused PyO3 boundary. The alternative
-maturin/PyO3 design in the feasibility report remains an option if measured IPC
+maturin/PyO3 design in the earlier feasibility work remains an option if measured IPC
 cost warrants it. Rust sources and Cargo.lock are included in the sdist; release
 wheels require native platform builds. The first macOS arm64 wheel was built and
 installed locally; other targets are not verified.
-
-### Native renderer is the default, Textual the fallback
-
-`nexus chat` defaults to the Rust client (`--renderer ratatui`) and falls back to
-Textual, with a printed note, when the executable is missing (`--renderer auto` is
-an alias). The default switched on 2026-10-02 at the owner's request, before the
-hosted-runner, real-provider and hardware gates were closed (see
-`plans/RATATUI_PLAN.md`); those remain open. Reason: the native binary only ships in wheels for
-the built platform matrix, and a pure-Python install (or a platform outside the
-matrix) must still get a working chat. Textual therefore stays a runtime
-dependency until a binary-less fallback wheel or a full platform matrix is
-verified on hosted runners (not verified); removing it earlier would break those
-installs. Both clients read the same host contract and share the pure helpers in
-`ui_support/` (timeline rows, details, context header, completion, model choice),
-so a wording or layout change lands in both.
-
-The Rust binary build is `optional = true` in `pyproject.toml`: a platform with no
-Rust toolchain (for example Windows installing from the sdist) still gets a working
-wheel without the binary, and `auto` then picks Textual (checked locally by building
-a wheel with no `cargo` on `PATH`: it succeeds and contains no `nexus-ratatui`). The
-reason for not publishing a separate pure wheel is that one source tree builds both
-shapes. The cost is that a broken Rust build on a supported platform no longer fails
-the build by itself; the wheel CI test (`nexus-ratatui --version`) catches that.
 
 ## Native TUI overlays and black theme (2026-10-02)
 
@@ -248,9 +218,7 @@ wall-clock and token limits remain the automatic stops.
 
 ## Native redesign: layout, context and incremental rendering (2026-10-02)
 
-The Ratatui redesign is intentionally independent of the fallback Textual
-presentation. Tool grouping is a pure helper, consumed by native projection;
-existing Textual rows remain unchanged. Full-height sidebars replace the lower
+Tool grouping is a pure helper consumed by native projection. Full-height sidebars replace the lower
 Logs pane. At constrained widths the most recently opened sidebar takes priority,
 with a narrow right overlay; saved visibility remains intact across resizing.
 Open sessions are marked in the Sessions list when its presence removes center tabs.
@@ -320,3 +288,71 @@ a model hint must not break delegation. `agents.max_tier` stays as a user ceilin
 reaching `high`). Roles without `tiers` keep the old behaviour, so existing custom
 agents change nothing until their owner opts in. Tier names are checked for shape
 at parse time and resolved later, because custom tiers live in config, not here.
+
+### One terminal client
+
+Ratatui is the sole terminal renderer. Maintaining a second widget implementation
+and its dependency stack is no longer part of the product. Missing native binaries
+fail with build/install guidance. Optional binary builds still allow CLI/browser
+installs on platforms without a Rust toolchain; terminal chat requires the binary.
+
+## Desktop keys follow the terminal, with Cmd aliases
+
+The shared `ui_support/shortcuts.py` tables are canonical for the desktop as well
+as Ratatui: every `SHORTCUTS` and `LEADER_SHORTCUTS` row has a desktop route, and
+`tests/test_desktop_keymap_parity.py` enforces it. Ratatui meanings win where they
+collide with macOS text editing; `Cmd` bindings are aliases only. This is why
+`Ctrl+E` toggles the Logs drawer rather than moving to end of line (`Cmd+→` does
+that), matching the terminal. New leader rows (`c` context popover, `z` update
+help) were added to the shared table because the terminal and web already handled
+them; the desktop now routes them too. The transient Ctrl+X leader is expressed
+with GPUI multi-stroke bindings. Scoped keys never intercept typing: `a`, the
+PageUp/PageDown transcript scroll and the `[` / `]` inspector tabs carry
+`!Editor`, and `Ctrl+S` saves only inside the `Form` context. See
+[desktop.md](desktop.md#keys).
+
+## Desktop overhaul starts with measured performance
+
+The desktop source launcher prefers a release binary to a newer debug binary,
+with dependency optimization in dev builds and a warning for debug fallback.
+Composer synchronization is debounced while native editing stays local. Bounded
+CPU traces identify bridge/render costs before the store and visual overhaul;
+they do not claim display FPS. Transcript rows borrow the projected content
+directly, avoiding per-frame deep copies without a duplicate Arc store. See
+[desktop.md](desktop.md#overhaul-performance-foundation).
+
+
+### Terminal interaction and incremental mirroring
+
+Tool/group/output, thought and turn folding belong to Rust. Python supplies
+complete labelled, redacted presentation and remains the canonical session reducer
+and host-action owner. Local disclosure sends no action. Sidebar/tab/file/log
+changes use optimistic state plus ordered acknowledgement numbers, allowing prompt
+redraw without stale persistence echoes reverting newer choices.
+
+Terminal schema 3 omits unchanged sections and carries ordered transcript suffixes;
+this avoids retransmitting session/history/sidebar data per token. Omitted
+one-shots never replay. Ordinary root deltas reuse the projected history and
+wrapped row prefix. Other events and child pages retain full projection for
+correctness; an open subagent page skips the unused root projection and reuses
+per-turn safe blocks and the modified-files scan. Desktop keeps its encoder. This boundary avoids duplicating domain
+reduction in Rust while removing presentation round trips. Large first-load and
+first-wrap costs remain explicit benchmark cases.
+
+The host's `state()` (a full reducer fold of the session log, run on the host
+loop) is cached per session and extended with only the new events; a log that no
+longer matches the cached last event is refolded. Opening a subagent page used to
+cost one full fold per click (about 160 ms at 500 turns, stalling every client).
+
+Development launches take the most recently built native binary, so a plain
+`cargo build` or `cargo test` makes the unoptimized debug build the one `nexus chat`
+runs. Build with `--release` when judging feel (release draw/key→frame measured
+3–6× faster than debug).
+
+Older turns start folded: only the newest two turns of a page are open by default
+(`RECENT_TURNS` in `rust/tui/src/disclosure.rs`). Older turns are rarely what the
+reader wants, and a folded turn costs the layout almost nothing. The window is
+computed from the blocks Rust already holds, so it is local and needs no host
+round trip; when a new turn pushes the oldest out, the layout is told to rebuild
+from that turn because no patch covers it. Python still projects and sends the
+folded turns; lazy loading of old turns is a separate, undecided change.

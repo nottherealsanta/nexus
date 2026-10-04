@@ -1,7 +1,7 @@
 # Surfaces: what every client does the same way
 
 Four surfaces sit on the host contract: the native Ratatui terminal app (`nexus
-chat`, Textual fallback), the GPUI desktop app (`nexus desktop`,
+chat`), the GPUI desktop app (`nexus desktop`,
 [desktop.md](desktop.md)), the browser app (`nexus web`, [web.md](web.md)) and
 the one-shot CLI/JSONL ([cli.md](cli.md)). This page holds shared behavior and
 context contracts. The browser is being deprecated: preserve existing behavior,
@@ -29,8 +29,8 @@ It reuses the native terminal workflows; adding it does not require new web work
 
 ## Shared code (`ui_support/`)
 
-Pure presentation helpers, importable by all surfaces. The TUI-only widgets
-(`tui_*.py`) are the only `ui_support` files that may import Textual.
+Pure presentation helpers, importable by all surfaces. Rich is used only by
+`context.py` to render context Markdown.
 
 | Module | Shared logic | Web port |
 | --- | --- | --- |
@@ -111,9 +111,9 @@ footers share the same left inset in both surfaces.
   returns. All subagent activity stays inline at the initiating call.
 - Completed Edit/Patch rows show a diff per file (original on the left, updated on the right at every width), from the durable `ToolCallView.diff` only.
 - Errors are plain red lines; each finished turn has a right-aligned footer
-  `model · 1.2s · ↑64K ↓3.1K · 81% cached · 800 reasoning` (parts with no data
-  are left out; `(not shown)` marks reasoning the provider hid). Agent color:
-  the host's `color`, else a name hash.
+  `model · 1.2s · ↑64K ↓3.1K · 81% cached · 800 r` (parts with no data are left
+  out; `r` is the turn's reasoning token count, whether or not the provider
+  shared the reasoning text). Agent color: the host's `color`, else a name hash.
 
 ## Context presentation
 
@@ -157,7 +157,7 @@ input is durable and visible after reconnecting ([loop.md](loop.md#steering-queu
 
 ## Keyboard
 
-The source is `SHORTCUTS` in `ui/tui/app.py` / `tui_command_palette.py`:
+The source is `ui_support/shortcuts.py`:
 `Ctrl+P/N/O/F/G/B/L/S/I/T/E/U/C/R`, `Shift+Tab`, `a`, `Esc`; `Ctrl+Space` toggles
 dictation. `Ctrl+U` (also `Ctrl+X U` and `/usage`) opens the provider usage modal:
 one section per connected provider with a bar per limit window, its reset,
@@ -208,7 +208,7 @@ commands ([extensions.md](extensions.md#settings-files-host)).
   reloads routes while no turn runs, otherwise the notice asks for a restart. The
   last model cannot be removed (use Reset). A row "Highest tier for subagents"
   sets `[agents] max_tier` (`AgentMaxTierSet`). Rows and help text come from
-  `ui_support/tier_settings.py`; Textual: `tui_models.py`, native:
+  `ui_support/tier_settings.py`; native:
   `ui/ratatui/tier_pages.py`.
 - **Session titles:** an on/off row and a "Title model" row (a tier, recommended
   `low`, or one model), under a two-line explanation that names the resolved model
@@ -253,9 +253,9 @@ the web shows a `DEV` badge (from `Health.dev`). See [devtools.md](devtools.md).
 ## Adding a user-visible feature
 
 1. Host command or reducer field first ([host.md](host.md), [events-and-view.md](events-and-view.md)).
-2. Shared logic in `ui_support/` if it is pure; then the TUI (`ui/tui/`) and the
+2. Shared logic in `ui_support/` if it is pure; then the native TUI (`ui/ratatui/`) and the
    web (`ui/web/js/`) in the same place.
-3. A check in each: a Textual pilot test and `tests/playwright_web_check.py`
+3. A check in each: a native PTY test and `tests/playwright_web_check.py`
    ([testing.md](testing.md)).
 
 Escape and Ctrl+C dismiss open dialogs and Settings (including nested screens)

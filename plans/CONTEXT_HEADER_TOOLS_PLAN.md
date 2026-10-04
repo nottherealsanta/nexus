@@ -1,7 +1,7 @@
 # Context header toggles and quieter tool rows
 
-Status: proposed (2026-10-02). Native Ratatui client first; Textual keeps parity
-where it already renders the same thing. Web is not touched (to be deprecated).
+Status: proposed (2026-10-02). Native Ratatui client only. Web is not touched
+(to be deprecated).
 
 ## Goals
 
@@ -25,7 +25,7 @@ where it already renders the same thing. Web is not touched (to be deprecated).
 | Section dialogs | `nexus/ui/ratatui/workflows.py` `context_show`, `tools_modal`, `context_extensions` | System / AGENTS.md / Tools / Skills / MCP views exist. Skills and MCP can be toggled. Tools are read-only. |
 | Toggle storage | `Session.disabled_extensions` (`nexus/session/session.py:717`), `context.extension_selected` events, `ContextExtensionSelect` (`nexus/host/facade.py:1622`) | Only `skills` and `mcp` categories. Locked once `turn.started` exists. |
 | Tool filtering | `Runtime._selected_manifest` (`nexus/runtime.py:3033`) | Drops the tools of disabled MCP servers. No per-tool filter. |
-| Counts | `_compact_header` → `Tools 13`, `Skills 1`, `MCP 0` | One total. `scope_counts` (`ui_support/context_header.py:87`) already splits rows by `scope == "project"`, but only in the Textual body text. |
+| Counts | `_compact_header` → `Tools 13`, `Skills 1`, `MCP 0` | One total. `scope_counts` (`ui_support/context_header.py:87`) already splits rows by `scope == "project"`, in the section body text. |
 | Tool group row | `rust/tui/src/transcript.rs:520` `tool_group` | `✗` + red tone + `· N failed` when any member failed, `✓` otherwise. Members that failed are red. |
 | Subagent row | `prototype.py` (Task branch) + `timeline._task_child_activity` | `✓ Task · …` with `N tool calls · 6m 53s`. While running, it shows the last **two** calls joined by `→`. No extra gap around it. |
 
@@ -84,9 +84,7 @@ Ratatui UI (`workflows.py`):
 - Header counts reflect only enabled entries; a disabled count is never hidden,
   it is shown in the section dialog (`Tools · 11 of 13 on · ~3.6K tokens`).
 
-Textual parity: `nexus/ui_support/tui_context_header.py` already calls
-`select_context_extension` for skills/MCP; add the tools category to the same
-list widget.
+Native workflows call `select_context_extension` for skills/MCP and tools.
 
 ### 3. Project / global counts for Skills and MCP
 
@@ -116,15 +114,13 @@ list widget.
 - Row look:
   ```
                                                    (blank)
-    ⠋ Task · Textual agent reuse          134 calls · 6m 53s
+    ⠋ Task · Agent reuse          134 calls · 6m 53s
       Read nexus/ui/ratatui/actions.py (offset=1, limit=32)
                                                    (blank)
   ```
   Spinner while running, agent colour on `Task`, the latest-call line in
   `p.muted`, metrics right-aligned when they fit. Finished: no glyph, the
   second line becomes the metrics (`134 tool calls · 6m 53s`).
-- Textual uses the same `_task_child_activity`, so it changes too; check
-  `tests/test_tui_functional_journeys.py` expectations.
 
 ### 5. No success/failure marks on tool groups
 
@@ -140,8 +136,6 @@ list widget.
 - `prototype.py`: `status` becomes `running | done`; stop sending `failures`
   (remove the field from the Rust `Content` struct, or ignore it, in the same
   change).
-- Textual (`ui_support/timeline.py` group heading) follows, so both terminals
-  match (`docs/surfaces.md`).
 - Turn-level errors (`turn.error`, the `Error:` block) are unchanged; only
   per-tool failure marks go.
 
@@ -161,12 +155,11 @@ list widget.
   `context_cells` hit-tests match the rendered chip positions at narrow and wide
   widths.
 - Task row: one latest call, blank line above and below.
-- `tests/playwright_tui_check.py` (Textual) for the toggle list and group rows.
+- `tests/playwright_ratatui_check.py` for the toggle list and group rows.
 
 ## Docs to update in the same change
 
 - `docs/ratatui-parity.md`: chip clicks, count order, tool-row marks.
-- `docs/textual.md`: same for Textual.
 - `docs/tools.md`: per-session tool selection and the lock.
 - `docs/context.md`: selection affects the assembled prompt and the cache key.
 - `docs/host.md`: `ContextExtensionSelect` categories.

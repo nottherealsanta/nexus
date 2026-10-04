@@ -1,7 +1,7 @@
 """Plain one-shot/JSONL human rendering of the event stream (PLAN section 14.11).
 
 Semantics live in the pure ``view/`` reducer; this module only turns an event
-into terminal text. Textual chat renders through Markdown widgets instead.
+into terminal text. Native chat renders Markdown in Rust.
 """
 from __future__ import annotations
 

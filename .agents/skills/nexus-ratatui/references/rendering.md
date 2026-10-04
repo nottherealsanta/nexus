@@ -18,7 +18,7 @@ the matching hit-test in the same commit.
 
 ## Palette
 
-`Palette::new(light)` mirrors `nexus/ui/tui/theme.py`: background, panel, element,
+`Palette::new(light)` defines native colors: background, panel, element,
 element_hi, dialog, border, border_strong, text, muted, quiet, accent, blue, purple,
 success, warning, error, cyan. Python sends colour *tokens* (`$nx-blue`,
 `$nx-label-neutral`) or `#rrggbb`; `transcript.rs: color()` resolves them. Add a
@@ -31,14 +31,14 @@ colour to both palettes at once.
   `block.id` + index and reuses unchanged ones (bounded to 4,096).
 - `wrap()` breaks at spaces, hard-breaks only words longer than the row, drops a
   space that lands on the margin, keeps graphemes whole.
-- Indents follow Textual padding: user card = bar + 2 spaces left, 2 right; agent,
+- Indents follow canonical padding: user card = bar + 2 spaces left, 2 right; agent,
   thought, tool, error = 2; reply (markdown) = 4; summary right-aligned with 2
   right padding; context chip = 2, body = 4.
-- Tool rows are truncated with `…`, never wrapped (Textual uses nowrap+ellipsis).
+- Tool rows are truncated with `…`, never wrapped.
 
-## Textual -> native mapping
+## Row mapping
 
-| Textual (`app.tcss`, `ui/tui/timeline.py`) | Native |
+| Presentation contract | Native |
 | --- | --- |
 | `.timeline-user` panel bg, padding 1 2 | `user()` card with blank rows top/bottom |
 | `▼/▶` chevron + `#N` badge (accent on element-hi) | header row with right-aligned tag |
@@ -53,9 +53,18 @@ colour to both palettes at once.
 | inline permission panel above composer | `prompt_area()` + prompt block in `draw()` |
 | modal pickers (`$nx-dialog`, accent title, rule, highlighted row) | `dialog_frame()` |
 
-When Textual's CSS changes, update the matching row here and in `rendering` code.
+When native rendering changes, keep hit-testing and row mapping consistent.
 
 ## Not yet matched (see the plan)
 
 Inline diff line numbers, details file-row expansion, MCP refresh control, spinner
 animation (rows are static between snapshots), voice/worktree/settings screens.
+
+
+Local disclosure uses complete hidden presentation and output fold boundaries.
+Do not clone the whole transcript per frame. Carry patch/disclosure ranges into
+`Cache::update_content`; preserve unaffected row-part Arcs. Typing affects only
+hints. Native optimistic toggles use `LocalUi` acknowledgements; disclosure must
+not acquire a blocking Python round trip. Turns older than the newest two start
+folded (`Disclosure::sync_window`); a turn leaving that window has no patch over it,
+so `update_content` marks its first block dirty.

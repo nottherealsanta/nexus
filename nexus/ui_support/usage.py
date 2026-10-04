@@ -1,6 +1,6 @@
 """Provider usage formatting shared by surfaces (``ProvidersUsageResult``).
 
-Pure functions, no Textual: the TUI usage modal (``ui/tui/usage.py``) renders
+Pure functions: the native usage panel (``ui/ratatui/workflows.py``) renders
 these strings and the web client's ``js/usage.js`` is a line-for-line port, so
 both surfaces word a limit identically: ``41% used · 59% left · resets in 6d
 5h (Wed 14:15)``.
@@ -107,7 +107,7 @@ def fetched_text(fetched_at: Any) -> str:
 
 def usage_lines(result: Any, now: float | None = None) -> tuple[list[str], list[str]]:
     """The usage screen as text lines with a tone each (``title``, ``ok``/``warn``/``critical``/
-    ``unknown`` for limit windows, ``dim``, ``bad``, ``""``), mirroring Textual's ``render_usage``."""
+    ``unknown`` for limit windows, ``dim``, ``bad``, ``""``), mirroring the terminal's ``render_usage``."""
     from .text import sanitize
 
     lines: list[str] = []

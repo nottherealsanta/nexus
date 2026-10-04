@@ -22,7 +22,7 @@ them); nothing touches the network or your workspace. Setup is never required.
 | Sandbox (`SEED_FILES`, `ensure_sandbox`, `reset_sandbox`, `tree_hash`) | `devtools/mock/sandbox.py` |
 | Catalogue | `devtools/mock/scenarios/__init__.py` (`_MODULES`) |
 | Host dispatch | `host_support/mock.py`; commands `MockList`, `MockStart`, `MockClean` (error outside dev mode) |
-| Surfaces | `ui_support/mock_args.py`, `mock_cli.py`, `ui/tui/mock.py`, `ui/web/js/mock.js` |
+| Surfaces | `ui_support/mock_args.py`, `mock_cli.py`, `ui/ratatui/actions.py`, `ui/web/js/mock.js` |
 
 **How the provider works:** it is stateless. The actor comes from a `⟦mock …⟧`
 directive in the first user message and the step from the number of assistant

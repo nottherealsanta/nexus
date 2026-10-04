@@ -16,18 +16,14 @@ ruff check nexus tests                              # ruff is installed separate
 ./rust-build-test.sh                                # locked Rust build and unit tests (Ratatui)
 python -m playwright install chromium               # once, for browser checks
 .venv/bin/python tests/playwright_web_check.py      # real-browser web client check
-.venv/bin/python tests/playwright_tui_check.py      # Textual shell served to a browser
+.venv/bin/python tests/playwright_ratatui_check.py  # native PTY screenshots
 python -m tests.provider_conformance                # provider conformance matrix (offline)
 ANTHROPIC_API_KEY=… pytest -m live tests/test_anthropic_live.py   # gated live test
 ```
 
-CI (`.github/workflows/ci.yml`; skipped for docs/markdown-only changes) runs
-`ruff` and `pytest -q` on Linux, Python 3.13, **ignoring** the timing-sensitive
-Textual pilot files (`test_ui_tui.py`, `test_mock_tui.py`,
-`test_tui_integration_render.py`, `test_tui_model_selection_integration.py`);
-those run on the developer's machine before each commit. A second job builds the
-wheel and runs `test_model_data_package.py` and `test_install_script.py`. The one
-required check is `ci-ok`. See [release.md](release.md).
+CI (`.github/workflows/ci.yml`) runs locked Rust builds/tests, Ruff and the full
+Python offline suite on Linux, Python 3.13. A second job builds the wheel and runs
+packaging/installer tests. The required check is `ci-ok`. See [release.md](release.md).
 
 The worktree is often dirty with unrelated work. If an unrelated test already
 fails, say so; do not change it.
@@ -44,7 +40,7 @@ fails, say so; do not change it.
 - **Loop with fakes:** the loop takes protocols, so `test_core_loop.py` passes fake
   sessions, assemblers and dispatchers.
 - **Host doubles:** UI test transports reject unknown commands; give any new host
-  call a fake response (`tests/test_tui_panels.py:PanelTransport`).
+  call a fake response (`tests/test_ratatui_journeys.py`).
 - **Offline catalogue:** the registry accepts an injected fetcher and cache paths,
   so no test reaches models.dev.
 
@@ -64,7 +60,7 @@ fails, say so; do not change it.
 | Agents | `test_agents_manager.py`, `test_subagent_*.py`, `test_worktree_*.py`, `test_host_worktrees.py` |
 | Host | `test_host_*.py`, `test_uds_*.py`, `test_http_*.py`, `test_web_transport.py` |
 | Security | `test_security_regressions.py`, `test_extension_security.py`, `test_outbound_*.py`, `test_config_secrets.py` |
-| TUI | `test_ui_tui.py`, `test_tui_*.py` |
+| TUI | `test_ratatui_*.py`, `test_prompt_history.py` |
 | Dev mode | `test_mock_*.py`, `test_benchmark.py` |
 | Release | `test_install_script.py`, `test_update_*`, `test_model_data_package.py` |
 | Docs | `test_docs.py` |
@@ -78,19 +74,14 @@ cancellation at each await point (`test_core_loop.py`, `test_session_send.py`).
 | Script | What it does |
 | --- | --- |
 | `tests/playwright_web_check.py` | end-to-end web check; screenshots to `artifacts/web-e2e/`; a few minutes |
-| `tests/playwright_tui_check.py` + `browser_serve.py` | real Textual shell through textual-serve with a Shift/Ctrl+Enter bridge, deterministic fixture transport |
-| `tests/visual_tui_check.py` + `visual_tui_demo.py` | TUI screenshots to `artifacts/visual-tui/` |
-| `tests/playwright_context_controls_check.py` | skill/MCP controls through the real TUI at wide and narrow sizes; `artifacts/context-controls/` |
 | `tests/playwright_context_web_check.py`, `playwright_message_check.py` | web context and queued-message flows |
-| `tests/playwright_mock_llm_check.py` + `mock_llm_serve.py` | scripted model through the real stack |
-| `tests/tui_keyprobe.py`, `tui_e2e_probe.py` | raw key-protocol and PTY probes (Shift+Enter, Ctrl+Enter, Ctrl+J) |
 
 `artifacts/` holds ignored screenshots and benchmark output.
 
 ## Rules
 
 - New behavior gets a test next to its peers (`tests/test_<area>_*.py`). UI changes
-  also get a browser or Textual check where one exists.
+  also get a browser or native PTY check where one exists.
 - Keep tests deterministic: no sleeps for correctness, injected clocks and
   fetchers, `tmp_path` workspaces.
 - Live tests are opt-in (`-m live`, credentials in the environment); never commit
@@ -111,14 +102,14 @@ cell layouts, Markdown and editor transitions use `cargo test --manifest-path
 rust/tui/Cargo.toml`. Python tests in `test_ratatui_*` exercise the actual scripted
 harness, replay, launch routing, preferences, failed submissions, Settings hash
 conflicts and credential-form handling. Source wheel builds require the dev
-`setuptools-rust` dependency and Rust ≥1.88. Keep Textual tests during migration.
+`setuptools-rust` dependency and Rust ≥1.88.
 
-The Ratatui migration has a side-by-side terminal check:
-`PYTHONPATH=. python tests/playwright_ratatui_check.py` after the native Cargo
-build. It captures both clients with identical reference events, exercises draft
-input and resizing, and writes ignored PNGs under `artifacts/ratatui-parity/`.
-The native development adapter supplies a controlling PTY and forwards bytes to
-the existing browser test server; it is not an installed product surface.
+The native terminal screenshot check is
+`PYTHONPATH=. python tests/playwright_ratatui_check.py` after a Cargo build.
+It captures recorded events, draft input and resizing under `artifacts/ratatui-parity/`.
+`browser_serve.py` serves vendored MIT-licensed xterm assets over loopback and
+forwards bounded packets to `ratatui_browser_demo.py`, which owns the controlling PTY.
+These helpers are not installed product surfaces.
 
 `PYTHONPATH=. python tests/playwright_ratatui_live.py "/mock question" "blue wins"`
 drives the real `nexus --dev chat --renderer ratatui` (real daemon, mock provider,
@@ -150,3 +141,15 @@ plus expanded tools, context popover, running composer and details tabs.
 The cancellation-during-approval integration check waits up to five seconds for
 the durable permission request, rather than counting event-loop yields; session
 setup performs disk I/O and yield counts are not a portable readiness bound.
+
+
+Native responsiveness checks: `tests/test_ratatui_responsiveness.py` covers
+section omissions, one-shots, coalescing, changed-tail projection, stale completions
+and debounced preferences; `tests/test_ratatui_pty.py -k local_disclosure` drives
+keyboard/mouse expansion with no Python reply. Rust cache tests assert row-part
+pointer reuse. `PYTHONPATH=.:tests .venv/bin/python tests/tui_responsiveness_bench.py
+--label current --native` records short/500-turn and large-output timings under
+`artifacts/tui-responsiveness/`. Native probing requires controlling-PTY access.
+The baseline mode can load an explicitly supplied pre-change projection module
+(`--baseline-module`) and executable (`--binary`); use a saved checkout/build for
+repeatable before/after results. It does not emulate provider/network latency.

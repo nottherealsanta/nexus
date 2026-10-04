@@ -23,14 +23,7 @@ jobs:
       - run: cargo build --locked --manifest-path rust/tui/Cargo.toml
       - run: uv sync --locked --extra dev
       - run: uvx ruff check nexus tests
-      # Textual pilot tests are timing/terminal sensitive and fail on the shared
-      # runners; they run on the developer's machine before each commit.
-      - run: >-
-          uv run pytest -q
-          --ignore=tests/test_ui_tui.py
-          --ignore=tests/test_mock_tui.py
-          --ignore=tests/test_tui_integration_render.py
-          --ignore=tests/test_tui_model_selection_integration.py
+      - run: uv run pytest -q
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 10

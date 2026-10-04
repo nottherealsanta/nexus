@@ -168,10 +168,6 @@ release-please reads.
   (`tests/test_model_data_package.py`, `tests/test_install_script.py`). It needs
   `pytest-asyncio` because one installer test is async.
 - `ci-ok`: passes if `test` and `build` did not fail. Require this name, not the jobs.
-- Four Textual pilot test files are ignored in CI (`test_ui_tui.py`, `test_mock_tui.py`,
-  `test_tui_integration_render.py`, `test_tui_model_selection_integration.py`): they are
-  timing and terminal-size sensitive on shared runners. Run the full suite locally
-  before committing.
 - There is no macOS or 3.14 job; developer machines cover them. The Playwright checks
   (`tests/playwright_*.py`) are manual.
 - Ruff rules are pinned in `pyproject.toml` (`E4`, `E9`, `F`, `E713`) so a new ruff
