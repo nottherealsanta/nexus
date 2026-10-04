@@ -155,6 +155,15 @@ right-aligned user messages, borderless expandable tool trees, and inline compos
 choices. Nexus retains an opaque near-black/light workspace and modest angled
 frames; every condensed tree remains expandable to full host-projected detail.
 
+The reference-inspired refinement uses a quiet 40 px title bar, 6 px control
+radii and 10 px message/composer/sheet radii. Neutral selected-session surfaces
+carry a small cyan edge rather than a large colored fill. Hairline separators
+stay subordinate to content; message gaps follow a 24 px rhythm. Code is placed
+on a subtly raised surface with matching copy controls. The context meter is a
+compact footer indicator rather than a line spanning the whole composer. The
+model choice carries more weight than secondary agent/effort controls, while
+all three remain explicitly labelled and accessible.
+
 | Ratatui capability | Desktop entry point / evidence |
 | --- | --- |
 | Submit, steer, queue, interrupt, cancel and restored drafts | Composer, Ctrl+Enter, Alt+Enter, Stop; ordered-patch/session-draft native tests |

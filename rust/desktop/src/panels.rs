@@ -20,7 +20,7 @@ impl Desktop {
             .gap_2()
             .px_3()
             .py_2()
-            .rounded(px(2.))
+            .rounded(px(6.))
             .text_size(px(12.))
             .text_color(t.muted)
             .cursor(CursorStyle::Arrow)
@@ -53,7 +53,7 @@ impl Desktop {
     pub(crate) fn topbar(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme();
         div()
-            .h(px(36.))
+            .h(px(40.))
             .flex_shrink_0()
             .flex()
             .items_center()
@@ -69,7 +69,8 @@ impl Desktop {
             .child(
                 div()
                     .text_size(px(15.))
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(t.muted)
                     .child("nexus"),
             )
             .child(
@@ -176,9 +177,9 @@ impl Desktop {
                             .gap_2()
                             .px_3()
                             .py_2()
-                            .rounded_t_md()
+                            .rounded(px(6.))
                             .max_w(px(230.))
-                            .bg(if s.active { t.surface } else { t.background })
+                            .bg(if s.active { t.raised } else { t.background })
                             .text_color(if s.active { t.text } else { t.muted })
                             .cursor(CursorStyle::Arrow)
                             .child(
@@ -333,8 +334,8 @@ impl Desktop {
             }
             let id = s.id.clone();
             let workspace = s.workspace.clone();
-            cards.push(div().id(("session", i)).focusable().tab_stop(self.snapshot.panel_title.is_empty() && self.snapshot.prompt.is_none()).focus(move |s| s.bg(t.raised)).flex().flex_col().gap_2().px_3().py_3().rounded(px(3.)).mb_1().cursor(CursorStyle::Arrow)
-                .bg(if s.active { t.accent_bg } else { t.sidebar }).hover(move |style| style.bg(t.raised))
+            cards.push(div().id(("session", i)).focusable().tab_stop(self.snapshot.panel_title.is_empty() && self.snapshot.prompt.is_none()).focus(move |s| s.bg(t.raised)).flex().flex_col().gap_1().px_3().py_2().rounded(px(6.)).mb_1().cursor(CursorStyle::Arrow)
+                .border_l(px(2.)).border_color(if s.active { t.accent } else { t.sidebar }).bg(if s.active { t.raised } else { t.sidebar }).hover(move |style| style.bg(t.raised))
                 .child(div().flex().items_center().gap_2().child(icons::icon(if s.state == "running" { "circle-dot" } else if s.state == "done" { "check" } else { "message-square" }, if s.active { t.accent } else { t.muted }))
                     .child(div().flex_1().min_w_0().font_weight(if s.active { FontWeight::SEMIBOLD } else { FontWeight::NORMAL }).truncate().child(s.title.clone()))
                     .child(self.button(("session-more",i), "···", json!({"type":"session_actions","text":s.id,"workspace":s.workspace}), cx).px_1().py_0()))
@@ -355,7 +356,7 @@ impl Desktop {
                     .p_4()
                     .flex()
                     .flex_col()
-                    .gap_4()
+                    .gap_3()
                     .child(
                         self.button(
                             "new-session",
@@ -364,15 +365,17 @@ impl Desktop {
                             cx,
                         )
                         .w_full()
-                        .bg(t.accent_bg)
-                        .text_color(t.accent),
+                        .bg(t.surface)
+                        .border_1()
+                        .border_color(t.border)
+                        .text_color(t.text),
                     )
                     .child(
                         div()
                             .px_3()
                             .py_2()
-                            .rounded(px(2.))
-                            .bg(t.background)
+                            .rounded(px(6.))
+                            .bg(t.surface)
                             .border_1()
                             .border_color(t.border)
                             .child(self.search.clone()),
@@ -622,6 +625,11 @@ impl Desktop {
                             cx,
                         )
                         .px_2()
+                        .bg(if panel.tab == tab {
+                            t.raised
+                        } else {
+                            t.sidebar
+                        })
                         .text_color(if panel.tab == tab {
                             t.accent
                         } else {
@@ -681,7 +689,7 @@ impl Desktop {
                 d.child(
                     div()
                         .p_3()
-                        .rounded(px(3.))
+                        .rounded(px(6.))
                         .bg(t.raised)
                         .text_size(px(12.))
                         .text_color(t.muted)
@@ -694,7 +702,7 @@ impl Desktop {
                     d.child(
                         div()
                             .p_3()
-                            .rounded(px(3.))
+                            .rounded(px(6.))
                             .bg(t.accent_bg)
                             .flex()
                             .flex_col()
@@ -792,6 +800,7 @@ impl Desktop {
             .child(
                 div()
                     .relative()
+                    .rounded(px(10.))
                     .child(icons::corner(t))
                     .border_1()
                     .border_color(t.border)
@@ -822,7 +831,7 @@ impl Desktop {
                     .child(
                         div()
                             .id("composer-scroll")
-                            .min_h(px(48.))
+                            .min_h(px(56.))
                             .max_h(px(220.))
                             .overflow_y_scroll()
                             .p_4()
@@ -895,6 +904,7 @@ impl Desktop {
                                             cx,
                                         )
                                         .bg(t.accent_bg)
+                                        .rounded(px(8.))
                                         .text_color(t.accent)
                                         .on_click(cx.listener(|this, _, w, cx| this.submit(w, cx)))
                                     }),
@@ -930,12 +940,18 @@ impl Desktop {
                     ),
             )
             .child(
-                div().h(px(2.)).w_full().rounded_full().bg(t.border).child(
-                    div()
-                        .h_full()
-                        .w(relative((percent / 100.) as f32))
-                        .bg(t.accent),
-                ),
+                div()
+                    .h(px(2.))
+                    .w(px(64.))
+                    .ml_auto()
+                    .rounded_full()
+                    .bg(t.border)
+                    .child(
+                        div()
+                            .h_full()
+                            .w(relative((percent / 100.) as f32))
+                            .bg(t.accent),
+                    ),
             )
             .into_any_element()
     }
@@ -954,11 +970,11 @@ impl Desktop {
                     json!({"type":"command","text":"/agent"}),
                     cx,
                 )
-                .py_0()
-                .px_1()
-                .text_color(t.accent),
+                .py_1()
+                .px_2()
+                .text_color(t.muted),
             )
-            .child(div().text_color(t.border).child("/"))
+            .child(div().mx_1().w(px(1.)).h(px(12.)).bg(t.border))
             .child(
                 self.button(
                     "model",
@@ -966,8 +982,10 @@ impl Desktop {
                     json!({"type":"command","text":"/model"}),
                     cx,
                 )
-                .py_0()
-                .px_1()
+                .py_1()
+                .px_2()
+                .text_color(t.text)
+                .font_weight(FontWeight::MEDIUM)
                 .max_w(px(280.))
                 .overflow_hidden(),
             )
@@ -1014,7 +1032,7 @@ impl Desktop {
                 .gap_3()
                 .px_4()
                 .py_3()
-                .rounded(px(3.))
+                .rounded(px(6.))
                 .cursor(CursorStyle::Arrow)
                 .bg(if i == self.selection {
                     t.raised
@@ -1125,7 +1143,7 @@ impl Desktop {
                     .py_2()
                     .border_1()
                     .border_color(t.border)
-                    .rounded(px(2.))
+                    .rounded(px(6.))
                     .child(self.filter.clone()),
             );
         }
@@ -1335,6 +1353,7 @@ impl Desktop {
                     .max_w(relative(0.92))
                     .h(px(660.))
                     .max_h(relative(0.88))
+                    .rounded(px(10.))
                     .relative()
                     .child(icons::corner(t))
                     .border_1()
@@ -1385,16 +1404,16 @@ impl Desktop {
         let prompt = self.snapshot.prompt.as_ref().unwrap();
         let id = prompt.id.clone();
         div().absolute().inset_0().bg(gpui::rgba(0x00000080)).flex().items_center().justify_center()
-            .child(div().w(px(680.)).max_w(relative(0.92)).max_h(relative(0.88)).relative().child(icons::corner(t)).border_1().border_color(t.border).bg(t.surface).shadow_xl().flex().flex_col()
+            .child(div().w(px(680.)).max_w(relative(0.92)).max_h(relative(0.88)).rounded(px(10.)).relative().child(icons::corner(t)).border_1().border_color(t.border).bg(t.surface).shadow_xl().flex().flex_col()
                 .child(div().px_6().pt_6().text_size(px(11.)).text_color(t.amber).font_weight(FontWeight::SEMIBOLD).child(if prompt.kind=="permission" { "YOUR APPROVAL IS NEEDED" } else { "A QUESTION FOR YOU" }))
                 .child(div().px_6().pt_2().pb_4().text_size(px(22.)).font_weight(FontWeight::SEMIBOLD).child(if prompt.kind=="permission" { "Review this action" } else { "Choose how to proceed" }))
                 .child(div().id("prompt-scroll").px_6().max_h(px(310.)).overflow_y_scroll().children(prompt.lines.iter().map(|line|div().py_1().text_size(px(13.)).line_height(px(21.)).child(line.clone()))))
                 .when(prompt.kind=="question", |d| d.child(div().px_6().pt_4().flex().flex_col().gap_2()
-                    .child(div().p_3().rounded(px(3.)).border_1().border_color(t.border).child(self.filter.clone()))
+                    .child(div().p_3().rounded(px(6.)).border_1().border_color(t.border).child(self.filter.clone()))
                     .child(self.button("custom-answer","Send answer",json!({"type":"answer","text":prompt.id,"value":self.filter.read(cx).content}),cx).bg(t.accent_bg).text_color(t.accent))))
                 .child(div().p_6().flex().flex_col().gap_2().children(prompt.choices.iter().enumerate().map(|(i,choice)| {
                     let action=json!({"type":"answer","text":id,"value":choice.value});
-                    if choice.disabled { div().px_4().py_3().rounded(px(3.)).text_color(t.muted).child(format!("{} · unavailable",choice.label)).into_any_element() }
+                    if choice.disabled { div().px_4().py_3().rounded(px(6.)).text_color(t.muted).child(format!("{} · unavailable",choice.label)).into_any_element() }
                     else { self.button(("answer",i),choice.label.clone(),action,cx).justify_start().bg(if i==0 { t.accent_bg } else { t.raised }).text_color(if i==0 { t.accent } else { t.text }).into_any_element() }
                 }))))
             .into_any_element()

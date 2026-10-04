@@ -90,7 +90,7 @@ impl Desktop {
             .flex()
             .justify_center()
             .px(px(if depth == 0 { 24. } else { 0. }))
-            .pt(px(if depth == 0 && block.gap > 0 { 16. } else { 2. }))
+            .pt(px(if depth == 0 && block.gap > 0 { 24. } else { 2. }))
             .pb_2();
         let copy = block.text.clone();
         let content = match block.kind.as_str() {
@@ -105,7 +105,7 @@ impl Desktop {
                     )
                     .focus(move |s| s.bg(t.raised))
                     .bg(t.raised)
-                    .rounded(px(4.))
+                    .rounded(px(10.))
                     .max_w(relative(0.85))
                     .ml_auto()
                     .px_4()
@@ -194,8 +194,12 @@ impl Desktop {
                             self.snapshot.panel_title.is_empty() && self.snapshot.prompt.is_none(),
                         )
                         .focus(move |s| s.text_color(t.accent))
-                        .text_size(px(10.))
+                        .rounded(px(4.))
+                        .px_2()
+                        .py_1()
+                        .text_size(px(11.))
                         .text_color(t.muted)
+                        .hover(move |s| s.bg(t.raised).text_color(t.text))
                         .cursor(CursorStyle::Arrow)
                         .child("Copy reply")
                         .on_click(move |_, _, cx| {
@@ -283,6 +287,7 @@ impl Desktop {
                             .focus(move |s| s.bg(t.raised).text_color(t.accent))
                             .px_2()
                             .py_2()
+                            .rounded(px(5.))
                             .flex()
                             .items_center()
                             .gap_2()

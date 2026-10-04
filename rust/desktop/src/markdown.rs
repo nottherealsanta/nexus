@@ -261,10 +261,10 @@ pub fn render(
             let source = block.text.clone();
             rows.push(
                 div()
-                    .rounded(px(3.))
+                    .rounded(px(6.))
                     .border_1()
                     .border_color(t.border)
-                    .bg(t.sidebar)
+                    .bg(t.surface)
                     .overflow_hidden()
                     .child(
                         div()
@@ -284,6 +284,10 @@ pub fn render(
                             .child(
                                 div()
                                     .id(SharedString::from(format!("{key}-copy")))
+                                    .rounded(px(4.))
+                                    .px_2()
+                                    .text_color(t.muted)
+                                    .hover(move |s| s.bg(t.raised).text_color(t.text))
                                     .cursor(CursorStyle::Arrow)
                                     .child("Copy")
                                     .on_click(move |_, _, cx| {
