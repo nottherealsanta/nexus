@@ -47,7 +47,7 @@ async def test_desktop_passes_existing_client_to_shared_bridge(tmp_path, monkeyp
     client, reconnect = object(), object()
     assert await desktop.run(tmp_path, session="s", client=client, reconnect=reconnect) == 0
     assert launch.await_args.args == (tmp_path.resolve(), "s", binary)
-    assert launch.await_args.kwargs == {"client": client, "reconnect": reconnect}
+    assert launch.await_args.kwargs == {"client": client, "reconnect": reconnect, "desktop": True}
 
 
 def test_freshest_desktop_source_binary_wins(tmp_path, monkeypatch):

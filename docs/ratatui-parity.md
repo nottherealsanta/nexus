@@ -588,3 +588,12 @@ current view. Covered by `test_projected_attachment_operations_are_allowed_recur
 Forms also project a defaulted `can_delete` capability for settings-file targets.
 The desktop shows delete/reset only where the shared host workflow supports it;
 confirmation and built-in-default protection remain in that workflow.
+
+## Desktop image presentation shared seam
+
+The GPUI launcher opts into bounded inline-image projection; Ratatui does not
+fetch draft thumbnail data. Submitted-message inspection now replaces embedded
+base64 with labelled media/size information and exposes each image as a projected
+preview operation. Both clients retain complete text and other content blocks.
+The daemon remains the source of draft image bytes. See [desktop.md](desktop.md)
+for bounds and native capture evidence.

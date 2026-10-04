@@ -244,7 +244,7 @@ pub fn render(
                             .flex_1()
                             .min_w_0()
                             .px_3()
-                            .py_2()
+                            .py_1()
                             .text_size(px(12.))
                             .font_weight(if block.table_head {
                                 FontWeight::SEMIBOLD
@@ -271,7 +271,7 @@ pub fn render(
                             .flex()
                             .justify_between()
                             .px_4()
-                            .py_2()
+                            .py_1()
                             .border_b_1()
                             .border_color(t.border)
                             .text_size(px(10.))
@@ -301,7 +301,8 @@ pub fn render(
                         div()
                             .id(key.clone())
                             .overflow_x_scroll()
-                            .p_4()
+                            .px_3()
+                            .py_2()
                             .font_family("Menlo")
                             .text_size(px(12.))
                             .line_height(px(21.))
@@ -322,7 +323,7 @@ pub fn render(
             .text_color(t.text)
             .child(selectable(&block, key, t));
         if block.heading > 0 {
-            row = row.font_weight(FontWeight::SEMIBOLD).mt_3();
+            row = row.font_weight(FontWeight::SEMIBOLD).mt_2();
         } else if block.quote {
             row = row
                 .pl_4()
@@ -335,7 +336,7 @@ pub fn render(
     div()
         .flex()
         .flex_col()
-        .gap_3()
+        .gap_1()
         .children(rows)
         .into_any_element()
 }

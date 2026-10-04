@@ -50,8 +50,8 @@ a local unsent draft; durable queued messages stay in the daemon.
 
 ## Interface
 
-- Real native title bar controls, `#0B0B0B` workspace surfaces, restrained angled
-  corners, Lucide stroke icons, cyan selection, and semantic status colors. Independently
+- Real native title bar controls, `#0B0B0B` workspace surfaces, curved
+  controls, Lucide stroke icons, neutral selection, and semantic status colors. Independently
   designed dark and light palettes (`/theme`), and standard macOS shortcuts.
 - Session search/sidebar, conversation tabs, workspace breadcrumb, context chips,
   virtualized variable-height transcript, focused Session/Files/MCP/Logs inspector tabs, tool/thought expansion, subagent pages,
@@ -127,10 +127,35 @@ not verified by the scripted UI checks.
 OpenChamber's persistent sessions/work area/inspector composition informs density
 and hierarchy, rather than its web implementation. The dark workspace background
 is #0B0B0B; only controls, code and raised decisions have near-black surfaces.
-A small 45-degree cut on composer and decision frames adds the requested restrained
-cyberpunk geometry. Color identifies selection or actual state, never fictional
-telemetry. Lucide SVGs are embedded and licensed locally; consistent monochrome
-strokes follow SF Symbols' optical principles without shipping Apple-only assets.
+Rounded composer and decision frames support the current reference direction.
+Selection, focus and links use neutral greys; success, input and error colors
+retain their actual meanings. Lucide SVGs are embedded and licensed locally;
+consistent monochrome strokes follow SF Symbols' optical principles without
+shipping Apple-only assets.
+
+The supplied screenshots inform compact title controls and activity trees. The
+latest density pass removes repeated user-role labels, reduces tool-row gaps,
+compresses code/diff padding and uses two-line session rows (name, message count
+and last activity). Session summaries report activity, not last-opened timestamps;
+no unsupported timestamp or turn count is invented. Utility controls in the title
+bar and composer are icon-only with hover names and existing keyboard routes.
+
+The composer follows Ratatui's editor → controls ordering: agent/model/effort
+choices and reported context figures share the row below the editor frame.
+The context label comes directly from the shared Ratatui projection, including
+reported pricing/window thresholds; missing limits never become invented totals.
+Attachments, dictation and speech are compact icons inside the frame. Context
+remains clickable. Floating sheets have a brief 140 ms entrance fade that uses a
+stable identity and does not restart on polling. New thumbnails fade in over 160 ms; there is no
+perpetual decorative motion.
+
+Draft and sent-message images have clickable thumbnails from host data. The
+private snapshot carries at most eight recent inline images within a shared
+4 MiB encoded budget. Full previews remain bounded to 4 MiB per image. Thumbnails
+that exceed the inline budget remain accessible through attachment/message
+inspection; these surfaces show every content block without raw base64 dumps.
+Draft reads are cached, limited to two seconds each and guarded by generation.
+Rust never reads attachment paths or fetches remote image URLs.
 
 References: [OpenChamber](https://github.com/openchamber/openchamber),
 [GPUI Kit guides](https://gpui-kit.com/docs/design-guides),
@@ -149,20 +174,6 @@ on Enter and never send draft updates; normal host-enabled autosave is debounced
 autosave before closing. Dictation exposes insert, send and discard; Escape discards
 an active recording/transcription. Hardware microphone, provider sign-in, and every
 Ratatui workflow have not yet been verified end to end in the desktop.
-
-The supplied Comet reference screenshots further inform the compact title bar,
-right-aligned user messages, borderless expandable tool trees, and inline composer
-choices. Nexus retains an opaque near-black/light workspace and modest angled
-frames; every condensed tree remains expandable to full host-projected detail.
-
-The reference-inspired refinement uses a quiet 40 px title bar, 6 px control
-radii and 10 px message/composer/sheet radii. Neutral selected-session surfaces
-carry a small cyan edge rather than a large colored fill. Hairline separators
-stay subordinate to content; message gaps follow a 24 px rhythm. Code is placed
-on a subtly raised surface with matching copy controls. The context meter is a
-compact footer indicator rather than a line spanning the whole composer. The
-model choice carries more weight than secondary agent/effort controls, while
-all three remain explicitly labelled and accessible.
 
 | Ratatui capability | Desktop entry point / evidence |
 | --- | --- |
@@ -200,3 +211,9 @@ deselected. The complete Python suite had 5266 passed and 13 failures; all 13 we
 reproduced on the pre-desktop commit `6c46af4`, including the PTY failure after
 supplying its native binary. Full-suite, baseline and Ratatui subset logs live
 under `artifacts/desktop/`. These existing failures were not changed by this work.
+
+The compact neutral/image-preview follow-up passed 20 desktop Rust tests,
+59 Ratatui Rust tests (2 ignored), and 193 focused Python checks (2 known baseline
+failures deselected). Native captures cover both themes, expanded tool rows,
+draft and sent thumbnails, full previews and keyboard attachment removal.
+The final composer context-label rebuild passed all 20 desktop tests again.

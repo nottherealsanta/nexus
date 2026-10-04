@@ -42,6 +42,58 @@ impl Desktop {
         });
         input.into_any_element()
     }
+    pub(crate) fn image_thumbnail(
+        &self,
+        image: &bridge::InlineImage,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let t = self.theme();
+        let operation = image.operation.clone();
+        div()
+            .id(SharedString::from(format!("image-{}", image.id)))
+            .focusable()
+            .tab_stop(self.snapshot.panel_title.is_empty() && self.snapshot.prompt.is_none())
+            .rounded(px(8.))
+            .overflow_hidden()
+            .border_1()
+            .border_color(t.border)
+            .hover(move |s| s.border_color(t.accent))
+            .focus(move |s| s.border_color(t.accent))
+            .cursor(CursorStyle::Arrow)
+            .flex()
+            .flex_col()
+            .w(px(112.))
+            .when_some(self.inline_images.get(&image.id), |d, data| {
+                d.child(
+                    img(data.clone())
+                        .w_full()
+                        .h(px(72.))
+                        .object_fit(ObjectFit::Contain)
+                        .bg(t.raised),
+                )
+            })
+            .child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .text_size(px(10.))
+                    .text_color(t.muted)
+                    .truncate()
+                    .child(image.label.clone()),
+            )
+            .on_click(cx.listener(move |this, _, w, cx| {
+                cx.stop_propagation();
+                if let Some(operation) = &operation {
+                    this.dispatch(json!({"type":"operation", "operation":operation}), w, cx);
+                }
+            }))
+            .with_animation(
+                SharedString::from(format!("thumbnail-enter-{}", image.id)),
+                Animation::new(std::time::Duration::from_millis(160)).with_easing(ease_in_out),
+                |d, progress| d.opacity(0.6 + 0.4 * progress),
+            )
+            .into_any_element()
+    }
     pub(crate) fn empty_state(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme();
         div().size_full().flex().flex_col().items_center().justify_center().gap_4().p_6()
@@ -90,8 +142,16 @@ impl Desktop {
             .flex()
             .justify_center()
             .px(px(if depth == 0 { 24. } else { 0. }))
-            .pt(px(if depth == 0 && block.gap > 0 { 24. } else { 2. }))
-            .pb_2();
+            .pt(px(if depth == 0 && block.gap > 0 {
+                if matches!(block.kind.as_str(), "tool" | "tool_group" | "thought") {
+                    4.
+                } else {
+                    10.
+                }
+            } else {
+                0.
+            }))
+            .pb(px(if depth == 0 { 2. } else { 0. }));
         let copy = block.text.clone();
         let content = match block.kind.as_str() {
             "context_header" => self.context_header(block, cx),
@@ -115,30 +175,6 @@ impl Desktop {
                     .gap_2()
                     .child(
                         div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .child(
-                                div()
-                                    .text_size(px(10.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(t.accent)
-                                    .child(if self.snapshot.agent_page.is_empty() {
-                                        "YOU"
-                                    } else {
-                                        "TASK"
-                                    }),
-                            )
-                            .child(div().text_size(px(10.)).text_color(t.muted).child(
-                                if block.number > 0 {
-                                    format!("#{:02}", block.number)
-                                } else {
-                                    "TASK".into()
-                                },
-                            )),
-                    )
-                    .child(
-                        div()
                             .text_size(px(15.))
                             .line_height(px(25.))
                             .child(block.title.clone()),
@@ -151,6 +187,15 @@ impl Desktop {
                                 .child(block.text.clone()),
                         )
                     })
+                    .child(
+                        div().flex().flex_wrap().gap_2().children(
+                            self.snapshot
+                                .inline_images
+                                .iter()
+                                .filter(|image| image.message == block.id.trim_end_matches(":user"))
+                                .map(|image| self.image_thumbnail(image, cx)),
+                        ),
+                    )
                     .when(!block.chips.is_empty(), |d| {
                         d.child(div().flex().flex_wrap().gap_2().children(
                             block.chips.iter().enumerate().map(|(i, chip)| {
@@ -178,8 +223,8 @@ impl Desktop {
             "markdown" => div()
                 .flex()
                 .flex_col()
-                .gap_2()
-                .py_2()
+                .gap_1()
+                .py_1()
                 .child(markdown::render(
                     &block.text,
                     t,
@@ -194,6 +239,10 @@ impl Desktop {
                             self.snapshot.panel_title.is_empty() && self.snapshot.prompt.is_none(),
                         )
                         .focus(move |s| s.text_color(t.accent))
+                        .map(|mut d| {
+                            d.style().align_self = Some(AlignSelf::FlexStart);
+                            d
+                        })
                         .rounded(px(4.))
                         .px_2()
                         .py_1()
@@ -224,7 +273,7 @@ impl Desktop {
                             .gap_3()
                             .text_size(px(11.))
                             .font_family("Menlo")
-                            .line_height(px(21.))
+                            .line_height(px(18.))
                             .bg(if kind == "add" {
                                 t.accent_bg
                             } else {
@@ -259,12 +308,13 @@ impl Desktop {
                     .border_1()
                     .border_color(t.border)
                     .overflow_hidden()
-                    .child(div().px_4().py_3().bg(t.surface).child(block.path.clone()))
+                    .child(div().px_3().py_2().bg(t.surface).child(block.path.clone()))
                     .child(
                         div()
                             .id(SharedString::from(format!("diff-{}", block.id)))
                             .overflow_x_scroll()
-                            .p_3()
+                            .px_3()
+                            .py_2()
                             .children(rows),
                     )
                     .into_any_element()
@@ -286,7 +336,7 @@ impl Desktop {
                             )
                             .focus(move |s| s.bg(t.raised).text_color(t.accent))
                             .px_2()
-                            .py_2()
+                            .py_1()
                             .rounded(px(5.))
                             .flex()
                             .items_center()
@@ -361,9 +411,9 @@ impl Desktop {
                     card = card.child(
                         div()
                             .px_4()
-                            .pb_3()
+                            .pb_1()
                             .text_size(px(12.))
-                            .line_height(px(21.))
+                            .line_height(px(18.))
                             .text_color(if block.kind == "error" {
                                 t.red
                             } else {
@@ -376,9 +426,9 @@ impl Desktop {
                     card = card.child(
                         div()
                             .px_4()
-                            .pb_4()
+                            .pb_1()
                             .text_size(px(12.))
-                            .line_height(px(21.))
+                            .line_height(px(18.))
                             .font_family("Menlo")
                             .child(block.detail.clone()),
                     );

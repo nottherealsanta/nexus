@@ -1,6 +1,5 @@
-//! Embedded Lucide stroke icons and restrained chamfer geometry.
+//! Embedded Lucide stroke icons for native desktop controls.
 //! No Apple-only glyphs or runtime asset paths; see assets/LICENSE-LUCIDE.
-use crate::theme::Theme;
 use gpui::{prelude::*, *};
 use std::borrow::Cow;
 const ICONS: &[(&str, &[u8])] = &[
@@ -146,9 +145,10 @@ pub fn button_label(label: &str) -> (Option<&'static str>, &str) {
         "···" => (Some("ellipsis"), ""),
         "⚙" => (Some("settings-2"), ""),
         "Attach" => (Some("paperclip"), label),
-        "Dictate" | "Stop dictation" => (Some("mic"), label),
+        "Dictate" => (Some("mic"), label),
         "Listen" => (Some("volume-2"), label),
         "Send" => (Some("arrow-up"), label),
+        "Stop dictation" => (Some("square"), label),
         "Stop" => (Some("square"), label),
         "Sessions" => (Some("panel-left"), label),
         "Details" => (Some("panel-right"), label),
@@ -161,31 +161,4 @@ pub fn button_label(label: &str) -> (Option<&'static str>, &str) {
         _ if label.starts_with("Jump to latest") => (Some("arrow-down"), label),
         _ => (None, label),
     }
-}
-/// A single 45-degree cut marks a raised decision/composer surface.
-/// It is structural, never a status decoration, and follows the theme boundary.
-pub fn corner(t: Theme) -> impl IntoElement {
-    canvas(
-        |_, _, _| (),
-        move |bounds, _, window, _| {
-            let mut cut = PathBuilder::fill();
-            cut.move_to(bounds.origin);
-            cut.line_to(bounds.top_right());
-            cut.line_to(bounds.bottom_right());
-            cut.close();
-            if let Ok(path) = cut.build() {
-                window.paint_path(path, t.background);
-            }
-            let mut edge = PathBuilder::stroke(px(1.));
-            edge.move_to(bounds.origin);
-            edge.line_to(bounds.bottom_right());
-            if let Ok(path) = edge.build() {
-                window.paint_path(path, t.border);
-            }
-        },
-    )
-    .absolute()
-    .top_0()
-    .right_0()
-    .size(px(10.))
 }

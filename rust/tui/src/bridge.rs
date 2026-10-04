@@ -51,6 +51,7 @@ pub struct Snapshot {
     pub context_tiers: Vec<u64>,
     pub attachments: usize,
     pub attachment_lines: Vec<String>,
+    pub inline_images: Vec<InlineImage>,
     /// Queued, steering and interrupt messages waiting for the running turn.
     pub queue_lines: Vec<String>,
     pub update_notice: String,
@@ -76,6 +77,18 @@ pub struct Snapshot {
     pub completion_query: String,
     pub completion_prefix: String,
 }
+#[derive(Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct InlineImage {
+    pub id: String,
+    pub message: String,
+    pub draft_index: Option<usize>,
+    pub label: String,
+    pub media: String,
+    pub data: String,
+    pub operation: Option<Value>,
+}
+
 #[derive(Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct Item {

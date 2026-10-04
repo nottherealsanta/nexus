@@ -15,6 +15,12 @@ this page and the code win.
 | **First run only asks to connect a provider**, then picks that provider's newest tool-calling model. | Minimum steps to a working chat; credentials never enter setup commands. | `host_support/setup.py` |
 | **Skill, MCP and root-agent choices lock after a session's first turn.** | Changing the prompt prefix would invalidate the prompt cache and confuse the record. | `session/session.py:context_locked` |
 
+The desktop's latest visual direction uses neutral greys, curved controls and
+compact activity trees, following the supplied native references. Its composer
+retains Ratatui's editor/controls/context ordering. Image previews are bounded
+presentation data from the existing host; custom clients never read local image
+paths themselves. See [desktop.md](desktop.md).
+
 ## Architecture
 
 | Decision | Why | Where |

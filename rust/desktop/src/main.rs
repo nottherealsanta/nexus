@@ -75,6 +75,7 @@ pub struct Desktop {
     form: Entity<Input>,
     text_cache: std::cell::RefCell<HashMap<String, Entity<Input>>>,
     image_preview: Option<std::sync::Arc<Image>>,
+    inline_images: HashMap<String, std::sync::Arc<Image>>,
     focus: FocusHandle,
     transcript: ListState,
     picker_scroll: ScrollHandle,
@@ -287,6 +288,7 @@ impl Desktop {
             form,
             text_cache: std::cell::RefCell::new(HashMap::new()),
             image_preview: None,
+            inline_images: HashMap::new(),
             focus: cx.focus_handle(),
             transcript,
             picker_scroll: ScrollHandle::new(),
@@ -395,6 +397,26 @@ impl Desktop {
                     })
             };
         }
+        self.inline_images
+            .retain(|id, _| next.inline_images.iter().any(|image| &image.id == id));
+        for image in next.inline_images.iter().take(8) {
+            if !self.inline_images.contains_key(&image.id) {
+                if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&image.data) {
+                    if bytes.len() <= 4 * 1024 * 1024 {
+                        let format = match image.media.as_str() {
+                            "image/jpeg" => ImageFormat::Jpeg,
+                            "image/gif" => ImageFormat::Gif,
+                            "image/webp" => ImageFormat::Webp,
+                            _ => ImageFormat::Png,
+                        };
+                        self.inline_images.insert(
+                            image.id.clone(),
+                            std::sync::Arc::new(Image::from_bytes(format, bytes)),
+                        );
+                    }
+                }
+            }
+        }
         let patch_start = next.blocks_from;
         let changed_session = next.composer_key != self.snapshot.composer_key;
         let changed_page = next.agent_page != self.snapshot.agent_page;
@@ -471,7 +493,8 @@ impl Desktop {
                 .update(cx, |input, cx| input.set(String::new(), cx));
             self.selection = 0;
             if !next.panel_title.is_empty() {
-                if next.items.is_empty() {
+                if next.items.is_empty() || (next.panel_format == "image" && next.items.len() == 1)
+                {
                     window.focus(&self.focus);
                 } else {
                     window.focus(&self.filter.read(cx).focus);

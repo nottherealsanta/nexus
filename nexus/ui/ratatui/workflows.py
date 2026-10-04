@@ -513,9 +513,33 @@ class Workflows(TierPages, SpeakPages):
             self.shell.attachment_labels.pop(operation["id"], None)
             self.stack.clear()
             await self.shell.command("/attach", ())
+        elif kind == "submitted_image":
+            from ...ui_support.native_images import decode_image_url
+            message = next(message for turn in self.active_view.turns for message in turn.messages if message.id == operation["id"])
+            value = decode_image_url(message.blocks[operation["index"]].image_url)
+            if value is None:
+                raise ValueError("Image preview is unavailable")
+            media, data = value
+            self.shell.show("Submitted image", {"Media type": media, "Size": f"{len(data):,} bytes"})
+            self.shell.preview_image, self.shell.preview_image_media = data, media
+            self.shell.panel_format = "image"
         elif kind == "message_page":
             message = next(message for turn in self.active_view.turns for message in turn.messages if message.id == operation["id"])
-            self.shell.show("Submitted message · every content block", message.to_dict())
+            from ...ui_support.native_images import decode_image_url
+            body = message.to_dict()
+            images = []
+            for index, block in enumerate(message.blocks):
+                if block.kind == "image" and (value := decode_image_url(block.image_url)):
+                    media, data = value
+                    images.append((index, media, data))
+                    body["blocks"][index]["image_url"] = f"Embedded {media} · {len(data):,} bytes · preview available"
+            self.shell.show("Submitted message · every content block", body)
+            if images:
+                _, media, data = images[0]
+                self.shell.preview_image, self.shell.preview_image_media = data, media
+                self.shell.panel_format = "image"
+                self.shell.items = [{"label": f"Preview image {index + 1}", "command": "",
+                    "operation": {"kind": "submitted_image", "id": message.id, "index": index}} for index, _, _ in images]
         elif kind == "turn_toggle":
             if operation["id"] in self.shell.collapsed_turns:
                 self.shell.collapsed_turns.remove(operation["id"])

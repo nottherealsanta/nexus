@@ -618,6 +618,9 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
                 agent=agent.type or "subagent", model=agent.model or preview.model or "default",
                 title=f"{agent.type or 'Subagent'} · {agent.description or agent.task}",
                 details_panel=_details_panel(SimpleNamespace(agent_name=agent.type, model=agent.model), replace(agent.body, phase=agent_status), shell))
+    if shell and getattr(shell, "inline_images_enabled", False):
+        from ...ui_support.native_images import inline_images
+        snapshot["inline_images"] = inline_images(view, shell)
     snapshot["agent_color"] = _agent_color(shell, snapshot["agent"])
     if snapshot.get("agent_page"):
         snapshot["agent_color"] = next((block["color"] for block in snapshot["blocks"]
@@ -628,10 +631,11 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
     return snapshot
 
 
-async def run(workspace: Path, session: str, binary: Path, client=None, reconnect=None) -> int:
+async def run(workspace: Path, session: str, binary: Path, client=None, reconnect=None, *, desktop=False) -> int:
     client = client or await open_client(workspace)
     controller = TuiController(client, session)
     shell = ShellActions(controller)
+    shell.inline_images_enabled = desktop
     shell.workspace = str(workspace)
     shell.tabs = [{"id": session, "title": session, "workspace": str(workspace), "state": "idle"}]
     shell.reconnect = reconnect or (lambda: open_client(workspace))
@@ -657,6 +661,9 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
         async with write_lock:
             # The literal `lines` projection is a test seam; the native typed blocks already
             # carry the transcript and the full-detail actions, so it is not built here.
+            if desktop:
+                from ...ui_support.native_images import refresh_draft_images
+                await refresh_draft_images(shell)
             snapshot = project(controller, revision, shell=shell, literal=False)
             snapshot["completion_bell"] = controller.completion_bell
             shell.notify_completion()
@@ -836,7 +843,8 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                                 shell.notice = "Question already answered by another client"
                 elif action["type"] == "operation":
                     operation = action.get("operation")
-                    allowed_operations = [item.get("operation") for item in shell.items] + [item.get("toggle_operation") for item in shell.items if not item.get("toggle_locked")] + list(_block_operations(project(controller, revision, shell=shell, literal=False)["blocks"]))
+                    image_operations = [item["operation"] for item in project(controller, revision, shell=shell, literal=False).get("inline_images", [])]
+                    allowed_operations = image_operations + [item.get("operation") for item in shell.items] + [item.get("toggle_operation") for item in shell.items if not item.get("toggle_locked")] + list(_block_operations(project(controller, revision, shell=shell, literal=False)["blocks"]))
                     if operation and operation in allowed_operations:
                         if operation["kind"] == "block_toggle":
                             if operation["id"] in shell.expanded: shell.expanded.remove(operation["id"])

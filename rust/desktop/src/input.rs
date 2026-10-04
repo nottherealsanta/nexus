@@ -824,7 +824,7 @@ impl Render for Input {
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_up))
             .on_mouse_move(cx.listener(Self::mouse_move))
             .text_size(px(self.font_size))
-            .line_height(px(24.))
+            .line_height(px(if self.font_size <= 12. { 18. } else { 24. }))
             .child(InputElement {
                 entity: cx.entity(),
             })

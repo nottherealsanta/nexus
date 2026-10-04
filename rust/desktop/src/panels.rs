@@ -12,6 +12,19 @@ impl Desktop {
         let dispatch = action["type"] != "ui_trace";
         let label: SharedString = label.into();
         let (symbol, caption) = icons::button_label(label.as_ref());
+        let icon_only = matches!(
+            label.as_ref(),
+            "Attach"
+                | "Dictate"
+                | "Listen"
+                | "Stop dictation"
+                | "Commands"
+                | "Sessions"
+                | "Details"
+                | "Settings"
+        );
+        let hint = label.clone();
+        let caption = if icon_only { "" } else { caption };
         div()
             .id(id)
             .flex()
@@ -41,6 +54,13 @@ impl Desktop {
                     ),
             )
             .focus(move |s| s.bg(t.raised).text_color(t.accent))
+            .when(icon_only, |d| {
+                d.w(px(32.))
+                    .h(px(32.))
+                    .px_0()
+                    .py_0()
+                    .tooltip(move |_, cx| cx.new(|_| ControlHint(hint.clone())).into())
+            })
             .when_some(symbol, |d, name| d.child(icons::icon(name, t.muted)))
             .when(!caption.is_empty(), |d| d.child(caption.to_owned()))
             .when(dispatch, |d| {
@@ -334,12 +354,12 @@ impl Desktop {
             }
             let id = s.id.clone();
             let workspace = s.workspace.clone();
-            cards.push(div().id(("session", i)).focusable().tab_stop(self.snapshot.panel_title.is_empty() && self.snapshot.prompt.is_none()).focus(move |s| s.bg(t.raised)).flex().flex_col().gap_1().px_3().py_2().rounded(px(6.)).mb_1().cursor(CursorStyle::Arrow)
-                .border_l(px(2.)).border_color(if s.active { t.accent } else { t.sidebar }).bg(if s.active { t.raised } else { t.sidebar }).hover(move |style| style.bg(t.raised))
-                .child(div().flex().items_center().gap_2().child(icons::icon(if s.state == "running" { "circle-dot" } else if s.state == "done" { "check" } else { "message-square" }, if s.active { t.accent } else { t.muted }))
+            cards.push(div().id(("session", i)).focusable().tab_stop(self.snapshot.panel_title.is_empty() && self.snapshot.prompt.is_none()).focus(move |s| s.bg(t.raised)).flex().flex_col().gap_1().px_2().py_1().rounded(px(6.)).mb_0().cursor(CursorStyle::Arrow)
+                .bg(if s.active { t.raised } else { t.sidebar }).hover(move |style| style.bg(t.raised))
+                .child(div().flex().items_center().gap_2()
                     .child(div().flex_1().min_w_0().font_weight(if s.active { FontWeight::SEMIBOLD } else { FontWeight::NORMAL }).truncate().child(s.title.clone()))
                     .child(self.button(("session-more",i), "···", json!({"type":"session_actions","text":s.id,"workspace":s.workspace}), cx).px_1().py_0()))
-                .child(div().ml_4().text_size(px(11.)).text_color(t.muted).truncate().child(if s.sub.is_empty() { s.status.clone() } else { s.sub.clone() }))
+                .child(div().text_size(px(11.)).text_color(t.muted).truncate().child(if s.sub.is_empty() { s.status.clone() } else if let Some((count, age)) = s.sub.split_once(" · ") { format!("{}{} message{} · active {}", if s.status == "working" { "Working · " } else if s.status == "input" { "Needs input · " } else { "" }, count, if count == "1" { "" } else { "s" }, age) } else { format!("{} messages", s.sub) }))
                 .on_click(cx.listener(move |this, _, w, cx| this.dispatch(json!({"type":"session_open","text":id,"workspace":workspace}), w, cx))).into_any_element());
         }
         div()
@@ -663,9 +683,6 @@ impl Desktop {
                 .child("Subagent transcript · updates live · Esc returns to conversation")
                 .into_any_element();
         }
-        let used = self.snapshot.context_used.unwrap_or(0);
-        let total = self.snapshot.context_window.unwrap_or(1).max(1);
-        let percent = ((used as f64 / total as f64) * 100.).min(100.);
         div()
             .flex_shrink_0()
             .px_6()
@@ -673,7 +690,7 @@ impl Desktop {
             .pt_3()
             .flex()
             .flex_col()
-            .gap_3()
+            .gap_2()
             .when(!self.follow, |d| {
                 d.child(
                     self.button(
@@ -801,37 +818,75 @@ impl Desktop {
                 div()
                     .relative()
                     .rounded(px(10.))
-                    .child(icons::corner(t))
                     .border_1()
                     .border_color(t.border)
                     .bg(t.surface)
                     .flex()
                     .flex_col()
-                    .when(!self.snapshot.attachment_lines.is_empty(), |d| {
-                        d.child(
-                            div().px_4().pt_3().flex().flex_wrap().gap_2().children(
-                                self.snapshot.attachment_lines.iter().enumerate().map(
-                                    |(i, line)| {
-                                        self.button(
-                                            ("draft-attachment", i),
-                                            line.clone(),
-                                            json!({"type":"command","text":"/attach"}),
-                                            cx,
-                                        )
-                                        .px_2()
-                                        .py_1()
-                                        .bg(t.accent_bg)
-                                        .text_size(px(11.))
-                                        .text_color(t.accent)
-                                    },
+                    .when(
+                        self.snapshot
+                            .inline_images
+                            .iter()
+                            .any(|image| image.message.is_empty()),
+                        |d| {
+                            d.child(
+                                div().px_4().pt_3().flex().flex_wrap().gap_2().children(
+                                    self.snapshot
+                                        .inline_images
+                                        .iter()
+                                        .filter(|image| image.message.is_empty())
+                                        .map(|image| self.image_thumbnail(image, cx)),
                                 ),
-                            ),
-                        )
-                    })
+                            )
+                        },
+                    )
+                    .when(
+                        self.snapshot
+                            .attachment_lines
+                            .iter()
+                            .enumerate()
+                            .any(|(i, _)| {
+                                !self
+                                    .snapshot
+                                    .inline_images
+                                    .iter()
+                                    .any(|image| image.draft_index == Some(i))
+                            }),
+                        |d| {
+                            d.child(
+                                div().px_4().pt_3().flex().flex_wrap().gap_2().children(
+                                    self.snapshot
+                                        .attachment_lines
+                                        .iter()
+                                        .enumerate()
+                                        .filter(|(i, _)| {
+                                            !self
+                                                .snapshot
+                                                .inline_images
+                                                .iter()
+                                                .any(|image| image.draft_index == Some(*i))
+                                        })
+                                        .map(|(i, line)| {
+                                            self.button(
+                                                ("draft-attachment", i),
+                                                line.clone(),
+                                                json!({"type":"command","text":"/attach"}),
+                                                cx,
+                                            )
+                                            .px_2()
+                                            .py_1()
+                                            .bg(t.accent_bg)
+                                            .text_size(px(11.))
+                                            .text_color(t.accent)
+                                        }),
+                                ),
+                            )
+                        },
+                    )
                     .child(
                         div()
                             .id("composer-scroll")
-                            .min_h(px(56.))
+                            .min_h(px(44.))
                             .max_h(px(220.))
                             .overflow_y_scroll()
                             .p_4()
@@ -885,30 +940,24 @@ impl Desktop {
                                         cx,
                                     )),
                             )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .flex_wrap()
-                                    .gap_2()
-                                    .child(self.composer_choices(cx))
-                                    .child(if self.snapshot.status == "running" {
-                                        self.button("stop", "Stop", json!({"type":"cancel"}), cx)
-                                            .bg(t.raised)
-                                            .text_color(t.amber)
-                                    } else {
-                                        self.button(
-                                            "send",
-                                            "Send",
-                                            json!({"type":"ui_trace","lines":[]}),
-                                            cx,
-                                        )
-                                        .bg(t.accent_bg)
-                                        .rounded(px(8.))
-                                        .text_color(t.accent)
-                                        .on_click(cx.listener(|this, _, w, cx| this.submit(w, cx)))
-                                    }),
-                            ),
+                            .child(div().flex().items_center().flex_wrap().gap_2().child(
+                                if self.snapshot.status == "running" {
+                                    self.button("stop", "Stop", json!({"type":"cancel"}), cx)
+                                        .bg(t.raised)
+                                        .text_color(t.amber)
+                                } else {
+                                    self.button(
+                                        "send",
+                                        "Send",
+                                        json!({"type":"ui_trace","lines":[]}),
+                                        cx,
+                                    )
+                                    .bg(t.accent_bg)
+                                    .rounded(px(8.))
+                                    .text_color(t.accent)
+                                    .on_click(cx.listener(|this, _, w, cx| this.submit(w, cx)))
+                                },
+                            )),
                     ),
             )
             .child(
@@ -918,39 +967,20 @@ impl Desktop {
                     .items_center()
                     .justify_between()
                     .gap_2()
-                    .child(
-                        div()
-                            .text_size(px(10.))
-                            .text_color(t.muted)
-                            .child("Shift+Enter for a new line"),
-                    )
+                    .child(self.composer_choices(cx))
                     .child(
                         self.button(
                             "context-usage",
-                            if self.snapshot.context_used.is_some() {
-                                format!("{:.1}k · {:.0}% context", used as f64 / 1000., percent)
+                            if !self.snapshot.context_label.is_empty() {
+                                self.snapshot.context_label.clone()
                             } else {
                                 "Context unavailable".into()
                             },
                             json!({"type":"context_popover"}),
                             cx,
                         )
-                        .py_0()
-                        .px_1(),
-                    ),
-            )
-            .child(
-                div()
-                    .h(px(2.))
-                    .w(px(64.))
-                    .ml_auto()
-                    .rounded_full()
-                    .bg(t.border)
-                    .child(
-                        div()
-                            .h_full()
-                            .w(relative((percent / 100.) as f32))
-                            .bg(t.accent),
+                        .px_1()
+                        .py_0(),
                     ),
             )
             .into_any_element()
@@ -966,7 +996,7 @@ impl Desktop {
             .child(
                 self.button(
                     "agent",
-                    format!("Agent: {} ▾", self.snapshot.agent),
+                    format!("{} ▾", self.snapshot.agent),
                     json!({"type":"command","text":"/agent"}),
                     cx,
                 )
@@ -978,7 +1008,7 @@ impl Desktop {
             .child(
                 self.button(
                     "model",
-                    format!("Model: {} ▾", self.snapshot.model),
+                    format!("{} ▾", self.snapshot.model),
                     json!({"type":"command","text":"/model"}),
                     cx,
                 )
@@ -992,7 +1022,7 @@ impl Desktop {
             .child(
                 self.button(
                     "effort",
-                    format!("Effort: {} ▾", self.snapshot.effort),
+                    format!("{} ▾", self.snapshot.effort),
                     json!({"type":"command","text":"/effort"}),
                     cx,
                 )
@@ -1134,7 +1164,9 @@ impl Desktop {
         });
         let markdown_details = self.snapshot.panel_format == "markdown";
         let mut body = div().flex().flex_col().flex_1().min_w_0().min_h_0();
-        if !self.snapshot.items.is_empty() {
+        if !self.snapshot.items.is_empty()
+            && !(self.snapshot.panel_format == "image" && self.snapshot.items.len() == 1)
+        {
             body = body.child(
                 div()
                     .mx_4()
@@ -1147,12 +1179,16 @@ impl Desktop {
                     .child(self.filter.clone()),
             );
         }
-        if let Some(image) = &self.image_preview {
+        if let Some(image) = self
+            .image_preview
+            .as_ref()
+            .filter(|_| self.snapshot.panel_format == "image")
+        {
             body = body.child(
                 div().p_4().flex().justify_center().child(
                     img(image.clone())
                         .max_w(relative(1.))
-                        .h(px(320.))
+                        .h((_window.viewport_size().height * 0.35).min(px(280.)))
                         .object_fit(ObjectFit::Contain),
                 ),
             );
@@ -1351,11 +1387,10 @@ impl Desktop {
                     .id("panel")
                     .w(if nav.is_some() { px(960.) } else { px(760.) })
                     .max_w(relative(0.92))
-                    .h(px(660.))
+                    .h(px(if self.snapshot.panel_format == "image" { if self.snapshot.items.is_empty() { 500. } else { 620. } } else { 660. }))
                     .max_h(relative(0.88))
                     .rounded(px(10.))
                     .relative()
-                    .child(icons::corner(t))
                     .border_1()
                     .border_color(t.border)
                     .bg(t.surface)
@@ -1397,14 +1432,17 @@ impl Desktop {
                     )
                     .child(div().flex().flex_1().min_h_0().children(nav).child(body)),
             )
-            .into_any_element()
+            .with_animation(SharedString::from(format!("panel-enter-{}", self.snapshot.panel_title)),
+            Animation::new(std::time::Duration::from_millis(140)).with_easing(ease_in_out),
+            |d, progress| d.opacity(0.7 + 0.3 * progress))
+        .into_any_element()
     }
     pub(crate) fn prompt_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme();
         let prompt = self.snapshot.prompt.as_ref().unwrap();
         let id = prompt.id.clone();
         div().absolute().inset_0().bg(gpui::rgba(0x00000080)).flex().items_center().justify_center()
-            .child(div().w(px(680.)).max_w(relative(0.92)).max_h(relative(0.88)).rounded(px(10.)).relative().child(icons::corner(t)).border_1().border_color(t.border).bg(t.surface).shadow_xl().flex().flex_col()
+            .child(div().w(px(680.)).max_w(relative(0.92)).max_h(relative(0.88)).rounded(px(10.)).relative().border_1().border_color(t.border).bg(t.surface).shadow_xl().flex().flex_col()
                 .child(div().px_6().pt_6().text_size(px(11.)).text_color(t.amber).font_weight(FontWeight::SEMIBOLD).child(if prompt.kind=="permission" { "YOUR APPROVAL IS NEEDED" } else { "A QUESTION FOR YOU" }))
                 .child(div().px_6().pt_2().pb_4().text_size(px(22.)).font_weight(FontWeight::SEMIBOLD).child(if prompt.kind=="permission" { "Review this action" } else { "Choose how to proceed" }))
                 .child(div().id("prompt-scroll").px_6().max_h(px(310.)).overflow_y_scroll().children(prompt.lines.iter().map(|line|div().py_1().text_size(px(13.)).line_height(px(21.)).child(line.clone()))))
@@ -1438,4 +1476,19 @@ fn kv(key: &str, value: &str, t: Theme) -> AnyElement {
         .child(div().text_color(t.muted).child(key.to_string()))
         .child(div().min_w_0().text_color(t.text).child(value.to_string()))
         .into_any_element()
+}
+
+struct ControlHint(SharedString);
+impl Render for ControlHint {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_3()
+            .py_2()
+            .rounded(px(6.))
+            .bg(rgb(0x2c2e33))
+            .text_color(rgb(0xf0f0f2))
+            .text_size(px(12.))
+            .shadow_md()
+            .child(self.0.clone())
+    }
 }

@@ -33,4 +33,4 @@ def binary_path() -> Path:
 async def run(workspace: Path, *, session: str, client=None, reconnect=None) -> int:
     from ..ratatui.prototype import run as run_native
 
-    return await run_native(workspace.resolve(), session, binary_path(), client=client, reconnect=reconnect)
+    return await run_native(workspace.resolve(), session, binary_path(), client=client, reconnect=reconnect, desktop=True)

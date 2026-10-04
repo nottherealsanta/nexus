@@ -439,6 +439,7 @@ here, so add a row when you add a file.
 | --- | --- |
 | `__init__.py` | Pure presentation helpers shared by terminal surfaces |
 | `agent_frontmatter.py` | Read and rewrite the simple `key: value` frontmatter of an agent `*.md` |
+| `native_images.py` | Bounded host-backed draft and submitted image previews for the desktop; no path or remote URL reads |
 | `clipboard.py` | Bounded local system clipboard image reading for terminal attachment uploads |
 | `context.py` | Pure display projections for context preview and session usage |
 | `hints.py` | Randomized tips shown in the middle of an empty session (mirrored in `js/hints.js`) |

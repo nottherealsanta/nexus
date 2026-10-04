@@ -11,7 +11,7 @@ Read `docs/desktop.md` and the relevant host contract documentation first. The t
 
 This client pins **GPUI 0.2.2**, not GPUI Kit. Reference material is adapted from the established Longbridge GPUI Kit skills; see [SOURCE.md](SOURCE.md) and licenses. Read the installed GPUI source and nearest implementation before choosing an API. Kit examples are conceptual references; do not add Kit or copy newer APIs blindly.
 
-For UI changes read [Design Guides](references/design-guides.md): design thesis, task, relevant visual/interaction sections, and final checklist. For a full redesign read the whole guide. Nexus intentionally owns semantic tokens in `theme.rs` and custom controls, so Kit-specific theme/component mandates map to the existing implementation. User direction overrides visual defaults: `#0B0B0B`, compact function-first layout, restrained angled corners, semantic cyan selection, green success, amber input, red errors. Preserve a usable light alternative.
+For UI changes read [Design Guides](references/design-guides.md): design thesis, task, relevant visual/interaction sections, and final checklist. For a full redesign read the whole guide. Nexus intentionally owns semantic tokens in `theme.rs` and custom controls, so Kit-specific theme/component mandates map to the existing implementation. User direction overrides visual defaults: `#0B0B0B`, compact function-first layout, curved controls, neutral grey selection, green success, amber input, red errors. Preserve a usable light alternative.
 
 ## Implementation workflow
 
