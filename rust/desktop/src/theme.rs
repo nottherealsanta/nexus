@@ -21,7 +21,7 @@ impl Theme {
         if light {
             Self {
                 background: c(0xf7f8fa),
-                sidebar: c(0xf7f8fa),
+                sidebar: c(0xf1f2f5),
                 surface: c(0xffffff),
                 raised: c(0xebeef2),
                 border: c(0xe1e4e8),
@@ -36,7 +36,7 @@ impl Theme {
         } else {
             Self {
                 background: c(0x0b0b0b),
-                sidebar: c(0x0b0b0b),
+                sidebar: c(0x101113),
                 surface: c(0x17181b),
                 raised: c(0x24262b),
                 border: c(0x303238),

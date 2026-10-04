@@ -165,7 +165,7 @@ impl Desktop {
                     )
                     .focus(move |s| s.bg(t.raised))
                     .bg(t.raised)
-                    .rounded(px(10.))
+                    .rounded(px(14.))
                     .max_w(relative(0.85))
                     .ml_auto()
                     .px_4()

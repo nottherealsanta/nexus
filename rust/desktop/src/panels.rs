@@ -23,6 +23,7 @@ impl Desktop {
                 | "Details"
                 | "Settings"
         );
+        let primary = label == "Send";
         let hint = label.clone();
         let caption = if icon_only { "" } else { caption };
         div()
@@ -37,7 +38,7 @@ impl Desktop {
             .text_size(px(12.))
             .text_color(t.muted)
             .cursor(CursorStyle::Arrow)
-            .hover(move |s| s.bg(t.raised).text_color(t.text))
+            .hover(move |s| s.bg(if primary { t.accent.opacity(0.9) } else { t.raised }).text_color(if primary { t.background } else { t.text }))
             .focusable()
             .tab_stop(
                 (self.snapshot.panel_title.is_empty() && self.snapshot.prompt.is_none())
@@ -53,7 +54,7 @@ impl Desktop {
                         )
                     ),
             )
-            .focus(move |s| s.bg(t.raised).text_color(t.accent))
+            .focus(move |s| s.bg(if primary { t.accent } else { t.raised }).text_color(if primary { t.background } else { t.accent }))
             .when(icon_only, |d| {
                 d.w(px(32.))
                     .h(px(32.))
@@ -79,7 +80,7 @@ impl Desktop {
             .items_center()
             .bg(t.sidebar)
             .border_b_1()
-            .border_color(t.border)
+            .border_color(t.border.opacity(0.55))
             .child(
                 div()
                     .w(px(104.))
@@ -171,7 +172,7 @@ impl Desktop {
             .flex_col()
             .flex_shrink_0()
             .border_b_1()
-            .border_color(t.border);
+            .border_color(t.border.opacity(0.55));
         if !self.snapshot.tabs.is_empty() {
             row = row.child(
                 div()
@@ -354,7 +355,7 @@ impl Desktop {
             }
             let id = s.id.clone();
             let workspace = s.workspace.clone();
-            cards.push(div().id(("session", i)).focusable().tab_stop(self.snapshot.panel_title.is_empty() && self.snapshot.prompt.is_none()).focus(move |s| s.bg(t.raised)).flex().flex_col().gap_1().px_2().py_1().rounded(px(6.)).mb_0().cursor(CursorStyle::Arrow)
+            cards.push(div().id(("session", i)).focusable().tab_stop(self.snapshot.panel_title.is_empty() && self.snapshot.prompt.is_none()).focus(move |s| s.bg(t.raised)).flex().flex_col().gap_1().px_2().py_1().rounded(px(8.)).mb_0().cursor(CursorStyle::Arrow)
                 .bg(if s.active { t.raised } else { t.sidebar }).hover(move |style| style.bg(t.raised))
                 .child(div().flex().items_center().gap_2()
                     .child(div().flex_1().min_w_0().font_weight(if s.active { FontWeight::SEMIBOLD } else { FontWeight::NORMAL }).truncate().child(s.title.clone()))
@@ -370,7 +371,7 @@ impl Desktop {
             .flex_col()
             .bg(t.sidebar)
             .border_r_1()
-            .border_color(t.border)
+            .border_color(t.border.opacity(0.55))
             .child(
                 div()
                     .p_4()
@@ -629,7 +630,7 @@ impl Desktop {
             .flex_col()
             .bg(t.sidebar)
             .border_l_1()
-            .border_color(t.border)
+            .border_color(t.border.opacity(0.55))
             .child(
                 div()
                     .flex()
@@ -817,7 +818,7 @@ impl Desktop {
             .child(
                 div()
                     .relative()
-                    .rounded(px(10.))
+                    .rounded(px(14.))
                     .border_1()
                     .border_color(t.border)
                     .bg(t.surface)
@@ -952,9 +953,9 @@ impl Desktop {
                                         json!({"type":"ui_trace","lines":[]}),
                                         cx,
                                     )
-                                    .bg(t.accent_bg)
-                                    .rounded(px(8.))
-                                    .text_color(t.accent)
+                                    .bg(t.accent)
+                                    .rounded(px(10.))
+                                    .text_color(t.background)
                                     .on_click(cx.listener(|this, _, w, cx| this.submit(w, cx)))
                                 },
                             )),
@@ -1389,7 +1390,7 @@ impl Desktop {
                     .max_w(relative(0.92))
                     .h(px(if self.snapshot.panel_format == "image" { if self.snapshot.items.is_empty() { 500. } else { 620. } } else { 660. }))
                     .max_h(relative(0.88))
-                    .rounded(px(10.))
+                    .rounded(px(14.))
                     .relative()
                     .border_1()
                     .border_color(t.border)
@@ -1442,7 +1443,7 @@ impl Desktop {
         let prompt = self.snapshot.prompt.as_ref().unwrap();
         let id = prompt.id.clone();
         div().absolute().inset_0().bg(gpui::rgba(0x00000080)).flex().items_center().justify_center()
-            .child(div().w(px(680.)).max_w(relative(0.92)).max_h(relative(0.88)).rounded(px(10.)).relative().border_1().border_color(t.border).bg(t.surface).shadow_xl().flex().flex_col()
+            .child(div().w(px(680.)).max_w(relative(0.92)).max_h(relative(0.88)).rounded(px(14.)).relative().border_1().border_color(t.border).bg(t.surface).shadow_xl().flex().flex_col()
                 .child(div().px_6().pt_6().text_size(px(11.)).text_color(t.amber).font_weight(FontWeight::SEMIBOLD).child(if prompt.kind=="permission" { "YOUR APPROVAL IS NEEDED" } else { "A QUESTION FOR YOU" }))
                 .child(div().px_6().pt_2().pb_4().text_size(px(22.)).font_weight(FontWeight::SEMIBOLD).child(if prompt.kind=="permission" { "Review this action" } else { "Choose how to proceed" }))
                 .child(div().id("prompt-scroll").px_6().max_h(px(310.)).overflow_y_scroll().children(prompt.lines.iter().map(|line|div().py_1().text_size(px(13.)).line_height(px(21.)).child(line.clone()))))

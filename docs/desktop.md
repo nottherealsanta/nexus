@@ -127,7 +127,10 @@ not verified by the scripted UI checks.
 OpenChamber's persistent sessions/work area/inspector composition informs density
 and hierarchy, rather than its web implementation. The dark workspace background
 is #0B0B0B; only controls, code and raised decisions have near-black surfaces.
-Rounded composer and decision frames support the current reference direction.
+Composer, user bubbles and floating decisions use matching 14 px curves; compact
+controls and session rows retain smaller radii. A subtly raised neutral sidebar
+and quiet pane dividers separate navigation from the #0B0B0B reading surface.
+Send uses a contrasting neutral fill with readable hover and keyboard-focus states.
 Selection, focus and links use neutral greys; success, input and error colors
 retain their actual meanings. Lucide SVGs are embedded and licensed locally;
 consistent monochrome strokes follow SF Symbols' optical principles without
