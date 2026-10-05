@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.2](https://github.com/nottherealsanta/nexus/compare/v0.3.1...v0.3.2) (2026-10-05)
+
+
+### Features
+
+* **mcp:** search-based MCP tool loading ([#59](https://github.com/nottherealsanta/nexus/issues/59)) ([208a7e2](https://github.com/nottherealsanta/nexus/commit/208a7e223aa36574ce872e222cf7a9e9007a431c))
+
+
+### Bug fixes
+
+* consolidate native clients and session improvements ([#58](https://github.com/nottherealsanta/nexus/issues/58)) ([22a2038](https://github.com/nottherealsanta/nexus/commit/22a2038f478b7b8ccf1990eaa11c887cf41b7fe8))
+
 ## [0.3.1](https://github.com/nottherealsanta/nexus/compare/v0.3.0...v0.3.1) (2026-10-02)
 
 
