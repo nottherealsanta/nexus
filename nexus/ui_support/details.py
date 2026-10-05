@@ -125,9 +125,14 @@ def mcp_rows(report: Mapping[str, Any] | None, *, error: str | None = None) -> l
     if not isinstance(mcp, Mapping):
         return [("plain-quiet", "MCP is disabled for this workspace.", "")]
     servers = [row for row in mcp.get("servers") or () if isinstance(row, Mapping)]
-    if not servers:
-        return [("plain-quiet", "No servers in .agents/mcp.json", "")]
     rows: list[tuple[str, str, str]] = []
+    for diagnostic in mcp.get("diagnostics") or ():
+        if isinstance(diagnostic, Mapping):
+            source = diagnostic.get("path") or diagnostic.get("name") or "MCP config"
+            message = diagnostic.get("error") or diagnostic.get("error_type") or "Configuration error"
+            rows.append(("plain-error", sanitize(f"{source}: {message}", 600), ""))
+    if not servers:
+        rows.append(("plain-quiet", "No MCP servers discovered (global or project config).", ""))
     for row in servers:
         health = str(row.get("health") or "unknown").casefold()
         tone = {"ready": "success", "failed": "error"}.get(health, "warning")

@@ -1720,6 +1720,9 @@ class HostFacade:
             result = await self.inspect_context(command.session)
             return p.ContextInspectResult(session=command.session, **result)
         if isinstance(command, p.Doctor):
+            # Construction is lazy: without this, a fresh daemon reports an
+            # empty generation rather than discovering workspace MCP config.
+            await self.runtime.ensure_started()
             # The report can read a bounded set of session tails (up to 64 x
             # 512 KiB) and parse their JSON. ``doctor`` stays a synchronous
             # facade method -- its direct callers are unchanged -- but the wire

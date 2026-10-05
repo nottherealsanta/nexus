@@ -137,8 +137,8 @@ class Workflows(TierPages, SpeakPages):
             if category == "mcp":
                 preview = await self.client.inspect_context(self.shell.controller.session)
                 server_rows = [row for row in preview.mcp_servers if row.get("scope") == scope]
-                rows = [(f"{row['name']} · {row.get('config_tool_loading', 'search')} · {row.get('tool_count', 0)} tools · {scope} · {row.get('status', 'unknown')}",
-                    {"kind": "settings_mcp_loading", "scope": scope, "name": row["name"], "tokens": row.get("schema_tokens", 0)}) for row in server_rows] + rows
+                rows = [(f"{row['name']} · {'On' if row.get('config_enabled', True) else 'Off'} · {row.get('config_tool_loading', 'search')} · {row.get('tool_count', 0)} tools · {scope} · {row.get('status', 'unknown')}",
+                    {"kind": "settings_mcp_loading", "scope": scope, "name": row["name"], "enabled": row.get("config_enabled", True), "tokens": row.get("schema_tokens", 0)}) for row in server_rows] + rows
             if category == "agents":
                 rows.insert(0, ("New sessions start with…", {"kind": "default_agent"}))
             names = [item.id for item in items if not item.builtin and (category != "agents" or getattr(item, "overrides_builtin", False))]
@@ -312,6 +312,25 @@ class Workflows(TierPages, SpeakPages):
             self.menu("Archived preview", [("Resume", {"kind": "session_unarchive", "id": operation["id"]})], labelled(result))
         elif kind == "settings":
             await self.settings(operation.get("scope", "global"), operation.get("category", ""))
+        elif kind == "settings_mcp_loading":
+            scope, name = operation["scope"], operation["name"]
+            self.menu(f"{name} · configuration", [
+                ("Switch Off" if operation.get("enabled", True) else "Switch On",
+                 {"kind": "settings_mcp_enabled_save", "scope": scope, "name": name, "enabled": not operation.get("enabled", True)}),
+                ("Search", {"kind": "settings_mcp_loading_save", "scope": scope, "name": name, "mode": "search"}),
+                (f"Load all (~{operation.get('tokens', 0)} tokens)", {"kind": "settings_mcp_loading_save", "scope": scope, "name": name, "mode": "all"}),
+            ], ["On/Off is persistent; loading changes apply to new sessions."])
+        elif kind in {"settings_mcp_enabled_save", "settings_mcp_loading_save"}:
+            scope, name = operation["scope"], operation["name"]
+            file = await self.client.settings_read(scope, "mcp", "mcp.json")
+            if kind == "settings_mcp_enabled_save":
+                result = await self.client.settings_mcp_enabled_set(scope, name, operation["enabled"], file.sha256)
+            else:
+                result = await self.client.settings_mcp_loading_set(scope, name, operation["mode"], file.sha256)
+            if result.status == "conflict":
+                self.menu("MCP settings conflict", [], ["File changed; reopen Settings → MCP and retry."])
+            else:
+                await self.settings(scope, "mcp")
         elif kind == "settings_read":
             result = await self.client.settings_read(operation["scope"], operation["category"], operation["id"])
             overrides = bool(getattr(result, "overrides_builtin", False))

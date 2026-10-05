@@ -128,3 +128,22 @@ Each server entry in `.agents/mcp.json` or `~/.nexus/mcp.json` accepts
 configuration errors. Project definitions replace global definitions by name.
 Session choices override config until modes freeze at the first turn. Settings
 changes affect new sessions; see [extensions.md](extensions.md#mcp-search-loading).
+
+## MCP server enablement and diagnostics
+
+MCP config is JSONC: `//` and block comments and trailing commas are accepted.
+Use a `servers` (or `mcpServers`) object, not a top-level array. Each server
+accepts `"enabled": true | false` (default `true`; strings are errors). Disabled
+servers remain configured but do not connect or expose tools, resources, or
+prompts. Settings → MCP → server → Switch On/Off patches just this field,
+preserving comments and other values in the defining global/project file.
+This is persistent configuration, distinct from session-only context toggles.
+
+`nexus --workspace /path/to/project doctor` discovers configuration even before
+the first turn. Both doctor (including `--json`) and `/mcp` display bounded,
+redacted configuration diagnostics, including the source path and parsing or
+validation error even when there are no live servers. A malformed file retains
+the previous definitions; fix the reported file rather than assuming an empty
+server count means the file was ignored. Global `~/.nexus/mcp.json` definitions
+are merged with the selected workspace's `.agents/mcp.json` by name (project
+wins); `.nexus/mcp.json` is only a project fallback when `.agents/mcp.json` is absent.

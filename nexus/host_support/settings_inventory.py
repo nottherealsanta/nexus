@@ -225,15 +225,25 @@ def write(runtime: object, scope: str, category: str, item_id: str, body: str, e
 
 
 def patch_mcp_loading(body: str, server: str, mode: str) -> str:
-    """Locate one JSONC object and replace/insert only its loading value.
+    if mode not in ("search", "all"):
+        raise ConfigError("Invalid MCP tool loading mode")
+    return _patch_mcp_value(body, server, "tool_loading", mode)
+
+
+def patch_mcp_enabled(body: str, server: str, enabled: bool) -> str:
+    if not isinstance(enabled, bool):
+        raise ConfigError("MCP enabled must be a bool")
+    return _patch_mcp_value(body, server, "enabled", enabled)
+
+
+def _patch_mcp_value(body: str, server: str, key: str, new_value: object) -> str:
+    """Locate one JSONC object and replace/insert only its requested value.
 
     A token scan preserves every original byte around the edit. Strict parsing
     rejects duplicate keys and ambiguous aliases before any mutation.
     """
     from ..ext.manager import _strict_json_object
 
-    if mode not in ("search", "all"):
-        raise ConfigError("Invalid MCP tool loading mode")
     try:
         document = _strict_json_object(body)
     except (ValueError, TypeError) as exc:
@@ -271,24 +281,32 @@ def patch_mcp_loading(body: str, server: str, mode: str) -> str:
 
     value(())
     path = (aliases[0], server)
-    existing = spans.get((*path, "tool_loading"))
+    existing = spans.get((*path, key))
     if existing:
         start, end = existing
-        return body[:start] + json.dumps(mode) + body[end:]
+        return body[:start] + json.dumps(new_value) + body[end:]
     start, _ = spans[path]
     # Inserting immediately after { handles trailing comments and commas without
     # moving them. Existing properties still keep their exact formatting.
     comma = "," if document[aliases[0]][server] else ""
-    return body[:start+1] + '"tool_loading": ' + json.dumps(mode) + comma + body[start+1:]
+    return body[:start+1] + json.dumps(key) + ': ' + json.dumps(new_value) + comma + body[start+1:]
 
 
 def set_mcp_loading(runtime, scope, server, mode, expected_sha256):
+    return _set_mcp_value(runtime, scope, server, mode, expected_sha256, patch_mcp_loading)
+
+
+def set_mcp_enabled(runtime, scope, server, enabled, expected_sha256):
+    return _set_mcp_value(runtime, scope, server, enabled, expected_sha256, patch_mcp_enabled)
+
+
+def _set_mcp_value(runtime, scope, server, value, expected_sha256, patch):
     target = settings_target(runtime, scope, "mcp", "mcp.json")
     old = _read_bounded(target.path)
     current = hashlib.sha256(old).hexdigest()
     if expected_sha256 != current:
         return {"status": "conflict", "sha256": current}
-    body = patch_mcp_loading(old.decode("utf-8"), server, mode)
+    body = patch(old.decode("utf-8"), server, value)
     return write(runtime, scope, "mcp", "mcp.json", body, expected_sha256)
 
 
@@ -485,8 +503,11 @@ async def dispatch_settings(command: Any, runtime: object) -> Any | None:
         return msgspec.convert(inventory(runtime, command.scope), type=p.SettingsInventoryResult)
     if isinstance(command, p.SettingsRead):
         return p.SettingsReadResult(**read(runtime, command.scope, command.category, command.id))
-    if isinstance(command, p.SettingsMcpLoadingSet):
-        result = set_mcp_loading(runtime, command.scope, command.server, command.mode, command.expected_sha256)
+    if isinstance(command, (p.SettingsMcpLoadingSet, p.SettingsMcpEnabledSet)):
+        if isinstance(command, p.SettingsMcpEnabledSet):
+            result = set_mcp_enabled(runtime, command.scope, command.server, command.enabled, command.expected_sha256)
+        else:
+            result = set_mcp_loading(runtime, command.scope, command.server, command.mode, command.expected_sha256)
         if result.get("status") == "written":
             reload = getattr(getattr(runtime, "extensions", None), "reload", None)
             if callable(reload):

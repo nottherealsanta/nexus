@@ -252,6 +252,10 @@ class _FakeRuntime:
         )
         self.closed = False
         self.refreshed = 0
+        self.started = False
+
+    async def ensure_started(self):
+        self.started = True
 
     def session(self, session_id, *, create=True, recover=True):
         return self.sessions.open(session_id)
@@ -301,6 +305,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.SettingsWrite(scope="project", category="agents", id="helper", body=""),
         p.SettingsDelete(scope="project", category="agents", id="helper"),
         p.SettingsReset(scope="project", category="agents"),
+        p.SettingsMcpEnabledSet(scope="project", server="s", enabled=False, expected_sha256="abc"),
         p.SetupStatus(),
         p.SetupSave(provider="openai", model="gpt-5.6"),
         p.ProvidersStatus(),
@@ -567,6 +572,7 @@ async def test_facade_handle_dispatches_every_verb():
     facade.daemon_info = {"pid": 123, "socket": "/tmp/nexus-test.sock"}
     doctor = await facade.handle(p.Doctor(explain_reload=True))
     assert isinstance(doctor, p.DoctorResult) and doctor.ok
+    assert runtime.started
     assert doctor.report["reload"]["hot"]
     assert doctor.report["daemon"] == facade.daemon_info
 
