@@ -392,6 +392,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 details_index = 0;
             }
             next.last_opened = s.last_opened.clone();
+            // Ring once per live turn completion: the bridge's counter only
+            // advances on a fresh completion, so replay or a sidebar refresh
+            // (which preserves the previous value) stays silent. The Python
+            // shell cannot ring the terminal the user is watching.
+            if next.completion_bell != s.completion_bell {
+                let mut tty = io::stderr();
+                let _ = write!(tty, "\x07");
+                let _ = tty.flush();
+            }
             s = next;
             animating = render::animating(&s);
             dirty = true;
