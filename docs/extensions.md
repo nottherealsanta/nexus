@@ -121,7 +121,7 @@ Health: `disabled`, `unknown`, `connecting`, `ready`, `degraded`, `backoff`,
 emitted, the rest are untouched. Config: `.agents/mcp.json` (JSONC) `servers` (or
 `mcpServers`) map, merged over `~/.nexus/mcp.json` (project names win; the legacy
 `.nexus/mcp.json` is read only when `.agents/mcp.json` is absent); per server
-`transport`, `command`, `args`, `env`, `cwd`, `url`, `headers`, `*_timeout_s`;
+`enabled` (boolean, defaults true), `transport`, `command`, `args`, `env`, `cwd`, `url`, `headers`, `*_timeout_s`;
 unknown keys are errors; only `${env:VAR}` interpolates. `[mcp]`:
 `connect_timeout_s` 20, `restart_max` 5. A corrupt file keeps the previous set.
 Stderr goes to `~/.nexus/projects/<hash>/logs/mcp/`, never into context.

@@ -103,6 +103,13 @@ class SettingsMcpLoadingSet(msgspec.Struct, tag=True, frozen=True):
     expected_sha256: str
 
 
+class SettingsMcpEnabledSet(msgspec.Struct, tag=True, frozen=True):
+    scope: Literal["global", "project"]
+    server: str
+    enabled: bool
+    expected_sha256: str
+
+
 class SettingsReset(msgspec.Struct, tag=True, frozen=True):
     scope: Literal["global", "project"]
     category: str
@@ -675,6 +682,7 @@ Command = (
     | SettingsInventory
     | SettingsRead
     | SettingsMcpLoadingSet
+    | SettingsMcpEnabledSet
     | SettingsWrite
     | SettingsDelete
     | SettingsReset
@@ -767,6 +775,7 @@ COMMANDS: tuple[type, ...] = (
     SettingsInventory,
     SettingsRead,
     SettingsMcpLoadingSet,
+    SettingsMcpEnabledSet,
     SettingsWrite,
     SettingsDelete,
     SettingsReset,
@@ -1751,6 +1760,7 @@ __all__ = [
     "SettingsRead",
     "SettingsReadResult",
     "SettingsMcpLoadingSet",
+    "SettingsMcpEnabledSet",
     "SettingsWrite",
     "SettingsWriteResult",
     "SetupSave",

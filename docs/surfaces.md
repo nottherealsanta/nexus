@@ -284,7 +284,10 @@ Native context dialogs show per-server On/Off controls and Search/All mode.
 Enter opens details with Search, Load all (estimated tokens), and Follow
 configuration actions before the first turn. Settings → MCP shows structured
 server rows above the file editor; loading choices patch the defining scope
-and refresh the page. Desktop uses these same host-backed workflows. The MCP
+and refresh the page. Server details also offer persistent Switch On/Off controls
+(including disabled servers), distinct from session context toggles. Doctor and
+`/mcp` show redacted config diagnostics even when no servers are live.
+Desktop uses these same host-backed workflows. The MCP
 inspector shows the mode alongside counts. `/mcp` opens the server list.
 
 `McpSearch` disclosures label each query and display schema fields as rows.

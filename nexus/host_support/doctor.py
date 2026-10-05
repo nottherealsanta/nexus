@@ -281,6 +281,15 @@ def _mcp_report(runtime: object) -> dict[str, Any] | None:
     if callable(diagnostics):
         with contextlib.suppress(Exception):
             rows = [_asdict(row) for row in (diagnostics() or ())]
+    extension_diagnostics = getattr(getattr(runtime, "extensions", None), "diagnostics", None)
+    if callable(extension_diagnostics):
+        with contextlib.suppress(Exception):
+            for row in extension_diagnostics():
+                if row.get("kind") == "mcp" and dict(row) not in rows:
+                    rows.append(dict(row))
+    rows = [{key: sanitize_text(redact_secrets(str(value)), limit=500)
+             for key, value in row.items() if key in {"kind", "name", "path", "error", "error_type"}}
+            for row in rows[:64]]
     return {"servers": servers, "diagnostics": rows}
 
 

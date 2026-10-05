@@ -1357,6 +1357,9 @@ def _print_doctor(report: dict[str, Any], stdout: TextIO) -> None:
     if isinstance(mcp, dict):
         servers = mcp.get("servers", []) or []
         stdout.write(f"mcp: servers={len(servers)}\n")
+        for diagnostic in mcp.get("diagnostics") or ():
+            if isinstance(diagnostic, dict):
+                stdout.write(f"  config: {diagnostic.get('path') or diagnostic.get('name') or 'MCP'}: {diagnostic.get('error') or diagnostic.get('error_type') or 'Configuration error'}\n")
         for row in servers:
             health = row.get("health", "?")
             name = row.get("name", "?")

@@ -683,3 +683,7 @@ preserved expansion through patches. Native closed/group/detail screenshots are
 captured with a silent Python fixture. A 1 MB fully rendered output still incurs a
 large first-wrap cost; viewport-only wrapping is not implemented. These checks do
 not establish zero latency or live-provider timing on every terminal.
+
+MCP Settings server details expose persistent On/Off and Search/All choices
+through host commands with optimistic hashes and JSONC-preserving edits. The
+MCP inspector displays config diagnostics, including failures with zero servers.

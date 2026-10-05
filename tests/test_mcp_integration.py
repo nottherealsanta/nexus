@@ -838,3 +838,34 @@ async def test_benchmark_skill_and_relative_mcp_script_load_outside_workspace(
         )
     finally:
         await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_doctor_discovers_jsonc_on_fresh_runtime(tmp_path):
+    from nexus.host.facade import HostFacade
+    from nexus.host import protocol as p
+    from nexus.ui_support.details import mcp_rows
+    directory = tmp_path / ".agents"
+    directory.mkdir()
+    path = directory / "mcp.json"
+    path.write_text('// comment\n{"servers":{"off":{"command":"unused", "enabled":false}}}')
+    runtime = make_runtime(tmp_path, ScriptedProvider([]))
+    try:
+        host = HostFacade(runtime)
+        result = await host.handle(p.Doctor())
+        assert result.report["extensions"]["generation"] > 0
+        assert result.report["mcp"]["servers"][0]["enabled"] is False
+        path.write_text('// comment\n{"servers": broken}')
+        result = await host.handle(p.Doctor())
+        diagnostics = result.report["mcp"]["diagnostics"]
+        assert diagnostics and diagnostics[0]["path"].endswith("/.agents/mcp.json")
+        import io
+        from nexus.cli import _print_doctor
+        output = io.StringIO()
+        _print_doctor(result.report, output)
+        assert "config:" in output.getvalue()
+        assert "JSONDecodeError" in output.getvalue()
+        assert any(tone == "plain-error" for tone, _, _ in mcp_rows(result.report))
+        assert any(tone == "plain-error" for tone, _, _ in mcp_rows({"mcp": {"servers": [], "diagnostics": diagnostics}}))
+    finally:
+        await runtime.aclose()

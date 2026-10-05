@@ -41,3 +41,31 @@ def test_hash_and_scope(tmp_path):
     path.symlink_to(tmp_path / "outside")
     with pytest.raises(ConfigError, match="symlink"):
         set_mcp_loading(runtime, "project", "s", "all", "")
+
+
+@pytest.mark.parametrize("body", [
+    '{"servers":{"s":{ /* keep */ "command":"x"}}}',
+    '{\n// comment\n"mcpServers":{"s":{"enabled":true,"command":"x",}},\n}',
+])
+def test_enabled_preserves_jsonc(body):
+    from nexus.host_support.settings_inventory import patch_mcp_enabled
+    result = patch_mcp_enabled(body, "s", False)
+    if '"enabled":true' in body:
+        assert result == body.replace('"enabled":true', '"enabled":false')
+    else:
+        assert result.replace('"enabled": false,', '') == body
+    with pytest.raises(ConfigError, match="bool"):
+        patch_mcp_enabled(body, "s", "false")
+
+
+def test_enabled_hash_conflict(tmp_path):
+    from nexus.host_support.settings_inventory import set_mcp_enabled
+    directory = tmp_path / ".agents"
+    directory.mkdir()
+    path = directory / "mcp.json"
+    body = '{"servers":{"s":{"command":"x"}}}'
+    path.write_text(body)
+    runtime = SimpleNamespace(workspace=tmp_path)
+    assert set_mcp_enabled(runtime, "project", "s", False, "wrong")["status"] == "conflict"
+    assert path.read_text() == body
+    assert set_mcp_enabled(runtime, "project", "s", False, hashlib.sha256(body.encode()).hexdigest())["status"] == "written"

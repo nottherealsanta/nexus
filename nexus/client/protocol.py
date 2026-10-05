@@ -146,6 +146,9 @@ class Client:
     async def settings_mcp_loading_set(self, scope: str, server: str, mode: str, expected_sha256: str) -> p.SettingsWriteResult:
         return await self._request(p.SettingsMcpLoadingSet(scope=scope, server=server, mode=mode, expected_sha256=expected_sha256))
 
+    async def settings_mcp_enabled_set(self, scope: str, server: str, enabled: bool, expected_sha256: str) -> p.SettingsWriteResult:
+        return await self._request(p.SettingsMcpEnabledSet(scope=scope, server=server, enabled=enabled, expected_sha256=expected_sha256))
+
     async def select_context_mcp_loading(self, session: str, server: str, mode: str | None) -> p.ContextInspectResult:
         return await self._request(p.ContextMcpLoadingSelect(session=session, server=server, mode=mode))
 

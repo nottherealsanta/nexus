@@ -545,3 +545,15 @@ async def test_voice_settings_cached_model_needs_no_download_consent(shell):
     shell.client.voice_prepare = AsyncMock()
     await shell.workflows.operate(operation)
     shell.client.voice_prepare.assert_awaited_once_with(allow_download=False)
+
+
+@pytest.mark.asyncio
+async def test_mcp_persistent_toggle_workflow(shell):
+    shell.client.settings_read = AsyncMock(return_value=p.SettingsReadResult(body="{}", rel_path="mcp.json", builtin=False, sha256="hash"))
+    shell.client.settings_mcp_enabled_set = AsyncMock(return_value=p.SettingsWriteResult(status="written"))
+    shell.workflows.settings = AsyncMock()
+    await shell.workflows.operate({"kind": "settings_mcp_loading", "scope": "project", "name": "s", "enabled": False})
+    operation = next(item["operation"] for item in shell.items if item["label"] == "Switch On")
+    await shell.workflows.operate(operation)
+    shell.client.settings_mcp_enabled_set.assert_awaited_once_with("project", "s", True, "hash")
+    shell.workflows.settings.assert_awaited_once_with("project", "mcp")

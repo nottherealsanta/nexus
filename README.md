@@ -82,7 +82,7 @@ the new provider route. Noninteractive `nexus run` requires a configured model.
 
 ```sh
 nexus --workspace /path/to/project init          # create nexus.toml, SOUL.md, MEMORY.md
-nexus --workspace /path/to/project doctor        # validate config, providers, extensions, MCP
+nexus --workspace /path/to/project doctor        # discover config, providers, extensions, MCP
 nexus --workspace /path/to/project run "Explain this repository"
 nexus --workspace /path/to/project chat          # interactive terminal client (native by default)
 ```
