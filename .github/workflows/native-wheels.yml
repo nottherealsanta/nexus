@@ -5,6 +5,9 @@ on:
       ref:
         type: string
         default: ''
+      runners:
+        type: string
+        default: '["ubuntu-24.04", "ubuntu-24.04-arm", "macos-15", "macos-15-intel"]'
 permissions:
   contents: read
 jobs:
@@ -12,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel]
+        runner: ${{ fromJSON(inputs.runners) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     steps:

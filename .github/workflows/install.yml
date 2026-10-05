@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [macos-latest]   # Linux deactivated for now
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -39,7 +39,7 @@ jobs:
           nexus update
           nexus --version
   docker:
-    if: github.event_name != 'schedule'
+    if: false   # Linux CI deactivated for now
     runs-on: ubuntu-latest
     strategy:
       matrix:

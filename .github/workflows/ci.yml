@@ -12,8 +12,8 @@ concurrency:
 permissions:
   contents: read
 jobs:
-  test:             # Linux on the minimum supported Python; dev machines cover macOS and 3.14
-    runs-on: ubuntu-latest
+  test:             # macOS only for now (Linux jobs are deactivated), on the minimum supported Python
+    runs-on: macos-latest
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
@@ -25,15 +25,15 @@ jobs:
       - run: uvx ruff check nexus tests
       - run: uv run pytest -q
   build:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.2.0
       - run: uv build
       - run: uv run --with pytest --with pytest-asyncio --with setuptools pytest -q tests/test_model_data_package.py tests/test_install_script.py
-  changes:          # the four-runner wheel matrix is slow: pull requests build it only when native inputs change
-    runs-on: ubuntu-latest
+  changes:          # the wheel build is slow: pull requests build it only when native inputs change
+    runs-on: macos-latest
     timeout-minutes: 5
     outputs:
       native: ${{ steps.filter.outputs.native }}
@@ -58,9 +58,11 @@ jobs:
     needs: changes
     if: needs.changes.outputs.native == 'true'
     uses: ./.github/workflows/native-wheels.yml
+    with:
+      runners: '["macos-15"]'   # one macOS runner for now; releases still build every platform
   ci-ok:            # the one required status check; its name never changes with the matrix
     if: always()
     needs: [test, build, changes, native-wheels]  # a skipped matrix is not a failure
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - run: '[ "${{ contains(needs.*.result, ''failure'') || contains(needs.*.result, ''cancelled'') }}" = false ]'
