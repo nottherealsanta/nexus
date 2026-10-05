@@ -175,7 +175,7 @@ class VoiceManager:
                 if callable(availability) and not availability():
                     self._state = self._new_state(
                         "unsupported",
-                        message="Voice runtime is not installed. Install the voice extra (nexus-harness[voice]; uv sync --extra voice for source checkouts; not available on musl/Alpine) and restart the daemon.",
+                        message="Voice runtime is not installed. Run `nexus voice init` to install it and download the model (not available on musl/Alpine).",
                     )
                     return self._state
                 path = await self.store.ensure(

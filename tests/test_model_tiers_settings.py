@@ -114,7 +114,7 @@ def test_rows_show_refs_source_and_resolved_model(tmp_path, monkeypatch):
     assert rows["low"]["refs"] == ["anthropic/cheap-2", "openai/cheap-1"]
     assert rows["low"]["source"] == "your list"
     assert rows["low"]["resolved"] == "anthropic/cheap-2"
-    assert rows["medium"]["source"] == "by price" and rows["medium"]["refs"] == []
+    assert rows["medium"]["source"] == "by price" and rows["medium"]["refs"] == ["openai/mid-1"]
     assert rows["medium"]["resolved"] == "openai/mid-1"
     assert model_settings.tier_rows(runtime)["max_tier"] == "high"
 
@@ -221,3 +221,30 @@ def test_sessions_section_validates_title_keys():
         SessionsSection(auto_title="yes")  # type: ignore[arg-type]
     with pytest.raises(ValueError):
         SessionsSection(title_model="a b")
+
+
+def test_default_chain_write_preserves_other_config_and_validates(tmp_path, monkeypatch):
+    runtime, home = _runtime(tmp_path, monkeypatch)
+    config = home / ".nexus" / "config.toml"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text('config_version = 2\n[sessions]\nauto_title = false\n')
+    refs = ["openai/cheap-1", "anthropic/cheap-2"]
+    result = asyncio.run(model_settings.default_models_set(runtime, refs))
+    assert result["restart_required"]
+    assert _config(home)["models"] == {"default": refs[0], "fallback": refs[1:]}
+    assert _config(home)["sessions"] == {"auto_title": False}
+    before = config.read_text()
+    for invalid in ([], [refs[0], refs[0]], ["unknown/nope"]):
+        with pytest.raises(ConfigError):
+            asyncio.run(model_settings.default_models_set(runtime, invalid))
+    assert config.read_text() == before
+
+
+def test_shared_candidates_include_skipped_pins_in_runtime_order(tmp_path, monkeypatch):
+    runtime, _ = _runtime(tmp_path, monkeypatch, overrides={"low": ["anthropic/cheap-2", "openai/cheap-1"]})
+    runtime.router = _router(runtime.tiers, runtime.registry, providers=("openai",))
+    row = model_settings.tier_rows(runtime)["tiers"][0]
+    assert row["refs"] == list(runtime.router.tier_candidates("low"))
+    assert row["resolved"] == "openai/cheap-1"
+    assert row["candidates"][0]["reason"] == "provider not connected"
+    assert row["candidates"][1]["selected"]

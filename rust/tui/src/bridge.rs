@@ -126,6 +126,26 @@ pub struct Item {
     /// Heading shown above the first item of each group (model picker); display only.
     #[serde(default)]
     pub group: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub value: String,
+    #[serde(default)]
+    pub scope: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub tone: String,
+    #[serde(default)]
+    pub changed: bool,
+    #[serde(default)]
+    pub move_up: Option<serde_json::Value>,
+    #[serde(default)]
+    pub move_down: Option<serde_json::Value>,
+    #[serde(default)]
+    pub remove: Option<serde_json::Value>,
     /// Dim text after the label (model picker: the provider/model ref).
     pub detail: String,
     /// The active choice: drawn with a leading `●` in the accent colour.

@@ -312,6 +312,12 @@ class Client:
 
     async def model_tier_reset(self, tier: str) -> Any: return await self._request(p.ModelTierReset(tier=tier))
 
+    async def default_model_settings(self) -> p.DefaultModelSettingsResult:
+        return await self.execute(p.DefaultModelSettings())
+
+    async def default_model_set(self, refs: list[str]) -> p.DefaultModelSettingsResult:
+        return await self.execute(p.DefaultModelSet(refs=list(refs)))
+
     async def agent_max_tier_set(self, tier: str) -> Any: return await self._request(p.AgentMaxTierSet(tier=tier))
 
     async def session_title_settings(self) -> Any: return await self._request(p.SessionTitleSettings())

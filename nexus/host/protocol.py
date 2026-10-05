@@ -408,6 +408,16 @@ class AgentMaxTierSet(msgspec.Struct, tag=True, frozen=True):
     tier: str
 
 
+class DefaultModelSettings(msgspec.Struct, tag=True, frozen=True):
+    """Read the ordered global default model chain."""
+
+
+class DefaultModelSet(msgspec.Struct, tag=True, frozen=True):
+    """Atomically save the first model and its ordered global fallbacks."""
+
+    refs: list[str]
+
+
 class SessionTitleSettings(msgspec.Struct, tag=True, frozen=True):
     """Read the automatic session-title settings (Settings -> Session titles)."""
 
@@ -709,6 +719,8 @@ Command = (
     | ModelTiers
     | ModelTierSet
     | ModelTierReset
+    | DefaultModelSettings
+    | DefaultModelSet
     | AgentMaxTierSet
     | SessionTitleSettings
     | SessionTitleSettingsSet
@@ -799,6 +811,8 @@ COMMANDS: tuple[type, ...] = (
     ModelTiers,
     ModelTierSet,
     ModelTierReset,
+    DefaultModelSettings,
+    DefaultModelSet,
     AgentMaxTierSet,
     SessionTitleSettings,
     SessionTitleSettingsSet,
@@ -1143,6 +1157,14 @@ class SessionTitleSettingsResult(msgspec.Struct, tag=True, frozen=True):
     message: str = ""
 
 
+class DefaultModelSettingsResult(msgspec.Struct, tag=True, frozen=True):
+    refs: list[str] = msgspec.field(default_factory=list)
+    resolved: str = ""
+    message: str = ""
+    candidates: list[dict[str, Any]] = msgspec.field(default_factory=list)
+    restart_required: bool = False
+
+
 class ModelSelectResult(msgspec.Struct, tag=True, frozen=True):
     """The accepted, validated selection plus how it resolved.
 
@@ -1457,6 +1479,7 @@ Result = (
     | ModelsListResult
     | ModelShowResult
     | ModelTiersResult
+    | DefaultModelSettingsResult
     | SessionTitleSettingsResult
     | ModelSelectResult
     | ReasoningEffortSelectResult
@@ -1536,6 +1559,7 @@ RESULTS: tuple[type, ...] = (
     ModelsListResult,
     ModelShowResult,
     ModelTiersResult,
+    DefaultModelSettingsResult,
     SessionTitleSettingsResult,
     ModelSelectResult,
     ReasoningEffortSelectResult,
@@ -1653,6 +1677,9 @@ __all__ = [
     "ModelTiersResult",
     "ModelTierSet",
     "ModelTierReset",
+    "DefaultModelSettings",
+    "DefaultModelSet",
+    "DefaultModelSettingsResult",
     "AgentMaxTierSet",
     "SessionTitleSettings",
     "SessionTitleSettingsSet",

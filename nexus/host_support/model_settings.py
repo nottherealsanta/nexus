@@ -93,12 +93,19 @@ def tier_rows(runtime: object) -> dict[str, Any]:
             refs = [ref for ref, tier in builtin.items() if tier == name]
             source = _SOURCE_BUILTIN if refs else _SOURCE_PRICE
         resolved = _resolved(runtime, name)
+        candidates = getattr(getattr(runtime, "router", None), "tier_candidates", None)
+        if callable(candidates):
+            refs = list(candidates(name))
+            if not mine and name in {"low", "medium", "high"} and getattr(runtime.tiers, "builtin", None):
+                source = _SOURCE_BUILTIN
         rows.append(
             {
                 "name": name,
                 "refs": refs,
                 "source": source,
                 "resolved": resolved,
+                "candidates": candidate_rows(runtime, refs, resolved),
+                "message": "" if resolved else "No connected provider can serve this tier",
                 "runnable": bool(resolved),
                 "editable": _TIER_RE.fullmatch(name) is not None,
             }
@@ -108,6 +115,43 @@ def tier_rows(runtime: object) -> dict[str, Any]:
         "max_tier": _effective_agents_max_tier(runtime),
         "order": list(tiers.order),
     }
+
+
+def candidate_rows(runtime: object, refs: list[str], resolved: str = "") -> list[dict[str, Any]]:
+    router = getattr(runtime, "router", None)
+    providers = getattr(router, "providers", {})
+    return [{"ref": ref, "connected": ref.split("/", 1)[0] in providers,
+             "selected": ref == resolved,
+             "reason": "" if ref.split("/", 1)[0] in providers else "provider not connected"}
+            for ref in refs[:MAX_TIER_REFS]]
+
+
+def default_settings(runtime: object) -> dict[str, Any]:
+    loader = getattr(runtime, "_load_config", None)
+    config = loader() if callable(loader) else None
+    section = getattr(config, "v2", None)
+    router = getattr(runtime, "router", None)
+    default = section.model_default() if section is not None else getattr(router, "default", None)
+    fallback = section.model_fallback() if section is not None else list(getattr(router, "fallback", ()))
+    refs = ([default] if default else []) + fallback
+    resolved, message = "", ""
+    try:
+        model = router.resolve(ModelRequest(messages=[]))
+        resolved = f"{model.provider.name}/{model.model}"
+    except (ConfigError, AttributeError) as exc:
+        message = str(exc)
+    return {"refs": refs, "resolved": resolved, "message": message,
+            "candidates": candidate_rows(runtime, refs, resolved)}
+
+
+async def default_models_set(runtime: object, refs: list[str], *, reload: bool = False) -> dict[str, Any]:
+    cleaned = _validate_refs(refs)
+    if len(cleaned) != len(refs):
+        raise ConfigError("default model chain contains duplicate references")
+    _check_refs_known(runtime, cleaned)
+    _write(runtime, (("models", "default", cleaned[0]), ("models", "fallback", cleaned[1:])))
+    reloaded = await _reload(runtime, reload)
+    return {**default_settings(runtime), "restart_required": not reloaded}
 
 
 def _validate_refs(refs: list[str]) -> list[str]:

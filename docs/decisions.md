@@ -139,7 +139,8 @@ Claude Agent SDK and `sounddevice` are required package dependencies; the old
 `install.sh` fail outright on Alpine. PEP 508 markers cannot tell musl from glibc,
 so `install.sh` adds `voice` itself except on musl (or with `--no-voice`), and
 `nexus update` keeps installed extras. Plain `pip`/`uv tool install nexus-harness`
-needs `[voice]`; source checkouts use `uv sync --extra voice`. Claude login and the
+does not get it, so `nexus voice init` installs the runtime into the current
+install (keeping version, source and extras) before downloading the model. Claude login and the
 consent-gated voice model download remain separate setup steps. Voice runtime
 platform support beyond macOS and glibc Linux is not verified (see [voice.md](voice.md)).
 
@@ -375,3 +376,11 @@ a wheel fling used to draw hundreds of near-full-screen frames faster than a ter
 parses them (32 MB over 8,000 events, 2.6 MB paced), so a reversal waited behind the
 backlog. The spinner clock advances on every loop pass, not only when input is idle.
 Slow phases (over 50 ms) are logged to `~/.nexus/tui-stalls.log`.
+
+## Settings revamp (native client)
+
+Workspace, Config, Soul and Hooks are hidden from the native Settings list for now;
+Settings is left only by an explicit close, never by an operation kind missing from
+an allow-list. A run-mode switch on an agent removes the other mode's fields so the
+file never holds a model and tiers that contradict each other. Not verified: native
+PTY rendering of the revamp.

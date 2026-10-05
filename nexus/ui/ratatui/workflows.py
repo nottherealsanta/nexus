@@ -58,14 +58,26 @@ class Workflows(TierPages, SpeakPages):
         return agent.body if agent is not None else self.shell.controller.view
 
     def menu(self, title, rows, lines=(), layout="drawer"):
+        if self.shell.settings_nav is not None:
+            layout = "modal"
         if self.shell.panel_title and title != self.shell.panel_title:
             self.stack.append((self.shell.panel_title, self.shell.panel_lines, self.shell.items, self.form, self.form_target, self.shell.panel_layout, self.shell.panel_format, self.shell.panel_tones))
             self.stack = self.stack[-20:]
         self.shell.show(title, list(lines), layout=layout)
         self.shell.panel_lines = list(lines)
         self.shell.panel_tones = []
-        self.shell.items = [{"label": label, "command": "", "operation": operation}
+        self.shell.items = [{"label": label, "command": "", "operation": operation,
+                             **operation.get("_presentation", {})}
                             for label, operation in rows]
+        if self.shell.settings_nav is not None:
+            for item in self.shell.items:
+                item.setdefault("name", item["label"].split(" · ", 1)[0])
+                item.setdefault("value", item["label"].partition(" · ")[2])
+                item.setdefault("scope", "Local" if self.shell.settings_nav in {"appearance", "layout"} else self.settings_scope.title())
+                item.setdefault("description", "")
+                item.setdefault("status", "")
+                item.setdefault("tone", "")
+                item.setdefault("changed", False)
         self.form = None
 
     def edit(self, title, body, target, *, secret=False, autosave=False, replace=False):
@@ -73,7 +85,7 @@ class Workflows(TierPages, SpeakPages):
         if self.shell.panel_title and not replace:
             self.stack.append((self.shell.panel_title, self.shell.panel_lines, self.shell.items, self.form, self.form_target, self.shell.panel_layout, self.shell.panel_format, self.shell.panel_tones))
             self.stack = self.stack[-20:]
-        self.shell.show(title, "", layout="page")
+        self.shell.show(title, "", layout="modal" if self.shell.settings_nav is not None else "page")
         self.form_target = target
         self.form = {"id": uuid.uuid4().hex, "body": body, "secret": secret,
                      "autosave": autosave, "status": "", "revision": 0, "saved": True}
@@ -93,6 +105,7 @@ class Workflows(TierPages, SpeakPages):
             self.shell.panel_lines = []
             self.shell.items = []
             self.form = None
+            self.shell.settings_nav = None
 
     async def settings_menu(self, scope="global", category=""):
         """Title, rows and lines of one Settings page (also used to refresh stale stack entries)."""
@@ -104,14 +117,13 @@ class Workflows(TierPages, SpeakPages):
         inventory = await self.client.settings_inventory(scope)
         if not category:
             rows = [(item.label, {"kind": "settings", "scope": scope, "category": item.key})
-                    for item in inventory.categories]
+                    for item in inventory.categories if item.key not in {"config", "soul", "hooks"}]
             rows += [("Providers", {"kind": "providers"}), ("Models", {"kind": "models_settings"}),
                      ("Session titles", {"kind": "title_settings"}), ("Voice", {"kind": "voice_settings"}),
                      ("Speech · local Kokoro", {"kind": "speech_settings"}),
                      ("Appearance", {"kind": "appearance"}),
                      ("Layout", {"kind": "layout"}),
                      ("Keyboard", {"kind": "keyboard"}),
-                     ("Workspace", {"kind": "workspace"}),
                      ("Switch to project" if scope == "global" else "Switch to global",
                       {"kind": "settings", "scope": "project" if scope == "global" else "global"})]
         else:
@@ -152,7 +164,7 @@ class Workflows(TierPages, SpeakPages):
         for index, entry in enumerate(self.stack):
             if entry[0] == f"Settings · {scope} · {category}":
                 title, rows, lines = await self.settings_menu(scope, category)
-                self.stack[index] = (title, lines, [{"label": label, "command": "", "operation": op} for label, op in rows], None, None, "page", "plain", [])
+                self.stack[index] = (title, lines, [{"label": label, "command": "", "operation": op} for label, op in rows], None, None, "modal", "plain", [])
 
     async def return_to_settings(self, scope, category):
         """After a mutation, drop transient confirm/editor pages and show a fresh category list."""
@@ -219,11 +231,9 @@ class Workflows(TierPages, SpeakPages):
             item["group"] = "Kokoro speech"
 
     #: Operation kinds that open or navigate Settings pages, and the area each selects.
-    NAV_AREAS = {"appearance": "appearance", "layout": "layout", "keyboard": "keys", "workspace": "workspace",
+    NAV_AREAS = {"appearance": "appearance", "layout": "layout", "keyboard": "keys",
                  "providers": "providers", "voice_settings": "voice", "speech_settings": "speech",
                  "models_settings": "models", "title_settings": "titles"}
-    NAV_KEEP = ("settings", "provider", "voice", "speech", "models", "tier", "title", "toggle_pref", "reset_prefs", "theme", "default_agent",
-                "confirm", "back", "discard_form", "setup", "agent_", "default_agent_save")
 
     async def settings_area(self, key):
         """Switch Settings to ``key`` (the left list): a fresh page with Escape closing Settings."""
@@ -243,13 +253,12 @@ class Workflows(TierPages, SpeakPages):
         elif kind == "settings":
             self.settings_scope = operation.get("scope", "global")
             self.shell.settings_nav = operation.get("category", "")
-        elif not kind.startswith(self.NAV_KEEP):
-            self.shell.settings_nav = None
         if kind.startswith(("tier_", "models_", "title_", "agent_tier")) and await self.tier_operate(operation):
             return
         if kind.startswith("speak_") and await self.speak_operate(operation):
             return
         if kind == "close_panel":
+            self.shell.settings_nav = None
             self.shell.panel_title = ""
             self.shell.panel_format = "plain"
             self.shell.preview_image = b""
@@ -370,7 +379,8 @@ class Workflows(TierPages, SpeakPages):
             self.menu("Default root agent", [(row["name"] + (" · current" if row["name"] == current else ""),
                 {"kind": "default_agent_save", "name": row["name"]}) for row in root_agents(await self.client.list_agents())])
         elif kind == "default_agent_save":
-            self.shell.show("Default agent saved", await self.client.set_default_agent(operation["name"], "global"))
+            await self.client.set_default_agent(operation["name"], "global")
+            await self.operate({"kind": "default_agent"})
         elif kind == "layout":
             labels = {"sessions_sidebar": ("Sessions sidebar", "ctrl+b"), "details_sidebar": ("Details sidebar", "ctrl+l"),
                       "context_preview": ("Show context header", "")}
@@ -387,7 +397,8 @@ class Workflows(TierPages, SpeakPages):
                 self.shell.preferences.set(key, self.shell.preferences.DEFAULTS[key])
             await self.operate({"kind": operation["then"]})
         elif kind == "keyboard":
-            await self.shell.command("/hotkeys", ())
+            from ...ui_support.shortcuts import KEYBOARD_SHORTCUTS
+            self.menu("Keyboard", [("Back", {"kind": "back"})], KEYBOARD_SHORTCUTS)
         elif kind == "workspace":
             self.shell.show("Workspace", await self.client.doctor())
         elif kind == "provider_open":
@@ -406,6 +417,7 @@ class Workflows(TierPages, SpeakPages):
             self.shell.notice = "Theme saved"
             await self.operate({"kind": "appearance"})
         elif kind == "context_show":
+            self.shell.settings_nav = None
             if self.agent_page_id:
                 from ...host.protocol import ContextInspectResult
                 fields = set(ContextInspectResult.__struct_fields__) - {"session"}
@@ -443,6 +455,8 @@ class Workflows(TierPages, SpeakPages):
             self.builtin_note()
         elif kind == "agent_pick":
             await self.agent_model_picker(operation["field"], operation.get("index", 0))
+        elif kind == "agent_mode":
+            await self.agent_mode_switch(operation["mode"])
         elif kind == "agent_set":
             await self.agent_write(operation["field"], operation.get("index", 0), operation["ref"])
         elif kind == "agent_clear":
@@ -853,28 +867,57 @@ class Workflows(TierPages, SpeakPages):
 
     def agent_page(self):
         """An agent file as form rows (model and fallbacks) beside the prompt file."""
-        from ...ui_support.agent_frontmatter import MAX_FALLBACKS, agent_fields, fallback_items
+        from ...ui_support.agent_frontmatter import MAX_FALLBACKS, agent_fields, fallback_items, run_mode
         draft = self.agent_draft
         fields = agent_fields(draft["body"])
         model, fallbacks = fields.get("model", ""), fallback_items(fields.get("fallback", ""))
-        rows = [(f"Model · {model or 'inherit the session model'}", {"kind": "agent_pick", "field": "model"})]
-        if model:
-            rows.append(("  × Clear model", {"kind": "agent_clear", "field": "model"}))
+        subagent = "subagent" in fields.get("contexts", "subagent")
+        mode = run_mode(draft["body"])
+        if mode == "session" and draft.get("mode"):
+            mode = draft["mode"]  # chosen but nothing written yet
+        label = {"session": "Session model", "model": "Specific model", "tier": "Tier"}[mode]
+        rows = [(f"Run on · {label}", {"kind": "agent_mode", "mode": self.next_run_mode(mode, subagent)})]
         tier_rows, tier_notes = self.agent_tier_rows(draft["body"])
-        if "subagent" in fields.get("contexts", "subagent"):
+        if mode == "tier" and subagent:
             rows += tier_rows
-        for index, ref in enumerate(fallbacks):
-            rows.append((f"Fallback {index + 1} · {ref}", {"kind": "agent_pick", "field": "fallback", "index": index}))
-            rows.append((f"  × Remove fallback {index + 1}", {"kind": "agent_clear", "field": "fallback", "index": index}))
-        if len(fallbacks) < MAX_FALLBACKS:
-            rows.append(("+ Add fallback", {"kind": "agent_pick", "field": "fallback", "index": len(fallbacks)}))
+        if mode == "model":
+            rows.append((f"Model · {model or 'choose a model'}", {"kind": "agent_pick", "field": "model"}))
+            if model:
+                rows.append(("  × Clear model", {"kind": "agent_clear", "field": "model"}))
+            for index, ref in enumerate(fallbacks):
+                rows.append((f"Fallback {index + 1} · {ref}", {"kind": "agent_pick", "field": "fallback", "index": index}))
+                rows.append((f"  × Remove fallback {index + 1}", {"kind": "agent_clear", "field": "fallback", "index": index}))
+            if len(fallbacks) < MAX_FALLBACKS:
+                rows.append(("+ Add fallback", {"kind": "agent_pick", "field": "fallback", "index": len(fallbacks)}))
         rows.append(("Edit prompt file…", {"kind": "agent_edit_file"}))
-        help_lines = ["Blank model fields inherit the session model. Fallbacks are tried in order when the model fails before replying."]
-        if "subagent" in fields.get("contexts", "subagent"):
+        help_lines = ["Run on: a specific model with ordered fallbacks, or "
+                      + ("a tier, which picks a model from the connected providers. " if subagent else "the session model. ")
+                      + "Choosing a mode removes the other mode's fields from the file."]
+        if fields.get("model") and fields.get("tiers"):
+            help_lines.append("This agent also lists tiers; choosing a mode removes the other.")
+        for key in ("provider", "reasoning_effort"):
+            if fields.get(key):
+                help_lines.append(f"{key}: {fields[key]} (edit in the prompt file)")
+        if mode == "tier" and subagent:
             help_lines.append("Tiers: " + TIERS_HELP)
             help_lines += tier_notes
         self.menu(f"Agent · {draft['target']['id']}", rows,
                   [*help_lines, str(fields.get("description", ""))] if fields.get("description") else help_lines)
+
+    @staticmethod
+    def next_run_mode(mode, subagent):
+        modes = ["session", "model", "tier"] if subagent else ["session", "model"]
+        return modes[(modes.index(mode) + 1) % len(modes)]
+
+    async def agent_mode_switch(self, mode):
+        """Switch run mode, keeping the discarded values so switching back restores them."""
+        from ...ui_support.agent_frontmatter import agent_fields, run_mode, set_run_mode
+        draft = self.agent_draft
+        fields = agent_fields(draft["body"])
+        stash = draft.setdefault("stash", {})
+        draft["mode"] = mode
+        stash[run_mode(draft["body"])] = {key: fields.get(key, "") for key in ("model", "fallback", "tiers")}
+        await self.agent_save_body(set_run_mode(draft["body"], mode, stash.get(mode)))
 
     async def agent_model_picker(self, field, index):
         from ...ui_support.model_choice import model_groups, recent_models
@@ -905,8 +948,10 @@ class Workflows(TierPages, SpeakPages):
     async def agent_save(self, updates):
         """Write frontmatter ``updates`` to the agent file at once and re-show the agent page."""
         from ...ui_support.agent_frontmatter import set_agent_fields
+        await self.agent_save_body(set_agent_fields(self.agent_draft["body"], updates))
+
+    async def agent_save_body(self, body):
         draft = self.agent_draft
-        body = set_agent_fields(draft["body"], updates)
         target = draft["target"]
         result = await self.client.settings_write(target["scope"], target["category"], target["id"], body,
                                                   expected_sha256=target["sha256"] or None)

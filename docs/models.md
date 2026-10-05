@@ -224,6 +224,8 @@ migration is performed: sign in again after upgrading. The legacy
 
 ## Default tier routing
 
+Settings → Models shows each tier's list in this run order (`ModelRouter.tier_candidates`, shared with resolution so the label and the page cannot disagree) and edits the default model chain (`models.default` plus `models.fallback`, global config) through `DefaultModelSet`.
+
 When the workspace leaves `models.default` unset (or set to a built-in tier), Nexus routes built-in tiers through these ordered model preferences. An explicitly configured `[models.tiers]` list or a session-pinned model takes precedence. Provider or model failures can move to the next model before ordinary workspace/agent fallback handling; agent fallbacks retain priority over the global `model.fallback` chain.
 
 | Tier | Ordered route | Default reasoning effort |

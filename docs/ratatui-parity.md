@@ -1,5 +1,11 @@
 # Ratatui implementation and parity ledger
 
+Session titles setting saves preserve the parent navigation history. Toggling
+automatic titles or choosing a model returns to the existing Session titles page;
+Escape still returns to its parent rather than losing the Settings stack. Both
+paths have Python workflow regression coverage; native PTY verification remains
+pending in `plans/SETTINGS_REVAMP_PLAN.md`.
+
 Untitled sessions display as **New Session** in the native tab bar and session
 picker, including immediately after creation and after session-list refreshes.
 Existing titles remain unchanged; session IDs are retained for navigation, not
@@ -334,13 +340,24 @@ subagent row has a blank row above and below and shows only its latest tool call
 Settings pages show each area's help line (`ui_support/settings_help.py`, shared with
 terminal); Appearance and Layout use labels and end with `Reset to default`.
 Settings has two-pane shape: a left list of areas (GENERAL: Appearance,
-Layout, Keyboard, Workspace; CONFIGURE: Providers, Voice, Agents, Tools, MCP servers,
-Skills, Hooks, Config, Soul) beside the current page, with the scope path and help
-above the list. Left/Right or a click switch areas (not while editing a file); Escape
-still steps back and then closes. An agent opens as form rows (`Model`, `Fallback 1..8`, `+ Add fallback`, `× Clear`),
-each saved at once through the host with the same hash check as the editor
-(`ui_support/agent_frontmatter`); models are chosen from the grouped model list, and
-`Edit prompt file…` opens the raw file. The other pages are still menus.
+Layout, Keyboard; CONFIGURE: Providers, Models, Session titles, Voice, Speech, Agents,
+Tools, MCP servers, Skills) beside the current page, with notes wrapped in full above
+the list. Workspace, Config, Soul and Hooks are hidden for now. Left moves focus to the
+area list (`▶` marker), Up/Down there switch areas, Right returns to the page; a click
+also switches. Settings stays open for every operation except an explicit close
+(`close_panel`, `context_show`); `Workflows.NAV_KEEP` no longer exists. Clicks and
+keys are ignored while a page is loading. Models lists the default model chain and each
+tier in the order the router runs it (`ModelRouter.tier_candidates`), with `in use`,
+`fallback` and skipped statuses; Alt+Up/Alt+Down reorder and Delete removes. An agent
+opens with a `Run on` row (Session model, Specific model, and for subagents Tier);
+Specific model shows `Model` and `Fallback 1..8`, Tier shows the tier rows, and
+switching mode removes the other mode's frontmatter fields (`set_run_mode` in
+`ui_support/agent_frontmatter`) while keeping the discarded values for the visit.
+Each change is saved at once through the host with the same hash check as the editor;
+`Edit prompt file…` opens the raw file. Not verified: native PTY screenshots of the
+revamp, real sign-in and real title generation. The typed-row header/groups design in
+`plans/SETTINGS_REVAMP_PLAN.md` §3.4 is only partly built (name/value/status/scope
+fields render; groups and wrapped footers are not).
 
 Keyboard focus over the transcript: with an empty draft, Tab focuses the last
 clickable block (tool row, thought, prompt card, agent card, diff); Up/Down, Tab,

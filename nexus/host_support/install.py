@@ -253,6 +253,93 @@ def update_command(
     return None
 
 
+VOICE_EXTRA = "voice"
+
+
+def voice_runtime_installed() -> bool:
+    """Whether the local dictation runtime (``kestrel``) is importable here."""
+    import importlib
+    import importlib.util
+
+    importlib.invalidate_caches()
+    try:
+        return importlib.util.find_spec("kestrel") is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def is_musl() -> bool:
+    """musl libc (Alpine): the voice runtime publishes no wheels for it."""
+    if not sys.platform.startswith("linux"):
+        return False
+    import platform
+
+    if platform.libc_ver()[0] == "glibc":
+        return False
+    try:
+        return any(Path("/lib").glob("ld-musl-*"))
+    except OSError:
+        return False
+
+
+def voice_requirements() -> list[str]:
+    """The ``voice`` extra's requirements, read from this install's metadata."""
+    try:
+        from importlib.metadata import requires
+
+        entries = requires(PACKAGE) or []
+    except Exception:  # noqa: BLE001 - metadata is best effort
+        return []
+    found: list[str] = []
+    for entry in entries:
+        requirement, _, marker = entry.partition(";")
+        compact = marker.replace(" ", "").replace("'", '"')
+        if f'extra=="{VOICE_EXTRA}"' in compact:
+            found.append(requirement.strip())
+    return found
+
+
+def voice_install_command(
+    uv: str | None,
+    *,
+    method: str,
+    source: str,
+    extras: list[str],
+    python: str,
+    version: str,
+    direct_url: dict[str, Any] | None,
+    executable: str,
+) -> list[str] | None:
+    """The command that adds the voice runtime to this install, or ``None``.
+
+    A uv tool is reinstalled at the *same* version and source with ``voice``
+    added to its extras, so ``nexus update`` keeps the runtime. Editable and
+    pip installs get the extra's requirements installed into this interpreter.
+    """
+    if method == "uv-tool":
+        if uv is None:
+            return None
+        spec_extras = sorted({*extras, VOICE_EXTRA})
+        install = [uv, "tool", "install", "--force", "--python", python]
+        url = str((direct_url or {}).get("url") or "")
+        if source == "pypi":
+            return [*install, _spec(spec_extras, f"=={version}")]
+        if source == "git":
+            commit = str(((direct_url or {}).get("vcs_info") or {}).get("commit_id") or "")
+            if not url or not commit:
+                return None
+            return [*install, _spec(spec_extras, f" @ git+{url}@{commit}")]
+        if source == "path" and url:
+            return [*install, _spec(spec_extras, f" @ {url}")]
+        return None
+    requirements = voice_requirements()
+    if not requirements:
+        return None
+    if uv is not None:
+        return [uv, "pip", "install", "--python", executable, *requirements]
+    return [executable, "-m", "pip", "install", *requirements]
+
+
 def run_update(command: list[str]) -> int:
     """Run the upgrade, streaming uv's output. Returns uv's exit code."""
     try:
