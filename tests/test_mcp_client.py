@@ -473,12 +473,17 @@ async def test_remote_error_secret_is_redacted():
 
 
 async def test_server_exit_after_init_is_normalized():
-    client = await connect(stdio_config(mode="exit_after_init"))
+    # The fixture exits right after replying to ``initialize``, so on a slow host
+    # the ``initialized`` notification inside ``connect`` can already hit a closed
+    # pipe. Either call may surface the exit; both must normalize it.
+    client = None
     try:
         with pytest.raises(MCPTransportError):
+            client = await connect(stdio_config(mode="exit_after_init"))
             await client.list_tools()
     finally:
-        await client.aclose()
+        if client is not None:
+            await client.aclose()
 
 
 # ---------------------------------------------------------------------------
