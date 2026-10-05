@@ -1267,7 +1267,7 @@ wheels = [
 
 [[package]]
 name = "nexus-harness"
-version = "0.3.3"
+version = "0.3.4"
 source = { editable = "." }
 dependencies = [
     { name = "claude-agent-sdk" },
