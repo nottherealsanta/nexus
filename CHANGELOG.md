@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.4](https://github.com/nottherealsanta/nexus/compare/v0.3.3...v0.3.4) (2026-10-05)
+
+
+### Bug fixes
+
+* use _request for default-model client calls ([#63](https://github.com/nottherealsanta/nexus/issues/63)) ([5e0240f](https://github.com/nottherealsanta/nexus/commit/5e0240f4a66de2e828161e4ec9806476ea50404a))
+
 ## [0.3.3](https://github.com/nottherealsanta/nexus/compare/v0.3.2...v0.3.3) (2026-10-05)
 
 
