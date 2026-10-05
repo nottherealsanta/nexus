@@ -111,14 +111,32 @@ async def fixture():
                             diff={"path": "src/util.py", "hunk": "--- a/src/util.py\n+++ b/src/util.py\n@@ -9,2 +9,2 @@\n def total(values):\n-    return sum(values)\n+    return int(sum(values))"})
         snapshot["panel_title"] = "Edit"
         snapshot["panel_lines"], snapshot["panel_tones"] = styled_lines(tool_detail_sections(tool))
-    elif state == "settings":
-        from nexus.ui_support.settings_help import SETTINGS_SECTIONS
-        snapshot["panel_title"] = "Settings · global · agents"
-        snapshot["panel_layout"] = "page"
-        snapshot["panel_lines"] = ["~/.nexus", "Build is the default root agent; advisor, task and quick are subagents."]
-        snapshot["items"] = [{"label": label, "command": "", "operation": {"kind": "noop"}} for label in (
-            "New sessions start with…", "build · built-in", "advisor · built-in", "quick · built-in", "task · built-in", "New file", "Reset category…")]
-        snapshot["nav"] = {"items": [[label, key or "", key is None] for key, label in SETTINGS_SECTIONS], "selected": 9}
+    elif state.startswith("settings"):
+        from unittest.mock import AsyncMock
+        from nexus.host import protocol as p
+        from nexus.model.tiers import DEFAULT_TIER_MODELS
+        tiers = []
+        connected = {"opencode-go", "github-copilot"}
+        for name, refs in DEFAULT_TIER_MODELS.items():
+            resolved = next((ref for ref in refs if ref.split("/", 1)[0] in connected), "")
+            tiers.append({"name": name, "refs": list(refs), "source": "built-in", "resolved": resolved,
+                "runnable": bool(resolved), "editable": True,
+                "candidates": [{"ref": ref, "connected": ref.split("/", 1)[0] in connected,
+                    "selected": ref == resolved, "reason": "provider not connected"} for ref in refs]})
+        shell.client.model_tiers = AsyncMock(return_value=p.ModelTiersResult(
+            order=["low", "medium", "high"], default="medium", max_tier="high", tiers=tiers))
+        shell.client.default_model_settings = AsyncMock(return_value=p.DefaultModelSettingsResult(
+            refs=["opencode-go/deepseek-v4.1-flash", "github-copilot/gpt-6-luna"], resolved="opencode-go/deepseek-v4.1-flash"))
+        shell.client.session_title_settings = AsyncMock(return_value=p.SessionTitleSettingsResult(
+            enabled=True, model="low", resolved=tiers[0]["resolved"]))
+        area = "titles" if "titles" in state else "models"
+        await shell.workflows.settings_area(area)
+        if "tier" in state:
+            await shell.workflows.operate({"kind": "tier_page", "name": "low"})
+        elif "default" in state:
+            await shell.workflows.operate({"kind": "models_default"})
+        if "light" in state: shell.preferences.values["theme"] = "nexus-light"
+        snapshot = project(controller, 1, shell=shell)
     elif state == "light":
         snapshot["theme"] = "nexus-light"
     elif state == "panel":

@@ -23,7 +23,7 @@ With no subcommand, `nexus` opens `chat`. Bare `nexus voice` shows voice status.
 | `tools list` | the model-facing tool catalogue for the current config |
 | `ext list\|reload\|validate\|trash` | extension inspection, rebuild, quarantine check, safe trash |
 | `worktrees list\|inspect\|review\|acknowledge\|integrate\|discard` | child worktree review flow ([agents.md](agents.md#worktrees)) |
-| `voice status\|download\|remove\|transcribe` | local dictation ([voice.md](voice.md)) |
+| `voice status\|init\|download\|remove\|transcribe` | local dictation; `init` installs the runtime when missing, then downloads the model ([voice.md](voice.md)) |
 | `doctor [--json] [--explain-reload]` | config, providers, registry, extensions, MCP; no model request |
 | `daemon status\|stop\|restart\|logs` / `restart` | workspace daemon management |
 | `init` | create `nexus.toml`, `SOUL.md`, `MEMORY.md` without overwriting |

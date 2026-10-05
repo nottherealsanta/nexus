@@ -69,7 +69,7 @@ async def test_reordering_a_tier_saves_the_whole_ordered_list(shell):
     await shell.workflows.settings_area("models")
     await shell.workflows.operate(shell.items[0]["operation"])
     assert shell.panel_title == "Tier · low"
-    assert _labels(shell)[:2] == ["1. openai/gpt-5-mini · used first", "2. anthropic/claude-haiku-4-5"]
+    assert _labels(shell)[:2] == ["1. openai/gpt-5-mini · in use", "2. anthropic/claude-haiku-4-5 · fallback"]
     await shell.workflows.operate(shell.items[1]["operation"])  # the second model
     labels = _labels(shell)
     assert labels[:3] == ["Move up", "Move down", "Remove from tier"]
@@ -165,6 +165,27 @@ async def test_title_model_choices_offer_tiers_and_models(shell):
 
 # -- an agent's Tiers row ---------------------------------------------------
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pick_model", [False, True])
+async def test_title_save_preserves_parent_and_returns_from_picker(shell, pick_model):
+    shell.client.session_title_settings = AsyncMock(return_value=_titles())
+    shell.client.session_title_settings_set = AsyncMock(return_value=_titles())
+    shell.client.model_tiers = AsyncMock(return_value=_tiers())
+    shell.client.list_models = AsyncMock(return_value=[])
+    shell.workflows.menu("Settings parent", [("Titles", {"kind": "title_settings"})])
+    shell.settings_nav = "titles"
+    await shell.workflows.operate({"kind": "title_settings"})
+    if pick_model:
+        await shell.workflows.operate({"kind": "title_model_pick"})
+        await shell.workflows.operate({"kind": "title_model_set", "model": "low"})
+    else:
+        await shell.workflows.operate({"kind": "title_set", "enabled": False})
+    assert shell.panel_title == "Session titles"
+    assert shell.settings_nav == "titles"
+    shell.workflows.back()
+    assert shell.panel_title == "Settings parent"
+
 AGENT = "---\nname: helper\ndescription: Helps.\ncontexts: [subagent]\ntiers: [low, medium]\n---\nWork.\n"
 
 
@@ -190,7 +211,7 @@ async def test_root_only_agents_have_no_tiers_row(shell):
 @pytest.mark.asyncio
 async def test_an_agent_without_tiers_says_it_uses_the_parents_model(shell):
     _open_agent(shell, "---\nname: helper\ndescription: Helps.\n---\nWork.\n")
-    assert "Tiers · not set (uses the parent's model)" in _labels(shell)
+    assert _labels(shell)[0] == "Run on · Session model"
 
 
 @pytest.mark.asyncio
@@ -225,7 +246,8 @@ async def test_a_tier_above_the_ceiling_is_called_out_on_the_agent_page(shell):
 async def test_a_pinned_model_outside_the_tiers_is_called_out(shell):
     shell.workflows.tier_cache = {"order": ["low", "medium", "high"], "ceiling": "high", "model_tier": "high"}
     _open_agent(shell, AGENT.replace("tiers:", "model: openai/gpt-6\ntiers:"))
-    assert any("pinned model is in the high tier" in line for line in shell.panel_lines)
+    assert any("also lists tiers; choosing a mode removes the other" in line for line in shell.panel_lines)
+    assert _labels(shell)[0] == "Run on · Specific model"
 
 
 def test_new_agents_start_with_tiers_both_clients_share():
@@ -237,3 +259,44 @@ def test_new_agents_start_with_tiers_both_clients_share():
     from nexus.agents.model import parse_frontmatter
 
     assert parse_frontmatter(body).tiers == ("low", "medium")
+
+
+@pytest.mark.asyncio
+async def test_models_default_row_survives_tier_parent_refresh(shell):
+    shell.client.model_tiers = AsyncMock(return_value=_tiers())
+    shell.client.default_model_settings = AsyncMock(return_value=p.DefaultModelSettingsResult(
+        refs=["openai/gpt-5-mini"], resolved="openai/gpt-5-mini"))
+    await shell.workflows.settings_area("models")
+    assert shell.items[0]["operation"]["kind"] == "models_default"
+    await shell.workflows.operate(shell.items[1]["operation"])
+    shell.workflows.back()
+    assert shell.panel_title == "Models"
+    assert shell.items[0]["operation"]["kind"] == "models_default"
+
+
+@pytest.mark.asyncio
+async def test_tier_inline_move_uses_same_order_as_submenu(shell):
+    shell.client.model_tiers = AsyncMock(return_value=_tiers())
+    shell.client.model_tier_set = AsyncMock(return_value=_tiers())
+    await shell.workflows.settings_area("models")
+    await shell.workflows.operate(shell.items[0]["operation"])
+    await shell.workflows.operate(shell.items[1]["move_up"])
+    shell.client.model_tier_set.assert_awaited_once_with(
+        "low", ["anthropic/claude-haiku-4-5", "openai/gpt-5-mini"])
+    assert shell.panel_title == "Tier · low"
+
+
+@pytest.mark.asyncio
+async def test_default_chain_reorder_refreshes_parent_and_keeps_settings(shell):
+    shell.client.model_tiers = AsyncMock(return_value=_tiers())
+    state = p.DefaultModelSettingsResult(refs=["openai/gpt-5-mini", "anthropic/claude-haiku-4-5"], resolved="openai/gpt-5-mini")
+    shell.client.default_model_settings = AsyncMock(return_value=state)
+    shell.client.default_model_set = AsyncMock(return_value=state)
+    await shell.workflows.settings_area("models")
+    await shell.workflows.operate(shell.items[0]["operation"])
+    await shell.workflows.operate(shell.items[1]["move_up"])
+    shell.client.default_model_set.assert_awaited_once_with(
+        ["anthropic/claude-haiku-4-5", "openai/gpt-5-mini"])
+    assert shell.panel_title == "Default model" and shell.settings_nav == "models"
+    shell.workflows.back()
+    assert shell.items[0]["operation"]["kind"] == "models_default"

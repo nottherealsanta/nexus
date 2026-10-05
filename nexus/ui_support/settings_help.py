@@ -17,9 +17,9 @@ SETTINGS_HELP: dict[str, str] = {
 #: Settings areas in the terminal's order: ``(key, label)``; a ``None`` key is a heading.
 SETTINGS_SECTIONS: tuple[tuple[str | None, str], ...] = (
     (None, "GENERAL"),
-    ("appearance", "Appearance"), ("layout", "Layout"), ("keys", "Keyboard"), ("workspace", "Workspace"),
+    ("appearance", "Appearance"), ("layout", "Layout"), ("keys", "Keyboard"),
     (None, ""),
     (None, "CONFIGURE"),
     ("providers", "Providers"), ("models", "Models"), ("titles", "Session titles"), ("voice", "Voice"), ("speech", "Speech"), ("agents", "Agents"), ("tools", "Tools"),
-    ("mcp", "MCP servers"), ("skills", "Skills"), ("hooks", "Hooks"), ("config", "Config"), ("soul", "Soul"),
+    ("mcp", "MCP servers"), ("skills", "Skills"),
 )

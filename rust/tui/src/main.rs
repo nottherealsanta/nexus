@@ -143,6 +143,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut details_scroll = 0usize;
     let mut page_positions: Vec<(String, usize, bool, usize)> = Vec::new();
     let mut panel_detail = false;
+    let mut settings_nav_focus = false;
     let mut selection = 0usize;
     let mut filter = String::new();
     let mut completion_index = 0usize;
@@ -280,6 +281,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 selection = 0;
                 filter.clear();
             }
+            if next.nav.is_none() { settings_nav_focus = false; }
             let new_prompt = next.prompt.as_ref().map(|p| p.id.as_str()).unwrap_or("");
             if new_prompt != prompt_id {
                 answer = Editor::default();
@@ -446,6 +448,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cache.focus = nav.and_then(|index| render::targets(&cache).get(index).copied());
             let drawing_at = Instant::now();
             let mut drawn_at = drawing_at;
+            cache.settings_nav_focus = settings_nav_focus;
             terminal.draw(|frame| {
                 let r = render::draw(
                     frame,
@@ -1004,22 +1007,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             dirty = true;
                             continue;
                         }
-                        // Settings area list: Left/Right switch areas (not while editing a form).
-                        if s.form.is_none()
-                            && filter.is_empty()
-                            && matches!(key.code, KeyCode::Left | KeyCode::Right)
-                        {
-                            if let Some(index) = s
-                                .nav
-                                .as_ref()
-                                .and_then(|nav| render::nav_step(nav, key.code == KeyCode::Right))
-                            {
-                                send(
-                                    json!({"type":"nav_select","text":index.to_string(),"generation":s.generation}),
-                                )?;
-                                dirty = true;
-                                continue;
+                        if s.nav.is_some() {
+                            if s.panel_loading && matches!(key.code, KeyCode::Esc | KeyCode::Enter | KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down) { continue; }
+                            if key.code == KeyCode::Left && s.form.is_none() {
+                                settings_nav_focus = true; dirty = true; continue;
                             }
+                            if key.code == KeyCode::Right && settings_nav_focus {
+                                settings_nav_focus = false; dirty = true; continue;
+                            }
+                            if settings_nav_focus && matches!(key.code, KeyCode::Up | KeyCode::Down) {
+                                if let Some(index) = s.nav.as_ref().and_then(|nav| render::nav_step(nav, key.code == KeyCode::Down)) {
+                                    send(json!({"type":"nav_select","text":index.to_string(),"generation":s.generation}))?;
+                                }
+                                dirty = true; continue;
+                            }
+                            if settings_nav_focus && key.code == KeyCode::Enter { continue; }
                         }
                         if key.code == KeyCode::Esc
                             || key.code == KeyCode::Char('c')
@@ -1028,6 +1030,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             action("dismiss", "")?;
                         } else if !s.items.is_empty() && !panel_detail {
                             let count = s.items.iter().filter(|row| row.matches(&filter)).count();
+                            let selected = s.items.iter().filter(|row| row.matches(&filter)).nth(selection);
+                            let control_op = selected.and_then(|row| match key.code {
+                                KeyCode::Up if key.modifiers.contains(KeyModifiers::ALT) => row.move_up.as_ref(),
+                                KeyCode::Down if key.modifiers.contains(KeyModifiers::ALT) => row.move_down.as_ref(),
+                                KeyCode::Delete => row.remove.as_ref(),
+                                _ => None,
+                            });
+                            if let Some(op) = control_op { send(json!({"type":"operation","operation":op,"generation":s.generation}))?; dirty = true; continue; }
                             match key.code {
                                 KeyCode::Up => selection = selection.saturating_sub(1),
                                 KeyCode::Down => {
@@ -1591,10 +1601,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                             if !s.panel_title.is_empty() {
+                                if s.panel_loading { continue; }
                                 if let Some(nav) = &s.nav {
                                     let list =
                                         render::nav_rect(render::panel_area(r.transcript, &s));
                                     if list.contains((mouse.column, mouse.row).into()) {
+                                        settings_nav_focus = true;
                                         let index = usize::from(mouse.row - list.y);
                                         if nav.items.get(index).is_some_and(|item| !item.2) {
                                             send(
@@ -1607,6 +1619,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                             if !s.panel_title.is_empty() {
+                                settings_nav_focus = false;
                                 let area = render::panel_area(r.transcript, &s);
                                 if !area.contains((mouse.column, mouse.row).into()) {
                                     action("dismiss", "")?;

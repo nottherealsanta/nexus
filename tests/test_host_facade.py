@@ -340,6 +340,8 @@ def test_protocol_round_trips_every_command_and_result():
         p.ModelsList(provider="p", tier="high"),
         p.ModelShow(ref="p/m"),
         p.ModelTiers(),
+        p.DefaultModelSettings(),
+        p.DefaultModelSet(refs=["openai/gpt-5-mini"]),
         p.SpeechStatus(),
         p.SpeechPrepare(),
         p.SpeakStop(),
@@ -432,6 +434,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.ModelsListResult(count=1, models=[{"id": "m"}]),
         p.ModelShowResult(ref="p/m", found=True, model={"id": "m"}),
         p.ModelTiersResult(order=["low", "medium", "high"], default="medium"),
+        p.DefaultModelSettingsResult(refs=["openai/gpt-5-mini"]),
         p.SessionTitleSettingsResult(enabled=True, model="low", resolved="openai/gpt-5-mini"),
         p.SpeechStatusResult(state="absent", bytes_total=345_000_000),
         p.AttachmentPreviewResult(attachment_id="att-1", media_type="image/png", data=b"png"),
@@ -552,6 +555,9 @@ async def test_facade_handle_dispatches_every_verb():
     tiers = await facade.handle(p.ModelTiers())
     assert isinstance(tiers, p.ModelTiersResult)
     assert tiers.default == "medium" and tiers.order == ["low", "medium", "high"]
+
+    default = await facade.handle(p.DefaultModelSettings())
+    assert isinstance(default, p.DefaultModelSettingsResult)
 
     selected = await facade.handle(p.ModelSelect(session="s", ref="low"))
     assert isinstance(selected, p.ModelSelectResult)

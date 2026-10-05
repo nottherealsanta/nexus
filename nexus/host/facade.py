@@ -1603,6 +1603,17 @@ class HostFacade:
             return p.ModelShowResult(
                 ref=command.ref, found=model is not None, model=model
             )
+        if isinstance(command, (p.DefaultModelSettings, p.DefaultModelSet)):
+            initializer = getattr(self.runtime, "ensure_models", None)
+            if callable(initializer):
+                await initializer()
+            if isinstance(command, p.DefaultModelSet):
+                state = await model_settings.default_models_set(
+                    self.runtime, list(command.refs), reload=not self.supervisor.running
+                )
+            else:
+                state = model_settings.default_settings(self.runtime)
+            return p.DefaultModelSettingsResult(**state)
         if isinstance(command, p.ModelTiers):
             initializer = getattr(self.runtime, "ensure_models", None)
             if callable(initializer):

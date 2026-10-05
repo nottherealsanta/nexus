@@ -185,6 +185,7 @@ struct Part {
 #[derive(Default)]
 pub struct Cache {
     pub disclosure: crate::disclosure::Disclosure,
+    pub settings_nav_focus: bool,
     dirty_from: Option<usize>,
     dirty_until: Option<usize>,
     patch_known: bool,
@@ -1392,7 +1393,7 @@ pub fn draw(
                         )
                     } else if i as i64 == nav.selected {
                         Line::styled(
-                            format!("{:<w$}", format!("▸ {label}"), w = usize::from(list.width)),
+                            format!("{:<w$}", format!("{} {label}", if cache.settings_nav_focus { "▶" } else { "▸" }), w = usize::from(list.width)),
                             Style::default()
                                 .fg(p.accent)
                                 .bg(p.element_hi)
@@ -1490,11 +1491,13 @@ pub fn draw(
             // Settings pages: the scope path and the area's help sit above the list.
             let mut lines: Vec<Line<'static>> = Vec::new();
             if s.nav.is_some() {
-                for text in s.panel_lines.iter().take(2) {
-                    lines.push(Line::styled(
-                        crate::transcript::truncate(text, usize::from(inner.width)),
-                        Style::default().fg(p.quiet).bg(p.dialog),
-                    ));
+                let note_lines: Vec<_> = s.panel_lines.iter().flat_map(|text| crate::transcript::wrap(&[Span::raw(text.clone())], inner.width as usize)).collect();
+                let height = dialogs::settings_header_height(s, inner.width, inner.height) as usize;
+                for cells in note_lines.iter().take(height) {
+                    lines.push(crate::transcript::line(vec![], cells.clone(), None, Style::default().fg(p.quiet).bg(p.dialog)));
+                }
+                if note_lines.len() > height && height > 0 {
+                    lines[height - 1] = Line::styled("More notes — Tab opens full details", Style::default().fg(p.accent));
                 }
             }
             lines.push(Line::from(if filter.is_empty() {
@@ -1550,7 +1553,11 @@ pub fn draw(
                 let width = usize::from(inner.width);
                 let available =
                     width.saturating_sub(3 + toggle.as_ref().map_or(0, |t| t.width() + 1));
-                let label = truncate_width(&item.label, available);
+                let structured = if item.name.is_empty() { item.label.clone() } else {
+                    format!("{}{}  {}  {} [{}]{}", item.name, if item.changed { " *" } else { "" }, item.value, item.status, item.scope,
+                        if item.move_up.is_some() || item.move_down.is_some() || item.remove.is_some() { "  ↑ ↓ ×" } else { "" })
+                };
+                let label = truncate_width(&structured, available);
                 let mut spans = vec![
                     Span::styled(
                         format!(" {marker} "),
@@ -1582,6 +1589,8 @@ pub fn draw(
                     selected_line = body.len();
                 }
                 body.push(Line::from(spans));
+                if !item.description.is_empty() { body.push(Line::styled(truncate_width(&format!("   {}", item.description), width), Style::default().fg(p.quiet).bg(p.dialog))); }
+                if !item.detail.is_empty() { body.push(Line::styled(truncate_width(&format!("   {}", item.detail), width), Style::default().fg(p.quiet).bg(p.dialog))); }
             }
             let reserved = if s.panel_hint.is_empty() { 0 } else { 2 };
             let room = inner.height.saturating_sub(lines.len() as u16 + reserved) as usize;

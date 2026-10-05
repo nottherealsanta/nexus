@@ -849,6 +849,70 @@ async def _dispatch_voice(
         return 1
 
 
+async def _voice_init(
+    workspace: Path, stdout: TextIO, stderr: TextIO
+) -> int:
+    """Install the voice runtime when it is missing, then download the model.
+
+    Running ``nexus voice init`` is the user's explicit consent to both steps.
+    After an install this process may hold stale code (a uv tool reinstall
+    replaces its venv), so the daemon restart and the model download run in a
+    fresh interpreter.
+    """
+    import shlex
+    import subprocess
+
+    from .host_support import install
+
+    if install.voice_runtime_installed():
+        stdout.write("Voice runtime is installed.\n")
+        stdout.flush()
+        return await _voice_command(
+            workspace, argparse.Namespace(voice_action="download"), stdout, stderr
+        )
+    if install.is_musl():
+        stderr.write(
+            "Error: the voice runtime publishes no musl (Alpine) builds, so local "
+            "dictation is not available on this system.\n"
+        )
+        return 1
+    method = install.install_method()
+    command = install.voice_install_command(
+        install.find_uv(),
+        method=method,
+        source=install.install_source(),
+        extras=install.installed_extras(),
+        python=f"{sys.version_info.major}.{sys.version_info.minor}",
+        version=install.package_version(),
+        direct_url=install._direct_url(),
+        executable=sys.executable,
+    )
+    if command is None:
+        stderr.write(
+            "Error: cannot work out how to add the voice runtime to this install. "
+            "Reinstall with `uv tool install --force 'nexus-harness[voice]'`, then "
+            "run `nexus voice init` again.\n"
+        )
+        return 1
+    stdout.write(f"Installing the voice runtime:\n  {shlex.join(command)}\n")
+    stdout.flush()
+    code = await asyncio.to_thread(install.run_update, command)
+    if code != 0:
+        stderr.write(f"Error: the install exited with status {code}; nothing was changed.\n")
+        return 1
+    if method == "editable":
+        stdout.write("Note: a later `uv sync` removes it unless you pass `--extra voice`.\n")
+    stdout.flush()
+    fresh = [sys.executable, "-m", "nexus", "--workspace", str(workspace)]
+    for step in (["daemon", "restart"], ["voice", "download"]):
+        result = await asyncio.to_thread(
+            subprocess.run, [*fresh, *step], check=False
+        )
+        if result.returncode != 0:
+            return result.returncode
+    return 0
+
+
 _VOICE_DOWNLOAD_TIMEOUT = 10 * 60
 _VOICE_POLL_SECONDS = 1.0
 _VOICE_DOWNLOAD_TERMINAL = {"ready", "error", "unsupported", "disabled"}
@@ -903,10 +967,10 @@ async def _wait_voice_download(
         detail = _voice_error_text(result.message) if result.message else "Voice runtime is unavailable."
         stderr.write(
             f"Error: {detail}\n"
-            if result.message and "Install the voice extra" in result.message
-            else f"Error: {detail} Install the voice extra "
-            "(`uv tool install --force 'nexus-harness[voice]'`). If Nexus was installed "
-            "while the daemon was already running, restart it with `nexus daemon restart`.\n"
+            if result.message and "nexus voice init" in result.message
+            else f"Error: {detail} Run `nexus voice init` to install the voice runtime "
+            "and download the model. If Nexus was installed while the daemon was "
+            "already running, restart it with `nexus daemon restart`.\n"
         )
         return 1
     return 0 if result.state == "ready" else 1
@@ -1554,6 +1618,9 @@ def build_parser() -> argparse.ArgumentParser:
     voice_sub = voice.add_subparsers(dest="voice_action")
     voice.set_defaults(voice_action="status")
     voice_sub.add_parser("status", help="Show local voice model status")
+    voice_sub.add_parser(
+        "init", help="Install the voice runtime if missing, then download the model"
+    )
     voice_sub.add_parser("download", help="Download and prepare the local voice model")
     voice_sub.add_parser("remove", help="Remove the cached local voice model")
     voice_transcribe = voice_sub.add_parser(
@@ -1696,6 +1763,8 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(_agents_command(workspace, args, stdout))
         if args.command == "tools":
             return asyncio.run(_tools_command(workspace, args, stdout))
+        if args.command == "voice" and args.voice_action == "init":
+            return asyncio.run(_voice_init(workspace, stdout, stderr))
         if args.command == "voice":
             return asyncio.run(_voice_command(workspace, args, stdout, stderr))
         if args.command == "worktrees":
@@ -1715,7 +1784,7 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         if args.command == "chat":
             return 130
-        if args.command == "voice" and args.voice_action == "download":
+        if args.command == "voice" and args.voice_action in ("download", "init"):
             stderr.write("Voice download interrupted; preparation may continue in the daemon.\n")
             return 130
         stderr.write("Cancelled. Workspace changes may already have occurred.\n")

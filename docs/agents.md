@@ -105,6 +105,11 @@ Names are checked for shape only here; an unknown name is skipped when the tier
 is resolved. `tiers` with `model: inherit` is a definition error. Repeats collapse
 like other list keys.
 
+Settings edits this as a **run mode**: a subagent runs on the session model, a
+specific model with ordered fallbacks, or a tier list; choosing a mode removes the
+other mode's `model`/`fallback`/`tiers` keys. A file that has both opens as a specific
+model with a warning.
+
 Which tier a child runs on (first match wins; `TierDecision` in `runner.py`):
 
 1. the call names a tier (`model: "medium"`);

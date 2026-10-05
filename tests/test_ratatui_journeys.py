@@ -101,7 +101,9 @@ async def test_project_file_edit_conflict_validation_and_delete(settings_shell):
     shell, workspace = settings_shell
     flows = shell.workflows
     await flows.operate({"kind": "settings", "scope": "project"})
-    await flows.operate(op(shell, "Soul"))
+    assert not any(label.startswith("Soul") for label in labels(shell))
+    # The hidden category remains supported at the host/editor boundary.
+    await flows.operate({"kind": "settings", "scope": "project", "category": "soul"})
     assert not any("Delete" in label for label in labels(shell))
     await flows.operate(op(shell, "New file"))
     await flows.save(flows.form["id"], "SOUL.md", 1)
@@ -486,9 +488,11 @@ async def test_agent_page_edits_model_and_fallbacks_through_the_host(settings_sh
     await flows.operate({"kind": "settings", "scope": "global", "category": "agents"})
     await flows.operate(op(shell, "helper"))
     assert shell.panel_title == "Agent · helper"
-    assert labels(shell)[0] == "Model · inherit the session model" and "+ Add fallback" in labels(shell)
+    assert labels(shell)[0] == "Run on · Session model"
+    await flows.operate(op(shell, "Run on"))
+    assert labels(shell)[0] == "Run on · Specific model" and "+ Add fallback" in labels(shell)
     await flows.operate({"kind": "agent_set", "field": "model", "index": 0, "ref": "openai/gpt-x"})
-    assert shell.panel_title == "Agent · helper" and labels(shell)[0] == "Model · openai/gpt-x" and "  × Clear model" in labels(shell)
+    assert shell.panel_title == "Agent · helper" and labels(shell)[1] == "Model · openai/gpt-x" and "  × Clear model" in labels(shell)
     await flows.operate({"kind": "agent_set", "field": "fallback", "index": 0, "ref": "anthropic/claude-y"})
     await flows.operate({"kind": "agent_set", "field": "fallback", "index": 1, "ref": "openai/gpt-z"})
     assert [l for l in labels(shell) if l.startswith("Fallback")] == ["Fallback 1 · anthropic/claude-y", "Fallback 2 · openai/gpt-z"]
@@ -496,4 +500,4 @@ async def test_agent_page_edits_model_and_fallbacks_through_the_host(settings_sh
     assert "model: openai/gpt-x" in saved and "fallback: [anthropic/claude-y, openai/gpt-z]" in saved and saved.rstrip().endswith("Hello.")
     await flows.operate({"kind": "agent_clear", "field": "fallback", "index": 0})
     await flows.operate({"kind": "agent_clear", "field": "model"})
-    assert labels(shell)[0] == "Model · inherit the session model" and [l for l in labels(shell) if l.startswith("Fallback")] == ["Fallback 1 · openai/gpt-z"]
+    assert labels(shell)[1] == "Model · choose a model" and [l for l in labels(shell) if l.startswith("Fallback")] == ["Fallback 1 · openai/gpt-z"]

@@ -32,6 +32,8 @@ def main():
                                          ("ratatui-usage", "tests/ratatui_browser_demo.py", "usage"), ("ratatui-completion", "tests/ratatui_browser_demo.py", "completion"),
                                          ("ratatui-subagent", "tests/ratatui_browser_demo.py", "subagent"),
                                          ("ratatui-local", "tests/ratatui_browser_demo.py", "local_disclosure"))
+            captures += tuple((f"ratatui-settings-{suffix}", "tests/ratatui_browser_demo.py", f"settings-{suffix}")
+                              for suffix in ("tier", "default", "titles", "light", "tier-narrow"))
             if os.environ.get("NEXUS_RATATUI_MATRIX"):
                 captures = [(f"redesign-{theme}-{sidebars}-{cols}", "tests/ratatui_browser_demo.py", f"redesign-{theme}-{sidebars}-Session")
                     for theme in ("dark","light") for sidebars in ("00","10","01","11") for cols in (80,120,200)]
@@ -73,6 +75,13 @@ def main():
                         page.wait_for_timeout(300)
                         page.evaluate("size => window.__nexusSockets.at(-1).send(JSON.stringify(['resize',size]))", {"width":cols,"height":50})
                         page.wait_for_timeout(350)
+                    if state.startswith("settings"):
+                        if "narrow" in state:
+                            page.set_viewport_size({"width": 850, "height": 620})
+                            page.wait_for_timeout(500)
+                        page.get_by_role("textbox", name="Terminal input").click()
+                        page.keyboard.press("ArrowLeft")
+                        page.wait_for_timeout(200)
                     page.screenshot(path=str(ARTIFACTS / f"{name}.png"))
                     if state == "local_disclosure":
                         page.get_by_role("textbox", name="Terminal input").click()

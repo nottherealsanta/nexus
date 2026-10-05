@@ -313,3 +313,60 @@ def test_static_completion_and_optimistic_toggle_ignore_stale_echo():
         assert third[0]["ui_sequence"]>second[0]["ui_sequence"]
     finally:
         probe.close()
+
+
+@pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
+def test_settings_native_focus_reorder_and_loading_guard():
+    master, slave = pty.openpty()
+    termios.tcsetwinsize(slave, (32, 122))
+    before = termios.tcgetattr(slave)
+    setup = "import os,fcntl,termios; os.setsid(); fcntl.ioctl(2,termios.TIOCSCTTY,0); os.execv(" + repr(str(BINARY)) + ", [" + repr(str(BINARY)) + "])"
+    process = subprocess.Popen([sys.executable, "-c", setup], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=slave)
+    stop = threading.Event()
+    def drain():
+        while not stop.is_set():
+            if select.select([master], [], [], .05)[0]:
+                try: os.read(master, 65536)
+                except OSError: return
+    thread = threading.Thread(target=drain, daemon=True)
+    thread.start()
+    buffer = bytearray()
+    def action():
+        deadline = time.monotonic() + 3
+        while b"\n" not in buffer:
+            assert select.select([process.stdout], [], [], max(0, deadline - time.monotonic()))[0]
+            buffer.extend(os.read(process.stdout.fileno(), 65536))
+        line, _, rest = buffer.partition(b"\n")
+        buffer[:] = rest
+        return json.loads(line)
+    def snapshot(revision, loading=False):
+        value = {"schema": 1, "revision": revision, "generation": 1, "title": "Settings PTY", "status": "idle",
+            "panel_title": "Models", "panel_layout": "modal", "panel_loading": loading,
+            "panel_lines": ["Global model routing"],
+            "nav": {"items": [["GENERAL", "", True], ["Models", "models", False], ["CONFIGURE", "", True], ["Providers", "providers", False]], "selected": 1},
+            "items": [{"label": "Model", "command": "", "operation": {"kind": "tier_ref"}, "move_down": {"kind": "tier_move", "delta": 1}}]}
+        process.stdin.write((json.dumps(value) + "\n").encode()); process.stdin.flush()
+        time.sleep(.15)
+    try:
+        snapshot(1)
+        deadline = time.monotonic() + 3
+        while termios.tcgetattr(slave) == before:
+            assert time.monotonic() < deadline
+            time.sleep(.01)
+        os.write(master, b"\x1b[D\x1b[B")
+        assert action()["type"] == "nav_select"
+        os.write(master, b"\x1b[C\r")
+        assert action()["operation"]["kind"] == "tier_ref"
+        os.write(master, b"\x1b[1;3B")
+        assert action()["operation"]["kind"] == "tier_move"
+        snapshot(2, loading=True)
+        os.write(master, b"\r\x1b[D\x1b[B")
+        assert not select.select([process.stdout], [], [], .25)[0], "loading must suppress stale actions"
+        snapshot(3)
+        os.write(master, b"\x1b")
+        assert action()["type"] == "dismiss"
+    finally:
+        process.terminate(); process.wait(timeout=3)
+        stop.set(); thread.join(timeout=1)
+        process.stdin.close(); process.stdout.close()
+        os.close(master); os.close(slave)

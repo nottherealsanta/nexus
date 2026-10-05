@@ -137,6 +137,13 @@ pub fn panel_area(transcript: Rect, s: &Snapshot) -> Rect {
     )
 }
 /// Filtered item index under the pointer, using the same grouping and scroll as drawing.
+pub fn item_height(item: &crate::bridge::Item) -> u16 {
+    1 + u16::from(!item.detail.is_empty()) + u16::from(!item.description.is_empty())
+}
+pub fn settings_header_height(s: &Snapshot, width: u16, height: u16) -> u16 {
+    let full: usize = s.panel_lines.iter().map(|text| crate::transcript::wrap(&[Span::raw(text.clone())], width as usize).len()).sum();
+    (full as u16).min(height.saturating_sub(5).min(8))
+}
 pub fn panel_item_at(
     s: &Snapshot,
     area: Rect,
@@ -151,7 +158,7 @@ pub fn panel_item_at(
         inner.width = inner.width.saturating_sub(taken);
     }
     let header = 2 + if s.nav.is_some() {
-        s.panel_lines.len().min(2)
+        usize::from(settings_header_height(s, inner.width, inner.height))
     } else {
         0
     };
@@ -173,7 +180,7 @@ pub fn panel_item_at(
         if i == selection {
             selected_line = body.len();
         }
-        body.push(Some(i));
+        for _ in 0..item_height(item) { body.push(Some(i)); }
     }
     let start = (selected_line + 1).saturating_sub(room.max(1));
     let row = usize::from(y.saturating_sub(inner.y));

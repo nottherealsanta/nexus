@@ -222,6 +222,7 @@ class ShellActions:
         await self.voice.discard()
         self.workflows.form = None
         self.workflows.stack.clear()
+        self.settings_nav = None
         self.workflows.agent_page_id = None
         self.workflows.agent_context = {}
         self.workflows.agent_parents.clear()

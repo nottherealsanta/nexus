@@ -100,6 +100,41 @@ def set_agent_fields(body: str, updates: Mapping[str, str]) -> str:
     return "".join([*lines[:start], *head, *lines[end:]])
 
 
+#: Run modes: a root agent inherits the session model or pins a model; a
+#: subagent pins a model or picks from tiers.
+RUN_MODES = ("session", "model", "tier")
+
+
+def run_mode(body: str) -> str:
+    """The mode a file is in: ``model`` wins when a file lists both a model and tiers."""
+    fields = agent_fields(body)
+    if fields.get("model"):
+        return "model"
+    if tier_items(fields.get("tiers", "")):
+        return "tier"
+    return "model" if fields.get("fallback") else "session"
+
+
+def set_run_mode(body: str, mode: str, items: Mapping[str, str] | None = None) -> str:
+    """Switch to ``mode`` and remove the fields that belong to the other modes.
+
+    ``tier`` writes ``tiers`` and removes ``model`` and ``fallback``; ``model``
+    writes ``model``/``fallback`` and removes ``tiers``; ``session`` removes all
+    three. ``items`` supplies the values to write for the chosen mode.
+    """
+    if mode not in RUN_MODES:
+        raise ValueError(f"unknown run mode {mode!r}")
+    items = dict(items or {})
+    updates = {"model": "", "fallback": "", "tiers": ""}
+    if mode == "tier":
+        updates["tiers"] = items.get("tiers", "")
+    elif mode == "model":
+        updates["model"] = items.get("model", "")
+        updates["fallback"] = items.get("fallback", "")
+    return set_agent_fields(body, updates)
+
+
 __all__ = [
-    "FORM_FIELDS", "MAX_FALLBACKS", "MAX_TIERS", "agent_fields", "fallback_items", "set_agent_fields", "tier_items",
+    "FORM_FIELDS", "MAX_FALLBACKS", "MAX_TIERS", "RUN_MODES", "agent_fields", "fallback_items", "run_mode",
+    "set_agent_fields", "set_run_mode", "tier_items",
 ]

@@ -253,6 +253,38 @@ def test_update_command_argv():
     assert update_command("/u/uv", "path", version="0.1.0", **kw) is not None
 
 
+def test_voice_install_command_argv():
+    from nexus.host_support.install import voice_install_command
+
+    kw = {"python": "3.13", "version": "0.3.2", "executable": "/venv/bin/python"}
+    assert voice_install_command(
+        "/u/uv", method="uv-tool", source="pypi", extras=["voice"], direct_url=None, **kw
+    ) == ["/u/uv", "tool", "install", "--force", "--python", "3.13", "nexus-harness[voice]==0.3.2"]
+    git = {"url": "https://github.com/x/nexus", "vcs_info": {"vcs": "git", "commit_id": "abc"}}
+    assert voice_install_command(
+        "/u/uv", method="uv-tool", source="git", extras=[], direct_url=git, **kw
+    )[-1] == "nexus-harness[voice] @ git+https://github.com/x/nexus@abc"
+    assert voice_install_command(
+        None, method="uv-tool", source="pypi", extras=[], direct_url=None, **kw
+    ) is None
+    editable = voice_install_command(
+        "/u/uv", method="editable", source="unknown", extras=[], direct_url=None, **kw
+    )
+    assert editable[:5] == ["/u/uv", "pip", "install", "--python", "/venv/bin/python"]
+    assert any(req.startswith("moondream") for req in editable[5:])
+    assert voice_install_command(
+        None, method="pip", source="pypi", extras=[], direct_url=None, **kw
+    )[:4] == ["/venv/bin/python", "-m", "pip", "install"]
+
+
+def test_voice_requirements_come_from_package_metadata():
+    from nexus.host_support.install import voice_requirements
+
+    reqs = voice_requirements()
+    assert any(req.startswith("moondream") for req in reqs)
+    assert not any(req.startswith("pytest") for req in reqs)
+
+
 def _fake_dist(monkeypatch, direct_url):
     import importlib.metadata as md
 

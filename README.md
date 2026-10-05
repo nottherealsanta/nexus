@@ -39,7 +39,8 @@ Options (also as `sh -s -- --flag`): `NEXUS_VERSION`, `NEXUS_SOURCE` (`pypi`, th
 default, or `git`), `NEXUS_GIT_REF`, `NEXUS_PYTHON`, `NEXUS_EXTRAS` (e.g. `documents`),
 `NEXUS_NO_VOICE`, `NEXUS_NO_MODIFY_PATH`, `NEXUS_NO_DOCTOR`. Local dictation (the
 `voice` extra) is added by default except on musl systems such as Alpine, whose
-platform the voice runtime does not support. Native Windows is not supported yet
+platform the voice runtime does not support. Any other install can run
+`nexus voice init`, which adds the runtime if it is missing and downloads the model. Native Windows is not supported yet
 (the daemon needs Unix sockets); use WSL.
 
 `nexus update` upgrades to the latest PyPI release through uv and restarts running

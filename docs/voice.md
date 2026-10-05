@@ -19,7 +19,7 @@ Voice settings retain a separate preparation action and
 never start capture.
 Cached weights do not include the Python voice runtime. Both download-enabled
 and cache-only preparation check runtime availability first and report the
-voice-extra installation instructions instead of a generic initialization error.
+`nexus voice init` instruction instead of a generic initialization error.
 
 ## Files
 
@@ -38,9 +38,15 @@ voice-extra installation instructions instead of a generic initialization error.
 
 1. **Install:** `install.sh` adds the `voice` extra (`moondream==2.4.0`) by
    default, except on musl systems such as Alpine (no `kestrel-native` wheels) or
-   with `--no-voice`; `sounddevice` is always installed. Plain `uv tool install`
-   needs `nexus-harness[voice]`; source checkouts use `uv sync --extra voice`. The
-   model (~179 MB) is **not** bundled.
+   with `--no-voice`; `sounddevice` is always installed. Any other install gets
+   both pieces from `nexus voice init`: when `kestrel` is not importable it adds
+   the runtime (a uv tool is reinstalled at the same version and source with
+   `voice` added to its extras, so `nexus update` keeps it; editable and pip
+   installs get the extra's requirements, read from package metadata, through
+   `uv pip install --python <interpreter>` or `pip`), restarts the workspace
+   daemon and downloads the model in a fresh interpreter, since a uv reinstall
+   replaces the running venv. It refuses on musl. With the runtime present it is
+   `nexus voice download`. The model (~179 MB) is **not** bundled.
 2. **Consent:** the first use shows a confirmation dialog in the TUI and web;
    `nexus voice download` is itself an explicit action. `VoicePrepare` carries no
    consent token, so UI consent is a client-flow contract, not host-enforced.
@@ -111,8 +117,8 @@ composer. Escape discards capture and cancels inference.
 The browser renders the same preview phases with a canvas waveform. Real-
 microphone latency and inference on supported hardware are **not verified**.
 
-`nexus voice` defaults to status. Missing-runtime download failures preserve the
-host installation guidance once, without appending a second installation recipe.
+`nexus voice` defaults to status. Missing-runtime download failures point to
+`nexus voice init` once, without appending a second installation recipe.
 
 
 The native Ratatui client uses the same host-backed TOML voice settings helper

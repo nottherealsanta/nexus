@@ -140,8 +140,8 @@ class ModelRouter:
         candidates: list[ResolvedModel] = []
         tier_defaults: tuple[str, ...] = ()
         reference = request.metadata.get("tier") or self._resolve_alias(self._reference(request))
-        if reference in DEFAULT_TIER_MODELS and not self._tier_pinned(reference):
-            tier_defaults = DEFAULT_TIER_MODELS[reference]
+        if self._as_tier(reference) is not None:
+            tier_defaults = self.tier_candidates(reference)
         for reference in (*agent_refs, *tier_defaults, *self._fallback):
             candidate = ModelRequest(messages=[], model=reference)
             try:
@@ -224,50 +224,35 @@ class ModelRouter:
         return get(ref)
 
     def _resolve_tier(self, tier: str, ref: str) -> ResolvedModel:
-        listed = getattr(self._registry, "list", None)
-        candidates = (
-            list(listed(tier=tier, selectable_only=True))
-            if callable(listed)
-            else []
+        for reference in self.tier_candidates(tier):
+            info = self._registry_lookup(reference)
+            if info is not None and getattr(info, "provider", None) in self._providers:
+                return self._resolve_info(info, ref)
+        registered = ", ".join(sorted(self._providers)) or "none"
+        offered = ", ".join(sorted({reference.split("/", 1)[0] for reference in self.tier_candidates(tier)})) or "none"
+        raise ConfigError(
+            f"No runnable provider has a model for tier {tier!r} (reference {ref!r}); "
+            f"registered providers: {registered}; "
+            f"catalogue providers offering this tier: {offered}"
         )
-        # Only a provider this router can actually stream is runnable. A
-        # catalogue entry whose provider has no adapter (or whose provider was
-        # not constructed) must never be chosen just because it sorts first.
-        runnable = [
-            info
-            for info in candidates
-            if getattr(info, "provider", None) in self._providers
-        ]
-        # The user's own ``[models.tiers]`` list is an explicit, ordered pin: its
-        # first runnable entry wins over the catalogue's order (Settings ->
-        # Models edits this list).
-        pinned = self._first_pinned(tier)
-        if pinned is not None:
-            return self._resolve_info(pinned, ref)
-        if not self._tier_pinned(tier):
-            for reference in DEFAULT_TIER_MODELS.get(tier, ()):
-                info = self._registry_lookup(reference)
-                if info is not None and getattr(info, "provider", None) in self._providers:
-                    return self._resolve_info(info, ref)
-        if not runnable:
-            registered = ", ".join(sorted(self._providers)) or "none"
-            available = (
-                ", ".join(
-                    sorted(
-                        {
-                            str(getattr(info, "provider", "?"))
-                            for info in candidates
-                        }
-                    )
-                )
-                or "none"
-            )
-            raise ConfigError(
-                f"No runnable provider has a model for tier {tier!r} "
-                f"(reference {ref!r}); registered providers: {registered}; "
-                f"catalogue providers offering this tier: {available}"
-            )
-        return self._resolve_info(runnable[0], ref)
+
+    def tier_candidates(self, tier: str) -> tuple[str, ...]:
+        """The shared ordered routes for Settings, resolution and retries.
+
+        Keep disconnected candidates visible. Explicit pins are authoritative;
+        built-ins use their curated route order, not classification order.
+        """
+        pins = [ref for ref, assigned in dict(getattr(self._tiers, "overrides", {}) or {}).items()
+                if assigned == tier and ref not in getattr(self._tiers, "order", ())]
+        if pins:
+            return tuple(pins)
+        if tier in DEFAULT_TIER_MODELS and getattr(self._tiers, "builtin", None):
+            return DEFAULT_TIER_MODELS[tier]
+        listed = getattr(self._registry, "list", None)
+        infos = list(listed(tier=tier, selectable_only=False)) if callable(listed) else []
+        infos.sort(key=lambda info: getattr(getattr(info, "cost", None), "output", None) or 0, reverse=True)
+        # Price-based tiers prefer the priciest route, including skipped entries.
+        return tuple(f"{info.provider}/{info.id}" for info in infos)
 
     def _first_pinned(self, tier: str) -> Any | None:
         """The first runnable model the user pinned to ``tier``, in list order."""

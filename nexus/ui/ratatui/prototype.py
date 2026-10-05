@@ -709,7 +709,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "completions": getattr(shell, "completions", []) if shell else [],
             "generation": shell.generation if shell else 0,
             "panel_title": escape_controls(shell.panel_title) if shell else "",
-            "panel_hint": escape_controls(getattr(shell, "panel_hint", "")) if shell else "",
+            "panel_hint": ("← areas · → page · ↑↓ select · Enter open · Alt+↑↓ reorder · Delete remove · Esc back" if shell and shell.settings_nav is not None else escape_controls(getattr(shell, "panel_hint", "")) if shell else ""),
             "panel_lines": [escape_controls(line) for line in shell.panel_lines] if shell else [],
             "panel_tones": list(shell.panel_tones) if shell else [],
             "items": [{**item, "label": escape_controls(item["label"]),
@@ -856,6 +856,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                 *[item["operation"] for item in snapshot.get("inline_images", [])],
                 *[item.get("operation") for item in shell.items],
                 *[item.get("toggle_operation") for item in shell.items if not item.get("toggle_locked")],
+                *[item.get(key) for item in shell.items for key in ("move_up", "move_down", "remove")],
                 *_block_operations(snapshot["blocks"])] if op}
             snapshot["completion_bell"] = controller.completion_bell
             shell.notify_completion()
@@ -1033,6 +1034,8 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     if not await shell.workflows.speak_stop():
                         await shell.cancel()
                 elif action["type"] == "dismiss":
+                    if shell.panel_loading:
+                        continue
                     if await shell.workflows.speak_stop():
                         continue
                     form = shell.workflows.form
@@ -1069,7 +1072,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                                 shell.notice = "Question already answered by another client"
                 elif action["type"] == "operation":
                     operation = action.get("operation")
-                    if operation and json.dumps(operation, sort_keys=True) in allowed_operations:
+                    if operation and json.dumps(operation, sort_keys=True) in allowed_operations and not shell.panel_loading:
                         if operation["kind"] in {"block_toggle", "turn_toggle"} and shell.local_transcript:
                             continue  # disclosure belongs exclusively to Rust
                         if operation["kind"] == "block_toggle":
@@ -1141,7 +1144,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                 elif action["type"] == "nav_select":
                     from ...ui_support.settings_help import SETTINGS_SECTIONS
                     index = int(action["text"])
-                    if 0 <= index < len(SETTINGS_SECTIONS) and SETTINGS_SECTIONS[index][0]:
+                    if not shell.panel_loading and 0 <= index < len(SETTINGS_SECTIONS) and SETTINGS_SECTIONS[index][0]:
                         key = SETTINGS_SECTIONS[index][0]
                         await shell.workflows.settings_area("speech" if key == "speech" else key)
                 elif action["type"] == "model_sort":
