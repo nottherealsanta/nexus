@@ -398,39 +398,36 @@ here, so add a row when you add a file.
 
 | File | Purpose |
 | --- | --- |
-| `voice_settings.py` | Host-backed voice configuration shared by terminal surfaces |
-| `speech_settings.py` | Host-backed Kokoro `/speak` settings with safe `[speech]` TOML updates |
-| `shortcuts.py` | Shared terminal shortcut and leader reference |
-| `settings_help.py` | One-line help per Settings area, shared by both consoles |
-| `speech_download.py` | Rules and wording for the `/speak` model download, shared by both clients |
-| `tier_settings.py` | Rows, labels and help text for Settings → Models, Session titles and an agent's Tiers row |
-| `session_status.py` | Shared session-card status words, relative age and sub-line |
-| `session_groups.py` | Shared project and local-date grouping for terminal session lists |
-| `session_controller.py` | Shared host-client lifecycle, selection and canonical reducer seam |
-
-| File | Purpose |
-| --- | --- |
 | `__init__.py` | Pure presentation helpers shared by terminal surfaces |
 | `agent_frontmatter.py` | Read and rewrite the simple `key: value` frontmatter of an agent `*.md` |
-| `native_schedule.py` | `UpdateCoalescer`: frame-rate coalescing of native bridge updates; user actions flush immediately |
-| `native_images.py` | Bounded host-backed draft and submitted image previews for the desktop; no path or remote URL reads |
 | `clipboard.py` | Bounded local system clipboard image reading for terminal attachment uploads |
+| `completion.py` | Toolkit-free composer completion shared by the native shell |
 | `context.py` | Pure display projections for context preview and session usage |
-| `hints.py` | Randomized tips shown in the middle of an empty session (mirrored in `js/hints.js`) |
+| `context_header.py` | Toolkit-free context header blocks, agent colors and tool grouping shared by both shells |
+| `details.py` | Toolkit-free details sidebar data (session rows, modified files, MCP rows) shared by both shells |
 | `fuzzy.py` | Shared fuzzy matcher (score and match positions) for the command palette and model picker |
+| `hints.py` | Randomized tips shown in the middle of an empty session (mirrored in `js/hints.js`) |
 | `mock_args.py` | Shared `/mock` argument handling for the chat surfaces |
 | `mock_cli.py` | `nexus mock list\|run\|clean` (dev mode only) |
+| `model_choice.py` | Toolkit-free model picker sort, fuzzy rank, grouping and effort rules |
+| `native_images.py` | Bounded host-backed draft and submitted image previews for the desktop; no path or remote URL reads |
+| `native_schedule.py` | `UpdateCoalescer`: frame-rate coalescing of native bridge updates; user actions flush immediately |
 | `prompt_history.py` | Bounded durable prompt history for the native composer |
 | `prompts.py` | UI-neutral choices for operator prompts: approvals and agent questions |
+| `session_controller.py` | Shared host-client lifecycle, selection and canonical reducer seam |
+| `session_groups.py` | Shared project and local-date grouping for terminal session lists |
+| `session_status.py` | Shared session-card status words, relative age and sub-line |
+| `settings_help.py` | One-line help per Settings area, shared by both consoles |
+| `shortcuts.py` | Shared terminal shortcut and leader reference |
+| `speech_download.py` | Rules and wording for the `/speak` model download, shared by both clients |
+| `speech_settings.py` | Host-backed Kokoro `/speak` settings with safe `[speech]` TOML updates |
 | `text.py` | Control-safe, credential-redacted text for terminal presentation |
+| `tier_settings.py` | Rows, labels and help text for Settings → Models, Session titles and an agent's Tiers row |
 | `timeline.py` | Pure formatting and filtering for reducer-backed conversation timelines |
 | `tool_details.py` | Presentable tool call details: every parameter and output, none of the JSON |
 | `usage.py` | Provider usage formatting shared by surfaces (`ProvidersUsageResult`) |
-| `details.py` | Toolkit-free details sidebar data (session rows, modified files, MCP rows) shared by both shells |
-| `context_header.py` | Toolkit-free context header blocks, agent colors and tool grouping shared by both shells |
-| `completion.py` | Toolkit-free composer completion shared by the native shell |
-| `model_choice.py` | Toolkit-free model picker sort, fuzzy rank, grouping and effort rules |
 | `voice_capture.py` | Bounded 16 kHz microphone capture for TUI dictation |
+| `voice_settings.py` | Host-backed voice configuration shared by terminal surfaces |
 
 ### `nexus/view/`
 

@@ -31,7 +31,7 @@ With no subcommand, `nexus` opens `chat`. Bare `nexus voice` shows voice status.
 | `claude init` | set up the Claude Agent SDK provider |
 | `update [--channel stable\|git --ref --version --no-restart]` | upgrade Nexus and restart running daemons ([release.md](release.md)) |
 | `searchserver start` | start the local SearXNG Docker service |
-| `mock list\|run\|clean` | dev mode scenarios |
+| `mock list\|run\|all\|clean` | dev mode scenarios |
 
 ## Layout
 
@@ -63,6 +63,7 @@ names, usage, summaries, aliases). `parse` resolves aliases to the canonical nam
 
 | Command | Usage | Aliases | Summary |
 | --- | --- | --- | --- |
+| `/attach` | `<path> \| clear` | | attach an image or document |
 | `/new` | `[id]` | `/clear` | start a new session |
 | `/sessions` | `[id]` | `/session` | list and switch |
 | `/model` | `[list\|tier\|provider/model\|id]` | | list models or set this session's model |

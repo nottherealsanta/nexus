@@ -33,11 +33,12 @@ inward-only exceptions. Errors are
 | Approvals | `PermissionResolve` `QuestionAnswer` |
 | Models | `ModelsList` `ModelShow` `ModelTiers` `ModelTierSet` `ModelTierReset` `AgentMaxTierSet` `ModelsRefresh` `ModelSelect` `ReasoningEffortSelect` |
 | Session titles | `SessionTitleSettings` `SessionTitleSettingsSet` |
-| Speech | `Speak` `SpeechStatus` `SpeechPrepare` |
+| Attachments | `AttachmentPrepare` `AttachmentPreview` |
+| Speech | `Speak` `SpeakStop` `SpeechStatus` `SpeechPrepare` |
 | Agents | `AgentsList` `AgentCurrent` `AgentSelect` `AgentReset` `AgentDefaultSet` `AgentTranscript` |
-| Context and tools | `ContextInspect` `ContextExtensionSelect` `ToolsList` |
+| Context and tools | `ContextInspect` `ContextMcpLoadingSelect` `ContextExtensionSelect` `ToolsList` |
 | Extensions | `ExtensionsReload` `ExtensionsList` `ExtensionsValidate` `ExtensionsTrash` |
-| Settings and setup | `SettingsInventory` `SettingsRead` `SettingsWrite` `SettingsReset` `SettingsDelete` `SetupStatus` `SetupSave` |
+| Settings and setup | `SettingsInventory` `SettingsRead` `SettingsMcpLoadingSet` `SettingsWrite` `SettingsReset` `SettingsDelete` `SetupStatus` `SetupSave` |
 | Providers | `ProvidersStatus` `ProviderLogin` `ProviderLoginPoll` `ProviderLoginCode` `ProviderLoginCancel` `ProviderKeySet` `ProviderLogout` `ProvidersUsage` |
 | Worktrees | `WorktreeList` `WorktreeInspect` `WorktreeReview` `WorktreeAcknowledge` `WorktreeIntegrate` `WorktreeDiscard` |
 | Workspace | `FileSearch` `GitDiff` `LogsRead` |
