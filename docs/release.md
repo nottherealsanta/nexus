@@ -235,7 +235,8 @@ Config lives in `release-please-config.json`:
    - the GitHub release has the installer, `SHA256SUMS` and dists
    - `uv tool install nexus-harness && nexus --version` on a clean machine prints the
      version (PyPI's index can lag a minute or two, so `nexus update` may not see a
-     brand-new release right away; `uv tool upgrade` has no refresh flag, so retry)
+     brand-new release right away even though it always forces a live lookup with
+     `--refresh-package`; retry after the index catches up)
    - Python 3.12 or older refuses the wheel with "requires Python >=3.13"
 
 ### Overrides
@@ -269,7 +270,7 @@ Config lives in `release-please-config.json`:
 
   | Situation | Command |
   | --- | --- |
-  | PyPI install, stable | `uv tool upgrade nexus-harness` |
+  | PyPI install, stable | `uv tool install --force --refresh-package nexus-harness --python X.Y "nexus-harness[extras]"` |
   | Git install, stable (**migration**) | `uv tool install --force --refresh-package nexus-harness --python X.Y "nexus-harness[extras]"` (`--refresh-package` is valid on `install`, not on `upgrade`) |
   | `--version V` | `uv tool install --force --python X.Y "nexus-harness[extras]==V"` |
   | `--channel git [--ref R]` | `uv tool install --force --reinstall --python X.Y "nexus-harness[extras] @ git+https://github.com/nottherealsanta/nexus@R"` |

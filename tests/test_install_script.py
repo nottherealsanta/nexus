@@ -233,7 +233,8 @@ def test_update_command_argv():
 
     kw = {"python": "3.14", "extras": []}
     assert update_command("/u/uv", "pypi", **kw) == [
-        "/u/uv", "tool", "upgrade", "nexus-harness",
+        "/u/uv", "tool", "install", "--force", "--refresh-package", "nexus-harness",
+        "--python", "3.14", "nexus-harness",
     ]
     # migration: a git install moves to PyPI, keeping extras and the Python minor
     assert update_command("/u/uv", "git", python="3.14", extras=["documents"]) == [
