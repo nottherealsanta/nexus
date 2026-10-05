@@ -114,7 +114,7 @@ def test_native_bridge_keyboard_and_terminal_restoration():
         assert bells == [True]
         os.write(master, b"\t\x1b[A\r")
         assert read_action() == {"type": "operation", "operation": {"kind": "tool_page", "id": "t1"}, "generation": 0}
-        process.stdin.write((json.dumps({"schema": 1, "revision": 3,
+        process.stdin.write((json.dumps({"schema": 1, "revision": 5,
             "title": "Nexus PTY", "status": "awaiting_permission", "lines": [],
             "prompt": {"kind": "permission", "id": "permission-1", "lines": ["Run shell?"],
                        "choices": [{"label": "Allow once", "value": "allow_once", "key": "y", "disabled": False}]}}) + "\n").encode())
@@ -122,14 +122,14 @@ def test_native_bridge_keyboard_and_terminal_restoration():
         time.sleep(.1)
         os.write(master, b"y")
         assert read_action() == {"type": "answer", "text": "permission-1", "value": "allow_once", "generation": 0}
-        process.stdin.write((json.dumps({"schema": 1, "revision": 4,
+        process.stdin.write((json.dumps({"schema": 1, "revision": 6,
             "title": "Nexus", "status": "idle", "panel_title": "Settings file",
             "form": {"id": "form-1", "body": "initial", "secret": False, "autosave": False}}) + "\n").encode())
         process.stdin.flush()
         time.sleep(.1)
         os.write(master, b"!\x13")
         assert read_action() == {"type": "save", "form": "form-1", "body": "initial!", "revision": 1, "generation": 0}
-        process.stdin.write((json.dumps({"schema": 1, "revision": 5,
+        process.stdin.write((json.dumps({"schema": 1, "revision": 7,
             "title": "Nexus", "status": "idle", "panel_title": "API key",
             "form": {"id": "secret-1", "body": "", "secret": True, "autosave": False}}) + "\n").encode())
         process.stdin.flush()
@@ -138,16 +138,16 @@ def test_native_bridge_keyboard_and_terminal_restoration():
         # Escape cancels a credential form; only explicit Ctrl+S may save it.
         assert read_action() == {"type": "dismiss", "text": ""}
         # Bounded modal: mouse selects an item; outside click dismisses without touching chat.
-        process.stdin.write((json.dumps({"schema": 1, "revision": 6, "status": "idle",
+        process.stdin.write((json.dumps({"schema": 1, "revision": 8, "status": "idle",
             "panel_title": "Commands", "panel_layout": "modal", "restore": "keep this draft",
             "items": [{"label": "Context", "command": "/context"}]}) + "\n").encode())
         process.stdin.flush()
         time.sleep(.1)
-        os.write(master, b"\x1b[<0;10;10M")  # first item row; moves with the composer height
+        os.write(master, b"\x1b[<0;10;11M")  # first item row; moves with the composer height
         assert read_action() == {"type": "pick", "text": "/context", "generation": 0}
         os.write(master, b"\x1b[<0;1;1M")
         assert read_action() == {"type": "dismiss", "text": ""}
-        process.stdin.write((json.dumps({"schema": 1, "revision": 7, "status": "idle",
+        process.stdin.write((json.dumps({"schema": 1, "revision": 9, "status": "idle",
             "panel_title": "Provider usage", "panel_layout": "modal", "panel_loading": True,
             "panel_lines": ["Cached limits"]}) + "\n").encode())
         process.stdin.flush()
@@ -155,7 +155,7 @@ def test_native_bridge_keyboard_and_terminal_restoration():
         os.write(master, b"r")
         assert read_action() == {"type": "command", "text": "/usage"}
         # A child page is read-only; keys and paste cannot change the root draft.
-        process.stdin.write((json.dumps({"schema": 1, "revision": 8, "status": "done",
+        process.stdin.write((json.dumps({"schema": 1, "revision": 10, "status": "done",
             "agent_page": "child", "title": "advisor · Inspect", "sessions_sidebar": False}) + "\n").encode())
         process.stdin.flush()
         time.sleep(.1)
@@ -163,7 +163,7 @@ def test_native_bridge_keyboard_and_terminal_restoration():
         time.sleep(.1)
         os.write(master, b"\x1b")
         assert read_action() == {"type": "dismiss", "text": ""}
-        process.stdin.write((json.dumps({"schema": 1, "revision": 8, "status": "idle"}) + "\n").encode())
+        process.stdin.write((json.dumps({"schema": 1, "revision": 10, "status": "idle"}) + "\n").encode())
         process.stdin.flush()
         time.sleep(.1)
         os.write(master, b"\r")
