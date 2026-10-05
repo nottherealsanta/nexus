@@ -2852,8 +2852,6 @@ pub fn composer_rows(area: Rect, s: &Snapshot) -> Vec<Rect> {
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
     ])
     .split(area)
     .to_vec()
