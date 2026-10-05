@@ -1,5 +1,17 @@
 # Sessions and durable state
 
+Opening a new chat reserves an **in-memory draft**, not a saved session. Setup
+and presence events remain in memory and snapshots are not written. The first
+user message atomically saves the draft's buffered records and the session row.
+Promotion preserves the derived title source (`first_message`), so automatic
+naming can replace that title without overwriting a user-set title.
+An accepted `input.queued` submission also saves it immediately so queued user
+work survives a daemon restart. Unsubmitted drafts disappear on restart and do
+not appear in workspace or cross-project session lists. Existing records with
+no user message or accepted queued input are hidden from those lists, not
+purged. Assistant-only messages do not qualify a chat for listing.
+
+
 `nexus/session/` owns the append-only record of every conversation. The log is
 the source of truth: views, snapshots, exports and forks are all derived from it.
 
@@ -145,10 +157,3 @@ default) and `SessionManager.set_auto_title` stores the result (`auto`).
   Clients see the new title on their normal session-list refresh.
 - Settings → Session titles switches it off and shows which model titles go to.
 
-
-## Durable MCP loading
-
-`context.mcp_loading_selected {server, mode}` records a per-server choice; null
-removes the override. `context.mcp_loading_frozen {server: mode}` records the
-first-turn effective modes. Reopening or forking replays these events. Choices
-lock after the first turn, and subsequently added servers default to Search.

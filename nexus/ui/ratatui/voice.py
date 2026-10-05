@@ -27,9 +27,15 @@ class Voice:
         self.finish_task = None
         self.auto_send = False
 
-    async def open(self, *, download=False):
+    async def open(self, *, download=False, prepare=True):
         status = await self.shell.client.voice_status()
         ready = getattr(status, "state", "") in {"ready", "loaded"} or getattr(status, "loaded", False)
+        if (
+            prepare and not download and status.enabled and status.cached
+            and not ready and status.state not in {"loading", "downloading"}
+        ):
+            status = await self.shell.client.voice_prepare(allow_download=False)
+            ready = getattr(status, "state", "") in {"ready", "loaded"} or getattr(status, "loaded", False)
         if ready and status.enabled and not download:
             await self.start()
             return
@@ -40,10 +46,12 @@ class Voice:
         elif status.state in {"loading", "downloading"}:
             rows = [("Refresh model status", {"kind": "voice"})]
         elif status.cached:
-            rows = [("Load voice model", {"kind": "voice_prepare", "allow_download": False})]
+            rows = [("Retry loading voice model", {"kind": "voice_prepare", "allow_download": False})]
         else:
             rows = [("Download voice model…", {"kind": "confirm", "label": "Download the local voice model (~179 MB)?",
                      "next": {"kind": "voice_prepare"}})]
+        if status.message:
+            rows = [(f"{label} · {status.message}", operation) for label, operation in rows]
         self.shell.workflows.menu("Local dictation", rows, [f"{key}: {getattr(status, key)}" for key in status.__struct_fields__])
 
     async def start(self):

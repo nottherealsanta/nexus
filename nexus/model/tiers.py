@@ -32,8 +32,32 @@ from typing import Any, Self
 
 from ..errors import ConfigError
 
+#: Ordered built-in routes, consulted only when the user has not pinned a tier.
+DEFAULT_TIER_MODELS = {
+    "low": (
+        "github-copilot/gpt-6-luna",
+        "codex/gpt-6-luna",
+        "opencode-go/deepseek-v4.1-flash",
+    ),
+    "medium": (
+        "codex/gpt-6.1-sol",
+        "opencode-go/deepseek-v4.1-flash",
+    ),
+    "high": (
+        "codex/gpt-6.1-sol",
+        "claude-agent/claude-sonnet-5-5",
+    ),
+}
+DEFAULT_TIER_EFFORTS = {
+    ("medium", "codex/gpt-6.1-sol"): "low",
+    ("medium", "opencode-go/deepseek-v4.1-flash"): "max",
+    ("high", "codex/gpt-6.1-sol"): "low",
+}
+
 __all__ = [
     "BUILTIN_TIERS",
+    "DEFAULT_TIER_MODELS",
+    "DEFAULT_TIER_EFFORTS",
     "COST_LOW_MAX",
     "COST_MEDIUM_MAX",
     "DEFAULT_TIER",
@@ -80,6 +104,8 @@ BUILTIN_TIERS: Mapping[str, str] = {
     "anthropic/claude-opus-4-5": HIGH,
     "openai/gpt-5.6": HIGH,
     "anthropic/claude-sonnet-5": MEDIUM,
+    "anthropic/claude-sonnet-5-5": MEDIUM,
+    "openai/gpt-6.1-sol": HIGH,
     "anthropic/claude-sonnet-4-5": MEDIUM,
     "openai/gpt-5": MEDIUM,
     "anthropic/claude-haiku-4-5": LOW,

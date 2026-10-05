@@ -1,7 +1,7 @@
-"""Native workflow journeys against the real host facade (no network, no Textual).
+"""Native workflow journeys against the real host facade (no network, no native terminal).
 
-Each journey mirrors the matching Textual screen (``tui_settings``, ``tui_providers``,
-``tui_setup``, ``WorktreesScreen``, ``attachments``) step by step.
+Journeys exercise native settings, providers, first-run setup, worktrees and
+attachments step by step.
 """
 from __future__ import annotations
 
@@ -78,7 +78,7 @@ async def test_settings_navigation_scope_and_back_stack(settings_shell):
     await flows.operate(op(shell, "Switch to project"))
     assert shell.panel_title == "Settings · project · sections"
     await flows.operate(op(shell, "Agents"))
-    # Agents are always global: the scope toggle never applies (Textual hides it).
+    # Agents are always global: the scope toggle never applies (native terminal hides it).
     assert shell.panel_title == "Settings · global · agents"
     assert labels(shell)[0] == "New sessions start with…"
     ordered = [label for label in labels(shell) if "built-in" in label]
@@ -183,7 +183,7 @@ async def test_reset_category_lists_removed_files_and_returns_to_fresh_list(sett
     await flows.operate({"kind": "settings", "scope": "project", "category": "skills"})
     await flows.operate(op(shell, "New file"))
     await flows.save(flows.form["id"], "demo", 1)
-    assert "name: demo" in flows.form["body"]  # same starter template as Textual
+    assert "name: demo" in flows.form["body"]  # same starter template as native terminal
     await flows.save(flows.form["id"], flows.form["body"], 2)
     flows.back()
     await flows.operate(op(shell, "Reset category"))
@@ -438,7 +438,7 @@ async def test_every_attachment_kind_is_numbered_previewed_and_removal_keeps_num
         for name in files:
             await shell.command("/attach", [str(tmp_path / name)])
             reference = shell.composer_insert
-            assert reference.split()[0] == ("image" if name.endswith(".png") else "document")
+            assert reference.startswith("[image " if name.endswith(".png") else "[document ")
         assert [shell.attachment_label(i) for i in range(6)] == ["image 1", "image 2", "document 1", "document 2", "document 3", "document 4"]
         assert shell.panel_title.startswith("Attachment · ")  # converted (markdown) documents open their preview
         await shell.command("/attach", [])
@@ -450,8 +450,8 @@ async def test_every_attachment_kind_is_numbered_previewed_and_removal_keeps_num
         assert [shell.attachment_label(i) for i in range(5)] == ["image 2", "document 1", "document 2", "document 3", "document 4"]
         assert [item["label"].split(" · ")[0] for item in shell.items] == ["image 2", "document 1", "document 2", "document 3", "document 4"]
         await shell.command("/attach", [str(tmp_path / "a.png")])  # a new image never reuses a removed number
-        assert shell.composer_insert == "image 3"
-        await shell.submit("see image 2 and image 3")
+        assert shell.composer_insert == "[image 3]"
+        await shell.submit("see [image 2] and [image 3]")
         text, kwargs = sent[0]
         assert kwargs["attachment_labels"] == ["image 2", "document 1", "document 2", "document 3", "document 4", "image 3"]
         assert len(kwargs["attachments"]) == 6 and shell.attachments == [] and shell.attachment_labels == {}

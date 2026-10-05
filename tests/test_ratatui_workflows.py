@@ -93,7 +93,7 @@ async def test_voice_finish_inserts_final_not_partial(shell, monkeypatch, send):
     assert not shell.client.voice_transcribe.await_args.kwargs.get("partial", False)
 
 
-def test_preferences_preserve_textual_keys_and_bound_favorites(tmp_path):
+def test_preferences_preserve_saved_keys_and_bound_favorites(tmp_path):
     import json
     from nexus.ui.ratatui.preferences import Preferences
     path = tmp_path / "tui.json"
@@ -475,8 +475,8 @@ async def test_extension_dialog_has_separate_inspection_and_toggle(shell, catego
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("state,cached,label", [
-    ("absent", True, "Load voice model"),
-    ("error", True, "Load voice model"),
+    ("absent", True, "Retry loading voice model"),
+    ("error", True, "Retry loading voice model"),
     ("loading", True, "Refresh model status"),
     ("downloading", False, "Refresh model status"),
     ("absent", False, "Download voice model…"),
@@ -485,7 +485,7 @@ async def test_voice_model_menu_distinguishes_cache_from_loaded_state(shell, sta
     shell.client.voice_status = AsyncMock(return_value=p.VoiceStatusResult(
         enabled=True, state=state, cached=cached,
     ))
-    await shell.voice.open()
+    await shell.voice.open(prepare=False)
     assert shell.items[0]["label"] == label
     operation = shell.items[0]["operation"]
     if cached and state not in {"loading", "downloading"}:
@@ -500,6 +500,41 @@ async def test_voice_model_menu_distinguishes_cache_from_loaded_state(shell, sta
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["absent", "error"])
+async def test_voice_command_loads_cached_model_then_records(shell, monkeypatch, state):
+    from nexus.ui.ratatui import voice
+    recorder = SimpleNamespace(start=lambda: None, stop=lambda: b"", full=False, duration=0)
+    monkeypatch.setattr(voice, "Recorder", lambda **kwargs: recorder)
+    shell.client.voice_status = AsyncMock(return_value=p.VoiceStatusResult(
+        enabled=True, state=state, cached=True))
+    shell.client.voice_prepare = AsyncMock(return_value=p.VoiceStatusResult(
+        enabled=True, state="loading", cached=True))
+    await shell.command("/voice", ())
+    shell.client.voice_prepare.assert_awaited_once_with(allow_download=False)
+    assert shell.items[0]["label"] == "Refresh model status"
+    assert shell.voice.phase == "idle"
+    await shell.voice.open(prepare=False)
+    shell.client.voice_prepare.assert_awaited_once()
+    shell.client.voice_status.return_value = p.VoiceStatusResult(enabled=True, state="ready", cached=True)
+    await shell.voice.open(prepare=False)
+    assert shell.voice.phase == "recording"
+    assert shell.panel_title == ""
+    shell.client.voice_cancel = AsyncMock()
+    await shell.voice.discard()
+
+
+@pytest.mark.asyncio
+async def test_voice_failed_load_does_not_retry_on_poll(shell):
+    shell.client.voice_status = AsyncMock(return_value=p.VoiceStatusResult(
+        enabled=True, state="error", cached=True, message="Model load failed"))
+    shell.client.voice_prepare = AsyncMock()
+    await shell.voice.open(prepare=False)
+    shell.client.voice_prepare.assert_not_awaited()
+    assert shell.items[0]["label"] == "Retry loading voice model · Model load failed"
+    assert shell.voice.phase == "idle"
+
+
+@pytest.mark.asyncio
 async def test_voice_settings_cached_model_needs_no_download_consent(shell):
     shell.client.voice_status = AsyncMock(return_value=p.VoiceStatusResult(
         enabled=True, state="absent", cached=True,
@@ -510,27 +545,3 @@ async def test_voice_settings_cached_model_needs_no_download_consent(shell):
     shell.client.voice_prepare = AsyncMock()
     await shell.workflows.operate(operation)
     shell.client.voice_prepare.assert_awaited_once_with(allow_download=False)
-
-
-@pytest.mark.asyncio
-async def test_mcp_loading_details_and_lock(shell):
-    shell.preview = p.ContextInspectResult(session="s", mcp_servers=[{"name": "fs", "tool_loading": "search", "schema_tokens": 123}], context_locked=False)
-    await shell.workflows.operate({"kind": "context_extension_details", "category": "mcp", "name": "fs"})
-    assert shell.items[0]["label"] == "Find tools by search"
-    assert "123 tokens" in shell.items[1]["label"]
-    shell.preview = p.ContextInspectResult(session="s", mcp_servers=[{"name": "fs"}], context_locked=True)
-    await shell.workflows.operate({"kind": "context_extension_details", "category": "mcp", "name": "fs"})
-    assert [item["label"] for item in shell.items] == ["Back"]
-
-
-@pytest.mark.asyncio
-async def test_mcp_loading_command_and_settings_hash(shell):
-    preview = p.ContextInspectResult(session="s", mcp_servers=[{"name": "fs", "tool_loading": "all"}])
-    shell.client.select_context_mcp_loading = AsyncMock(return_value=preview)
-    shell.client.inspect_context = AsyncMock(return_value=preview)
-    await shell.workflows.operate({"kind": "context_mcp_loading", "name": "fs", "mode": "all"})
-    shell.client.select_context_mcp_loading.assert_awaited_once_with("s", "fs", "all")
-    assert "all" in shell.items[0]["label"]
-    shell.client.settings_read = AsyncMock(return_value=p.SettingsReadResult(body="{}", sha256="hash", rel_path="mcp.json", builtin=False))
-    await shell.workflows.operate({"kind": "settings_mcp_loading", "scope": "project", "name": "fs", "tokens": 123})
-    assert shell.items[1]["operation"]["sha256"] == "hash"

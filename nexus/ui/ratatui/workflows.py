@@ -10,7 +10,7 @@ from ...ui_support.completion import root_agents
 
 import uuid
 
-from ...ui_support.text import escape_controls, redact
+from ...ui_support.text import escape_controls
 from .actions import labelled
 from .speak_pages import SpeakPages
 from .tier_pages import TierPages
@@ -69,7 +69,7 @@ class Workflows(TierPages, SpeakPages):
         self.form = None
 
     def edit(self, title, body, target, *, secret=False, autosave=False, replace=False):
-        """Open an editor; Escape returns to the menu that opened it (Textual keeps the list)."""
+        """Open an editor; Escape returns to the menu that opened it."""
         if self.shell.panel_title and not replace:
             self.stack.append((self.shell.panel_title, self.shell.panel_lines, self.shell.items, self.form, self.form_target, self.shell.panel_layout, self.shell.panel_format, self.shell.panel_tones))
             self.stack = self.stack[-20:]
@@ -117,7 +117,7 @@ class Workflows(TierPages, SpeakPages):
         else:
             items = [item for item in inventory.items if item.category == category]
             order = {"build": 0, "orchestrator": 1, "advisor": 2, "task": 3, "quick": 4}
-            if category == "agents":  # build first, built-in subagents, then custom (Textual order)
+            if category == "agents":  # build first, built-in subagents, then custom
                 items.sort(key=lambda item: (order.get(item.id, 9), item.id.casefold()))
             rows = [(escape_controls(item.label) + (" · built-in" if item.builtin else " · edited" if getattr(item, "overrides_builtin", False) else ""),
                      {"kind": "settings_read", "scope": scope, "category": category, "id": item.id})
@@ -329,7 +329,7 @@ class Workflows(TierPages, SpeakPages):
         elif kind == "confirm":
             label, lines = operation["label"], list(operation.get("lines") or [])
             following = operation["next"]
-            if following.get("kind") == "settings_delete":  # same wording as Textual
+            if following.get("kind") == "settings_delete":  # Keep confirmation wording consistent
                 if following.get("builtin"):
                     raise ValueError("Built-in defaults cannot be deleted; edit and save to override them")
                 label = (f"Reset {following['id']} to the built-in default? Your edits move to trash."
@@ -455,23 +455,6 @@ class Workflows(TierPages, SpeakPages):
             group = next(g for g in tool_groups(list(self.shell.preview.tools)) if g.key == operation["group"])
             entry = group.entries[operation["index"]]
             self.menu(f"Tool · {entry.title} · ~{_compact_tokens(entry.tokens)} tokens", [("Back", {"kind": "back"})], entry.body.splitlines(), layout="context")
-        elif kind == "context_mcp_loading":
-            self.shell.preview = await self.client.select_context_mcp_loading(
-                self.shell.controller.session, operation["name"], operation["mode"])
-            self.shell.panel_title = ""
-            await self.context_extensions("mcp")
-        elif kind == "settings_mcp_loading":
-            file = await self.client.settings_read(operation["scope"], "mcp", "mcp.json")
-            self.menu(f"Tool loading · {operation['name']}", [
-                ("Find tools by search", {**operation, "kind": "settings_mcp_loading_set", "mode": "search", "sha256": file.sha256}),
-                (f"Load all tools into context (~{operation.get('tokens', 0)} tokens)", {**operation, "kind": "settings_mcp_loading_set", "mode": "all", "sha256": file.sha256})],
-                ["Applies to new sessions. Existing sessions keep their frozen loading mode."])
-        elif kind == "settings_mcp_loading_set":
-            result = await self.client.settings_mcp_loading_set(operation["scope"], operation["name"], operation["mode"], operation["sha256"])
-            if result.status == "conflict":
-                raise ValueError("MCP settings changed; reopen this page before saving")
-            await self.refresh_settings_pages(operation["scope"], "mcp")
-            await self.settings(operation["scope"], "mcp")
         elif kind == "context_toggle":
             self.shell.preview = await self.client.select_context_extension(self.shell.controller.session,
                 operation["category"], operation["name"], operation["enabled"])
@@ -490,13 +473,7 @@ class Workflows(TierPages, SpeakPages):
             preview = self.shell.preview
             rows = preview.skills_index if operation["category"] == "skills" else preview.mcp_servers
             row = next((row for row in rows if (row.get("name") or row.get("id")) == operation["name"]), {})
-            actions = [("Back", {"kind": "back"})]
-            if operation["category"] == "mcp" and not preview.context_locked and not self.agent_page_id:
-                actions = [
-                    ("Find tools by search", {"kind": "context_mcp_loading", "name": operation["name"], "mode": "search"}),
-                    (f"Load all tools into context (~{row.get('schema_tokens', 0)} tokens)", {"kind": "context_mcp_loading", "name": operation["name"], "mode": "all"}),
-                    ("Follow configuration", {"kind": "context_mcp_loading", "name": operation["name"], "mode": None}), *actions]
-            self.menu(str(operation["name"]), actions, labelled(row), layout="context")
+            self.menu(str(operation["name"]), [("Back", {"kind": "back"})], labelled(row), layout="context")
         elif kind == "context_extensions":
             await self.context_extensions(operation["category"])
         elif kind == "agent_page":
@@ -691,7 +668,7 @@ class Workflows(TierPages, SpeakPages):
             await self.shell.voice.start()
         elif kind == "voice_prepare":
             await self.client.voice_prepare(allow_download=operation.get("allow_download", True))
-            await self.shell.voice.open()
+            await self.shell.voice.open(prepare=False)
         elif kind == "setup":
             status = await self.client.setup_status()
             rows = [(f"Use {row.get('label', row['id'])} · newest model", {"kind": "setup_save", "provider": row["id"], "model": ""})
@@ -706,7 +683,7 @@ class Workflows(TierPages, SpeakPages):
                 {"kind": "setup_save", "provider": row["provider"], "model": row["id"]}) for row in rows])
         elif kind == "setup_save":
             result = await self.client.setup_save(operation["provider"], operation["model"])
-            model = redact(escape_controls(result.global_model))
+            model = escape_controls(result.global_model)
             self.shell.show("Setup saved", "\n".join([f"Saved {model} as the default."] + (
                 ["Restart the daemon (nexus daemon stop) to use it."] if result.restart_required else ["Using it now · /model to change"])))
             if not result.restart_required:
@@ -752,7 +729,7 @@ class Workflows(TierPages, SpeakPages):
         return {"child_id": r.child_id, "review_id": r.review_id, "digest": r.digest}
 
     async def review_pages(self, child_id):
-        """Load every review page for one pinned review identity (Textual pages by 8 files)."""
+        """Load every review page for one pinned review identity."""
         import re
         first = await self.client.review_worktree(child_id, limit=REVIEW_PAGE_LIMIT)
         for value, pattern in ((first.review_id, r"[0-9a-f]{32}"), (first.digest, r"[0-9a-f]{64}")):
@@ -875,7 +852,7 @@ class Workflows(TierPages, SpeakPages):
             self.form["status"] = f"Built-in default · saving writes an override to {where}"
 
     def agent_page(self):
-        """An agent file as form rows (model and fallbacks) beside the prompt file (Textual's agent form)."""
+        """An agent file as form rows (model and fallbacks) beside the prompt file."""
         from ...ui_support.agent_frontmatter import MAX_FALLBACKS, agent_fields, fallback_items
         draft = self.agent_draft
         fields = agent_fields(draft["body"])
@@ -910,7 +887,7 @@ class Workflows(TierPages, SpeakPages):
             item["group"] = title
 
     async def agent_write(self, field, index, ref):
-        """Set (or clear) one agent field and save the file at once, like the Textual form."""
+        """Set (or clear) one agent field and save the file at once,."""
         from ...ui_support.agent_frontmatter import agent_fields, fallback_items
         draft = self.agent_draft
         fields = agent_fields(draft["body"])
@@ -993,7 +970,7 @@ class Workflows(TierPages, SpeakPages):
         for row in ordered:
             name = row.get("name") or row.get("id")
             scope = row.get("scope", "project" if category == "mcp" else "global")
-            items.append((f"{scope:<8} {name}" + (f" · {row.get('tool_count', 0)} · {row.get('tool_loading', 'search')}" if category == "mcp" else ""), {"kind": "context_extension_details", "category": category, "name": name}))
+            items.append((f"{scope:<8} {name}", {"kind": "context_extension_details", "category": category, "name": name}))
         self.menu(category.upper(), items,
                   ["Context locked after first turn" if locked else "Click a right-side toggle or press Space to switch; Enter shows details."], layout="context")
         for item, row in zip(self.shell.items, ordered):
@@ -1026,7 +1003,7 @@ def login_result(login):
 
 
 def new_file_body(category, name):
-    """Starter text for a new settings file (same templates as Textual)."""
+    """Starter text for a new settings file."""
     if category == "agents":
         return new_agent_template(name)
     if category == "skills":
@@ -1035,14 +1012,14 @@ def new_file_body(category, name):
 
 
 def session_rows(result, current: str = "", seen: dict | None = None, now: float | None = None):
-    """Project session cards: ``status``/``sub`` come from the helpers Textual's cards use.
+    """Project session cards: ``status``/``sub`` come from shared presentation helpers.
 
     ``seen`` records the last terminal-turn sequence viewed per session, so
     presence-only log activity cannot make a session appear newly finished.
     """
     from ...ui_support.session_groups import _session_groups
     from ...ui_support.session_status import session_status, session_subline
-    from ...ui_support.text import escape_controls, redact
+    from ...ui_support.text import escape_controls
     seen = {} if seen is None else seen
     groups = _session_groups([(row.workspace, row.session) for row in result.sessions], "")
     workspace_for = {id(row.session): row.workspace for row in result.sessions}
@@ -1055,8 +1032,8 @@ def session_rows(result, current: str = "", seen: dict | None = None, now: float
                     getattr(row, "completion_seq", getattr(row, "last_seq", 0)),
                 )
             status = session_status(row, seen, current)
-            rows.append({"id": row.id, "title": redact(escape_controls(row.title or "New Session")),
-                         "workspace": workspace_for[id(row)], "state": row.state, "group": redact(escape_controls(group)),
-                         "status": status, "sub": redact(escape_controls(session_subline(row, status, now, compact=True))),
+            rows.append({"id": row.id, "title": escape_controls(row.title or "New Session"),
+                         "workspace": workspace_for[id(row)], "state": row.state, "group": escape_controls(group),
+                         "status": status, "sub": escape_controls(session_subline(row, status, now, compact=True)),
                          "active": row.id == current})
     return rows

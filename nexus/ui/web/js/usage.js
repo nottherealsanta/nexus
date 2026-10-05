@@ -1,4 +1,3 @@
-// Provider usage modal body: port of nexus/ui_support/usage.py + ui/tui/usage.py.
 // One ProvidersUsage result renders as a section per connected provider with a
 // labelled bar per limit window (5-hour, weekly, monthly…), its reset time,
 // notes and the endpoint the numbers came from. Wording matches the TUI.

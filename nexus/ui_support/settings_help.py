@@ -1,4 +1,4 @@
-"""One-line help for each Settings area, shared by the Textual and native consoles."""
+"""One-line help for each Settings area, for the native console."""
 from __future__ import annotations
 
 SETTINGS_HELP: dict[str, str] = {
@@ -14,7 +14,7 @@ SETTINGS_HELP: dict[str, str] = {
     "soul": "Set instructions included in every conversation. Edit SOUL.md here; start a new session to use updated instructions.",
 }
 
-#: Settings areas in Textual's order: ``(key, label)``; a ``None`` key is a heading.
+#: Settings areas in the terminal's order: ``(key, label)``; a ``None`` key is a heading.
 SETTINGS_SECTIONS: tuple[tuple[str | None, str], ...] = (
     (None, "GENERAL"),
     ("appearance", "Appearance"), ("layout", "Layout"), ("keys", "Keyboard"), ("workspace", "Workspace"),

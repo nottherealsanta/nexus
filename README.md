@@ -4,8 +4,7 @@ A small, provider-agnostic Python agent harness. Nexus owns the agentic loop,
 the message and tool contracts, permissions, sessions, context, and the
 extension system; model providers are pluggable adapters behind one protocol.
 
-Runtime dependencies are `httpx`, `msgspec`, `mcp`, `keyring`, `textual`, and
-`textual-diff-view`. Python 3.13+ on macOS or
+Runtime dependencies include `httpx`, `msgspec`, `mcp`, and `rich`. Python 3.13+ on macOS or
 Linux. No vendor SDK, no agent framework, no OS sandbox.
 
 ## Install
@@ -54,7 +53,7 @@ version, `nexus daemon stop --all` stops every workspace daemon, and `nexus doct
 duplicate `nexus` binaries and daemons still running an older version. Uninstall with
 `uv tool uninstall nexus-harness` (sessions in `~/.nexus` are kept).
 
-The Textual chat shell is installed with the normal CLI runtime dependencies.
+Native wheels include the Ratatui chat executable. Source installs need a Rust toolchain to build it.
 `nexus chat` requires an interactive terminal; use `nexus run` for piped or
 non-interactive prompts.
 
@@ -89,7 +88,7 @@ nexus --workspace /path/to/project chat          # interactive terminal client (
 
 `init` creates editable files without overwriting anything that exists; it is
 local and needs no daemon. `run` takes a prompt, or `-` to read the prompt from
-stdin. `chat` is the full-screen Textual shell; `Ctrl+P` opens chat commands,
+stdin. `chat` is the full-screen native Ratatui shell; `Ctrl+P` opens chat commands,
 `Ctrl+N` starts a session, `Ctrl+O` opens the Sessions dialog, `Ctrl+F` forks,
 `Ctrl+B` / `Ctrl+L` toggle the sessions and details sidebars, `Ctrl+S` opens
 Settings, `Ctrl+U` shows plan usage and limits (5-hour, weekly, monthly) for every
@@ -111,31 +110,12 @@ visible. Generic historical event errors and failed turns remain available from
 prompt. Routine ready/completed status text is not shown. Runtime/model metadata
 sits below the composer, and errors/status feedback remain there when actionable.
 
-`tests/browser_serve.py` is a development/test helper, not a shipped surface: it
-is not installed with the package, `nexus` never imports it, and it is not a
-supported serving path. It exists because plain `textual serve`'s bundled xterm
-frontend reports every Enter variant as a bare carriage return, so Shift+Enter
-would submit instead of newlining; the helper adds a small serving-layer keyboard
-bridge that reports Shift/Ctrl+Enter as Kitty CSI-u, which the app already
-understands, and nothing else. Use it only to serve a local checkout with the
-contract intact, as `python tests/browser_serve.py --command "nexus chat"` does.
+`tests/browser_serve.py` is a loopback-only development helper for native PTY
+screenshots. It uses vendored MIT-licensed xterm assets and the native fixture
+bridge; it is not installed with Nexus.
 
-**Terminal support and limitations.** The terminal decides how Enter and
-Shift+Enter are encoded. `nexus chat` works wherever the terminal speaks the
-Kitty keyboard protocol — kitty, WezTerm, foot, Ghostty, recent iTerm2 — because
-Textual negotiates it and resolves `CSI 13;2u` to `Shift+Enter`. The Nexus
-key-protocol driver (`nexus/ui/tui/keys.py`) additionally decodes the older xterm
-`modifyOtherKeys` form (`CSI 27;2;13~`) for terminals or tmux setups that already
-emit it; that mode is not force-enabled, because doing so re-encodes printable
-shifted keys in a way Textual's parser does not preserve. `Alt+Enter` interrupts only where the terminal encodes it distinctly (`CSI 13;3u`, or the
-`modifyOtherKeys` form the driver rewrites); terminals that map it to `ESC CR`
-lose the modifier, and the app cannot recover it. Terminals that send a bare
-carriage return for *every* Enter cannot be distinguished — those bytes mean
-Enter — so there `Shift+Enter` submits and `Ctrl+J` (the `LF` byte) inserts the
-newline. `tests/test_tui_keys.py` pins the decoder against the real byte
-sequences, runs the driver under a pseudo-terminal, and drives the real
-`NexusTextualApp`/`ChatEditor` through that driver to assert Shift+Enter drafts a
-newline and Enter then sends it.
+The terminal must report modified Enter keys distinctly for Shift+Enter to work.
+Use Ctrl+J for a newline on terminals that send the same bytes for every Enter.
 
 Every command except `init`, `auth`, and `nexus daemon status|stop|logs` is a **client of
 a per-workspace daemon** — including `doctor`, `models`, `sessions`, `ext`,
@@ -190,7 +170,7 @@ nexus restart            # stop, then start a fresh daemon (picks up code/config
 | `nexus init` | Create `nexus.toml`, `SOUL.md`, `MEMORY.md` without overwriting. |
 | `nexus doctor [--explain-reload] [--json]` | Validate config, providers, registry, extensions, MCP, and state what is hot vs. restart-only. |
 | `nexus run <prompt\|->` | One turn. `--session NAME`, `--json` for headless JSONL. |
-| `nexus` / `nexus chat` | Interactive terminal client: the native Ratatui client by default, Textual when its executable is missing or with `--renderer textual`. `--session NAME`. Requires stdin/stdout TTY. |
+| `nexus` / `nexus chat` | Interactive terminal client: the native Ratatui client. `--session NAME`. Requires stdin/stdout TTY. |
 | `nexus web [--no-browser]` | Open the workspace in a local browser client served by the running daemon (one-use launch URL). |
 | `nexus replay <id> [--json]` | Re-render a session from its log (same path as `sessions replay`). |
 | `nexus daemon status\|stop\|logs` | Manage the workspace daemon. `status --json`; `logs --lines N`. |
@@ -1012,20 +992,10 @@ ANTHROPIC_API_KEY=... pytest -m live tests/test_anthropic_live.py
 pip install ruff
 ruff check nexus tests
 
-# Terminal key-protocol regression: raw Shift+Enter / Ctrl+Enter / Ctrl+J bytes
-# through the real decoder, a pseudo-terminal driver run, and an end-to-end PTY
-# run of the real NexusTextualApp/ChatEditor over that driver.
-pytest tests/test_tui_keys.py
-
-# Textual web rendering plus browser screenshots (writes ignored artifacts/visual-tui/).
-python tests/visual_tui_check.py
-
-# Real-browser functional check of the Textual shell: types into the editor,
-# asserts Shift+Enter newlines before Enter submits the multiline draft, opens
-# Commands, and captures screenshots. Uses the deterministic fixture transport
-# (no daemon or model) served through tests/browser_serve.py. Install the browser
-# once with `python -m playwright install chromium`.
-python tests/playwright_tui_check.py
+# Native terminal regression and screenshot checks
+cargo test --locked --manifest-path rust/tui/Cargo.toml
+pytest tests/test_ratatui_pty.py
+python tests/playwright_ratatui_check.py
 ```
 
 Tests use temporary workspaces and recorded fixtures; they need no network and

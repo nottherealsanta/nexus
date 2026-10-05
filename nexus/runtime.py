@@ -96,7 +96,9 @@ from .model.request import REASONING_EFFORT_ORDER, ModelRequest, ToolSchema
 from .model.router import ModelRouter
 from .model.reasoning_effort import ReasoningEffortSelection
 from .model.selection import ModelSelection
-from .model.tiers import DEFAULT_TIER, TierTable
+from .model.tiers import (
+    DEFAULT_TIER, DEFAULT_TIER_EFFORTS, TierTable,
+)
 from .net import OutboundHTTPService, SafeOutboundHTTPService
 from .net.local_search import LocalSearchHTTPService
 from .session import Session, SessionManager
@@ -742,6 +744,11 @@ class _ContextCoordinator:
                 )
             )
             resolved = self._resolve(provider_name, model)
+        if resolved is None and selection is None and agent_definition is not None:
+            # A stale agent default must not be routed through an unrelated
+            # workspace default. Preserve the requested route for descriptive
+            # metadata, while leaving execution to report the unresolved route.
+            return provider_name, model, None
         if resolved is None and (provider_name, model) != (
             configured_provider,
             configured_model,
@@ -890,9 +897,21 @@ class _ContextCoordinator:
         provider_name, _model, resolved = self._root_route(
             session, config=config, agent_definition=agent_definition
         )
-        return self._effort_metadata(
+        metadata = self._effort_metadata(
             session, agent_definition, resolved, provider_name=provider_name
         )
+        if resolved is not None and getattr(session, "model_selection", None) is None:
+            reference = self._route_reference(config, agent_definition=agent_definition)[1]
+            selected = DEFAULT_TIER_EFFORTS.get((reference, f"{provider_name}/{resolved.model}"))
+            if (
+                selected is not None
+                and getattr(session, "reasoning_effort_selection", None) is None
+                and getattr(agent_definition, "reasoning_effort", None) is None
+                and not any(value == reference for value in self._tiers.overrides.values())
+            ):
+                metadata["effective_effort"] = selected
+                metadata["source"] = "tier-default"
+        return metadata
 
     def for_turn(
         self,
@@ -942,25 +961,49 @@ class _ContextCoordinator:
             agent_definition=agent_definition,
             model_selection=model_selection,
         )
+        tier_name = None
+        explicit_model = session_model_selection is not None or model_selection is not None
+        if not explicit_model and resolved is not None:
+            reference = getattr(agent_definition, "model", None)
+            if not reference:
+                _provider, reference, _configured_provider, _configured_model = self._route_reference(
+                    config, agent_definition=agent_definition
+                )
+            if isinstance(reference, str) and reference in getattr(self._tiers, "order", ()):
+                tier_name = reference
         capabilities = getattr(resolved, "capabilities", None)
         request_counter = None
         selected_agent_effort = None
         explicit_session_model = session_model_selection is not None
+        if (
+            tier_name is not None
+            and not any(value == tier_name for value in self._tiers.overrides.values())
+            and not explicit_session_model
+            and getattr(session, "reasoning_effort_selection", None) is None
+            and getattr(agent_definition, "reasoning_effort", None) is None
+        ):
+            selected_agent_effort = DEFAULT_TIER_EFFORTS.get((tier_name, f"{provider_name}/{model}"))
         if resolved is not None:
             request_counter = RequestTokenCounter(
                 resolved.provider,
                 cache=self._token_cache,
                 provider_name=provider_name,
             )
-            selected_agent_effort = self._effective_effort(
-                session, agent_definition, resolved, provider_name=provider_name
-            )
+            if selected_agent_effort is None:
+                selected_agent_effort = self._effective_effort(
+                    session, agent_definition, resolved, provider_name=provider_name
+                )
         assembler = for_turn(
             capabilities=capabilities,
             request_counter=request_counter,
             model=model,
             provider=provider_name,
             reasoning_effort=selected_agent_effort,
+        )
+        assembler._tier_name = tier_name
+        assembler._effort_explicit = (
+            getattr(session, "reasoning_effort_selection", None) is not None
+            or getattr(agent_definition, "reasoning_effort", None) is not None
         )
         if session is not None:
             # Captured by the manifest factory for every iteration of this root
@@ -3053,6 +3096,8 @@ class Runtime:
         skills = disabled.get("skills", ())
         servers = disabled.get("mcp", ())
         off_tools = disabled.get("tools", ())
+        if not skills and not servers and not off_tools and not manifest.mcp:
+            return manifest
         disabled_tools = {
             tool.name for name, server in manifest.mcp.items() if name in servers
             for tool in getattr(server, "tools", ())
@@ -4017,8 +4062,13 @@ class Runtime:
                 kwargs.update(api_key=None, auth_headers=CopilotHeaders(manager), api_selector=EndpointFallback(api or "chat"))
             elif auth == "keychain":
                 from .auth.api_key import StoredKeyAuth
+                from .model.providers.openai import EndpointFallback, _is_opencode_host
                 factory = self._api_key_auth_factory or StoredKeyAuth
                 kwargs.update(api_key=None, auth_headers=factory(name, profile=getattr(section, "profile", None) or "default"))
+                # OpenCode Go serves different models on /chat/completions and
+                # /responses; remember the dialect the model accepts.
+                if _is_opencode_host(base_url or ""):
+                    kwargs["api_selector"] = EndpointFallback(api or "chat")
             provider = OpenAIProvider(api=api, **kwargs)
             # The adapter class is ``openai`` for every OpenAI-compatible wire,
             # but the router key is the configured vendor id. Relabel so the

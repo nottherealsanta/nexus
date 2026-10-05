@@ -9,14 +9,20 @@ starts `prototype.run`. Python spawns the binary with piped stdin/stdout. Rust t
 terminal control through `/dev/tty` (Crossterm `use-dev-tty`), so the IPC pipes do not
 collide with input. Closing the client never cancels daemon work.
 
-## Wire format (schema 1)
+## Wire format
 
-- Python -> Rust: one compact JSON object per line (`separators=(",", ":")`), the
-  *snapshot* (`bridge.rs: Snapshot`). `schema` must be 1; `revision` must not go
-  backwards; `generation` changes when the session/panel context changes and resets
-  Rust-local state (draft, scroll).
-- Rust -> Python: one JSON object per line, `{"type": ..., ...}` plus `generation`.
-  Python ignores actions whose generation is stale.
+The live terminal emits schema 3 section deltas: omitted fields retain prior
+values; empty/null fields clear them. `reset` starts a session/page, `blocks_from`
+replaces a dependent suffix, and history supports initial/appended values. Schema
+1/2 remain readable. Never discard dependent patches. One-shot insert/restore
+fields are not retained by omission.
+
+Rust → Python carries host actions and sequenced UI-persistence actions. Disclosure
+never writes stdout. Rust owns session/page LRU disclosure choices, optimistic
+sidebar/tab/file/log choices and static command completion. Python owns canonical
+session reduction, labelled content/redaction and host commands. Preferences write
+off-loop. See `disclosure.rs`, `local_ui.rs`, `wire.py`, `stream_projection.py` and
+`ui_support/native_schedule.py`.
 
 ### Snapshot fields (see `bridge.rs`)
 
@@ -51,24 +57,23 @@ lives in the run loop of `prototype.py`; menu operations are handled by
 
 ## Flow of a streamed token
 
-daemon event -> `controller.ingest` (reducer) -> `update()` -> `project()` (reuses
-cached per-turn blocks) -> dedup check -> JSON line -> Rust parses newest snapshot ->
-`Cache::update_content` re-wraps only changed blocks -> draw. Known cost: the whole
-`blocks` array is resent per token (about 1 MiB at 1,000 turns). A per-turn patch
-protocol (schema 2) is proposed in `plans/RATATUI_PLAN.md` but not built.
+Host event → immediate ingest → 16 ms coalesced update → changed-tail root
+projection for ordinary text/thought deltas → section/suffix delta → Rust merge
+→ changed-block wrapping → viewport draw. Other events and child pages retain
+full projection. Trace both runtimes and record large first-load costs.
 
-## Flow of a keypress
+## Flow of an interaction
 
-Crossterm key -> `main.rs` (leader state, editor, shortcut table) -> either local
-(editor edit, scroll, selection) or an action line -> Python handler -> host command
--> new snapshot. Local-only state (draft text, scroll, filter, selection) lives in
-Rust and resets on `generation` change; anything that must survive reconnect lives
-in Python/host.
+Draft edits, scrolling, selection, disclosure and static command completion stay
+local. Sidebar/tab/file/log changes redraw locally, then send a sequenced action;
+Rust protects newer choices from stale echoes while Python persists. Session/child
+fetches and agent commands still use the host. Disclosure is client-lifetime state;
+durable sessions remain daemon-owned.
 
-## Shared helpers (toolkit-free, used by Textual too)
+## Shared presentation helpers
 
 `timeline.py` (tool row text, turn footer, agent label, task header/metrics),
 `details.py` (session rows, modified files, MCP rows), `context_header.py` (header
 blocks, agent colours, tool grouping), `completion.py`, `model_choice.py`,
 `shortcuts.py`, `session_groups.py`, `voice_settings.py`, `session_controller.py`.
-Add new pure logic here, not in `ui/ratatui/` and not in a Textual module.
+Add reusable pure presentation logic here.

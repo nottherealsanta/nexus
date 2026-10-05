@@ -161,17 +161,13 @@ release-please reads.
 `ci.yml` runs on PRs and on pushes to `main` (skipping docs-only changes: `**.md`,
 `docs/`, `plans/`, `artifacts/`) and by hand.
 
-- `test`: one Linux job on Python 3.13. `uv sync --locked --extra dev`, `ruff check`,
+- `test`: one macOS job on Python 3.13 (Linux CI is deactivated for now). `uv sync --locked --extra dev`, `ruff check`,
   then `pytest -q`. `--locked` fails when `uv.lock` is stale, which is why the release
   PR must update it.
 - `build`: `uv build`, then the wheel/installer tests
   (`tests/test_model_data_package.py`, `tests/test_install_script.py`). It needs
   `pytest-asyncio` because one installer test is async.
 - `ci-ok`: passes if `test` and `build` did not fail. Require this name, not the jobs.
-- Four Textual pilot test files are ignored in CI (`test_ui_tui.py`, `test_mock_tui.py`,
-  `test_tui_integration_render.py`, `test_tui_model_selection_integration.py`): they are
-  timing and terminal-size sensitive on shared runners. Run the full suite locally
-  before committing.
 - There is no macOS or 3.14 job; developer machines cover them. The Playwright checks
   (`tests/playwright_*.py`) are manual.
 - Ruff rules are pinned in `pyproject.toml` (`E4`, `E9`, `F`, `E713`) so a new ruff
@@ -290,7 +286,7 @@ Config lives in `release-please-config.json`:
 
 ## Installer CI
 
-- `install.yml` runs the installer matrix (macOS, Linux, two Docker images) only when
+- `install.yml` runs the installer on macOS (the Linux and Docker jobs are deactivated for now) only when
   an installer file changes, installing **this commit** with `--source git --git-ref
   "$GITHUB_SHA"` so unreleased code is tested.
 - Nightly it runs only `published-script`: the real one-liner against PyPI, then

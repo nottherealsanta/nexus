@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from collections import OrderedDict
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import aclosing
-from dataclasses import replace
 from typing import Any
 
 from ..client.protocol import Client, ClientError
@@ -23,6 +23,10 @@ class ModelEffortSelectionError(ClientError):
         self.model_selected = model_selected
         self.original = error
         super().__init__(str(error))
+
+
+#: Sessions whose reduced view is kept while another session is shown (open tabs).
+PARKED_SESSIONS = 8
 
 
 class SessionController:
@@ -55,6 +59,14 @@ class SessionController:
         self._agent_metadata_revision = 0
         self._selection_lock = asyncio.Lock()
         self._bootstrap_revision = 0
+        # Reduced views of sessions left behind: (view, cursor, completion_seq).
+        # Returning to one re-reads only the events after its cursor.
+        self._parked: OrderedDict[str, tuple[ConversationView, int, int]] = OrderedDict()
+        self._resume_cursor = False  # set by switch_session; consumed by the next bootstrap
+
+    def forget(self, session: str) -> None:
+        """Drop a parked view (its tab was closed)."""
+        self._parked.pop(session, None)
 
     async def _refresh_agent_metadata(
         self,
@@ -113,33 +125,42 @@ class SessionController:
         summary = await self.client.open_session(session)
         if not self._bootstrap_is_current(session, bootstrap_revision):
             return "", summary
-        _baseline, seq = await self.client.state(session, 0)
-        if not self._bootstrap_is_current(session, bootstrap_revision):
-            return "", summary
-        # The host projection establishes the baseline seq; hydrate the typed
-        # reducer through the same append-only event protocol before tailing.
-        view = initial_state(session)
-        completion_seq = 0
-        async with aclosing(self.client.stream(session, 0, follow=False)) as events:
-            async for event in events:
-                if not self._bootstrap_is_current(session, bootstrap_revision):
-                    return "", summary
-                view = apply(view, event)
-                if event.type in {"turn.completed", "turn.failed", "turn.cancelled"}:
-                    completion_seq = max(completion_seq, event.seq)
-        if not self._bootstrap_is_current(session, bootstrap_revision):
-            return "", summary
-        cursor = max(max(0, int(seq)), view.last_seq)
-        if view.last_seq < cursor:
-            view = replace(view, last_seq=cursor)
-        self.view = view
-        self.cursor = cursor
-        self.completion_seq = completion_seq
-        await self._refresh_agent_metadata(
-            session,
-            metadata_revision,
-            bootstrap_revision=bootstrap_revision,
+        # The typed reducer is hydrated from the append-only event stream, which
+        # carries its own last seq. The host's full-view baseline used to be fetched
+        # first and only its seq kept: a whole-session fold, serialization and
+        # transfer on every session open, thrown away.
+        # A parked session resumes from its cursor; the append-only log only grows.
+        view, start, completion_seq = self.view, self.cursor, self.completion_seq
+        resume, self._resume_cursor = self._resume_cursor, False
+        if not resume or start <= 0 or view.session_id != session:
+            view, start, completion_seq = initial_state(session), 0, 0
+        # The agent lookup is independent of the replay and scales with session size,
+        # so it overlaps the event stream instead of following it.
+        metadata = asyncio.ensure_future(
+            self._refresh_agent_metadata(
+                session, metadata_revision, bootstrap_revision=bootstrap_revision
+            )
         )
+        try:
+            async with aclosing(self.client.stream(session, start, follow=False)) as events:
+                async for event in events:
+                    if not self._bootstrap_is_current(session, bootstrap_revision):
+                        metadata.cancel()
+                        return "", summary
+                    view = apply(view, event)
+                    if event.type in {"turn.completed", "turn.failed", "turn.cancelled"}:
+                        completion_seq = max(completion_seq, event.seq)
+            if not self._bootstrap_is_current(session, bootstrap_revision):
+                metadata.cancel()
+                return "", summary
+            cursor = view.last_seq
+            self.view = view
+            self.cursor = cursor
+            self.completion_seq = completion_seq
+            await metadata
+        except BaseException:
+            metadata.cancel()
+            raise
         return "", summary
 
     def _bootstrap_is_current(self, session: str, revision: int) -> bool:
@@ -219,10 +240,16 @@ class SessionController:
                 await task
         self._task = None
         self.running = False
+        if self.session and self.cursor > 0 and self.view.session_id == self.session:
+            self._parked[self.session] = (self.view, self.cursor, self.completion_seq)
+            self._parked.move_to_end(self.session)
+            while len(self._parked) > PARKED_SESSIONS:
+                self._parked.popitem(last=False)
         self.session = session
         self._agent_metadata_revision += 1
-        self.view = initial_state(session)
-        self.cursor = 0
+        resumed = self._parked.pop(session, None)
+        self.view, self.cursor, self.completion_seq = resumed or (initial_state(session), 0, 0)
+        self._resume_cursor = resumed is not None
         self.agent_name = "build"
         self.agent_source = "default"
         self.agent_color = None

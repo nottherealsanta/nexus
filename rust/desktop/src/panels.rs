@@ -1,5 +1,19 @@
 //! Desktop chrome, settings, pickers and approval sheets share host actions.
 use super::*;
+#[path = "primitives.rs"]
+pub mod primitives;
+use self::primitives::visible_range;
+use gpui::ScrollHandle;
+use std::cell::RefCell;
+
+thread_local! {
+    static PANEL_SCROLL: RefCell<ScrollHandle> = RefCell::new(ScrollHandle::new());
+    static PICKER_FILTER_CACHE: RefCell<Option<(u64, Vec<usize>)>> = const { RefCell::new(None) };
+}
+
+fn panel_scroll_handle() -> ScrollHandle {
+    PANEL_SCROLL.with(|scroll| scroll.borrow().clone())
+}
 impl Desktop {
     pub(crate) fn button(
         &self,
@@ -38,7 +52,14 @@ impl Desktop {
             .text_size(px(12.))
             .text_color(t.muted)
             .cursor(CursorStyle::Arrow)
-            .hover(move |s| s.bg(if primary { t.accent.opacity(0.9) } else { t.raised }).text_color(if primary { t.background } else { t.text }))
+            .hover(move |s| {
+                s.bg(if primary {
+                    t.accent.opacity(0.9)
+                } else {
+                    t.raised
+                })
+                .text_color(if primary { t.background } else { t.text })
+            })
             .focusable()
             .tab_stop(
                 (self.snapshot.panel_title.is_empty() && self.snapshot.prompt.is_none())
@@ -54,7 +75,10 @@ impl Desktop {
                         )
                     ),
             )
-            .focus(move |s| s.bg(if primary { t.accent } else { t.raised }).text_color(if primary { t.background } else { t.accent }))
+            .focus(move |s| {
+                s.bg(if primary { t.accent } else { t.raised })
+                    .text_color(if primary { t.background } else { t.accent })
+            })
             .when(icon_only, |d| {
                 d.w(px(32.))
                     .h(px(32.))
@@ -71,10 +95,217 @@ impl Desktop {
                 }))
             })
     }
+    /// Top banner shown while the daemon is unreachable (§Phase 3). The composer
+    /// stays visible and read-only with its draft kept; Reconnect replays state.
+    pub(crate) fn disconnected_banner(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme();
+        div()
+            .w_full()
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap_3()
+            .px_4()
+            .py_2()
+            .bg(t.amber.opacity(0.16))
+            .border_b_1()
+            .border_color(t.border)
+            .text_size(px(12.))
+            .text_color(t.text)
+            .child("Disconnected — the daemon is unreachable. Your draft is kept.")
+            .child(self.button(
+                "reconnect-banner",
+                "Reconnect  ⌘R",
+                json!({"type":"command","text":"/reconnect"}),
+                cx,
+            ))
+            .into_any_element()
+    }
+
+    /// Turn minimap rail (§2.4.3): one long tick per user turn, a short tick per
+    /// assistant turn, and a brighter band for the visible range. Hidden by the
+    /// caller below 900 px or when there are no turns.
+    pub(crate) fn minimap(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme();
+        let total = self.snapshot.blocks.len().max(1) as f32;
+        let (visible_start, visible_end) = self.transcript_visible.get();
+        let band_top = (visible_start as f32 / total).clamp(0., 1.);
+        let band_height =
+            ((visible_end.saturating_sub(visible_start)) as f32 / total).clamp(0.02, 1.);
+        let ticks = self.minimap_ticks.iter().cloned().map(|tick| {
+            let top = (tick.block as f32 / total).clamp(0., 1.);
+            let label = tick.label.clone();
+            div()
+                .id(SharedString::from(format!("minimap-{}", tick.block)))
+                .absolute()
+                .top(relative(top))
+                .left(px(if tick.long { 0. } else { 3. }))
+                .w(px(if tick.long { 12. } else { 6. }))
+                .h(px(if tick.long { 3. } else { 2. }))
+                .rounded(px(1.))
+                .bg(if tick.long {
+                    t.muted
+                } else {
+                    t.muted.opacity(0.45)
+                })
+                .cursor(CursorStyle::Arrow)
+                .hover(move |s| s.bg(t.accent))
+                .tooltip(move |_, cx| cx.new(|_| ControlHint(label.clone().into())).into())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.follow = false;
+                    this.transcript.scroll_to(ListOffset {
+                        item_ix: tick.block,
+                        offset_in_item: px(0.),
+                    });
+                    cx.notify();
+                }))
+        });
+        div()
+            .w(px(12.))
+            .flex_shrink_0()
+            .h_full()
+            .py(px(8.))
+            .child(
+                div()
+                    .relative()
+                    .w_full()
+                    .h_full()
+                    .child(
+                        div()
+                            .absolute()
+                            .top(relative(band_top))
+                            .h(relative(band_height))
+                            .w_full()
+                            .rounded(px(2.))
+                            .bg(t.accent.opacity(0.12)),
+                    )
+                    .children(ticks),
+            )
+            .into_any_element()
+    }
+
+    /// "New messages" affordance shown when content arrived while scrolled up
+    /// (§3.6 follow logic). Clicking restores follow and jumps to the end.
+    pub(crate) fn follow_pill(&self, cx: &mut Context<Self>) -> AnyElement {
+        if !self.follow_pending || self.follow {
+            return div().into_any_element();
+        }
+        let t = self.theme();
+        div()
+            .absolute()
+            .bottom(px(118.))
+            .left_0()
+            .right_0()
+            .flex()
+            .justify_center()
+            .child(
+                div()
+                    .id("follow-latest")
+                    .px_3()
+                    .py_2()
+                    .rounded(px(999.))
+                    .bg(t.raised)
+                    .border_1()
+                    .border_color(t.border)
+                    .shadow_lg()
+                    .text_size(px(12.))
+                    .text_color(t.text)
+                    .cursor(CursorStyle::Arrow)
+                    .hover(move |s| s.bg(t.accent_bg).text_color(t.accent))
+                    .on_click(cx.listener(|this, _, w, cx| this.latest(&JumpLatest, w, cx)))
+                    .child("↓ New messages"),
+            )
+            .into_any_element()
+    }
+    /// Bounded toast stack, bottom-centre above the composer (§2.4.16).
+    pub(crate) fn toasts(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.notices.is_empty() {
+            return div().into_any_element();
+        }
+        let t = self.theme();
+        let notices: Vec<_> = self.notices.iter().cloned().collect();
+        let items = notices.into_iter().map(|notice| {
+            let accent = match notice.kind {
+                NoticeKind::Info => t.accent,
+                NoticeKind::Warning => t.amber,
+                NoticeKind::Error => t.red,
+            };
+            let id = notice.id;
+            let mut row = div()
+                .id(SharedString::from(format!("toast-{id}")))
+                .w_full()
+                .max_w(px(460.))
+                .flex()
+                .items_start()
+                .gap_3()
+                .p_3()
+                .rounded(px(10.))
+                .bg(t.raised)
+                .border_1()
+                .border_l_4()
+                .border_color(accent)
+                .shadow_lg()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(px(12.))
+                        .text_color(t.text)
+                        .child(notice.text.clone()),
+                );
+            match notice.action {
+                NoticeAction::Reconnect => {
+                    row = row.child(self.button(
+                        SharedString::from(format!("toast-action-{id}")),
+                        "Reconnect",
+                        json!({"type":"command","text":"/reconnect"}),
+                        cx,
+                    ));
+                }
+                NoticeAction::UpdateHelp => {
+                    row = row.child(self.button(
+                        SharedString::from(format!("toast-action-{id}")),
+                        "Update help",
+                        json!({"type":"update_help"}),
+                        cx,
+                    ));
+                }
+                NoticeAction::None => {}
+            }
+            if notice.kind != NoticeKind::Info {
+                row = row.child(
+                    div()
+                        .id(SharedString::from(format!("toast-dismiss-{id}")))
+                        .px_2()
+                        .py_1()
+                        .rounded(px(6.))
+                        .text_size(px(11.))
+                        .text_color(t.muted)
+                        .cursor(CursorStyle::Arrow)
+                        .hover(move |s| s.bg(t.accent_bg).text_color(t.text))
+                        .on_click(cx.listener(move |this, _, _, cx| this.dismiss_notice(id, cx)))
+                        .child("Dismiss"),
+                );
+            }
+            row.into_any_element()
+        });
+        div()
+            .absolute()
+            .bottom(px(150.))
+            .left_0()
+            .right_0()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap_2()
+            .children(items)
+            .into_any_element()
+    }
     pub(crate) fn topbar(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme();
         div()
-            .h(px(40.))
+            .h(px(TOP_BAR_HEIGHT))
             .flex_shrink_0()
             .flex()
             .items_center()
@@ -331,7 +562,8 @@ impl Desktop {
     }
     fn session_row(&self, row: usize, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         #[cfg(test)]
-        self.session_render_count.set(self.session_render_count.get() + 1);
+        self.session_render_count
+            .set(self.session_render_count.get() + 1);
         let t = self.theme();
         let Some((i, heading)) = self.session_rows.borrow().get(row).copied() else {
             return div().into_any_element();
@@ -339,29 +571,115 @@ impl Desktop {
         let Some(s) = self.snapshot.sessions.get(i) else {
             return div().into_any_element();
         };
-            let id = s.id.clone();
-            let workspace = s.workspace.clone();
-            let card = div().id(("session", i)).focusable().tab_stop(self.snapshot.panel_title.is_empty() && self.snapshot.prompt.is_none()).focus(move |s| s.bg(t.raised)).flex().flex_col().gap_1().px_2().py_1().rounded(px(8.)).mb_0().cursor(CursorStyle::Arrow)
-                .bg(if s.active { t.raised } else { t.sidebar }).hover(move |style| style.bg(t.raised))
-                .child(div().flex().items_center().gap_2()
-                    .child(div().flex_1().min_w_0().font_weight(if s.active { FontWeight::SEMIBOLD } else { FontWeight::NORMAL }).truncate().child(s.title.clone()))
-                    .child(self.button(("session-more",i), "···", json!({"type":"session_actions","text":s.id,"workspace":s.workspace}), cx).px_1().py_0()))
-                .child(div().text_size(px(11.)).text_color(t.muted).truncate().child(if s.sub.is_empty() { s.status.clone() } else if let Some((count, age)) = s.sub.split_once(" · ") { format!("{}{} message{} · active {}", if s.status == "working" { "Working · " } else if s.status == "input" { "Needs input · " } else { "" }, count, if count == "1" { "" } else { "s" }, age) } else { format!("{} messages", s.sub) }))
-                .on_click(cx.listener(move |this, _, w, cx| this.dispatch(json!({"type":"session_open","text":id,"workspace":workspace}), w, cx))).into_any_element();
-        div().when(heading, |d| d.child(div().mt_5().mb_2().px_3()
-            .text_size(px(10.)).font_weight(FontWeight::SEMIBOLD)
-            .text_color(t.muted).child(s.group.to_uppercase())))
-            .child(card).into_any_element()
+        let id = s.id.clone();
+        let workspace = s.workspace.clone();
+        let selected = self.search_selected.as_deref() == Some(s.id.as_str());
+        let card = div()
+            .id(("session", i))
+            .focusable()
+            .tab_stop(self.snapshot.panel_title.is_empty() && self.snapshot.prompt.is_none())
+            .focus(move |s| s.bg(t.raised))
+            .flex()
+            .flex_col()
+            .gap_1()
+            .px_2()
+            .py_1()
+            .rounded(px(8.))
+            .mb_0()
+            .cursor(CursorStyle::Arrow)
+            .when(selected, |d| d.border_1().border_color(t.accent))
+            .bg(if selected {
+                t.accent_bg
+            } else if s.active {
+                t.raised
+            } else {
+                t.sidebar
+            })
+            .hover(move |style| style.bg(t.raised))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .font_weight(if s.active {
+                                FontWeight::SEMIBOLD
+                            } else {
+                                FontWeight::NORMAL
+                            })
+                            .truncate()
+                            .child(s.title.clone()),
+                    )
+                    .child(
+                        self.button(
+                            ("session-more", i),
+                            "···",
+                            json!({"type":"session_actions","text":s.id,"workspace":s.workspace}),
+                            cx,
+                        )
+                        .px_1()
+                        .py_0(),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(t.muted)
+                    .truncate()
+                    .child(if s.sub.is_empty() {
+                        s.status.clone()
+                    } else if let Some((count, age)) = s.sub.split_once(" · ") {
+                        format!(
+                            "{}{} message{} · active {}",
+                            if s.status == "working" {
+                                "Working · "
+                            } else if s.status == "input" {
+                                "Needs input · "
+                            } else {
+                                ""
+                            },
+                            count,
+                            if count == "1" { "" } else { "s" },
+                            age
+                        )
+                    } else {
+                        format!("{} messages", s.sub)
+                    }),
+            )
+            .on_click(cx.listener(move |this, _, w, cx| {
+                this.dispatch(
+                    json!({"type":"session_open","text":id,"workspace":workspace}),
+                    w,
+                    cx,
+                )
+            }))
+            .into_any_element();
+        div()
+            .when(heading, |d| {
+                d.child(
+                    div()
+                        .mt_5()
+                        .mb_2()
+                        .px_3()
+                        .text_size(px(10.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(t.muted)
+                        .child(s.group.to_uppercase()),
+                )
+            })
+            .child(card)
+            .into_any_element()
     }
     pub(crate) fn sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme();
         let query = self.search.read(cx).content.to_lowercase();
         let mut rows = vec![];
         let mut group = String::new();
-        for (i, session) in self.snapshot.sessions.iter().enumerate().filter(|(_, session)| {
-            format!("{} {} {}", session.title, session.id, session.workspace)
-                .to_lowercase().contains(&query)
-        }) {
+        for i in search_matches(&self.snapshot.sessions, &query) {
+            let session = &self.snapshot.sessions[i];
             let heading = session.group != group;
             group = session.group.clone();
             rows.push((i, heading));
@@ -370,11 +688,13 @@ impl Desktop {
             self.session_list.reset(rows.len());
             *self.session_rows.borrow_mut() = rows;
         }
+
         let view = cx.entity().downgrade();
         let sessions = list(self.session_list.clone(), move |row, window, cx| {
             view.update(cx, |this, cx| this.session_row(row, window, cx))
                 .unwrap_or_else(|_| div().into_any_element())
-        }).size_full();
+        })
+        .size_full();
         div()
             .w(px(252.))
             .flex_shrink_0()
@@ -411,7 +731,29 @@ impl Desktop {
                             .bg(t.surface)
                             .border_1()
                             .border_color(t.border)
-                            .child(self.search.clone()),
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(div().flex_1().min_w_0().child(self.search.clone()))
+                            .when(!self.search.read(cx).content.is_empty(), |d| {
+                                d.child(
+                                    div()
+                                        .id("search-clear")
+                                        .px_2()
+                                        .rounded(px(4.))
+                                        .text_color(t.muted)
+                                        .cursor(CursorStyle::Arrow)
+                                        .hover(move |s| s.bg(t.accent_bg).text_color(t.text))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.search.update(cx, |input, cx| {
+                                                input.set(String::new(), cx)
+                                            });
+                                            this.search_selected = None;
+                                            cx.notify();
+                                        }))
+                                        .child("×"),
+                                )
+                            }),
                     ),
             )
             .child(
@@ -1045,20 +1387,12 @@ impl Desktop {
     }
     pub(crate) fn panel(&self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme();
-        let query = self.filter.read(cx).content.to_lowercase();
+        let query = normalize_query(&self.filter.read(cx).content);
         let mut items = vec![];
         let mut group = String::new();
-        for (i, item) in self
-            .snapshot
-            .items
-            .iter()
-            .filter(|i| {
-                format!("{} {}", i.label, i.detail)
-                    .to_lowercase()
-                    .contains(&query)
-            })
-            .enumerate()
-        {
+        let filtered = ranked_filter(&self.snapshot.items, &query);
+        let visible = visible_range(filtered.len(), 0, 100, 0);
+        for (i, item) in filtered[visible].iter().copied().enumerate() {
             if item.group != group {
                 group = item.group.clone();
                 items.push(section(&group.to_uppercase(), t));
@@ -1219,23 +1553,40 @@ impl Desktop {
                     .child(section("DESKTOP SHORTCUTS", t))
                     .children(
                         [
-                            ("Cmd+N", "New session"),
-                            ("Cmd+K", "Commands"),
-                            ("Cmd+,", "Settings"),
+                            ("Cmd+N / Ctrl+N", "New session"),
+                            ("Cmd+K / Ctrl+P", "Commands"),
+                            ("Cmd+, / Ctrl+S", "Settings"),
                             ("Cmd+M", "Models"),
+                            ("Cmd+O / Ctrl+O", "Sessions list"),
                             ("Cmd+B / Cmd+L", "Sessions / details"),
                             ("Cmd+I / Cmd+U", "Context / provider usage"),
                             ("Cmd+Shift+A", "Attach files"),
                             ("Ctrl+Space", "Dictation"),
-                            ("Cmd+.", "Stop turn"),
+                            ("Cmd+. / Ctrl+C", "Stop turn (Esc twice)"),
                             ("Ctrl+Enter / Alt+Enter", "Queue / interrupt"),
-                            ("Cmd+S", "Save file"),
+                            ("Cmd+S / Ctrl+S", "Save file"),
+                            ("Ctrl+T / Ctrl+E", "Cycle effort / Logs"),
                             ("Cmd+Shift+G / Cmd+Shift+E", "Cycle agent / effort"),
                             ("Cmd+Shift+L", "Logs"),
                             ("Option+Up / Down", "Prompt history"),
+                            ("PageUp / PageDown", "Scroll transcript"),
+                            ("[ / ]", "Previous / next inspector tab"),
+                            ("a", "Agent picker (outside the editor)"),
                             ("Cmd+Shift+T", "Dark / light theme"),
-                            ("Tab / Shift+Tab", "Next / previous control"),
+                            ("Ctrl+Tab / Ctrl+Shift+Tab", "Next / previous control"),
+                            (
+                                "Tab",
+                                "Completion, or transcript navigation on an empty draft",
+                            ),
                             ("Up / Down, Enter / Tab", "Select / insert completion"),
+                            (
+                                "j / k, Enter / Esc",
+                                "Move / open / leave transcript navigation",
+                            ),
+                            (
+                                "Ctrl+X c / z / ?",
+                                "Context popover / update help / shortcuts",
+                            ),
                         ]
                         .into_iter()
                         .map(|(key, label)| kv(key, label, t)),
@@ -1247,6 +1598,7 @@ impl Desktop {
             body = body.child(
                 div()
                     .id("form-scroll")
+                    .key_context("Form")
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
@@ -1255,9 +1607,13 @@ impl Desktop {
                     .child(self.form.clone()),
             );
         } else {
+            let panel_scroll = panel_scroll_handle();
+            let first_diff = (panel_scroll.offset().y.abs() / px(22.)) as usize;
+            let visible_diff = visible_range(self.snapshot.panel_lines.len(), first_diff, 160, 8);
             body = body.child(
                 div()
                     .id("panel-scroll")
+                    .track_scroll(&panel_scroll)
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
@@ -1291,8 +1647,9 @@ impl Desktop {
                                 self.snapshot
                                     .panel_lines
                                     .iter()
-                                    .filter(|_| !markdown_details)
                                     .enumerate()
+                                    .filter(|(i, _)| visible_diff.contains(i))
+                                    .filter(|_| !markdown_details)
                                     .map(|(i, line)| {
                                         let tone = self
                                             .snapshot
@@ -1337,12 +1694,14 @@ impl Desktop {
                                             .text_size(px(12.))
                                             .line_height(px(21.))
                                             .text_color(match tone {
-                                                "add" => t.green,
-                                                "del" => t.red,
+                                                "add" => t.diff_add,
+                                                "del" => t.diff_remove,
                                                 "hunk" => t.accent,
                                                 "header" | "title" => t.text,
                                                 _ => t.muted,
                                             })
+                                            .when(tone == "add", |d| d.bg(t.diff_add_bg))
+                                            .when(tone == "del", |d| d.bg(t.diff_remove_bg))
                                             .child(
                                                 line.replace("terminal shell", "desktop client")
                                                     .replace("narrow terminals", "narrow windows"),
@@ -1453,8 +1812,14 @@ impl Desktop {
         let t = self.theme();
         let prompt = self.snapshot.prompt.as_ref().unwrap();
         let id = prompt.id.clone();
-        div().absolute().inset_0().bg(gpui::rgba(0x00000080)).flex().items_center().justify_center()
-            .child(div().w(px(680.)).max_w(relative(0.92)).max_h(relative(0.88)).rounded(px(14.)).relative().border_1().border_color(t.border).bg(t.surface).shadow_xl().flex().flex_col()
+        let backdrop = div()
+            .absolute()
+            .inset_0()
+            .bg(gpui::rgba(0x00000080))
+            .flex()
+            .items_center()
+            .justify_center();
+        let sheet = div().w(px(680.)).max_w(relative(0.92)).max_h(relative(0.88)).rounded(px(14.)).relative().border_1().border_color(t.border).bg(t.surface).shadow_xl().flex().flex_col()
                 .child(div().px_6().pt_6().text_size(px(11.)).text_color(t.amber).font_weight(FontWeight::SEMIBOLD).child(if prompt.kind=="permission" { "YOUR APPROVAL IS NEEDED" } else { "A QUESTION FOR YOU" }))
                 .child(div().px_6().pt_2().pb_4().text_size(px(22.)).font_weight(FontWeight::SEMIBOLD).child(if prompt.kind=="permission" { "Review this action" } else { "Choose how to proceed" }))
                 .child(div().id("prompt-scroll").px_6().max_h(px(310.)).overflow_y_scroll().children(prompt.lines.iter().map(|line|div().py_1().text_size(px(13.)).line_height(px(21.)).child(line.clone()))))
@@ -1465,18 +1830,131 @@ impl Desktop {
                     let action=json!({"type":"answer","text":id,"value":choice.value});
                     if choice.disabled { div().px_4().py_3().rounded(px(6.)).text_color(t.muted).child(format!("{} · unavailable",choice.label)).into_any_element() }
                     else { self.button(("answer",i),choice.label.clone(),action,cx).justify_start().bg(if i==0 { t.accent_bg } else { t.raised }).text_color(if i==0 { t.accent } else { t.text }).into_any_element() }
-                }))))
-            .into_any_element()
+                })));
+        if self.snapshot.panel_title.is_empty() {
+            backdrop.child(sheet).into_any_element()
+        } else {
+            // A panel-contained confirmation sheet tracks that panel instead of
+            // dimming and blocking the whole desktop window.
+            div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .child(sheet)
+                .into_any_element()
+        }
+    }
+}
+
+pub(crate) fn normalize_query(query: &str) -> String {
+    query
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+pub(crate) fn ranked_filter<'a>(
+    items: &'a [crate::bridge::Item],
+    query: &str,
+) -> Vec<&'a crate::bridge::Item> {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    query.hash(&mut hasher);
+    for item in items {
+        item.label.hash(&mut hasher);
+        item.detail.hash(&mut hasher);
+        item.command.hash(&mut hasher);
+    }
+    let cache_key = hasher.finish();
+    let cached = PICKER_FILTER_CACHE.with(|cache| {
+        cache
+            .borrow()
+            .as_ref()
+            .filter(|(key, _)| *key == cache_key)
+            .map(|(_, indices)| indices.clone())
+    });
+    let indices = cached.unwrap_or_else(|| {
+        if query.is_empty() {
+            return (0..items.len()).collect();
+        }
+        let mut matches: Vec<(usize, usize)> = items
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| {
+                let label = item.label.to_lowercase();
+                let detail = item.detail.to_lowercase();
+                let command = item.command.to_lowercase();
+                let score = if label == query {
+                    0
+                } else if label.starts_with(query) {
+                    1
+                } else if label.split_whitespace().any(|word| word.starts_with(query)) {
+                    2
+                } else if label.contains(query) {
+                    3
+                } else if detail.contains(query) {
+                    4
+                } else if command.contains(query) {
+                    5
+                } else {
+                    return None;
+                };
+                Some((score, index))
+            })
+            .collect();
+        // Stable order preserves the host's group/order for equal relevance.
+        matches.sort_by_key(|(score, _)| *score);
+        matches.into_iter().map(|(_, index)| index).collect()
+    });
+    PICKER_FILTER_CACHE.with(|cache| *cache.borrow_mut() = Some((cache_key, indices.clone())));
+    indices
+        .into_iter()
+        .filter_map(|index| items.get(index))
+        .collect()
+}
+
+#[cfg(test)]
+mod picker_tests {
+    use super::{normalize_query, ranked_filter};
+    use crate::bridge::Item;
+
+    fn item(label: &str, detail: &str, command: &str) -> Item {
+        Item {
+            label: label.into(),
+            detail: detail.into(),
+            command: command.into(),
+            ..Item::default()
+        }
+    }
+
+    #[test]
+    fn query_normalization_collapses_whitespace_and_case() {
+        assert_eq!(normalize_query("  Open   File "), "open file");
+    }
+
+    #[test]
+    fn picker_ranks_exact_prefix_word_and_substring_then_preserves_ties() {
+        let items = vec![
+            item("Files", "", ""),
+            item("Find files", "", ""),
+            item("Open", "files", ""),
+            item("Recently opened", "", ""),
+            item("Bookmarks", "", ""),
+        ];
+        let got = ranked_filter(&items, "files");
+        assert_eq!(
+            got.iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            ["Files", "Find files", "Open"]
+        );
     }
 }
 fn section(label: &str, t: Theme) -> AnyElement {
     div()
-        .mt_4()
-        .mb_2()
-        .text_size(px(10.))
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(t.muted)
-        .child(label.to_string())
+        .mt_3()
+        .child(primitives::section_label(label.to_uppercase(), t))
         .into_any_element()
 }
 fn kv(key: &str, value: &str, t: Theme) -> AnyElement {

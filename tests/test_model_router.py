@@ -157,3 +157,56 @@ def test_agent_fallback_from_request_metadata_is_tried_before_the_global_chain()
         ("b", "m2"), ("c", "m3"),
     ]
     assert no_global.fallbacks(ModelRequest(messages=[])) == []
+
+
+def _default_tier_router(tmp_path, *, tiers=None):
+    from nexus.model.registry import ModelRegistry
+    from nexus.model.tiers import TierTable
+
+    names = ("github-copilot", "codex", "opencode-go", "claude-agent")
+    providers = {name: FakeProvider(name) for name in names}
+    registry = ModelRegistry(
+        providers={name: {} for name in names},
+        provider_aliases={"codex": "openai", "claude-agent": "anthropic"},
+        env={}, offline=True, cache_path=tmp_path / "catalogue.json",
+    )
+    import asyncio
+    asyncio.run(registry.load())
+    return ModelRouter(providers, default="medium", registry=registry, tiers=tiers or TierTable())
+
+
+@pytest.mark.parametrize("tier, expected", [
+    ("low", [("github-copilot", "gpt-6-luna"), ("codex", "gpt-6-luna"), ("opencode-go", "deepseek-v4.1-flash")]),
+    ("medium", [("codex", "gpt-6.1-sol"), ("opencode-go", "deepseek-v4.1-flash")]),
+    ("high", [("codex", "gpt-6.1-sol"), ("claude-agent", "claude-sonnet-5-5")]),
+])
+def test_builtin_tier_routes(tmp_path, tier, expected):
+    router = _default_tier_router(tmp_path)
+    request = ModelRequest(messages=[], model=tier)
+    primary = router.resolve(request)
+    assert [(r.provider.name, r.model) for r in [primary, *router.fallbacks(request)]] == expected
+    # The runtime assembles a concrete model; durable route metadata retains
+    # the tier for fallbacks after that transformation.
+    concrete = ModelRequest(messages=[], model=primary.model, provider=primary.provider.name, metadata={"tier": tier})
+    assert [(r.provider.name, r.model) for r in router.fallbacks(concrete)] == expected[1:]
+
+
+def test_builtin_tier_efforts_and_explicit_override(tmp_path):
+    from nexus.model.request import SamplingParams
+    router = _default_tier_router(tmp_path)
+    request = ModelRequest(messages=[], model="medium", metadata={"tier": "medium"})
+    assert router.tier_effort(request, router.resolve(request)) == "low"
+    fallback = router.fallbacks(request)[0]
+    assert router.tier_effort(request, fallback) == "max"
+    for effort in (None, "high"):
+        explicit = ModelRequest(messages=[], model="medium", metadata={"tier": "medium", "reasoning_effort_explicit": True}, params=SamplingParams(reasoning_effort=effort))
+        assert router.tier_effort(explicit, fallback) == effort
+
+
+def test_pinned_tier_does_not_inherit_builtin_chain(tmp_path):
+    from nexus.model.tiers import TierTable
+    router = _default_tier_router(tmp_path, tiers=TierTable(overrides={"github-copilot/gpt-6-luna": "medium"}))
+    request = ModelRequest(messages=[], model="medium", metadata={"tier": "medium"})
+    assert router.resolve(request).provider.name == "github-copilot"
+    assert router.fallbacks(request) == []
+    assert router.tier_effort(request, router.resolve(request)) is None

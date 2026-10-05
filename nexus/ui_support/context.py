@@ -12,7 +12,7 @@ from rich.text import Text
 
 from ..host import protocol as p
 from ..view import ConversationView
-from .text import escape_controls, redact
+from .text import escape_controls
 
 MAX_TEXT = 1_000_000
 MAX_ROWS = 512
@@ -40,7 +40,7 @@ def _plain(value: object, limit: int | None = MAX_TEXT) -> str:
             value = json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
         except (TypeError, ValueError):
             value = str(value)
-    text = redact(escape_controls(str(value)).replace("\t", "\\t"))
+    text = escape_controls(str(value)).replace("\t", "\\t")
     return text if limit is None or len(text) <= limit else text[:limit] + "…"
 
 

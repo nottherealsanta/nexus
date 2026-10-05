@@ -67,8 +67,8 @@ async def test_session_switch_retains_images_and_stable_markers(tmp_path, monkey
     shell.attachments.extend([first, second])
     assert shell.attachment_marker(0) == "[image 1]"
     assert shell.attachment_marker(1) == "[image 2]"
-    assert shell.attachments == []
-    assert shell.tabs[-1]["title"] == "New Session"
+    assert shell.attachments == [first, second]
+    assert not shell.tabs
     await shell.switch("s")
     assert shell.attachments == [first, second]
     assert shell.attachment_marker(1) == "[image 2]"
@@ -177,7 +177,7 @@ async def test_new_session_reuses_agent_without_picker(tmp_path, monkeypatch, na
 
 
 @pytest.mark.asyncio
-async def test_command_edge_cases_match_textual(tmp_path, monkeypatch):
+async def test_command_edge_cases_use_shared_contract(tmp_path, monkeypatch):
     rows = [SimpleNamespace(id="alpha-1"), SimpleNamespace(id="beta-2")]
     diff = SimpleNamespace(patch="", truncated=False)
     shell = _shell(tmp_path, monkeypatch, list_sessions=AsyncMock(return_value=rows),
@@ -216,6 +216,40 @@ def test_every_shared_shortcut_is_bound_natively():
         if match:
             assert f"KeyCode::Char('{match.group(1)}')" in source, f"{key} is not bound"
     assert "KeyModifiers::ALT" in source and "KeyCode::BackTab" in source and "1500" in source
+
+
+def test_shared_shortcuts_have_native_keymap_coverage():
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "shared_shortcuts", Path("nexus/ui_support/shortcuts.py")
+    )
+    shortcuts = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(shortcuts)
+
+    source = Path("rust/desktop/src/keymap.rs").read_text()
+    bindings = set(__import__("re").findall(r'KeyBinding::new\("([^\"]+)"', source))
+    # `enter` is bound by the shared editor (input.rs), not the shell keymap.
+    baseline = {
+        "ctrl+enter": "ctrl-enter", "alt+enter": "alt-enter",
+        "ctrl+p": "ctrl-p", "ctrl+n": "ctrl-n", "ctrl+o": "ctrl-o",
+        "ctrl+g": "ctrl-g", "ctrl+b": "ctrl-b",
+        "ctrl+l": "ctrl-l", "ctrl+s": "ctrl-s", "ctrl+i": "ctrl-i",
+        "ctrl+t": "ctrl-t", "ctrl+space": "ctrl-space", "ctrl+e": "ctrl-e",
+        "ctrl+u": "ctrl-u", "ctrl+c": "ctrl-c", "ctrl+r": "ctrl-r",
+        "ctrl+q": "ctrl-q", "escape": "escape",
+    }
+    for key, _, _ in shortcuts.SHORTCUTS:
+        if key in baseline:
+            if key == "ctrl+f":
+                # The terminal implements fork_session; no equivalent native
+                # action is currently declared in main.rs.
+                assert baseline[key] not in bindings
+            else:
+                assert baseline[key] in bindings, f"{key} is missing from native keymap"
+    for letter, _, _ in shortcuts.LEADER_SHORTCUTS:
+        assert f"ctrl-x {letter}" in bindings, f"Ctrl+X {letter} is missing from native keymap"
 
 
 async def test_preview_refusal_while_a_turn_runs_is_not_an_error(tmp_path, monkeypatch):

@@ -1,4 +1,4 @@
-"""Real scripted harness through the native host adapter, without Textual."""
+"""Real scripted harness through the native host adapter, without native terminal."""
 import asyncio
 
 import pytest

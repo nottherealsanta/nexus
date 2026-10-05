@@ -1,4 +1,4 @@
-"""Capture both real terminal clients with identical deterministic events.
+"""Capture the real native terminal client with identical deterministic events.
 
 Run after cargo build: PYTHONPATH=. python tests/playwright_ratatui_check.py.
 Screenshots prove rendered/interactive terminals, not complete feature parity.
@@ -24,15 +24,14 @@ def main():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         try:
-            captures = (("textual", "tests/visual_tui_demo.py --state reference", ""), ("ratatui", "tests/ratatui_browser_demo.py", ""),
-                                         ("textual-permission", "tests/visual_tui_demo.py --state permission", ""), ("ratatui-permission", "tests/ratatui_browser_demo.py", "permission"),
-                                         ("textual-picker", "tests/visual_tui_demo.py --state picker", ""), ("ratatui-picker", "tests/ratatui_browser_demo.py", "picker"),
+            captures = (("ratatui", "tests/ratatui_browser_demo.py", ""),
+                                         ("ratatui-permission", "tests/ratatui_browser_demo.py", "permission"),
+                                         ("ratatui-picker", "tests/ratatui_browser_demo.py", "picker"),
                                          ("ratatui-panel", "tests/ratatui_browser_demo.py", "panel"), ("ratatui-light", "tests/ratatui_browser_demo.py", "light"), ("ratatui-diff", "tests/ratatui_browser_demo.py", "diff"), ("ratatui-tool", "tests/ratatui_browser_demo.py", "tool"), ("ratatui-settings", "tests/ratatui_browser_demo.py", "settings"),
                                          ("ratatui-agents", "tests/ratatui_browser_demo.py", "agents"), ("ratatui-markdown", "tests/ratatui_browser_demo.py", "markdown"),
                                          ("ratatui-usage", "tests/ratatui_browser_demo.py", "usage"), ("ratatui-completion", "tests/ratatui_browser_demo.py", "completion"),
-                                         ("textual-subagent", "tests/visual_tui_demo.py --state subagent", ""), ("ratatui-subagent", "tests/ratatui_browser_demo.py", "subagent"))
-            captures += tuple((f"ratatui-mcp-{state}", f"tests/ratatui_browser_demo.py --bridge {sys.executable} tests/mcp_search_native_fixture.py --state {state}", "")
-                              for state in ("context", "details", "settings", "loading"))
+                                         ("ratatui-subagent", "tests/ratatui_browser_demo.py", "subagent"),
+                                         ("ratatui-local", "tests/ratatui_browser_demo.py", "local_disclosure"))
             if os.environ.get("NEXUS_RATATUI_MATRIX"):
                 captures = [(f"redesign-{theme}-{sidebars}-{cols}", "tests/ratatui_browser_demo.py", f"redesign-{theme}-{sidebars}-Session")
                     for theme in ("dark","light") for sidebars in ("00","10","01","11") for cols in (80,120,200)]
@@ -64,7 +63,7 @@ def main():
                     else:
                         raise RuntimeError("Terminal server did not become ready")
                     page.wait_for_timeout(1500)
-                    assert page.locator(".intro-dialog").is_hidden(), "terminal process failed to start"
+                    assert server.poll() is None, "terminal process failed to start"
                     if state.startswith("redesign-"):
                         import math
                         cols = int(name.rsplit("-",1)[-1])
@@ -75,6 +74,16 @@ def main():
                         page.evaluate("size => window.__nexusSockets.at(-1).send(JSON.stringify(['resize',size]))", {"width":cols,"height":50})
                         page.wait_for_timeout(350)
                     page.screenshot(path=str(ARTIFACTS / f"{name}.png"))
+                    if state == "local_disclosure":
+                        page.get_by_role("textbox", name="Terminal input").click()
+                        page.keyboard.press("Tab")
+                        page.keyboard.press("Enter")
+                        page.wait_for_timeout(150)
+                        page.screenshot(path=str(ARTIFACTS / f"{name}-group.png"))
+                        page.keyboard.press("Tab")
+                        page.keyboard.press("Enter")
+                        page.wait_for_timeout(150)
+                        page.screenshot(path=str(ARTIFACTS / f"{name}-detail.png"))
                     if state or name != name.split("-")[0]:
                         print(f"{name}: captured")
                         continue

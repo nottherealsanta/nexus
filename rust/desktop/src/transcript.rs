@@ -42,6 +42,21 @@ impl Desktop {
         });
         input.into_any_element()
     }
+
+    pub(crate) fn prepare_markdown_cache(&mut self) {
+        let sources: Vec<String> = self
+            .snapshot
+            .blocks
+            .iter()
+            .filter(|block| block.kind == "markdown")
+            .map(|block| block.text.clone())
+            .collect();
+        self.parsed_docs
+            .retain_sources(sources.iter().map(String::as_str));
+        for source in sources {
+            self.parsed_docs.prepare(&source);
+        }
+    }
     pub(crate) fn image_thumbnail(
         &self,
         image: &bridge::InlineImage,
@@ -157,6 +172,13 @@ impl Desktop {
             "context_header" => self.context_header(block, cx),
             "user" => {
                 let op = block.operation.clone();
+                let user_text = if block.title.is_empty() {
+                    block.text.clone()
+                } else if block.text.is_empty() {
+                    block.title.clone()
+                } else {
+                    format!("{}\n{}", block.title, block.text)
+                };
                 div()
                     .id(SharedString::from(block.id.clone()))
                     .focusable()
@@ -173,19 +195,16 @@ impl Desktop {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .child(
-                        div()
-                            .text_size(px(15.))
-                            .line_height(px(25.))
-                            .child(block.title.clone()),
-                    )
-                    .when(!block.text.is_empty(), |d| {
-                        d.child(
-                            div()
-                                .text_size(px(14.))
-                                .line_height(px(24.))
-                                .child(block.text.clone()),
-                        )
+                    .when(!user_text.is_empty(), |d| {
+                        d.child(self.selectable(
+                            &markdown::Block {
+                                text: user_text,
+                                ..Default::default()
+                            },
+                            SharedString::from(format!("user-text-{}", block.id)),
+                            t,
+                            cx,
+                        ))
                     })
                     .child(
                         div().flex().flex_wrap().gap_2().children(
@@ -225,12 +244,18 @@ impl Desktop {
                 .flex_col()
                 .gap_1()
                 .py_1()
-                .child(markdown::render(
-                    &block.text,
-                    t,
-                    &block.id,
-                    |block, key, t| self.selectable(block, key, t, cx),
-                ))
+                .child({
+                    let parsed = self.parsed_docs.get(&block.text);
+                    if let Some(parsed) = parsed {
+                        markdown::render_parsed(&parsed.blocks, t, &block.id, |block, key, t| {
+                            self.selectable(block, key, t, cx)
+                        })
+                    } else {
+                        markdown::render(&block.text, t, &block.id, |block, key, t| {
+                            self.selectable(block, key, t, cx)
+                        })
+                    }
+                })
                 .child(
                     div()
                         .id(SharedString::from(format!("copy-{}", block.id)))
@@ -265,41 +290,74 @@ impl Desktop {
                 .child(block.text.clone())
                 .into_any_element(),
             "diff" => {
+                let gutter = |text: String| {
+                    div()
+                        .w(px(34.))
+                        .flex_shrink_0()
+                        .pr_2()
+                        .text_right()
+                        .text_color(t.muted.opacity(0.65))
+                        .child(text)
+                };
                 let mut rows = vec![];
                 for (old_no, old, new_no, new, kind) in &block.diff_rows {
+                    let added = kind == "add";
+                    let removed = kind == "del";
                     rows.push(
                         div()
                             .flex()
-                            .gap_3()
+                            .items_center()
                             .text_size(px(11.))
                             .font_family("Menlo")
                             .line_height(px(18.))
-                            .bg(if kind == "add" {
-                                t.accent_bg
+                            .bg(if added {
+                                t.diff_add_bg
+                            } else if removed {
+                                t.diff_remove_bg
                             } else {
-                                t.sidebar
+                                t.surface.opacity(0.)
                             })
-                            .child(div().w(px(32.)).text_color(t.muted).child(if *old_no == 0 {
+                            .child(gutter(if *old_no == 0 {
                                 String::new()
                             } else {
                                 old_no.to_string()
                             }))
-                            .child(
-                                div()
-                                    .w_1_2()
-                                    .text_color(if kind == "del" { t.red } else { t.text })
-                                    .child(old.clone()),
-                            )
-                            .child(div().w(px(32.)).text_color(t.muted).child(if *new_no == 0 {
+                            .child(gutter(if *new_no == 0 {
                                 String::new()
                             } else {
                                 new_no.to_string()
                             }))
                             .child(
                                 div()
-                                    .w_1_2()
-                                    .text_color(if kind == "add" { t.green } else { t.text })
-                                    .child(new.clone()),
+                                    .w(px(12.))
+                                    .flex_shrink_0()
+                                    .text_color(if added {
+                                        t.diff_add
+                                    } else if removed {
+                                        t.diff_remove
+                                    } else {
+                                        t.muted
+                                    })
+                                    .child(if added {
+                                        "+"
+                                    } else if removed {
+                                        "-"
+                                    } else {
+                                        " "
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_color(if added {
+                                        t.diff_add
+                                    } else if removed {
+                                        t.diff_remove
+                                    } else {
+                                        t.muted
+                                    })
+                                    .child(if removed { old.clone() } else { new.clone() }),
                             ),
                     );
                 }

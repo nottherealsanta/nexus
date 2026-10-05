@@ -5,11 +5,21 @@ bounded; the TUI and web use the host contract and never touch the runtime or th
 model cache. Plans and spike notes: `plans/VOICE_PLAN.md`, `plans/VOICE_SPIKE.md`.
 
 Voice status reports `cached` separately from the in-memory lifecycle state.
-Terminal clients offer **Load voice model** for cached files (including after
-idle unload), without download consent; loading/downloading shows progress or
+Native `/voice` and Ctrl+X, V automatically load cached files (including after
+idle unload), without an extra confirmation, then start recording with the
+existing start sound once ready. Loading/downloading shows progress or
 a refresh action instead of another download prompt. Cache-only preparation
 uses `VoicePrepare.allow_download=false`, so missing or invalid files cannot
 silently trigger a download. A missing cache still requires explicit consent.
+Dialog polling never retries a failed load automatically; errors remain visible
+alongside the retry action, not only in inspect details. Scheduled preparation
+publishes loading immediately, before the background task runs, so clients do
+not mistake its initial response for a failed load.
+Voice settings retain a separate preparation action and
+never start capture.
+Cached weights do not include the Python voice runtime. Both download-enabled
+and cache-only preparation check runtime availability first and report the
+voice-extra installation instructions instead of a generic initialization error.
 
 ## Files
 
@@ -21,8 +31,8 @@ silently trigger a download. A missing cache still requires explicit consent.
 | `voice/audio.py` | strict WAV validation: mono, 16 kHz, PCM16, ≥ 0.2 s, ≤ `voice.max_seconds` (≤ 120) |
 | `voice/model.py` | `VoiceState`, `TranscribeResult`, `VoiceError` |
 | `host_support/voice.py` | bounded, redacted host dispatch and Doctor projection |
-| `ui_support/voice_capture.py`, `tui_voice.py`; `ui/web/js/voice.js`, `voice-worklet.js` | TUI and browser capture and consent flow |
-| `ui_support/tui_voice.py:VoiceStrip`, `ui/web/js/voice-strip.js` | the live dictation strip (waveform + running transcript) |
+| `ui_support/voice_capture.py`, `ui/ratatui/voice.py`; `ui/web/js/voice.js`, `voice-worklet.js` | TUI and browser capture and consent flow |
+| `ui/ratatui/voice.py`, `ui/web/js/voice-strip.js` | the live dictation strip (waveform + running transcript) |
 
 ## Flow
 
@@ -80,9 +90,9 @@ Implement the `Engine` protocol (`load`, `transcribe(bytes)`, `close`) in
 `nexus/voice/`, keep dependency imports lazy, preserve the bounded WAV,
 serialized worker, model-store and host-command boundaries, and cover it with a
 fake-engine unit test. No UI may import the inference library or read the cache.
-Tests: `tests/test_voice_*.py`, `test_tui_voice.py`.
+Tests: `tests/test_voice_*.py`, `test_ratatui_voice.py`.
 
-The Textual voice dialog shows only the actions for its current phase. Runtime
+The native voice dialog shows only the actions for its current phase. Runtime
 errors and unsupported installations show the host's message and Retry, even
 before preparation is requested; a loaded model offers Start dictation and
 replaces the download invitation.
@@ -106,7 +116,7 @@ host installation guidance once, without appending a second installation recipe.
 
 
 The native Ratatui client uses the same host-backed TOML voice settings helper
-as Textual for `/voice on|off`. It observes `enabled`, `max_seconds` and
+for `/voice on|off`. It observes `enabled`, `max_seconds` and
 `auto_send`, and submits only a final transcript combined with the existing
 composer draft. A late result is discarded if the session or active panel
 changed. Partial transcripts are previews only. Native capture tests use a fake
@@ -136,7 +146,7 @@ independently of recording cues; playback is best-effort without audio support.
 Starting dictation plays a short rising two-note cue; stopping plays a falling
 one. The cue (`ui_support/voice_capture.py:play_cue`, via `sounddevice`
 output) finishes before the microphone opens so it is not recorded. It is
-terminal-only (Textual and Ratatui); the web app has none. Cues are best-effort (a
+terminal-only (Ratatui); the web app has none. Cues are best-effort (a
 missing output device is silent) and `NEXUS_VOICE_SOUNDS=off` disables them. Discarding with Escape also plays the stop cue. Audible result on
 real hardware is not verified.
 
@@ -149,7 +159,7 @@ tool-call preambles), tool calls/results, reasoning blocks, or child-agent
 transcripts. An active turn, missing final text, or a tool-call-only final
 message is refused. Markdown in the final answer is passed through as text.
 Playback happens on the daemon machine's default output device, not remotely
-on the client. Both Ratatui and Textual dispatch the same `Speak` host command;
+on the client. Both Ratatui dispatch the same `Speak` host command;
 the deprecated browser client has no new speech UI.
 
 Install in the environment used to run the daemon (source checkout shown):

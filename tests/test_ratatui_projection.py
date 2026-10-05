@@ -1,4 +1,4 @@
-"""Native transcript projection follows the Textual timeline order and spacing."""
+"""Native transcript projection follows the native terminal timeline order and spacing."""
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -43,6 +43,25 @@ def test_user_border_matches_agent_color(tmp_path, monkeypatch, color):
     assert user["color"] == (color or snapshot["agent_color"])
 
 
+def test_live_activity_preview_closes_at_reply_and_completion(tmp_path, monkeypatch):
+    tools = [ToolCallView(call_id=f"read-{i}", name="read", event_seq=i + 2,
+                         status="completed", input={"path": f"{i}.py"}) for i in range(8)]
+    turn = replace(_turn(), phase="active", messages=[_turn().messages[0]], tools=tools)
+    def activity(value):
+        return next(b for b in _snapshot(tmp_path, monkeypatch, [value],
+                    local_transcript=True)["blocks"] if b["kind"] == "tool_group")
+    live = activity(turn)
+    assert live["preview_limit"] == 5
+    assert live["text"] == "Read 8 files"
+    assert len(live["members"]) == 8  # Rust bounds the preview, never the full payload.
+    completed = activity(replace(turn, phase="completed"))
+    assert "preview_limit" not in completed
+    reply = MessageView(id="reply", role="assistant", event_seq=20,
+                        blocks=[BlockView(text="The files look good.")])
+    assert "preview_limit" not in activity(replace(turn, messages=turn.messages + [reply]))
+    assert activity(replace(turn, tools=tools[:2]))["id"] == live["id"]
+
+
 def test_parallel_markers_are_separate_from_tool_text(tmp_path, monkeypatch):
     tools = [
         ToolCallView(call_id="a", name="read", event_seq=2, iteration=1,
@@ -67,14 +86,14 @@ def test_blocks_follow_event_order_with_textual_gaps(tmp_path, monkeypatch):
     assert kinds == ["user", "tool_group", "markdown", "summary"]
     user, tool, reply, summary = blocks[:4]
     assert user["number"] == 1 and user["title"] == "hi there" and user["text"] == "second line"
-    assert tool["gap"] == 1 and tool["text"] == "Explored: 1 read"  # margin after the prompt card
+    assert tool["gap"] == 1 and tool["text"] == "Read 1 file"  # margin after the prompt card
     assert reply["gap"] == 1  # a reply after a tool call is set apart
     assert summary["gap"] == 0 and "3.3s" in summary["text"]  # reply bottom margin collapses with the footer's
     assert blocks[4]["id"].startswith("u:user") and blocks[4]["gap"] == 1  # turn margin-bottom
 
 
 @pytest.mark.parametrize("expanded", [False, True])
-def test_thought_and_tool_groups_have_blank_rows_between_them(tmp_path, monkeypatch, expanded):
+def test_thought_and_tools_share_one_activity_group(tmp_path, monkeypatch, expanded):
     thought = MessageView(id="thought", role="assistant", event_seq=3,
                           blocks=[BlockView(kind="thinking", text="Consider the next step.")])
     turn = replace(_turn(), messages=[_turn().messages[0], thought], tools=[
@@ -86,9 +105,11 @@ def test_thought_and_tool_groups_have_blank_rows_between_them(tmp_path, monkeypa
     blocks = _snapshot(tmp_path, monkeypatch, [turn], verbose=expanded,
                        expanded={"thoughtthinking"} if expanded else set())["blocks"]
     transcript = [b for b in blocks if b["kind"] in {"tool_group", "thought"}]
-    assert [b["kind"] for b in transcript] == ["tool_group", "thought", "tool_group"]
-    assert transcript[1]["gap"] == 1
-    assert transcript[2]["gap"] == 1
+    assert len(transcript) == 1
+    assert transcript[0]["text"] == "Read 2 files · Thought 1 time"
+    assert transcript[0]["count"] == 3
+    if expanded:
+        assert [m["kind"] for m in transcript[0]["members"]] == ["tool", "thought", "tool"]
 
 
 def test_collapsed_turn_keeps_prompt_and_counts_tools(tmp_path, monkeypatch):
@@ -239,7 +260,7 @@ def test_session_cards_carry_status_words_age_and_the_current_marker():
     from nexus.ui.ratatui.workflows import session_rows
 
     def row(id, state, seq, title):
-        return ProjectSession("/w", "p", SessionSummary(id=id, title=title, state=state, last_activity=1000.0, last_seq=seq, message_count=3))
+        return ProjectSession("/w", "p", SessionSummary(id=id, title=title, state=state, last_activity=1000.0, last_seq=seq, completion_seq=seq, message_count=3))
 
     result = ProjectSessionsListResult(sessions=[row("a", "running", 5, "Busy"), row("b", "idle", 5, "Quiet"), row("c", "awaiting_input", 5, "Asks"), row("d", "idle", 0, "")])
     seen = {"b": 2}  # b finished something since it was last viewed
@@ -367,8 +388,8 @@ def test_agent_page_uses_child_conversation_and_recorded_context(tmp_path, monke
 
 
 @pytest.mark.parametrize("name, inputs, summary", [
-    ("Read", {"path": "private-file.txt"}, "Explored: 1 read"),
-    ("Bash", {"command": "echo private-output"}, "Bash · 1 call"),
+    ("Read", {"path": "private-file.txt"}, "Read 1 file"),
+    ("Bash", {"command": "echo private-output"}, "Ran 1 command"),
 ])
 def test_single_tool_keeps_group_summary_and_expands_details(tmp_path, monkeypatch, name, inputs, summary):
     tool = ToolCallView(call_id="only", name=name, event_seq=2, status="completed",
@@ -380,7 +401,7 @@ def test_single_tool_keeps_group_summary_and_expands_details(tmp_path, monkeypat
     closed = group(set())
     assert closed["text"] == summary and closed["count"] == 1
     assert closed["collapsed"] and closed["members"] == []
-    opened = group({"t:gonly", "only:detail"})
+    opened = group({"t:activity:only", "only:detail"})
     assert opened["text"] == summary and not opened["collapsed"]
     assert len(opened["members"]) == 1
     assert "private-output" in opened["members"][0]["detail"]
@@ -395,24 +416,70 @@ def test_groups_and_tool_detail_have_independent_expansion(tmp_path, monkeypatch
     def group(expanded):
         return next(b for b in _snapshot(tmp_path, monkeypatch, [turn], literal=False, expanded=expanded)["blocks"] if b["kind"] == "tool_group")
     assert group(set())["members"] == []
-    opened = group({"t:gshort"})
+    opened = group({"t:activity:short"})
     assert opened["count"] == 2 and not opened["members"][1]["detail"]
-    folded = group({"t:gshort", "long:detail"})["members"][1]
+    folded = group({"t:activity:short", "long:detail"})["members"][1]
     assert "command: ls" in folded["detail"] and "more lines" in folded["detail"]
     assert folded["output_operation"] == {"kind": "block_toggle", "id": "long:output"}
-    all_output = group({"t:gshort", "long:detail", "long:output"})["members"][1]
+    all_output = group({"t:activity:short", "long:detail", "long:output"})["members"][1]
     assert "line 29" in all_output["detail"]
 
 
 def test_explored_group_summarises_lookups_and_thought_carries_duration(tmp_path, monkeypatch):
     thinking = BlockView(kind="thinking", text="**Plan**\nlook around", elapsed_ms=671)
-    messages = [_turn().messages[0], MessageView(id="a", role="assistant", event_seq=1, blocks=[thinking])]
-    tools = [ToolCallView(call_id="g", name="Grep", event_seq=2, status="completed", input={"pattern": "x"}),
+    messages = [_turn().messages[0], MessageView(id="a", role="assistant", event_seq=2, blocks=[thinking])]
+    tools = [ToolCallView(call_id="g", name="Grep", event_seq=3, status="completed", input={"pattern": "x"}),
              ToolCallView(call_id="r", name="Read", event_seq=3, status="completed", input={"path": "a.py"})]
     blocks = _snapshot(tmp_path, monkeypatch, [replace(_turn(), messages=messages, tools=tools)], literal=False,
-                       expanded={"t:gg"})["blocks"]
-    thought = next(b for b in blocks if b["kind"] == "thought")
-    assert thought["title"] == "Thought: 671ms"
+                       expanded={"t:activity:athinking"})["blocks"]
     group = next(b for b in blocks if b["kind"] == "tool_group")
-    assert group["text"] == "Explored: 1 search, 1 read"
-    assert [m["heading"].split(" ")[0] for m in group["members"]] == ["✱", "→"]
+    assert group["members"][0]["title"] == "Thought: 671ms"
+    assert group["text"] == "Thought 1 time · Searched 1 time · Read 1 file"
+    assert [m["heading"].split(" ")[0] for m in group["members"][1:]] == ["✱", "→"]
+
+
+def test_local_transcript_supplies_hidden_content_without_python_expansion(tmp_path, monkeypatch):
+    output = "\n".join(f"line {i}" for i in range(30))
+    turn = replace(_turn(), tools=[ToolCallView(call_id="long", name="Bash", event_seq=2,
+                   status="completed", input={"command": "ls"}, display=output)])
+    def snapshot(expanded):
+        return _snapshot(tmp_path, monkeypatch, [turn], literal=False,
+                         local_transcript=True, expanded=expanded)
+    blocks = snapshot(set())["blocks"]
+    group = next(b for b in blocks if b["kind"] == "tool_group")
+    assert group["local_ui"] and group["collapsed"]
+    member = group["members"][0]
+    assert "line 29" in member["local_detail"]
+    assert member["fold_lines"] > 0
+    assert "local_preview" not in member
+    assert member["detail"] == ""
+    assert member["members"] == []
+    assert all(b["turn_id"] == "t" for b in blocks)
+    assert blocks == snapshot({"unused"})["blocks"]
+
+
+def test_disconnected_flag_tracks_the_notice(tmp_path, monkeypatch):
+    connected = _snapshot(tmp_path, monkeypatch, [_turn()])
+    assert connected["disconnected"] is False
+    offline = _snapshot(
+        tmp_path, monkeypatch, [_turn()],
+        notice="Disconnected: use /reconnect to replay and reattach",
+    )
+    assert offline["disconnected"] is True
+
+
+def test_folded_turn_summary_lists_tool_calls_tokens_and_model():
+    from nexus.ui.ratatui.prototype import _fold_summary
+    from nexus.view.model import MessageView, ToolCallView, TurnView, UsageTotals
+
+    def turn(tools, usage, model):
+        return TurnView(
+            id="t", index=0, phase="completed",
+            messages=[MessageView(id="a", role="assistant", event_seq=2, model=model, provider="p" if model else None)],
+            tools=[ToolCallView(call_id=str(i), name="Read", event_seq=3 + i, status="completed") for i in range(tools)],
+            usage=usage,
+        )
+
+    assert _fold_summary(turn(2, UsageTotals(input_tokens=1000, output_tokens=234), "gpt")) == "2 tools · 1.2K tokens · gpt"
+    assert _fold_summary(turn(1, UsageTotals(), None)) == "1 tool"
+    assert _fold_summary(turn(0, UsageTotals(), None)) == "0 tools"

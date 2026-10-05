@@ -1,5 +1,4 @@
-//! Transcript blocks to styled, wrapped rows, matching the Textual timeline
-//! (`nexus/ui/tui/timeline.py`, `app.tcss` `.timeline-*`). Python decides order
+//! Transcript blocks to styled, wrapped rows, for the native timeline. Python decides order
 //! and blank-row gaps; this module only draws and wraps at word boundaries.
 use crate::{bridge::Content, markdown, render::Palette};
 use ratatui::{
@@ -222,7 +221,8 @@ fn user(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
         }
         out.push((row, op.clone()));
     }
-    if !b.text.is_empty() {
+    // A folded turn's text is its stats line; it is drawn under the card, not in it.
+    if !b.text.is_empty() && !b.collapsed {
         for text in b.text.lines() {
             for cells in wrap(&[Span::raw(text.to_string())], inner) {
                 out.push((line(bar(()), cells, Some(width), base), op.clone()));
@@ -264,9 +264,28 @@ fn user(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
         ));
     }
     out.push((line(bar(()), vec![], Some(width), base), op.clone()));
+    if b.collapsed && !b.text.is_empty() {
+        // Outside the box, muted, aligned with the prompt text (5 columns in). The next
+        // block's own gap supplies the blank line below.
+        let outside = Style::default().fg(p.muted).bg(p.background);
+        let indent = || vec![Span::styled("     ", Style::default().bg(p.background))];
+        for text in b.text.lines() {
+            for cells in wrap(&[Span::styled(text.to_string(), outside)], inner) {
+                out.push((
+                    line(
+                        indent(),
+                        cells,
+                        Some(width),
+                        Style::default().bg(p.background),
+                    ),
+                    op.clone(),
+                ));
+            }
+        }
+    }
 }
 
-/// An inline file diff like textual-diff-view: `path (+a, -r)`, then split rows with
+/// An inline file diff with split columns: `path (+a, -r)`, then split rows with
 /// real line numbers, removed lines tinted red on the left and added lines green on
 /// the right, long lines wrapped inside their column, hunks separated by `⋯`.
 fn diff(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
@@ -476,7 +495,7 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
         }
         "hints" => {
             // Tips for an empty session: "keys\ttext" rows, centred as one block
-            // (Python pads both columns to equal width, like Textual's EmptyHints).
+            // (Python pads both columns to equal width, like the terminal's EmptyHints).
             for row in b.text.lines() {
                 let (keys, text) = row.split_once('\t').unwrap_or(("", row));
                 let used = keys.width() + 2 + text.width();
@@ -580,7 +599,13 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
             // No ✓/✗ and no failure count: failed calls recover on their own, and
             // the expanded member still shows the error output in full.
             let running = b.status == "running";
-            let glyph = if running { "\u{e000}" } else { "→" };
+            let glyph = if running {
+                "\u{e000}"
+            } else if b.collapsed {
+                "›"
+            } else {
+                "⌄"
+            };
             let tone = if running {
                 color(&b.color, p.blue, p)
             } else {
@@ -599,7 +624,13 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
                 op.clone(),
             ));
             for member in &b.members {
-                let text = if member.heading.is_empty() {
+                let text = if member.kind == "thought" {
+                    if member.detail.is_empty() {
+                        format!("{} · Enter for reasoning", member.title)
+                    } else {
+                        member.title.clone()
+                    }
+                } else if member.heading.is_empty() {
                     format!("{:<8} {}", member.title, member.text)
                 } else {
                     member.heading.clone()

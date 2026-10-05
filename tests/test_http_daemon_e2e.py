@@ -533,6 +533,7 @@ async def test_sigterm_closes_http_and_removes_the_token_file(daemon_env):
 async def test_restart_mints_a_fresh_token_and_keeps_the_session(daemon_env):
     client, endpoint = await _open_http_daemon(daemon_env)
     await client.call(p.SessionOpen(session="s"))
+    await client.call(p.SessionStart(session="s", content="Persist this session"))
     first_token = endpoint["token"]
     await client.close()
     await stop(daemon_env.workspace, socket_path=daemon_env.socket)

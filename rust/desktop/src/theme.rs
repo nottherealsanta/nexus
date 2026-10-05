@@ -14,6 +14,12 @@ pub struct Theme {
     pub green: Hsla,
     pub red: Hsla,
     pub amber: Hsla,
+    pub diff_add: Hsla,
+    pub diff_add_bg: Hsla,
+    pub diff_remove: Hsla,
+    pub diff_remove_bg: Hsla,
+    pub focus_ring: Hsla,
+    pub disabled: Hsla,
 }
 impl Theme {
     pub fn new(light: bool) -> Self {
@@ -32,6 +38,12 @@ impl Theme {
                 green: c(0x267e58),
                 red: c(0xb84949),
                 amber: c(0x946716),
+                diff_add: c(0x176b43),
+                diff_add_bg: c(0xe8f5ec),
+                diff_remove: c(0xa33c42),
+                diff_remove_bg: c(0xfbeaec),
+                focus_ring: c(0x4c7dff),
+                disabled: c(0xa6abb3),
             }
         } else {
             Self {
@@ -47,7 +59,46 @@ impl Theme {
                 green: c(0x91c9a4),
                 red: c(0xf08c98),
                 amber: c(0xe2bd80),
+                diff_add: c(0x8ed5a5),
+                diff_add_bg: c(0x14281d),
+                diff_remove: c(0xf09a9e),
+                diff_remove_bg: c(0x301a1d),
+                focus_ring: c(0x789cff),
+                disabled: c(0x666a72),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rgb_value(color: Hsla) -> [u8; 3] {
+        let rgba: gpui::Rgba = color.into();
+        [
+            (rgba.r * 255.) as u8,
+            (rgba.g * 255.) as u8,
+            (rgba.b * 255.) as u8,
+        ]
+    }
+
+    #[test]
+    fn dark_canvas_retains_near_black_and_palettes_are_opaque() {
+        let dark = Theme::new(false);
+        assert_eq!(rgb_value(dark.background), [11, 11, 11]);
+        assert_eq!(dark.background.a, 1.0);
+        let light = Theme::new(true);
+        assert_eq!(light.background.a, 1.0);
+    }
+
+    #[test]
+    fn diff_states_have_distinct_tinted_semantics() {
+        let dark = Theme::new(false);
+        let light = Theme::new(true);
+        assert_ne!(dark.diff_add_bg, dark.surface);
+        assert_ne!(dark.diff_remove_bg, dark.surface);
+        assert_ne!(dark.diff_add, dark.diff_remove);
+        assert_ne!(light.diff_add_bg, light.diff_remove_bg);
     }
 }

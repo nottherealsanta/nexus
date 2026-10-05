@@ -10,7 +10,7 @@ use ratatui::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
-/// Nexus dark/light tokens, mirroring `nexus/ui/tui/theme.py`.
+/// Nexus dark/light tokens, defined by the native palette.
 mod chrome;
 mod dialogs;
 pub use chrome::*;
@@ -131,6 +131,20 @@ impl<T> Indexed<T> {
     pub fn range(&self, start: usize, count: usize) -> impl Iterator<Item = &T> {
         (start..start.saturating_add(count).min(self.length)).filter_map(|index| self.get(index))
     }
+    fn truncate_parts(&mut self, length: usize) {
+        self.parts.truncate(length);
+        self.offsets.truncate(length);
+        self.length = self
+            .parts
+            .last()
+            .zip(self.offsets.last())
+            .map_or(0, |(part, offset)| offset + part.len());
+    }
+    fn append_part(&mut self, part: std::sync::Arc<Vec<T>>) {
+        self.offsets.push(self.length);
+        self.length += part.len();
+        self.parts.push(part);
+    }
     fn set_parts(&mut self, parts: Vec<std::sync::Arc<Vec<T>>>) {
         let first = self
             .parts
@@ -170,6 +184,15 @@ struct Part {
 }
 #[derive(Default)]
 pub struct Cache {
+    pub disclosure: crate::disclosure::Disclosure,
+    dirty_from: Option<usize>,
+    dirty_until: Option<usize>,
+    patch_known: bool,
+    active_parts: Vec<Option<std::sync::Arc<Part>>>,
+    active_page: String,
+    part_offsets: Vec<usize>,
+    built_verbose: bool,
+    hints_index: Option<usize>,
     parts: std::collections::HashMap<String, std::sync::Arc<Part>>,
     blocks: Vec<crate::bridge::Content>,
     pub operations: Indexed<Option<serde_json::Value>>,
@@ -192,6 +215,8 @@ pub struct Cache {
     /// The draft is non-empty: empty-session hints keep their rows but go blank.
     pub typing: bool,
     pub content_elapsed: std::time::Duration,
+    pub content_blocks: usize,
+    pub content_reset: bool,
     session_chrome: Option<(
         u64,
         u16,
@@ -486,13 +511,16 @@ impl Cache {
         width: u16,
     ) -> &(Vec<Line<'static>>, Vec<Option<usize>>) {
         // Stored as a pair below to share exactly the drawing/hit-test rows.
-        let same = self
-            .details_chrome
-            .as_ref()
-            .is_some_and(|old| old.0 == s.revision && old.1 == width);
+        let same = self.details_chrome.as_ref().is_some_and(|old| {
+            old.0 == s.revision.wrapping_add(s.ui_local_revision << 32) && old.1 == width
+        });
         if !same {
             let (lines, hits) = details_rows(s, p, width);
-            self.details_chrome = Some((s.revision, width, (lines, hits)));
+            self.details_chrome = Some((
+                s.revision.wrapping_add(s.ui_local_revision << 32),
+                width,
+                (lines, hits),
+            ));
         }
         &self.details_chrome.as_ref().unwrap().2
     }
@@ -536,6 +564,28 @@ impl Cache {
             }
         }
     }
+    pub fn note_patch(&mut self, from: Option<usize>) {
+        self.patch_known = true;
+        if from.is_some() {
+            self.dirty_until = None;
+        }
+        if let Some(from) = from {
+            self.dirty_from = Some(self.dirty_from.map_or(from, |old| old.min(from)));
+        }
+    }
+    pub fn invalidate_disclosure(&mut self) {
+        let from = self.disclosure.changed_from.take();
+        let until = self.disclosure.changed_until.take();
+        self.dirty_until = if self.dirty_from.is_none() {
+            until
+        } else {
+            self.dirty_until.zip(until).map(|(old, new)| old.max(new))
+        };
+        if let Some(from) = from {
+            self.dirty_from = Some(self.dirty_from.map_or(from, |old| old.min(from)));
+        }
+        self.patch_known = true;
+    }
     pub fn update_content(
         &mut self,
         context: &[String],
@@ -545,104 +595,201 @@ impl Cache {
     ) {
         let began = std::time::Instant::now();
         self.content_elapsed = std::time::Duration::ZERO;
-        if self.blocks.len() == blocks.len()
-            && self
-                .blocks
-                .iter()
-                .zip(blocks)
-                .all(|(old, new)| same_block(old, new))
-            && self.source == context
-            && self.width == width
-            && self.typing == self.built_typing
-        {
-            return;
-        }
+        self.content_blocks = 0;
+        let reset = self.width != width
+            || self.source != context
+            || self.active_page != self.disclosure.scope
+            || self.built_verbose != self.disclosure.verbose;
         if self.typing != self.built_typing {
-            self.parts.clear();
+            if let Some(index) = self.hints_index {
+                let prior = self.dirty_from;
+                self.dirty_from = Some(prior.map_or(index, |old| old.min(index)));
+                if prior.is_none() {
+                    self.dirty_until = Some(index + 1);
+                }
+            }
+            self.built_typing = self.typing;
         }
-        self.built_typing = self.typing;
-        if !context.is_empty() {
-            self.lines.clear();
-            self.operations.clear();
-        }
-        for row in context {
-            for line in row.lines() {
-                for cells in
-                    crate::transcript::wrap(&[Span::raw(line.to_string())], usize::from(width))
-                {
-                    self.lines.push(crate::transcript::line(
-                        vec![],
-                        cells,
-                        None,
-                        Style::default().fg(palette.muted),
-                    ));
-                    self.operations.push(None);
+        self.content_reset = reset;
+        if reset || self.dirty_from.is_some() || !self.patch_known {
+            // A turn leaving the newest-two window folds without any patch touching it.
+            if let Some(index) = self.disclosure.sync_window(blocks) {
+                if !reset {
+                    self.dirty_from = Some(self.dirty_from.map_or(index, |old| old.min(index)));
+                    self.dirty_until = None;
+                    self.patch_known = true;
                 }
             }
         }
-        let mut old = std::mem::take(&mut self.parts);
-        let mut lines = Vec::new();
-        let mut operations = Vec::new();
-        for (i, block) in blocks.iter().enumerate() {
-            let key = format!("{}|{}:{}", self.page, block.id, i);
-            let part = if let Some(part) = old
-                .remove(&key)
-                .filter(|part| same_block(&part.block, block) && part.width == width)
-            {
-                part
-            } else {
-                let mut shown = block.clone();
-                if self.typing && shown.kind == "hints" {
-                    shown.text = shown
+        let start = if reset {
+            0
+        } else if let Some(from) = self.dirty_from {
+            from.min(self.active_parts.len())
+        } else if self.patch_known {
+            return;
+        } else {
+            self.blocks
+                .iter()
+                .zip(blocks)
+                .take_while(|(old, new)| same_block(old, new))
+                .count()
+        };
+        if !reset && start == blocks.len() && self.blocks.len() == blocks.len() {
+            return;
+        }
+        self.dirty_from = None;
+        self.active_page = self.disclosure.scope.clone();
+        self.built_typing = self.typing;
+        self.built_verbose = self.disclosure.verbose;
+        let stop = if reset {
+            blocks.len()
+        } else {
+            self.dirty_until
+                .take()
+                .unwrap_or(blocks.len())
+                .min(blocks.len())
+        };
+        let prefix_count = if reset {
+            0
+        } else {
+            self.part_offsets
+                .get(start)
+                .copied()
+                .unwrap_or(self.lines.parts.len())
+        };
+        let end_count = if stop == blocks.len() || reset {
+            self.lines.parts.len()
+        } else {
+            self.part_offsets
+                .get(stop)
+                .copied()
+                .unwrap_or(self.lines.parts.len())
+        };
+        let saved_parts = if stop < blocks.len() && stop < self.active_parts.len() {
+            self.active_parts.split_off(stop)
+        } else {
+            Vec::new()
+        };
+        let saved_blocks = if stop < blocks.len() && stop < self.blocks.len() {
+            self.blocks.split_off(stop)
+        } else {
+            Vec::new()
+        };
+        // Move untouched suffix row parts; only prefix offsets shift after disclosure.
+        let saved_lines = self.lines.parts.split_off(end_count);
+        let saved_operations = self.operations.parts.split_off(end_count);
+        self.active_parts.truncate(start);
+        self.blocks.truncate(start);
+        self.part_offsets.truncate(start);
+        self.lines.truncate_parts(prefix_count);
+        self.operations.truncate_parts(prefix_count);
+        if reset && !context.is_empty() {
+            let mut rows = Vec::new();
+            for row in context {
+                for text in row.lines() {
+                    for cells in
+                        crate::transcript::wrap(&[Span::raw(text.to_owned())], usize::from(width))
+                    {
+                        rows.push(crate::transcript::line(
+                            vec![],
+                            cells,
+                            None,
+                            Style::default().fg(palette.muted),
+                        ));
+                    }
+                }
+            }
+            self.operations
+                .append_part(std::sync::Arc::new(vec![None; rows.len()]));
+            self.lines.append_part(std::sync::Arc::new(rows));
+        }
+        self.content_blocks = stop - start;
+        if reset {
+            self.hints_index = blocks.iter().position(|block| block.kind == "hints");
+        }
+        for source in blocks.iter().take(stop).skip(start) {
+            self.part_offsets.push(self.lines.parts.len());
+            let part = self.disclosure.block(source).map(|block| {
+                let key = format!("{}|{}", self.disclosure.scope, source.id);
+                if let Some(part) = self.parts.get(&key).filter(|part| {
+                    part.width == width
+                        && same_block(&part.block, &block)
+                        && !(block.kind == "hints" && self.typing)
+                }) {
+                    return part.clone();
+                }
+                let block = if self.typing && block.kind == "hints" {
+                    let mut hidden = block.into_owned();
+                    if !hidden.rev.is_empty() {
+                        hidden.rev.push_str(":typing");
+                    }
+                    hidden.text = hidden
                         .text
                         .lines()
                         .map(|_| "\t")
                         .collect::<Vec<_>>()
                         .join("\n");
-                }
-                let rows = crate::transcript::build(&shown, width, palette);
-                std::sync::Arc::new(Part {
-                    block: block.clone(),
+                    std::borrow::Cow::Owned(hidden)
+                } else {
+                    block
+                };
+                let rows = crate::transcript::build(&block, width, palette);
+                let part = std::sync::Arc::new(Part {
+                    block: if block.rev.is_empty() {
+                        block.into_owned()
+                    } else {
+                        crate::bridge::Content {
+                            id: block.id.clone(),
+                            rev: block.rev.clone(),
+                            ..Default::default()
+                        }
+                    },
                     width,
                     operations: std::sync::Arc::new(
                         rows.iter().map(|(_, op)| op.clone()).collect(),
                     ),
                     lines: std::sync::Arc::new(rows.into_iter().map(|(line, _)| line).collect()),
-                })
-            };
-            lines.push(part.lines.clone());
-            operations.push(part.operations.clone());
-            if i + 16384 >= blocks.len() {
-                self.parts.insert(key, part);
-            }
-        }
-        self.lines.set_parts(lines);
-        self.operations.set_parts(operations);
-        let mine = format!("{}|", self.page);
-        if self.parts.len() + old.len() <= 32768 {
-            self.parts
-                .extend(old.into_iter().filter(|(key, _)| !key.starts_with(&mine)));
-        }
-        self.source = context.to_vec();
-        self.blocks = blocks
-            .iter()
-            .map(|block| {
-                if block.rev.is_empty() {
-                    block.clone()
-                } else {
-                    crate::bridge::Content {
-                        id: block.id.clone(),
-                        rev: block.rev.clone(),
-                        ..Default::default()
-                    }
+                });
+                if self.parts.len() >= 32768 {
+                    self.parts.clear();
                 }
-            })
-            .collect();
+                self.parts.insert(key, part.clone());
+                part
+            });
+            if let Some(part) = &part {
+                self.lines.append_part(part.lines.clone());
+                self.operations.append_part(part.operations.clone());
+            }
+            self.active_parts.push(part);
+            self.blocks.push(if source.rev.is_empty() {
+                source.clone()
+            } else {
+                crate::bridge::Content {
+                    id: source.id.clone(),
+                    rev: source.rev.clone(),
+                    ..Default::default()
+                }
+            });
+        }
+        let mut line_suffix = saved_lines.into_iter();
+        let mut operation_suffix = saved_operations.into_iter();
+        for part in saved_parts {
+            self.part_offsets.push(self.lines.parts.len());
+            if part.is_some() {
+                self.lines.append_part(line_suffix.next().unwrap());
+                self.operations
+                    .append_part(operation_suffix.next().unwrap());
+            }
+            self.active_parts.push(part);
+        }
+        self.blocks.extend(saved_blocks);
+        self.source = context.to_vec();
         self.width = width;
         self.content_elapsed = began.elapsed();
     }
     pub fn reset(&mut self) {
         self.width = 0;
+        self.dirty_from = Some(0);
         self.parts.clear();
         self.session_chrome = None;
         self.details_chrome = None;
@@ -658,10 +805,10 @@ pub struct Regions {
     pub workspace: Rect,
     pub context: Rect,
 }
-/// Composer height: the editor grows with its wrapped content up to Textual's
+/// Composer height: the editor grows with its wrapped content up to the terminal's
 /// `max-height: 22` (9-row resting layout), leaving the
 /// transcript at least four rows.
-/// Rows above the editor for queued messages (Textual's input-queue preview).
+/// Rows above the editor for queued messages (the terminal's input-queue preview).
 pub fn queue_rows(s: &Snapshot) -> u16 {
     s.queue_lines.len().min(4) as u16
 }
@@ -678,7 +825,7 @@ pub fn composer_height(area: Rect, draft: &Editor, s: &Snapshot) -> u16 {
         displayed.cursor += s.voice_preview.len();
     }
     let rows = editor_view(&displayed, false, &Palette::new(false), width, u16::MAX).len();
-    let wanted = 6 + rows.clamp(3, 22) as u16 + queue_rows(s);
+    let wanted = 6 + rows.clamp(2, 22) as u16 + queue_rows(s);
     wanted
         .min(area.height.saturating_sub(2 + 4))
         .min(area.height)
@@ -750,19 +897,25 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
 pub fn editor_text(editor: &Editor, secret: bool, palette: &Palette) -> Vec<Line<'static>> {
     let mut lines = vec![Line::default()];
     let selection = editor.selection();
+    // The cursor is a highlighted cell over the character it sits on (a space at the end of
+    // a line), so it never shifts the text. Selections use the accent colour instead.
+    let cursor_style = Style::default().bg(palette.text).fg(palette.background);
     for (i, g) in editor.text.grapheme_indices(true) {
-        if i == editor.cursor {
-            lines
-                .last_mut()
-                .unwrap()
-                .spans
-                .push(Span::styled("█", Style::default().fg(palette.accent)));
-        }
+        let at_cursor = i == editor.cursor;
         if g == "\n" {
+            if at_cursor {
+                lines
+                    .last_mut()
+                    .unwrap()
+                    .spans
+                    .push(Span::styled(" ", cursor_style));
+            }
             lines.push(Line::default());
             continue;
         }
-        let style = if selection.is_some_and(|(a, b)| i >= a && i < b) {
+        let style = if at_cursor {
+            cursor_style
+        } else if selection.is_some_and(|(a, b)| i >= a && i < b) {
             Style::default().bg(palette.accent).fg(palette.background)
         } else {
             Style::default().fg(palette.text)
@@ -780,12 +933,12 @@ pub fn editor_text(editor: &Editor, secret: bool, palette: &Palette) -> Vec<Line
             style,
         ));
     }
-    if editor.cursor == editor.text.len() {
+    if editor.cursor >= editor.text.len() {
         lines
             .last_mut()
             .unwrap()
             .spans
-            .push(Span::styled("█", Style::default().fg(palette.accent)));
+            .push(Span::styled(" ", cursor_style));
     }
     lines
 }
@@ -913,7 +1066,7 @@ pub fn draw(
         r.transcript,
     );
     if total > height && r.transcript.width > 2 {
-        // A thin scrollbar on the transcript's right edge, like Textual's.
+        // A thin scrollbar on the transcript's right edge, like the terminal's.
         let mut state = ratatui::widgets::ScrollbarState::new(cache.max_scroll).position(offset);
         frame.render_stateful_widget(
             ratatui::widgets::Scrollbar::new(ratatui::widgets::ScrollbarOrientation::VerticalRight)
@@ -983,6 +1136,9 @@ pub fn draw(
         let mut displayed = Editor::default();
         displayed.text = draft.text.clone();
         displayed.cursor = draft.cursor;
+        if preview.is_empty() {
+            displayed.anchor = draft.anchor; // the selection highlight needs the anchor
+        }
         if !preview.is_empty() {
             let at = cache
                 .voice_cursor
@@ -1011,8 +1167,8 @@ pub fn draw(
         if displayed.text.is_empty() {
             frame.render_widget(
                 Paragraph::new(Line::from(vec![
-                    Span::styled("█", Style::default().fg(p.accent)),
-                    Span::styled("Type a message…", Style::default().fg(p.quiet)),
+                    Span::styled("T", Style::default().bg(p.text).fg(p.background)),
+                    Span::styled("ype a message…", Style::default().fg(p.quiet)),
                 ]))
                 .style(Style::default().bg(p.panel)),
                 editor_area,
@@ -1329,7 +1485,7 @@ pub fn draw(
             let rows: Vec<_> = s
                 .items
                 .iter()
-                .filter(|item| item.label.to_lowercase().contains(&needle))
+                .filter(|item| item.matches(&needle))
                 .collect();
             // Settings pages: the scope path and the area's help sit above the list.
             let mut lines: Vec<Line<'static>> = Vec::new();
@@ -1512,7 +1668,7 @@ pub fn draw(
         }
     }
     if let Some(prompt) = &s.prompt {
-        // Textual shows approvals and questions as a short panel above the
+        // The terminal shows approvals and questions as a short panel above the
         // composer with the transcript still visible.
         let area = prompt_area(r.transcript, prompt);
         frame.render_widget(Clear, area);
@@ -1647,11 +1803,17 @@ mod tests {
         let p = Palette::new(false);
         let backend = ratatui::backend::TestBackend::new(80, 2);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        terminal.draw(|frame| {
-            draw_top_bar(frame, &s, frame.area(), &p, 0);
-        }).unwrap();
+        terminal
+            .draw(|frame| {
+                draw_top_bar(frame, &s, frame.area(), &p, 0);
+            })
+            .unwrap();
         let buffer = terminal.backend().buffer();
-        let dot = buffer.content.iter().find(|cell| cell.symbol() == "●").unwrap();
+        let dot = buffer
+            .content
+            .iter()
+            .find(|cell| cell.symbol() == "●")
+            .unwrap();
         assert_eq!(dot.fg, p.blue);
     }
     use ratatui::{backend::TestBackend, Terminal};
@@ -1767,7 +1929,9 @@ mod tests {
         let meter = activity_meter(&s, &p, 10, 0);
         assert!(meter.iter().all(|span| span.content == "─"));
         assert!(meter[..6].iter().all(|span| span.style.fg == Some(p.blue)));
-        assert!(meter[6..].iter().all(|span| span.style.fg == Some(p.border)));
+        assert!(meter[6..]
+            .iter()
+            .all(|span| span.style.fg == Some(p.border)));
         let empty = Snapshot::default();
         assert!(activity_meter(&empty, &p, 10, 0)
             .iter()
@@ -2408,7 +2572,7 @@ mod tests {
     fn composer_grows_with_content_and_is_capped() {
         let area = Rect::new(0, 0, 80, 60);
         let mut draft = Editor::default();
-        assert_eq!(composer_height(area, &draft, &Snapshot::default()), 9);
+        assert_eq!(composer_height(area, &draft, &Snapshot::default()), 8);
         draft.insert(&"line\n".repeat(9));
         assert_eq!(composer_height(area, &draft, &Snapshot::default()), 6 + 10);
         draft.insert(&"line\n".repeat(60));
@@ -2422,7 +2586,7 @@ mod tests {
         queued.queue_lines = vec!["Queued · a".into(), "Steering · b".into()];
         assert_eq!(
             composer_height(Rect::new(0, 0, 80, 60), &Editor::default(), &queued),
-            11,
+            10,
             "queued messages get rows above the editor"
         );
     }
@@ -2475,7 +2639,7 @@ mod tests {
                 let row: String = (r.workspace.x..r.workspace.right())
                     .map(|x| terminal.backend().buffer()[(x, r.workspace.y)].symbol())
                     .collect();
-                assert!(row.contains("/workspace") && row.contains("idle"), "{row}");
+                assert!(row.contains("/workspace") && !row.contains("idle"), "{row}");
                 assert!(!row.contains('▐'), "no duplicate details toggle: {row}");
                 if r.tabs.height > 0 {
                     assert_eq!(r.tabs.height, 1, "top bar has no separator row");
@@ -2558,7 +2722,8 @@ fn editor_view(
                     rows.push(Line::default());
                     columns = 0;
                 }
-                if grapheme == "█" && span.style.fg == Some(palette.accent) {
+                if span.style.bg == Some(palette.text) && span.style.fg == Some(palette.background)
+                {
                     cursor_row = rows.len() - 1;
                 }
                 rows.last_mut()
@@ -2622,15 +2787,9 @@ mod editor_layout_tests {
                 let rows = composer_rows(composer, &s);
                 let cursor = &terminal.backend().buffer()
                     [(composer.x + 5 + text.len() as u16, rows[1].y + 1)];
-                assert_eq!(cursor.symbol(), "█");
-                assert_eq!(cursor.fg, p.accent);
-                assert_eq!(cursor.bg, p.panel);
-                if text.is_empty() {
-                    assert_eq!(
-                        terminal.backend().buffer()[(composer.x + 6, rows[1].y + 1)].symbol(),
-                        "T"
-                    );
-                }
+                assert_eq!(cursor.symbol(), if text.is_empty() { "T" } else { " " });
+                assert_eq!(cursor.bg, p.text);
+                assert_eq!(cursor.fg, p.background);
             }
         }
     }
@@ -2645,7 +2804,7 @@ mod editor_layout_tests {
         assert!(rows
             .iter()
             .flat_map(|row| row.spans.iter())
-            .any(|span| span.content == "█"));
+            .any(|span| span.style.bg == Some(Palette::new(false).text)));
     }
 }
 
@@ -2688,7 +2847,7 @@ mod history_benchmark {
 pub fn composer_rows(area: Rect, s: &Snapshot) -> Vec<Rect> {
     Layout::vertical([
         Constraint::Length(1 + queue_rows(s)),
-        Constraint::Min(4),
+        Constraint::Min(3),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -2788,17 +2947,11 @@ fn control_spans(s: &Snapshot, p: &Palette, width: usize) -> Vec<Span<'static>> 
         }
         spans.push(Span::styled(
             text.clone(),
-            Style::default()
-                .fg(if *command == "/agent" {
-                    accent
-                } else {
-                    p.muted
-                })
-                .add_modifier(if *command == "/agent" {
-                    Modifier::BOLD
-                } else {
-                    Modifier::empty()
-                }),
+            Style::default().fg(match *command {
+                "/agent" => accent,
+                "/model" => p.text,
+                _ => p.muted,
+            }),
         ));
     }
     spans.push(Span::raw(" ".repeat(layout.gap)));
@@ -2958,11 +3111,11 @@ mod redesign_regressions {
             },
         ];
         cache.update_content(&[], &blocks, 100, &p);
-        let history = cache.parts["|old:0"].clone();
+        let history = cache.parts["|old"].clone();
         blocks[1].text.push_str("ing");
         blocks[1].rev = "2".into();
         cache.update_content(&[], &blocks, 100, &p);
-        assert!(std::sync::Arc::ptr_eq(&history, &cache.parts["|old:0"]));
+        assert!(std::sync::Arc::ptr_eq(&history, &cache.parts["|old"]));
         assert!(cache.lines.range(0, 100).any(|line| line
             .spans
             .iter()
@@ -2975,7 +3128,7 @@ mod redesign_regressions {
             .map(|span| span.content.as_ref())
             .collect::<String>();
         cache.update_content(&[], &blocks, 40, &p);
-        assert!(!std::sync::Arc::ptr_eq(&history, &cache.parts["|old:0"]));
+        assert!(!std::sync::Arc::ptr_eq(&history, &cache.parts["|old"]));
         assert!(text.contains("history"));
     }
     #[test]
@@ -3076,5 +3229,123 @@ mod redesign_regressions {
         }
         samples.sort_by(f64::total_cmp);
         eprintln!("2000 turns, 300 wheel events, simulated 50 snapshots/s: p50 {:.3} p95 {:.3} max {:.3} ms (TestBackend, no real terminal flush)",samples[150],samples[285],samples[299]);
+    }
+}
+
+#[cfg(test)]
+mod local_cache_regressions {
+    use super::*;
+    use crate::bridge::Content;
+    use serde_json::json;
+    #[test]
+    fn local_click_only_projects_affected_group_and_reuses_suffix() {
+        let mut cache = Cache::default();
+        let op = json!({"kind":"block_toggle","id":"g"});
+        let blocks = vec![
+            Content {
+                id: "before".into(),
+                kind: "markdown".into(),
+                text: "before".into(),
+                rev: "1".into(),
+                ..Default::default()
+            },
+            Content {
+                id: "g".into(),
+                kind: "tool_group".into(),
+                local_ui: true,
+                operation: Some(op.clone()),
+                rev: "1".into(),
+                members: vec![Content {
+                    id: "member".into(),
+                    text: "tool".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            Content {
+                id: "after".into(),
+                kind: "markdown".into(),
+                text: "after".into(),
+                rev: "1".into(),
+                ..Default::default()
+            },
+        ];
+        let p = Palette::new(false);
+        cache.note_patch(Some(0));
+        cache.update_content(&[], &blocks, 100, &p);
+        let before = cache.active_parts[0].clone().unwrap();
+        let after = cache.active_parts[2].clone().unwrap();
+        assert!(cache.disclosure.toggle(&op, &blocks));
+        cache.invalidate_disclosure();
+        cache.update_content(&[], &blocks, 100, &p);
+        assert_eq!(cache.content_blocks, 1);
+        assert!(std::sync::Arc::ptr_eq(
+            &before,
+            cache.active_parts[0].as_ref().unwrap()
+        ));
+        assert!(std::sync::Arc::ptr_eq(
+            &after,
+            cache.active_parts[2].as_ref().unwrap()
+        ));
+        cache.typing = true;
+        cache.update_content(&[], &blocks, 100, &p);
+        assert_eq!(cache.content_blocks, 0);
+    }
+
+    #[test]
+    fn a_third_turn_refolds_the_oldest_without_a_patch_over_it() {
+        let user = |turn: &str| Content {
+            id: format!("{turn}:user"),
+            kind: "user".into(),
+            title: format!("prompt {turn}"),
+            local_ui: true,
+            turn_id: turn.into(),
+            rev: "1".into(),
+            operation: Some(json!({"kind":"turn_toggle","id":turn})),
+            ..Default::default()
+        };
+        let reply = |turn: &str| Content {
+            id: format!("{turn}:reply"),
+            kind: "markdown".into(),
+            text: format!("reply {turn}"),
+            turn_id: turn.into(),
+            rev: "1".into(),
+            ..Default::default()
+        };
+        let p = Palette::new(false);
+        let mut cache = Cache::default();
+        let mut blocks = vec![user("t1"), reply("t1"), user("t2"), reply("t2")];
+        cache.note_patch(Some(0));
+        cache.update_content(&[], &blocks, 100, &p);
+        assert!(cache.active_parts.iter().all(|part| part.is_some()));
+        let t2_user = cache.active_parts[2].clone().unwrap();
+        // The host patch only covers the new turn (from block 4).
+        blocks.extend([user("t3"), reply("t3")]);
+        cache.note_patch(Some(4));
+        cache.update_content(&[], &blocks, 100, &p);
+        assert!(cache.active_parts[1].is_none(), "t1 reply must fold away");
+        assert!(cache.active_parts[3].is_some() && cache.active_parts[5].is_some());
+        // t2 stays open and, being outside the rebuilt range's changes, keeps its rows.
+        assert_eq!(cache.active_parts[2].as_ref().unwrap().lines, t2_user.lines);
+    }
+}
+
+#[cfg(test)]
+mod selection_highlight_tests {
+    use super::*;
+    #[test]
+    fn selected_text_gets_the_accent_background() {
+        let p = Palette::new(false);
+        let mut editor = Editor::default();
+        editor.insert("one two");
+        editor.anchor = Some(4);
+        let lines = editor_text(&editor, false, &p);
+        let selected: String = lines[0]
+            .spans
+            .iter()
+            .filter(|span| span.style.bg == Some(p.accent))
+            .map(|span| span.content.to_string())
+            .collect();
+        assert_eq!(selected, "two");
     }
 }

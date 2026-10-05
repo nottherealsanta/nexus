@@ -76,7 +76,9 @@ def make_manager(*, engine=None, store=None, **overrides):
 async def test_prepare_lifecycle_and_retry_after_failure(monkeypatch):
     manager, engine = make_manager()
     assert manager.status().state == "absent"
-    assert manager.schedule_prepare().state == "absent"
+    assert manager.schedule_prepare().state == "loading"
+    assert manager.active
+    assert manager.schedule_prepare().state == "loading"
     await manager._prepare_task
     assert manager.status().state == "ready"
     assert manager.status().revision == "rev1"
@@ -265,7 +267,8 @@ async def test_disabling_during_prepare_cannot_transition_to_ready():
 
 
 @pytest.mark.asyncio
-async def test_explicit_prepare_checks_engine_availability_before_download():
+@pytest.mark.parametrize("allow_download", [True, False])
+async def test_explicit_prepare_checks_engine_availability_before_download(allow_download):
     store = FakeStore()
 
     def unavailable_engine(_path):
@@ -280,9 +283,10 @@ async def test_explicit_prepare_checks_engine_availability_before_download():
         store=store,
     )
 
-    state = await manager.prepare()
+    state = await manager.prepare(allow_download=allow_download)
 
     assert state.state == "unsupported"
+    assert "Voice runtime is not installed" in state.message
     assert store.calls == []
     await manager.shutdown()
 

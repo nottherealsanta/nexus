@@ -17,7 +17,7 @@ Three parts, in order:
 
 ## Implementation status (2026-10-03)
 
-All three parts are implemented in both terminal clients (Ratatui and Textual);
+All three parts are implemented in the native terminal client (Ratatui);
 the web client is untouched. Where the code differs from the text below, the code
 and `docs/` win:
 
@@ -27,7 +27,7 @@ and `docs/` win:
 - **Trigger:** it lives in `HostFacade` (`SessionStart`, via `host_support/auto_title.py`),
   not in `runtime.py`: that is where a root session's first message arrives, and
   subagents never pass through it. Clients refresh titles by polling the session
-  list (Textual every 2 s), so no new notification was needed.
+  list, so no new notification was needed.
 - **`tiers` validation:** names are checked for shape when the file is parsed;
   unknown names are skipped at resolution (custom tiers live in config, not in the
   agents layer). Repeats collapse like the other list keys instead of failing. A
@@ -58,8 +58,7 @@ and `docs/` win:
   `provider_auth.write_global_keys(runtime, updates)` and then
   `runtime.reload_model_routes()`. Reuse that path.
 - **Settings pages:** Ratatui is in `ui/ratatui/workflows.py` (see
-  `voice_settings` for a toggle-row menu). Textual is in
-  `ui_support/tui_settings.py`. The web client is being deprecated, so it gets
+  `voice_settings` for a toggle-row menu). The native implementation is in `ui/ratatui/tier_pages.py`. The web client is being deprecated, so it gets
   no work here.
 
 ---
@@ -203,7 +202,7 @@ usage, because the call is not part of the session.
    - If the message is a slash command or has no text, skip it.
 4. When the title is stored, send the update the sidebar and tabs already use
    for session summaries (**verify** which notification that is). The title
-   then changes in place in the Ratatui and Textual clients without a reload.
+   then changes in place in the Ratatui client without a reload.
 
 The title is metadata on the session row, not a record in the conversation, so
 it does not go through the reducer and does not appear in the timeline. It
@@ -356,7 +355,7 @@ subagent (`contexts` includes `subagent`).
   new tiers on the next model request.
 
 **A new agent from Settings** starts with tiers. The new-agent template is
-duplicated today, in `ui_support/tui_settings.py:771` and
+implemented in
 `ui/ratatui/workflows.py:899`. Move it into one shared helper,
 `new_agent_template(name)` in `ui_support/agent_frontmatter.py`, and write:
 
@@ -506,7 +505,7 @@ not push built-in roles out of it.
   - a model/tier conflict is rejected;
   - a role without `tiers` shows "not set";
   - `AgentMaxTierSet` round-trips and rejects unknown tiers.
-  - Use Ratatui `tests/test_ratatui_*` and a Textual pilot check.
+  - Use Ratatui `tests/test_ratatui_*` and a native PTY check.
 - A user-added role with `tiers` is resolved exactly like a built-in one (same
   roster line, same clamp rules).
 
@@ -555,7 +554,7 @@ not push built-in roles out of it.
 - `tests/test_session_db*.py`: the `title_source` migration on an existing
   database.
 - Ratatui: `tests/test_ratatui_*` covers both Settings pages (rows, toggle, help
-  text). Textual: a pilot check for both pages.
+  text). Native PTY checks cover interactive pages.
 
 ## Docs to update in the same change
 

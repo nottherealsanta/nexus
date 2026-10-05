@@ -94,8 +94,8 @@ def test_built_wheel_contains_catalogue_and_notice(tmp_path: Path):
     assert b'"logo' not in payload.lower()
 
 
-def test_built_wheel_ships_web_tui_and_agent_assets(tmp_path: Path):
-    """A one-line install must not lose the browser client, TUI styles, or agents."""
+def test_built_wheel_ships_web_and_agent_assets(tmp_path: Path):
+    """A one-line install must not lose the browser client or agents."""
     wheel = _build_wheel(tmp_path)
     with zipfile.ZipFile(wheel) as archive:
         names = archive.namelist()
@@ -103,7 +103,7 @@ def test_built_wheel_ships_web_tui_and_agent_assets(tmp_path: Path):
     assert "nexus/host_support/searchserver/searxng/settings.yml" in names
     assert "nexus/ui/web/index.html" in names
     assert "nexus/ui/web/js/app.js" in names
-    assert any(n.startswith("nexus/ui/tui/") and n.endswith(".tcss") for n in names)
+    assert not any(n.startswith("nexus/ui/tui/") for n in names)
     assert any(n.startswith("nexus/agents/data/") and n.endswith(".md") for n in names)
 
 
@@ -116,6 +116,7 @@ def test_standard_wheel_requires_claude_agent_and_voice_capture(tmp_path: Path):
         metadata_path = next(name for name in archive.namelist() if name.endswith(".dist-info/METADATA"))
         metadata = Parser().parsestr(archive.read(metadata_path).decode())
     requirements = metadata.get_all("Requires-Dist", [])
+    assert not any(requirement.startswith("textual") for requirement in requirements)
     for package in ("claude-agent-sdk", "sounddevice"):
         assert any(requirement.startswith(package) and ";" not in requirement
                    for requirement in requirements), (package, requirements)

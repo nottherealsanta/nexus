@@ -7,7 +7,7 @@
 
 ## Purpose
 
-This is the visual spec for `nexus web`. The browser client is the Textual shell
+This is the visual spec for `nexus web`. The browser client is the terminal shell
 (`nexus chat`) in a browser. It has the same regions in the same places, the same
 commands, keys, and wording ([docs/web.md](docs/web.md), "Parity with the TUI").
 This document only decides how it **looks**: a modern finish on a terminal
@@ -66,7 +66,7 @@ It changes no session, daemon, permission, or model behavior.
 
 ## Information architecture (unchanged from the TUI)
 
-The regions, their order, and their sizes come from `ui/tui/app.tcss` via
+The regions, their order, and their sizes come from the browser layout via
 [docs/web.md](docs/web.md). One terminal cell = 8px wide; one row = 20px here
 (16px in the terminal, taller for readability).
 
@@ -119,7 +119,7 @@ only Logs; no horizontal page scroll (asserted in
 ### Surface and color tokens
 
 `tokens.css` keeps the **same role names** as today (they map role for role to
-`ui/tui/theme.py`), with Signal values. Dark is the default.
+`rust/tui/src/render.rs`), with Signal values. Dark is the default.
 
 | Token | Dark | Light | Use |
 | --- | --- | --- | --- |
@@ -286,7 +286,7 @@ row with an `::after` rule. Used for sidebar groups and details sections.
 
 The timeline sits on the flat `--canvas`. Content keeps a 16px gutter.
 
-**Context header** (`tui_context_header.py`), four blocks: `SYSTEM PROMPT`,
+**Context header** (`ui_support/context_header.py`), four blocks: `SYSTEM PROMPT`,
 `TOOLS`, `SKILLS`, `MCP`. The chip is a **solid tag** in the agent's color
 (neutral grey when empty), as the TUI draws it. The body sits on one shared
 indent. Hover gives the whole block an `--active` fill with a 1px `--border`
@@ -496,7 +496,7 @@ Used 2 tools
 - Switching sessions resolves target session override, then workspace default, then browser default, then Balanced. Reload restores the same result. Clearing browser site data resets to Balanced. New sessions have no session override and inherit the effective workspace/browser default without writing a session fact.
 - Theme and detail level are never encoded in `/s/<session-id>` or query/fragment. Browser Back/Forward changes session navigation only. Copy/share URL opens the same session with that browser’s own local preference.
 - Markdown/JSON/JSONL exports are exactly the host’s session export and are independent of the rendered level. No omitted projection content may be inserted into an export by the client.
-- Do not synchronize this preference across browser profiles or expose it to Textual. It cannot alter daemon events, reducer state, permissions, model prompts/selection/behavior, tool execution, queue state, security bounds, or what another attached client sees.
+- Do not synchronize this preference across browser profiles or expose it to other clients. It cannot alter daemon events, reducer state, permissions, model prompts/selection/behavior, tool execution, queue state, security bounds, or what another attached client sees.
 
 ## Accessibility and keyboard requirements
 
@@ -516,7 +516,7 @@ Used 2 tools
   `ui/web/styles/app.css` (components), `ui/web/styles/context-preview.css`.
   No framework, build step, remote font, or image asset. Swatches, bars, and
   constellation marks are CSS only.
-- Keep role token names. `tokens.css` maps role for role to `ui/tui/theme.py`
+- Keep role token names. `tokens.css` maps role for role to `rust/tui/src/render.rs`
   (`nx-accent` → `--accent`, `nx-blue` → `--info`, …). The web uses the
   Signal values. If a role is added in one place, add it in the other.
 - Radius: the tokens are 0, and no literal non-zero `border-radius` remains in

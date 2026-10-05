@@ -1,5 +1,5 @@
 /* Nexus web client. Three panes: sessions, conversation, session details, laid
-   out like the Textual shell. Browser typography and controls are independent
+   out like the terminal shell. Browser typography and controls are independent
    of the terminal finish; code and diagnostics retain monospace typography. */
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -44,7 +44,7 @@ kbd { display: inline-block; min-width: 18px; padding: 0 5px; border: 1px solid 
 .voice-settings-status { padding: 8px 12px; border-radius: var(--radius-sm); background: var(--accent-tint); color: var(--accent); }
 
 /* ---------- shell ----------
-   One to one with the Textual shell (nexus/ui/tui/app.tcss). One terminal cell is
+   One to one with the terminal shell (native terminal layout). One terminal cell is
    8px wide and 16px tall: sessions sidebar 34 cells, details 42, top bar 2 rows. */
 .app-shell { --agent-color: var(--success); --agent-tint: color-mix(in srgb, var(--agent-color) var(--tint-mix), var(--canvas)); height: 100dvh; min-height: 0; display: grid; grid-template-rows: 72px minmax(0, 1fr); grid-template-columns: 272px minmax(0, 1fr); grid-template-areas: "top top" "side main"; background: var(--canvas); overflow: hidden; }
 .app-shell.inspector-open { grid-template-columns: 272px minmax(0, 1fr) 336px; grid-template-areas: "top top top" "side main insp"; }
@@ -670,7 +670,7 @@ body { font-size: 13px; line-height: var(--row); }
 .text-dialog-header h2 { margin: 0; font: 600 15px/24px var(--font-sans); }
 .text-body { min-height: 0; margin: 0; padding: 12px 16px; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--code); color: var(--text); font: 12px/18px var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .text-body.structured { white-space: normal; }
-/* provider usage (Ctrl+U, /usage): port of ui/tui/usage.py */
+/* provider usage (Ctrl+U, /usage): port of ui_support/usage.py */
 .usage-dialog-body { display: grid; gap: 14px; font: 12.5px/18px var(--font-sans); }
 .usage-report { display: grid; gap: 18px; }
 .usage-provider { display: grid; gap: 8px; }

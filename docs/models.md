@@ -44,7 +44,7 @@ with a `base_url`.
 | Adapter (`providers/`) | Names / kinds | Notes |
 | --- | --- | --- |
 | `anthropic.py` | `anthropic` | Messages API; `count_tokens` endpoint; `usage_input_excludes_cache` |
-| `openai.py` | `openai`, `codex`, any `kind = "openai_compatible"` | Responses and Chat Completions behind one class (`api = "responses"\|"chat"`); `EndpointFallback` remembers per-model dialects |
+| `openai.py` | `openai`, `codex`, any `kind = "openai_compatible"` | Responses and Chat Completions behind one class (`api = "responses"\|"chat"`); `EndpointFallback` remembers the dialect a model accepts when a host serves some models on only one endpoint (GitHub Copilot, OpenCode Go) |
 | `gemini.py` | `google`, `gemini`, `kind = "google"` | `generateContent` streaming; synthetic call ids |
 | `ollama.py` | `ollama` | native `/api/chat` or OpenAI-compatible mode; keyless, loopback default `http://localhost:11434`; conservative capabilities (`tools = false` unless the registry says otherwise) |
 | `opencode.py` | `opencode` (`kind` `acp`) | OpenCode over its Agent Client Protocol subprocess only; ACP tool calls stay inside that agent; child env is an explicit allowlist |
@@ -71,8 +71,25 @@ Resolution order, first hit wins:
 3. a registry reference: `provider/model`, a bare id, or an aggregator alias;
 4. adapter fallback: split `provider/model` and use the adapter's own capabilities.
 
-A tier name works anywhere a model string does. `ModelRouter.fallbacks` only
-*lists* the `model.fallback` chain; the loop decides when to try one
+A tier name works anywhere a model string does. Unpinned built-in tiers prefer
+these ordered routes (skipping providers that are not configured):
+
+| Tier | Primary | Ordered fallbacks |
+| --- | --- | --- |
+| Low | Copilot GPT-6 Luna | Codex GPT-6 Luna → OpenCode Go DeepSeek V4.1 Flash |
+| Medium | Codex GPT-6.1 Sol, low effort | OpenCode Go DeepSeek V4.1 Flash, max effort |
+| High | Codex GPT-6.1 Sol, low effort | Claude Agent Sonnet 5.5 |
+
+References use `codex/gpt-6.1-sol` and `claude-agent/claude-sonnet-5-5`.
+The new Sol and Sonnet catalogue entries are provisional: provider availability,
+pricing, and limits are **not verified** (no prices or limits are fabricated); their baseline capabilities follow the
+existing bundled model families. Explicit tier pins replace built-in preferences
+and fallback chains. Explicit session/agent effort choices (including Default)
+win over route effort defaults; fallback requests apply their own route effort.
+Root route/effort metadata and context assembly expose these defaults.
+
+`ModelRouter.fallbacks` only *lists* the agent, tier, then global
+`model.fallback` chains; the loop decides when to try one
 ([loop.md](loop.md#failure-handling)). Per-session `/model` and effort choices
 are durable (`model.selected`, `reasoning_effort.selected`).
 Explicit effort choices (including Default) are also remembered per concrete
@@ -89,7 +106,10 @@ the effort prompt for remembered models; `/effort` remains available to change i
 - `ModelRegistry` is data and lookup only; it does no I/O during a turn.
   Acquisition is fetch-on-first-use with a TTL (`models.refresh_ttl_days`, 7);
   on failure it falls back to a valid stale cache, then the vendored snapshot,
-  then empty. `models.offline = true` never fetches. `ModelsRefresh` forces one.
+  then empty. The snapshot lists Nexus's signed-in providers (OpenCode Go,
+  GitHub Copilot) as well as the major direct APIs, so a connected provider
+  still appears on the model list when the catalogue cannot be fetched.
+  `models.offline = true` never fetches. `ModelsRefresh` forces one.
 - Only descriptive fields are read (`id`, `name`, `env`, `npm`, `modalities`,
   `cost`, `limit`). A `base_url` or `api_key` in catalogue JSON is ignored:
   **the catalogue can never redirect a request or supply a credential.** `env`
@@ -136,7 +156,13 @@ the effort prompt for remembered models; `/effort` remains available to change i
 | ChatGPT / Codex OAuth (`auth = "chatgpt_oauth"`) | `auth/codex.py`: browser PKCE or device code; protocol pinned to a cited OpenCode commit (see `auth/NOTICE`) | rotating refresh token + routing metadata in the private credential file; access/ID tokens never persisted |
 | GitHub Copilot (`auth = "github_copilot"`) | `auth/copilot.py`: GitHub.com device flow using OpenCode's OAuth app id (`CLIENT_ID`); the GitHub token is the Copilot API bearer (no `copilot_internal` exchange), verified against `/models` at login | private credential file |
 | Pasted key (`auth = "keychain"`, e.g. OpenCode Go) | `auth/api_key.py` | private credential file |
+
+OpenCode Go (`opencode.ai` base URLs) additionally gets an `x-opencode-session` header on every chat/responses request, set to the Nexus session id (the loop stamps it into `ModelRequest.metadata["session_id"]`); the gateway asks for one stable id per conversation.
 | Claude subscription (`kind = "claude-agent"`) | `model/providers/claude_agent_auth.py:ClaudeCliAuth`: runs `claude auth login --claudeai` headless (`BROWSER` is a no-op), returns the printed URL, then pipes the code the user pastes (`ProviderLoginCode`) to the CLI | the Claude CLI's own store, shared with Claude Code; Nexus never reads it and never signs it out |
+
+OpenCode Go (`opencode.ai` base URLs) additionally gets an `x-opencode-session` header on every chat/responses request, set to the Nexus session id (the loop stamps it into `ModelRequest.metadata["session_id"]`); the gateway asks for one stable id per conversation.
+
+OpenCode Go serves different models on different protocols — for example GPT-6 Luna and Grok answer only on `/responses`, while Kimi and GLM answer only on `/chat/completions` — and rejects the other with `Model does not support this protocol.` The route defaults to `chat` and carries an `EndpointFallback` (the same mechanism Copilot uses) that retries the other endpoint once and remembers the model's dialect.
 
 `auth/store.py` is file-backed (`FileSecretStore`); profile names match
 `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. Host flow: `ProvidersStatus`, `ProviderLogin`
@@ -194,3 +220,16 @@ Credentials are plaintext in `~/.nexus/credentials.json` (`0600`, directory
 `0700`), or `$NEXUS_HOME/credentials.json`. No keychain fallback or automatic
 migration is performed: sign in again after upgrading. The legacy
 `auth = "keychain"` spelling still selects pasted API keys.
+
+
+## Default tier routing
+
+When the workspace leaves `models.default` unset (or set to a built-in tier), Nexus routes built-in tiers through these ordered model preferences. An explicitly configured `[models.tiers]` list or a session-pinned model takes precedence. Provider or model failures can move to the next model before ordinary workspace/agent fallback handling; agent fallbacks retain priority over the global `model.fallback` chain.
+
+| Tier | Ordered route | Default reasoning effort |
+| --- | --- | --- |
+| `low` | `github-copilot/gpt-6-luna` → `openai-codex/gpt-6-luna` → `opencode-go/deepseek-v4.1-flash` | provider default |
+| `medium` | `openai-codex/gpt-6.1-sol` → `opencode-go/deepseek-v4.1-flash` | `low` on Codex; `max` on DeepSeek |
+| `high` | `openai-codex/gpt-6.1-sol` → `claude-agent/claude-sonnet-5.5` | `low` on Codex; provider default on Claude |
+
+A user-selected effort remains authoritative, and the tier effort applies consistently to fallback attempts when that fallback has a tier-specific default.

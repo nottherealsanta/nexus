@@ -19,6 +19,7 @@ import asyncio
 
 import pytest
 
+from nexus.model.message import Message, Text
 from nexus.config import Config
 from nexus.config.schema import (
     AgentSection,
@@ -150,6 +151,7 @@ async def test_selection_is_one_durable_event_and_survives_reopen(tmp_path):
     assert len(events) == 1
     assert events[0].data["model"] == "m2"
     assert events[0].data["provider"] == "scripted"
+    runtime.session("s").append_message(Message(role="user", content=[Text(text="Keep this model")]))
     await runtime.aclose()
 
     reopened = _runtime(tmp_path, ScriptedProvider())
@@ -172,6 +174,7 @@ async def test_latest_selection_wins_after_reopen(tmp_path):
     facade.open_session("s")
     await facade.handle(p.ModelSelect(session="s", ref="scripted/first"))
     await facade.handle(p.ModelSelect(session="s", ref="scripted/second"))
+    runtime.session("s").append_message(Message(role="user", content=[Text(text="Keep this model")]))
     await runtime.aclose()
 
     reopened = _runtime(tmp_path, ScriptedProvider())

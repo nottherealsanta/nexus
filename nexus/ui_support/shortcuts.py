@@ -46,6 +46,8 @@ LEADER_SHORTCUTS: tuple[tuple[str, str, str], ...] = (
     ("t", "cycle_reasoning_effort", "Cycle root reasoning effort"),
     ("u", "show_usage", "Provider usage and limits"),
     ("r", "reconnect", "Reconnect"),
+    ("c", "context_popover", "Context popover"),
+    ("z", "update_help", "Nexus update help"),
     ("?", "show_shortcuts", "Show keyboard shortcuts"),
 )
 

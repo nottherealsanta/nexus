@@ -1,4 +1,4 @@
-"""Pure session-card facts shared by the Textual and native session sidebars.
+"""Pure session-card facts for the native session sidebar.
 
 Status in words, relative age and the card's second line; no UI toolkit here.
 """

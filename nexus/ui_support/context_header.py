@@ -1,4 +1,4 @@
-"""Pure context-header blocks shared by the Textual and native shells.
+"""Pure context-header blocks for the native shell.
 
 ``header_blocks`` reduces an inspected request into the labelled blocks that
 open every conversation (System prompt, Tools, AGENTS.md, Skills, MCP): label,

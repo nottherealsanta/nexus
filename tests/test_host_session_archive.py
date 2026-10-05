@@ -7,6 +7,7 @@ import asyncio
 import pytest
 
 from nexus.client.protocol import Client, ClientError
+from nexus.model.message import Message, Text
 from nexus.events import Event
 from nexus.host import protocol as p
 from nexus.host.facade import HostFacade
@@ -88,7 +89,7 @@ def test_archive_host_commands_preview_search_and_count(tmp_path):
 
 def test_archived_pages_validate_bounds_and_page(tmp_path):
     client, manager = _archived_client(tmp_path)
-    manager.open("other")
+    manager.open("other").append_message(Message(role="user", content=[Text(text="Other session")]))
     manager.archive("other")
 
     async def scenario():

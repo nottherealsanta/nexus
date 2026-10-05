@@ -79,6 +79,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+from urllib.parse import urlsplit
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from contextlib import aclosing
 from typing import Any
@@ -958,11 +959,16 @@ class EndpointFallback:
 
     GitHub Copilot answers ``model "x" is not accessible via the
     /chat/completions endpoint`` for models it serves on ``/responses`` (and the
-    reverse). The provider tries the configured dialect first; on that
-    rejection it remembers the other dialect for the model and retries once.
+    reverse). OpenCode Go answers ``Model does not support this protocol.``
+    without naming the endpoint, for models served only on ``/responses`` (for
+    example GPT-6 Luna, Grok) or only on ``/chat/completions`` (for example Kimi,
+    GLM). The provider tries the configured dialect first; on either rejection it
+    remembers the other dialect for the model and retries once.
     """
 
     _PATHS = ((API_CHAT, "/chat/completions"), (API_RESPONSES, "/responses"))
+    #: OpenCode Go's protocol rejection does not name the endpoint.
+    _PROTOCOL_REJECTION = "does not support this protocol"
 
     def __init__(self, default: str = API_CHAT) -> None:
         self._default = default
@@ -974,12 +980,20 @@ class EndpointFallback:
     def switch(self, model: str, api: str, error: BaseException) -> str | None:
         """The other dialect when ``error`` says ``model`` is not served on ``api``."""
         text = str(error)
-        for dialect, path in self._PATHS:
-            if api == dialect and f"not accessible via the {path} endpoint" in text:
-                other = API_RESPONSES if dialect == API_CHAT else API_CHAT
-                self._learned[model] = other
-                return other
-        return None
+        rejected = self._PROTOCOL_REJECTION in text or any(
+            api == dialect and f"not accessible via the {path} endpoint" in text
+            for dialect, path in self._PATHS
+        )
+        if not rejected:
+            return None
+        other = API_RESPONSES if api == API_CHAT else API_CHAT
+        self._learned[model] = other
+        return other
+
+
+def _is_opencode_host(base_url: str) -> bool:
+    host = (urlsplit(base_url).hostname or "").lower()
+    return host == "opencode.ai" or host.endswith(".opencode.ai")
 
 
 class OpenAIProvider:
@@ -1114,8 +1128,13 @@ class OpenAIProvider:
             )
         return spec
 
-    async def _headers(self, body: Mapping[str, Any] | None = None) -> dict[str, str]:
+    async def _headers(
+        self, body: Mapping[str, Any] | None = None, session_id: str | None = None
+    ) -> dict[str, str]:
         headers = {"content-type": "application/json", "accept": "text/event-stream", **self._extra_headers}
+        if session_id and _is_opencode_host(self._base_url):
+            # OpenCode Go asks every client for one stable id per conversation.
+            headers.setdefault("x-opencode-session", session_id)
         if self._auth_headers is not None:
             headers.update(await self._auth_headers.headers())
             # A strategy may add per-request headers derived from the body
@@ -1231,7 +1250,8 @@ class OpenAIProvider:
             default_max_tokens=self._default_max_tokens,
             capabilities=capabilities,
         )
-        headers = await self._headers(body)
+        session_id = req.metadata.get("session_id") if isinstance(req.metadata, Mapping) else None
+        headers = await self._headers(body, session_id if isinstance(session_id, str) else None)
         usage = _UsageTotals()
         accumulator = ToolCallAccumulator()
 

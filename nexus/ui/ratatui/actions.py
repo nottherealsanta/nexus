@@ -77,11 +77,13 @@ class ShellActions:
         self.mcp_due = 0.0
         self.turn_cache = OrderedDict()
         self.turn_cache_bytes = 0
+        self.preview_task: asyncio.Task | None = None
         self.sessions = []
         self.workspace = ""
         self.tabs = []
         self.last_completion_cue = 0
         self.breadcrumb = ""
+        self.model_names: dict[tuple[str, str], str] = {}  # (provider, id) -> catalogue display name
         self.settings_nav: str | None = None  # selected Settings area while Settings is open
         self.model_sort = "updated"  # model picker order: updated|name (Ctrl+S)
         self.update_notice = ""  # "<version> available: <command>" shown in the footer
@@ -223,8 +225,7 @@ class ShellActions:
         self.workflows.agent_page_id = None
         self.workflows.agent_context = {}
         self.workflows.agent_parents.clear()
-        self.turn_cache.clear()
-        self.turn_cache_bytes = 0
+        # The turn cache is keyed by session and bounded, so open tabs keep their rows.
         self.generation += 1
         self.logs.reset_session()
         if not any(row["id"] == session and row["workspace"] == self.workspace for row in self.tabs):
@@ -242,13 +243,27 @@ class ShellActions:
         await self.controller.switch_session(session)
         await self.controller.bootstrap()
         self.mark_current_seen()
-        await self.refresh_preview(session)
+        # The context preview is a host round-trip the first paint does not need.
+        if self.preview_task:
+            self.preview_task.cancel()
+        self.preview_task = asyncio.create_task(self._refresh_preview_later(session))
         self.panel_title = ""
         self.panel_loading = False
         self.panel_revision += 1
         if self.usage_task:
             self.usage_task.cancel()
         self.panel_lines = []
+
+    async def _refresh_preview_later(self, session: str) -> None:
+        try:
+            if await self.refresh_preview(session) and self.on_update:
+                await self.on_update()
+        except asyncio.CancelledError:
+            raise
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # The terminal closed while the read-only refresh completed.
+        except Exception as exc:  # noqa: BLE001 - surfaced like any other action failure
+            self.notice = str(exc)
 
     async def refresh_preview(self, session: str | None = None) -> bool:
         """Reload the next-turn context preview; an active session has none yet.
@@ -319,7 +334,7 @@ class ShellActions:
         except Exception:
             self.composer_restore = text
             raise
-        from ...ui_support.tui_history import append_history
+        from ...ui_support.prompt_history import append_history
         append_history(text)
         self.attachments.clear(); self.attachment_labels.clear()
         self.marker_attachments.clear()
@@ -496,7 +511,7 @@ class ShellActions:
             await self.workflows.operate({"kind": "archived", "query": argument})
         elif name == "/settings":
             self.workflows.settings_scope = argument if argument in {"project", "global"} else "global"
-            await self.workflows.operate({"kind": "appearance"})  # Textual opens Settings on Appearance
+            await self.workflows.operate({"kind": "appearance"})
         elif name == "/reload":
             self.show("Extensions reloaded", await self.client.reload_extensions(trigger="chat"))
             self.mcp_due = 0.0
@@ -513,7 +528,7 @@ class ShellActions:
                     return True  # the session changed while converting; never attach to another session
                 self.attachments.append(item)
                 self.composer_insert = self.attachment_marker(len(self.attachments)-1)
-                if item.kind == "markdown":  # Textual opens the converted preview immediately
+                if item.kind == "markdown":
                     self.workflows.menu("Attachment · " + item.name, [("Remove attachment", {"kind": "attachment_remove", "id": item.attachment_id})], labelled(item.preview))
             else:
                 self.workflows.menu("Attachments", [(self.attachment_label(i) + " · " + item.name, {"kind": "attachment_preview", "id": item.attachment_id}) for i,item in enumerate(self.attachments)], labelled(self.attachments))

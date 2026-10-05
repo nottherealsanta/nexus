@@ -28,9 +28,16 @@ def test_native_blocks_follow_durable_conversation_order():
         MessageView(id="first", role="assistant", event_seq=2, blocks=[BlockView(kind="thinking", text="inspect")]),
         MessageView(id="last", role="assistant", event_seq=5, blocks=[BlockView(text="answer")])],
         tools=[ToolCallView(call_id="read", name="Read", event_seq=3)]))
-    blocks = project(SimpleNamespace(view=view), 1)["blocks"]
+    controller = SimpleNamespace(view=view)
+    from nexus.ui.ratatui.actions import ShellActions
+    shell = ShellActions(controller)
+    shell.local_transcript = True
+    blocks = project(controller, 1, shell=shell)["blocks"]
     ids = [block["id"] for block in blocks]
-    assert ids.index("firstthinking") < ids.index("turn:gread") < ids.index("lasttext")
+    assert ids.index("turn:activity:firstthinking") < ids.index("lasttext")
+    group = next(block for block in blocks if block["kind"] == "tool_group")
+    assert [member["id"] for member in group["members"]] == ["firstthinking", "read"]
+    assert group["text"] == "Thought 1 time · Read 1 file"
 
 
 def test_projection_cache_reuses_unchanged_turns_and_invalidates_replacements(tmp_path, monkeypatch):

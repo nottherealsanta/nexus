@@ -1,8 +1,8 @@
-"""Pure details-sidebar data shared by the Textual and native shells.
+"""Pure details-sidebar data for the native shell.
 
 Session facts, files modified by tools and MCP server health, reduced from the
 canonical view and the redacted Doctor report. No UI toolkit is imported here,
-so the native shell can show exactly what the Textual sidebar shows.
+so every native client projects the same session facts.
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def diff_preview_lines(hunks: Iterable[str], limit: int = 60) -> list[str]:
     """A file's diff lines without ``---``/``+++`` headers, clipped with a notice.
 
     Plain text (the first character carries add/remove/hunk meaning), so each
-    shell colours it its own way; the same rules as the Textual sidebar.
+    shell colours it its own way.
     """
     lines = [sanitize(line, 200) for hunk in hunks for line in hunk.splitlines()
              if not line.startswith(("---", "+++"))]
@@ -115,7 +115,7 @@ def mcp_rows(report: Mapping[str, Any] | None, *, error: str | None = None) -> l
     """``(tone, text, note)`` rows of the MCP SERVERS block.
 
     Tones: ``success|error|warning|quiet`` for a server dot, ``plain-error`` and
-    ``plain-quiet`` for message lines. Mirrors ``tui_panels.mcp_markup``.
+    ``plain-quiet`` for message lines. Used by the native MCP panel.
     """
     if error:
         return [("plain-error", "Unavailable: " + sanitize(error, 120), "")]

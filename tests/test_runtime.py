@@ -6,6 +6,7 @@ from typing import ClassVar
 import httpx
 import pytest
 
+from nexus.model.message import Message, Text
 from nexus.config import Config
 from nexus.config.schema import (
     AgentsSection,
@@ -314,6 +315,7 @@ async def test_injected_todo_store_survives_agent_definition_rebuild_and_reopen(
         tools=original_manager,
     )
     first_session = first_runtime.session("injected-todo-reopen")
+    first_session.append_message(Message(role="user", content=[Text(text="Track this task")]))
     first_session.append_event(
         Event(
             type="todo.updated",

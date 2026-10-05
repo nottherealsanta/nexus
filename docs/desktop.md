@@ -6,14 +6,17 @@ client of the existing workspace daemon. The terminal remains available.
 ## Build and run
 
 ```sh
-cargo build --manifest-path rust/desktop/Cargo.toml
+cargo build --release --manifest-path rust/desktop/Cargo.toml
 .venv/bin/nexus desktop
 .venv/bin/nexus desktop --session SESSION_ID
 NEXUS_HOME=/tmp/nexus-desktop-dev .venv/bin/nexus --dev desktop
 ```
 
 The source executable is discovered automatically; `NEXUS_DESKTOP_BINARY` selects
-an explicit executable. Desktop builds are separate from the terminal wheel build.
+an explicit executable. Source discovery prefers release over debug regardless of
+modification time; a debug-only source fallback prints a performance warning.
+Installed executables beside Python retain priority. Development builds optimize
+dependencies at level 2. Desktop builds are separate from the terminal wheel build.
 GPUI is pinned to 0.2.2. macOS needs Xcode's Metal toolchain. Other platforms have
 not been verified. No TTY is required. Closing the window detaches the viewer and
 leaves daemon turns running.
@@ -42,20 +45,40 @@ Python surface reads session storage or owns providers/tools. Credentials and
 permissions remain in the daemon. The wire is private presentation data, not a
 second public host API.
 
-Rust includes the existing native bridge schema so protocol structs stay aligned.
-Schema 2 transcript patches are applied in order, never dropped. The input reader
-is bounded at 16 MiB per snapshot and a 32-message channel. Reconnect and session
-changes use the existing generation checks and durable replay. Each session keeps
-a local unsent draft; durable queued messages stay in the daemon.
+The private desktop wire is encoded by `nexus/ui/desktop/wire.py` as schema 3.
+It sends per-topic deltas and transcript block operations: a stable block ID can
+carry a Unicode-safe suffix append when its text grows, otherwise a splice updates
+the changed block-list range. A generation or agent-page change resets topics and
+transcript. One-shot composer insert/restore values are resent once, and unchanged
+snapshots produce no message. Rust applies updates transactionally, rejects stale
+revisions, and accepts schema 1 and 2 snapshots for compatibility. Metadata-only
+updates do not clone transcript blocks in the decoder. The input reader is bounded
+at 16 MiB per snapshot and a 32-message channel. Reconnect and session changes use
+the existing generation checks and durable replay. Each session keeps a local
+unsent draft; durable queued messages stay in the daemon.
 
 ## Interface
 
+- When the daemon is unreachable the projection sets `disconnected`: a top banner
+  ("Disconnected — Reconnect ⌘R") appears, the composer becomes read-only with
+  its draft kept, and submit is refused; the timeline stays readable and the
+  Reconnect route replays durable state.
 - Real native title bar controls, `#0B0B0B` workspace surfaces, curved
   controls, Lucide stroke icons, neutral selection, and semantic status colors. Independently
   designed dark and light palettes (`/theme`), and standard macOS shortcuts.
-- Session search/sidebar, conversation tabs, workspace breadcrumb, context chips,
+- Session search filters by title, id and workspace; Up/Down move a highlighted
+  match, Enter opens it, Escape clears the field, and a clear control appears
+  while the field is non-empty. The sidebar, conversation tabs, workspace breadcrumb, context chips,
   virtualized variable-height transcript, focused Session/Files/MCP/Logs inspector tabs, tool/thought expansion, subagent pages,
-  Markdown, diffs and complete parameter/result inspection.
+  Markdown, diffs and complete parameter/result inspection. Diffs render as unified rows with tabular old/new gutters, a `+`/`-`
+  marker and add/remove background tints rather than a colourless 50/50 split.
+- The transcript follows new content while the viewport still reaches the newest
+  item. Scrolling above it turns follow off and, when content then arrives, a
+  bottom-centre "↓ New messages" pill restores follow (also Ctrl+End / Cmd+J).
+- Above 900 px a 12 px turn minimap sits at the left of the column: a long tick
+  per user turn, a short tick per assistant turn, and a band for the visible
+  range. Hovering shows the turn's first line; clicking scrolls to it. Ticks are
+  derived from projected block kinds, with no invented counts or timestamps.
 - Multiline composer with Unicode selection, native IME integration, copy/paste,
   undo, image clipboard attachments, Shift+Enter newline and Enter send. Agent/model/effort selection sits inside the composer; context
   occupancy remains below it.
@@ -66,33 +89,48 @@ a local unsent draft; durable queued messages stay in the daemon.
 - Native attachment file picker; `/attach PATH` also works. Voice and speech use
   existing daemon consent/download workflows.
 - Sessions collapse below 820 logical pixels; details collapse below 1150. The Sessions/Details toolbar controls and Cmd+B/Cmd+L open collapsed panes as
-  dismissible drawers. Dialogs fit the current window.
+  dismissible drawers. Widening past the threshold re-docks the pane and clears
+  the drawer flag, so it does not reappear on the next narrow resize. Dialogs fit the current window.
+- Transient notices are a bounded toast stack (at most three) bottom-centre above
+  the composer: info toasts auto-dismiss after 6 s, warnings and errors persist
+  with an explicit Dismiss, and notices with a host action (Reconnect, Update
+  help) render that button. Repeated identical messages replace the current
+  toast instead of stacking. This replaces the previous fixed-position error box.
 
 ## Keys
 
+The Ratatui Ctrl-key semantics are canonical; macOS Cmd bindings are aliases.
+`rust/desktop/src/keymap.rs` is a declarative table checked against the shared
+`ui_support/shortcuts.py` tables by `tests/test_desktop_keymap_parity.py`.
+
 | Action | Key |
 | --- | --- |
-| New session | Cmd+N |
-| Commands | Cmd+K |
-| Settings | Cmd+, |
-| Models | Cmd+M |
-| Sessions/details sidebar | Cmd+B / Cmd+L (Ctrl variants retained) |
-| Context / provider usage | Cmd+I / Cmd+U (Ctrl variants retained) |
-| Attach | Cmd+Shift+A |
-| Dictation | Ctrl+Space |
+| Send / newline | Enter / Shift+Enter or Ctrl+J |
 | Queue / interrupt submit | Ctrl+Enter / Alt+Enter |
-| Model favorite / sort / refresh | Ctrl+F / Ctrl+S / Ctrl+R in model picker |
-| Stop turn | Cmd+. / Ctrl+C |
+| New session | Ctrl+N (Cmd+N) |
+| Commands | Ctrl+P (Cmd+K) |
+| Sessions list | Ctrl+O (Cmd+O) |
+| Fork session | Ctrl+F |
+| Agent picker | Ctrl+G, or `a` outside the editor (Cmd+Shift+G cycles) |
+| Sessions/details sidebar | Ctrl+B / Ctrl+L (Cmd+B / Cmd+L) |
+| Settings | Ctrl+S (Cmd+,); Ctrl+S saves inside a form; Ctrl+F/S/R are scoped in the model picker |
+| Context / provider usage | Ctrl+I / Ctrl+U (Cmd+I / Cmd+U) |
+| Cycle effort / toggle logs | Ctrl+T / Ctrl+E |
+| Dictation | Ctrl+Space |
+| Attach | Cmd+Shift+A |
+| Stop turn | Ctrl+C or Escape twice within 1.5 s (Cmd+.) |
 | Dismiss panel | Escape |
-| Save settings file | Cmd+S |
-| Cycle agent / effort | Cmd+Shift+G / Cmd+Shift+E |
-| Toggle logs | Cmd+Shift+L |
-| Reconnect | Cmd+R |
-| Latest transcript | Cmd+J |
-| Prompt history | Option+Up / Option+Down |
+| Reconnect / quit | Ctrl+R / Ctrl+Q |
+| Latest transcript | Ctrl+End (Cmd+J) |
+| Scroll transcript | PageUp / PageDown (outside the editor) |
+| Inspector tabs | `[` / `]` (outside the editor) |
+| Prompt history | Up / Down on a single-line draft, or Option+Up / Option+Down |
 | Completion selection / insert / dismiss | Up/Down / Enter or Tab / Escape |
-| Composer focus | Cmd+Enter |
-| Theme | Cmd+Shift+T |
+| Tab | insert a completion, force a completion, or enter transcript navigation on an empty draft |
+| Transcript navigation | j/k or Up/Down or Shift+Tab move, Enter/Space opens, Escape or any other key leaves |
+| Focus traversal | Ctrl+Tab / Ctrl+Shift+Tab |
+| Composer focus / theme | Cmd+Enter / Cmd+Shift+T |
+| Ctrl+X leader | m v n o f g b l s i e t u r c z ? (model, dictate, new, sessions, fork, agent, sidebars, settings, context, logs, effort, usage, reconnect, context popover, update help, shortcuts) |
 
 ## Visual verification
 
@@ -192,7 +230,7 @@ Ratatui workflow have not yet been verified end to end in the desktop.
 | Approval choices and free-form questions | Host-validated sheets; native fixtures and live question-answer journey |
 | Attachments: files, image clipboard, preview, remove, submitted inspection | Native file picker, `/attach`, draft chips and message chips; marker/operation tests and live preview |
 | Local voice and speech | Composer controls and settings; insert/send/discard; physical audio remains unverified |
-| Logs, daemon reconnect, notices and update help | Details tabs, Cmd+Shift+L, Cmd+R and update notice action |
+| Logs, daemon reconnect, notices and update help | Details tabs (`[` / `]`), Ctrl+E / Cmd+Shift+L, Ctrl+R, Ctrl+X c context popover and Ctrl+X z update help |
 | Dark/light themes, pane toggles and narrow drawers | Host preferences and semantic palettes; real screenshots; native narrow drawer test |
 
 This table audits implemented entry points; it does not claim every external
@@ -208,7 +246,7 @@ sections. Approval and image sheets were checked in dark and light fixtures;
 completion selection/insertion and expanded tool parameters were checked against
 the live host. Fixtures are rendering evidence, not executed approval workflows.
 
-Desktop Rust tests: 20 passed. Ratatui Rust tests: 59 passed, 2 ignored. Focused
+Desktop Rust tests: 66 passed. Ratatui Rust tests: 59 passed, 2 ignored. Focused
 Python launch/action/layering/docs checks: 156 passed, one known baseline failure
 deselected. The complete Python suite had 5266 passed and 13 failures; all 13 were
 reproduced on the pre-desktop commit `6c46af4`, including the PTY failure after
@@ -232,9 +270,54 @@ sessions, verifies fewer than 100 rows are instantiated for a frame, and checks
 that searching reaches session 999. This addresses the previously eager sidebar;
 it does not establish a frame-rate guarantee for every conversation or machine.
 
-## MCP loading controls
+## Overhaul performance foundation
 
-The shared native workflow presents per-session Search/Load all actions and
-structured Settings → MCP server rows with token estimates. The inspector
-includes each server's loading mode. Target names and “via McpCall” are visible
-in permission and tool disclosures.
+Phase 0 of [the overhaul plan](../plans/DESKTOP_OVERHAUL_PLAN.md) is in progress.
+Composer edits paint locally. Draft synchronization waits for 250 ms of quiet;
+completion waits for 120 ms, and Tab requests completion immediately. Transcript
+re-measurement is debounced the same way: a width change during a window drag
+schedules one re-measure after 120 ms of quiet instead of resetting the list
+every frame, so the scroll position no longer jumps mid-drag. Submission,
+composer blur, session-opening commands and quit flush pending drafts and cancel
+pending completion tasks. Local drafts remain per session; this does not add
+persistent draft storage. Generation guards prevent delayed work crossing a reconnect.
+
+Preview and inline image base64 decoding runs on a background executor, bounded
+to eight inline images plus a preview and 4 MiB decoded per image. A retained task
+cancels superseded batches; generation and image revision guards reject stale
+results. GPUI still owns image format decoding and rendering. Theme/input state
+updates happen on snapshot and input events; log visibility reports happen on
+snapshot, drawer and window-bounds changes. Transcript rendering borrows blocks
+directly instead of cloning their full content on every visible row.
+
+Set `NEXUS_DESKTOP_TRACE=1` to collect bounded timing samples. Two-second stderr
+summaries report p50/p95/max for snapshot bytes, snapshot application, root element
+layout requests, prepaint, paint and composer change-to-CPU-paint. No content or
+credentials are logged. `trace.rs` holds at most 4,096 samples; ordinary launches
+bypass the tracing element. These are CPU timings, not GPU/display presentation
+or complete Taffy layout timings, and do not prove 60 fps or 120 Hz scrolling.
+
+Schema-3 wire support is an incomplete Phase 1 slice. Python still projects a full
+snapshot, while Rust applies it through the monolithic root entity and copies
+internally accumulated transcript text. Entity splitting, update coalescing, and
+image addressing are not implemented. Native performance for
+schema 3 is not verified; performance targets and the full native review matrix
+remain unverified. The serialiser byte target is covered by a Python test: a
+token appended to a 2,000-block session emits no topics and a single append op
+under 8 KiB, with 500 updates totalling under 64 KiB.
+
+Phase 7 keyboard parity is complete in the shell keymap: every row of
+`SHORTCUTS` and `LEADER_SHORTCUTS` has a desktop route, `Ctrl+X ?` opens the
+shared `/hotkeys` reference, `Ctrl+X c` / `Ctrl+X z` dispatch the context
+popover and update help, `a` opens the agent picker outside the editor,
+PageUp/PageDown scroll the transcript, `[` / `]` cycle inspector tabs and a
+double Escape within 1.5 s stops the turn. The `Form` context saves with
+`Ctrl+S`. A Rust test asserts every bound action has a handler. A live manual
+key sweep and the remaining native states are still unverified.
+
+Phase 0 verification: 27 desktop Rust tests and 159 focused Python checks passed.
+The actual isolated dev desktop completed the tool marathon (8/8), multiline
+input, light/dark transition and settings review. `artifacts/desktop/perf-baseline.md`
+records post-change dev CPU timings and captures; no before/after or release
+frame-rate claim is made. Historical Phase 0 schema-2 traffic was above the planned
+8 KiB target; this is not a schema-3 performance measurement.

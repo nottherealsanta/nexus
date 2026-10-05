@@ -713,6 +713,9 @@ def test_context_usage_prefers_the_provider_measurement_and_carries_it_forward()
     state = apply(state, _ev(5, "model.usage", {"input": 3800, "output": 50}, turn="t1"))
     assert context_measure(state)[0] == 3850
     assert turn_footer_text(state.turns[0]).endswith("turn ↑6.7K ↓150 · 43% cached")
+    # Reasoning shows as a bare ``r`` count, with no hidden/shown distinction.
+    with_reasoning = apply(state, _ev(6, "model.usage", {"input": 0, "output": 0, "reasoning": 800}, turn="t1"))
+    assert turn_footer_text(with_reasoning.turns[0]).endswith("43% cached · 800 r")
     assert fold([
         _ev(1, "turn.started", turn="t1"),
         _ev(2, "context.assembled", {"iteration": 1, **assembled}, turn="t1"),

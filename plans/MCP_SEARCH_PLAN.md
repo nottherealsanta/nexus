@@ -1,9 +1,7 @@
 # MCP tool search plan (`McpSearch` / `McpCall`)
 
-Status: in progress, 2026-10-04. Core runtime, settings, and Ratatui support are
-implemented on branch `feat/mcp-search` in worktree `/private/tmp/nexus-mcp-search`.
-The remaining work and verification gaps are recorded in sections 14–16. Where
-this plan and the code disagree, the code wins, then `docs/`.
+Status: proposed, 2026-10-04. Nothing here is implemented yet. Where this plan
+and the code disagree after implementation, the code wins, then `docs/`.
 
 ## 1. Problem
 
@@ -241,7 +239,7 @@ through the generic tool row), but gets no new controls unless asked.
 | Permission prompt (all clients) | names the target (`github · create_issue`), shows its arguments, notes "via McpCall" |
 | Ratatui context dialog (`ui/ratatui/workflows.py`) | MCP list: existing On/Off toggle plus a mode label; Enter → details page with "Load all tools into context (~N tokens)" / "Find tools by search" actions; locked after the first turn |
 | Ratatui Settings → MCP | structured server rows with the loading switch (section 7.3) |
-| Desktop (GPUI, `rust/desktop`) | deferred; no desktop feature work or testing is part of this implementation |
+| Desktop (GPUI, `rust/desktop`) | same controls in the context header MCP dialog and Settings → MCP; details panel MCP tab shows each server's mode |
 | CLI `/mcp`, `nexus run` JSONL | `/mcp` lists mode per server; JSONL events carry `McpCall` with `target` |
 
 ## 11. Durability and replay
@@ -276,78 +274,42 @@ through the generic tool row), but gets no new controls unless asked.
 
 ## 14. Implementation phases
 
-Implementation was done across phases rather than kept green between each
-phase. The Python full-suite run recorded below predates the latest fixes; do
-not treat that run as final verification.
+Each phase lands with its tests and doc updates; the suite stays green between
+phases.
 
-1. **Per-call target resolution in the tool manager** (section 6) — implemented.
+1. **Per-call target resolution in the tool manager** (section 6).
    Tests: `tests/test_tools_manager_resolve.py` — permission key, the "changes
    anything" flag and the research-profile refusal all follow the target;
    validation errors include the schema; duplicate/exclusivity handling unchanged.
-2. **Search core** — `nexus/mcp/search.py` (section 5) — implemented.
+2. **Search core** — `nexus/mcp/search.py` (section 5).
    Tests: `tests/test_mcp_search_rank.py` — tokenisation, `select:`, ordering
    determinism, bounds, clipping messages.
 3. **Config and session state** — `tool_loading` key; `ContextMcpLoadingSelect`;
    `context.mcp_loading_selected` / `context.mcp_loading_frozen`; precedence and
-   lock — implemented. Tests: `tests/test_mcp_loading_config.py` and
-   `tests/test_session_mcp_loading.py` cover config, precedence, selection,
-   freezing, reconnect, replay, and the new-server default. The session test
-   was added after the last broad test run and still needs a final run.
+   lock. Tests: `tests/test_mcp_loading_config.py`,
+   `tests/test_session_mcp_loading.py` (reconnect + replay reproduce modes).
 4. **Bridge + runtime wiring** — build `McpSearch`/`McpCall`; drop search-mode
    tools in `_selected_manifest`; include proxies only when needed; agent
    intersections. Tests: `tests/test_mcp_search_tools.py` against
    `tests/fixtures/mcp_server.py` (search → call round trip, multi-query,
    per-query failure, lazy connect, server off, all-mode refusal, hot reload
    removing a tool); a test that the request's tools are byte-identical across
-   iterations after searches — implemented. Search → call, schema correction,
-   target restrictions, wildcard selection, lazy connection, disabled/all
-   refusal, fixed request schemas, and hot removal have coverage in
-   `tests/test_mcp_search_tools.py`. Explicit coverage is still needed for
-   per-query transport failure isolation, result/schema clipping, and child
-   agents inheriting MCP modes and authority. The `claude_agent` SDK path has
-   existing generic tool-bridge tests, but this change has not been exercised
-   through that provider.
+   iterations after searches.
 5. **Context** — `mcp_index` changes, `ContextInspect` fields, context-header
-   chips — implemented. `tests/test_context_parts_mcp.py` covers bounded names
-   and deferred-token display. The Ratatui context header and MCP details were
-   captured; a focused `tests/test_context_header.py` addition is still absent.
-6. **Settings** — `SettingsMcpLoadingSet` with comment-preserving patch — implemented.
+   chips. Tests: `tests/test_context_parts_mcp.py`,
+   `tests/test_context_header.py` additions.
+6. **Settings** — `SettingsMcpLoadingSet` with comment-preserving patch.
    Tests: `tests/test_settings_mcp_loading.py` (comments kept, hash conflict,
    scope policing, refuse-on-ambiguous).
-7. **Surfaces** — shared `tool_details.py` rows, permission prompt target naming,
-   Ratatui context dialog + Settings rows, and replay target display — implemented.
-   `tests/test_tool_details_mcp_search.py`, Ratatui workflow tests, and a new
-   native PTY operation check cover these paths. Ratatui context/details/Settings
-   screenshots were captured. The Settings screenshot exposed a long server
-   row that was subsequently shortened; recapture is outstanding. GPUI and
-   desktop tests are deliberately deferred per the user's instruction. The
-   `/mcp` slash command has not been extended with loading mode.
+7. **Surfaces** — `tool_details.py` rows, permission prompt naming, Ratatui
+   context dialog + Settings rows, desktop dialogs + details tab, `/mcp`.
+   Tests: `tests/test_tool_details_mcp_search.py`; existing Ratatui PTY check
+   extended; desktop screenshot check (`skills/native-app-review`).
 8. **Docs** — `docs/extensions.md` (MCP section), `docs/tools.md` (bundle `mcp`,
    new tools, research profile note), `docs/context.md` (`mcp_index`),
    `docs/config.md` (`tool_loading`), `docs/surfaces.md` (controls),
    `docs/host.md` (two commands), `docs/decisions.md` (section 13),
-   `docs/module-map.md` (`mcp/search.py`) — updates are present. Final doc
-   consistency review remains.
-
-### Verification already completed
-
-- Rust Ratatui unit suite: 59 passed, 2 ignored; native TUI build succeeded.
-- Offline native terminal capture: MCP context list, server details, Settings
-  server rows, and loading menu captured. This is a TUI check, not desktop QA.
-- Initial targeted Python groups passed (including 177 host/docs/UI/layering
-  checks, 84 tool-manager checks, and 22 MCP integration checks). Targeted tests
-  added since those runs are not all included in those counts.
-- A full Python run reported 5,293 passed, 312 skipped, 4 deselected, and 23
-  failed. It ran before several subsequent fixes. A narrower rerun after early
-  fixes reported 264 passed and 5 failed; two failures in that rerun were the
-  session-freeze assertions that were addressed afterward. Neither result is a
-  final run.
-- Comparing failures with base revision `b5af0b0` found existing unrelated
-  failures in queue/interrupt behavior, Ratatui attachments/session markers,
-  the session summary/schema expectation, and a model-picker fake. Do not
-  attribute the entire full-suite failure list to this work; rerun the focused
-  failures and compare with base as needed.
-- No desktop application tests or validation should be run for this plan.
+   `docs/module-map.md` (`mcp/search.py`).
 
 ## 15. Open questions
 
@@ -357,40 +319,5 @@ not treat that run as final verification.
 2. **Tool names in `mcp_index`.** Recommended (cheap and helps search a lot), but
    it is a standing cost per search-mode server. Keep, cap, or make it optional?
 3. **`claude_agent` provider.** It re-exposes Nexus tools through its own SDK
-   MCP server (`_claude_agent_worker.py`). Existing generic SDK tool tests pass
-   in the earlier suite, but proxy handoff and MCP search/call behavior through
-   that provider remain unverified.
-
-## 16. Remaining work
-
-Done 2026-10-04 (second pass):
-
-1. Focused groups pass. Full offline suite: 5,306 passed, 312 skipped, 13 failed;
-   all 13 fail identically on base `b5af0b0` (queue/interrupt, attachments,
-   session markers/cards, session summary/schema, model picker, native PTY
-   keyboard). Fixed on the way: `ContextMcpLoadingSelect` rejected servers not
-   yet connected (now validates against the inspected `mcp_servers` rows);
-   `test_session_mcp_loading` wrongly compared live events to the whole log.
-2. Phase-4 gaps closed in `tests/test_mcp_search_bounds.py`: per-server connect
-   failure isolated per query, schema clipping and select-alone cap, total result
-   cap, target timeout and duplicate `McpCall` forms, child agent inherits frozen
-   modes and fixed proxy schemas, and the proxy catalogue for all/search/off/no-
-   server. `claude_agent`: the worker exposes the two proxy schemas unchanged
-   (`tests/test_claude_agent_provider.py`); it never executes tools, so proxy
-   handoff is the generic Nexus tool path. Child-agent *denial* of out-of-set
-   targets is covered by `test_proxy_target_restrictions_search_and_call` at the
-   manager level, not through a real child run.
-3. Freezing in the attached stream is tested (`live == events tail`). Added later:
-   a detached-turn freeze test (`test_detached_turn_freezes_once_before_first_model_request`)
-   and a replay test for a denied target with no resolved `target`
-   (`test_denied_target_survives_replay_without_resolved_target`).
-4. Shared header: `tests/test_context_header.py`. `/mcp` opens the context dialog,
-   which already shows mode per server in Ratatui; no separate CLI output exists,
-   so nothing more was added.
-5. Settings row recaptured: `artifacts/ratatui-parity/ratatui-mcp-settings.png`
-   (fits; only the trailing status clips in the narrow pane). TUI only.
-6. Docs: README, `docs/extending.md`, `docs/cli.md` updated to the search default.
-
-Still open: child-agent denial through a real child run; the open questions in
-section 15. No commit or merge has
-been made.
+   MCP server (`_claude_agent_worker.py`). The proxies should pass through
+   unchanged; verify in phase 4 (not verified yet).

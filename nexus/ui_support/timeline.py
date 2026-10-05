@@ -7,7 +7,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from ..ui_support.text import escape_controls, redact, sanitize
+from ..ui_support.text import escape_controls, sanitize
 from ..view import AgentView, MessageView, ToolCallView, TurnView
 
 _DETAIL_LIMIT = 1_600
@@ -114,7 +114,7 @@ def tool_batches(tools: Sequence[ToolCallView]) -> dict[str, str]:
 
 @dataclass(frozen=True)
 class ToolGroup:
-    """A stable native activity group; shared Textual formatting stays unchanged."""
+    """A stable native activity group; canonical formatting stays stable."""
     id: str
     members: tuple[ToolCallView, ...]
     failures: int
@@ -174,7 +174,7 @@ def todo_preview(tool: ToolCallView) -> list[str]:
         return []
     glyphs = {"pending": "☐", "in_progress": "◐", "completed": "✓", "cancelled": "✗"}
     shown = todos[:4] if len(todos) > 5 else todos
-    rows = [f"{glyphs.get(str(item.get('status')), '☐')} {redact(_first_line(_text(item.get('content', ''), 180)))}"
+    rows = [f"{glyphs.get(str(item.get('status')), '☐')} {_first_line(_text(item.get('content', ''), 180))}"
             for item in shown if isinstance(item, Mapping)]
     if len(todos) > 5:
         rows.append(f"{len(todos) - 4} more")
@@ -184,7 +184,7 @@ def todo_preview(tool: ToolCallView) -> list[str]:
 def tool_output(tool: ToolCallView) -> str:
     """The body a tool block shows: raw output for shells and searches."""
     if tool.error:
-        return redact(_literal(tool.error))
+        return _literal(tool.error)
     if tool.name.casefold() in _RAW_OUTPUT_TOOLS and tool.result:
         parts = [
             _literal(block.get("text", ""), _DETAIL_LIMIT)
@@ -380,6 +380,69 @@ def diff_split_rows(hunk: str, limit: int = 400) -> list[DiffRow]:
     return rows
 
 
+_REVIEW_ROW_LIMIT = 4000
+
+
+def structured_diff(diff: Mapping[str, object]) -> dict:
+    """Structured per-file unified diff for the desktop Review pane (plan D3).
+
+    Returns ``{"files": [{"path", "added", "removed", "hunks": [{"header",
+    "rows": [{"kind", "old_no", "new_no", "text"}]}]}], "truncated": bool}``.
+    ``kind`` is ``ctx``, ``add`` or ``del``; ``0`` means no line number. The row
+    budget is announced through ``truncated`` rather than silently clipped.
+    """
+    files: list[dict] = []
+    budget = _REVIEW_ROW_LIMIT
+    truncated = bool(diff.get("truncated"))
+    for path, hunk in split_diff_files(diff):
+        hunks: list[dict] = []
+        added = removed = 0
+        current: dict | None = None
+        old = new = 0
+        for line in hunk.splitlines():
+            header = _HUNK_START.match(line)
+            if header:
+                if current is not None:
+                    hunks.append(current)
+                old, new = int(header.group(1)), int(header.group(2))
+                current = {"header": line, "rows": []}
+                continue
+            if current is None or line.startswith("\\"):
+                continue
+            if budget <= 0:
+                truncated = True
+                break
+            if line.startswith("+"):
+                current["rows"].append(
+                    {"kind": "add", "old_no": 0, "new_no": new, "text": line[1:]}
+                )
+                new += 1
+                added += 1
+            elif line.startswith("-"):
+                current["rows"].append(
+                    {"kind": "del", "old_no": old, "new_no": 0, "text": line[1:]}
+                )
+                old += 1
+                removed += 1
+            else:
+                text = line[1:] if line.startswith(" ") else line
+                current["rows"].append(
+                    {"kind": "ctx", "old_no": old, "new_no": new, "text": text}
+                )
+                old += 1
+                new += 1
+            budget -= 1
+        if current is not None:
+            hunks.append(current)
+        if hunks:
+            files.append(
+                {"path": path, "added": added, "removed": removed, "hunks": hunks}
+            )
+        if budget <= 0:
+            break
+    return {"files": files, "truncated": truncated}
+
+
 def diff_sections(diff: Mapping[str, object]) -> list[DiffSection]:
     """Per-file before/after text for a (possibly multi-file) ``diff`` artifact."""
     sections: list[DiffSection] = []
@@ -428,7 +491,7 @@ def _latest_activity(agent: AgentView) -> str:
 def _task_short_phrase(value: object) -> str:
     if value is None:
         return ""
-    phrase = redact(_text(value, 240))
+    phrase = _text(value, 240)
     phrase = " ".join(phrase.split())
     phrase = re.split(r"(?<=[.!?])\s+", phrase, maxsplit=1)[0]
     return _text(phrase, 100)
@@ -472,7 +535,7 @@ def _task_header(tool: ToolCallView, agent: AgentView | None, spinner_index: int
         if isinstance(tool.input, Mapping)
         else None
     ) or "General"
-    kind = redact(_text(str(kind), 32)).title()
+    kind = _text(str(kind), 32).title()
     running = marker == "running" and (agent is None or agent.status == "spawned")
     phrase = _task_phrase(tool, agent) or "completed"
     spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -489,10 +552,10 @@ def _task_child_activity(agent: AgentView) -> str:
         return "Starting…"
     calls = []
     for tool in tools[-1:]:
-        name = redact(_text(tool.name or "tool", 32))
+        name = _text(tool.name or "tool", 32)
         target = "" if tool.name.casefold() in {"task", "subagent"} else format_arguments(tool)
         progress = tool.progress[-1] if tool.progress else ""
-        detail = redact(_text(" · ".join(part for part in (target, progress) if part), 90))
+        detail = _text(" · ".join(part for part in (target, progress) if part), 90)
         calls.append(f"{name}: {detail}" if detail else name)
     return "  →  ".join(calls)
 
@@ -618,9 +681,9 @@ def turn_footer_text(turn: TurnView) -> str:
     # request size shown by the composer context meter.
     tokens = f"turn ↑{_compact_tokens(prompt)} ↓{_compact_tokens(usage.output_tokens)}" if prompt or usage.output_tokens else ""
     cached = f"{round(usage.cache_read_tokens / prompt * 100)}% cached" if prompt and usage.cache_read_tokens else ""
-    shown = any(block.kind == "thinking" and block.text.strip() for message in turn.messages for block in message.blocks)
-    reasoning = (f"{_compact_tokens(usage.reasoning_tokens)} reasoning" + ("" if shown else " (not shown)")
-                 if usage.reasoning_tokens else "")
+    # ``r`` is reasoning tokens; the count is additive provider usage for the
+    # whole turn and does not distinguish shared from hidden reasoning.
+    reasoning = f"{_compact_tokens(usage.reasoning_tokens)} r" if usage.reasoning_tokens else ""
     return " · ".join(part for part in (model if model != "unknown" else "", _turn_duration(turn) or "", tokens, cached, reasoning) if part)
 
 
@@ -653,7 +716,7 @@ def tool_row_text(tool: ToolCallView, spinner_index: int = 0, gutter: str = "") 
         summary = _text(tool.error.splitlines()[0], 88)
     if summary.casefold().startswith(f"{tool.name.casefold()}:"):
         summary = summary[len(tool.name) + 1 :].strip()
-    summary = redact(summary)
+    summary = summary
     suffix = f" · {summary}" if summary else (f" · {marker}" if marker not in {"completed", "failed"} else "")
     rows = todo_preview(tool)
     heading = "☐ Todo " + rows[0] if rows else tool_heading(tool)
@@ -699,6 +762,7 @@ __all__ = [
     "diff_sections",
     "diff_split_rows",
     "format_arguments",
+    "structured_diff",
     "split_diff_files",
     "thought_title",
     "tool_heading",
@@ -731,7 +795,7 @@ def running_output_tail(tool: ToolCallView, lines: int = LIVE_TAIL_LINES) -> tup
     """
     if tool.name.casefold() not in _LIVE_OUTPUT_TOOLS:
         return None
-    output = redact("".join(tool.progress[-200:]))
+    output = "".join(tool.progress[-200:])
     rows = [_text(line, 160) for line in output.splitlines() if line.strip()]
     return rows[-lines:], max(0, len(rows) - lines)
 

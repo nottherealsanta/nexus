@@ -77,7 +77,7 @@ from the durable log. No thinking duration is synthesized.
   streams as well as signed adapters. Test distinct signatures and signature-only
   replay carriers without duplicate content.
 - Run `tests/test_core_loop.py` for durable boundaries and
-  `tests/test_tui_panels.py` for the real Textual context/details projection.
+  `tests/test_ratatui_projection.py` for the real native context/details projection.
   Run `tests/playwright_web_check.py` for live updates, reconnect, clearing before
   completion, safe text rendering, and narrow-screen layout.
 - Keep live checks gated and outside the ordinary offline suite. Use the configured

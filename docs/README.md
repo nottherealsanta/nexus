@@ -28,8 +28,7 @@ agent can see is hidden from the user. Keep this in mind for every change.
 | Add a host command; daemon, transports, presence | [host.md](host.md) | `nexus/host/`, `nexus/host_support/` |
 | Add a CLI subcommand or a chat slash command | [cli.md](cli.md) | `nexus/cli.py`, `nexus/ui/cli/` |
 | Something every client must do the same way | [surfaces.md](surfaces.md) | `nexus/ui_support/` |
-| Work on `nexus chat` | [textual.md](textual.md) | `nexus/ui/tui/` |
-| Build the Rust/Ratatui replacement | [ratatui-parity.md](ratatui-parity.md), [ratatui-feasibility.md](ratatui-feasibility.md) | `nexus/ui/ratatui/`, `rust/tui/` |
+| Work on `nexus chat` (Ratatui) | [ratatui-parity.md](ratatui-parity.md) | `nexus/ui/ratatui/`, `rust/tui/` |
 | Build or run the GPUI desktop client | [desktop.md](desktop.md) | `nexus/ui/desktop/`, `rust/desktop/` |
 | Work on `nexus web` | [web.md](web.md) | `nexus/ui/web/`, `nexus/host/web.py` |
 | Local dictation | [voice.md](voice.md) | `nexus/voice/` |

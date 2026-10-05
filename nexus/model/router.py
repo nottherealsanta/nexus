@@ -36,6 +36,7 @@ from ..errors import ConfigError
 from .capabilities import Capabilities
 from .provider import Provider, ResolvedModel
 from .request import ModelRequest
+from .tiers import DEFAULT_TIER_EFFORTS, DEFAULT_TIER_MODELS
 
 __all__ = ["ModelRouter"]
 
@@ -130,8 +131,6 @@ class ModelRouter:
         that produced no output (plan section 8).
         """
         agent_refs = _agent_fallback(request)
-        if not self._fallback and not agent_refs:
-            return []
         seen: set[tuple[str, str]] = set()
         try:
             primary = self.resolve(request)
@@ -139,7 +138,11 @@ class ModelRouter:
         except ConfigError:
             pass
         candidates: list[ResolvedModel] = []
-        for reference in (*agent_refs, *self._fallback):
+        tier_defaults: tuple[str, ...] = ()
+        reference = request.metadata.get("tier") or self._resolve_alias(self._reference(request))
+        if reference in DEFAULT_TIER_MODELS and not self._tier_pinned(reference):
+            tier_defaults = DEFAULT_TIER_MODELS[reference]
+        for reference in (*agent_refs, *tier_defaults, *self._fallback):
             candidate = ModelRequest(messages=[], model=reference)
             try:
                 resolved = self.resolve(candidate)
@@ -241,6 +244,11 @@ class ModelRouter:
         pinned = self._first_pinned(tier)
         if pinned is not None:
             return self._resolve_info(pinned, ref)
+        if not self._tier_pinned(tier):
+            for reference in DEFAULT_TIER_MODELS.get(tier, ()):
+                info = self._registry_lookup(reference)
+                if info is not None and getattr(info, "provider", None) in self._providers:
+                    return self._resolve_info(info, ref)
         if not runnable:
             registered = ", ".join(sorted(self._providers)) or "none"
             available = (
@@ -274,6 +282,23 @@ class ModelRouter:
             if info is not None and getattr(info, "provider", None) in self._providers:
                 return info
         return None
+
+    def _tier_pinned(self, tier: str) -> bool:
+        return any(value == tier for value in dict(getattr(self._tiers, "overrides", {}) or {}).values())
+
+    def tier_effort(self, request: ModelRequest, candidate: ResolvedModel) -> str | None:
+        """Apply per-route defaults only when no explicit effort was selected."""
+        tier = request.metadata.get("tier") or self._resolve_alias(self._reference(request))
+        if (
+            request.metadata.get("reasoning_effort_explicit")
+            or not isinstance(tier, str)
+            or tier not in DEFAULT_TIER_MODELS
+            or self._tier_pinned(tier)
+        ):
+            return request.params.reasoning_effort
+        return DEFAULT_TIER_EFFORTS.get(
+            (tier, f"{candidate.provider.name}/{candidate.model}")
+        )
 
     def _resolve_info(self, info: Any, ref: str) -> ResolvedModel:
         provider_name = getattr(info, "provider", None)

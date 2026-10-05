@@ -1,4 +1,4 @@
-"""Toolkit-free model-picker logic shared by the Textual and native shells (PLAN §14.11).
+"""Toolkit-free model-picker logic for the native shell (PLAN §14.11).
 
 Sorting (updated date or natural name), the six-month freshness filter, fuzzy
 ranking over name/ref/provider, and the Favorites, Recent, then
@@ -86,7 +86,7 @@ def rank_models(rows: list[dict], query: str) -> tuple[list[dict], dict[str, tup
 
 def model_groups(rows: list[dict], *, query: str = "", sort_mode: str = "updated",
                  favorites: list[str] = (), recent: list[str] = ()) -> tuple[list[tuple[str, list[dict]]], dict[str, tuple[int, ...]]]:
-    """Titled, de-duplicated groups exactly as the Textual picker lists them."""
+    """Titled, de-duplicated model-picker groups."""
     query = query.strip()
     highlights: dict[str, tuple[int, ...]] = {}
     if query:

@@ -1,14 +1,14 @@
 # Web app (`nexus web`)
 
 > **To be deprecated.** No new features are added or ported here unless explicitly
-> requested; the terminal clients (Ratatui, Textual) come first. Existing behavior
+> requested; the terminal client (Ratatui) come first. Existing behavior
 > below stays as documented until removal.
 
 Parallel tool markers sit in the left gutter outside the header's text flow,
 so grouped and standalone tool calls share the same left alignment.
 
 A framework-free browser client (plain HTML, CSS and ES modules; **no build
-step**) for the same per-workspace daemon. It mirrors the Textual shell: same
+step**) for the same per-workspace daemon. It mirrors the terminal shell: same
 functionality, everything in the same place ([surfaces.md](surfaces.md)). Product
 intent is in `plans/webplan.md`; the visual history is in root `design.md`
 (its "Signal" finish is superseded by the browser-native finish below). The host
@@ -39,7 +39,7 @@ system applies everywhere (`tokens.css`, `app.css`).
   keys); status dots are round. Use the tokens, never a literal `0` or `999px`
   (except dots and progress bars). No hard offset shadows; floating layers use
   `--shadow` / `--shadow-sm`.
-- **Color:** `tokens.css` maps `ui/tui/theme.py` (`_DARK`/`_LIGHT`) role for role
+- **Color:** `tokens.css` maps `rust/tui/src/render.rs` role for role
   (`nx-accent` → `--accent`, `nx-blue` → `--info`, …); `data-theme` is `dark`,
   `light` or `system`. Preserve the shared semantic roles.
 - **Components:** all status labels share the `.tag` shape (11px, semibold,
@@ -96,9 +96,9 @@ Packaged files are listed in `pyproject.toml` (`"nexus.ui.web" = ["index.html",
 | `js/preferences.js` | localStorage detail level (session → workspace → browser precedence) and theme |
 | `js/tool-details.js` | `toolDetailSections`/`renderToolDetails`: port of `ui_support/tool_details.py` |
 | `js/context-view.js` | port of `ui_support/context.py`: `renderContextGroups`, `renderToolsReport`, `renderCurrentContext` |
-| `js/settings-files.js` | Agents/Tools/MCP/Skills/Hooks/Config/Soul editors over `Settings*` (700 ms autosave, agent model/fallback form); port of `tui_settings.py` |
+| `js/settings-files.js` | Agents/Tools/MCP/Skills/Hooks/Config/Soul editors over `Settings*` (700 ms autosave, agent model/fallback form); port of `ui/ratatui/workflows.py` |
 | `js/providers.js` | `createProviders({api, el, $, listId, isOpen})`: Settings → Providers cards (Claude: code field + `ProviderLoginCode`), also used by first-run setup |
-| `js/usage.js` | `renderUsage(result, el)`: the Ctrl+U / `/usage` provider usage modal body (shown in `#text-overlay` by `openUsage`); port of `ui_support/usage.py` + `ui/tui/usage.py` |
+| `js/usage.js` | `renderUsage(result, el)`: the Ctrl+U / `/usage` provider usage modal body (shown in `#text-overlay` by `openUsage`); port of `ui_support/usage.py` + `ui/ratatui/workflows.py` |
 | `js/voice.js`, `voice-worklet.js` | microphone capture, resample to mono 16 kHz PCM16 WAV, bounded buffers, `snapshot()` for live previews; first use needs explicit confirmation |
 | `js/voice-strip.js` | `#voice-strip`: the live dictation card above the composer (canvas waveform, fading-in preview words, "Transcribing" glow); twin of the TUI `VoiceStrip` |
 | `js/mock.js` | dev-mode `/mock` and the `DEV` badge |
@@ -140,8 +140,8 @@ Reduced motion disables transitions.
 ## Rules
 
 - Parity with the TUI ([surfaces.md](surfaces.md)). When `app.tcss`, `theme.py`,
-  `commands.py`, `app.py:SHORTCUTS`, `ui_support/timeline.py`, `tui_panels.py` or
-  `tui_context_header.py` change, change the web to match, and the reverse.
+  `commands.py`, `ui_support/shortcuts.py`, `ui_support/timeline.py`, `ui_support/details.py` or
+  `ui_support/context_header.py` change, change the web to match, and the reverse.
 - New data or actions are host commands; never compute server state in JS from
   files.
 - Keep IDs stable: the Playwright check selects `#composer-input`,
@@ -180,8 +180,7 @@ With a real daemon and a scripted model (no API key):
 4. Permission prompts wait only while a viewer is attached; otherwise
    `on_unattended` (default `deny`) applies.
 5. Screenshot with Python Playwright (`.venv`). To compare with the terminal,
-   render the Textual shell against the same daemon:
-   `NexusTextualApp(client, session=…).run_test(size=(200, 55))` → `export_screenshot()`.
+   capture the native terminal with `tests/playwright_ratatui_live.py`.
 
 ## Testing
 
@@ -192,7 +191,6 @@ With a real daemon and a scripted model (no API key):
 - `tests/playwright_context_web_check.py`, `playwright_message_check.py`: context
   and queued-message flows.
 - `tests/test_web_transport.py`: routes, auth, CSRF, CSP, snapshot/patch transport.
-  (`tests/test_browser_serve.py` covers the Textual browser bridge, not this app.)
 - Host projection: `tests/test_host_facade.py`, `test_host_logs_read.py`,
   `test_client_context_inspect.py`.
 
@@ -214,7 +212,7 @@ documents and scanned PDFs needing hosted OCR (disabled) give a visible error.
 Limits: 8 MiB per file, eight per message, 12 MiB encoded combined. Prepared
 drafts expire after one hour; submitted content stays in the durable log.
 
-Validation: `tests/test_attachments.py`, `tests/test_tui_attachments.py`,
+Validation: `tests/test_attachments.py`, `tests/test_ratatui_journeys.py`,
 `tests/playwright_attachments_check.py`.
 
 Escape and Ctrl+C dismiss open dialogs and Settings (including nested screens)

@@ -1,6 +1,6 @@
-# Parity checklist and replacement gates
+# Native feature audit
 
-Use this to audit a feature against Textual. Mark an item done only with evidence
+Use this to audit a feature against the documented host and surface contracts. Mark an item done only with evidence
 (test or screenshot) and record it in `docs/ratatui-parity.md`.
 
 ## Per-feature audit
@@ -13,7 +13,7 @@ Use this to audit a feature against Textual. Mark an item done only with evidenc
       reachable.
 - [ ] Narrow (about 60 cols), medium (110-169), wide (170+) checked in dark and light.
 - [ ] Clipping is announced; nothing the agent sees is hidden from the user.
-- [ ] Web client updated if the behaviour is user-visible (`docs/web.md`).
+- [ ] Existing web behavior updated when needed; new web features only when requested (`docs/web.md`).
 
 ## Areas and current status (update as you go)
 
@@ -23,18 +23,11 @@ panel, pickers, settings/provider/worktree/attachment journeys through the real 
 
 Open: spinner animation, inline diff with line numbers, details file expansion and MCP
 refresh control, populated-context-header screenshot, voice/worktree/settings
-screens visually, Textual's agent form fields in native settings, real audio hardware.
+screens visually, real audio hardware.
 
-## Gates before removing Textual
+## Verification
 
-1. Interaction and visual audits above complete for every area.
-2. Full offline suite plus the Textual timing-sensitive group pass.
-3. Performance: long history and streaming measured (patch protocol if needed).
-4. Distribution: hosted wheel matrix (Linux/macOS x86-64/ARM64, Python 3.13/3.14,
-   musl), clean-install launch without Textual (add a CI import check), installer and
-   `nexus update` behaviour, and a story for platforms without a native wheel
-   (binary-less fallback wheel, or keep Textual as the fallback).
-5. `--renderer auto` currently picks native when the binary exists, else Textual;
-   only drop Textual from runtime dependencies when gate 4 is verified on hosted runners.
-6. Docs, plan and ledger updated; reviewed commit with Conventional Commit subject.
-   No merge, publication or version bump unless the user asks.
+Run native unit and workflow tests, layering/docs checks and relevant PTY checks.
+Inspect screenshots for visual changes. Report remaining hardware, terminal and
+wheel-matrix limitations honestly. `auto` is an alias for Ratatui; missing binaries
+report install/build guidance. No merge, publication or version bump unless asked.

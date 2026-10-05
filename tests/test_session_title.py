@@ -211,7 +211,7 @@ def test_schema_upgrade_keeps_old_rows_and_leaves_their_title_alone(tmp_path):
     )
     conn.close()
     db = StateDatabase(path)
-    assert db.schema_version() == SCHEMA_VERSION == 2
+    assert db.schema_version() == SCHEMA_VERSION == 3
     store = SqliteSessionStore(db, "project", "main", root=str(tmp_path), lock_dir=tmp_path)
     row = store.session_row("old")
     assert (row["title"], row["title_source"]) == ("Old title", "")
@@ -351,19 +351,19 @@ async def test_at_most_two_calls_run_at_once():
 async def test_a_new_session_gets_a_model_written_title_through_the_host(tmp_path):
     """SessionStart -> background call -> the stored title replaces the derived one."""
     from nexus.config import Config
-    from nexus.config.schema import ConfigV2
+    from nexus.config.schema import ConfigV2, ModelSection, SessionsSection
     from nexus.host import HostFacade
     from nexus.host import protocol as p
     from nexus.model.providers.scripted import ScriptedProvider, text_response
     from nexus.runtime import Runtime
 
-    runtime = Runtime(tmp_path, config=Config(), providers={"scripted": ScriptedProvider(text_response("sure"))})
+    runtime = Runtime(tmp_path, config=Config(version=2, v2=ConfigV2(model=ModelSection(default="scripted/m"))), providers={"scripted": ScriptedProvider(text_response("sure"))})
     facade = HostFacade(runtime)
     facade.open_session("s1")
     # The title call gets its own router so the scripted turn provider is untouched.
     facade.titles = AutoTitler(SimpleNamespace(
         sessions=runtime.sessions, router=_Router(_Provider("Failing CI test investigation")),
-        _load_config=lambda: SimpleNamespace(v2=ConfigV2()),
+        _load_config=lambda: SimpleNamespace(v2=ConfigV2(sessions=SessionsSection(title_model="scripted/title"))),
     ))
     await facade.handle(p.SessionStart(session="s1", content="hey can you look at the failing test in ci"))
     await facade.wait_idle(timeout=5.0)

@@ -2,7 +2,7 @@
 
 Guidance for coding agents working on **Nexus**, a provider-agnostic Python agent
 harness. A per-workspace daemon owns sessions and turns. Four surfaces are clients
-of it: a terminal chat client (the native Ratatui client by default, with the Textual app as the fallback), a one-shot CLI and JSONL stream, and a plain HTML/CSS/JS
+of it: a terminal chat client (the native Ratatui client), a one-shot CLI and JSONL stream, and a plain HTML/CSS/JS
 browser app, and a Rust GPUI desktop client.
 
 **The idea of Nexus is that the context is clearly presented to the user and to
@@ -31,10 +31,8 @@ Update the matching doc in the same change as the code.
 | Host commands, daemon, transports, presence | [docs/host.md](docs/host.md) |
 | CLI subcommands and chat slash commands | [docs/cli.md](docs/cli.md) |
 | Anything both UIs must do the same way | [docs/surfaces.md](docs/surfaces.md) |
-| `nexus chat`, the Textual shell (`nexus/ui/tui/`, `nexus/ui_support/`) | [docs/textual.md](docs/textual.md) |
-| Feasibility of a Rust/Ratatui TUI with Python and maturin | [docs/ratatui-feasibility.md](docs/ratatui-feasibility.md) |
 | `nexus web`, the browser client (**to be deprecated**; `nexus/ui/web/`, `nexus/host/web.py`) | [docs/web.md](docs/web.md) |
-| Native Ratatui replacement and parity | [docs/ratatui-parity.md](docs/ratatui-parity.md) |
+| Native Ratatui terminal client | [docs/ratatui-parity.md](docs/ratatui-parity.md) |
 | Rust GPUI desktop client | [docs/desktop.md](docs/desktop.md), [GPUI skill](skills/gpui-nexus/SKILL.md), [native screenshot skill](skills/native-app-review/SKILL.md) |
 | Local dictation | [docs/voice.md](docs/voice.md) |
 | Trust boundaries, network, credentials | [docs/security.md](docs/security.md) |
@@ -59,7 +57,6 @@ uv sync --extra dev            # or: pip install -e '.[dev]'  (Python ≥3.13; t
 ruff check nexus tests         # ruff is installed separately
 python -m playwright install chromium                            # once, for browser checks
 .venv/bin/python tests/playwright_web_check.py                   # real-browser web client check
-.venv/bin/python tests/playwright_tui_check.py                   # Textual shell served to a browser
 ```
 
 Run the product: `nexus chat` (TUI, needs a TTY), `nexus run "prompt"` (one
@@ -78,18 +75,13 @@ Tests need no network or credentials. They use temporary workspaces,
    Checked by `tests/test_layering.py`.
 2. **UI encapsulation.** Code under `nexus/ui/**` may import only `nexus.host`,
    `nexus.view`, `nexus.events`, `nexus.client`, `nexus.host_support`,
-   `nexus.ui_support`, `nexus.ui`, and the standard library. Textual and Rich
-   imports stay inside `nexus/ui/tui/` (and `nexus/ui_support/tui_widgets.py`,
-   `nexus/ui_support/tui_panels.py`, `nexus/ui_support/tui_list.py`,
-   `nexus/ui_support/tui_context_header.py`, `nexus/ui_support/tui_archived.py`,
-  `nexus/ui_support/tui_diff.py`,
-  `nexus/ui_support/tui_settings.py`, `nexus/ui_support/tui_setup.py`,
-  `nexus/ui_support/tui_providers.py`, `nexus/ui_support/tui_models.py`,
-  `nexus/ui_support/tui_speech.py`, `nexus/ui_support/tui_voice.py`).
+   `nexus.ui_support`, `nexus.ui`, and the standard library. Presentation toolkit imports stay outside the
+   Python clients, except Rich in
+   `nexus/ui_support/context.py` for Markdown rendering.
    Checked by `tests/test_ui_layering.py`.
 3. **No line caps.** Line counts are recorded in the Phase 3 baseline report
-   (`tests/test_phase3_exit.py`) for information only. New Textual behavior still
-   goes in its own module (e.g. `ui/tui/panels.py`) rather than growing `app.py`,
+   (`tests/test_phase3_exit.py`) for information only. New terminal behavior still
+   goes in its own module (e.g. `ui/ratatui/workflows.py`) rather than growing the bridge,
    and helpers belong in `nexus/host_support/` or `nexus/ui_support/` when they
    fit there.
 4. **All UI work goes through the host contract.** A surface never reads session
@@ -145,7 +137,7 @@ Tests need no network or credentials. They use temporary workspaces,
   paths are checked by `tools/permissions.py`. Don't weaken these to make a
   feature easier.
 - New behavior gets a test next to its peers (`tests/test_<area>_*.py`). UI
-  changes also get a browser or Textual check where one already exists.
+  changes also get a browser or native PTY check where one already exists.
 - The worktree is often dirty with unrelated in-progress work. Don't revert or
   "fix" files outside your task. If an unrelated test already fails, say so
   instead of changing it.

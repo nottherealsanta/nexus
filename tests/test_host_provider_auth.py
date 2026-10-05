@@ -319,6 +319,13 @@ async def test_runtime_uses_direct_copilot_bearer_and_opencode_go_routes_from_ke
         copilot, go = runtime.providers["github-copilot"], runtime.providers["opencode-go"]
         assert copilot._base_url == "https://api.githubcopilot.com"
         assert go._base_url == "https://opencode.ai/zen/go/v1"
+        # OpenCode Go serves some models only on /responses; the route carries a
+        # per-model endpoint fallback so those models still work after a retry.
+        assert go._api_selector is not None
+        assert go._api_selector.api_for("gpt-6-luna") == "chat"
+        assert go._api_selector.switch(
+            "gpt-6-luna", "chat", RuntimeError("Model does not support this protocol.")
+        ) == "responses"
         await secrets.write_secret("opencode-go:default", "sk-go-123456")
         headers = await go._headers({"messages": []})
         assert headers["authorization"] == "Bearer sk-go-123456"

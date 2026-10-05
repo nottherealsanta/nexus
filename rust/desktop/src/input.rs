@@ -867,6 +867,7 @@ pub fn bindings(cx: &mut App) {
         KeyBinding::new("ctrl-z", Undo, Some("Editor")),
         KeyBinding::new("ctrl-y", Redo, Some("Editor")),
         KeyBinding::new("shift-enter", Newline, Some("Editor")),
+        KeyBinding::new("ctrl-j", Newline, Some("Editor")),
         KeyBinding::new("enter", Submit, Some("Editor")),
         KeyBinding::new("up", Up, Some("Editor")),
         KeyBinding::new("down", Down, Some("Editor")),

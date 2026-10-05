@@ -14,7 +14,7 @@ Entry points:
 * :func:`~nexus.ui.cli.run.run_once` — one turn, human or JSONL;
 * :func:`~nexus.ui.cli.run.run_once` — one-shot runs, human or JSONL.
 
-Interactive chat is the Textual shell in :mod:`nexus.ui.tui`.
+Interactive chat is the native shell in :mod:`nexus.ui.ratatui`.
 """
 from __future__ import annotations
 

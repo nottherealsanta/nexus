@@ -1,4 +1,4 @@
-"""Native completion and model picker share the Textual shell's logic."""
+"""Native completion and model picker share the native terminal shell's logic."""
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -51,7 +51,7 @@ async def test_host_failure_gives_no_candidates():
     assert await complete(c, "/model ", "") == []
 
 
-def test_model_groups_match_textual_picker():
+def test_model_groups_use_canonical_order():
     groups, _ = model_groups(MODELS, favorites=["a/mid"], recent=["a/mid", "b/new"])
     assert [(t, [r["id"] for r in rows]) for t, rows in groups] == [
         ("Favorites", ["mid"]), ("Recent", ["new"]), ("Recently updated", ["old"])]

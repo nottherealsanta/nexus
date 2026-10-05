@@ -298,11 +298,9 @@ class SessionManager:
                     return session
                 if not create:
                     raise SessionError(f"Session {session_id!r} does not exist")
-            # No cached handle and no row: create outside the lock. SQL's own
-            # primary key is the concurrency authority here -- a losing racer's
-            # ``INSERT OR IGNORE`` is simply a no-op, and the loop above then
-            # finds the row the winner published.
-            self.store.create(session_id)
+            # Reserve in memory; the first accepted user input atomically
+            # publishes the buffered setup records and session row.
+            self.store.create_draft(session_id)
 
     def _build_handle(self, session_id: str) -> Session:
         return Session(

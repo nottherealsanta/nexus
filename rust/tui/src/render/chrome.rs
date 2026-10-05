@@ -9,7 +9,7 @@ pub enum SidebarHit {
     Archived,
     Session(usize),
 }
-/// The sessions sidebar as styled rows, like Textual's `SessionSidebar`: a New
+/// The sessions sidebar as styled rows, like the terminal's `SessionSidebar`: a New
 /// session button, `SESSIONS N`, day/project headings and two-line cards (glyph
 /// and title; status words and age) with a left bar on the current session.
 pub fn session_sidebar(
@@ -545,29 +545,18 @@ pub fn details_tab_at(area: Rect, x: u16) -> Option<&'static str> {
     None
 }
 
-fn breadcrumb_status(s: &Snapshot, spin: usize) -> String {
-    match s.status.as_str() {
-        "running" | "active" | "working" => format!("{} running", SPINNER[spin % SPINNER.len()]),
-        "awaiting_input" | "awaiting_permission" | "input" => "● needs input".into(),
-        "" | "idle" => "idle".into(),
-        other => other.replace('_', " "),
-    }
-}
 fn notice_width(s: &Snapshot, area: Rect) -> usize {
-    let reserved = breadcrumb_status(s, 0).width() + 3;
     crate::transcript::truncate(
         &s.update_notice,
-        20.min((area.width as usize).saturating_sub(reserved)),
+        20.min(area.width as usize).saturating_sub(1),
     )
     .width()
 }
-fn breadcrumb_row(s: &Snapshot, area: Rect, p: &Palette, spin: usize) -> Line<'static> {
+fn breadcrumb_row(s: &Snapshot, area: Rect, p: &Palette, _spin: usize) -> Line<'static> {
     let width = area.width as usize;
-    let status = breadcrumb_status(s, spin);
     let notice = crate::transcript::truncate(&s.update_notice, notice_width(s, area));
     let suffix = " ";
-    let reserved =
-        status.width() + suffix.width() + notice.width() + if notice.is_empty() { 0 } else { 3 };
+    let reserved = suffix.width() + notice.width();
     // Match the composer inset (two cells) plus its three-cell rail padding.
     let indent = 5;
     let crumb = crate::transcript::truncate(&s.breadcrumb, width.saturating_sub(reserved + indent));
@@ -575,23 +564,9 @@ fn breadcrumb_row(s: &Snapshot, area: Rect, p: &Palette, spin: usize) -> Line<'s
     Line::from(vec![
         Span::styled(
             format!("{}{crumb}{}", " ".repeat(indent), " ".repeat(gap)),
-            Style::default().fg(p.muted),
-        ),
-        Span::styled(notice.clone(), Style::default().fg(p.accent)),
-        Span::styled(
-            if notice.is_empty() { "" } else { " · " },
             Style::default().fg(p.quiet),
         ),
-        Span::styled(
-            status,
-            Style::default().fg(
-                if matches!(s.status.as_str(), "running" | "active" | "working") {
-                    crate::transcript::color(&s.agent_color, p.blue, p)
-                } else {
-                    p.muted
-                },
-            ),
-        ),
+        Span::styled(notice.clone(), Style::default().fg(p.accent)),
         Span::styled(suffix, Style::default().fg(p.border_strong)),
     ])
 }
@@ -599,8 +574,6 @@ pub fn update_notice_at(s: &Snapshot, area: Rect, x: u16, y: u16) -> bool {
     if s.update_notice.is_empty() || !area.contains((x, y).into()) || y != area.y {
         return false;
     }
-    let end = area
-        .right()
-        .saturating_sub((breadcrumb_status(s, 0).width() + 3 + 1) as u16);
+    let end = area.right().saturating_sub(1);
     x >= end.saturating_sub(notice_width(s, area) as u16) && x < end
 }

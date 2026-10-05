@@ -637,9 +637,10 @@ def test_multi_target_approval_lists_every_path_without_truncation_and_fails_clo
         }],
     })
     assert "\\x1b[2J" in protected
-    assert "supersecret" not in protected
-    assert "ghp_12345678901234567890" not in protected
-    assert "private/api_key=\u2026" in protected
+    # Nothing is redacted: the user sees what the agent sees (controls are still escaped).
+    assert "supersecret" in protected
+    assert "ghp_12345678901234567890" in protected
+    assert "private/api_key=supersecret" in protected
 
     overflow = {"tool": "Move", "targets": [*targets, {
         "role": "source", "path": "src/overflow.py", "reason": "Read required."
