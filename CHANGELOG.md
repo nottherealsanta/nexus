@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3](https://github.com/nottherealsanta/nexus/compare/v0.3.2...v0.3.3) (2026-10-05)
+
+
+### Bug fixes
+
+* settings revamp, run-ordered models and agent run modes ([#61](https://github.com/nottherealsanta/nexus/issues/61)) ([e837a50](https://github.com/nottherealsanta/nexus/commit/e837a5097835934c7a3c48df34ffd1475f30b5c1))
+
 ## [0.3.2](https://github.com/nottherealsanta/nexus/compare/v0.3.1...v0.3.2) (2026-10-05)
 
 
