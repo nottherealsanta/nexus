@@ -205,11 +205,6 @@ def test_completion_watermark_ignores_presence_and_advances_for_next_turn(tmp_pa
     assert session_status(next_turn, seen, "other") == "done"
 
 
-# ---------------------------------------------------------------------------
-# fork
-# ---------------------------------------------------------------------------
-
-
 def test_fork_at_end_preserves_records_exactly(tmp_path):
     manager = SessionManager(tmp_path)
     session = manager.open("src")

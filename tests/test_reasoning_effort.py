@@ -829,7 +829,7 @@ def test_manifest_coordinator_forwards_reasoning_effort_to_context_iteration(tmp
             return catalog
 
         def _build_iteration_manager(self, *_args, **_kwargs):
-            return SimpleNamespace(names=(), specs=(), schemas=lambda: ())
+            return SimpleNamespace(names=(), authority_names=(), authority_mutating=(), specs=(), schemas=lambda: ())
 
     coordinator = _ManifestEnvironmentFactory.__new__(_ManifestEnvironmentFactory)
     coordinator._runtime = RuntimeStub()

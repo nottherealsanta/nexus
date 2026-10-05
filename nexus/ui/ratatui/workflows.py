@@ -122,6 +122,11 @@ class Workflows(TierPages, SpeakPages):
             rows = [(escape_controls(item.label) + (" · built-in" if item.builtin else " · edited" if getattr(item, "overrides_builtin", False) else ""),
                      {"kind": "settings_read", "scope": scope, "category": category, "id": item.id})
                     for item in items]
+            if category == "mcp":
+                preview = await self.client.inspect_context(self.shell.controller.session)
+                server_rows = [row for row in preview.mcp_servers if row.get("scope") == scope]
+                rows = [(f"{row['name']} · {row.get('config_tool_loading', 'search')} · {row.get('tool_count', 0)} tools · {scope} · {row.get('status', 'unknown')}",
+                    {"kind": "settings_mcp_loading", "scope": scope, "name": row["name"], "tokens": row.get("schema_tokens", 0)}) for row in server_rows] + rows
             if category == "agents":
                 rows.insert(0, ("New sessions start with…", {"kind": "default_agent"}))
             names = [item.id for item in items if not item.builtin and (category != "agents" or getattr(item, "overrides_builtin", False))]

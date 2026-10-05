@@ -413,6 +413,13 @@ def _details_panel(controller, view, shell):
     added, removed = sum(f.added for f in files), sum(f.removed for f in files)
     report = getattr(shell, "mcp_report", None) or {}
     daemon = report.get("daemon") or {}
+    # Doctor reports configuration; context inspection owns the session mode.
+    preview = getattr(shell, "preview", None)
+    session_modes = {row["name"]: row for row in getattr(preview, "mcp_servers", ())}
+    mcp_report = {**report, "mcp": {**(report.get("mcp") or {}), "servers": [
+        {**row, **({"tool_loading": session_modes[row["name"]]["tool_loading"]}
+                  if row.get("name") in session_modes else {})}
+        for row in (report.get("mcp") or {}).get("servers", ())]}}
     from importlib.metadata import version
     from datetime import datetime
     def stamp(value):
@@ -442,7 +449,7 @@ def _details_panel(controller, view, shell):
                    "diff": [escape_controls(line) for line in diff_preview_lines(f.hunks)] if is_open or bool(shell and getattr(shell, "local_transcript", False)) else []} for f in files],
         "files_summary": f"+{added} -{removed} across {len(files)} file{'s' if len(files) != 1 else ''}" if files else "",
         "mcp": [[tone, escape_controls(text), escape_controls(note)]
-                for tone, text, note in mcp_rows(getattr(shell, "mcp_report", None), error=getattr(shell, "mcp_error", None))],
+                for tone, text, note in mcp_rows(mcp_report, error=getattr(shell, "mcp_error", None))],
     }
 
 

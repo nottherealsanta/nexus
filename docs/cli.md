@@ -85,7 +85,7 @@ names, usage, summaries, aliases). `parse` resolves aliases to the canonical nam
 | `/theme` | `[dark\|light]` | | switch theme |
 | `/settings` | | | open Settings |
 | `/verbose` | | | toggle full tool output previews |
-| `/mcp`, `/skills`, `/tasks` | | | MCP servers, active skills, background agent tasks |
+| `/mcp`, `/skills`, `/tasks` | | | MCP servers (with each server's tool loading mode in the Ratatui dialog), active skills, background agent tasks |
 | `/reload` | | | reload extensions and MCP |
 | `/review`, `/commit` | | | ask the agent to review / commit changes |
 | `/archived` | | `/resume` | browse archived sessions |

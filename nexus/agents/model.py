@@ -235,7 +235,7 @@ AGENT_CONTEXTS = frozenset({"root", "subagent"})
 _NAME_RE = re.compile(rf"[A-Za-z0-9][A-Za-z0-9._-]{{0,{MAX_NAME_CHARS - 1}}}\Z")
 _BUNDLE_RE = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
 #: A tool item: a tool name with an optional leading ``-`` (an exclusion).
-_TOOL_RE = re.compile(r"-?[A-Za-z][A-Za-z0-9_]{0,63}\Z")
+_TOOL_RE = re.compile(r"-?(?:mcp__[A-Za-z0-9_]+__\*|[A-Za-z][A-Za-z0-9_]{0,63})\Z")
 _INT_RE = re.compile(r"[0-9]+\Z")
 _FLOAT_RE = re.compile(r"[0-9]+\.[0-9]+\Z")
 _PROVIDER_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}\Z")

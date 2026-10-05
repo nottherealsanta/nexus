@@ -202,7 +202,8 @@
           "progress": [],
           "requested_ts": 3.0,
           "started_ts": null,
-          "status": "completed"
+          "status": "completed",
+          "target": null
         }
       ],
       "updated_ts": 14.0,

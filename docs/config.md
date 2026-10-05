@@ -120,3 +120,11 @@ For the native terminal client, `NEXUS_TUI_BINARY` explicitly selects
 the Rust executable. Shell preferences retain `$XDG_CONFIG_HOME/nexus/tui.json`
 (or `~/.config/nexus/tui.json`) and saved appearance and layout keys. Native startup
 never opens session storage; session data continues to come from the host.
+
+## MCP tool loading
+
+Each server entry in `.agents/mcp.json` or `~/.nexus/mcp.json` accepts
+`"tool_loading": "search" | "all"`. Omission means Search; other values are
+configuration errors. Project definitions replace global definitions by name.
+Session choices override config until modes freeze at the first turn. Settings
+changes affect new sessions; see [extensions.md](extensions.md#mcp-search-loading).

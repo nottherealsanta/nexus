@@ -792,13 +792,19 @@ class AgentManager:
                     canonical_tool_name(str(tool))
                     for tool in bundles.get(bundle, ())
                 )
+        if "mcp" in resolved.bundles:
+            requested.update(name for name in ceiling if name.startswith("mcp__") or name in {"McpSearch", "McpCall"})
         declared_tools, _collisions = canonical_tool_names(resolved.tools)
+        from fnmatch import fnmatchcase
+        requested.update(name for name in ceiling for pattern in declared_tools if fnmatchcase(name, pattern))
         requested.update(declared_tools)
 
         requested_set = frozenset(requested)
         selected = (ceiling & requested_set) - frozenset(
             canonical_tool_name(tool) for tool in resolved.excluded_tools
         )
+        excluded = frozenset(name for name in ceiling for pattern in resolved.excluded_tools if fnmatchcase(name, pattern))
+        selected -= excluded
         stripped = frozenset()
         if resolved.read_only:
             forbidden = FORBIDDEN_ROLE_TOOLS | frozenset(
@@ -810,11 +816,16 @@ class AgentManager:
             # context (for example Skill or extension controls) merely because
             # their current spec is marked non-mutating. Keep the ceiling to the
             # pure workspace inspection tools.
-            outside_read_only = selected - READ_ONLY_TOOLS
+            read_only_tools = READ_ONLY_TOOLS | {name for name in selected if name.startswith("mcp__") or name in {"McpSearch", "McpCall"}}
+            outside_read_only = selected - read_only_tools
             stripped = stripped | outside_read_only
-            selected = selected & READ_ONLY_TOOLS
+            selected = selected & read_only_tools
         else:
             forbidden = frozenset()
+        if any(name.startswith("mcp__") for name in selected):
+            selected |= (ceiling & {"McpSearch", "McpCall"}) - excluded
+        else:
+            selected -= {"McpSearch", "McpCall"}
         return AgentToolSelection(
             agent=resolved.name,
             available=available_set,

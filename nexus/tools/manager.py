@@ -59,6 +59,7 @@ from .spec import (
     CancelTokenView,
     PathTarget,
     RegisteredTool,
+    ResolvedTarget,
     ToolCall,
     ToolContext,
     ToolExecutionResult,
@@ -297,6 +298,7 @@ class PreparedCall:
     error: ToolExecutionResult | None = None
     code: str | None = None
     decision: Decision | None = None
+    target: ResolvedTarget | None = None
     path_targets: tuple[PathTarget, ...] = ()
     _multi_target_authorization: object | None = dataclasses.field(
         default=None, repr=False, compare=False
@@ -346,7 +348,10 @@ class PreparedBatch:
 
     def calls(self) -> tuple[ToolCall, ...]:
         """The executable calls, in order, for the permission engine."""
-        return tuple(entry.call for entry in self.executable)
+        return tuple(
+            ToolCall(entry.call.id, entry.target.spec.name, dict(entry.target.arguments))
+            if entry.target else entry.call for entry in self.executable
+        )
 
     def spec_map(self) -> dict[str, ToolSpec]:
         return {
@@ -564,6 +569,7 @@ class ToolManager:
         self._catalog = catalog
         self._by_name = self._index(catalog)
         selected = self._select(catalog, tool_names)
+        self._target_restrict = None if restrict is None else frozenset(restrict)
         if restrict is not None:
             # An activation overlay narrows the selected catalog to a subset;
             # unknown names are ignored (they were never available). Order is
@@ -571,6 +577,8 @@ class ToolManager:
             allowed = {
                 name for name in restrict if isinstance(name, str)
             }
+            if any(name.startswith("mcp__") for name in allowed):
+                allowed.update(("McpSearch", "McpCall"))
             selected = tuple(tool for tool in selected if tool.name in allowed)
         self._tools = selected
         # ``prepare`` must resolve against the *selected* catalog, not the full
@@ -728,6 +736,32 @@ class ToolManager:
     @property
     def profile(self) -> str:
         return self._profile_name
+
+    @property
+    def authority_names(self) -> tuple[str, ...]:
+        """Includes deferred names for agent intersections, never model schemas."""
+        targets = (
+            name for tool in self.tools for name in tool.deferred_targets
+            if (self._target_restrict is None or name in self._target_restrict)
+            and not (self._profile.read_only and name in tool.deferred_mutating)
+        )
+        return tuple(dict.fromkeys((*self.names, *targets)))
+
+    @property
+    def authority_mutating(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(name for tool in self.tools
+            for name in ((tool.name,) if tool.mutates else ()) + tool.deferred_mutating))
+
+    def authority_for_profile(self, profile: str) -> tuple[str, ...]:
+        selected = get_profile(profile)
+        names = set()
+        for tool in self.tools:
+            if tool.bundle in selected.bundles or tool.name in selected.include:
+                names.update((tool.name, *tool.deferred_targets))
+        names.difference_update(selected.exclude)
+        if selected.read_only:
+            names.difference_update(self.authority_mutating)
+        return tuple(sorted(names))
 
     @property
     def workspace(self) -> Path:
@@ -918,6 +952,33 @@ class ToolManager:
                     is_error=True,
                 ),
             )
+        if tool.resolve is not None:
+            target = None
+            try:
+                target = tool.resolve(dict(normalized.input))
+                if isinstance(target, ToolError):
+                    raise target
+                if not isinstance(target, ResolvedTarget):
+                    raise ToolSpecError("Invalid resolved target")
+                if self._target_restrict is not None and target.spec.name not in self._target_restrict:
+                    raise ToolSpecError(f"Target {target.spec.name} is not permitted by this agent's tool restrictions")
+                validate_tool_input(target.spec, target.arguments)
+                if self._profile.read_only and target.spec.mutates:
+                    raise ToolSpecError("The research profile refuses targets that change state")
+                if target.spec.path_mode or target.spec.multi_path_targets or target.spec.bundle == "fs":
+                    raise ToolSpecError("Proxy targets cannot bypass filesystem preparation")
+                key = target.spec.resolve_permission_key(target.arguments)
+            except Exception as exc:  # Resolver failures never widen authority or crash a turn.
+                schema = ("\nInput schema: " + json.dumps(target.spec.input_schema)
+                          if isinstance(exc, ToolInputError) and target is not None else "")
+                message = f"{normalized.name}: {exc}{schema}"
+                if isinstance(target, ResolvedTarget) and target.format_error is not None:
+                    message = target.format_error(message)
+                return PreparedCall(
+                    call=normalized, spec=target.spec if isinstance(target, ResolvedTarget) else spec,
+                    target=target if isinstance(target, ResolvedTarget) else None,
+                    code="target_invalid", error=ToolExecutionResult.text(message, is_error=True))
+            return PreparedCall(call=normalized, spec=target.spec, key=key, target=target)
         try:
             raw_targets = spec.resolve_multi_path_targets(normalized.input)
         except Exception as exc:  # noqa: BLE001 - resolver failures fail closed
@@ -1134,6 +1195,7 @@ class ToolManager:
                     {
                         "call_id": entry.call.id,
                         "tool": entry.call.name,
+                        **({"target": entry.target.spec.name} if entry.target else {}),
                         "code": entry.code or "invalid",
                         "error": _first_text(entry.error),
                         "executed": False,
@@ -1157,6 +1219,7 @@ class ToolManager:
                         {
                             "call_id": entry.call.id,
                             "tool": entry.call.name,
+                        **({"target": entry.target.spec.name} if entry.target else {}),
                             "code": code,
                             "error": _first_text(target_error),
                             "executed": False,
@@ -1176,6 +1239,7 @@ class ToolManager:
                         {
                             "call_id": entry.call.id,
                             "tool": entry.call.name,
+                        **({"target": entry.target.spec.name} if entry.target else {}),
                             "code": "multi_target_unauthorized",
                             "error": _first_text(result),
                             "executed": False,
@@ -1192,6 +1256,7 @@ class ToolManager:
                     {
                         "call_id": entry.call.id,
                         "tool": entry.call.name,
+                        **({"target": entry.target.spec.name} if entry.target else {}),
                         "code": "unknown_tool",
                         "executed": False,
                     },
@@ -1213,6 +1278,7 @@ class ToolManager:
                     {
                         "call_id": entry.call.id,
                         "tool": entry.call.name,
+                        **({"target": entry.target.spec.name} if entry.target else {}),
                         "code": code,
                         "executed": False,
                     },
@@ -1475,7 +1541,7 @@ class ToolManager:
     ) -> ToolExecutionResult:
         assert entry.spec is not None
         spec = entry.spec
-        tool = self._selected[spec.name]
+        tool = self._selected[entry.call.name]
         call = entry.call
 
         # Execution-time authorization: re-canonicalize the fs path through the
@@ -1492,7 +1558,8 @@ class ToolManager:
                 "tool.failed",
                 {
                     "call_id": call.id,
-                    "tool": spec.name,
+                    "tool": call.name,
+                    **({"target": spec.name} if entry.target else {}),
                     "code": code,
                     "error": _first_text(guard_error),
                     "executed": False,
@@ -1503,7 +1570,8 @@ class ToolManager:
         await self._emit(
             emit,
             "tool.started",
-            {"call_id": call.id, "tool": spec.name, "bundle": spec.bundle},
+            {"call_id": call.id, "tool": call.name, "bundle": spec.bundle,
+             **({"target": spec.name} if entry.target else {})},
         )
         ctx = self._make_context(ctx_factory, call, spec, emit, cancel)
         if cancel is not None:
@@ -1513,7 +1581,8 @@ class ToolManager:
         started = time.monotonic()
         failed = False
         try:
-            coro = tool.run(dict(call.input), ctx)
+            coro = (entry.target.run(dict(entry.target.arguments), ctx)
+                    if entry.target else tool.run(dict(call.input), ctx))
             if timeout is not None:
                 result = await asyncio.wait_for(coro, timeout)
             else:
@@ -1545,7 +1614,8 @@ class ToolManager:
                 "tool.failed",
                 {
                     "call_id": call.id,
-                    "tool": spec.name,
+                    "tool": call.name,
+                    **({"target": spec.name} if entry.target else {}),
                     "error": _first_text(result),
                     "duration_ms": duration_ms,
                     "executed": True,
@@ -1557,7 +1627,8 @@ class ToolManager:
                 "tool.completed",
                 {
                     "call_id": call.id,
-                    "tool": spec.name,
+                    "tool": call.name,
+                    **({"target": spec.name} if entry.target else {}),
                     "is_error": result.is_error,
                     "duration_ms": duration_ms,
                     "executed": True,
@@ -1587,6 +1658,8 @@ class ToolManager:
         return dataclasses.replace(
             base,
             call_id=call.id,
+            tool_authority=(None if self._target_restrict is None and not self._profile.read_only
+                            else self.authority_names),
             cancel_token=cancel if cancel is not None else base.cancel_token,
             emit=self._ctx_emitter(emit, call, spec),
             job_registry=self._job_registry,

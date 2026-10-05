@@ -372,6 +372,8 @@ def test_protocol_round_trips_every_command_and_result():
         p.ToolsList(),
         p.ContextInspect(session="s"),
         p.ContextExtensionSelect(session="s", category="skills", name="example", enabled=False),
+        p.ContextMcpLoadingSelect(session="s", server="example", mode="search"),
+        p.SettingsMcpLoadingSet(scope="project", server="example", mode="all", expected_sha256="abc"),
         p.Doctor(explain_reload=True),
         p.UpdateStatus(),
         p.Health(),

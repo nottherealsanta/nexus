@@ -215,6 +215,7 @@ class ToolCallView(_View):
     #: Model iteration that requested the call; calls sharing it are one batch.
     iteration: int = 0
     name: str = ""
+    target: str | None = None
     status: str = "requested"  # requested|running|completed|failed
     bundle: str | None = None
     is_error: bool = False

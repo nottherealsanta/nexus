@@ -174,3 +174,17 @@ For an extension tool written by users, see [extending.md](extending.md).
 Permission-key callback exceptions become `ToolSpecError` and a denied,
 model-visible preparation error. Invalid subagent routing arguments must not
 abort the whole turn or bypass the permission gate.
+
+## Deferred MCP calls
+
+The `mcp` bundle contains `McpSearch` and `McpCall` when at least one enabled
+server uses search loading. Search accepts 1–8 queries (keyword or `select:name`)
+and returns bounded, untrusted descriptions and schemas. Calls resolve their
+real target before validation and permission evaluation. The target's name,
+permission key, mutability, concurrency and server deadline govern execution.
+`research` retains the proxy but refuses targets that change state.
+
+`RegisteredTool.resolve` returns a frozen `ResolvedTarget` containing the spec,
+runner and arguments. Preparation keeps the proxy call alongside this target;
+permission batches use target calls so existing MCP wildcard rules and durable
+grants keep their meaning. Filesystem targets cannot bypass path preparation.

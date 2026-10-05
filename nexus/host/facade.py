@@ -1688,6 +1688,13 @@ class HostFacade:
         if isinstance(command, p.ToolsList):
             tools = await self.list_tools()
             return p.ToolsListResult(count=len(tools), tools=tools)
+        if isinstance(command, p.ContextMcpLoadingSelect):
+            session = self._session(command.session, create=False, recover=False)
+            context = await self.inspect_context(command.session)
+            if not any(row.get("name") == command.server for row in context["mcp_servers"]):
+                raise ValueError("Unknown MCP server")
+            session.select_mcp_loading(command.server, command.mode)
+            return p.ContextInspectResult(session=command.session, **await self.inspect_context(command.session))
         if isinstance(command, p.ContextExtensionSelect):
             session = self._session(command.session, create=False, recover=False)
             if session.context_locked or session.active:

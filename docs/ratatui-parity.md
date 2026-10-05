@@ -144,6 +144,12 @@ root agent before switching and persist that selection through the host in
 the new session; `/agent` remains the explicit way to choose another agent.
 Covered by native action regression tests.
 
+New-session actions (`/new`, named `/new`, and Ctrl+N) open the session
+immediately, without an agent picker. They capture the current/last-active
+root agent before switching and persist that selection through the host in
+the new session; `/agent` remains the explicit way to choose another agent.
+Covered by native action regression tests and Textual functional journeys.
+
 | Area | Implemented | Remaining verification or work |
 | --- | --- | --- |
 | Host/reducer | Shared session controller, replay, continuous follow, bounded automatic reconnect, cross-project routing | Reconnect and project switching under real daemon churn |

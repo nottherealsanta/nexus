@@ -166,3 +166,26 @@ with no global/project selector. Other file categories retain scoped editing.
 the write-a-tool-and-call-it walkthrough), `test_skills_*.py`, `test_hooks_manager.py`,
 `test_mcp_*.py`, fixtures under `tests/fixtures/{extensions,hooks,mcp}` and
 `tests/fixtures/mcp_server.py`.
+
+## MCP search loading
+
+Servers default to `tool_loading: "search"`; their full schemas stay out of
+`ModelRequest.tools`. `McpSearch` discovers tools with local deterministic
+keyword ranking or exact `select:` queries; `McpCall` validates and invokes a
+current target. Search never invokes a target and cannot connect disabled
+servers. Target removal returns “not found; search again”. Per-query server
+failures do not discard other queries. Search results carry names-only notes
+for compaction, and retain the existing untrusted-data fencing.
+
+`nexus/mcp/search.py` indexes at most 2,000 tools per server and 64 servers.
+Names outrank parameter names, which outrank description matches; IDF weights
+reduce common-word bias. Ties sort by qualified name. Bounds are announced.
+Search caches the immutable catalogue identity; no embeddings or model requests
+are involved. Individual schemas cap at 8,000 characters, or 24,000 for a
+single-tool exact selection; the total obeys `tools.max_result_tokens`.
+
+A session can choose Search, Load all, or Follow configuration per server.
+Choices are durable events and lock after the first turn. Effective modes freeze
+in `context.mcp_loading_frozen`; subsequent config edits affect new sessions.
+Servers added to an existing session use Search. All loading retains the direct
+`mcp__server__tool` interface.

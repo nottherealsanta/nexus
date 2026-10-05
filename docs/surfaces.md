@@ -277,3 +277,18 @@ Submitted messages separate the prompt sentence from numbered attachment rows.
 The browser shows labelled image thumbnails and expandable full document cards,
 also in request-context messages. The terminal shows compact labelled rows;
 clicking the message body opens the complete attached text and image metadata.
+
+## MCP tool loading
+
+Native context dialogs show per-server On/Off controls and Search/All mode.
+Enter opens details with Search, Load all (estimated tokens), and Follow
+configuration actions before the first turn. Settings → MCP shows structured
+server rows above the file editor; loading choices patch the defining scope
+and refresh the page. Desktop uses these same host-backed workflows. The MCP
+inspector shows the mode alongside counts. `/mcp` opens the server list.
+
+`McpSearch` disclosures label each query and display schema fields as rows.
+`McpCall` headings name the resolved server/tool; parameters remain fully
+inspectable. Permission requests use the target's rules and show “via McpCall”.
+The durable `tool.started.target` field preserves the target during replay.
+The deprecated web surface continues using generic rows and receives no new controls.

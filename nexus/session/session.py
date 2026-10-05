@@ -295,6 +295,12 @@ class _SessionEventSink:
             await self._fanout.put(
                 record.event, critical=event.type in _CRITICAL_EVENTS
             )
+        if event.type == "turn.started":
+            modes = getattr(self._session, "_mcp_loading_pending", None)
+            self._session._mcp_loading_pending = None
+            if modes:
+                await self.emit(Event(type="context.mcp_loading_frozen", data=modes,
+                                      session=self._session.id))
         return record
 
 
@@ -371,6 +377,7 @@ class Session:
         #: The active turn's frozen tool bundle, so ``resolve_permission`` can
         #: reach the approval broker without this layer importing ``nexus.tools``.
         self._active_tools: Any | None = None
+        self._mcp_loading_pending: dict[str, str] | None = None
         if type(event_buffer) is not int or event_buffer < 1:
             raise ValueError("event_buffer must be a positive integer")
         self._event_buffer = event_buffer
@@ -734,6 +741,41 @@ class Session:
         if self.context_locked:
             raise ValueError("Skills, MCP and agents are locked after the first turn to preserve the prompt cache. Start a new session to change them.")
         self._emit("context.extension_selected", {"category": category, "name": name, "enabled": enabled})
+
+    @property
+    def mcp_loading_choices(self) -> dict[str, str]:
+        choices = {}
+        for event in self.read().events():
+            if event.type == "context.mcp_loading_selected":
+                name, mode = event.data.get("server"), event.data.get("mode")
+                if isinstance(name, str):
+                    if mode in ("search", "all"):
+                        choices[name] = mode
+                    elif mode is None:
+                        choices.pop(name, None)
+        return choices
+
+    @property
+    def mcp_loading_frozen(self) -> dict[str, str] | None:
+        for event in self.read().events():
+            if event.type == "context.mcp_loading_frozen":
+                return {name: mode for name, mode in event.data.items() if mode in ("search", "all")}
+        # An empty first-turn catalogue has no modes to record. Later servers
+        # still use search, independent of configuration edits.
+        return {} if self.context_locked else None
+
+    def select_mcp_loading(self, server: str, mode: str | None) -> None:
+        self._ensure_writable()
+        if not isinstance(server, str) or not server or len(server) > 256 or mode not in (None, "search", "all"):
+            raise ValueError("Invalid MCP tool loading selection")
+        if self.context_locked or self.active:
+            raise ValueError("MCP tool loading is locked after the first turn to preserve the prompt cache. Start a new session to change it.")
+        self._emit("context.mcp_loading_selected", {"server": server, "mode": mode})
+
+    def prepare_mcp_loading(self, modes: dict[str, str]) -> None:
+        """Stage first-turn modes; the event sink freezes and streams them."""
+        if self.mcp_loading_frozen is None:
+            self._mcp_loading_pending = dict(modes)
 
     @property
     def agent_selection(self) -> AgentSelection | None:

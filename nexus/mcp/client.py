@@ -473,6 +473,8 @@ class MCPServerConfig:
     list_timeout_s: float = DEFAULT_LIST_TIMEOUT_S
     call_timeout_s: float = DEFAULT_CALL_TIMEOUT_S
     secrets: tuple[str, ...] = ()
+    tool_loading: str = "search"
+    tool_loading_source: str = "default"
 
     def redact(self, text: str) -> str:
         """Redact this server's secrets and credential shapes from ``text``."""
@@ -521,6 +523,7 @@ def parse_server_config(
         "init_timeout_s",
         "list_timeout_s",
         "call_timeout_s",
+        "tool_loading",
     }
     unknown = sorted(set(raw) - allowed)
     if unknown:
@@ -531,6 +534,10 @@ def parse_server_config(
         raise MCPConfigError(
             f"server {name!r}: transport must be 'stdio', 'http', or 'sse'"
         )
+
+    tool_loading = raw.get("tool_loading", "search")
+    if tool_loading not in ("search", "all"):
+        raise MCPConfigError(f"server {name!r}: tool_loading must be 'search' or 'all'")
 
     secrets: list[str] = []
 
@@ -605,6 +612,8 @@ def parse_server_config(
         init_timeout_s=_timeout(raw, "init_timeout_s", DEFAULT_INIT_TIMEOUT_S),
         list_timeout_s=_timeout(raw, "list_timeout_s", DEFAULT_LIST_TIMEOUT_S),
         call_timeout_s=_timeout(raw, "call_timeout_s", DEFAULT_CALL_TIMEOUT_S),
+        tool_loading=tool_loading,
+        tool_loading_source="config" if "tool_loading" in raw else "default",
         secrets=tuple(dict.fromkeys(secrets)),
     )
 
