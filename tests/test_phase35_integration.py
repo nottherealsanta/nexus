@@ -35,7 +35,7 @@ from nexus.config.schema import (
 )
 from nexus.errors import SessionBusy
 from nexus.events import Event
-from nexus.model.message import Document, Image
+from nexus.model.message import Document, Image, Text
 from nexus.model.providers.scripted import (
     ScriptedProvider,
     Wait,
@@ -467,18 +467,19 @@ async def test_pending_queue_rehydrates_and_drains_fifo(tmp_path):
     queued = [e for e in reopened.events if e.type == "input.queued"]
     assert [e.data["queued_id"] for e in queued] == [first, second]
 
-    # A single no-input turn drains the whole FIFO at successive boundaries.
+    # A no-input turn batches the pending FIFO into one user message.
     await reopened.start_turn()
     await wait_until_idle(reopened)
 
     consumed = [e.data["queued_id"] for e in reopened.events if e.type == "input.consumed"]
     assert consumed == [first, second]
     user_texts = [
-        message.content[0].text
+        "".join(block.text for block in message.content if isinstance(block, Text))
         for message in reopened.messages
         if message.role == "user" and message.content
     ]
-    assert user_texts == ["q1", "q2"]
+    assert user_texts == ["q1\n\nq2"]
+    assert provider.calls == 1
     await runtime.aclose()
 
 

@@ -1,6 +1,7 @@
 """Root-agent selection durability, eligibility, and turn-time application."""
 from __future__ import annotations
 
+from nexus.model.message import Message, Text
 from nexus.config import Config
 from nexus.config.schema import (
     AgentSection,
@@ -60,6 +61,7 @@ async def test_agent_select_replay_reopen_fork_and_reset(tmp_path):
     assert [e.type for e in handle.events].count("agent.selected") == 1
     assert handle.agent_selection.name == "plan"
 
+    runtime.session("s").append_message(Message(role="user", content=[Text(text="Keep this selection")]))
     fork = runtime.sessions.fork("s", new_id="branch")
     assert fork.agent_selection.name == "plan"
     await runtime.aclose()

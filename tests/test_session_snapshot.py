@@ -348,6 +348,7 @@ def test_dangling_recovery_across_snapshot_and_tail_never_executes(tmp_path):
 
 def test_snapshot_aware_recovery_finds_prefix_and_tail_on_reopen(tmp_path):
     session = _open(tmp_path, "dangle2")
+    session.append_message(Message(role="user", content=[Text(text="Use these tools")]))
     session.append_message(_tool_use("prefix-call"))
     session.write_snapshot()
     session.append_message(_tool_use("tail-call"))

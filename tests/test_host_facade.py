@@ -318,6 +318,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.SessionSearch(query="term"),
         p.SessionOpen(session="s"),
         p.AttachmentPrepare(name="note.txt", data=b"note"),
+        p.AttachmentPreview(attachment_id="att-1"),
         p.SessionStart(session="s", content="hi"),
         p.SessionEnqueue(session="s", content="hi"),
         p.SessionCancel(session="s"),
@@ -431,6 +432,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.ModelTiersResult(order=["low", "medium", "high"], default="medium"),
         p.SessionTitleSettingsResult(enabled=True, model="low", resolved="openai/gpt-5-mini"),
         p.SpeechStatusResult(state="absent", bytes_total=345_000_000),
+        p.AttachmentPreviewResult(attachment_id="att-1", media_type="image/png", data=b"png"),
         p.ModelSelectResult(session="s", provider="p", model="m", tier="high"),
         p.ReasoningEffortSelectResult(
             session="s", stored_override="high", effective_effort="high",
@@ -1407,11 +1409,12 @@ async def test_messages_during_active_turn(tmp_path, mode):
         handle = runtime.session("s")
         assert handle.queue_depth == 0
         kinds = [e.type for e in handle.events]
-        assert kinds.count("turn.started") == (2 if mode == "steer" else 3)
+        assert kinds.count("turn.started") == 2
         assert kinds.count("turn.cancelled") == (1 if mode == "interrupt" else 0)
         texts = ["".join(b.text for b in m.content if isinstance(b, Text))
                  for m in handle.messages if m.role == "user"]
-        assert texts == (["original", "later", "direction"] if mode == "queue"
+        assert texts == (["original", "later\n\ndirection"] if mode == "queue"
+                         else ["original", "direction\n\nlater"] if mode == "interrupt"
                          else ["original", "direction", "later"])
         assert facade.state("s")[0].to_dict() == fold(handle.events).to_dict()
         assert all(t.phase != "failed" for t in facade.state("s")[0].turns)

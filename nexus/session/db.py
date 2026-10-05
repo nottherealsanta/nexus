@@ -457,9 +457,9 @@ class SqliteSessionStore:
                 conn.execute(
                     "INSERT INTO sessions"
                     "(project_id, namespace, id, created_at, last_seq, completion_seq, last_activity,"
-                    " message_count, title, parent_id, fork_seq, archived_at, archive_reason,"
+                    " message_count, title, title_source, parent_id, fork_seq, archived_at, archive_reason,"
                     " trash_id, trashed_at, trash_expires_at, trash_reason)"
-                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         self.project_id,
                         self.namespace,
@@ -470,6 +470,7 @@ class SqliteSessionStore:
                         last_activity,
                         message_count,
                         title,
+                        "first_message" if title else "",
                         parent_id,
                         fork_seq,
                         archived_at,

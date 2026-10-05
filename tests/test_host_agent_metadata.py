@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from nexus.model.message import Message, Text
 from nexus.config import Config
 from nexus.config.schema import (
     AgentSection,
@@ -69,7 +70,7 @@ async def test_current_agent_metadata_tracks_configured_session_override_and_uns
         assert isinstance(configured, p.AgentCurrentResult)
         assert (configured.name, configured.source) == ("custom", "config")
         assert configured.color == "#12AB34"
-        assert (configured.provider, configured.model) == ("scripted", "configured")
+        assert (configured.provider, configured.model) == ("openai", "agent-model")
         assert configured.reasoning_effort is None
         assert configured.reasoning_effort_source is None
 
@@ -96,7 +97,7 @@ async def test_current_agent_metadata_tracks_configured_session_override_and_uns
 
         fresh_session = await facade.handle(p.AgentCurrent(session="fresh-session"))
         assert isinstance(fresh_session, p.AgentCurrentResult)
-        assert (fresh_session.provider, fresh_session.model) == ("scripted", "configured")
+        assert (fresh_session.provider, fresh_session.model) == ("openai", "agent-model")
     finally:
         await runtime.aclose()
 
@@ -344,6 +345,7 @@ async def test_reasoning_effort_host_select_clear_and_replay(tmp_path):
         assert (request.provider, request.model) == ("openai", "model-a")
         assert request.params.reasoning_effort == "high"
 
+        handle.append_message(Message(role="user", content=[Text(text="Keep this effort")]))
         await runtime.aclose()
         runtime = make_runtime()
         facade = HostFacade(runtime)

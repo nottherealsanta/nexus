@@ -3,6 +3,8 @@
 Opening a new chat reserves an **in-memory draft**, not a saved session. Setup
 and presence events remain in memory and snapshots are not written. The first
 user message atomically saves the draft's buffered records and the session row.
+Promotion preserves the derived title source (`first_message`), so automatic
+naming can replace that title without overwriting a user-set title.
 An accepted `input.queued` submission also saves it immediately so queued user
 work survives a daemon restart. Unsubmitted drafts disappear on restart and do
 not appear in workspace or cross-project session lists. Existing records with

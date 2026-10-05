@@ -201,6 +201,17 @@ def test_create_from_records_publishes_prefix_in_one_call(tmp_path):
     assert row["fork_seq"] == 2
     assert row["message_count"] == 2
     assert row["title"] == "one"
+    assert row["title_source"] == "first_message"
+
+
+def test_draft_promotion_preserves_derived_title_source(tmp_path):
+    store = _store(_db(tmp_path))
+    store.create_draft("draft")
+    store.append_event("draft", Event(type="model.selected", data={"model": "m"}))
+    store.append_message("draft", _msg("Investigate a failing test"))
+    assert store.session_row("draft")["title_source"] == "first_message"
+    assert store.set_auto_title("draft", "Failing test investigation")
+    assert store.session_row("draft")["title_source"] == "auto"
 
 
 # -- WAL cross-connection visibility -----------------------------------------

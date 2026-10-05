@@ -91,6 +91,7 @@ def test_session_summary_is_transport_neutral(tmp_path):
         "state",
         "last_activity",
         "last_seq",
+        "completion_seq",
         "viewers",
         "message_count",
         "created_at",
