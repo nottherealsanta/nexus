@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.5](https://github.com/nottherealsanta/nexus/compare/v0.3.4...v0.3.5) (2026-10-05)
+
+
+### Bug fixes
+
+* restore MCP settings toggles and startup diagnostics ([#65](https://github.com/nottherealsanta/nexus/issues/65)) ([6ca0b52](https://github.com/nottherealsanta/nexus/commit/6ca0b52307d7371a8be68673b38ea925172483da))
+
 ## [0.3.4](https://github.com/nottherealsanta/nexus/compare/v0.3.3...v0.3.4) (2026-10-05)
 
 
