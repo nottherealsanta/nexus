@@ -28,13 +28,10 @@ pub fn button_width(label: &str) -> u16 {
     (width(label) + 4) as u16
 }
 
-/// `[ label ]`. Loading keeps the width and swaps the label for a spinner.
-pub fn button(buf: &mut Buffer, ui: &mut Ui, x: u16, y: u16, b: &Button) -> Response {
+/// `[ label ]` drawn without registering a stop (the caller owns focus).
+pub fn button_view(buf: &mut Buffer, ui: &Ui, x: u16, y: u16, b: &Button, focused: bool, h: f32) {
     let t = ui.theme;
     let w = button_width(b.label);
-    let rect = Rect::new(x, y, w, 1);
-    let r = ui.stop(b.id, rect);
-    let h = ui.hover_of(b.id);
     let mut st = match b.kind {
         ButtonKind::Primary => Style::default().fg(t.bg).bg(mix(t.accent, t.text, h * 0.2)),
         ButtonKind::Secondary => Style::default().fg(t.text).bg(mix(t.element, t.element_hi, h)),
@@ -50,7 +47,7 @@ pub fn button(buf: &mut Buffer, ui: &mut Ui, x: u16, y: u16, b: &Button) -> Resp
     if b.disabled {
         st = t.quiet_style();
     }
-    if r.focused {
+    if focused {
         st = st.add_modifier(Modifier::REVERSED | Modifier::BOLD);
     }
     let label = if b.loading { ui.spinner().to_string() } else { b.label.to_string() };
@@ -58,6 +55,14 @@ pub fn button(buf: &mut Buffer, ui: &mut Ui, x: u16, y: u16, b: &Button) -> Resp
     let (l, rr) = br(ui);
     let shown = format!("{l} {:^inner$} {rr}", truncate(&label, inner, ui.glyphs.ellipsis), inner = inner);
     put(buf, x, y, &shown, st, w);
+}
+
+/// `[ label ]`. Loading keeps the width and swaps the label for a spinner.
+pub fn button(buf: &mut Buffer, ui: &mut Ui, x: u16, y: u16, b: &Button) -> Response {
+    let w = button_width(b.label);
+    let r = ui.stop(b.id, Rect::new(x, y, w, 1));
+    let h = ui.hover_of(b.id);
+    button_view(buf, ui, x, y, b, r.focused, h);
     r
 }
 
@@ -259,14 +264,12 @@ pub fn tabs(buf: &mut Buffer, ui: &mut Ui, area: Rect, id: &str, tabs: &[Tab], a
 pub fn stepper_width(value: &str) -> u16 {
     (width(value) + 14) as u16
 }
-/// `[ − ]  60 s  [ + ]`
-pub fn stepper(buf: &mut Buffer, ui: &mut Ui, x: u16, y: u16, id: &str, value: &str) -> Response {
+/// `[ − ]  60 s  [ + ]` drawn without registering a stop; the parts are hit targets of `id`.
+pub fn stepper_view(buf: &mut Buffer, ui: &mut Ui, x: u16, y: u16, id: &str, value: &str, focused: bool) {
     let t = ui.theme;
-    let w = stepper_width(value);
-    let r = ui.stop(id, Rect::new(x, y, w, 1));
     let minus = if ui.glyphs.ascii { "-" } else { "−" };
     let mut st = Style::default().fg(t.text).bg(t.element);
-    if r.focused {
+    if focused {
         st = st.add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
     }
     let (l, rr) = br(ui);
@@ -276,5 +279,11 @@ pub fn stepper(buf: &mut Buffer, ui: &mut Ui, x: u16, y: u16, id: &str, value: &
     let px = x + 5 + width(value) as u16 + 4;
     put(buf, px, y, &format!("{l} + {rr}"), st, 5);
     ui.hits.add(Rect::new(px, y, 5, 1), id, Part::Named("inc".into()));
+}
+/// `[ − ]  60 s  [ + ]`
+pub fn stepper(buf: &mut Buffer, ui: &mut Ui, x: u16, y: u16, id: &str, value: &str) -> Response {
+    let w = stepper_width(value);
+    let r = ui.stop(id, Rect::new(x, y, w, 1));
+    stepper_view(buf, ui, x, y, id, value, r.focused);
     r
 }

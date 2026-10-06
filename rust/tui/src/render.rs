@@ -236,6 +236,9 @@ pub struct Cache {
     pub pointer: Option<(u16, u16)>,
     pub component_hover: components::Hover,
     pub toasts: toasts::Toasts,
+    /// The parsed one-page Settings area and its client-side state (focus, scroll, popups).
+    pub settings_page: Option<(u64, std::sync::Arc<crate::settings_page::Page>)>,
+    pub page_state: crate::settings_page::PageState,
     /// Sessions sidebar filter text and whether it is being edited.
     pub filter: String,
     pub filtering: bool,
@@ -479,6 +482,17 @@ fn same_block(a: &crate::bridge::Content, b: &crate::bridge::Content) -> bool {
     }
 }
 impl Cache {
+    /// The page for this snapshot, parsed once per revision.
+    pub fn page_for(&mut self, revision: u64, raw: &serde_json::Value) -> std::sync::Arc<crate::settings_page::Page> {
+        if let Some((rev, page)) = &self.settings_page {
+            if *rev == revision {
+                return page.clone();
+            }
+        }
+        let page = std::sync::Arc::new(crate::settings_page::Page::from_value(raw));
+        self.settings_page = Some((revision, page.clone()));
+        page
+    }
     pub fn session_rows(
         &mut self,
         s: &Snapshot,
@@ -1546,6 +1560,11 @@ pub fn draw(
                 .style(Style::default().fg(p.accent).bg(p.dialog)),
                 areas[1],
             );
+        } else if let Some(raw) = s.settings_page.as_ref() {
+            let page = cache.page_for(s.revision, raw);
+            let mut state = std::mem::take(&mut cache.page_state);
+            crate::settings_page::draw(frame, inner, &page, &mut state, &p, s.theme == "nexus-light");
+            cache.page_state = state;
         } else if !s.items.is_empty() && !panel_detail {
             dialogs::draw_menu(
                 frame,

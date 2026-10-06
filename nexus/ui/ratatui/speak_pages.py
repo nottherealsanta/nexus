@@ -88,9 +88,6 @@ class SpeakPages:
             self.shell.panel_title = ""
             self.stack.clear()
             await self.speak_now()
-        elif kind == "speak_settings_prepare":
-            await self.client.speech_prepare()
-            await self.speech_settings()
         else:
             return False
         return True

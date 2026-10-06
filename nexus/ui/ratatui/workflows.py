@@ -33,6 +33,10 @@ class Workflows(TierPages, SpeakPages):
         self.agent_page_id = None
         self.agent_context = {}
         self.agent_parents = []
+        self.settings_page = None  # the typed one-page Settings area currently shown, if any
+        self.page_area = ""
+        self.page_title = ""
+        self.page_state: dict[str, dict] = {}  # per-area view state (active tab, ...)
 
     @property
     def client(self):
@@ -109,9 +113,6 @@ class Workflows(TierPages, SpeakPages):
 
     async def settings_menu(self, scope="global", category=""):
         """Title, rows and lines of one Settings page (also used to refresh stale stack entries)."""
-        if category == "speech":
-            await self.speech_settings()
-            return "Speech · local Kokoro", self.shell.items, self.shell.panel_lines
         if category == "agents":
             scope = "global"
         inventory = await self.client.settings_inventory(scope)
@@ -119,8 +120,7 @@ class Workflows(TierPages, SpeakPages):
             rows = [(item.label, {"kind": "settings", "scope": scope, "category": item.key})
                     for item in inventory.categories if item.key not in {"config", "soul", "hooks"}]
             rows += [("Providers", {"kind": "providers"}), ("Models", {"kind": "models_settings"}),
-                     ("Session titles", {"kind": "title_settings"}), ("Voice", {"kind": "voice_settings"}),
-                     ("Speech · local Kokoro", {"kind": "speech_settings"}),
+                     ("Voice & speech", {"kind": "voice_settings"}),
                      ("Appearance", {"kind": "appearance"}),
                      ("Layout", {"kind": "layout"}),
                      ("Keyboard", {"kind": "keyboard"}),
@@ -152,8 +152,13 @@ class Workflows(TierPages, SpeakPages):
         return f"Settings · {scope} · {category or 'sections'}", rows, [inventory.root_display, *([help_text] if help_text else [])]
 
     async def settings(self, scope="global", category=""):
-        self.shell.settings_nav = category
+        """Open Settings on ``category`` (default: the first area). Each area is one page."""
+        from .settings_pages import PAGE_AREAS
         self.settings_scope = scope
+        area = category or "appearance"
+        if area in PAGE_AREAS:
+            return await self.open_page(area)
+        self.shell.settings_nav = category  # config, soul and hooks stay editor-only for now
         title, rows, lines = await self.settings_menu(scope, category)
         self.menu(title, rows, lines)
 
@@ -176,78 +181,76 @@ class Workflows(TierPages, SpeakPages):
         self.shell.panel_title = ""
         await self.settings(scope, category)
 
-    async def providers(self):
-        result = await self.client.providers_status()
-        self.menu("Providers", [(row.get("label", row["id"]) + (" · connected" if row.get("connected") else " · not connected"),
-            {"kind": "provider", "id": row["id"]}) for row in result.providers], ["Choose a provider to manage its connection and sign-in options.", "Credentials stay in the daemon; connect more than one provider to switch models."])
-
-    async def voice_settings(self):
-        """Configure local transcription without starting microphone capture."""
-        status = await self.client.voice_status()
-        rows = [
-            (f"Voice input · {'on' if status.enabled else 'off'}", {"kind": "voice_setting", "key": "enabled", "value": not status.enabled}),
-            (f"Send transcript automatically · {'on' if status.auto_send else 'off'}", {"kind": "voice_setting", "key": "auto_send", "value": not status.auto_send}),
-            (f"Processing device · {status.configured_device}", {"kind": "voice_choices", "key": "device", "current": status.configured_device}),
-            (f"Recording limit · {status.max_seconds} seconds", {"kind": "voice_choices", "key": "max_seconds", "current": status.max_seconds}),
-        ]
-        if status.state in {"loading", "downloading"}:
-            rows.append(("Refresh model status", {"kind": "voice_settings"}))
-        elif status.cached or status.state in {"ready", "transcribing"}:
-            rows.append(("Load / prepare local model", {"kind": "voice_settings_prepare", "allow_download": False}))
-        else:
-            rows.append(("Download local model…", {"kind": "confirm", "label": "Download the local voice model (~179 MB)?", "next": {"kind": "voice_settings_prepare"}}))
-        self.menu("Voice · local dictation", rows, [
-            f"Model: {status.state} · {status.message or 'Audio is transcribed locally.'}",
-            "Auto-send submits immediately; turn it off to review the transcript in the composer.",
-            *labelled(status),
-        ])
-        for index, item in enumerate(self.shell.items):
-            item["group"] = "Input and transcript" if index < 2 else "Local transcription" if index < 4 else "Model setup"
-
-    async def speech_settings(self):
-        """Show saved local Kokoro /speak configuration and the model's download state."""
-        from ...ui_support import speech_download as sd
-        from ...ui_support.speech_settings import read_speech_settings
-        values = await read_speech_settings(self.client)
-        status = await self.client.speech_status()
-        rows = []
-        for key, label in (("language", "Language"), ("voice", "Voice"), ("speed", "Speed"), ("device", "Device")):
-            rows.append((f"{label} · {values[key]}", {"kind": "speech_choices", "key": key, "current": values[key]}))
-        rows.append(("Reset to default", {"kind": "speech_reset"}))
-        state = status.state
-        if state in {"absent", "error"}:
-            rows.append(("Download speech model…", {"kind": "confirm", "label": f"{sd.CONSENT_TITLE}. Download it now?",
-                                                    "lines": [sd.CONSENT_PROMPT], "next": {"kind": "speak_settings_prepare"}}))
-        elif state == "downloading":
-            rows.append(("Refresh download status", {"kind": "speech_settings"}))
-        model_line = (sd.progress_text(status) if state == "downloading" else sd.ready_text() if state == "ready"
-                      else status.message or "The speech model is not downloaded yet.")
-        self.menu("Speech · local Kokoro", rows, [
-            "/speak generates speech locally using Kokoro. Settings are saved to nexus.toml [speech].",
-            "No automatic downloads: the model is fetched only after you confirm the download.",
-            f"Model: {model_line}",
-        ])
-        for item in self.shell.items:
-            item["group"] = "Kokoro speech"
-
     #: Operation kinds that open or navigate Settings pages, and the area each selects.
     NAV_AREAS = {"appearance": "appearance", "layout": "layout", "keyboard": "keys",
-                 "providers": "providers", "voice_settings": "voice", "speech_settings": "speech",
-                 "models_settings": "models", "title_settings": "titles"}
+                 "models_settings": "models"}
+
+    async def open_page(self, area):
+        """Show one Settings area as a single typed page; Escape closes Settings."""
+        from ...ui_support.settings_help import SETTINGS_SECTIONS
+        label = next((name for key, name in SETTINGS_SECTIONS if key == area), area.title())
+        self.stack.clear()
+        self.page_area = area
+        self.page_title = f"Settings · {label}"
+        self.settings_page = None
+        self.shell.settings_nav = area
+        self.shell.show(self.page_title, [], layout="modal")
+        self.shell.items = []
+        self.shell.panel_tones = []
+        self.form = None
+        await self.refresh_page()
+
+    def return_to_page(self):
+        """Leave a confirmation or picker that was stacked on the page (a no-op if the page is already shown)."""
+        if self.page_area and self.shell.panel_title != self.page_title:
+            self.back()
+
+    async def refresh_page(self):
+        """Rebuild the current page from the host (a no-op unless a page is the open panel)."""
+        if not self.page_area or self.shell.panel_title != self.page_title:
+            return
+        from .settings_pages import page_module
+        try:
+            self.settings_page = await page_module(self.page_area).build(self)
+        except Exception as exc:  # noqa: BLE001 - keep the last page and say what failed
+            self.shell.flash(f"{self.page_title} could not be refreshed: {exc}", "error")
+        self.shell.panel_revision += 1
 
     async def settings_area(self, key):
         """Switch Settings to ``key`` (the left list): a fresh page with Escape closing Settings."""
+        from .settings_pages import PAGE_AREAS
+        if key in PAGE_AREAS:
+            return await self.open_page(key)
         self.stack.clear()
         self.shell.panel_title = ""
-        operation = {"keys": {"kind": "keyboard"}, "providers": {"kind": "providers"}, "voice": {"kind": "voice_settings"}, "speech": {"kind": "speech_settings"},
-                     "models": {"kind": "models_settings"}, "titles": {"kind": "title_settings"}}.get(
+        operation = {"keys": {"kind": "keyboard"}, "providers": {"kind": "providers"},
+                     "models": {"kind": "models_settings"}}.get(
             key, {"kind": key} if key in ("appearance", "layout", "workspace") else {"kind": "settings", "scope": self.settings_scope, "category": key})
         await self.operate(operation)
 
     settings_scope = "global"
 
     async def operate(self, operation):
+        """Run one operation, then rebuild the open Settings page so it shows what the host reports."""
+        try:
+            await self._operate(operation)
+        finally:
+            await self.refresh_page()
+
+    async def _operate(self, operation):
         kind = operation["kind"]
+        if kind.startswith("sp_"):
+            from .settings_pages import page_module
+            return await page_module(operation["area"]).handle(self, operation)
+        if kind in {"models_settings", "title_settings"}:
+            return await self.open_page("models")
+        if kind in {"voice_settings", "speech_settings"}:
+            return await self.open_page("voice")
+        if kind in {"providers", "provider"}:
+            self.page_state.setdefault("providers", {})["expand"] = operation.get("id", "")
+            return await self.open_page("providers")
+        if kind in {"appearance", "layout", "keyboard"}:
+            return await self.open_page("keys" if kind == "keyboard" else kind)
         if kind in self.NAV_AREAS:
             self.shell.settings_nav = self.NAV_AREAS[kind]
         elif kind == "settings":
@@ -365,36 +368,6 @@ class Workflows(TierPages, SpeakPages):
                 label = (f"Reset {following['id']} to the built-in default? Your edits move to trash."
                          if following.get("overrides_builtin") else f"Delete {following['id']} to trash?")
             self.menu(label, [("Cancel", {"kind": "back"}), ("Continue", following)], lines)
-        elif kind == "providers":
-            await self.providers()
-        elif kind == "provider":
-            await self.provider_page(operation["id"])
-        elif kind == "provider_key":
-            self.edit("API key · Control+S to save", "", operation, secret=True)
-        elif kind == "provider_resume":
-            self.login = login_result(operation["login"])
-            await self.login_screen()
-        elif kind == "provider_login":
-            self.login = await self.client.provider_login(operation["id"], operation.get("method", ""))
-            await self.login_screen()
-        elif kind == "provider_poll":
-            self.login = await self.client.provider_login_poll(self.login.login_id)
-            if self.login.status != "pending":  # finished: show the host message, then fresh provider state
-                await self.provider_page(self.login.provider, message=self.login.message or self.login.status)
-            else:
-                await self.login_screen()
-        elif kind == "provider_code":
-            self.edit("Paste sign-in code · Control+S to submit", "", operation, secret=True)
-        elif kind == "provider_cancel":
-            login = self.login
-            try:
-                await self.client.provider_login_cancel(login.login_id)
-            finally:  # an already-finished sign-in is not an error worth stranding the screen for
-                self.login = None
-            await self.provider_page(login.provider, message="Sign-in cancelled")
-        elif kind == "provider_logout":
-            result = await self.client.provider_logout(operation["id"])
-            await self.provider_page(operation["id"], message=str(field(result, "message", "") or "Signed out"))
         elif kind == "default_agent":
             current = await self.client.default_agent()
             self.menu("Default root agent", [(row["name"] + (" · current" if row["name"] == current else ""),
@@ -402,41 +375,8 @@ class Workflows(TierPages, SpeakPages):
         elif kind == "default_agent_save":
             await self.client.set_default_agent(operation["name"], "global")
             await self.operate({"kind": "default_agent"})
-        elif kind == "layout":
-            labels = {"sessions_sidebar": ("Sessions sidebar", "ctrl+b"), "details_sidebar": ("Details sidebar", "ctrl+l"),
-                      "context_preview": ("Show context header", "")}
-            rows = [(f"{labels[key][0]}{'  ' + labels[key][1] if labels[key][1] else ''} · {'on' if self.shell.preferences.values[key] else 'off'}",
-                     {"kind": "toggle_pref", "key": key}) for key in labels]
-            rows.append(("Reset to default", {"kind": "reset_prefs", "keys": list(labels), "then": "layout"}))
-            self.menu("Layout", rows, ["Panels hide automatically on narrow terminals."])
-        elif kind == "toggle_pref":
-            key = operation["key"]
-            self.shell.preferences.set(key, not self.shell.preferences.values[key])
-            await self.operate({"kind": "layout"})
-        elif kind == "reset_prefs":
-            for key in operation["keys"]:
-                self.shell.preferences.set(key, self.shell.preferences.DEFAULTS[key])
-            await self.operate({"kind": operation["then"]})
-        elif kind == "keyboard":
-            from ...ui_support.shortcuts import KEYBOARD_SHORTCUTS
-            self.menu("Keyboard", [("Back", {"kind": "back"})], KEYBOARD_SHORTCUTS)
         elif kind == "workspace":
             self.shell.show("Workspace", await self.client.doctor())
-        elif kind == "provider_open":
-            import asyncio
-            import webbrowser
-            if self.login.url.startswith("https://"):
-                await asyncio.to_thread(webbrowser.open, self.login.url)
-        elif kind == "appearance":
-            current = self.shell.preferences.values["theme"]
-            self.menu("Appearance", [("Dark" + (" · selected" if current == "nexus-dark" else ""), {"kind": "theme", "value": "nexus-dark"}),
-                                     ("Light" + (" · selected" if current == "nexus-light" else ""), {"kind": "theme", "value": "nexus-light"}),
-                                     ("Reset to default", {"kind": "reset_prefs", "keys": ["theme"], "then": "appearance"})],
-                      ["Theme for this terminal shell."])
-        elif kind == "theme":
-            self.shell.preferences.set("theme", operation["value"])
-            self.shell.notice = "Theme saved"
-            await self.operate({"kind": "appearance"})
         elif kind == "context_show":
             self.shell.settings_nav = None
             if self.agent_page_id:
@@ -652,47 +592,6 @@ class Workflows(TierPages, SpeakPages):
                                       proceed={**operation, "token": result.confirmation_token})
             else:
                 await self.worktree_outcome(result)
-        elif kind == "voice_settings":
-            await self.voice_settings()
-        elif kind == "speech_settings":
-            await self.speech_settings()
-        elif kind == "speech_choices":
-            from ...ui_support.speech_settings import SPEECH_CHOICES, compatible_voices, read_speech_settings
-            key = operation["key"]
-            choices = SPEECH_CHOICES[key]
-            if key == "voice":
-                choices = compatible_voices(str((await read_speech_settings(self.client))["language"]))
-            self.menu(f"Speech · {key.title()}", [
-                (f"{value}{' · selected' if value == operation['current'] else ''}", {"kind": "speech_setting", "key": key, "value": value})
-                for value in choices
-            ], ["Choose a local Kokoro setting. This does not download a model."])
-        elif kind == "speech_setting":
-            from ...ui_support.speech_settings import set_speech_config
-            await set_speech_config(self.client, **{operation["key"]: operation["value"]})
-            if operation["key"] == "language":
-                self.stack.clear()
-                self.shell.panel_title = ""
-            await self.speech_settings()
-        elif kind == "speech_reset":
-            from ...ui_support.speech_settings import reset_speech_config
-            await reset_speech_config(self.client)
-            await self.speech_settings()
-        elif kind == "voice_choices":
-            key = operation["key"]
-            values = ("auto", "cpu", "mps", "cuda") if key == "device" else (15, 30, 60, 90, 120)
-            self.menu("Processing device" if key == "device" else "Recording limit", [
-                (str(value) + (" · selected" if value == operation["current"] else ""),
-                 {"kind": "voice_setting", "key": key, "value": value}) for value in values],
-                ["Auto chooses an available accelerator; CPU works without one." if key == "device" else "Recording stops at this limit. Press any key to finish earlier."])
-        elif kind == "voice_setting":
-            from ...ui_support.voice_settings import set_voice_config
-            await set_voice_config(self.client, **{operation["key"]: operation["value"]})
-            self.stack.clear()
-            self.shell.panel_title = ""
-            await self.voice_settings()
-        elif kind == "voice_settings_prepare":
-            await self.client.voice_prepare(allow_download=operation.get("allow_download", True))
-            await self.voice_settings()
         elif kind == "voice":
             await self.shell.voice.open()
         elif kind == "voice_enable":
@@ -726,38 +625,6 @@ class Workflows(TierPages, SpeakPages):
                 self.shell.preview = await self.client.inspect_context(self.shell.controller.session)
         else:
             raise ValueError("Unknown native workflow")
-
-    async def provider_page(self, provider_id, message=""):
-        """One provider card: state, help, sign-in methods, resume of a pending sign-in, sign out."""
-        result = await self.client.providers_status()
-        provider = next((row for row in result.providers if row["id"] == provider_id), None)
-        if provider is None:
-            raise ValueError("Unknown provider")
-        methods = [field(method, "id", method if isinstance(method, str) else "") for method in provider.get("methods", [])]
-        rows = []
-        login = provider.get("login")
-        if login and field(login, "status") == "pending":
-            rows.append(("Resume sign-in", {"kind": "provider_resume", "login": plain_login(login)}))
-        if "api_key" in methods:
-            rows.append(("Set API key", {"kind": "provider_key", "id": provider_id}))
-        for method_id in methods:
-            if method_id and method_id != "api_key":
-                rows.append((METHOD_LABELS.get(method_id, f"Sign in · {method_id}"),
-                             {"kind": "provider_login", "id": provider_id, "method": method_id}))
-        if provider.get("connected") and provider.get("can_logout", True) is not False:
-            rows.append(("Sign out…", {"kind": "confirm", "label": "Sign out of this provider?",
-                                       "next": {"kind": "provider_logout", "id": provider_id}}))
-        label = provider.get("label", provider_id)
-        if self.shell.panel_title != "Providers":  # re-render in place: Back still reaches the provider list
-            transient = {label, "Provider sign-in", "Sign out of this provider?"}
-            self.stack = [entry for entry in self.stack if entry[0] not in transient]
-            self.shell.panel_title = ""
-        self.menu(provider.get("label", provider_id), rows, [
-            f"Connection: {'connected' if provider.get('connected') else 'not connected'}" + (f" · {message}" if message else ""),
-            provider.get("instruction") or "Choose a sign-in method below to manage this provider.",
-            *labelled(provider)])
-        for item in self.shell.items:
-            item["group"] = "Connection management" if item["operation"]["kind"] == "confirm" else "Sign-in options"
 
     def review_binding(self):
         r = self.review
@@ -814,12 +681,6 @@ class Workflows(TierPages, SpeakPages):
         self.shell.show("Worktree outcome", result)
         self.shell.items = [{"label": "Back to worktrees", "command": "", "operation": {"kind": "worktrees"}}]
 
-    async def login_screen(self):
-        rows = [("Open sign-in page", {"kind": "provider_open"}), ("Refresh sign-in status", {"kind": "provider_poll"}), ("Cancel", {"kind": "provider_cancel"})]
-        if self.login.code_entry:
-            rows.insert(0, ("Paste sign-in code", {"kind": "provider_code"}))
-        self.menu("Provider sign-in", rows, labelled(self.login))
-
     async def save(self, form_id, body, revision):
         if not self.form or form_id != self.form["id"] or revision < self.form["revision"]:
             return
@@ -856,26 +717,6 @@ class Workflows(TierPages, SpeakPages):
             self.edit("New file body · " + name, new_file_body(target["category"], name), {"kind": "settings_read", "scope": target["scope"],
                 "category": target["category"], "id": name, "sha256": "", "builtin": False, "overrides_builtin": False,
                 "refresh": True}, autosave=True, replace=True)
-        elif target["kind"] == "provider_key":
-            if not body.strip():
-                raise ValueError("Paste your API key first")
-            result = await self.client.provider_key_set(target["id"], body.strip())
-            self.form = None
-            message = field(result, "message", "")
-            try:
-                await self.provider_page(target["id"], message=message if isinstance(message, str) and message else "Key saved")
-            except ValueError:  # provider vanished from status: show the list
-                await self.providers()
-        elif target["kind"] == "provider_code":
-            if not body.strip():
-                raise ValueError("Paste the code shown after signing in first")
-            result = await self.client.provider_login_code(self.login.login_id, body.strip())
-            self.form = None
-            self.stack = [entry for entry in self.stack if entry[0] != "Provider sign-in"]
-            self.shell.panel_title = ""
-            await self.login_screen()
-            self.shell.panel_lines.insert(0, str(field(result, "message", "")))
-
     tools_expanded: set = set()
     agent_draft: dict = {}
 

@@ -437,7 +437,7 @@ fn gallery(c: &mut Ctx) {
                 search_field(buf, ui, Rect::new(34, y, 40, 1), "g:search", &TextState::new("refr"), Some((3, 41)));
                 y += 2;
                 head(buf, ui, &mut y, "ORDERED LIST · in use · fallback · not connected");
-                let items = [OrderedItem { label: "anthropic/claude-sonnet-5-5", note: "" }, OrderedItem { label: "openai/gpt-6-mini", note: "" }, OrderedItem { label: "google/gemini-3-pro", note: "not connected" }];
+                let items = [OrderedItem { label: "anthropic/claude-sonnet-5-5", tag: "", note: "" }, OrderedItem { label: "openai/gpt-6-mini", tag: "", note: "" }, OrderedItem { label: "google/gemini-3-pro", tag: "", note: "not connected" }];
                 ordered_list(buf, ui, Rect::new(x, y, 84, 4), "g:ol", &items, "Add model…");
                 y += 5;
                 head(buf, ui, &mut y, "SECTION · open · closed · error");

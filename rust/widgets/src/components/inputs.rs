@@ -104,13 +104,11 @@ pub fn search_field(buf: &mut Buffer, ui: &mut Ui, area: Rect, id: &str, state: 
     r
 }
 
-/// Closed select: `[ value            ▾]`, right-aligned control of width `w`.
-pub fn select(buf: &mut Buffer, ui: &mut Ui, x: u16, y: u16, w: u16, id: &str, value: &str) -> Response {
+/// Closed select drawn without registering a focus stop (for rows that are the stop).
+pub fn select_view(buf: &mut Buffer, ui: &Ui, x: u16, y: u16, w: u16, value: &str, focused: bool, hover: f32) {
     let t = ui.theme;
-    let r = ui.stop(id, Rect::new(x, y, w, 1));
-    let h = ui.hover_of(id);
-    let mut st = Style::default().fg(t.text).bg(mix(t.element, t.element_hi, h));
-    if r.focused {
+    let mut st = Style::default().fg(t.text).bg(mix(t.element, t.element_hi, hover));
+    if focused {
         st = st.add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
     }
     fill(buf, Rect::new(x, y, w, 1), st);
@@ -119,6 +117,13 @@ pub fn select(buf: &mut Buffer, ui: &mut Ui, x: u16, y: u16, w: u16, id: &str, v
     let inner = w.saturating_sub(5) as usize;
     put(buf, x + 2, y, &truncate(value, inner, ui.glyphs.ellipsis), st, inner as u16);
     put(buf, x + w - 3, y, &format!(" {}{rr}", ui.glyphs.caret), st, 3);
+}
+
+/// Closed select: `[ value            ▾]`, right-aligned control of width `w`.
+pub fn select(buf: &mut Buffer, ui: &mut Ui, x: u16, y: u16, w: u16, id: &str, value: &str) -> Response {
+    let r = ui.stop(id, Rect::new(x, y, w, 1));
+    let h = ui.hover_of(id);
+    select_view(buf, ui, x, y, w, value, r.focused, h);
     r
 }
 

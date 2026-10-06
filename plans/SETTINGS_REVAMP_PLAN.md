@@ -1,6 +1,6 @@
 # Settings revamp (native Ratatui client)
 
-Status: steps 2, 5, 6, 7 and 8 landed (navigation core, run-ordered tiers, default
+Status: superseded by plans/RATATUI_DESIGN_MOCKUPS_PLAN.md (one-page Settings). Earlier status: steps 2, 5, 6, 7 and 8 landed (navigation core, run-ordered tiers, default
 chain, Session titles, agent run mode); the typed-row visual design (§3.4), shortcut
 rows and native PTY/screenshot checks remain pending.
 Scope: **the native Ratatui terminal client only**

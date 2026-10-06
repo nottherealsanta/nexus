@@ -76,8 +76,8 @@ def test_toast_shows_runs_its_action_and_closes_by_click_or_chord():
                          "action": {"label": "Undo", "operation": undo}}])
         wait_for("Removed haiku-4-5")
         wait_for("from the Low tier")
-        # Ctrl+X T runs the newest toast's action through the normal operation path.
-        os.write(master, b"\x18t")
+        # Ctrl+X A runs the newest toast's action through the normal operation path.
+        os.write(master, b"\x18a")
         assert read_action() == {"type": "operation", "operation": undo, "generation": 0}
         # The same list in the next snapshot must not bring a dismissed toast back.
         send(2, toasts=[{"id": 7, "level": "warning", "title": "Removed haiku-4-5", "body": "from the Low tier"}])

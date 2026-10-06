@@ -720,6 +720,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "archived_label": shell.archived_label if shell else "",
             "sessions_truncated": bool(shell and shell.sessions_truncated),
             "sessions_request": shell.sessions_request if shell else 0,
+            "settings_page": (shell.workflows.settings_page if shell.panel_title and shell.panel_title == shell.workflows.page_title else None) if shell else None,
             "tabs": _tab_rows(controller, shell) if shell else [],
             "breadcrumb": escape_controls(_display_breadcrumb(shell.breadcrumb)) if shell else "",
             "details_panel": details_panel,
@@ -1075,6 +1076,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                             ("Discard draft", {"kind": "discard_form"})], [form["status"], form["body"]])
                     else:
                         shell.workflows.back()
+                        await shell.workflows.refresh_page()
                 elif action["type"] == "command":
                     await shell.submit(action["text"])
                 elif action["type"] == "pick":
@@ -1177,7 +1179,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     index = int(action["text"])
                     if not shell.panel_loading and 0 <= index < len(SETTINGS_SECTIONS) and SETTINGS_SECTIONS[index][0]:
                         key = SETTINGS_SECTIONS[index][0]
-                        await shell.workflows.settings_area("speech" if key == "speech" else key)
+                        await shell.workflows.settings_area(key)
                 elif action["type"] == "model_sort":
                     shell.model_sort = "name" if shell.model_sort == "updated" else "updated"
                     await shell.command("/model", ())

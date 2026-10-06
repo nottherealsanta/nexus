@@ -317,7 +317,7 @@ impl App {
                 KeyCode::Char('n') => {
                     self.select("notifications", 0);
                 }
-                KeyCode::Char('t') => self.run_undo(),
+                KeyCode::Char('a') => self.run_undo(),
                 _ => {}
             }
             return;

@@ -46,6 +46,14 @@ impl HitMap {
             self.hits.push((Rect::new(x as u16, top as u16, r.width.min(clip.width), (bottom - top) as u16), id, part));
         }
     }
+    /// Rect of a named part of `id` (e.g. a row's `control`), used to anchor popups.
+    pub fn rect_of_part(&self, id: &str, name: &str) -> Option<Rect> {
+        self.hits
+            .iter()
+            .rev()
+            .find(|(_, i, p)| i == id && matches!(p, Part::Named(n) if n == name))
+            .map(|(r, _, _)| *r)
+    }
     pub fn len(&self) -> usize {
         self.hits.len()
     }

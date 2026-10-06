@@ -141,8 +141,11 @@ pub fn list(buf: &mut Buffer, ui: &mut Ui, area: Rect, items: &[ListItem], st: &
     drawn
 }
 
+#[derive(Default, Clone, Copy)]
 pub struct OrderedItem<'a> {
     pub label: &'a str,
+    /// Overrides the default tag (`in use` for the first row, `fallback` after).
+    pub tag: &'a str,
     /// Extra note: "not connected", "no key", …; non-empty notes are warnings.
     pub note: &'a str,
 }
@@ -172,11 +175,15 @@ pub fn ordered_list(buf: &mut Buffer, ui: &mut Ui, area: Rect, id: &str, items: 
         let btn_w = 3 * 3 + 2;
         put(buf, area.x + 2, y, &format!("{}", i + 1), st, 2);
         put(buf, area.x + 4, y, g.handle, t.dim().bg(st.bg.unwrap_or(t.bg)), 2);
-        let tag = if i == 0 { "in use" } else { "fallback" };
+        let tag = if !it.tag.is_empty() { it.tag } else if i == 0 { "in use" } else { "fallback" };
         let lab = if r.focused { st.add_modifier(Modifier::BOLD) } else { st };
         put(buf, area.x + 7, y, &truncate(it.label, label_w as usize, g.ellipsis), lab, label_w);
         let mut tx = area.x + 7 + label_w + 3;
-        let tag_st = if i == 0 { t.strong(st.fg(t.success)) } else { t.dim().bg(st.bg.unwrap_or(t.bg)) };
+        let tag_st = match tag {
+            "in use" => t.strong(st.fg(t.success)),
+            "skipped" => st.fg(t.warning),
+            _ => t.dim().bg(st.bg.unwrap_or(t.bg)),
+        };
         tx += put(buf, tx, y, tag, tag_st, 12) + 1;
         if !it.note.is_empty() {
             put(buf, tx + 1, y, &format!("· {}", it.note), st.fg(t.warning), 24);

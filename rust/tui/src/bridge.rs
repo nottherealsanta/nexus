@@ -82,6 +82,8 @@ pub struct Snapshot {
     pub tabs: Vec<Session>,
     pub archived_label: String,
     pub sessions_truncated: bool,
+    /// The typed one-page Settings area (`nexus/ui_support/settings_page.py`), or null.
+    pub settings_page: Option<Value>,
     /// Bumped by `/sessions`: the client opens and focuses the sessions sidebar.
     pub sessions_request: u64,
     pub breadcrumb: String,
@@ -483,6 +485,9 @@ impl Snapshot {
             self.details_sidebar = std::mem::take(&mut previous.details_sidebar);
         }
         self.sessions_drawer = previous.sessions_drawer;
+        if !present.contains_key("settings_page") {
+            self.settings_page = std::mem::take(&mut previous.settings_page);
+        }
         if !present.contains_key("last_opened") {
             self.last_opened = previous.last_opened.clone();
         }

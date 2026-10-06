@@ -38,7 +38,7 @@ SVGs open in any browser (serve `shots/` over HTTP if your browser blocks `file:
 Everything else goes to the screen, so it behaves as the plan specifies:
 `↑↓` move, `←→` value/pane, `Tab` next stop, `Space`/`Enter` toggle/activate,
 `/` search, `Alt+↑↓` reorder, `Delete` remove, `Ctrl+PgUp/PgDn` tabs, `Esc` ladder,
-`Ctrl+X X` dismiss toasts, `Ctrl+X N` notifications, `Ctrl+X T` undo. Changes act on
+`Ctrl+X X` dismiss toasts, `Ctrl+X N` notifications, `Ctrl+X A` undo. Changes act on
 an in-memory copy and raise a `Saved … (mock)` toast. The mouse works (click, `×`).
 
 ## Files

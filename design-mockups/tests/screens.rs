@@ -266,7 +266,7 @@ fn remove_then_undo_restores_the_model() {
     app.key(key(KeyCode::Delete));
     assert_eq!(app.w.tiers[0].len(), 1);
     app.key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL));
-    app.key(key(KeyCode::Char('t')));
+    app.key(key(KeyCode::Char('a')));
     assert_eq!(app.w.tiers[0][1].label, removed);
 }
 
@@ -292,7 +292,7 @@ fn ascii_glyphs_have_no_wide_unicode_chrome() {
 
 #[test]
 fn scope_control_only_where_a_page_can_be_project_scoped() {
-    for (key, scoped) in [("settings-models", false), ("settings-voice", false), ("settings-providers", false), ("settings-layout", false), ("settings-agents", false), ("settings-tools", false), ("settings-skills", true), ("settings-mcp", true)] {
+    for (key, scoped) in [("settings-models", false), ("settings-voice", false), ("settings-providers", false), ("settings-layout", false), ("settings-agents", false), ("settings-tools", true), ("settings-skills", true), ("settings-mcp", true)] {
         let mut app = App::new();
         app.select(key, 0);
         let t = text(&mut app);

@@ -787,7 +787,7 @@ error 12 s, paused while the pointer is on a toast, same-key toasts merge (`×2`
 most three visible plus `+N more`. They float at the top-right of the conversation
 area over everything (dialogs included) and never reflow it; the countdown hairline is
 deliberately faint. Click `×` to dismiss, click the action to run its operation.
-`Ctrl+X x` dismisses all, `Ctrl+X t` runs the newest toast's action. Esc does not
+`Ctrl+X x` dismisses all, `Ctrl+X a` runs the newest toast's action (`Ctrl+X t` stays "cycle reasoning effort"). Esc does not
 dismiss toasts (it already means stop/close). Every toast is also a `client · toast`
 line in the Logs tab (warnings and errors always, info and success with the routine
 entries), so a dismissed toast is never lost. Not done yet: the notifications list
@@ -833,3 +833,43 @@ Covered by `render.rs` tests (regions, selection, shared filter), `tests/test_ra
 (`/sessions` request) and `tests/test_ratatui_pty_sessions.py` (real PTY, docked and
 drawer). Not done yet: row actions (rename, fork, archive, multi-select) and
 `Load more` paging; they need host commands and are tracked in the plan.
+
+## One-page Settings (2026-10 overhaul, step 4)
+
+Every Settings area is one page, not a menu with pages inside. Python builds a typed
+page (`ui_support/settings_page.py`: headings, notes, rows with a control, tabs,
+ordered lists, collapsible sections, buttons, tables, progress, callouts) and sends
+it as the snapshot field `settings_page`; the Rust client (`settings_page/`) renders it
+with the `rust/widgets` kit and owns focus, scroll, select popups, text editing and
+section open state. A change is one operation sent back with `value` (and, for an
+ordered list, `action` and `index`); the host applies it through the same host commands
+as before and **rebuilds the page after every operation**, so what is shown is what the
+host reports. The page lives and dies with the Settings panel (`panel_title`), so a
+stale page is never drawn over another dialog. Text from the host is control-safe and
+bounded; an unknown block type is shown as a visible note, never dropped.
+
+Areas: Appearance, Layout, Keyboard (read-only), Providers, Models, Voice & speech,
+Agents, Tools, MCP servers, Skills. `/settings` opens on Appearance. **Scope** (the
+Global/Project control and per-row badges) appears only on Tools, Skills and MCP
+servers, the per-file areas that can differ per project; everything else is always
+global and shows no scope. Models holds the default chain, the session-title model,
+the Low/Medium/High **tabs** (each an ordered list: `Alt+↑↓` reorders, `Delete`
+removes, `Add model…` opens the one allowed picker), the subagent ceiling and the
+catalogue. Providers is one section per provider (connected first), with API key,
+sign-in code and device code handled in place in masked fields. Voice and speech are one
+page; downloads always ask first. Agents, Tools, Skills and MCP list their files with
+Edit/New/Reset through the existing editor pages. Session titles moved into Models and
+Speech into Voice & speech (their nav entries are gone).
+
+Keys on a page: `↑↓` move, `←→` change a segmented control, stepper or tab (Left on a
+plain row moves to the area list), `Space`/`Enter` toggle or open, `Ctrl+PgUp/PgDn`
+switch tab from anywhere, `Esc` closes a popup or edit first and then Settings; the
+mouse clicks any control and the wheel scrolls. Drill-ins that remain: file and agent
+editors, model pickers, and confirmations; they stack on the page and `Esc` returns to it.
+Removed: the old per-area menu pages, the `tier_*`/`models_default*`/`title_*`/`provider_*`
+/`voice_*`/`speech_*` operations and the legacy Sessions-style Settings home.
+Not done: inline agent detail (an agent still opens the agent editor page), settings
+search, and scope on Models. **Rust side not verified:** the renderer, key handling and
+integration were written and type-checked, but the Rust tests and a real-terminal check
+could not be run in this environment (the C linker was blocked by the Xcode license).
+Python behaviour is covered by `tests/test_ratatui_settings_*.py` and the ported journeys.

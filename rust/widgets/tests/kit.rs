@@ -171,7 +171,7 @@ fn ordered_list_marks_in_use_and_registers_every_stop() {
     let mut ui = Ui::new(&th, &g);
     let mut buf = Buffer::empty(Rect::new(0, 0, 90, 6));
     ui.begin_frame();
-    let items = [OrderedItem { label: "anthropic/claude-haiku-4-5", note: "" }, OrderedItem { label: "google/gemini-3-flash", note: "not connected" }];
+    let items = [OrderedItem { label: "anthropic/claude-haiku-4-5", tag: "", note: "" }, OrderedItem { label: "google/gemini-3-flash", tag: "", note: "not connected" }];
     let h = ordered_list(&mut buf, &mut ui, Rect::new(0, 0, 90, 6), "tier:low", &items, "Add model…");
     assert_eq!(h, 3);
     assert!(text(&buf, 0).contains("in use"));

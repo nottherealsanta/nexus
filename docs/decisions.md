@@ -399,3 +399,17 @@ toasts are for events. Every toast is mirrored to the Logs tab, so ephemerality 
 hides information. Esc does not dismiss toasts because Esc already stops and closes.
 The widget kit lives in `rust/widgets` so the design mock-ups and the TUI share one
 implementation.
+
+## Settings are typed pages the host builds and the client renders (2026-10)
+
+Settings had grown into menus with pages inside pages, and the rule that kept it
+"still Settings" (an allow-list of operation kinds) was the likely cause of Settings
+closing unexpectedly. A page is now data: the host builds it from host results, the
+client renders it, and every operation rebuilds it. That makes "never close
+unexpectedly" structural (an operation cannot replace the page with a panel), keeps
+the client free of settings logic (it only knows controls), and keeps what is shown
+equal to what the host reports (no optimistic local values to drift). The cost is a
+host round trip per change, which is local and fast. Scope is a property of the area
+(only per-file areas have it), not of the page chrome, so always-global areas never
+imply a choice that does not exist. Drill-ins are limited to editors, pickers and
+confirmations, which stack on the page and return to it.

@@ -138,9 +138,15 @@ async def test_native_failed_download_shows_the_error_and_offers_a_retry(shell):
 async def test_native_speech_settings_show_the_model_and_a_download_row(shell):
     shell.client.speech_status = AsyncMock(return_value=_status("absent", message="The speech model is not downloaded yet."))
     shell.client.speech_prepare = AsyncMock(return_value=_status("downloading"))
+    shell.client.voice_status = AsyncMock(return_value=p.VoiceStatusResult(enabled=True, state="ready", cached=True))
     shell.client.settings_read = AsyncMock(return_value=p.SettingsReadResult(body="config_version = 2\n", rel_path="nexus.toml", builtin=False, sha256="h"))
-    await shell.workflows.operate({"kind": "speech_settings"})
-    assert "Download speech model…" in _labels(shell)
-    assert any(line.startswith("Model: The speech model is not downloaded yet") for line in shell.panel_lines)
-    await shell.workflows.operate({"kind": "speak_settings_prepare"})
+    await shell.workflows.operate({"kind": "speech_settings"})  # speech now lives on the Voice & speech page
+    blocks = list(shell.workflows.settings_page["blocks"])
+    buttons = {i["label"]: i["operation"] for b in blocks if b.get("t") == "buttons" for i in b["items"]}
+    assert "Download speech model…" in buttons
+    model = next(b for b in blocks if b.get("t") == "row" and b["id"] == "speech_model")
+    assert model["control"]["value"] == "The speech model is not downloaded yet."
+    await shell.workflows.operate(buttons["Download speech model…"])  # asks first, with the size
+    shell.client.speech_prepare.assert_not_awaited()
+    await shell.workflows.operate(shell.items[1]["operation"])
     shell.client.speech_prepare.assert_awaited_once()

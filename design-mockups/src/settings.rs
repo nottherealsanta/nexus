@@ -7,10 +7,10 @@ use nexus_widgets::*;
 use ratatui::{layout::Rect, style::Style};
 
 /// Cursor over a page's rows inside the scratch buffer.
-/// Only these pages can differ per project; every other page is always global, so
+/// Only these pages can differ per project (the per-file areas); every other page is always global, so
 /// it shows neither the Scope control nor scope badges (plan revision 2).
 pub fn scoped(area: &str) -> bool {
-    matches!(area, "skills" | "mcp")
+    matches!(area, "tools" | "skills" | "mcp")
 }
 
 pub struct Flow {
@@ -222,7 +222,7 @@ fn models(buf: &mut ratatui::buffer::Buffer, ui: &mut Ui, w: &World, v: &mut Vie
     head(buf, ui, f, "DEFAULT");
     let r = f.rect(1);
     put(buf, r.x + 2, r.y, "Default model chain", ui.theme.dim(), r.width);
-        let items: Vec<OrderedItem> = w.default_chain.iter().map(|m| OrderedItem { label: &m.label, note: if m.connected { "" } else { "not connected" } }).collect();
+        let items: Vec<OrderedItem> = w.default_chain.iter().map(|m| OrderedItem { label: &m.label, tag: "", note: if m.connected { "" } else { "not connected" } }).collect();
     let h = ordered_list_height(items.len());
     let r = f.rect(h);
     ordered_list(buf, ui, r, "chain", &items, "Add model…");
@@ -235,7 +235,7 @@ fn models(buf: &mut ratatui::buffer::Buffer, ui: &mut Ui, w: &World, v: &mut Vie
     let r = f.rect(2);
     tabs(buf, ui, r, "tabs:tier", &tabs_v, v.tier_tab);
     let tier = &w.tiers[v.tier_tab];
-    let items: Vec<OrderedItem> = tier.iter().map(|m| OrderedItem { label: &m.label, note: if m.connected { "" } else { "not connected" } }).collect();
+    let items: Vec<OrderedItem> = tier.iter().map(|m| OrderedItem { label: &m.label, tag: "", note: if m.connected { "" } else { "not connected" } }).collect();
     let r = f.rect(ordered_list_height(items.len()));
     ordered_list(buf, ui, r, &format!("tier:{}", v.tier_tab), &items, "Add model…");
     let users = ["quick, explore", "build, task, reviewer", "orchestrator, advisor"][v.tier_tab];
@@ -355,7 +355,7 @@ fn agents(buf: &mut ratatui::buffer::Buffer, ui: &mut Ui, w: &World, v: &mut Vie
         put(buf, r.x + 2, r.y, "Tier", ui.theme.dim(), 9);
         select(buf, ui, r.x + 10, r.y, 16, "agent:tier", TIERS[a.tier]);
     } else {
-        let items = [OrderedItem { label: "anthropic/claude-sonnet-5-5", note: "" }, OrderedItem { label: "openai/gpt-6-mini", note: "" }];
+        let items = [OrderedItem { label: "anthropic/claude-sonnet-5-5", tag: "", note: "" }, OrderedItem { label: "openai/gpt-6-mini", tag: "", note: "" }];
         let r = df.rect(ordered_list_height(2));
         ordered_list(buf, ui, r, "agent:models", &items, "Add model…");
     }

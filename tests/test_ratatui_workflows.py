@@ -40,14 +40,13 @@ async def test_stale_form_does_not_save(shell):
 
 @pytest.mark.asyncio
 async def test_provider_secret_not_returned_in_snapshot(shell):
-    shell.client.provider_key_set = AsyncMock()
-    shell.client.providers_status = AsyncMock(return_value=p.ProvidersStatusResult())
-    await shell.workflows.operate({"kind": "provider_key", "id": "openai"})
-    form = shell.workflows.form
-    await shell.workflows.save(form["id"], "test-secret", 1)
+    shell.client.provider_key_set = AsyncMock(return_value=SimpleNamespace(message="Key saved"))
+    shell.client.providers_status = AsyncMock(return_value=p.ProvidersStatusResult(providers=[
+        {"id": "openai", "label": "OpenAI", "connected": True, "methods": ["api_key"]}]))
+    await shell.workflows.operate({"kind": "sp_providers", "area": "providers", "key": "api_key", "provider": "openai", "value": " test-secret "})
     shell.client.provider_key_set.assert_awaited_once_with("openai", "test-secret")
     assert shell.workflows.form is None
-    assert "test-secret" not in repr(shell.panel_lines)
+    assert "test-secret" not in repr((shell.panel_lines, shell.toasts, shell.workflows.settings_page))
 
 
 @pytest.mark.asyncio
@@ -362,16 +361,17 @@ async def test_image_more_info_uses_daemon_preview(shell):
 
 @pytest.mark.asyncio
 async def test_layout_and_appearance_toggle_and_reset_to_defaults(shell):
+    # The pages themselves are covered in test_ratatui_settings_simple_pages.py.
     await shell.workflows.operate({"kind": "layout"})
-    assert [item["label"] for item in shell.items][:2] == ["Sessions sidebar  ctrl+b · on", "Details sidebar  ctrl+l · on"]
-    await shell.workflows.operate(shell.items[0]["operation"])
+    rows = {b["id"]: b for b in shell.workflows.settings_page["blocks"] if b.get("t") == "row"}
+    await shell.workflows.operate({**rows["sessions_sidebar"]["control"]["operation"], "value": False})
     assert shell.preferences.values["sessions_sidebar"] is False
-    assert shell.items[0]["label"].endswith("· off")
-    await shell.workflows.operate(shell.items[-1]["operation"])  # Reset to default
+    await shell.workflows.operate({"kind": "sp_layout", "area": "layout", "key": "reset"})
     assert shell.preferences.values["sessions_sidebar"] is True
-    await shell.workflows.operate({"kind": "theme", "value": "nexus-light"})
-    assert shell.panel_title == "Appearance" and shell.items[1]["label"] == "Light · selected"
-    await shell.workflows.operate(shell.items[-1]["operation"])
+    await shell.workflows.settings_area("appearance")
+    await shell.workflows.operate({"kind": "sp_appearance", "area": "appearance", "key": "theme", "value": "nexus-light"})
+    assert shell.panel_title == "Settings · Appearance" and shell.preferences.values["theme"] == "nexus-light"
+    await shell.workflows.operate({"kind": "sp_appearance", "area": "appearance", "key": "reset"})
     assert shell.preferences.values["theme"] == "nexus-dark"
 
 
@@ -387,10 +387,10 @@ async def test_settings_pages_carry_the_area_list_and_switching_replaces_the_pag
     assert labels[:3] == ["GENERAL", "Appearance", "Layout"] and nav["items"][nav["selected"]][1] == "layout"
     assert nav["items"][0][2] is True  # a heading
     await shell.workflows.settings_area("appearance")
-    assert shell.panel_title == "Appearance" and _settings_nav(shell)["items"][_settings_nav(shell)["selected"]][1] == "appearance"
+    assert shell.panel_title == "Settings · Appearance" and _settings_nav(shell)["items"][_settings_nav(shell)["selected"]][1] == "appearance"
     assert shell.workflows.stack == []
     await shell.workflows.settings_area("tools")
-    assert shell.panel_title == "Settings · global · tools" and _settings_nav(shell)["items"][_settings_nav(shell)["selected"]][1] == "tools"
+    assert shell.panel_title == "Settings · Tools" and _settings_nav(shell)["items"][_settings_nav(shell)["selected"]][1] == "tools"
     shell.refresh_preview = AsyncMock(return_value=True)
     shell.preview = SimpleNamespace(system_text="prompt")
     await shell.workflows.operate({"kind": "context_show", "key": "system"})
@@ -410,32 +410,6 @@ async def test_agents_document_uses_markdown_and_preserves_newlines(shell):
     shell.workflows.menu("Next", [("Back", {"kind": "back"})])
     shell.workflows.back()
     assert shell.panel_format == "markdown" and shell.panel_layout == "context"
-
-
-@pytest.mark.asyncio
-async def test_voice_settings_never_starts_capture_and_saves_options(shell):
-    shell.client.voice_status = AsyncMock(return_value=p.VoiceStatusResult(enabled=True, state="ready", configured_device="cpu"))
-    shell.client.settings_read = AsyncMock(return_value=p.SettingsReadResult(body="config_version = 2\n", rel_path="config.toml", builtin=False, sha256="h"))
-    shell.client.settings_write = AsyncMock(return_value=p.SettingsWriteResult(status="saved"))
-    await shell.workflows.settings_area("voice")
-    assert shell.voice.phase == "idle"
-    assert shell.settings_nav == "voice"
-    assert any("Processing device · cpu" in item["label"] for item in shell.items)
-    await shell.workflows.operate(shell.items[1]["operation"])
-    assert "auto_send = true" in shell.client.settings_write.await_args.args[3]
-    assert shell.settings_nav == "voice"
-    assert shell.voice.phase == "idle"
-
-
-@pytest.mark.asyncio
-async def test_provider_options_have_headings_and_connection_status(shell):
-    shell.client.providers_status = AsyncMock(return_value=p.ProvidersStatusResult(providers=[
-        {"id": "openai", "label": "OpenAI", "connected": True, "methods": ["api_key"]}]))
-    await shell.workflows.settings_area("providers")
-    await shell.workflows.operate(shell.items[0]["operation"])
-    assert shell.panel_lines[0] == "Connection: connected"
-    assert [item["group"] for item in shell.items] == ["Sign-in options", "Connection management"]
-    assert shell.settings_nav == "providers"
 
 
 async def test_subagent_page_context_nested_back_and_child_tool_details(shell):
@@ -597,19 +571,6 @@ async def test_voice_failed_load_does_not_retry_on_poll(shell):
     shell.client.voice_prepare.assert_not_awaited()
     assert shell.items[0]["label"] == "Retry loading voice model · Model load failed"
     assert shell.voice.phase == "idle"
-
-
-@pytest.mark.asyncio
-async def test_voice_settings_cached_model_needs_no_download_consent(shell):
-    shell.client.voice_status = AsyncMock(return_value=p.VoiceStatusResult(
-        enabled=True, state="absent", cached=True,
-    ))
-    await shell.workflows.voice_settings()
-    assert not any(item["label"] == "Download local model…" for item in shell.items)
-    operation = next(item["operation"] for item in shell.items if item["label"] == "Load / prepare local model")
-    shell.client.voice_prepare = AsyncMock()
-    await shell.workflows.operate(operation)
-    shell.client.voice_prepare.assert_awaited_once_with(allow_download=False)
 
 
 @pytest.mark.asyncio

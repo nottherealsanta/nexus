@@ -6,6 +6,7 @@ mod input;
 mod local_ui;
 mod markdown;
 mod render;
+mod settings_page;
 mod trace;
 mod transcript;
 use bridge::Snapshot;
@@ -1035,7 +1036,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             dirty = true;
                             continue;
                         }
-                        if key.code == KeyCode::Char('t') {
+                        if key.code == KeyCode::Char('a') {
                             if let Some((id, operation)) = cache.toasts.newest_action() {
                                 send(
                                     json!({"type":"operation","operation":operation,"generation":s.generation}),
@@ -1257,6 +1258,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             };
                             dirty = true;
                             continue;
+                        }
+                        // A typed one-page Settings area owns its keys; what it does not use passes on.
+                        if !settings_nav_focus && !s.panel_loading {
+                            if let Some(raw) = s.settings_page.as_ref() {
+                                let page = cache.page_for(s.revision, raw);
+                                let mut state = std::mem::take(&mut cache.page_state);
+                                let act = settings_page::key(&page, &mut state, key);
+                                cache.page_state = state;
+                                match act {
+                                    settings_page::Act::Pass => {}
+                                    settings_page::Act::Done => {
+                                        dirty = true;
+                                        continue;
+                                    }
+                                    settings_page::Act::Send(operation) => {
+                                        send(
+                                            json!({"type":"operation","operation":operation,"generation":s.generation}),
+                                        )?;
+                                        dirty = true;
+                                        continue;
+                                    }
+                                    settings_page::Act::Close => {
+                                        action("dismiss", "")?;
+                                        continue;
+                                    }
+                                    settings_page::Act::Nav => {
+                                        settings_nav_focus = true;
+                                        dirty = true;
+                                        continue;
+                                    }
+                                }
+                            }
                         }
                         if s.nav.is_some() {
                             if s.panel_loading
@@ -1660,6 +1693,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .contains(ratatui::layout::Position::new(mouse.column, mouse.row))
                         {
                             dirty = true;
+                        }
+                    }
+                    // A one-page Settings area takes the wheel and left clicks over its page
+                    // (the area list on the left keeps its own handling).
+                    if let Some(raw) = s.settings_page.as_ref().filter(|_| !s.panel_title.is_empty()) {
+                        let area = render::panel_area(r.transcript, &s);
+                        let at = ratatui::layout::Position::new(mouse.column, mouse.row);
+                        if area.contains(at) && !render::nav_rect(area).contains(at) {
+                            let wheel = match mouse.kind {
+                                MouseEventKind::ScrollUp => Some(-3),
+                                MouseEventKind::ScrollDown => Some(3),
+                                _ => None,
+                            };
+                            if let Some(delta) = wheel {
+                                cache.page_state.scroll.offset =
+                                    (i32::from(cache.page_state.scroll.offset) + delta).clamp(0, 2000) as u16;
+                                dirty = true;
+                                continue;
+                            }
+                            if mouse.kind == MouseEventKind::Down(event::MouseButton::Left) {
+                                let page = cache.page_for(s.revision, raw);
+                                let mut state = std::mem::take(&mut cache.page_state);
+                                let act = settings_page::click(&page, &mut state, mouse.column, mouse.row);
+                                cache.page_state = state;
+                                match act {
+                                    settings_page::Act::Pass => {}
+                                    settings_page::Act::Done | settings_page::Act::Nav => {
+                                        dirty = true;
+                                        continue;
+                                    }
+                                    settings_page::Act::Send(operation) => {
+                                        send(
+                                            json!({"type":"operation","operation":operation,"generation":s.generation}),
+                                        )?;
+                                        dirty = true;
+                                        continue;
+                                    }
+                                    settings_page::Act::Close => {
+                                        action("dismiss", "")?;
+                                        continue;
+                                    }
+                                }
+                            }
                         }
                     }
                     match mouse.kind {

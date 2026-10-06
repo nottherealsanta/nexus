@@ -53,8 +53,8 @@ These supersede anything below that says otherwise.
 ## Revision 2
 
 1. **Scope is shown only where a page can differ per project.** Today that is
-   **Skills** and **MCP servers**. Appearance, Layout, Keyboard, Providers, Models,
-   Agents, Tools (session selection) and Voice & speech are always global, so they
+   **Tools** (Python tool files), **Skills** and **MCP servers**. Appearance, Layout,
+   Keyboard, Providers, Models, Agents and Voice & speech are always global, so they
    show neither the header Scope control nor per-row `global` badges (Tools rows
    say `session`). The footer still names the file a page saves to. This supersedes
    §9.3.1 ("Scope segmented control") and the scope-badge rule in §4.4 for
@@ -73,6 +73,20 @@ two previews are always visible. Enter or click on a block means *inspect* (open
 the full dialog); it never hides anything. Loading and error are states of the
 data, not modes: contents still show (loading marks tokens `— tok`; error adds a
 Retry callout). Supersedes the "expands in place" wording in Revision 1.
+
+## Revision 4: what the real implementation does differently
+
+- **Tools** in Settings are Python tool *files* (like Skills), so Tools is a scoped
+  area; the mock-up's session tool tree belongs to the context header, not Settings.
+- **Agents** keeps the existing agent editor page (model or tier, fallbacks, tiers,
+  prompt) as a drill-in instead of an inline master-detail; the page shows the default
+  agent and the files.
+- **Models** has no scope control (the host stores tiers globally) and no per-tier
+  "used by" line; **Voice** limit is a select over the host's fixed choices.
+- **Toast action key** is `Ctrl+X A`; `Ctrl+X T` stays "cycle reasoning effort" and
+  `Ctrl+X N` stays `/new`, so the notifications list needs another key (not built).
+- Settings search, extra Appearance and Layout options (glyphs, motion, dense,
+  toast position) are not built; they need new preferences.
 
 ## Contents
 
@@ -703,7 +717,7 @@ block; many unrelated messages use it ("Copied 120 characters", "Voice off",
 - `Ctrl+X X` (leader, then `x`) dismisses **all** visible toasts. Verify the
   binding is free in `rust/tui/src/input.rs`; the leader currently uses `M`, `V`,
   `U`.
-- `Ctrl+X T` NEW: focus the newest toast's action button (if it has one); Enter
+- `Ctrl+X A` NEW (T is taken by cycle-effort): run the newest toast's action (if it has one); Enter
   runs it, Esc returns focus.
 - Mouse: click `[×]` dismisses that toast; click the body runs the action if any,
   else does nothing; wheel over toasts scrolls the content beneath.
@@ -1413,7 +1427,7 @@ Commands: `.venv/bin/python -m pytest -q`, `ruff check nexus tests`,
 | Global | `Ctrl+X M` / `A` / `E` / `V` | model / agent / effort / dictation |
 | Global | `Ctrl+X X` | dismiss all toasts |
 | Global | `Ctrl+X N` | notifications list |
-| Global | `Ctrl+X T` | focus newest toast action |
+| Global | `Ctrl+X A` | run newest toast action |
 | Global | `?` (outside text input) | key sheet for the region |
 | Lists | `↑↓ Home End PgUp PgDn` | move |
 | Lists | `Enter` / `Space` | activate / toggle-or-select |

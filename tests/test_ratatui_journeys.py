@@ -57,6 +57,29 @@ def op(shell, label_start):
     return next(item["operation"] for item in shell.items if item["label"].startswith(label_start))
 
 
+def page_blocks(shell):
+    """Every block of the open one-page Settings area, section children included."""
+    def walk(blocks):
+        for block in blocks:
+            yield block
+            if block.get("t") == "section":
+                yield from walk(block["blocks"])
+    return list(walk(shell.workflows.settings_page["blocks"]))
+
+
+def page_labels(shell):
+    return [b["label"] for b in page_blocks(shell) if b.get("t") == "row"]
+
+
+def file_op(shell, label_start):
+    """The Edit operation of the file row whose label starts with ``label_start``."""
+    return next(b["control"]["operation"] for b in page_blocks(shell) if b.get("t") == "row" and b["label"].startswith(label_start))
+
+
+def page_button(shell, label_start):
+    return next(i["operation"] for b in page_blocks(shell) if b.get("t") == "buttons" for i in b["items"] if i["label"].startswith(label_start))
+
+
 # -- settings -----------------------------------------------------------------
 
 @pytest.fixture
@@ -73,27 +96,27 @@ async def test_settings_navigation_scope_and_back_stack(settings_shell):
     shell, _ = settings_shell
     flows = shell.workflows
     await flows.operate({"kind": "settings", "scope": "global"})
-    assert shell.panel_title == "Settings · global · sections"
-    assert "Switch to project" in labels(shell)
-    await flows.operate(op(shell, "Switch to project"))
-    assert shell.panel_title == "Settings · project · sections"
-    await flows.operate(op(shell, "Agents"))
-    # Agents are always global: the scope toggle never applies (native terminal hides it).
-    assert shell.panel_title == "Settings · global · agents"
-    assert labels(shell)[0] == "New sessions start with…"
-    ordered = [label for label in labels(shell) if "built-in" in label]
-    assert ordered[0].startswith("build") and ordered[-1].startswith("task") or ordered[-1].startswith("quick")
-    # Opening a file keeps the list reachable: Back from the editor returns to the category page.
-    await flows.operate(op(shell, "build"))
+    assert shell.panel_title == "Settings · Appearance", "Settings opens on the first area, not a list of sections"
+    await flows.settings_area("tools")
+    assert flows.settings_page["scope"]["options"] == ["Global", "Project"], "tools can differ per project"
+    await flows.operate({"kind": "sp_tools", "area": "tools", "key": "scope", "value": 1})
+    assert flows.settings_scope == "project" and flows.settings_page["scope"]["value"] == 1
+    await flows.settings_area("agents")
+    # Agents are always global: no scope control, whatever the last choice was.
+    assert shell.panel_title == "Settings · Agents" and flows.settings_page["scope"] is None
+    files = page_labels(shell)  # this stub host has no default-agent answer; the files still list
+    assert files[0].startswith("build") and "built-in" in files[0]
+    # Opening a file keeps the page reachable: Back from the editor returns to it.
+    await flows.operate(file_op(shell, "build"))
     assert shell.panel_title == "Agent · build" and labels(shell)[-1] == "Edit prompt file…"
     await flows.operate(op(shell, "Edit prompt file…"))
     assert flows.form and flows.form["status"].startswith("Built-in default")
     flows.back()
     assert shell.panel_title == "Agent · build"
     flows.back()
-    assert shell.panel_title == "Settings · global · agents"
+    assert shell.panel_title == "Settings · Agents"
     flows.back()
-    assert shell.panel_title == "Settings · project · sections"
+    assert shell.panel_title == "" and shell.settings_nav is None, "Escape from the page closes Settings"
 
 
 @pytest.mark.asyncio
@@ -134,7 +157,7 @@ async def test_project_file_edit_conflict_validation_and_delete(settings_shell):
     assert shell.notice == "Deleted to trash"
     # Back never resurrects the deleted confirmation or editor.
     flows.back()
-    assert shell.panel_title == "Settings · project · sections"
+    assert shell.panel_title == "Settings · Appearance"
 
 
 @pytest.mark.asyncio
@@ -148,7 +171,7 @@ async def test_validation_error_from_host_keeps_draft_and_builtin_cannot_be_dele
         await flows.save(flows.form["id"], "this is = = not toml", 2)
     assert flows.form["body"] == "this is = = not toml" and not flows.form["saved"] and not flows.form["autosave"]
     await flows.operate({"kind": "settings", "scope": "global", "category": "agents"})
-    await flows.operate(op(shell, "build"))
+    await flows.operate(file_op(shell, "build"))
     await flows.operate(op(shell, "Edit prompt file…"))
     assert flows.form_target["builtin"] is True
     with pytest.raises(ValueError, match="Built-in"):
@@ -160,7 +183,7 @@ async def test_agent_override_saves_then_resets_to_builtin(settings_shell, home)
     shell, _ = settings_shell
     flows = shell.workflows
     await flows.operate({"kind": "settings", "scope": "global", "category": "agents"})
-    await flows.operate(op(shell, "build"))
+    await flows.operate(file_op(shell, "build"))
     await flows.operate(op(shell, "Edit prompt file…"))
     body = flows.form["body"]
     await flows.save(flows.form["id"], body + "\nExtra line.\n", 1)
@@ -168,14 +191,15 @@ async def test_agent_override_saves_then_resets_to_builtin(settings_shell, home)
     assert flows.form_target["overrides_builtin"] is True and flows.form_target["builtin"] is False
     flows.back()
     flows.back()
-    assert any(label.startswith("build") and "edited" in label for label in labels(shell))
-    await flows.operate(op(shell, "build"))
+    await flows.refresh_page()
+    assert any(label.startswith("build") and "edited" in label for label in page_labels(shell))
+    await flows.operate(file_op(shell, "build"))
     await flows.operate(op(shell, "Edit prompt file…"))
     await flows.operate({"kind": "confirm", "label": "x", "next": {**flows.form_target, "kind": "settings_delete"}})
     assert shell.panel_title.startswith("Reset build to the built-in default")
     await flows.operate(shell.items[1]["operation"])
     assert shell.notice == "Reset to built-in default"
-    assert any(label.startswith("build") and "built-in" in label for label in labels(shell))
+    assert any(label.startswith("build") and "built-in" in label for label in page_labels(shell))
 
 
 @pytest.mark.asyncio
@@ -183,16 +207,18 @@ async def test_reset_category_lists_removed_files_and_returns_to_fresh_list(sett
     shell, workspace = settings_shell
     flows = shell.workflows
     await flows.operate({"kind": "settings", "scope": "project", "category": "skills"})
-    await flows.operate(op(shell, "New file"))
+    await flows.operate(page_button(shell, "New file"))
     await flows.save(flows.form["id"], "demo", 1)
     assert "name: demo" in flows.form["body"]  # same starter template as native terminal
     await flows.save(flows.form["id"], flows.form["body"], 2)
     flows.back()
-    await flows.operate(op(shell, "Reset category"))
+    await flows.refresh_page()
+    assert any(label.startswith("demo") for label in page_labels(shell))
+    await flows.operate(page_button(shell, "Reset category"))
     assert "demo" in shell.panel_lines
     await flows.operate(shell.items[1]["operation"])
-    assert shell.panel_title == "Settings · project · skills" and shell.notice == "Reset to default"
-    assert not any(label.startswith("demo") for label in labels(shell))
+    assert shell.panel_title == "Settings · Skills" and shell.notice == "Reset to default"
+    assert not any(label.startswith("demo") for label in page_labels(shell))
     assert not (workspace / ".agents" / "skills" / "demo" / "SKILL.md").exists()
 
 
@@ -206,29 +232,55 @@ def provider_shell(home, **kwargs):
     return shell_for(Client(FacadeTransport(facade))), runtime, secrets
 
 
+def _sections(shell):
+    return {block["title"]: block for block in shell.workflows.settings_page["blocks"] if block.get("t") == "section"}
+
+
+def _walk(blocks):
+    for block in blocks:
+        yield block
+        if block.get("t") == "section":
+            yield from _walk(block["blocks"])
+
+
+def _row(section, id_suffix):
+    return next(b for b in _walk(section["blocks"]) if b.get("t") == "row" and b["id"].endswith(id_suffix))
+
+
+def _button(section, label_start):
+    return next(item["operation"] for b in _walk(section["blocks"]) if b.get("t") == "buttons"
+                for item in b["items"] if item["label"].startswith(label_start))
+
+
+def _buttons(section):
+    return [item["label"] for b in _walk(section["blocks"]) if b.get("t") == "buttons" for item in b["items"]]
+
+
 @pytest.mark.asyncio
 async def test_api_key_journey_never_echoes_the_key_and_shows_state(home):
     shell, _, secrets = provider_shell(home)
     flows = shell.workflows
     await flows.operate({"kind": "providers"})
-    assert [label.split(" · ")[0] for label in labels(shell)] == ["ChatGPT (Codex)", "GitHub Copilot", "OpenCode Go", "Claude (Pro/Max)"]
-    await flows.operate(op(shell, "OpenCode Go"))
-    assert labels(shell) == ["Set API key"]
-    await flows.operate(op(shell, "Set API key"))
+    assert shell.panel_title == "Settings · Providers" and shell.settings_nav == "providers"
+    assert list(_sections(shell)) == ["ChatGPT (Codex)", "Claude (Pro/Max)", "GitHub Copilot", "OpenCode Go"], "one section per provider, not connected: A–Z"
+    section = _sections(shell)["OpenCode Go"]
+    assert section["summary"] == "not connected" and "Sign out…" not in _buttons(section)
+    field = _row(section, ":key")["control"]
+    assert field["secret"] is True and field["value"] == ""
     key = "sk-go-live-0123456789abcdef"
     with pytest.raises(ValueError):
-        await flows.save(flows.form["id"], "  ", 1)
-    await flows.save(flows.form["id"], key, 2)
+        await flows.operate({**field["operation"], "value": "  "})
+    await flows.operate({**field["operation"], "value": key})
     assert secrets.values["opencode-go:default"] == key
-    assert flows.form is None and shell.panel_title == "OpenCode Go"
-    assert "Sign out…" in labels(shell)
-    assert key not in repr((shell.panel_lines, shell.items, shell.panel_title))
-    flows.back()
-    assert shell.panel_title == "Providers"
-    await flows.operate(op(shell, "OpenCode Go"))
-    await flows.operate(op(shell, "Sign out"))
+    section = _sections(shell)["OpenCode Go"]
+    assert section["summary"] == "connected" and "Sign out…" in _buttons(section)
+    assert list(_sections(shell))[0] == "OpenCode Go", "connected providers come first"
+    assert key not in repr((shell.workflows.settings_page, shell.panel_lines, shell.items, shell.toasts, shell.panel_title))
+    await flows.operate(_button(section, "Sign out"))
+    assert shell.panel_title == "Sign out of OpenCode Go?"
     await flows.operate(shell.items[1]["operation"])
-    assert "opencode-go:default" not in secrets.values and "Sign out…" not in labels(shell)
+    assert shell.panel_title == "Settings · Providers"
+    assert "opencode-go:default" not in secrets.values and "Sign out…" not in _buttons(_sections(shell)["OpenCode Go"])
 
 
 @pytest.mark.asyncio
@@ -237,25 +289,25 @@ async def test_claude_code_flow_cancel_resume_and_failure(home):
     shell, runtime, _ = provider_shell(home, claude=claude)
     flows = shell.workflows
     await flows.operate({"kind": "provider", "id": "claude-agent"})
-    assert "Sign in with browser" in labels(shell)
-    assert "Sign out…" not in labels(shell)  # can_logout is false for Claude
-    await flows.operate(op(shell, "Sign in"))
-    assert shell.panel_title == "Provider sign-in"
-    assert labels(shell)[0] == "Paste sign-in code" and any("claude.com" in line for line in shell.panel_lines)
-    # Leaving and returning offers to resume the pending sign-in.
+    section = _sections(shell)["Claude (Pro/Max)"]
+    assert section["open"] and "Sign in with browser" in _buttons(section)
+    assert "Sign out…" not in _buttons(section)  # can_logout is false for Claude
+    await flows.operate(_button(section, "Sign in"))
+    section = _sections(shell)["Claude (Pro/Max)"]
+    assert section["summary"] == "sign-in pending" and any("claude.com" in str(b) for b in _walk(section["blocks"]))
+    code = _row(section, ":code")["control"]
+    assert code["secret"] is True, "the sign-in code is typed in a masked field"
+    # The pending sign-in survives leaving and returning to the page.
     await flows.operate({"kind": "provider", "id": "claude-agent"})
-    assert "Resume sign-in" in labels(shell)
-    await flows.operate(op(shell, "Resume"))
-    await flows.operate(op(shell, "Paste sign-in code"))
+    assert _sections(shell)["Claude (Pro/Max)"]["summary"] == "sign-in pending"
     with pytest.raises(ValueError):
-        await flows.save(flows.form["id"], "", 1)
-    await flows.save(flows.form["id"], "abc123#state", 2)
-    assert shell.panel_title == "Provider sign-in" and shell.panel_lines[0].startswith("Code sent")
-    assert "abc123" not in repr(shell.panel_lines)
+        await flows.operate({**code["operation"], "value": ""})
+    await flows.operate({**code["operation"], "value": "abc123#state"})
+    assert "abc123" not in repr((flows.settings_page, shell.toasts, shell.panel_lines))
     await runtime._provider_logins[flows.login.login_id].task
-    await flows.operate({"kind": "provider_poll"})
-    assert shell.panel_title == "Claude (Pro/Max)"
-    assert any("connected" in line.lower() for line in shell.panel_lines)
+    refresh = _button(_sections(shell)["Claude (Pro/Max)"], "Refresh")
+    await flows.operate(refresh)
+    assert flows.login is None and _sections(shell)["Claude (Pro/Max)"]["summary"] == "connected"
     assert claude.code == "abc123#state"
 
 
@@ -264,28 +316,31 @@ async def test_device_flow_poll_pending_then_cancel_and_denial(home):
     device = FakeDevice()
     shell, runtime, _ = provider_shell(home, copilot=device)
     flows = shell.workflows
-    await flows.operate({"kind": "provider_login", "id": "github-copilot", "method": "device"})
-    assert any("WXYZ-0000" in line for line in shell.panel_lines)
-    await flows.operate({"kind": "provider_poll"})
-    assert shell.panel_title == "Provider sign-in"  # still pending: stay on the code screen
-    await flows.operate({"kind": "provider_cancel"})
-    assert shell.panel_title == "GitHub Copilot" and flows.login is None
-    assert any("cancelled" in line.lower() for line in shell.panel_lines)
-    assert not any(label.startswith("Resume") for label in labels(shell))
-    # Approval path ends on the provider card with the host message.
+    await flows.operate({"kind": "provider", "id": "github-copilot"})
+    await flows.operate({"kind": "sp_providers", "area": "providers", "key": "login", "provider": "github-copilot", "method": "device"})
+    section = _sections(shell)["GitHub Copilot"]
+    assert _row(section, ":user-code")["control"]["value"] == "WXYZ-0000"
+    await flows.operate(_button(section, "Refresh"))
+    assert _sections(shell)["GitHub Copilot"]["summary"] == "sign-in pending"  # still pending: stay on the code
+    await flows.operate(_button(_sections(shell)["GitHub Copilot"], "Cancel"))
+    assert flows.login is None and _sections(shell)["GitHub Copilot"]["summary"] == "not connected"
+    assert shell.toasts[-1]["title"] == "Sign-in cancelled"
+    assert not any(label.startswith("Resume") for label in _buttons(_sections(shell)["GitHub Copilot"]))
+    # Approval path ends connected, with a Sign out button.
     device2 = FakeDevice()
     shell, runtime, _ = provider_shell(home, copilot=device2)
-    await shell.workflows.operate({"kind": "provider_login", "id": "github-copilot", "method": "device"})
+    await shell.workflows.operate({"kind": "provider", "id": "github-copilot"})
+    await shell.workflows.operate({"kind": "sp_providers", "area": "providers", "key": "login", "provider": "github-copilot", "method": "device"})
     device2.approved.set()
     await runtime._provider_logins[shell.workflows.login.login_id].task
-    await shell.workflows.operate({"kind": "provider_poll"})
-    assert shell.panel_title == "GitHub Copilot" and "Sign out…" in labels(shell)
+    await shell.workflows.operate(_button(_sections(shell)["GitHub Copilot"], "Refresh"))
+    assert "Sign out…" in _buttons(_sections(shell)["GitHub Copilot"])
 
 
 @pytest.mark.asyncio
 async def test_setup_journey_selects_connected_provider_default(home, tmp_path):
     shell, runtime, secrets = provider_shell(home)
-    await shell.workflows.operate({"kind": "provider_key", "id": "opencode-go"})
+    await shell.workflows.operate({"kind": "sp_providers", "area": "providers", "key": "api_key", "provider": "opencode-go", "value": "sk-test-key-0123456789"})
     shell.client.setup_status = lambda: _status()  # noqa: E731
     async def _status():
         return p.SetupStatusResult(required=True, providers=[
@@ -486,7 +541,7 @@ async def test_agent_page_edits_model_and_fallbacks_through_the_host(settings_sh
     (home / ".nexus" / "agents").mkdir(parents=True, exist_ok=True)
     (home / ".nexus" / "agents" / "helper.md").write_text("---\nname: helper\ndescription: test\n---\nHello.\n")
     await flows.operate({"kind": "settings", "scope": "global", "category": "agents"})
-    await flows.operate(op(shell, "helper"))
+    await flows.operate(file_op(shell, "helper"))
     assert shell.panel_title == "Agent · helper"
     assert labels(shell)[0] == "Run on · Session model"
     await flows.operate(op(shell, "Run on"))
