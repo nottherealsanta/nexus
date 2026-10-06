@@ -146,7 +146,7 @@ platform support beyond macOS and glibc Linux is not verified (see [voice.md](vo
 
 ## The 2026-10 UI redesign: picks from the design mock-ups
 
-The 26 elements in `design-mockups/` were judged variant by variant and the
+The 26 elements in the (since removed) Textual `design-mockups/` were judged variant by variant and the
 picks applied to both surfaces ([surfaces.md](surfaces.md) has the result).
 Notable choices and why:
 
