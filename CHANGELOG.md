@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.7](https://github.com/nottherealsanta/nexus/compare/v0.3.6...v0.3.7) (2026-10-06)
+
+
+### Features
+
+* extend Ratatui context and host tools ([6b10816](https://github.com/nottherealsanta/nexus/commit/6b10816208ee902f160501949ed3e19182285109))
+
+
+### Bug fixes
+
+* force 0.3.7 release ([c44b5d8](https://github.com/nottherealsanta/nexus/commit/c44b5d8261fa23328bcb25aaf045a005a52af66c))
+
 ## [0.3.6](https://github.com/nottherealsanta/nexus/compare/v0.3.5...v0.3.6) (2026-10-06)
 
 
