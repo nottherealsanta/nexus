@@ -924,7 +924,9 @@ class Daemon:
         # Only remove the socket/pid this daemon actually created; a duplicate
         # that failed to acquire the lock must never delete a live daemon's files.
         if self._bound:
-            for path in (self._socket, self._pid_file, self._http_file):
+            # The socket goes last: observers treat its absence as "fully
+            # stopped", so the pid and token files must already be gone.
+            for path in (self._http_file, self._pid_file, self._socket):
                 with contextlib.suppress(FileNotFoundError, OSError):
                     path.unlink()
             self._bound = False
