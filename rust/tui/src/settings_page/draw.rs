@@ -102,9 +102,8 @@ fn kind_of(v: &str) -> ButtonKind {
 
 fn draw_row(buf: &mut Buffer, ui: &mut Ui, f: &mut Flow, r: &Row, cx: &Ctx) {
     let rid = row_id(&r.id);
-    let has_desc = !r.description.is_empty();
-    let rect = f.rect(1 + has_desc as u16);
     let cw = control_width(&r.control);
+    let rect = f.rect(setting_row_height(f.w, &r.label, &r.description, &r.scope, cw));
     let editing = cx.edit.as_ref().filter(|(id, _)| *id == rid).map(|(_, t)| t.clone());
     setting_row(buf, ui, rect, &rid, &r.label, &r.description, &r.scope, cw, |b, ui, c, focused| {
         let x = c.x + c.width - cw.min(c.width);
@@ -195,7 +194,7 @@ fn draw_blocks(buf: &mut Buffer, ui: &mut Ui, f: &mut Flow, blocks: &[Block], cx
             }
             Block::Ordered(o) => {
                 let items: Vec<OrderedItem> = o.items.iter().map(|i| OrderedItem { label: &i.label, tag: &i.tag, note: &i.note }).collect();
-                let rect = f.rect(ordered_list_height(items.len()));
+                let rect = f.rect(ordered_list_height(items.len(), f.w));
                 let add = if o.editable { o.add_label.as_str() } else { "" };
                 ordered_list(buf, ui, rect, &ord_id(&o.id), &items, if add.is_empty() { "Add…" } else { add });
             }
@@ -348,8 +347,9 @@ mod tests {
     fn a_closed_section_opens_and_exposes_its_buttons() {
         let page = Page::from_value(&sample());
         let mut st = PageState::default();
+        st.area = "models".into(); // a draw for a new area starts with fresh state
         st.sections.insert("prov".into(), true);
-        let screen = render(&page, &mut st, 100, 40);
+        let screen = render(&page, &mut st, 100, 60);
         assert!(screen.contains("Disconnect"), "{screen}");
         assert!(st.order.contains(&"btn:act:0".to_string()));
     }

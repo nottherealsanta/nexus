@@ -1,6 +1,6 @@
 # Ratatui design mock-ups, component kit and UX redesign
 
-Status: **Phases 0–2 implemented** (old mock-ups removed; `rust/widgets` kit with 13
+Status: **Phases 0–5 implemented** (Phase 6 keyboard polish pending); earlier: **Phases 0–2 implemented** (old mock-ups removed; `rust/widgets` kit with 13
 tests; `design-mockups/` with 25 screens and 17 tests). **Stopped at the Phase 2
 review gate**: Phases 3–6 (wiring into `rust/tui` and Python) are not started. Kit
 files are grouped by family (`controls`, `inputs`, `lists`, `feedback`, `scroll`)

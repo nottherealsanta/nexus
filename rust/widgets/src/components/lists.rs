@@ -149,44 +149,64 @@ pub struct OrderedItem<'a> {
     /// Extra note: "not connected", "no key", …; non-empty notes are warnings.
     pub note: &'a str,
 }
-pub fn ordered_list_height(n: usize) -> u16 {
-    n as u16 + 1
+/// Narrow lists use two lines per model (name, then tag and note) so a name is never reduced to
+/// an initial; wide lists keep everything on one line.
+pub fn ordered_row_height(width: u16) -> u16 {
+    if width < 72 {
+        2
+    } else {
+        1
+    }
 }
-/// Reorderable model list: row 1 is `in use`, others `fallback`. Rows are focus
-/// stops `{id}:{i}`; the trailing row is `{id}:add`. Buttons carry parts up/down/remove.
+pub fn ordered_list_height(n: usize, width: u16) -> u16 {
+    n as u16 * ordered_row_height(width) + 1
+}
 pub fn ordered_list(buf: &mut Buffer, ui: &mut Ui, area: Rect, id: &str, items: &[OrderedItem], add_label: &str) -> u16 {
     let t = ui.theme;
     let g = ui.glyphs;
-    // Tags line up in one column after the longest visible label.
+    let rh = ordered_row_height(area.width);
+    let right = area.x + area.width;
+    let btn_w = 3 * 3 + 2;
+    // Wide: tags line up in one column after the longest label (capped so buttons always fit).
     let label_w = items.iter().map(|i| width(i.label)).max().unwrap_or(0).min(area.width.saturating_sub(40) as usize) as u16;
     for (i, it) in items.iter().enumerate() {
-        let y = area.y + i as u16;
-        if y >= area.y + area.height {
-            return i as u16;
+        let y = area.y + i as u16 * rh;
+        if y + rh > area.y + area.height {
+            return i as u16 * rh;
         }
         let rid = format!("{id}:{i}");
-        let r = ui.stop(&rid, Rect::new(area.x, y, area.width, 1));
+        let rect = Rect::new(area.x, y, area.width, rh);
+        let r = ui.stop(&rid, rect);
         let st = row_style(ui, &rid, r.focused, t.surface);
-        fill(buf, Rect::new(area.x, y, area.width, 1), st);
+        fill(buf, rect, st);
         if r.focused {
-            focus_bar(buf, ui, area.x, y, 1);
+            focus_bar(buf, ui, area.x, y, rh);
         }
-        let right = area.x + area.width;
-        let btn_w = 3 * 3 + 2;
         put(buf, area.x + 2, y, &format!("{}", i + 1), st, 2);
         put(buf, area.x + 4, y, g.handle, t.dim().bg(st.bg.unwrap_or(t.bg)), 2);
         let tag = if !it.tag.is_empty() { it.tag } else if i == 0 { "in use" } else { "fallback" };
         let lab = if r.focused { st.add_modifier(Modifier::BOLD) } else { st };
-        put(buf, area.x + 7, y, &truncate(it.label, label_w as usize, g.ellipsis), lab, label_w);
-        let mut tx = area.x + 7 + label_w + 3;
         let tag_st = match tag {
             "in use" => t.strong(st.fg(t.success)),
             "skipped" => st.fg(t.warning),
             _ => t.dim().bg(st.bg.unwrap_or(t.bg)),
         };
-        tx += put(buf, tx, y, tag, tag_st, 12) + 1;
-        if !it.note.is_empty() {
-            put(buf, tx + 1, y, &format!("· {}", it.note), st.fg(t.warning), 24);
+        if rh == 1 {
+            put(buf, area.x + 7, y, &truncate(it.label, label_w as usize, g.ellipsis), lab, label_w);
+            let mut tx = area.x + 7 + label_w + 3;
+            tx += put(buf, tx, y, tag, tag_st, 12) + 1;
+            if !it.note.is_empty() {
+                put(buf, tx + 1, y, &format!("· {}", it.note), st.fg(t.warning), 24);
+            }
+        } else {
+            let room = right.saturating_sub(area.x + 7 + btn_w + 1);
+            put(buf, area.x + 7, y, &truncate(it.label, room as usize, g.ellipsis), lab, room);
+            let mut tx = area.x + 7;
+            tx += put(buf, tx, y + 1, tag, tag_st, 12) + 1;
+            if !it.note.is_empty() {
+                let nw = right.saturating_sub(tx + 2);
+                put(buf, tx + 1, y + 1, &truncate(&format!("· {}", it.note), nw as usize, g.ellipsis), st.fg(t.warning), nw);
+            }
         }
         let bx = right.saturating_sub(btn_w);
         for (k, (name, gl)) in [("up", g.up), ("down", g.down), ("remove", g.close)].iter().enumerate() {
@@ -197,7 +217,7 @@ pub fn ordered_list(buf: &mut Buffer, ui: &mut Ui, area: Rect, id: &str, items: 
             ui.hits.add(Rect::new(x, y, 3, 1), &rid, Part::Named((*name).into()));
         }
     }
-    let ay = area.y + items.len() as u16;
+    let ay = area.y + items.len() as u16 * rh;
     if ay < area.y + area.height {
         let aid = format!("{id}:add");
         let r = ui.stop(&aid, Rect::new(area.x, ay, area.width, 1));
@@ -208,7 +228,7 @@ pub fn ordered_list(buf: &mut Buffer, ui: &mut Ui, area: Rect, id: &str, items: 
         }
         put(buf, area.x + 7, ay, &if t.is_mono() { format!("[ + {add_label} ]") } else { format!("+ {add_label}") }, st.fg(t.accent), area.width.saturating_sub(7));
     }
-    ordered_list_height(items.len())
+    ordered_list_height(items.len(), area.width)
 }
 
 /// Collapsible section header with a summary so collapsed sections hide nothing.
@@ -248,6 +268,23 @@ pub fn badge(buf: &mut Buffer, ui: &Ui, right: u16, y: u16, text: &str, color: C
 
 pub const SCOPE_W: u16 = 9;
 
+fn scope_cols(scope: &str) -> u16 {
+    if scope.is_empty() {
+        0
+    } else {
+        SCOPE_W + 1
+    }
+}
+/// True when the label and control do not fit side by side: the control then goes on its own
+/// line under the label, so a label is never clipped to make room for a control.
+fn stacked(w: u16, label: &str, scope: &str, control_w: u16) -> bool {
+    width(label) as u16 + 4 + control_w + scope_cols(scope) + 2 > w
+}
+/// Rows a setting row needs at `width`: label, optional stacked control, optional description.
+pub fn setting_row_height(w: u16, label: &str, description: &str, scope: &str, control_w: u16) -> u16 {
+    1 + stacked(w, label, scope, control_w.min(w.saturating_sub(6))) as u16 + (!description.is_empty()) as u16
+}
+
 /// Label, control and scope on one row, description beneath. `control` draws into
 /// the rect it is given (right-aligned, `control_w` wide) and learns if the row is focused.
 pub fn setting_row(
@@ -262,7 +299,9 @@ pub fn setting_row(
     control: impl FnOnce(&mut Buffer, &mut Ui, Rect, bool),
 ) -> u16 {
     let t = ui.theme;
-    let h = 1 + (!description.is_empty()) as u16;
+    let cw = control_w.min(area.width.saturating_sub(6));
+    let stack = stacked(area.width, label, scope, cw);
+    let h = setting_row_height(area.width, label, description, scope, control_w);
     let rect = Rect::new(area.x, area.y, area.width, h);
     let r = ui.stop(id, rect);
     let st = row_style(ui, id, r.focused, t.bg);
@@ -274,15 +313,20 @@ pub fn setting_row(
     if !scope.is_empty() {
         badge(buf, ui, right - 1, area.y, scope, scope_color(ui, scope));
     }
-    let cw = control_w.min(area.width.saturating_sub(SCOPE_W + 12));
-    let cx = right.saturating_sub(SCOPE_W + 1 + cw);
-    let lw = cx.saturating_sub(area.x + 3);
     let lab = if r.focused { st.add_modifier(Modifier::BOLD) } else { st };
-    put(buf, area.x + 2, area.y, &truncate(label, lw as usize, ui.glyphs.ellipsis), lab, lw);
-    control(buf, ui, Rect::new(cx, area.y, cw, 1), r.focused);
+    let cx = right.saturating_sub(scope_cols(scope) + cw);
+    if stack {
+        let lw = area.width.saturating_sub(4 + scope_cols(scope));
+        put(buf, area.x + 2, area.y, &truncate(label, lw as usize, ui.glyphs.ellipsis), lab, lw);
+        control(buf, ui, Rect::new(cx, area.y + 1, cw, 1), r.focused);
+    } else {
+        let lw = cx.saturating_sub(area.x + 3);
+        put(buf, area.x + 2, area.y, &truncate(label, lw as usize, ui.glyphs.ellipsis), lab, lw);
+        control(buf, ui, Rect::new(cx, area.y, cw, 1), r.focused);
+    }
     if !description.is_empty() {
         let dw = area.width.saturating_sub(5);
-        put(buf, area.x + 4, area.y + 1, &truncate(description, dw as usize, ui.glyphs.ellipsis), t.dim().bg(st.bg.unwrap_or(t.bg)), dw);
+        put(buf, area.x + 4, area.y + h - 1, &truncate(description, dw as usize, ui.glyphs.ellipsis), t.dim().bg(st.bg.unwrap_or(t.bg)), dw);
     }
     h
 }

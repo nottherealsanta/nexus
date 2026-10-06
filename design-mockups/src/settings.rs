@@ -35,25 +35,25 @@ impl Flow {
 
 /// Row: label + select control. Opens a popup through `app` when activated.
 fn select_row(buf: &mut ratatui::buffer::Buffer, ui: &mut Ui, f: &mut Flow, id: &str, label: &str, desc: &str, scope: &str, value: &str) {
-    let r = f.rect(1 + (!desc.is_empty()) as u16);
+    let r = f.rect(setting_row_height(f.w, label, desc, scope, 24));
     setting_row(buf, ui, r, id, label, desc, scope, 24, |b, ui, cr, _| {
         select(b, ui, cr.x, cr.y, cr.width, &format!("{id}:select"), value);
     });
 }
 fn toggle_row(buf: &mut ratatui::buffer::Buffer, ui: &mut Ui, f: &mut Flow, id: &str, label: &str, desc: &str, scope: &str, on: bool, locked: bool) {
-    let r = f.rect(1 + (!desc.is_empty()) as u16);
+    let r = f.rect(setting_row_height(f.w, label, desc, scope, TOGGLE_W));
     setting_row(buf, ui, r, id, label, desc, scope, TOGGLE_W, |b, ui, cr, foc| toggle_view(b, ui, cr.x + cr.width - TOGGLE_W, cr.y, on, locked, foc));
 }
 fn seg_row(buf: &mut ratatui::buffer::Buffer, ui: &mut Ui, f: &mut Flow, id: &str, label: &str, desc: &str, scope: &str, opts: &[&str], active: usize) {
-    let r = f.rect(1 + (!desc.is_empty()) as u16);
     let w = segmented_width(opts);
+    let r = f.rect(setting_row_height(f.w, label, desc, scope, w));
     setting_row(buf, ui, r, id, label, desc, scope, w, |b, ui, cr, foc| {
         segmented_view(b, ui, cr.x + cr.width - w, cr.y, id, opts, active, if foc { Some(active) } else { None });
     });
 }
 fn step_row(buf: &mut ratatui::buffer::Buffer, ui: &mut Ui, f: &mut Flow, id: &str, label: &str, desc: &str, scope: &str, value: &str) {
-    let r = f.rect(1 + (!desc.is_empty()) as u16);
     let w = stepper_width(value);
+    let r = f.rect(setting_row_height(f.w, label, desc, scope, w));
     setting_row(buf, ui, r, id, label, desc, scope, w, |b, ui, cr, _| {
         stepper(b, ui, cr.x + cr.width - w, cr.y, &format!("{id}:step"), value);
     });
@@ -223,7 +223,7 @@ fn models(buf: &mut ratatui::buffer::Buffer, ui: &mut Ui, w: &World, v: &mut Vie
     let r = f.rect(1);
     put(buf, r.x + 2, r.y, "Default model chain", ui.theme.dim(), r.width);
         let items: Vec<OrderedItem> = w.default_chain.iter().map(|m| OrderedItem { label: &m.label, tag: "", note: if m.connected { "" } else { "not connected" } }).collect();
-    let h = ordered_list_height(items.len());
+    let h = ordered_list_height(items.len(), f.w);
     let r = f.rect(h);
     ordered_list(buf, ui, r, "chain", &items, "Add model…");
     seg_row(buf, ui, f, "set:effort", "Default reasoning effort", "", "", &EFFORTS, w.effort);
@@ -236,7 +236,7 @@ fn models(buf: &mut ratatui::buffer::Buffer, ui: &mut Ui, w: &World, v: &mut Vie
     tabs(buf, ui, r, "tabs:tier", &tabs_v, v.tier_tab);
     let tier = &w.tiers[v.tier_tab];
     let items: Vec<OrderedItem> = tier.iter().map(|m| OrderedItem { label: &m.label, tag: "", note: if m.connected { "" } else { "not connected" } }).collect();
-    let r = f.rect(ordered_list_height(items.len()));
+    let r = f.rect(ordered_list_height(items.len(), f.w));
     ordered_list(buf, ui, r, &format!("tier:{}", v.tier_tab), &items, "Add model…");
     let users = ["quick, explore", "build, task, reviewer", "orchestrator, advisor"][v.tier_tab];
     let r = f.rect(1);
@@ -356,7 +356,7 @@ fn agents(buf: &mut ratatui::buffer::Buffer, ui: &mut Ui, w: &World, v: &mut Vie
         select(buf, ui, r.x + 10, r.y, 16, "agent:tier", TIERS[a.tier]);
     } else {
         let items = [OrderedItem { label: "anthropic/claude-sonnet-5-5", tag: "", note: "" }, OrderedItem { label: "openai/gpt-6-mini", tag: "", note: "" }];
-        let r = df.rect(ordered_list_height(2));
+        let r = df.rect(ordered_list_height(2, df.w));
         ordered_list(buf, ui, r, "agent:models", &items, "Add model…");
     }
     let r = df.rect(1);

@@ -869,7 +869,7 @@ editors, model pickers, and confirmations; they stack on the page and `Esc` retu
 Removed: the old per-area menu pages, the `tier_*`/`models_default*`/`title_*`/`provider_*`
 /`voice_*`/`speech_*` operations and the legacy Sessions-style Settings home.
 Not done: inline agent detail (an agent still opens the agent editor page), settings
-search, and scope on Models. **Rust side not verified:** the renderer, key handling and
-integration were written and type-checked, but the Rust tests and a real-terminal check
-could not be run in this environment (the C linker was blocked by the Xcode license).
-Python behaviour is covered by `tests/test_ratatui_settings_*.py` and the ported journeys.
+search, and scope on Models. Covered by `settings_page/` unit tests (model, input,
+draw), `tests/test_ratatui_pty_settings.py` (real PTY: render, toggle, segmented, popup,
+tab, reorder, area list, Escape, focus across a host rebuild) and the Python side by `tests/test_ratatui_settings_*.py` and the ported journeys. Not verified
+against a live provider or a real daemon.
