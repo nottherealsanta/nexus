@@ -1013,6 +1013,32 @@ mod tests {
     }
 
     #[test]
+    fn markdown_streamed_code_preserves_source_and_wraps_unicode() {
+        let source =
+            "```rust\n界界界界界界界界界界 \u{1f469}\u{200d}\u{1f4bb} e\u{301} **literal**\n";
+        let block = Content {
+            kind: "assistant".into(),
+            text: source.into(),
+            operation: Some(serde_json::json!({"action": "copy", "text": source})),
+            ..Default::default()
+        };
+        for width in [16, 24, 60] {
+            let rows = build(&block, width, &Palette::new(false));
+            assert!(rows
+                .iter()
+                .all(|(line, op)| line.width() <= width as usize && op == &block.operation));
+            let displayed = rows
+                .iter()
+                .flat_map(|(line, _)| line.spans.iter())
+                .map(|span| span.content.as_ref())
+                .collect::<String>();
+            assert!(displayed.contains("\u{1f469}\u{200d}\u{1f4bb}"));
+            assert!(displayed.contains("e\u{301}"));
+            assert_eq!(block.text, source);
+        }
+    }
+
+    #[test]
     fn gaps_context_chips_and_tool_failures() {
         let p = Palette::new(false);
         let tool = Content {

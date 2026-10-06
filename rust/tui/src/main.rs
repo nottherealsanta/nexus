@@ -281,7 +281,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 selection = 0;
                 filter.clear();
             }
-            if next.nav.is_none() { settings_nav_focus = false; }
+            if next.nav.is_none() {
+                settings_nav_focus = false;
+            }
             let new_prompt = next.prompt.as_ref().map(|p| p.id.as_str()).unwrap_or("");
             if new_prompt != prompt_id {
                 answer = Editor::default();
@@ -443,6 +445,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 completion_candidates(&completion_cache, prefix)
             };
+        let completion_visible = s.panel_title.is_empty()
+            && s.prompt.is_none()
+            && completion_hidden != completion.completion_query
+            && !completion.completions.is_empty();
+        if !completion_visible {
+            dirty |= cache.component_hover.update_surfaces(
+                &s,
+                &drawn_regions,
+                &filter,
+                selection,
+                panel_detail,
+                cache.pointer,
+                s.panel_title.is_empty()
+                    && s.prompt.is_none()
+                    && completion_hidden != completion.completion_query
+                    && !completion.completions.is_empty(),
+                Instant::now(),
+            );
+        }
+        if completion_visible {
+            dirty |= cache.component_hover.update_completion(
+                &completion,
+                &drawn_regions,
+                completion_index,
+                cache.pointer,
+                Instant::now(),
+            );
+        }
+        dirty |= cache.component_hover.needs_redraw(Instant::now());
         if dirty && last_draw.elapsed() >= FRAME_INTERVAL {
             last_draw = Instant::now();
             cache.focus = nav.and_then(|index| render::targets(&cache).get(index).copied());
@@ -469,6 +500,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     logs_scroll,
                     details_scroll,
                 );
+                cache.component_hover.paint_tabs(frame, &s, &r);
                 drawn_regions = r;
                 let query = draft.text[..draft.cursor]
                     .rsplit(char::is_whitespace)
@@ -480,7 +512,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     && completion_hidden != query
                     && !completion.completions.is_empty()
                 {
-                    render::completion(frame, &completion, r.transcript, completion_index);
+                    render::completion(
+                        frame,
+                        &completion,
+                        r.transcript,
+                        completion_index,
+                        &cache.component_hover,
+                    );
                 }
                 drawn_at = Instant::now();
             })?;
@@ -518,6 +556,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(summary) = timings.publish() {
                 send(json!({"type":"ui_trace", "lines":summary}))?;
             }
+            cache.component_hover.painted(Instant::now());
             dirty = false;
         }
         // As-you-type completion : a `/command`,
@@ -981,6 +1020,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     }
                     if !s.panel_title.is_empty() {
+                        if key.code == KeyCode::Char('i')
+                            && key.modifiers.contains(KeyModifiers::CONTROL)
+                        {
+                            if let Some(op) = s
+                                .items
+                                .iter()
+                                .filter(|row| row.matches(&filter))
+                                .nth(selection)
+                                .and_then(|item| item.info_operation.as_ref())
+                            {
+                                send(
+                                    json!({"type":"operation","operation":op,"generation":s.generation}),
+                                )?;
+                                dirty = true;
+                                continue;
+                            }
+                        }
                         if s.panel_title == "Provider usage"
                             && (key.code == KeyCode::Char('r')
                                 || key.code == KeyCode::Char('u')
@@ -1008,20 +1064,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             continue;
                         }
                         if s.nav.is_some() {
-                            if s.panel_loading && matches!(key.code, KeyCode::Esc | KeyCode::Enter | KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down) { continue; }
+                            if s.panel_loading
+                                && matches!(
+                                    key.code,
+                                    KeyCode::Esc
+                                        | KeyCode::Enter
+                                        | KeyCode::Left
+                                        | KeyCode::Right
+                                        | KeyCode::Up
+                                        | KeyCode::Down
+                                )
+                            {
+                                continue;
+                            }
                             if key.code == KeyCode::Left && s.form.is_none() {
-                                settings_nav_focus = true; dirty = true; continue;
+                                settings_nav_focus = true;
+                                dirty = true;
+                                continue;
                             }
                             if key.code == KeyCode::Right && settings_nav_focus {
-                                settings_nav_focus = false; dirty = true; continue;
+                                settings_nav_focus = false;
+                                dirty = true;
+                                continue;
                             }
-                            if settings_nav_focus && matches!(key.code, KeyCode::Up | KeyCode::Down) {
-                                if let Some(index) = s.nav.as_ref().and_then(|nav| render::nav_step(nav, key.code == KeyCode::Down)) {
-                                    send(json!({"type":"nav_select","text":index.to_string(),"generation":s.generation}))?;
+                            if settings_nav_focus && matches!(key.code, KeyCode::Up | KeyCode::Down)
+                            {
+                                if let Some(index) = s.nav.as_ref().and_then(|nav| {
+                                    render::nav_step(nav, key.code == KeyCode::Down)
+                                }) {
+                                    send(
+                                        json!({"type":"nav_select","text":index.to_string(),"generation":s.generation}),
+                                    )?;
                                 }
-                                dirty = true; continue;
+                                dirty = true;
+                                continue;
                             }
-                            if settings_nav_focus && key.code == KeyCode::Enter { continue; }
+                            if settings_nav_focus && key.code == KeyCode::Enter {
+                                continue;
+                            }
                         }
                         if key.code == KeyCode::Esc
                             || key.code == KeyCode::Char('c')
@@ -1030,14 +1110,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             action("dismiss", "")?;
                         } else if !s.items.is_empty() && !panel_detail {
                             let count = s.items.iter().filter(|row| row.matches(&filter)).count();
-                            let selected = s.items.iter().filter(|row| row.matches(&filter)).nth(selection);
+                            let selected = s
+                                .items
+                                .iter()
+                                .filter(|row| row.matches(&filter))
+                                .nth(selection);
                             let control_op = selected.and_then(|row| match key.code {
-                                KeyCode::Up if key.modifiers.contains(KeyModifiers::ALT) => row.move_up.as_ref(),
-                                KeyCode::Down if key.modifiers.contains(KeyModifiers::ALT) => row.move_down.as_ref(),
+                                KeyCode::Up if key.modifiers.contains(KeyModifiers::ALT) => {
+                                    row.move_up.as_ref()
+                                }
+                                KeyCode::Down if key.modifiers.contains(KeyModifiers::ALT) => {
+                                    row.move_down.as_ref()
+                                }
                                 KeyCode::Delete => row.remove.as_ref(),
                                 _ => None,
                             });
-                            if let Some(op) = control_op { send(json!({"type":"operation","operation":op,"generation":s.generation}))?; dirty = true; continue; }
+                            if let Some(op) = control_op {
+                                send(
+                                    json!({"type":"operation","operation":op,"generation":s.generation}),
+                                )?;
+                                dirty = true;
+                                continue;
+                            }
                             match key.code {
                                 KeyCode::Up => selection = selection.saturating_sub(1),
                                 KeyCode::Down => {
@@ -1298,8 +1392,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             follow = true;
                             draft.cursor = draft.text.len();
                         }
-                        KeyCode::Up if !draft.text.contains('\n') => draft.history(true),
-                        KeyCode::Down if !draft.text.contains('\n') => draft.history(false),
+                        KeyCode::Up | KeyCode::Down => {
+                            let down = key.code == KeyCode::Down;
+                            let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+                            let width =
+                                usize::from(drawn_regions.composer.width.saturating_sub(9).max(1));
+                            if !shift && draft.visual_layout(width).rows.len() == 1 {
+                                draft.history(!down);
+                            } else {
+                                draft.select_move(shift);
+                                draft.vertical_wrapped(down, width);
+                            }
+                        }
                         KeyCode::BackTab => action("cycle_agent", "")?,
                         KeyCode::Tab
                             if draft.text.is_empty()
@@ -1355,8 +1459,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let r = drawn_regions;
                     let pointer = Some((mouse.column, mouse.row));
                     if cache.pointer != pointer {
+                        let left_transcript = cache.pointer.is_some_and(|(x, y)| {
+                            r.transcript.contains(ratatui::layout::Position::new(x, y))
+                        });
                         cache.pointer = pointer;
-                        dirty = true;
+                        // Pointer motion is presentation-only; redraw only if a
+                        // transcript hover target or a component transition changes.
+                        if mouse.kind != MouseEventKind::Moved
+                            || left_transcript
+                            || r.transcript
+                                .contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+                        {
+                            dirty = true;
+                        }
                     }
                     match mouse.kind {
                         MouseEventKind::ScrollUp => {
@@ -1601,7 +1716,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                             if !s.panel_title.is_empty() {
-                                if s.panel_loading { continue; }
+                                if s.panel_loading {
+                                    continue;
+                                }
                                 if let Some(nav) = &s.nav {
                                     let list =
                                         render::nav_rect(render::panel_area(r.transcript, &s));

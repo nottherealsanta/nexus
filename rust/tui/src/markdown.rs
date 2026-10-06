@@ -5,10 +5,53 @@
 use crate::render::Palette;
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::{
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::Span,
 };
+use ratatui_markdown::{
+    markdown::{MarkdownBlock, MarkdownRenderer},
+    theme::{Generation, RichTextTheme},
+};
 use unicode_width::UnicodeWidthStr;
+
+// ratatui-markdown 0.3.6 (MIT OR Apache-2.0) shares our ratatui 0.29 types.
+// Reuse its fenced-code presentation, not its lossy line-oriented parser or
+// character-count wrapping. CommonMark structure and cell wrapping stay local.
+struct MarkdownTheme<'a>(&'a Palette);
+macro_rules! theme_colors {
+    ($($method:ident => $field:ident),* $(,)?) => {
+        $(fn $method(&self) -> Color { self.0.$field })*
+    };
+}
+impl RichTextTheme for MarkdownTheme<'_> {
+    fn generation(&self) -> Generation {
+        Generation(0)
+    }
+    theme_colors! {
+        get_text_color => text, get_muted_text_color => quiet,
+        get_primary_color => accent, get_popup_selected_background => element_hi,
+        get_popup_selected_text_color => text, get_border_color => border,
+        get_focused_border_color => border_strong, get_secondary_color => purple,
+        get_info_color => blue, get_background_color => background,
+        get_json_key_color => blue, get_json_string_color => success,
+        get_json_number_color => warning, get_json_bool_color => purple,
+        get_json_null_color => quiet, get_accent_yellow => warning,
+    }
+}
+
+// Display controls rather than passing terminal escape sequences through. The
+// transcript keeps the original message separately for copying and caching.
+fn terminal_safe(text: &str) -> String {
+    text.chars()
+        .map(|ch| {
+            if ch.is_control() && ch != '\n' && ch != '\t' {
+                format!("\\u{{{:04x}}}", ch as u32)
+            } else {
+                ch.to_string()
+            }
+        })
+        .collect()
+}
 
 /// One logical row before wrapping: a first-row prefix (wrapped rows hang under
 /// its width) and an optional background that fills the whole row.
@@ -151,6 +194,19 @@ impl<'a> Walker<'a> {
         }
     }
     fn fence(&mut self, body: &str, language: &str) {
+        // Keep the literal, labelled mermaid fallback without invoking diagram
+        // hooks: this text-only transcript cannot place graphical output.
+        if language != "mermaid" {
+            let block = MarkdownBlock::code_block(language, body.replace('\t', "    "));
+            for line in MarkdownRenderer::new(self.width).render(&[block], &MarkdownTheme(self.p)) {
+                self.cur.extend(line.spans.into_iter().map(|mut span| {
+                    span.style = span.style.bg(self.p.panel);
+                    span
+                }));
+                self.fence_row();
+            }
+            return;
+        }
         let bg = self.p.panel;
         let style = Style::default().fg(self.p.text).bg(bg);
         if !language.is_empty() {
@@ -229,6 +285,7 @@ impl<'a> Walker<'a> {
 }
 
 pub fn lines(text: &str, p: &Palette, width: usize) -> Vec<Row> {
+    let safe_text = terminal_safe(text);
     let mut w = Walker {
         p,
         width,
@@ -248,7 +305,7 @@ pub fn lines(text: &str, p: &Palette, width: usize) -> Vec<Row> {
     };
     let mut fence_body = String::new();
     for event in Parser::new_ext(
-        text,
+        &safe_text,
         Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS,
     ) {
         match event {
@@ -316,11 +373,19 @@ pub fn lines(text: &str, p: &Palette, width: usize) -> Vec<Row> {
                 w.marker = None;
                 w.item_depth = w.item_depth.saturating_sub(1);
             }
-            Event::Start(Tag::Link { dest_url, .. })
-            | Event::Start(Tag::Image { dest_url, .. }) => {
+            Event::Start(Tag::Image { dest_url, .. }) => {
+                w.text("[image: ", w.style());
                 w.links.push(dest_url.to_string());
             }
-            Event::End(TagEnd::Link) | Event::End(TagEnd::Image) => {
+            Event::Start(Tag::Link { dest_url, .. }) => {
+                w.links.push(dest_url.to_string());
+            }
+            Event::End(TagEnd::Image) => {
+                if let Some(url) = w.links.pop() {
+                    w.text(&format!(" ({url})]"), w.style().fg(p.quiet));
+                }
+            }
+            Event::End(TagEnd::Link) => {
                 if let Some(url) = w.links.pop() {
                     let style = w.style().fg(p.quiet);
                     w.text(&format!(" ({url})"), style);
@@ -457,12 +522,70 @@ mod tests {
         );
     }
     #[test]
+    fn inline_styles_tasks_rules_and_reference_links() {
+        let p = Palette::new(false);
+        let rows = lines("**bold** *italic* ~~gone~~ [label][ref]\n\n- [x] done\n- [ ] pending\n\n---\n\n[ref]: https://example.com", &p, 60);
+        for (text, modifier) in [
+            ("bold", Modifier::BOLD),
+            ("italic", Modifier::ITALIC),
+            ("gone", Modifier::CROSSED_OUT),
+        ] {
+            assert!(rows
+                .iter()
+                .flat_map(|row| &row.spans)
+                .any(|span| span.content == text && span.style.add_modifier.contains(modifier)));
+        }
+        let text = rows.iter().map(plain).collect::<Vec<_>>().join("\n");
+        for expected in [
+            "label (https://example.com)",
+            "[x] done",
+            "[ ] pending",
+            "────",
+        ] {
+            assert!(text.contains(expected), "missing {expected}: {text}");
+        }
+    }
+    #[test]
     fn fences_carry_language_and_fill_with_panel_colour() {
         let p = Palette::new(false);
         let rows = lines("```rust\nlet x = 1;\n```", &p, 60);
-        assert_eq!(plain(&rows[0]), " rust");
-        assert_eq!(plain(&rows[1]), " let x = 1;");
+        assert_eq!(plain(&rows[0]), " ╭─ rust");
+        assert_eq!(plain(&rows[1]), " │ let x = 1;");
         assert!(rows.iter().all(|row| row.bg == Some(p.panel)));
+    }
+    #[test]
+    fn terminal_only_fallbacks_keep_content() {
+        let text = render("![diagram](https://example.com/image.png)\n\n![](empty.png)\n\n<div>raw HTML</div>\n\n```mermaid\ngraph TD; A-->B\n```\n\n```unknown\nopaque source\n```").join("\n");
+        for expected in [
+            "[image: diagram (https://example.com/image.png)]",
+            "[image:  (empty.png)]",
+            "<div>raw HTML</div>",
+            "mermaid",
+            "graph TD; A-->B",
+            "unknown",
+            "opaque source",
+        ] {
+            assert!(text.contains(expected), "missing {expected}: {text}");
+        }
+    }
+    #[test]
+    fn streaming_and_controls_are_visible_without_terminal_escapes() {
+        let text = render("```rust\nlet unfinished = \"界\";\n\u{1b}[31m\u{7}").join("\n");
+        assert!(text.contains("let unfinished = \"界\";"));
+        assert!(text.contains("\\u{001b}[31m\\u{0007}"));
+        assert!(!text.contains('\u{1b}'));
+        assert!(!text.contains('\u{7}'));
+    }
+    #[test]
+    fn upstream_code_is_not_truncated_or_reparsed_as_inline_markdown() {
+        let body = "界界界界界界界界界界 **literal** [x](url)";
+        let rows = lines(&format!("```text\n{body}\n```"), &Palette::new(false), 8);
+        assert!(rows
+            .iter()
+            .map(plain)
+            .collect::<Vec<_>>()
+            .join("\n")
+            .contains(body));
     }
     #[test]
     fn quotes_have_a_bar_and_tables_align() {

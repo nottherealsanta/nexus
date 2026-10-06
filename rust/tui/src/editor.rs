@@ -1,5 +1,65 @@
 //! Bounded grapheme editor with selection and undo. No domain state lives here.
 use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
+
+/// Source ranges for visual rows. Soft breaks never change the editor's text;
+/// renderers should render these slices rather than wrapping them again.
+pub struct VisualLayout<'a> {
+    text: &'a str,
+    pub rows: Vec<std::ops::Range<usize>>,
+}
+
+impl VisualLayout<'_> {
+    pub fn row_text(&self, row: usize) -> &str {
+        &self.text[self.rows[row].clone()]
+    }
+
+    /// A cursor at a soft break belongs to the following row. At a hard break
+    /// it belongs to the preceding row, until it moves past the newline.
+    pub fn cursor_position(&self, cursor: usize) -> (usize, usize) {
+        let row = self
+            .rows
+            .iter()
+            .rposition(|range| range.start <= cursor)
+            .unwrap_or(0);
+        let range = &self.rows[row];
+        let column = self.text[range.start..cursor.min(range.end)]
+            .graphemes(true)
+            .map(UnicodeWidthStr::width)
+            .sum();
+        (row, column)
+    }
+
+    pub fn cursor_at(&self, row: usize, column: usize) -> usize {
+        let range = &self.rows[row];
+        let mut columns = 0;
+        let mut cursor = range.start;
+        for (offset, grapheme) in self.row_text(row).grapheme_indices(true) {
+            if columns + grapheme.width() > column {
+                break;
+            }
+            columns += grapheme.width();
+            cursor = range.start + offset + grapheme.len();
+        }
+        // A soft row's end is also the next row's start. Keep navigation on
+        // the requested row rather than accidentally moving an extra row.
+        if cursor == range.end
+            && self
+                .rows
+                .get(row + 1)
+                .is_some_and(|next| next.start == cursor)
+        {
+            cursor = self
+                .row_text(row)
+                .grapheme_indices(true)
+                .last()
+                .map(|(offset, _)| range.start + offset)
+                .unwrap_or(range.start);
+        }
+        cursor
+    }
+}
+
 const MAX_UNDO_BYTES: usize = 8 * 1024 * 1024;
 #[derive(Default)]
 pub struct Editor {
@@ -12,6 +72,75 @@ pub struct Editor {
     redo: Vec<(String, usize)>,
 }
 impl Editor {
+    /// Wrap whitespace-delimited words using terminal display columns. Words
+    /// that fit a row move intact; only oversized tokens split at grapheme
+    /// boundaries. Whitespace is retained, including at soft row boundaries.
+    pub fn visual_layout(&self, width: usize) -> VisualLayout<'_> {
+        let width = width.max(1);
+        let mut rows = Vec::new();
+        let mut logical_start = 0;
+        for logical in self.text.split('\n') {
+            let mut row_start = logical_start;
+            let mut columns = 0;
+            let graphemes: Vec<_> = logical.grapheme_indices(true).collect();
+            let mut index = 0;
+            while index < graphemes.len() {
+                let (offset, grapheme) = graphemes[index];
+                if !grapheme.chars().all(char::is_whitespace) {
+                    let token_start = index;
+                    let mut token_width = 0;
+                    while index < graphemes.len()
+                        && !graphemes[index].1.chars().all(char::is_whitespace)
+                    {
+                        token_width += graphemes[index].1.width();
+                        index += 1;
+                    }
+                    if token_width <= width && columns + token_width > width && columns > 0 {
+                        rows.push(row_start..logical_start + offset);
+                        row_start = logical_start + offset;
+                        columns = 0;
+                    }
+                    for &(offset, grapheme) in &graphemes[token_start..index] {
+                        if columns + grapheme.width() > width && columns > 0 {
+                            rows.push(row_start..logical_start + offset);
+                            row_start = logical_start + offset;
+                            columns = 0;
+                        }
+                        columns += grapheme.width();
+                    }
+                } else {
+                    if columns + grapheme.width() > width && columns > 0 {
+                        rows.push(row_start..logical_start + offset);
+                        row_start = logical_start + offset;
+                        columns = 0;
+                    }
+                    columns += grapheme.width();
+                    index += 1;
+                }
+            }
+            rows.push(row_start..logical_start + logical.len());
+            logical_start += logical.len() + 1;
+        }
+        VisualLayout {
+            text: &self.text,
+            rows,
+        }
+    }
+
+    /// Navigate with exactly the same source ranges used for visual rendering.
+    pub fn vertical_wrapped(&mut self, down: bool, width: usize) {
+        let layout = self.visual_layout(width);
+        let (row, column) = layout.cursor_position(self.cursor);
+        let target = if down {
+            (row + 1 < layout.rows.len()).then_some(row + 1)
+        } else {
+            row.checked_sub(1)
+        };
+        if let Some(target) = target {
+            self.cursor = layout.cursor_at(target, column);
+        }
+    }
+
     fn image_marker(content: &str) -> bool {
         let number = content
             .strip_prefix("image #")
@@ -275,6 +404,84 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn visual_wrap_keeps_words_and_source_whitespace() {
+        let mut e = Editor::default();
+        e.insert("one two  three\nfour\n");
+        let layout = e.visual_layout(7);
+        let rows: Vec<_> = (0..layout.rows.len())
+            .map(|row| layout.row_text(row))
+            .collect();
+        assert_eq!(rows, ["one two", "  three", "four", ""]);
+        assert_eq!(e.text, "one two  three\nfour\n");
+
+        e.text = "hello world".into();
+        let layout = e.visual_layout(8);
+        assert_eq!(layout.row_text(0), "hello ");
+        assert_eq!(layout.row_text(1), "world");
+        assert_eq!(layout.cursor_position(6), (1, 0));
+        assert_eq!(layout.cursor_position(8), (1, 2));
+        e.cursor = 2;
+        e.vertical_wrapped(true, 8);
+        assert_eq!(e.cursor, 8);
+        e.vertical_wrapped(false, 8);
+        assert_eq!(e.cursor, 2);
+    }
+
+    #[test]
+    fn visual_wrap_splits_only_oversized_tokens_at_graphemes() {
+        let mut e = Editor::default();
+        e.insert("a abcdefghi 界界 e\u{301}🙂");
+        let layout = e.visual_layout(5);
+        let rows: Vec<_> = (0..layout.rows.len())
+            .map(|row| layout.row_text(row))
+            .collect();
+        assert_eq!(rows, ["a abc", "defgh", "i ", "界界 ", "e\u{301}🙂"]);
+        assert_eq!(rows.concat(), e.text);
+        for row in &rows {
+            assert!(row.width() <= 5);
+        }
+        let start = e.text.find("界界").unwrap();
+        assert_eq!(layout.cursor_position(start + "界".len()), (3, 2));
+        assert_eq!(layout.cursor_at(4, 2), e.text.find("🙂").unwrap());
+        e.cursor = start + "界".len();
+        e.vertical_wrapped(true, 5);
+        assert_eq!(e.cursor, e.text.find("🙂").unwrap());
+    }
+
+    #[test]
+    fn visual_navigation_clamps_without_crossing_soft_breaks() {
+        let mut e = Editor::default();
+        e.insert("abcd ef\nz");
+        let layout = e.visual_layout(5);
+        assert_eq!(layout.cursor_position(7), (1, 2));
+        assert_eq!(layout.cursor_position(8), (2, 0));
+        assert_eq!(layout.cursor_at(0, 100), 4);
+        e.cursor = 7;
+        e.vertical_wrapped(false, 5);
+        assert_eq!(e.cursor, 2);
+        e.vertical_wrapped(true, 5);
+        assert_eq!(e.cursor, 7);
+        e.vertical_wrapped(true, 5);
+        assert_eq!(e.cursor, 9);
+    }
+
+    #[test]
+    fn visual_wrap_handles_empty_narrow_and_wide_graphemes() {
+        let mut e = Editor::default();
+        assert_eq!(e.visual_layout(0).rows, [0..0]);
+        e.insert("界🙂e\u{301}\n\n");
+        let layout = e.visual_layout(0);
+        let rows: Vec<_> = (0..layout.rows.len())
+            .map(|row| layout.row_text(row))
+            .collect();
+        assert_eq!(rows, ["界", "🙂", "e\u{301}", "", ""]);
+        assert_eq!(layout.cursor_position(e.text.len()), (4, 0));
+        for row in 0..layout.rows.len() {
+            assert!(e.text.is_char_boundary(layout.cursor_at(row, 1)));
+        }
+    }
+
     #[test]
     fn combining_and_emoji_are_whole_graphemes() {
         let mut e = Editor::default();

@@ -275,6 +275,8 @@ class Workflows(TierPages, SpeakPages):
             self.shell.panel_title = ""
             self.shell.items = []
             return await self.shell.submit(operation["command"])
+        elif kind == "model_details":
+            self.model_details(operation["model"])
         elif kind == "model_choose":
             ref, levels, selected = operation["ref"], operation["levels"], operation.get("selected")
             if operation.get("remembered"):
@@ -942,11 +944,37 @@ class Workflows(TierPages, SpeakPages):
         from ...ui_support.model_choice import model_groups, recent_models
         rows = [row for row in recent_models(await self.client.list_models(selectable_only=True)) if row.get("provider") and row.get("id")]
         groups, _ = model_groups(rows, favorites=self.shell.preferences.values["model_favorites"], recent=self.shell.preferences.values["model_recent"])
-        items = [(f"{row.get('name') or row['id']} · {row['provider']}/{row['id']}", {"kind": "agent_set", "field": field, "index": index, "ref": f"{row['provider']}/{row['id']}"}, title)
+        items = [(f"{row.get('name') or row['id']} · {row['provider']}", {"kind": "agent_set", "field": field, "index": index, "ref": f"{row['provider']}/{row['id']}"}, title, row)
                  for title, group in groups for row in group]
-        self.menu("Agent model" if field == "model" else f"Agent fallback {index + 1}", [(label, op) for label, op, _ in items])
-        for item, (_, _, title) in zip(self.shell.items, items):
+        self.menu("Agent model" if field == "model" else f"Agent fallback {index + 1}", [(label, op) for label, op, _, _ in items])
+        self.shell.panel_hint = "Ctrl+I details"
+        for item, (_, _, title, row) in zip(self.shell.items, items):
             item["group"] = title
+            self.model_item_metadata(item, row)
+
+    @staticmethod
+    def model_item_metadata(item, row):
+        item["search"] = f"{row['provider']}/{row['id']}"
+        item["info_operation"] = {"kind": "model_details", "model": row}
+
+    def model_details(self, row):
+        import json
+        unknown = "unknown"
+        cost = row.get("cost") or {}
+        lines = [
+            f"Name: {row.get('name') or unknown}",
+            f"Provider: {row.get('provider') or unknown}",
+            f"Model ID: {row.get('id') or unknown}",
+            f"Context tokens: {row.get('context') or unknown}",
+            f"Max input tokens: {row.get('max_input') or unknown}",
+            f"Max output tokens: {row.get('max_output') or unknown}",
+            "Pricing (USD per million tokens):",
+            *[f"  {key}: {cost[key] if cost.get(key) is not None else unknown}"
+              for key in ("input", "output", "cache_read", "cache_write")],
+            "", "Original metadata:", json.dumps(row, ensure_ascii=False, indent=2),
+        ]
+        self.menu("Model details", [], "\n".join(lines).splitlines(), layout="modal")
+        self.shell.items = []  # Text-only panel: arrow/page keys scroll all metadata.
 
     async def agent_write(self, field, index, ref):
         """Set (or clear) one agent field and save the file at once,."""

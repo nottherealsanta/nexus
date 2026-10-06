@@ -403,7 +403,7 @@ here, so add a row when you add a file.
 | `clipboard.py` | Bounded local system clipboard image reading for terminal attachment uploads |
 | `completion.py` | Toolkit-free composer completion shared by the native shell |
 | `context.py` | Pure display projections for context preview and session usage |
-| `context_header.py` | Toolkit-free context header blocks, agent colors and tool grouping shared by both shells |
+| `context_header.py` | Toolkit-free context header blocks, complete inventories and bounded fallback previews; skill tokens estimate the included index rather than the available catalogue |
 | `details.py` | Toolkit-free details sidebar data (session rows, modified files, MCP rows) shared by both shells |
 | `fuzzy.py` | Shared fuzzy matcher (score and match positions) for the command palette and model picker |
 | `hints.py` | Randomized tips shown in the middle of an empty session (mirrored in `js/hints.js`) |
@@ -473,8 +473,10 @@ here, so add a row when you add a file.
 The Rust client lives in `rust/tui/src/`: `main.rs` (terminal loop, key and mouse
 handling), `input.rs` (action writers, editor keys, picking, OSC 52 base64),
 `bridge.rs` (the versioned snapshot contract), `editor.rs` (grapheme editor),
-`render.rs` (palette, layout regions, the draw pass), `render/chrome.rs` (top bar,
-tabs, sessions and details sidebars), `render/dialogs.rs` (dialog frames, toned
+`render.rs` (palette, layout regions, the draw pass), `render/components.rs`
+(shared button/toggle/section/selectable styles and bounded local hover state;
+composer controls are the first adopters), `render/chrome.rs` (top bar,
+tabs, sessions and details sidebars), `render/context.rs` (reusable width-aware inventory sections: tools 1–5 columns, skills 1–2 columns, MCP one column, all capped at five rows with total/omitted indicators; unchanged host detail operations), `render/dialogs.rs` (dialog frames, toned
 panel text, Settings area list, prompt and logs regions, completion popup),
 `transcript.rs` (blocks to rows, diffs) and `markdown.rs`. `main()` is still one long
 loop over local state; splitting it further needs a state struct and is not done.

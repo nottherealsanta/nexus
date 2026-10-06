@@ -324,6 +324,19 @@ class ShellActions:
         result = await self.controller.cancel()
         self.composer_restore = "\n\n".join(result.returned_messages)
 
+    async def close_tab(self, workspace, session):
+        """Use the native tab-close policy without deleting or cancelling work."""
+        index = next((i for i, row in enumerate(self.tabs)
+                      if row["id"] == session and row["workspace"] == workspace), None)
+        if index is not None and len(self.tabs) == 1:
+            await self.command("/new", ())
+        elif index is not None:
+            self.tabs.pop(index)
+            self.controller.forget(session)
+            if self.controller.session == session and self.tabs:
+                row = self.tabs[min(index, len(self.tabs) - 1)]
+                await self.switch_project(row["workspace"], row["id"])
+
     async def submit(self, text, mode="steer"):
         command = parse(text)
         if command:
@@ -380,6 +393,10 @@ class ShellActions:
         elif name == "/hotkeys":
             from ...ui_support.shortcuts import KEYBOARD_SHORTCUTS
             self.show("Keyboard shortcuts", "\n".join(KEYBOARD_SHORTCUTS))
+        elif name == "/close":
+            if args:
+                raise ValueError("Usage: /close")
+            await self.close_tab(self.workspace, session)
         elif name == "/new":
             session_id = argument or uuid.uuid4().hex[:12]
             agent = self.controller.agent_name
@@ -419,6 +436,7 @@ class ShellActions:
                 rows = [row for row in recent_models(await self.client.list_models(selectable_only=True))
                         if row.get("provider") and row.get("id")]
                 for row in rows:
+                    row["original_metadata"] = dict(row)
                     row["ref"] = f"{row['provider']}/{row['id']}"
                 favorites = self.preferences.values["model_favorites"]
                 recent = self.preferences.values["model_recent"]
@@ -430,10 +448,11 @@ class ShellActions:
                         rows.append({**row, "group": title, "name": str(row.get("name") or row["ref"])})
                 self.picker("Select model", rows, "/model", "ref", layout="modal")
                 sort = "Updated ↓" if self.model_sort == "updated" else "Name A–Z"
-                self.panel_hint = f"Sort ctrl+s {sort}  Favorite ctrl+f  Refresh ctrl+r"
+                self.panel_hint = f"Details ctrl+i  Sort ctrl+s {sort}  Favorite ctrl+f  Refresh ctrl+r"
                 for item, row in zip(self.items, rows):
-                    # The name leads; the provider/model ref trails it dimmed. `●` marks the active model.
-                    item.update(group=row["group"], detail=row["ref"], current=row["ref"] == current)
+                    item.update(label=f"{row['original_metadata'].get('name') or row['id']} · {row['provider']}",
+                                group=row["group"], detail="", current=row["ref"] == current)
+                    self.workflows.model_item_metadata(item, row["original_metadata"])
                     state = dict(current=current, current_effort=self.controller.reasoning_effort, stored_override=self.controller.stored_override)
                     from ...ui_support.model_choice import preselected_effort, selection_effort
                     keep, commit = selection_effort(row, effort_source=self.controller.reasoning_effort_source, pending=None, touched=False, **state)

@@ -73,12 +73,13 @@ async def test_settings_validation_keeps_editor_and_disables_autosave(shell):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("send", [False, True])
-async def test_voice_finish_inserts_final_not_partial(shell, monkeypatch, send):
+@pytest.mark.parametrize("auto_send", [False, True])
+@pytest.mark.parametrize("send", [False, True, None], ids=["escape-keeps", "enter-sends", "default-stop"])
+async def test_voice_finish_inserts_final_not_partial(shell, monkeypatch, send, auto_send):
     from nexus.ui.ratatui import voice
     recorder = SimpleNamespace(start=lambda: None, stop=lambda: b"wav", snapshot=lambda: b"wav", full=False, duration=0)
     monkeypatch.setattr(voice, "Recorder", lambda **kwargs: recorder)
-    shell.client.voice_status = AsyncMock(return_value=p.VoiceStatusResult(enabled=True, state="ready"))
+    shell.client.voice_status = AsyncMock(return_value=p.VoiceStatusResult(enabled=True, state="ready", auto_send=auto_send))
     shell.client.voice_cancel = AsyncMock()
     async def transcribe(audio, request_id, **kwargs):
         return p.VoiceTranscribeResult(request_id=request_id, text="final transcript", duration_s=1, elapsed_s=.1)
@@ -86,11 +87,73 @@ async def test_voice_finish_inserts_final_not_partial(shell, monkeypatch, send):
     await shell.voice.open()
     assert shell.panel_title == ""
     assert shell.voice.phase == "recording"
+    shell.voice.preview = "partial transcript"
     await shell.voice.stop(send=send)
     assert shell.composer_insert == "final transcript"
-    assert shell.composer_auto_send is send
+    assert shell.composer_auto_send is (auto_send if send is None else send)
     assert shell.voice.phase == "idle"
+    assert shell.voice.preview == ""
     assert not shell.client.voice_transcribe.await_args.kwargs.get("partial", False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auto_send", [False, True])
+async def test_voice_capture_cap_stop_retains_auto_send(shell, monkeypatch, auto_send):
+    from nexus.ui.ratatui import voice
+    monkeypatch.setattr(voice.asyncio, "sleep", AsyncMock())
+    shell.voice.recorder = SimpleNamespace(full=True, stop=lambda: b"wav")
+    shell.voice.request = "capture"
+    shell.voice.generation = shell.generation
+    shell.voice.auto_send = auto_send
+    shell.voice.phase = "recording"
+    shell.client.voice_transcribe = AsyncMock(return_value=p.VoiceTranscribeResult(
+        request_id="capture", text="final transcript", duration_s=1, elapsed_s=.1))
+    await shell.voice._previews()
+    assert shell.composer_insert == "final transcript"
+    assert shell.composer_auto_send is auto_send
+    assert shell.voice.recorder is None
+    assert shell.voice.phase == "idle"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auto_send", [False, True])
+async def test_voice_explicit_discard_cancels_without_transcription(shell, auto_send):
+    from unittest.mock import Mock, call
+    recorder = SimpleNamespace(stop=Mock(return_value=b"wav"))
+    shell.voice.recorder = recorder
+    shell.voice.request = "capture"
+    shell.voice.preview_request = "capture-p1"
+    shell.voice.preview = "partial transcript"
+    shell.voice.auto_send = auto_send
+    shell.voice.phase = "recording"
+    shell.client.voice_cancel = AsyncMock()
+    shell.client.voice_transcribe = AsyncMock()
+    before = (shell.composer_insert, shell.composer_auto_send)
+    await shell.voice.discard()
+    recorder.stop.assert_called_once_with()
+    assert shell.client.voice_cancel.await_args_list == [call("capture-p1"), call("capture")]
+    shell.client.voice_transcribe.assert_not_awaited()
+    assert (shell.composer_insert, shell.composer_auto_send) == before
+    assert shell.voice.recorder is None and shell.voice.phase == "idle"
+    assert shell.voice.preview == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("send", [False, True, None])
+async def test_voice_finish_rejects_stale_generation(shell, send):
+    shell.voice.recorder = SimpleNamespace(stop=lambda: b"wav")
+    shell.voice.request = "capture"
+    shell.voice.generation = shell.generation
+    shell.voice.phase = "recording"
+    shell.voice.auto_send = True
+    async def transcribe(*args, **kwargs):
+        shell.generation += 1
+        return p.VoiceTranscribeResult(request_id="capture", text="stale transcript", duration_s=1, elapsed_s=.1)
+    shell.client.voice_transcribe = AsyncMock(side_effect=transcribe)
+    before = (shell.composer_insert, shell.composer_auto_send)
+    await shell.voice.stop(send=send)
+    assert (shell.composer_insert, shell.composer_auto_send) == before
+    assert shell.voice.phase == "idle"
 
 
 def test_preferences_preserve_saved_keys_and_bound_favorites(tmp_path):

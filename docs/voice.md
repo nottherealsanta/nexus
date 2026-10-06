@@ -55,10 +55,12 @@ and cache-only preparation check runtime availability first and report the
    An absent model stays cached-only.
 4. **Capture:** clients send bounded mono 16 kHz PCM16 WAV (`VoiceTranscribe`; the
    browser uses `POST /v1/web/voice`, 8 MiB cap). The transcript is inserted as
-   editable composer text; `auto_send` is off by default. In terminal clients,
+   editable composer text; `auto_send` is off by default. In the native Ratatui client,
    Enter during recording stops capture and sends the completed message after
-   final transcription, even with `auto_send` off. Other keys keep their existing
-   stop behavior; Escape discards. Failed or empty transcription does not send.
+   final transcription, even with `auto_send` off. Escape and other stopping keys
+   keep the final transcript without sending, even with `auto_send` on. Automatic
+   capture-limit stops retain the `auto_send` preference. Explicit discard remains
+   a separate cancellation path. Failed or empty transcription does not send.
 5. **Live preview:** while recording, clients re-send the growing recording as
    `VoiceTranscribe(partial=True)` (web: `?partial=1`), request id
    `<recording id>-p<n>`. At most one preview is in flight, sent only after
@@ -86,7 +88,7 @@ are pinned to the one trusted manifest. `NEXUS_VOICE=off` disables it.
 - Real inference, platform support, benchmarks and network behavior are **not
   verified**. Do not describe the path as proven offline.
 - The model weights are CC-BY-4.0; keep the attribution in `nexus/voice/NOTICE`.
-- UI behavior (orange dot only while recording, the floating live strip with
+- Legacy/web UI behavior (orange dot only while recording, the floating live strip with
   waveform and preview text, any key stops, `Esc` discards, no auto
   "loading/ready" model labels): [surfaces.md](surfaces.md#dictation).
 
@@ -105,14 +107,15 @@ replaces the download invitation.
 
 ## Live transcript previews
 
-The TUI displays a floating waveform and transcript tail above the composer,
+The legacy TUI displays a floating waveform and transcript tail above the composer,
 without moving the composer. Growing WAV snapshots are bounded by the capture
 limit; at most one preview is in flight, with pacing based on inference latency.
 `VoiceTranscribe.partial` defaults to false and is carried by the client and web
 endpoint. Partial requests bypass final-result deduplication, never mark a
 session as voice-used, and do not insert text. Stopping cancels the preview and
 requests a final transcript of the full recording; only that result enters the
-composer. Escape discards capture and cancels inference.
+composer. Legacy/web Escape discards capture and cancels inference; native
+Ratatui Escape finishes and keeps the final transcript without sending.
 
 The browser renders the same preview phases with a canvas waveform. Real-
 microphone latency and inference on supported hardware are **not verified**.
@@ -139,7 +142,10 @@ Native dictation now previews directly inside the editable composer, at the capt
 insertion position. Recording shows only a one-cell pulsing orange outline square
 below the agent control; the floating waveform/status strip is removed. Typing
 stops capture and also applies the typed key. Final text replaces the temporary
-preview at the captured position, preserving typed suffix text; Escape discards.
+preview at the captured position, preserving typed suffix text. Escape stops and
+keeps the final transcript without sending; Enter stops and sends. Both explicit
+choices override `auto_send`. Only a default stop (`send=None`, including the
+capture limit) uses that preference; explicit discard cancels without insertion.
 The composer grows for live previews. Real microphone/model latency is unverified.
 
 ## Start and stop cues
@@ -153,7 +159,9 @@ Starting dictation plays a short rising two-note cue; stopping plays a falling
 one. The cue (`ui_support/voice_capture.py:play_cue`, via `sounddevice`
 output) finishes before the microphone opens so it is not recorded. It is
 terminal-only (Ratatui); the web app has none. Cues are best-effort (a
-missing output device is silent) and `NEXUS_VOICE_SOUNDS=off` disables them. Discarding with Escape also plays the stop cue. Audible result on
+missing output device is silent) and `NEXUS_VOICE_SOUNDS=off` disables them. Native
+Escape plays the stop cue while keeping the transcript; explicit discard also
+plays the stop cue. Audible result on
 real hardware is not verified.
 
 

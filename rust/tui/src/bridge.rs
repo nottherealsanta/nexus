@@ -148,6 +148,8 @@ pub struct Item {
     pub remove: Option<serde_json::Value>,
     /// Dim text after the label (model picker: the provider/model ref).
     pub detail: String,
+    pub search: String,
+    pub info_operation: Option<Value>,
     /// The active choice: drawn with a leading `●` in the accent colour.
     pub current: bool,
 }
@@ -160,7 +162,9 @@ impl Item {
     /// already do.
     pub fn matches(&self, filter: &str) -> bool {
         let needle = filter.to_lowercase();
-        self.label.to_lowercase().contains(&needle) || self.detail.to_lowercase().contains(&needle)
+        self.label.to_lowercase().contains(&needle)
+            || self.detail.to_lowercase().contains(&needle)
+            || self.search.to_lowercase().contains(&needle)
     }
 }
 #[derive(Deserialize)]
@@ -606,10 +610,10 @@ mod section_tests {
         assert_eq!(next.blocks[0].id, "a");
     }
     #[test]
-    fn picker_filter_matches_the_provider_detail() {
+    fn picker_filter_matches_hidden_model_reference() {
         let item = Item {
             label: "Kimi K3".into(),
-            detail: "opencode-go/kimi-k3".into(),
+            search: "opencode-go/kimi-k3".into(),
             ..Default::default()
         };
         assert!(item.matches("open"));

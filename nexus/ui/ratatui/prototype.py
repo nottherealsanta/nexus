@@ -29,6 +29,19 @@ _OUTPUT_SECTIONS = frozenset({"Result", "Summary", "Error", "Progress"})
 _EXPAND_AFTER_LINES = 12  # outputs longer than this expand in place on click
 
 
+def _display_breadcrumb(breadcrumb: str, home: Path | None = None) -> str:
+    """Abbreviate only the actual home component; keep the source path intact."""
+    home_text = str(Path.home() if home is None else home).rstrip("/")
+    path, separator, branch = breadcrumb.partition(" › ")
+    # Root is not a useful home abbreviation, nor is a relative home path.
+    if home_text and Path(home_text).is_absolute():
+        if path == home_text:
+            path = "~"
+        elif path.startswith(home_text + "/"):
+            path = "~" + path[len(home_text):]
+    return path + separator + branch
+
+
 #: Read-only lookups that collapse into one `Explored: 1 search, 1 read` row.
 _EXPLORE_KINDS = {"grep": ("search", "searches"), "glob": ("search", "searches"),
                   "read": ("read", "reads"), "ls": ("list", "lists")}
@@ -356,8 +369,16 @@ def _context_blocks(shell, view):
     else:
         found = [HeaderBlock(key, label, "", "", None, NEUTRAL) for key, label in (
             ("system", "System prompt"), ("tools", "Tools"), ("agents", "AGENTS.md"), ("skills", "Skills"), ("mcp", "MCP"))]
-    return [{"id": "context:" + block.key, "kind": "context", "title": block.label, "text": block.body,
-             "status": f"~{_compact_tokens(block.tokens)} tokens" if block.tokens else "", "color": _agent_color(shell, getattr(getattr(shell, "controller", None), "agent_name", (getattr(preview, "agent", {}) or {}).get("name", "build"))),
+    def token_status(block):
+        if block.key == "skills":
+            return (f"Included index · ~{_compact_tokens(block.tokens)} tokens"
+                    if block.tokens is not None else "Included index · tokens unknown")
+        return f"~{_compact_tokens(block.tokens)} tokens" if block.tokens is not None else "tokens unknown"
+
+    return [{"id": "context:" + block.key, "kind": "context", "title": block.label,
+             "text": "\n".join(block.inventory) if block.key in {"tools", "skills", "mcp"} else block.body,
+             "local_preview": block.inventory_note,
+             "status": token_status(block), "color": _agent_color(shell, getattr(getattr(shell, "controller", None), "agent_name", (getattr(preview, "agent", {}) or {}).get("name", "build"))),
              "gap": 1, "operation": {"kind": "context_show", "key": block.key}}
             for block in found]
 
@@ -375,9 +396,9 @@ def _compact_header(shell, view):
         return [project, len(rows) - project]
 
     counts = {"context:tools": [sum(1 for t in getattr(preview, "tools", []) if not isinstance(t, dict) or t.get("enabled") is not False)],
-              "context:skills": scoped(getattr(preview, "skills_index", []), "global"),
-              "context:mcp": scoped(getattr(preview, "mcp_servers", []), "project")}
-    chips = [{**chip, "text": "", "counts": counts.get(chip["id"], []) if preview else [], "gap": 0} for chip in chips]
+              "context:skills": [sum(scoped(getattr(preview, "skills_index", []), "global"))],
+              "context:mcp": [sum(scoped(getattr(preview, "mcp_servers", []), "project"))]}
+    chips = [{**chip, "text": chip["text"] if chip["id"] in {"context:tools", "context:skills", "context:mcp"} else "", "counts": counts.get(chip["id"], []) if preview else [], "gap": 0} for chip in chips]
     total = "Context total · tokens unavailable"
     if preview is not None and hasattr(preview, "tools"):
         total = f"Context total · ~{sum(block.tokens or 0 for block in header_blocks(preview, chips[0]["color"])):,} tokens"
@@ -690,7 +711,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "archived_label": shell.archived_label if shell else "",
             "sessions_truncated": bool(shell and shell.sessions_truncated),
             "tabs": _tab_rows(controller, shell) if shell else [],
-            "breadcrumb": escape_controls(shell.breadcrumb) if shell else "",
+            "breadcrumb": escape_controls(_display_breadcrumb(shell.breadcrumb)) if shell else "",
             "details_panel": details_panel,
             "logs": shell.logs.lines() if shell else [],
             **({"logs_all": shell.logs.lines(show_all=True), "logs_folded": shell.logs.lines(show_all=False),
@@ -1179,15 +1200,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                         await shell.switch_project(row["workspace"], row["id"])
                         await shell.workflows.operate({"kind": "session_actions", **row})
                 elif action["type"] == "tab_close":
-                    index = next((i for i,row in enumerate(shell.tabs) if row["id"] == action["text"] and row["workspace"] == action["workspace"]), None)
-                    if index is not None and len(shell.tabs) == 1:
-                        await shell.command("/new", ())
-                    elif index is not None:
-                        shell.tabs.pop(index)
-                        controller.forget(action["text"])
-                        if controller.session == action["text"] and shell.tabs:
-                            row = shell.tabs[min(index, len(shell.tabs)-1)]
-                            await shell.switch_project(row["workspace"], row["id"])
+                    await shell.close_tab(action["workspace"], action["text"])
                 elif action["type"] == "session_open":
                     if any(row["id"] == action["text"] and row["workspace"] == action["workspace"] for row in [*shell.sessions, *shell.tabs]):
                         await shell.switch_project(action["workspace"], action["text"])

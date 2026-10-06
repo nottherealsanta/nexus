@@ -69,6 +69,31 @@ def test_effort_selection_is_atomic_only_when_needed():
 
 
 @pytest.mark.asyncio
+async def test_agent_model_picker_details_preserve_original_metadata(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    from nexus.ui.ratatui.actions import ShellActions
+    c = client()
+    row = {"provider": "other", "id": "internal", "name": "Display",
+           "context": 128000, "max_output": 8192, "cost": {"input": 0},
+           "extra": {"future": [1, 2]}}
+    c.list_models.return_value = [row]
+    shell = ShellActions(SimpleNamespace(client=c))
+    await shell.workflows.agent_model_picker("fallback", 0)
+    item = shell.items[0]
+    assert item["label"] == "Display · other"
+    assert item["operation"]["ref"] == "other/internal"
+    await shell.workflows.operate(item["info_operation"])
+    assert not shell.items
+    text = "\n".join(shell.panel_lines)
+    assert "Context tokens: 128000" in text and "Max output tokens: 8192" in text
+    import json
+    assert json.loads(text.split("Original metadata:\n", 1)[1]) == row
+    shell.workflows.back()
+    assert shell.items[0] == item
+
+
+@pytest.mark.asyncio
 async def test_native_model_picker_orders_and_commits_effort(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
@@ -79,12 +104,25 @@ async def test_native_model_picker_orders_and_commits_effort(tmp_path, monkeypat
     shell = ShellActions(controller)
     shell.preferences.set("model_favorites", ["a/mid"])
     await shell.submit("/model")
-    assert [i["detail"] for i in shell.items][0] == "a/mid"
+    assert shell.items[0]["search"] == "a/mid"
+    assert all(i["detail"] == "" for i in shell.items)
+    assert shell.items[0]["label"] == "Mid · a"
     assert shell.panel_title == "Select model" and shell.panel_layout == "modal"
     assert shell.items[0]["group"] == "Favorites"  # shown as a heading above the first favorite
-    first = next(i for i in shell.items if i["detail"] == "a/old")
+    first = next(i for i in shell.items if i["search"] == "a/old")
     assert first["current"] and first["operation"]["selected"] == "high"
-    assert any(i["detail"] == "b/new" and not i["current"] for i in shell.items)
+    assert any(i["search"] == "b/new" and not i["current"] for i in shell.items)
+    original = dict(first["info_operation"]["model"])
+    await shell.workflows.operate(first["info_operation"])
+    assert shell.panel_title == "Model details"
+    text = "\n".join(shell.panel_lines)
+    assert "Model ID: old" in text and "Max input tokens: unknown" in text
+    import json
+    assert json.loads(text.split("Original metadata:\n", 1)[1]) == original
+    shell.workflows.back()
+    assert shell.panel_title == "Select model"
+    assert first in shell.items
+    controller.select_model_and_effort.assert_not_awaited()
 
 
 @pytest.mark.asyncio

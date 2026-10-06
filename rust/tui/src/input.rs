@@ -7,7 +7,7 @@ use std::io::{self, Write};
 
 pub const MAX_DRAFT: usize = 1024 * 1024;
 pub fn voice_stop(key: KeyCode) -> Value {
-    json!({"type":"voice_stop","discard":key == KeyCode::Esc,"send":key == KeyCode::Enter})
+    json!({"type":"voice_stop","discard":false,"send":key == KeyCode::Enter})
 }
 pub fn send(value: Value) -> io::Result<()> {
     let started = std::time::Instant::now();
@@ -154,7 +154,7 @@ pub fn base64(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod base64_tests {
     #[test]
-    fn voice_enter_sends_escape_discards_and_other_keys_only_stop() {
+    fn voice_enter_sends_escape_keeps_and_other_keys_only_stop() {
         use crossterm::event::KeyCode;
         assert_eq!(
             super::voice_stop(KeyCode::Enter),
@@ -162,7 +162,7 @@ mod base64_tests {
         );
         assert_eq!(
             super::voice_stop(KeyCode::Esc),
-            serde_json::json!({"type":"voice_stop","discard":true,"send":false})
+            serde_json::json!({"type":"voice_stop","discard":false,"send":false})
         );
         assert_eq!(
             super::voice_stop(KeyCode::Char('a')),
