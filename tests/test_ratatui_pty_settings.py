@@ -155,3 +155,48 @@ async def test_the_pythons_own_snapshot_renders_and_its_operations_round_trip(tm
         assert offered["operation"] == {"kind": "sp_models", "area": "models", "key": "chain"}
     finally:
         t.close()
+
+
+@pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
+def test_question_mark_alt_digits_and_f6_navigate_across_the_app():
+    t = Terminal(40, 120)
+    try:
+        send_page(t)
+        # `?` on a page opens the Keyboard page (the same one /hotkeys opens).
+        t.key(b"?")
+        assert t.action()["operation"] == {"kind": "keyboard"}
+        # Alt+1 jumps to the first area (Appearance, nav index 1: index 0 is a heading).
+        t.key(b"\x1b1")
+        assert t.action() == {"type": "nav_select", "text": "1", "generation": 1}
+        t.key(b"\x1b2")
+        assert t.action() == {"type": "nav_select", "text": "2", "generation": 1}
+        t.key(b"\x1b9")  # there is no ninth area: nothing is sent
+        t.key(b"\x1b[24~")  # F12: unrelated key, ignored
+        t.key(b"\x11")
+        assert t.action()["type"] == "quit"
+    finally:
+        t.close()
+
+
+@pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
+def test_f6_moves_focus_between_the_composer_and_the_sessions_sidebar():
+    from test_ratatui_pty_sessions import SESSIONS
+
+    t = Terminal(30, 120)
+    try:
+        t.send(sessions_sidebar=True, sessions=SESSIONS, composer_key="w/s1", generation=1)
+        time.sleep(.4)
+        t.redraw()
+        assert "type to filter" not in t.text()
+        t.key(b"\x1b[17~")  # F6
+        t.redraw()
+        assert "type to filter" in t.text(), "F6 focuses the sidebar"
+        t.key(b"\x1b[17~")
+        t.redraw()
+        assert "type to filter" not in t.text(), "and F6 again returns to the composer"
+        t.key(b"hello\r")
+        assert t.action() == {"type": "submit", "text": "hello", "mode": "steer", "generation": 1}
+        t.key(b"\x11")
+        assert t.action()["type"] == "quit"
+    finally:
+        t.close()

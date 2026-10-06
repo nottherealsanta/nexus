@@ -465,8 +465,7 @@ class ShellActions:
                                    ("Ctrl+X G · Agents", "/agent")):
                 self.items.append({"label": label, "command": command})
         elif name == "/hotkeys":
-            from ...ui_support.shortcuts import KEYBOARD_SHORTCUTS
-            self.show("Keyboard shortcuts", "\n".join(KEYBOARD_SHORTCUTS))
+            await self.workflows.open_page("keys")  # the same page as Settings → Keyboard
         elif name == "/close":
             if args:
                 raise ValueError("Usage: /close")

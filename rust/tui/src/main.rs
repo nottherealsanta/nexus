@@ -1259,6 +1259,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             dirty = true;
                             continue;
                         }
+                        // Alt+1…9 jumps to the n-th Settings area (Ctrl+digit is not delivered by terminals).
+                        if let (Some(nav), KeyCode::Char(digit @ '1'..='9')) = (s.nav.as_ref(), key.code) {
+                            if key.modifiers.contains(KeyModifiers::ALT) && !s.panel_loading {
+                                let n = digit as usize - '1' as usize;
+                                if let Some((index, _)) =
+                                    nav.items.iter().enumerate().filter(|(_, item)| !item.2).nth(n)
+                                {
+                                    send(
+                                        json!({"type":"nav_select","text":index.to_string(),"generation":s.generation}),
+                                    )?;
+                                    dirty = true;
+                                    continue;
+                                }
+                            }
+                        }
                         // A typed one-page Settings area owns its keys; what it does not use passes on.
                         if !settings_nav_focus && !s.panel_loading {
                             if let Some(raw) = s.settings_page.as_ref() {
@@ -1508,6 +1523,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                             _ => continue,
+                        }
+                        dirty = true;
+                        continue;
+                    }
+                    // F6 moves keyboard focus between the composer and the sessions sidebar.
+                    if key.code == KeyCode::F(6) || key.code == KeyCode::BackTab && key.modifiers.contains(KeyModifiers::CONTROL) {
+                        if cache.sessions_focus {
+                            cache.sessions_focus = false;
+                        } else {
+                            details_focus = false;
+                            sessions_surface(&mut s, &mut cache, &mut local_ui, false, terminal.size()?.width)?;
                         }
                         dirty = true;
                         continue;

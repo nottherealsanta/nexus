@@ -26,7 +26,8 @@ async def build(workflows) -> dict:
         sp.table([("Action", 0), ("Keys", 24), ("Where", 8)], [
             ["Move", "Up / Down", "Lists"], ["Change a value", "Left / Right", "Settings"], ["Toggle, open", "Space / Enter", "Settings"],
             ["Reorder a model", "Alt+Up / Alt+Down", "Settings"], ["Remove a model", "Delete", "Settings"],
-            ["Switch tier", "Ctrl+PageUp / Ctrl+PageDown", "Settings"], ["Close", "Esc", "Settings"],
+            ["Switch tier", "Ctrl+PageUp / Ctrl+PageDown", "Settings"], ["Jump to an area", "Alt+1 … Alt+9", "Settings"],
+            ["Show this page", "?", "Settings"], ["Move focus: composer / sessions", "F6", "Global"], ["Close", "Esc", "Settings"],
         ]),
     ]
     return sp.page(AREA, "Keyboard", blocks, footer="Read-only: shortcuts are defined in code.",

@@ -304,6 +304,8 @@ pub fn key(page: &Page, st: &mut PageState, key: KeyEvent) -> Act {
         KeyCode::Enter => activate(page, st),
         KeyCode::Char(' ') => activate(page, st),
         KeyCode::Delete | KeyCode::Backspace => remove(page, st),
+        // `?` opens the Keyboard page (nothing here is a text field while no edit is active).
+        KeyCode::Char('?') => Act::Send(json!({"kind": "keyboard"})),
         _ => Act::Pass,
     }
 }
@@ -515,6 +517,18 @@ mod tests {
         key(&p, &mut st, press(KeyCode::Left));
         assert!(!st.is_open(&sec));
         assert_eq!(key(&p, &mut st, press(KeyCode::Left)), Act::Nav, "a closed section's Left leaves for the area list");
+    }
+
+    #[test]
+    fn question_mark_opens_the_keyboard_page_but_is_text_while_editing() {
+        let (p, mut st) = (page(), state(&page()));
+        assert_eq!(key(&p, &mut st, press(KeyCode::Char('?'))), Act::Send(json!({"kind": "keyboard"})));
+        let v = json!({"area": "x", "blocks": [{"t": "row", "id": "k", "label": "Key", "control": {"c": "text", "value": "", "secret": false, "placeholder": "", "operation": {"kind": "sp_x", "key": "k"}}}]});
+        let p = Page::from_value(&v);
+        let mut st = PageState { order: vec!["row:k".into()], focus: "row:k".into(), ..Default::default() };
+        key(&p, &mut st, press(KeyCode::Enter));
+        key(&p, &mut st, press(KeyCode::Char('?')));
+        assert_eq!(st.edit.as_ref().unwrap().text.value, "?");
     }
 
     #[test]

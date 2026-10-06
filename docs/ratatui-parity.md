@@ -873,3 +873,13 @@ search, and scope on Models. Covered by `settings_page/` unit tests (model, inpu
 draw), `tests/test_ratatui_pty_settings.py` (real PTY: render, toggle, segmented, popup,
 tab, reorder, area list, Escape, focus across a host rebuild) and the Python side by `tests/test_ratatui_settings_*.py` and the ported journeys. Not verified
 against a live provider or a real daemon.
+
+## Keyboard polish (2026-10 overhaul, step 5)
+
+`F6` moves keyboard focus between the composer and the sessions sidebar (opening the
+sidebar or drawer if needed). On a Settings page `?` opens Settings → Keyboard (the page
+`/hotkeys` opens), and `Alt+1…9` jumps to the n-th area (`Ctrl+digit` is not delivered by
+terminals). The Keyboard page lists every shortcut from the one table the app uses.
+Covered by `tests/test_ratatui_pty_settings.py` and `settings_page/input.rs` tests. Not
+built: a hint bar under the composer (the composer is intentionally unchanged), type-ahead
+in lists, and a `?` sheet per region.

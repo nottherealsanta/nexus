@@ -77,7 +77,7 @@ names, usage, summaries, aliases). `parse` resolves aliases to the canonical nam
 | `/close` | | | close the current tab (native TUI only; same action as the tab close button) |
 | `/fork` | `[at_seq]` | | branch this session |
 | `/export` | `[json\|markdown\|jsonl]` | | export |
-| `/help`, `/hotkeys` | | | help, keyboard shortcuts |
+| `/help`, `/hotkeys` | | | help; `/hotkeys` opens Settings → Keyboard (native TUI) |
 | `/exit` | | `/quit` | leave |
 | `/worktrees` | | | review and manage child worktrees |
 | `/copy` | | | copy assembled context as JSON |
