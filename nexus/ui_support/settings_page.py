@@ -146,3 +146,88 @@ def count_blocks(value: Any) -> int:
         if block.get("t") == "section":
             total += count_blocks(block.get("blocks", []))
     return total
+
+
+# -- which operations the client may send back ---------------------------------
+
+#: Fields the client fills in itself; everything else in an operation is the host's own.
+CLIENT_FIELDS = ("value", "action", "index")
+_LIST_ACTIONS = {"up", "down", "remove", "add"}
+
+
+def _key(operation: dict) -> str:
+    import json
+    return json.dumps(operation, sort_keys=True)
+
+
+def _walk(blocks):
+    for block in blocks:
+        yield block
+        if block.get("t") == "section":
+            yield from _walk(block.get("blocks", []))
+
+
+def _control_rule(control: dict):
+    """Predicate on the client's ``value`` for one control, or ``None`` when it sends no value."""
+    kind = control.get("c")
+    if kind == "toggle":
+        return lambda op: isinstance(op.get("value"), bool)
+    if kind == "segmented":
+        values = control.get("values", [])
+        return lambda op: op.get("value") in values
+    if kind == "select":
+        values = [option[1] for option in control.get("options", [])]
+        return lambda op: op.get("value") in values
+    if kind == "stepper":
+        low, high = control.get("min", float("-inf")), control.get("max", float("inf"))
+        return lambda op: isinstance(op.get("value"), (int, float)) and not isinstance(op.get("value"), bool) and low <= op["value"] <= high
+    if kind == "text":
+        return lambda op: isinstance(op.get("value"), str) and len(op["value"]) <= 400
+    return None
+
+
+def operations(page: dict) -> tuple[set[str], dict[str, Any]]:
+    """The operations a page offers: exact ones (buttons) and base operations the client completes."""
+    exact: set[str] = set()
+    derived: dict[str, Any] = {}
+    scope = page.get("scope")
+    if scope:
+        count = len(scope.get("options", []))
+        derived[_key(scope["operation"])] = lambda op: isinstance(op.get("value"), int) and 0 <= op["value"] < count
+    for block in _walk(page.get("blocks", [])):
+        kind = block.get("t")
+        if kind == "row":
+            control = block.get("control", {})
+            rule = _control_rule(control)
+            operation = control.get("operation")
+            if operation is not None:
+                if rule is not None:
+                    derived[_key(operation)] = rule
+                else:
+                    exact.add(_key(operation))
+        elif kind == "tabs":
+            count = len(block.get("items", []))
+            derived[_key(block["operation"])] = lambda op, count=count: isinstance(op.get("value"), int) and 0 <= op["value"] < count
+        elif kind == "ordered":
+            count = len(block.get("items", []))
+            derived[_key(block["operation"])] = lambda op, count=count: (
+                op.get("action") in _LIST_ACTIONS and isinstance(op.get("index"), int) and 0 <= op["index"] <= count)
+        elif kind == "buttons":
+            exact.update(_key(item["operation"]) for item in block.get("items", []))
+        elif kind == "callout" and block.get("action"):
+            exact.add(_key(block["action"]["operation"]))
+    return exact, derived
+
+
+def accepts(page: dict | None, operation: dict) -> bool:
+    """Is ``operation`` one this page offered? Exact, or an offered base completed with a valid client field."""
+    if not page or not isinstance(operation, dict):
+        return False
+    exact, derived = operations(page)
+    if _key(operation) in exact:
+        return True
+    if not any(field in operation for field in CLIENT_FIELDS):
+        return False
+    base = {key: value for key, value in operation.items() if key not in CLIENT_FIELDS}
+    rule = derived.get(_key(base))
+    return bool(rule and rule(operation))

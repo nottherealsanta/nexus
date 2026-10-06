@@ -120,3 +120,10 @@ async def test_speech_model_download_asks_with_the_size_and_shows_progress(shell
     bar = next(b for b in page["blocks"] if b.get("t") == "progress")
     assert 0.39 < bar["fraction"] < 0.41 and "138 / 345 MB" in bar["label"]
     assert "Refresh status" in _buttons(page)
+
+
+@pytest.mark.asyncio
+async def test_every_operation_the_client_can_send_is_accepted_by_the_bridge(shell):
+    from settings_page_ops import assert_every_client_op_is_accepted
+    await shell.workflows.settings_area("voice")
+    assert assert_every_client_op_is_accepted(shell) > 10

@@ -85,3 +85,23 @@ async def test_signing_out_asks_first_and_returns_to_the_page(shell):
     await shell.workflows.operate(shell.items[1]["operation"])
     shell.client.provider_logout.assert_awaited_once_with("openai")
     assert shell.panel_title == "Settings · Providers" and shell.toasts[-1]["title"] == "Signed out of OpenAI"
+
+
+@pytest.mark.asyncio
+async def test_every_operation_the_client_can_send_is_accepted_by_the_bridge(shell):
+    from settings_page_ops import assert_every_client_op_is_accepted
+    await shell.workflows.settings_area("providers")
+    assert assert_every_client_op_is_accepted(shell) > 5
+
+
+@pytest.mark.asyncio
+async def test_first_run_opens_on_providers_with_the_setup_action(shell):
+    shell.client.setup_status = AsyncMock(return_value=p.SetupStatusResult(required=True, providers=[]))
+    await shell.workflows.open_page("providers")
+    callout = shell.workflows.settings_page["blocks"][0]
+    assert callout["t"] == "callout" and callout["action"] == {"label": "Choose default model", "operation": {"kind": "setup"}}
+    from nexus.ui_support import settings_page as sp
+    assert sp.accepts(shell.workflows.settings_page, {"kind": "setup"}), "the bridge lets the client run it"
+    shell.client.setup_status = AsyncMock(return_value=p.SetupStatusResult(required=False, providers=[]))
+    await shell.workflows.refresh_page()
+    assert shell.workflows.settings_page["blocks"][0]["t"] == "note", "no setup hint once a provider is connected"

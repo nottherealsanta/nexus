@@ -70,3 +70,11 @@ async def test_these_pages_need_no_scope_and_say_where_they_save(shell):
         await shell.workflows.settings_area(area)
         page = shell.workflows.settings_page
         assert page["scope"] is None and page["footer"]
+
+
+@pytest.mark.asyncio
+async def test_every_operation_the_client_can_send_is_accepted_by_the_bridge(shell):
+    from settings_page_ops import assert_every_client_op_is_accepted
+    for area in ("appearance", "layout", "keys"):
+        await shell.workflows.settings_area(area)
+        assert_every_client_op_is_accepted(shell)

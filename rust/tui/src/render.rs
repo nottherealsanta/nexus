@@ -1415,7 +1415,7 @@ pub fn draw(
         );
     }
     if !s.panel_title.is_empty() {
-        let area = panel_area(r.transcript, s);
+        let area = panel_area(panel_host(&r, s), s);
         let title = if s.panel_loading {
             format!(
                 "{} {} · refreshing",

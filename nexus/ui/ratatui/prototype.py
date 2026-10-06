@@ -47,6 +47,21 @@ _EXPLORE_KINDS = {"grep": ("search", "searches"), "glob": ("search", "searches")
                   "read": ("read", "reads"), "ls": ("list", "lists")}
 
 
+def operation_allowed(shell, allowed: set, operation) -> bool:
+    """May the client run ``operation``? Only operations this snapshot offered: list rows, transcript
+    blocks, and the controls of the open Settings page (an offered operation the client completed with
+    a valid ``value``, ``action`` or ``index``)."""
+    import json
+    from ...ui_support import settings_page as sp
+    if not operation:
+        return False
+    if json.dumps(operation, sort_keys=True) in allowed:
+        return True
+    workflows = shell.workflows
+    page = workflows.settings_page if shell.panel_title and shell.panel_title == workflows.page_title else None
+    return sp.accepts(page, operation)
+
+
 def _block_operations(blocks):
     """Allow only actions present in the current projected transcript, including chips."""
     for block in blocks:
@@ -1033,9 +1048,8 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
             limit=16 * 1024 * 1024)
         try:
             setup = await shell.client.setup_status()
-            if setup.required:
-                await shell.workflows.providers()
-                shell.items.append({"label": "Choose default model", "command": "", "operation": {"kind": "setup"}})
+            if setup.required:  # first run: open Settings on Providers (its page offers "Choose default model")
+                await shell.workflows.open_page("providers")
         except Exception as exc:
             shell.flash(str(exc), "error")
         await update()
@@ -1105,7 +1119,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                                 shell.notice = "Question already answered by another client"
                 elif action["type"] == "operation":
                     operation = action.get("operation")
-                    if operation and json.dumps(operation, sort_keys=True) in allowed_operations and not shell.panel_loading:
+                    if operation_allowed(shell, allowed_operations, operation) and not shell.panel_loading:
                         if operation["kind"] in {"block_toggle", "turn_toggle"} and shell.local_transcript:
                             continue  # disclosure belongs exclusively to Rust
                         if operation["kind"] == "block_toggle":

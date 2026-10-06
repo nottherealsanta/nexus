@@ -883,3 +883,29 @@ terminals). The Keyboard page lists every shortcut from the one table the app us
 Covered by `tests/test_ratatui_pty_settings.py` and `settings_page/input.rs` tests. Not
 built: a hint bar under the composer (the composer is intentionally unchanged), type-ahead
 in lists, and a `?` sheet per region.
+
+## Settings fixes after first use (2026-10)
+
+Four defects found by using the Settings pages, each now covered by a test that fails without
+its fix:
+
+- **Nothing on a page worked.** The bridge runs only operations a snapshot offered, matched
+  exactly. A control sends its offered operation plus a `value` (`action` and `index` for an
+  ordered list), so every control was silently refused (the tier tabs, toggles, selects).
+  `ui_support/settings_page.accepts()` now accepts an offered operation completed with a valid
+  client field: the value must be an offered option, in range, or of the right type; anything
+  else, another area's operation, or a stale page is refused. `prototype.operation_allowed()` is
+  the gate. Tests: `tests/test_settings_page_operations.py` (every operation the client can build
+  from every area's real page is accepted, forged ones are not) and the end-to-end tests below.
+- **Wheel scrolling stopped early.** The scroll container re-followed the focused row on every
+  frame, undoing a wheel scroll. It now follows focus only when focus changes (kit `Scroll`).
+- **Settings was only ~36 columns wide** beside both sidebars, because it was sized from the
+  transcript; tables and labels clipped. Settings now spans the whole window (`panel_host`).
+  Tables also drop or shrink fixed columns before squeezing their main column.
+- **First run called a removed menu** (`Workflows.providers`). It now opens Settings on
+  Providers, whose page carries the "Choose default model" action.
+
+`tests/test_ratatui_e2e_settings.py` runs the real Python bridge, the real native binary and a
+real host (scripted model) under a pseudo-terminal, driven only by keystrokes and read through a
+small screen emulator: Models opens from the host, a tier tab changes the tier, a toggle saves and
+the page shows it, and the Keyboard page scrolls past its second section by wheel and by keys.

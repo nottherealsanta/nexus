@@ -80,6 +80,14 @@ async def build(workflows) -> dict:
     providers = sorted(result.providers, key=lambda row: (not row.get("connected"), str(row.get("label", row["id"])).casefold()))
     blocks = [sp.note("Credentials stay in the daemon (~/.nexus/credentials.json). Connect more than one provider to fall back between them."),
               sp.gap()]
+    try:  # first run: say what to do next, with the one action that finishes setup
+        setup = await workflows.client.setup_status()
+        if getattr(setup, "required", False):
+            blocks.insert(0, sp.callout("info", "Connect a provider, then choose your default model.",
+                                        {"label": "Choose default model", "operation": {"kind": "setup"}}))
+            blocks.insert(1, sp.gap())
+    except Exception:  # noqa: BLE001 - the page still works without the setup hint
+        pass
     for provider in providers:
         blocks.append(_section(workflows, provider, expand))
     if not providers:

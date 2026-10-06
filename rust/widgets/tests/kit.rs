@@ -257,3 +257,51 @@ fn toast_layout_matches_what_is_drawn_and_ingest_ignores_seen_ids() {
         assert!(laid[0].action.is_some(), "newest toast carries the action");
     }
 }
+
+#[test]
+fn the_wheel_can_scroll_away_from_the_focused_row_and_focus_still_scrolls_into_view() {
+    let (th, g) = (Theme::dark(), Glyphs::unicode());
+    let mut ui = Ui::new(&th, &g);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 40, 12));
+    let mut sc = Scroll::default();
+    let mut frame = |ui: &mut Ui, sc: &mut Scroll, buf: &mut Buffer| {
+        ui.begin_frame();
+        scrolled(buf, ui, Rect::new(2, 1, 38, 8), sc, |b, ui, r| {
+            for i in 0..40u16 {
+                ui.stop(&format!("row:{i}"), Rect::new(0, i, r.width, 1));
+                put(b, 0, i, &format!("line {i}"), ui.theme.text_style(), 20);
+            }
+            40
+        });
+        ui.end_frame();
+    };
+    frame(&mut ui, &mut sc, &mut buf);
+    frame(&mut ui, &mut sc, &mut buf); // the first frame assigns focus; settle before wheeling
+    assert_eq!(ui.focus.current(), Some("row:0"));
+    // The user wheels down; focus stays on row 0, far off screen. Every later frame keeps that position.
+    sc.offset = 20;
+    for _ in 0..3 {
+        frame(&mut ui, &mut sc, &mut buf);
+    }
+    assert_eq!(sc.offset, 20, "a frame must not snap the position back to the focused row");
+    assert!((1..9).map(|y| text(&buf, y)).collect::<String>().contains("line 22"));
+    // Moving focus does follow it.
+    ui.focus.set("row:35");
+    frame(&mut ui, &mut sc, &mut buf);
+    assert!(sc.offset >= 28, "focus moved, so the view follows: {}", sc.offset);
+}
+
+#[test]
+fn a_narrow_table_keeps_its_main_column_readable() {
+    let (th, g) = (Theme::dark(), Glyphs::unicode());
+    let mut ui = Ui::new(&th, &g);
+    let rows = vec![vec!["Dismiss all toasts".to_string(), "Ctrl+X X".to_string(), "Leader".to_string()]];
+    for width in [40u16, 60, 100] {
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, 6));
+        ui.begin_frame();
+        table(&mut buf, &mut ui, Rect::new(0, 0, width, 4), "t", &[("Action", 0), ("Keys", 24), ("Where", 8)], &rows, usize::MAX, 0);
+        let row = text(&buf, 2);
+        assert!(row.contains("Dismiss all toasts"), "width {width}: {row}");
+        assert!(row.chars().count() <= width as usize);
+    }
+}

@@ -6,6 +6,16 @@ use crate::ui::Ui;
 #[derive(Default, Clone, Copy, Debug)]
 pub struct Scroll {
     pub offset: u16,
+    /// Hash of the focus id the position last followed. The container scrolls to keep focus
+    /// visible only when focus *changes*, so the wheel can scroll away from the focused row.
+    focus_seen: u64,
+}
+
+fn hash_of(id: Option<&str>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    id.unwrap_or("").hash(&mut h);
+    h.finish() | 1
 }
 
 /// `draw` receives a scratch buffer and a rect `(0, 0, area.width - 1, MAX)`; it
@@ -17,8 +27,12 @@ pub fn scrolled(buf: &mut Buffer, ui: &mut Ui, area: Rect, scroll: &mut Scroll, 
     fill(&mut scratch, Rect::new(0, 0, w, MAX), Style::default().fg(ui.theme.text).bg(ui.theme.bg));
     let start = ui.hits.len();
     let h = draw(&mut scratch, ui, Rect::new(0, 0, w, MAX)).min(MAX);
-    // Keep the focused stop visible with a one-row margin.
-    if let Some(r) = ui.focus.current().and_then(|id| ui.hits.rect_of(id)) {
+    // Keep the focused stop visible with a one-row margin, but only when focus moved; otherwise
+    // every frame would undo a wheel scroll.
+    let seen = hash_of(ui.focus.current());
+    let moved = seen != scroll.focus_seen;
+    scroll.focus_seen = seen;
+    if let Some(r) = ui.focus.current().and_then(|id| ui.hits.rect_of(id)).filter(|_| moved) {
         let (top, bottom) = (r.y, r.y + r.height);
         if top < scroll.offset + 1 {
             scroll.offset = top.saturating_sub(1);

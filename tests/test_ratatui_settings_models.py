@@ -188,3 +188,27 @@ def test_pages_are_control_safe_and_bounded():
     hostile = sp.page("x", "T\x1b[31m", [sp.row("a", "Label\x07", sp.readout("v\x1b]0;x"))] + [sp.gap()] * 1000)
     assert "\x1b" not in str(hostile) and "\x07" not in str(hostile)
     assert len(hostile["blocks"]) <= sp.MAX_BLOCKS
+
+
+@pytest.mark.asyncio
+async def test_every_operation_the_client_can_send_is_accepted_by_the_bridge(shell):
+    from settings_page_ops import assert_every_client_op_is_accepted
+    await shell.workflows.settings_area("models")
+    assert assert_every_client_op_is_accepted(shell) > 15
+    await shell.workflows.operate(sp.op("models", "tab", value=1))
+    assert_every_client_op_is_accepted(shell)
+
+
+@pytest.mark.asyncio
+async def test_the_bridge_gate_runs_the_tier_tab_operation_and_only_while_the_page_is_open(shell):
+    """The user-visible bug: clicking or pressing a tier tab did nothing because the bridge refused the operation."""
+    from nexus.ui.ratatui.prototype import operation_allowed
+    await shell.workflows.settings_area("models")
+    tabs = next(b for b in shell.workflows.settings_page["blocks"] if b.get("t") == "tabs")
+    medium = {**tabs["operation"], "value": 1}  # exactly what the client sends for the Medium tab
+    assert operation_allowed(shell, set(), medium)
+    await shell.workflows.operate(medium)
+    assert next(b for b in shell.workflows.settings_page["blocks"] if b.get("t") == "tabs")["active"] == 1
+    assert not operation_allowed(shell, set(), {**tabs["operation"], "value": 7}), "no such tab"
+    shell.workflows.back()  # Settings closed: a stale page must not be drivable
+    assert not operation_allowed(shell, set(), medium)

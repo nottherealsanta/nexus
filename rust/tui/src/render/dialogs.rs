@@ -61,6 +61,16 @@ pub fn completion(
         area,
     );
 }
+/// Where a panel is laid out. Settings (it has the area list) spans the whole window width so it
+/// keeps a usable page beside open sidebars; every other panel stays within the transcript.
+pub fn panel_host(r: &super::Regions, s: &Snapshot) -> Rect {
+    if s.nav.is_none() {
+        return r.transcript;
+    }
+    let left = if r.sessions.width > 0 { r.sessions.x } else { r.transcript.x };
+    let right = if r.details.width > 0 { r.details.right() } else { r.transcript.right() };
+    Rect::new(left, r.transcript.y, right.saturating_sub(left), r.transcript.height)
+}
 /// A shared rectangle for painting and input; legacy snapshots retain full pages.
 pub fn panel_area(transcript: Rect, s: &Snapshot) -> Rect {
     if s.panel_layout == "context" {
@@ -414,6 +424,24 @@ mod tests {
             assert_eq!(panel_area(parent, &s).width, parent.width);
         }
     }
+    #[test]
+    fn settings_spans_the_window_beside_both_sidebars_and_other_panels_stay_in_the_transcript() {
+        let regions = crate::render::Regions {
+            sessions: Rect::new(0, 0, 30, 50),
+            transcript: Rect::new(30, 0, 60, 43),
+            details: Rect::new(90, 0, 40, 50),
+            ..Default::default()
+        };
+        let mut s = Snapshot::default();
+        assert_eq!(panel_host(&regions, &s), regions.transcript, "ordinary panels stay in the transcript");
+        s.nav = Some(crate::bridge::Nav::default());
+        let host = panel_host(&regions, &s);
+        assert_eq!((host.x, host.right(), host.y, host.height), (0, 130, 0, 43));
+        assert!(panel_area(host, &s).width > panel_area(regions.transcript, &s).width * 2, "a far wider settings window");
+        let narrow = crate::render::Regions { transcript: Rect::new(0, 1, 80, 22), ..Default::default() };
+        assert_eq!(panel_host(&narrow, &s), narrow.transcript, "with no sidebars it is the transcript");
+    }
+
     #[test]
     fn settings_modal_is_large_and_inset_even_for_page_layout() {
         let parent = Rect::new(5, 4, 120, 40);

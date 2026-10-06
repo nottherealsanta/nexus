@@ -1724,7 +1724,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // A one-page Settings area takes the wheel and left clicks over its page
                     // (the area list on the left keeps its own handling).
                     if let Some(raw) = s.settings_page.as_ref().filter(|_| !s.panel_title.is_empty()) {
-                        let area = render::panel_area(r.transcript, &s);
+                        let area = render::panel_area(render::panel_host(&r, &s), &s);
                         let at = ratatui::layout::Position::new(mouse.column, mouse.row);
                         if area.contains(at) && !render::nav_rect(area).contains(at) {
                             let wheel = match mouse.kind {
@@ -2037,7 +2037,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                                 if let Some(nav) = &s.nav {
                                     let list =
-                                        render::nav_rect(render::panel_area(r.transcript, &s));
+                                        render::nav_rect(render::panel_area(render::panel_host(&r, &s), &s));
                                     if list.contains((mouse.column, mouse.row).into()) {
                                         settings_nav_focus = true;
                                         let index = usize::from(mouse.row - list.y);
@@ -2053,7 +2053,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             if !s.panel_title.is_empty() {
                                 settings_nav_focus = false;
-                                let area = render::panel_area(r.transcript, &s);
+                                let area = render::panel_area(render::panel_host(&r, &s), &s);
                                 if !area.contains((mouse.column, mouse.row).into()) {
                                     action("dismiss", "")?;
                                 } else if s.form.is_none() && !panel_detail {

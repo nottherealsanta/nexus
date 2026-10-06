@@ -338,15 +338,30 @@ pub fn kv(buf: &mut Buffer, ui: &Ui, area: Rect, key: &str, value: &str, key_w: 
     put(buf, area.x + key_w, area.y, &truncate(value, vw as usize, ui.glyphs.ellipsis), Style::default().fg(t.text), vw);
 }
 
-/// Table with a header; a column of width 0 takes the remaining space.
+/// Table with a header; a column of width 0 takes the remaining space. When the table is narrow the
+/// fixed columns shrink (down to 8) and then drop from the right, so the flexible column stays readable.
 pub fn table(buf: &mut Buffer, ui: &mut Ui, area: Rect, id: &str, cols: &[(&str, u16)], rows: &[Vec<String>], selected: usize, scroll: usize) -> usize {
     let t = ui.theme;
-    let fixed: u16 = cols.iter().map(|c| c.1).sum::<u16>() + cols.len() as u16;
-    let flex = area.width.saturating_sub(fixed + 2).max(4);
-    let widths: Vec<u16> = cols.iter().map(|c| if c.1 == 0 { flex } else { c.1 }).collect();
+    let mut fixed_w: Vec<u16> = cols.iter().map(|c| c.1).collect();
+    let mut shown: Vec<usize> = (0..cols.len()).collect();
+    let flex_of = |shown: &[usize], fixed_w: &[u16]| {
+        let flexes = shown.iter().filter(|&&i| fixed_w[i] == 0).count().max(1) as u16;
+        let fixed: u16 = shown.iter().map(|&i| fixed_w[i]).sum::<u16>() + shown.len() as u16 + 2;
+        area.width.saturating_sub(fixed) / flexes
+    };
+    while flex_of(&shown, &fixed_w) < 20 && shown.len() > 1 {
+        match shown.iter().copied().filter(|&i| fixed_w[i] > 8).max_by_key(|&i| fixed_w[i]) {
+            Some(i) => fixed_w[i] -= 1,
+            None => {
+                shown.pop();
+            }
+        }
+    }
+    let flex = flex_of(&shown, &fixed_w).max(4);
+    let widths: Vec<u16> = shown.iter().map(|&i| if fixed_w[i] == 0 { flex } else { fixed_w[i] }).collect();
     let mut x = area.x + 2;
-    for (c, w) in cols.iter().zip(&widths) {
-        put(buf, x, area.y, c.0, t.strong(Style::default().fg(t.muted).add_modifier(Modifier::BOLD)), *w);
+    for (&i, w) in shown.iter().zip(&widths) {
+        put(buf, x, area.y, cols[i].0, t.strong(Style::default().fg(t.muted).add_modifier(Modifier::BOLD)), *w);
         x += w + 1;
     }
     put(buf, area.x, area.y + 1, &ui.glyphs.rule.repeat(area.width as usize), Style::default().fg(t.border), area.width);
@@ -363,7 +378,8 @@ pub fn table(buf: &mut Buffer, ui: &mut Ui, area: Rect, id: &str, cols: &[(&str,
             focus_bar(buf, ui, area.x, y, 1);
         }
         let mut x = area.x + 2;
-        for (cell, w) in row.iter().zip(&widths) {
+        for (&c, w) in shown.iter().zip(&widths) {
+            let cell = row.get(c).map(String::as_str).unwrap_or("");
             put(buf, x, y, &truncate(cell, *w as usize, ui.glyphs.ellipsis), st, *w);
             x += w + 1;
         }

@@ -153,3 +153,11 @@ pointer reuse. `PYTHONPATH=.:tests .venv/bin/python tests/tui_responsiveness_ben
 The baseline mode can load an explicitly supplied pre-change projection module
 (`--baseline-module`) and executable (`--binary`); use a saved checkout/build for
 repeatable before/after results. It does not emulate provider/network latency.
+
+## Native end to end (bridge + binary)
+
+`tests/test_ratatui_e2e_settings.py` starts the real Python bridge loop and the real native
+binary under a pseudo-terminal with a scripted host, sends keystrokes and mouse-wheel escape
+sequences, and asserts on the emulated screen. Use it for anything where the host's snapshot and
+the client's operations must agree; hand-built snapshots (`test_ratatui_pty_*.py`) cannot catch
+that. Build `rust/tui` first (`cargo build`); the tests skip without the binary.

@@ -130,3 +130,11 @@ async def test_mcp_page_still_lists_files_when_live_server_state_is_unavailable(
     await shell.workflows.settings_area("mcp")
     assert "mcp.json" in _labels(shell) and not any(b.get("t") == "section" for b in _blocks(shell))
     assert shell.toasts[-1]["level"] == "warning"
+
+
+@pytest.mark.asyncio
+async def test_every_operation_the_client_can_send_is_accepted_by_the_bridge(shell):
+    from settings_page_ops import assert_every_client_op_is_accepted
+    for area in ("agents", "tools", "skills", "mcp"):
+        await shell.workflows.settings_area(area)
+        assert_every_client_op_is_accepted(shell)

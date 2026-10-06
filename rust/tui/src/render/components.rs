@@ -155,7 +155,7 @@ impl Hover {
         let target = pointer.and_then(|(x, y)| {
             let point = (x, y).into();
             if !s.panel_title.is_empty() {
-                let area = super::panel_area(r.transcript, s);
+                let area = super::panel_area(super::panel_host(&r, s), s);
                 if !area.contains(point) {
                     return None;
                 }
