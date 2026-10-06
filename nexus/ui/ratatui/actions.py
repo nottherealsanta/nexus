@@ -125,6 +125,7 @@ class ShellActions:
         self.model_sort = "updated"  # model picker order: updated|name (Ctrl+S)
         self.update_notice = ""  # "<version> available: <command>" shown in the footer
         self.sessions_truncated = False  # the host list hit its cap
+        self.sessions_request = 0  # bumped by /sessions: the client opens and focuses the sidebar
         self.archived_label = ""  # "Archived · N" under the sessions list, "" when none
         self.seen_seq: dict[str, int] = {}  # completion sequence viewed per session
         self.open_files: set[str] = set()  # modified files expanded in the details sidebar

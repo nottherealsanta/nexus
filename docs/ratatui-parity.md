@@ -809,3 +809,27 @@ text stays one click away. Skills and MCP counts are one total of enabled entrie
 (not project/global). Not done: strike-through for disabled tools (the host header
 projection filters disabled tools out of the inventory instead of listing them).
 Covered by `render/context.rs` tests and `tests/test_ratatui_workflows.py`.
+
+## One sessions surface (2026-10 overhaul, step 3)
+
+`/session`, `/sessions`, `Ctrl+O`, `Ctrl+B` and `Ctrl+X b` open the same thing: the
+left sessions sidebar, with keyboard focus in it. There is no separate Sessions
+dialog. `/sessions` (no argument) refreshes the list and bumps the snapshot field
+`sessions_request`; the client opens and focuses the sidebar when it sees a new value.
+`/sessions <id>` still switches directly. `Ctrl+B` opens and focuses it; with focus
+already inside it hides it again.
+
+With focus: `↑ ↓ Home End PgUp PgDn` move the selection (a raised row with a bar),
+`Enter` opens the session, typing or `/` filters (title, id, workspace, group;
+the first match is selected, and `Enter` while typing opens it), `Esc` clears the
+filter and then leaves, a click elsewhere leaves. Keys that do not apply (Ctrl
+combinations) still reach the normal handlers.
+
+Below 90 columns the sidebar is a **drawer** (up to 40 columns) over the
+conversation, never a column, and it opens only on request: it is a local flag, not
+the saved `sessions_sidebar` preference (which defaults on), so a narrow window does
+not cover the transcript by itself. Choosing a session or `Esc` closes it.
+Covered by `render.rs` tests (regions, selection, shared filter), `tests/test_ratatui_toasts.py`
+(`/sessions` request) and `tests/test_ratatui_pty_sessions.py` (real PTY, docked and
+drawer). Not done yet: row actions (rename, fork, archive, multi-select) and
+`Load more` paging; they need host commands and are tracked in the plan.

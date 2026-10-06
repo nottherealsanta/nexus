@@ -103,3 +103,19 @@ def test_every_toast_is_also_in_the_logs_tab(tmp_path, monkeypatch):
     assert "[ERROR] client · toast · Could not reach OpenAI" in folded
     assert "Copied 3 characters" not in folded and "1 routine entries folded" in folded
     assert "[SUCCESS] client · toast · Copied 3 characters" in everything
+
+
+@pytest.mark.asyncio
+async def test_sessions_command_opens_the_sidebar_instead_of_a_dialog(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+    shell = _shell(tmp_path, monkeypatch)
+    row = SimpleNamespace(id="s2", title="Docs", state="idle", workspace="/w", session=None, last_seq=0, completion_seq=0)
+    row.session = SimpleNamespace(id="s2", title="Docs", state="idle", last_seq=0, completion_seq=0, group="~/w", archived=False, updated_at=0)
+    shell.controller.client = SimpleNamespace(project_sessions=AsyncMock(return_value=SimpleNamespace(sessions=[], truncated=False)))
+    assert shell.sessions_request == 0
+    await shell.command("/sessions", ())
+    await shell.command("/sessions", ())
+    assert shell.sessions_request == 2, "each request asks the client to open and focus the sidebar"
+    assert not shell.panel_title, "there is no separate Sessions dialog"
+    snapshot = project(shell.controller, 1, shell=shell)
+    assert snapshot["sessions_request"] == 2

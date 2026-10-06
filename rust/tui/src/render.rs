@@ -239,6 +239,10 @@ pub struct Cache {
     /// Sessions sidebar filter text and whether it is being edited.
     pub filter: String,
     pub filtering: bool,
+    /// Keyboard focus is in the sessions sidebar; `sessions_sel` is the selected session id.
+    pub sessions_focus: bool,
+    pub sessions_sel: Option<String>,
+    pub sessions_request_seen: u64,
     /// Recent microphone levels (0..1) and seconds since recording began, for the voice strip.
     pub voice_levels: Vec<f32>,
     pub voice_elapsed: u64,
@@ -481,10 +485,17 @@ impl Cache {
         p: &Palette,
         width: u16,
     ) -> &[(Line<'static>, Option<SidebarHit>)] {
+        // The selection is part of the cache key, folded into the filter text.
         let key = (
             s.revision,
             width,
-            self.filter.clone(),
+            format!(
+                "{}\u{1}{}",
+                self.filter,
+                self.sessions_focus
+                    .then(|| self.sessions_sel.clone().unwrap_or_default())
+                    .unwrap_or_default()
+            ),
             self.filtering,
             self.spin,
         );
@@ -505,6 +516,9 @@ impl Cache {
                     self.spin,
                     &self.filter,
                     self.filtering,
+                    self.sessions_focus
+                        .then_some(())
+                        .and(self.sessions_sel.as_deref()),
                 ),
             ));
         }
@@ -876,6 +890,8 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
     ])
     .split(columns[1]);
     let drawer = s.details_sidebar && area.width < 100;
+    // Below 90 columns the sessions sidebar is a drawer over the conversation, not a column.
+    let sessions_drawer = s.sessions_drawer && area.width < 90;
     Regions {
         tabs: center[0],
         workspace: Rect::new(
@@ -884,7 +900,11 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
             center[2].width,
             1,
         ),
-        sessions: columns[0],
+        sessions: if sessions_drawer {
+            Rect::new(area.x, area.y, area.width.min(40), area.height)
+        } else {
+            columns[0]
+        },
         details: if drawer {
             Rect::new(
                 area.right().saturating_sub(area.width.min(40)),
@@ -979,29 +999,6 @@ pub fn draw(
         logs_open,
     );
     draw_top_bar(frame, s, r.tabs, &p, cache.spin);
-    if r.sessions.width > 0 {
-        let inner = usize::from(r.sessions.width.saturating_sub(3));
-        let height = usize::from(r.sessions.height.saturating_sub(3));
-        let mut lines: Vec<Line<'static>> = cache
-            .session_rows(s, &p, inner as u16)
-            .iter()
-            .skip(1 + sessions_scroll)
-            .take(height)
-            .map(|(line, _)| line.clone())
-            .collect();
-        lines.resize(height, Line::default());
-        frame.render_widget(
-            Paragraph::new(lines)
-                .block(
-                    Block::default()
-                        .borders(Borders::RIGHT)
-                        .border_style(Style::default().fg(p.border_strong))
-                        .padding(ratatui::widgets::Padding::new(1, 1, 2, 0)),
-                )
-                .style(Style::default().bg(p.panel)),
-            r.sessions,
-        );
-    }
     cache.content_elapsed = std::time::Duration::ZERO;
     cache.typing = !draft.text.is_empty();
     cache.page = s.agent_page.clone();
@@ -1238,6 +1235,31 @@ pub fn draw(
         );
     }
     if r.sessions.width > 0 {
+        // Drawn after the transcript so a narrow drawer covers it.
+        frame.render_widget(Clear, r.sessions);
+        let inner = usize::from(r.sessions.width.saturating_sub(3));
+        let height = usize::from(r.sessions.height.saturating_sub(3));
+        let mut lines: Vec<Line<'static>> = cache
+            .session_rows(s, &p, inner as u16)
+            .iter()
+            .skip(1 + sessions_scroll)
+            .take(height)
+            .map(|(line, _)| line.clone())
+            .collect();
+        lines.resize(height, Line::default());
+        frame.render_widget(
+            Paragraph::new(lines)
+                .block(
+                    Block::default()
+                        .borders(Borders::RIGHT)
+                        .border_style(Style::default().fg(p.border_strong))
+                        .padding(ratatui::widgets::Padding::new(1, 1, 2, 0)),
+                )
+                .style(Style::default().bg(p.panel)),
+            r.sessions,
+        );
+    }
+    if r.sessions.width > 0 {
         let title = format!(
             "☰ Sessions{}+",
             " ".repeat(r.sessions.width.saturating_sub(13) as usize)
@@ -1252,7 +1274,11 @@ pub fn draw(
             ),
         );
         let field = if cache.filter.is_empty() && !cache.filtering {
-            "Filter sessions".into()
+            if cache.sessions_focus {
+                "↑↓ Enter · type to filter".into()
+            } else {
+                "Filter sessions".into()
+            }
         } else {
             format!("{}{}", cache.filter, if cache.filtering { "█" } else { "" })
         };
@@ -1956,7 +1982,7 @@ mod tests {
             },
         ];
         assert!(animating(&s));
-        let rows = session_sidebar(&s, &Palette::new(false), 27, 1, "", false);
+        let rows = session_sidebar(&s, &Palette::new(false), 27, 1, "", false, None);
         let text = |i: usize| {
             rows[i]
                 .0
@@ -1975,7 +2001,7 @@ mod tests {
         assert!(text(first).starts_with("▌⠙ Fix bug"), "{}", text(first));
         assert!(text(first + 1).contains("working now · just now"));
         assert!(text(first + 2).starts_with(" · Docs"));
-        let filtered = session_sidebar(&s, &Palette::new(false), 27, 1, "docs", true);
+        let filtered = session_sidebar(&s, &Palette::new(false), 27, 1, "docs", true, None);
         let titles: Vec<String> = filtered
             .iter()
             .filter(|(_, hit)| matches!(hit, Some(SidebarHit::Session(_))))
@@ -1989,7 +2015,7 @@ mod tests {
         assert_eq!(titles.len(), 2, "one session card of two lines matches");
         assert!(titles[0].contains("Docs"));
         s.archived_label = "Archived · 3".into();
-        let rows = session_sidebar(&s, &Palette::new(false), 27, 1, "", false);
+        let rows = session_sidebar(&s, &Palette::new(false), 27, 1, "", false, None);
         assert_eq!(rows.last().unwrap().1, Some(SidebarHit::Archived));
     }
     #[test]
@@ -2126,6 +2152,49 @@ mod tests {
         assert!(targets(&Cache::default()).is_empty());
     }
     #[test]
+    fn keyboard_selection_is_drawn_and_filtering_shares_one_visible_list() {
+        use crate::bridge::Session;
+        let session = |id: &str, title: &str, active: bool| Session {
+            group: "Today".into(),
+            id: id.into(),
+            title: title.into(),
+            active,
+            ..Default::default()
+        };
+        let s = Snapshot {
+            sessions: vec![
+                session("a", "Fix token refresh", true),
+                session("b", "Refresh docs", false),
+                session("c", "Audit licences", false),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(visible_sessions(&s, ""), vec![0, 1, 2]);
+        assert_eq!(visible_sessions(&s, "REFRESH"), vec![0, 1], "case-insensitive");
+        assert_eq!(visible_sessions(&s, "licenc"), vec![2]);
+        assert!(visible_sessions(&s, "zzz").is_empty());
+        let p = Palette::new(false);
+        let rows = session_sidebar(&s, &p, 27, 0, "", false, Some("c"));
+        let line = |sid: usize| {
+            rows.iter()
+                .find(|(_, hit)| *hit == Some(SidebarHit::Session(sid)))
+                .unwrap()
+                .0
+                .clone()
+        };
+        let picked = line(2);
+        assert_eq!(picked.spans[0].content, "▌", "the selected row has the bar");
+        assert_eq!(picked.spans[2].style.bg, Some(p.element_hi), "and a raised row");
+        assert!(picked.spans[2].style.add_modifier.contains(Modifier::BOLD));
+        let plain = line(1);
+        assert_eq!(plain.spans[0].content, " ", "unselected, not current, no bar");
+        // The selection never changes what is shown or how hits map.
+        let without = session_sidebar(&s, &p, 27, 0, "", false, None);
+        assert_eq!(rows.len(), without.len());
+        assert!(rows.iter().zip(&without).all(|(a, b)| a.1 == b.1));
+    }
+
+    #[test]
     fn sidebar_width_policy_retains_preferences_and_uses_full_height() {
         for width in [80, 120, 170, 220] {
             for left in [false, true] {
@@ -2141,7 +2210,19 @@ mod tests {
                         if r.sessions.width > 0 {
                             assert_eq!(r.sessions.height, 50);
                             assert_eq!(r.sessions.y, 0);
-                            assert_eq!(r.tabs.height, 0);
+                            // Docked columns replace the tab row; a narrow drawer overlays it.
+                            assert_eq!(r.tabs.height, u16::from(width < 90));
+                        }
+                        if width == 80 {
+                            assert_eq!(r.sessions.width, 0, "the preference alone never opens a drawer");
+                            let opened = Snapshot { sessions_drawer: true, ..Default::default() };
+                            let r = regions(Rect::new(0, 0, width, 50), &opened, 7, false);
+                            assert!(r.sessions.width > 0 && r.sessions.width <= 40);
+                            assert_eq!(r.transcript.width, 80, "a drawer never shrinks the conversation");
+                            if false {
+                                assert!(r.sessions.width <= 40);
+                                assert_eq!(r.transcript.width, 80, "a drawer never shrinks the conversation");
+                            }
                         }
                         if r.details.width > 0 {
                             assert_eq!(r.details.height, 50);

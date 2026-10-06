@@ -1072,12 +1072,14 @@ class Workflows(TierPages, SpeakPages):
                                           "name": row.get("name") or row.get("id"), "enabled": not enabled})
 
     async def sessions(self):
+        """The sessions surface is the left sidebar: refresh it and ask the client to open and focus it.
+
+        ``/session``, ``/sessions``, ``/archived`` and Ctrl+B all land there; there is no separate dialog.
+        """
         result = await self.client.project_sessions()
-        self.shell.sessions = session_rows(result, self.shell.controller.session, self.shell.seen_seq)
+        self.shell.refresh_session_tabs(session_rows(result, self.shell.controller.session, self.shell.seen_seq))
         self.shell.sessions_truncated = bool(result.truncated)
-        self.menu("Sessions", [(f"{row['workspace']} · {row['title']} · {row['state']}",
-            {"kind": "session_open", "id": row["id"], "workspace": row["workspace"]}) for row in self.shell.sessions],
-            ["[Session list truncated]"] if result.truncated else [])
+        self.shell.sessions_request += 1
 
 
 REVIEW_PAGE_LIMIT = 8

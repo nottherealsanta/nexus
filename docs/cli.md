@@ -65,7 +65,7 @@ names, usage, summaries, aliases). `parse` resolves aliases to the canonical nam
 | --- | --- | --- | --- |
 | `/attach` | `<path> \| clear` | | attach an image or document |
 | `/new` | `[id]` | `/clear` | start a new session |
-| `/sessions` | `[id]` | `/session` | list and switch |
+| `/sessions` | `[id]` | `/session` | switch to `[id]`, or (native TUI) open and focus the sessions sidebar, the same surface as `Ctrl+B` |
 | `/model` | `[list\|tier\|provider/model\|id]` | | list models or set this session's model |
 | `/effort` | `[LEVEL]` | `/reasoning` | reasoning effort |
 | `/agent` | `[list\|current\|reset\|NAME]` | | root agent |

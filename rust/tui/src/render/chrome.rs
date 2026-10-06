@@ -74,6 +74,22 @@ pub enum SidebarHit {
 /// The sessions sidebar as styled rows, like the terminal's `SessionSidebar`: a New
 /// session button, `SESSIONS N`, day/project headings and two-line cards (glyph
 /// and title; status words and age) with a left bar on the current session.
+/// Indexes of the sessions the sidebar shows for `filter` (title, id, workspace or
+/// group, case-insensitive). Keyboard selection and drawing share this one list.
+pub fn visible_sessions(s: &Snapshot, filter: &str) -> Vec<usize> {
+    let needle = filter.to_lowercase();
+    (0..s.sessions.len())
+        .filter(|i| {
+            let row = &s.sessions[*i];
+            needle.is_empty()
+                || format!("{} {} {} {}", row.title, row.id, row.workspace, row.group)
+                    .to_lowercase()
+                    .contains(&needle)
+        })
+        .collect()
+}
+
+/// `selected` is the keyboard-selected session id (drawn with a raised row and a bar).
 pub fn session_sidebar(
     s: &Snapshot,
     p: &Palette,
@@ -81,6 +97,7 @@ pub fn session_sidebar(
     spin: usize,
     filter: &str,
     _editing: bool,
+    selected: Option<&str>,
 ) -> Vec<(Line<'static>, Option<SidebarHit>)> {
     let pad = |text: String, style: Style| {
         let used = text.width();
@@ -94,15 +111,7 @@ pub fn session_sidebar(
         Some(SidebarHit::New),
     )];
     let needle = filter.to_lowercase();
-    let shown: Vec<usize> = (0..s.sessions.len())
-        .filter(|i| {
-            let row = &s.sessions[*i];
-            needle.is_empty()
-                || format!("{} {} {} {}", row.title, row.id, row.workspace, row.group)
-                    .to_lowercase()
-                    .contains(&needle)
-        })
-        .collect();
+    let shown = visible_sessions(s, filter);
     rows.push((
         Line::styled(
             if needle.is_empty() {
@@ -139,9 +148,16 @@ pub fn session_sidebar(
             "done" => "·",
             _ => "·",
         };
-        let bg = if session.active { p.element } else { p.panel };
+        let picked = selected == Some(session.id.as_str());
+        let bg = if picked {
+            p.element_hi
+        } else if session.active {
+            p.element
+        } else {
+            p.panel
+        };
         let bar = Span::styled(
-            if session.active {
+            if session.active || picked {
                 "▌"
             } else if s
                 .tabs
@@ -154,7 +170,7 @@ pub fn session_sidebar(
             },
             Style::default().fg(p.accent).bg(bg),
         );
-        let bold = if session.active {
+        let bold = if session.active || picked {
             Modifier::BOLD
         } else {
             Modifier::empty()

@@ -719,6 +719,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "sessions": shell.sessions if shell else [],
             "archived_label": shell.archived_label if shell else "",
             "sessions_truncated": bool(shell and shell.sessions_truncated),
+            "sessions_request": shell.sessions_request if shell else 0,
             "tabs": _tab_rows(controller, shell) if shell else [],
             "breadcrumb": escape_controls(_display_breadcrumb(shell.breadcrumb)) if shell else "",
             "details_panel": details_panel,

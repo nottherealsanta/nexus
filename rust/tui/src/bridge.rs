@@ -82,6 +82,8 @@ pub struct Snapshot {
     pub tabs: Vec<Session>,
     pub archived_label: String,
     pub sessions_truncated: bool,
+    /// Bumped by `/sessions`: the client opens and focuses the sessions sidebar.
+    pub sessions_request: u64,
     pub breadcrumb: String,
     pub details_panel: DetailsPanel,
     pub logs: Vec<String>,
@@ -93,6 +95,10 @@ pub struct Snapshot {
     pub details_sidebar: bool,
     /// Local width arbitration, preserved across Python snapshots.
     pub last_opened: String,
+    /// Local only: the sessions drawer is open (terminals under 90 columns). Never the
+    /// persisted sidebar preference, so a narrow window does not open a drawer by itself.
+    #[serde(skip)]
+    pub sessions_drawer: bool,
     pub context_preview: bool,
     pub voice_phase: String,
     pub voice_preview: String,
@@ -476,6 +482,7 @@ impl Snapshot {
         if !present.contains_key("details_sidebar") {
             self.details_sidebar = std::mem::take(&mut previous.details_sidebar);
         }
+        self.sessions_drawer = previous.sessions_drawer;
         if !present.contains_key("last_opened") {
             self.last_opened = previous.last_opened.clone();
         }
