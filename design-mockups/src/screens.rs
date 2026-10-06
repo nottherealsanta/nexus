@@ -19,7 +19,7 @@ pub fn registry() -> Vec<ScreenDef> {
     let mut v = vec![
         ScreenDef { key: "gallery", title: "Component gallery", states: &["controls", "inputs & lists", "feedback"], draw: gallery },
         ScreenDef { key: "chat", title: "Chat", states: &["idle", "streaming", "permission", "question", "recording", "empty", "disconnected"], draw: chat },
-        ScreenDef { key: "context-header", title: "Context header", states: &["all expanded", "compact (default)", "tools open", "loading", "error"], draw: context_header },
+        ScreenDef { key: "context-header", title: "Context header", states: &["default", "loading", "error"], draw: context_header },
         ScreenDef { key: "toasts", title: "Toasts", states: &["one of each", "stacked + more", "dedup ×2", "with action"], draw: toasts },
         ScreenDef { key: "sessions", title: "Sessions (docked)", states: &["default", "searching", "archived", "rename", "multi-select", "empty"], draw: sessions_docked },
         ScreenDef { key: "sessions-drawer", title: "Sessions (narrow drawer)", states: &["default", "searching"], draw: sessions_drawer },

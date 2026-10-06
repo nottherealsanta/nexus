@@ -313,3 +313,21 @@ fn context_header_has_no_dot_leader_and_tokens_sit_next_to_the_title() {
     let (a, b) = (tools.find("Tools").unwrap(), tools.find("tok").unwrap());
     assert!(b - a < 20, "tokens next to the title: {tools}");
 }
+
+#[test]
+fn context_header_always_shows_its_contents_in_every_state() {
+    for st in 0..3 {
+        let mut app = App::new();
+        app.select("context-header", st);
+        let t = text(&mut app);
+        for need in ["read", "native-app-review", "github", "AGENTS.md"] {
+            assert!(t.contains(need), "state {st} hides {need}:\n{t}");
+        }
+    }
+    let mut app = App::new();
+    app.select("chat", 0);
+    assert!(text(&mut app).contains("native-app-review"), "chat shows the full header too");
+    app.focus.set("ctx:tools");
+    app.key(key(KeyCode::Enter));
+    assert!(text(&mut app).contains("read"), "Enter inspects; it never collapses");
+}

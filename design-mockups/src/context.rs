@@ -2,16 +2,14 @@
 //!
 //! Same look as today: `◈` in the block's colour, a bold title, a dot leader,
 //! counts, right-aligned token estimates, one blank row between blocks, each block
-//! one click/keyboard target. New: each block expands in place to show what it
-//! actually holds (tools grid, skills with tokens, MCP servers with status).
+//! one click/keyboard target. New: every block always shows what it actually holds
+//! (there is no compact or collapsed mode) (tools grid, skills with tokens, MCP servers with status).
 //! Unavailable estimates show `—`, never an invented number.
 use crate::ctx::*;
 use crate::fixture::*;
 use nexus_widgets::lists::*;
 use nexus_widgets::*;
 use ratatui::{layout::Rect, style::{Color, Modifier, Style}};
-
-pub const BLOCKS: [&str; 5] = ["system", "agents", "tools", "skills", "mcp"];
 
 pub fn id(b: &str) -> String {
     format!("ctx:{b}")
@@ -77,8 +75,7 @@ pub fn draw(c: &mut Ctx, area: Rect, mode: usize) -> u16 {
     }
     for b in blocks(c, loading) {
         let bid = id(b.key);
-        let open = c.v.open.contains(&bid) && mode != 3;
-        let content = if open { content_rows(c, b.key, w) } else { 0 };
+        let content = content_rows(c, b.key, w);
         let h = 1 + content;
         if y + h > end {
             break;
@@ -93,8 +90,6 @@ pub fn draw(c: &mut Ctx, area: Rect, mode: usize) -> u16 {
         }
         // Heading: ◈ Title  2,140 tok  counts. One grey for the pin, tokens and counts;
         // only the title is emphasised. No dot leader.
-        let chev = if open { g.open } else { g.closed };
-        put(c.buf, area.x + 2, y, chev, Style::default().fg(t.quiet).bg(bg), 1);
         let grey = t.dim().bg(bg);
         put(c.buf, x, y, "◈", grey, 1);
         let tw = put(c.buf, x + 2, y, b.title, Style::default().fg(t.text).bg(bg).add_modifier(Modifier::BOLD), 24);
@@ -110,9 +105,7 @@ pub fn draw(c: &mut Ctx, area: Rect, mode: usize) -> u16 {
         if loading {
             put(c.buf, x + 2 + tw + 2 + 7, y, &format!(" {} estimating", c.ui.spinner()), t.dim().bg(bg), 16);
         }
-        if open {
-            draw_content(c, b.key, Rect::new(x + 2, y + 1, w.saturating_sub(2), content), bg);
-        }
+        draw_content(c, b.key, Rect::new(x + 2, y + 1, w.saturating_sub(2), content), bg);
         y += h + 1; // one blank row between blocks, as today
     }
     let foot = if total_known { format!("Context total · ~{} tokens", fmt(total)) } else { "Context total · tokens unavailable".into() };

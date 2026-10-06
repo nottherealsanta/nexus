@@ -65,6 +65,15 @@ These supersede anything below that says otherwise.
    `Context total` footer is left-aligned under the pins. Supersedes the
    right-aligned tokens and per-block colours in Revision 1.
 
+## Revision 3
+
+**The context header has one mode: it always shows its contents.** No compact or
+collapsed form, no expand/collapse chevrons. Tools, skills, MCP servers and the
+two previews are always visible. Enter or click on a block means *inspect* (opens
+the full dialog); it never hides anything. Loading and error are states of the
+data, not modes: contents still show (loading marks tokens `— tok`; error adds a
+Retry callout). Supersedes the "expands in place" wording in Revision 1.
+
 ## Contents
 
 0. [What was asked](#0-what-was-asked)
