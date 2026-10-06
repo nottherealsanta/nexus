@@ -1,0 +1,11 @@
+[package]
+name = "nexus-widgets"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+description = "Component kit for the Nexus native terminal client and its design mock-ups"
+
+[dependencies]
+ratatui = "0.29"
+unicode-width = "0.2"
+unicode-segmentation = "1"
