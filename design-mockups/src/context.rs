@@ -26,7 +26,6 @@ const ROWS: usize = 5;
 struct Block {
     key: &'static str,
     title: &'static str,
-    color: Color,
     counts: String,
     tokens: Option<u32>,
 }
@@ -44,7 +43,6 @@ fn fmt(n: u32) -> String {
 }
 
 fn blocks(c: &Ctx, loading: bool) -> Vec<Block> {
-    let t = c.theme();
     let tools: Vec<&Tool> = c.w.families.iter().flat_map(|f| f.tools.iter()).collect();
     let on = tools.iter().filter(|t| t.on).count();
     let tool_tok: u32 = tools.iter().filter(|t| t.on).map(|t| t.tokens).sum();
@@ -54,11 +52,11 @@ fn blocks(c: &Ctx, loading: bool) -> Vec<Block> {
     let mcp_tok: u32 = c.w.mcp.iter().filter(|m| m.enabled).map(|m| m.tokens).sum();
     let known = |n: u32| if loading { None } else { Some(n) };
     vec![
-        Block { key: "system", title: "System prompt", color: t.purple, counts: "build · 2 sections".into(), tokens: known(2140) },
-        Block { key: "agents", title: "AGENTS.md", color: t.blue, counts: "~/repos/nexus · 1 file".into(), tokens: known(3880) },
-        Block { key: "tools", title: "Tools", color: t.cyan, counts: format!("{} tools · {on} on", tools.len()), tokens: known(tool_tok) },
-        Block { key: "skills", title: "Skills", color: t.accent, counts: format!("{} skills · {sk_on} on", c.w.skills.len()), tokens: known(sk_tok) },
-        Block { key: "mcp", title: "MCP", color: t.success, counts: format!("{} servers · {running} running", c.w.mcp.len()), tokens: known(mcp_tok) },
+        Block { key: "system", title: "System prompt", counts: "build · 2 sections".into(), tokens: known(2140) },
+        Block { key: "agents", title: "AGENTS.md", counts: "~/repos/nexus · 1 file".into(), tokens: known(3880) },
+        Block { key: "tools", title: "Tools", counts: format!("{} tools · {on} on", tools.len()), tokens: known(tool_tok) },
+        Block { key: "skills", title: "Skills", counts: format!("{} skills · {sk_on} on", c.w.skills.len()), tokens: known(sk_tok) },
+        Block { key: "mcp", title: "MCP", counts: format!("{} servers · {running} running", c.w.mcp.len()), tokens: known(mcp_tok) },
     ]
 }
 
@@ -93,28 +91,24 @@ pub fn draw(c: &mut Ctx, area: Rect, mode: usize) -> u16 {
         if r.focused {
             focus_bar(c.buf, c.ui, area.x, y, 1);
         }
-        // Heading: ◈ Title ········ counts          tokens
+        // Heading: ◈ Title  2,140 tok  counts. One grey for the pin, tokens and counts;
+        // only the title is emphasised. No dot leader.
         let chev = if open { g.open } else { g.closed };
         put(c.buf, area.x + 2, y, chev, Style::default().fg(t.quiet).bg(bg), 1);
-        put(c.buf, x, y, "◈", Style::default().fg(b.color).bg(bg), 1);
+        let grey = t.dim().bg(bg);
+        put(c.buf, x, y, "◈", grey, 1);
         let tw = put(c.buf, x + 2, y, b.title, Style::default().fg(t.text).bg(bg).add_modifier(Modifier::BOLD), 24);
         let tok = match b.tokens {
             Some(n) => { total += n; format!("{} tok", fmt(n)) }
             None => { total_known = false; "— tok".into() }
         };
-        let right = x + w;
-        let counts_w = width(&b.counts) as u16;
-        put_right(c.buf, right, y, &tok, t.dim().bg(bg));
-        let counts_x = right.saturating_sub(tok.chars().count() as u16 + 3 + counts_w);
-        let lead_from = x + 2 + tw + 1;
-        if counts_x > lead_from + 2 {
-            put(c.buf, lead_from, y, &"·".repeat((counts_x - lead_from - 1) as usize), Style::default().fg(t.border_strong).bg(bg), counts_x - lead_from);
-            put(c.buf, counts_x, y, &b.counts, t.dim().bg(bg), counts_w);
-        } else {
-            put(c.buf, lead_from, y, &"·".repeat(2), Style::default().fg(t.border_strong).bg(bg), 2);
-        }
+        let tx = x + 2 + tw + 2;
+        let tokw = put(c.buf, tx, y, &tok, grey, 14);
+        let cx = tx + tokw + 2;
+        let room = (x + w).saturating_sub(cx);
+        put(c.buf, cx, y, &format!("· {}", truncate(&b.counts, room.saturating_sub(2) as usize, g.ellipsis)), t.quiet_style().bg(bg), room);
         if loading {
-            put(c.buf, x + 3 + tw + 1, y, &format!("{} estimating", c.ui.spinner()), t.dim().bg(bg), 16);
+            put(c.buf, x + 2 + tw + 2 + 7, y, &format!(" {} estimating", c.ui.spinner()), t.dim().bg(bg), 16);
         }
         if open {
             draw_content(c, b.key, Rect::new(x + 2, y + 1, w.saturating_sub(2), content), bg);
@@ -123,7 +117,7 @@ pub fn draw(c: &mut Ctx, area: Rect, mode: usize) -> u16 {
     }
     let foot = if total_known { format!("Context total · ~{} tokens", fmt(total)) } else { "Context total · tokens unavailable".into() };
     if y < end {
-        put_right(c.buf, x + w, y, &foot, t.dim());
+        put(c.buf, x, y, &foot, t.dim(), w);
         y += 1;
     }
     y - area.y

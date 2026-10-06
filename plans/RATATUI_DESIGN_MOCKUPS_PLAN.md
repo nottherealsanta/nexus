@@ -50,6 +50,21 @@ These supersede anything below that says otherwise.
      error shows a callout with Retry above the counts.
    Mock-up screen: `context-header` (all expanded, compact, tools open, loading, error).
 
+## Revision 2
+
+1. **Scope is shown only where a page can differ per project.** Today that is
+   **Skills** and **MCP servers**. Appearance, Layout, Keyboard, Providers, Models,
+   Agents, Tools (session selection) and Voice & speech are always global, so they
+   show neither the header Scope control nor per-row `global` badges (Tools rows
+   say `session`). The footer still names the file a page saves to. This supersedes
+   §9.3.1 ("Scope segmented control") and the scope-badge rule in §4.4 for
+   always-global pages. Mock-up rule: `settings::scoped(area)`.
+2. **Context header: no dot leader, one grey.** `◈ Title  2,140 tok  · counts`: the
+   pin, token count and counts are all the same grey for every block; only the
+   title is emphasised, and the token count sits right after the title. The
+   `Context total` footer is left-aligned under the pins. Supersedes the
+   right-aligned tokens and per-block colours in Revision 1.
+
 ## Contents
 
 0. [What was asked](#0-what-was-asked)

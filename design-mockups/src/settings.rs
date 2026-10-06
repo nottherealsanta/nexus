@@ -7,6 +7,12 @@ use nexus_widgets::*;
 use ratatui::{layout::Rect, style::Style};
 
 /// Cursor over a page's rows inside the scratch buffer.
+/// Only these pages can differ per project; every other page is always global, so
+/// it shows neither the Scope control nor scope badges (plan revision 2).
+pub fn scoped(area: &str) -> bool {
+    matches!(area, "skills" | "mcp")
+}
+
 pub struct Flow {
     pub x: u16,
     pub w: u16,
@@ -74,9 +80,11 @@ pub fn draw(c: &mut Ctx, area: Rect) {
     let sw = inner.width.saturating_sub(scope_w + 9).min(48);
     let r = search_field(c.buf, c.ui, Rect::new(inner.x + 1, inner.y, sw, 1), "settings:search", &sf, None);
     c.v.search_focus = r.focused;
-    let agents_global = AREAS[c.v.area].0 == "agents";
-    put(c.buf, inner.x + inner.width - scope_w - 8, inner.y, "Scope", t.dim(), 6);
-    segmented(c.buf, c.ui, inner.x + inner.width - scope_w - 1, inner.y, "settings:scope", &["Global", "Project"], if agents_global { 0 } else { c.w.scope });
+    let has_scope = scoped(AREAS[c.v.area].0);
+    if has_scope {
+        put(c.buf, inner.x + inner.width - scope_w - 8, inner.y, "Scope", t.dim(), 6);
+        segmented(c.buf, c.ui, inner.x + inner.width - scope_w - 1, inner.y, "settings:scope", &["Global", "Project"], c.w.scope);
+    }
     let body = Rect::new(inner.x, inner.y + 2, inner.width, inner.height.saturating_sub(4));
     let sep = Style::default().fg(t.border);
     put(c.buf, inner.x, inner.y + 1, &c.ui.glyphs.rule.repeat(inner.width as usize), sep, inner.width);
@@ -112,7 +120,8 @@ pub fn draw(c: &mut Ctx, area: Rect) {
         "keyboard" => "Read-only: keys are defined in code.".to_string(),
         "agents" => "Saved in ~/.nexus/agents/ · global only".to_string(),
         "mcp" => "Saved in mcp.json".to_string(),
-        _ => format!("Saved in {}", if c.w.scope == 0 { "~/.nexus/nexus.toml" } else { "<workspace>/.agents/nexus.toml" }),
+        a if scoped(a) && c.w.scope == 1 => "Saved in <workspace>/.agents/".to_string(),
+        _ => "Saved in ~/.nexus/nexus.toml".to_string(),
     };
     put(c.buf, desc_row.x, desc_row.y, &truncate(&saved, desc_row.width as usize, c.ui.glyphs.ellipsis), t.dim(), desc_row.width);
     key_hints(c.buf, c.ui, hint_row, &[("↑↓", "move"), ("←→", "pane/value"), ("Space", "toggle"), ("Enter", "open"), ("Alt+↑↓", "reorder"), ("/", "search"), ("Ctrl+PgUp/Dn", "tab"), ("?", "keys"), ("Esc", "close")]);
@@ -174,18 +183,18 @@ fn page(buf: &mut ratatui::buffer::Buffer, ui: &mut Ui, w: &World, v: &mut View,
     match area {
         "appearance" => {
             intro_s(buf, ui, f, "How Nexus looks in this terminal.");
-            seg_row(buf, ui, f, "set:theme", "Theme", "Dark, light, or follow the terminal.", "global", &["Dark", "Light", "System"], w.theme);
-            seg_row(buf, ui, f, "set:glyphs", "Glyphs", "ASCII is used automatically when TERM=linux.", "global", &["Unicode", "ASCII"], w.ascii as usize);
-            toggle_row(buf, ui, f, "set:motion", "Reduce motion", "No spinners, hover blend or toast hairline.", "global", w.reduce_motion, false);
-            toggle_row(buf, ui, f, "set:dense", "Dense transcript", "Smaller gaps between rows.", "global", w.dense, false);
+            seg_row(buf, ui, f, "set:theme", "Theme", "Dark, light, or follow the terminal.", "", &["Dark", "Light", "System"], w.theme);
+            seg_row(buf, ui, f, "set:glyphs", "Glyphs", "ASCII is used automatically when TERM=linux.", "", &["Unicode", "ASCII"], w.ascii as usize);
+            toggle_row(buf, ui, f, "set:motion", "Reduce motion", "No spinners, hover blend or toast hairline.", "", w.reduce_motion, false);
+            toggle_row(buf, ui, f, "set:dense", "Dense transcript", "Smaller gaps between rows.", "", w.dense, false);
         }
         "layout" => {
             intro_s(buf, ui, f, "Which panels open on start and how toasts appear.");
-            toggle_row(buf, ui, f, "set:sess-start", "Sessions sidebar on start", "Open the sessions sidebar when Nexus starts.", "global", w.sessions_on_start, false);
-            toggle_row(buf, ui, f, "set:det-start", "Details sidebar on start", "", "global", w.details_on_start, false);
-            toggle_row(buf, ui, f, "set:hints", "Show key hints", "A one-row hint bar under the composer.", "global", w.key_hints, false);
-            seg_row(buf, ui, f, "set:toastpos", "Toast position", "Toasts float and never move the transcript.", "global", &["Top right", "Bottom right"], w.toast_top);
-            step_row(buf, ui, f, "set:sidebar-w", "Sidebar width", "30–60 columns.", "global", "44");
+            toggle_row(buf, ui, f, "set:sess-start", "Sessions sidebar on start", "Open the sessions sidebar when Nexus starts.", "", w.sessions_on_start, false);
+            toggle_row(buf, ui, f, "set:det-start", "Details sidebar on start", "", "", w.details_on_start, false);
+            toggle_row(buf, ui, f, "set:hints", "Show key hints", "A one-row hint bar under the composer.", "", w.key_hints, false);
+            seg_row(buf, ui, f, "set:toastpos", "Toast position", "Toasts float and never move the transcript.", "", &["Top right", "Bottom right"], w.toast_top);
+            step_row(buf, ui, f, "set:sidebar-w", "Sidebar width", "30–60 columns.", "", "44");
         }
         "keyboard" => keyboard(buf, ui, v, f),
         "providers" => providers(buf, ui, w, v, f),
@@ -213,14 +222,13 @@ fn models(buf: &mut ratatui::buffer::Buffer, ui: &mut Ui, w: &World, v: &mut Vie
     head(buf, ui, f, "DEFAULT");
     let r = f.rect(1);
     put(buf, r.x + 2, r.y, "Default model chain", ui.theme.dim(), r.width);
-    put_right(buf, r.x + r.width - 1, r.y, "global", ui.theme.dim().fg(scope_color(ui, "global")), );
-    let items: Vec<OrderedItem> = w.default_chain.iter().map(|m| OrderedItem { label: &m.label, note: if m.connected { "" } else { "not connected" } }).collect();
+        let items: Vec<OrderedItem> = w.default_chain.iter().map(|m| OrderedItem { label: &m.label, note: if m.connected { "" } else { "not connected" } }).collect();
     let h = ordered_list_height(items.len());
     let r = f.rect(h);
     ordered_list(buf, ui, r, "chain", &items, "Add model…");
-    seg_row(buf, ui, f, "set:effort", "Default reasoning effort", "", "global", &EFFORTS, w.effort);
-    toggle_row(buf, ui, f, "set:titles", "Session titles", "Name new sessions automatically.", "global", w.title_on, false);
-    select_row(buf, ui, f, "set:title-model", "Title model", "A tier or a specific model.", "global", "quick tier");
+    seg_row(buf, ui, f, "set:effort", "Default reasoning effort", "", "", &EFFORTS, w.effort);
+    toggle_row(buf, ui, f, "set:titles", "Session titles", "Name new sessions automatically.", "", w.title_on, false);
+    select_row(buf, ui, f, "set:title-model", "Title model", "A tier or a specific model.", "", "quick tier");
     f.gap();
     head(buf, ui, f, "TIERS");
     let tabs_v: Vec<Tab> = TIERS.iter().enumerate().map(|(i, n)| Tab { label: n, badge: if w.tiers[i].iter().all(|m| !m.connected) { "!" } else { "" } }).collect();
@@ -312,7 +320,7 @@ fn providers(buf: &mut ratatui::buffer::Buffer, ui: &mut Ui, w: &World, v: &mut 
 }
 
 fn agents(buf: &mut ratatui::buffer::Buffer, ui: &mut Ui, w: &World, v: &mut View, f: &mut Flow) {
-    select_row(buf, ui, f, "set:default-agent", "New sessions start with…", "", "global", "build");
+    select_row(buf, ui, f, "set:default-agent", "New sessions start with…", "", "", "build");
     f.gap();
     let top = f.y;
     let list_w = 24.min(f.w / 3);
@@ -395,7 +403,7 @@ fn tools(buf: &mut ratatui::buffer::Buffer, ui: &mut Ui, w: &World, v: &mut View
                 if t.locked {
                     put(buf, r.x + 42, r.y, "locked after the first turn", ui.theme.dim().bg(st.bg.unwrap()), 30);
                 }
-                put_right(buf, r.x + r.width - 11, r.y, "global", ui.theme.dim().fg(scope_color(ui, "global")).bg(st.bg.unwrap()));
+                put_right(buf, r.x + r.width - 11, r.y, "session", ui.theme.dim().fg(scope_color(ui, "session")).bg(st.bg.unwrap()));
                 toggle_view(buf, ui, r.x + r.width - TOGGLE_W - 1, r.y, t.on, t.locked, resp.focused);
             }
         }
@@ -436,7 +444,7 @@ fn skills(buf: &mut ratatui::buffer::Buffer, ui: &mut Ui, w: &World, f: &mut Flo
     for s in &w.skills {
         let r = f.rect(2);
         let id = format!("skill:{}", s.name);
-        setting_row(buf, ui, r, &id, s.name, s.desc, "global", TOGGLE_W + 12, |b, ui, cr, foc| {
+        setting_row(buf, ui, r, &id, s.name, s.desc, if w.scope == 0 { "global" } else { "project" }, TOGGLE_W + 12, |b, ui, cr, foc| {
             put(b, cr.x, cr.y, &format!("~{} tok", s.tokens), ui.theme.dim(), 10);
             toggle_view(b, ui, cr.x + cr.width - TOGGLE_W, cr.y, s.on, false, foc);
         });
@@ -447,16 +455,16 @@ fn skills(buf: &mut ratatui::buffer::Buffer, ui: &mut Ui, w: &World, f: &mut Flo
 
 fn voice(buf: &mut ratatui::buffer::Buffer, ui: &mut Ui, w: &World, f: &mut Flow) {
     head(buf, ui, f, "VOICE INPUT · local dictation");
-    toggle_row(buf, ui, f, "set:voice", "Voice input", "", "global", w.voice_on, false);
-    toggle_row(buf, ui, f, "set:autosend", "Send transcript automatically", "Off lets you review the transcript in the composer first.", "global", w.auto_send, false);
-    select_row(buf, ui, f, "set:device", "Processing device", "", "global", DEVICES[w.device]);
-    step_row(buf, ui, f, "set:limit", "Recording limit", "10–300 seconds.", "global", &format!("{} s", w.limit));
+    toggle_row(buf, ui, f, "set:voice", "Voice input", "", "", w.voice_on, false);
+    toggle_row(buf, ui, f, "set:autosend", "Send transcript automatically", "Off lets you review the transcript in the composer first.", "", w.auto_send, false);
+    select_row(buf, ui, f, "set:device", "Processing device", "", "", DEVICES[w.device]);
+    step_row(buf, ui, f, "set:limit", "Recording limit", "10–300 seconds.", "", &format!("{} s", w.limit));
     kv_row(buf, ui, f, "voice:model", "Model", &format!("{} ready · whisper-small · 179 MB", ui.glyphs.dot_ok), "Re-check");
     f.gap();
     head(buf, ui, f, "SPEECH · /speak, local Kokoro");
-    select_row(buf, ui, f, "set:lang", "Language", "", "global", "English (US)");
-    select_row(buf, ui, f, "set:voice-name", "Voice", "", "global", ["af_heart", "am_michael", "bf_emma"][w.speech_voice]);
-    step_row(buf, ui, f, "set:speed", "Speed", "", "global", &format!("{:.1}×", w.speech_speed as f32 / 10.0));
+    select_row(buf, ui, f, "set:lang", "Language", "", "", "English (US)");
+    select_row(buf, ui, f, "set:voice-name", "Voice", "", "", ["af_heart", "am_michael", "bf_emma"][w.speech_voice]);
+    step_row(buf, ui, f, "set:speed", "Speed", "", "", &format!("{:.1}×", w.speech_speed as f32 / 10.0));
     if w.speech_downloaded {
         kv_row(buf, ui, f, "speech:model", "Model", &format!("{} ready · kokoro-82m", ui.glyphs.dot_ok), "Re-check");
     } else {

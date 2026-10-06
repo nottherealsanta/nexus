@@ -274,7 +274,8 @@ impl App {
         self.toasts.push(level, title, body, "", "");
     }
     fn saved(&mut self) {
-        let path = if self.w.scope == 0 { "~/.nexus/nexus.toml" } else { "<workspace>/.agents/nexus.toml" };
+        let project = self.w.scope == 1 && matches!(self.key_of(), "settings-skills" | "settings-mcp");
+        let path = if project { "<workspace>/.agents/" } else { "~/.nexus/nexus.toml" };
         self.toasts.push(Level::Success, "Saved", &format!("{path} (mock)"), "saved", "");
     }
 

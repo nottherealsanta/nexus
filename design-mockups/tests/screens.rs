@@ -289,3 +289,27 @@ fn ascii_glyphs_have_no_wide_unicode_chrome() {
         assert!(!t.contains(bad), "ASCII mode drew {bad}:\n{t}");
     }
 }
+
+#[test]
+fn scope_control_only_where_a_page_can_be_project_scoped() {
+    for (key, scoped) in [("settings-models", false), ("settings-voice", false), ("settings-providers", false), ("settings-layout", false), ("settings-agents", false), ("settings-tools", false), ("settings-skills", true), ("settings-mcp", true)] {
+        let mut app = App::new();
+        app.select(key, 0);
+        let t = text(&mut app);
+        assert_eq!(t.contains("Scope"), scoped, "{key}:\n{t}");
+        if !scoped {
+            assert!(!t.contains("global  ") && !t.lines().any(|l| l.trim_end().ends_with("global")), "{key} shows a scope badge:\n{t}");
+        }
+    }
+}
+
+#[test]
+fn context_header_has_no_dot_leader_and_tokens_sit_next_to_the_title() {
+    let mut app = App::new();
+    app.select("context-header", 0);
+    let t = text(&mut app);
+    assert!(!t.contains("····"), "no dot leader:\n{t}");
+    let tools = t.lines().find(|l| l.contains("Tools") && l.contains("tok")).expect("tools heading");
+    let (a, b) = (tools.find("Tools").unwrap(), tools.find("tok").unwrap());
+    assert!(b - a < 20, "tokens next to the title: {tools}");
+}
