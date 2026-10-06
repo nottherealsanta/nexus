@@ -797,3 +797,15 @@ and dictation indicators are intentionally unchanged.
 Covered by `tests/test_ratatui_toasts.py`, `tests/test_ratatui_pty_toasts.py` (real
 controlling PTY, full-redraw absence checks) and `render/toasts.rs` unit tests.
 Not verified against a live provider.
+
+## Context header always shows its contents (2026-10 overhaul, step 2)
+
+The header that opens every conversation has one mode. Besides the tools, skills and
+MCP inventories, the System prompt and AGENTS.md rows now show a one-line preview
+under their heading (the first non-empty line, `… +N more lines` counted, clipped
+with an ellipsis; `None included` once a preview exists and the block is empty).
+The preview opens the same host dialog as the heading (`context_show`), so the full
+text stays one click away. Skills and MCP counts are one total of enabled entries
+(not project/global). Not done: strike-through for disabled tools (the host header
+projection filters disabled tools out of the inventory instead of listing them).
+Covered by `render/context.rs` tests and `tests/test_ratatui_workflows.py`.

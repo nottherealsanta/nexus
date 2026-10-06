@@ -89,6 +89,24 @@ fn inventory(block: &Content, width: usize, inset: usize, palette: &Palette) -> 
     rows
 }
 
+/// One muted line under the System prompt / AGENTS.md heading: the first line of
+/// the text, clipped with an ellipsis. The full text stays in the host dialog.
+fn preview(block: &Content, width: usize, inset: usize, palette: &Palette) -> Rows {
+    let text = block.text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let inset = inset.min(width.saturating_sub(1));
+    let room = width.saturating_sub(inset).clamp(1, 100);
+    vec![(
+        Line::from(vec![
+            Span::raw(" ".repeat(inset)),
+            Span::styled(clipped(text, room), Style::default().fg(palette.muted)),
+        ]),
+        block.operation.clone(),
+    )]
+}
+
 pub(super) fn build(block: &Content, width: u16, palette: &Palette) -> Rows {
     if block.kind == "context_header" {
         let mut rows = Vec::new();
@@ -107,6 +125,8 @@ pub(super) fn build(block: &Content, width: u16, palette: &Palette) -> Rows {
                 "context:tools" | "context:skills" | "context:mcp"
             ) {
                 rows.extend(inventory(member, usize::from(width), 5, palette));
+            } else if matches!(member.id.as_str(), "context:system" | "context:agents") {
+                rows.extend(preview(member, usize::from(width), 5, palette));
             }
         }
         rows
@@ -194,6 +214,37 @@ mod tests {
         assert!(rows[1].0.to_string().starts_with("     read"));
         assert!(rows[1].0.width() <= 105);
         assert!(!rows.iter().any(|row| row.0.to_string().contains("omitted")));
+    }
+
+    #[test]
+    fn system_and_agents_previews_always_show_under_their_heading() {
+        let palette = Palette::new(false);
+        let member = |id: &str, title: &str, text: &str| Content {
+            id: id.into(),
+            title: title.into(),
+            text: text.into(),
+            status: "~2.1k tokens".into(),
+            operation: Some(serde_json::json!({"kind":"context_show","key":"system"})),
+            ..Default::default()
+        };
+        let block = Content {
+            kind: "context_header".into(),
+            members: vec![
+                member("context:system", "System prompt", "You are Nexus, a provider-agnostic agent.  … +40 more lines"),
+                member("context:agents", "AGENTS.md", "None included"),
+            ],
+            ..Default::default()
+        };
+        let rows = build(&block, 80, &palette);
+        let line = |i: usize| rows[i].0.to_string();
+        assert!(line(0).starts_with("     System prompt"), "{}", line(0));
+        assert!(line(1).starts_with("     You are Nexus"), "{}", line(1));
+        assert!(rows[1].1.is_some(), "the preview opens the same dialog");
+        assert!(line(2).is_empty() && line(3).starts_with("     AGENTS.md"));
+        assert_eq!(line(4), "     None included");
+        let narrow = build(&block, 30, &palette);
+        assert!(narrow.iter().all(|(l, _)| l.width() <= 30), "clipped, never overflowing");
+        assert!(narrow[1].0.to_string().ends_with('…'), "clipping is announced");
     }
 
     #[test]

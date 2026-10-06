@@ -398,7 +398,14 @@ def _compact_header(shell, view):
     counts = {"context:tools": [sum(1 for t in getattr(preview, "tools", []) if not isinstance(t, dict) or t.get("enabled") is not False)],
               "context:skills": [sum(scoped(getattr(preview, "skills_index", []), "global"))],
               "context:mcp": [sum(scoped(getattr(preview, "mcp_servers", []), "project"))]}
-    chips = [{**chip, "text": chip["text"] if chip["id"] in {"context:tools", "context:skills", "context:mcp"} else "", "counts": counts.get(chip["id"], []) if preview else [], "gap": 0} for chip in chips]
+    # Every block shows what it holds: inventories for tools/skills/MCP, a one-line
+    # preview for the system prompt and AGENTS.md ("None included" once a preview exists).
+    def shown(chip):
+        if chip["id"] in {"context:system", "context:agents"} and preview is not None and not chip["text"]:
+            return "None included"
+        return chip["text"]
+
+    chips = [{**chip, "text": shown(chip), "counts": counts.get(chip["id"], []) if preview else [], "gap": 0} for chip in chips]
     total = "Context total · tokens unavailable"
     if preview is not None and hasattr(preview, "tools"):
         total = f"Context total · ~{sum(block.tokens or 0 for block in header_blocks(preview, chips[0]["color"])):,} tokens"

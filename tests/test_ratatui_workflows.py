@@ -483,7 +483,7 @@ async def test_remembered_model_skips_effort_prompt(shell):
     shell.controller.select_model_and_effort.assert_awaited_once_with("openai/example", "high")
 
 
-def test_compact_header_chips_open_their_section_and_count_project_then_global():
+def test_compact_header_chips_open_their_section_and_show_one_total_count():
     from nexus.ui.ratatui.prototype import _compact_header
     preview = SimpleNamespace(
         tools=[{"name": "read", "group": "files"}, {"name": "write", "group": "files", "enabled": False}],
@@ -492,10 +492,12 @@ def test_compact_header_chips_open_their_section_and_count_project_then_global()
     shell = SimpleNamespace(preview=preview, controller=SimpleNamespace(agent_name="build"), agent_definitions={})
     [header, footer] = _compact_header(shell, None)
     chips = {chip["id"]: chip for chip in header["members"]}
-    assert chips["context:skills"]["counts"] == [1, 2]
-    assert chips["context:mcp"]["counts"] == [0, 0]
+    assert chips["context:skills"]["counts"] == [3], "one total of enabled skills, not project/global"
+    assert chips["context:mcp"]["counts"] == [0]
     assert chips["context:tools"]["counts"] == [1]
     assert chips["context:skills"]["operation"] == {"kind": "context_show", "key": "skills"}
+    # System prompt and AGENTS.md always show a one-line preview under their heading.
+    assert "text" in chips["context:system"] and "text" in chips["context:agents"]
     from nexus.ui_support.context_header import header_blocks
     total = sum(block.tokens or 0 for block in header_blocks(preview, header["color"]))
     assert footer == {"id": "context:total", "kind": "summary", "text": f"Context total · ~{total:,} tokens"}
