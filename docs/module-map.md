@@ -403,7 +403,7 @@ here, so add a row when you add a file.
 | `clipboard.py` | Bounded local system clipboard image reading for terminal attachment uploads |
 | `completion.py` | Toolkit-free composer completion shared by the native shell |
 | `context.py` | Pure display projections for context preview and session usage |
-| `context_header.py` | Toolkit-free context header blocks, agent colors and tool grouping shared by both shells |
+| `context_header.py` | Toolkit-free context header blocks, complete inventories and bounded fallback previews; skill tokens estimate the included index rather than the available catalogue |
 | `details.py` | Toolkit-free details sidebar data (session rows, modified files, MCP rows) shared by both shells |
 | `fuzzy.py` | Shared fuzzy matcher (score and match positions) for the command palette and model picker |
 | `hints.py` | Randomized tips shown in the middle of an empty session (mirrored in `js/hints.js`) |
@@ -418,6 +418,7 @@ here, so add a row when you add a file.
 | `session_groups.py` | Shared project and local-date grouping for terminal session lists |
 | `session_status.py` | Shared session-card status words, relative age and sub-line |
 | `settings_help.py` | One-line help per Settings area, shared by both consoles |
+| `settings_page.py` | The typed one-page Settings model (blocks, controls, operations); control-safe and bounded |
 | `shortcuts.py` | Shared terminal shortcut and leader reference |
 | `speech_download.py` | Rules and wording for the `/speak` model download, shared by both clients |
 | `speech_settings.py` | Host-backed Kokoro `/speak` settings with safe `[speech]` TOML updates |
@@ -473,17 +474,31 @@ here, so add a row when you add a file.
 The Rust client lives in `rust/tui/src/`: `main.rs` (terminal loop, key and mouse
 handling), `input.rs` (action writers, editor keys, picking, OSC 52 base64),
 `bridge.rs` (the versioned snapshot contract), `editor.rs` (grapheme editor),
-`render.rs` (palette, layout regions, the draw pass), `render/chrome.rs` (top bar,
-tabs, sessions and details sidebars), `render/dialogs.rs` (dialog frames, toned
+`render.rs` (palette, layout regions, the draw pass), `render/toasts.rs` (toasts: ingest by id, timers paused on hover, hit targets, drawn by the `rust/widgets` kit), `render/components.rs`
+(shared button/toggle/section/selectable styles and bounded local hover state;
+composer controls are the first adopters), `render/chrome.rs` (top bar,
+tabs, sessions and details sidebars), `render/context.rs` (reusable width-aware inventory sections: tools 1–5 columns, skills 1–2 columns, MCP one column, all capped at five rows with total/omitted indicators; unchanged host detail operations), `render/dialogs.rs` (dialog frames, toned
 panel text, Settings area list, prompt and logs regions, completion popup),
-`transcript.rs` (blocks to rows, diffs) and `markdown.rs`. `main()` is still one long
+`settings_page/` (one-page Settings: `model.rs` parses the host's typed page, `input.rs` focus/keys/mouse, `draw.rs` renders it with the widget kit), `transcript.rs` (blocks to rows, diffs) and `markdown.rs`. `rust/widgets` is the shared component kit (see its crate docs). `main()` is still one long
 loop over local state; splitting it further needs a state struct and is not done.
 | `actions.py` | Native shell slash dispatch, attachments and host-backed panels |
 | `controller.py` | Continuous native subscription using canonical bootstrap and reduction |
 | `preferences.py` | Native shell preferences |
 | `workflows.py` | Settings, provider, context, session and worktree workflows |
 | `speak_pages.py` | `/speak` consent, download progress and speaking in the native client |
-| `tier_pages.py` | Settings → Models, Session titles and an agent's Tiers row |
+| `tier_pages.py` | An agent's Tiers row (Settings → Models and titles are on the Models page) |
+| `settings_pages/__init__.py` | Registry of the one-page Settings areas (`PAGE_AREAS`) and their lazy module lookup |
+| `settings_pages/models.py` | Settings → Models: default chain, session titles, tier tabs, subagent limit, catalogue |
+| `settings_pages/providers.py` | Settings → Providers: one section per provider with in-place sign-in, API key and sign-out |
+| `settings_pages/voice.py` | Settings → Voice & speech: local dictation and Kokoro speech with consent-gated downloads |
+| `settings_pages/appearance.py` | Settings → Appearance (theme) |
+| `settings_pages/layout.py` | Settings → Layout (sidebars and context header) |
+| `settings_pages/keys.py` | Settings → Keyboard: every shortcut, read-only, from the shared table |
+| `settings_pages/files.py` | Shared builder for file-backed areas: scope control, Edit/New file/Reset rows |
+| `settings_pages/agents.py` | Settings → Agents: default root agent and agent files (always global) |
+| `settings_pages/tools.py` | Settings → Tools: tool files, global or per project |
+| `settings_pages/skills.py` | Settings → Skills: SKILL.md files, global or per project |
+| `settings_pages/mcp.py` | Settings → MCP servers: per-server switch and tool loading, plus mcp.json files |
 | `logs.py` | Bounded paged native diagnostics with routine-entry folding |
 | `voice.py` | Bounded native dictation using shared capture and host transcription |
 | `desktop.py` | Explicit clipboard operations with byte/time bounds |

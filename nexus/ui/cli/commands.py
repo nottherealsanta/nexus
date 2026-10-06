@@ -49,7 +49,7 @@ class CommandSpec:
 SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("/attach", "Attach an image or document", "<path> | clear"),
     CommandSpec("/new", "Start a new session", "[id]", aliases=("/clear",)),
-    CommandSpec("/sessions", "List sessions and switch", "[id]", aliases=("/session",)),
+    CommandSpec("/sessions", "Open the sessions sidebar, or switch to [id]", "[id]", aliases=("/session",)),
     CommandSpec("/model", "List models or set this session's model", "[list|tier|provider/model|id]"),
     CommandSpec("/effort", "Choose this session's reasoning effort", "[LEVEL]", aliases=("/reasoning",)),
     CommandSpec("/agent", "List or select this session's root agent", "[list|current|reset|NAME]"),
@@ -58,6 +58,7 @@ SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("/context", "Show assembled prompt, tools, messages, and accounting"),
     CommandSpec("/reconnect", "Reattach and replay missed events"),
     CommandSpec("/cancel", "Cancel the active turn"),
+    CommandSpec("/close", "Close the current tab (native TUI)"),
     CommandSpec("/fork", "Branch this session", "[at_seq]"),
     CommandSpec("/export", "Export this session", "[json|markdown|jsonl]"),
     CommandSpec("/help", "Show this help"),

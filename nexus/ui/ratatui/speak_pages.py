@@ -40,7 +40,7 @@ class SpeakPages:
             await self.client.speak(self.shell.controller.session)
             pass  # speaking shows no notice; only a failure does
         except Exception as exc:  # noqa: BLE001 - a failure is a labelled notice
-            self.shell.notice = str(exc)
+            self.shell.flash(str(exc), "error")
         if self.shell.on_update:
             await self.shell.on_update()
 
@@ -88,9 +88,6 @@ class SpeakPages:
             self.shell.panel_title = ""
             self.stack.clear()
             await self.speak_now()
-        elif kind == "speak_settings_prepare":
-            await self.client.speech_prepare()
-            await self.speech_settings()
         else:
             return False
         return True

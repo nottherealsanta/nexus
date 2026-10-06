@@ -20,6 +20,6 @@ SETTINGS_SECTIONS: tuple[tuple[str | None, str], ...] = (
     ("appearance", "Appearance"), ("layout", "Layout"), ("keys", "Keyboard"),
     (None, ""),
     (None, "CONFIGURE"),
-    ("providers", "Providers"), ("models", "Models"), ("titles", "Session titles"), ("voice", "Voice"), ("speech", "Speech"), ("agents", "Agents"), ("tools", "Tools"),
+    ("providers", "Providers"), ("models", "Models"), ("voice", "Voice & speech"), ("agents", "Agents"), ("tools", "Tools"),
     ("mcp", "MCP servers"), ("skills", "Skills"),
 )

@@ -2,6 +2,68 @@
 //! sidebar rows (split out of `render.rs`; hit-testing shares these layouts).
 use super::*;
 
+/// Composer controls share their exact text layout with pointer hit testing.
+pub(super) fn control_spans(
+    s: &Snapshot,
+    p: &Palette,
+    width: usize,
+    hover: &components::Hover,
+    now: std::time::Instant,
+) -> Vec<Span<'static>> {
+    let layout = control_layout(s, width);
+    let accent = crate::transcript::color(&s.agent_color, p.blue, p);
+    let mut spans = Vec::new();
+    for (i, (text, command)) in layout.left.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" · ", Style::default().fg(p.quiet)));
+        }
+        let foreground = match *command {
+            "/agent" => accent,
+            "/model" => p.text,
+            _ => p.muted,
+        };
+        spans.push(Span::styled(
+            text.clone(),
+            components::button(
+                p,
+                foreground,
+                components::State {
+                    hover: hover.amount(command, now),
+                    ..Default::default()
+                },
+            ),
+        ));
+    }
+    spans.push(Span::raw(" ".repeat(layout.gap)));
+    let state = components::State {
+        hover: hover.amount("context", now),
+        ..Default::default()
+    };
+    if layout.bars {
+        let fill = s
+            .context_window
+            .filter(|window| *window > 0)
+            .map(|window| {
+                (s.context_used.unwrap_or(0) as f64 / window as f64 * 10.0)
+                    .ceil()
+                    .clamp(0.0, 10.0) as usize
+            })
+            .unwrap_or(0);
+        for i in 0..10 {
+            spans.push(Span::styled(
+                "╱",
+                components::button(p, if i < fill { accent } else { p.border }, state),
+            ));
+        }
+        spans.push(Span::raw("  "));
+    }
+    spans.push(Span::styled(
+        layout.text,
+        components::button(p, p.quiet, state),
+    ));
+    spans
+}
+
 /// What a sidebar row opens when clicked.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SidebarHit {
@@ -12,6 +74,22 @@ pub enum SidebarHit {
 /// The sessions sidebar as styled rows, like the terminal's `SessionSidebar`: a New
 /// session button, `SESSIONS N`, day/project headings and two-line cards (glyph
 /// and title; status words and age) with a left bar on the current session.
+/// Indexes of the sessions the sidebar shows for `filter` (title, id, workspace or
+/// group, case-insensitive). Keyboard selection and drawing share this one list.
+pub fn visible_sessions(s: &Snapshot, filter: &str) -> Vec<usize> {
+    let needle = filter.to_lowercase();
+    (0..s.sessions.len())
+        .filter(|i| {
+            let row = &s.sessions[*i];
+            needle.is_empty()
+                || format!("{} {} {} {}", row.title, row.id, row.workspace, row.group)
+                    .to_lowercase()
+                    .contains(&needle)
+        })
+        .collect()
+}
+
+/// `selected` is the keyboard-selected session id (drawn with a raised row and a bar).
 pub fn session_sidebar(
     s: &Snapshot,
     p: &Palette,
@@ -19,6 +97,7 @@ pub fn session_sidebar(
     spin: usize,
     filter: &str,
     _editing: bool,
+    selected: Option<&str>,
 ) -> Vec<(Line<'static>, Option<SidebarHit>)> {
     let pad = |text: String, style: Style| {
         let used = text.width();
@@ -32,15 +111,7 @@ pub fn session_sidebar(
         Some(SidebarHit::New),
     )];
     let needle = filter.to_lowercase();
-    let shown: Vec<usize> = (0..s.sessions.len())
-        .filter(|i| {
-            let row = &s.sessions[*i];
-            needle.is_empty()
-                || format!("{} {} {} {}", row.title, row.id, row.workspace, row.group)
-                    .to_lowercase()
-                    .contains(&needle)
-        })
-        .collect();
+    let shown = visible_sessions(s, filter);
     rows.push((
         Line::styled(
             if needle.is_empty() {
@@ -77,9 +148,16 @@ pub fn session_sidebar(
             "done" => "·",
             _ => "·",
         };
-        let bg = if session.active { p.element } else { p.panel };
+        let picked = selected == Some(session.id.as_str());
+        let bg = if picked {
+            p.element_hi
+        } else if session.active {
+            p.element
+        } else {
+            p.panel
+        };
         let bar = Span::styled(
-            if session.active {
+            if session.active || picked {
                 "▌"
             } else if s
                 .tabs
@@ -92,7 +170,7 @@ pub fn session_sidebar(
             },
             Style::default().fg(p.accent).bg(bg),
         );
-        let bold = if session.active {
+        let bold = if session.active || picked {
             Modifier::BOLD
         } else {
             Modifier::empty()
@@ -361,7 +439,7 @@ pub fn details_rows(
     };
     let quiet = |text: &str| Line::styled(text.to_string(), Style::default().fg(p.quiet));
     let d = &s.details_panel;
-    let mut out = vec![title("SESSION")];
+    let mut out = vec![title("SESSION METADATA"), Line::default()];
     for (label, value) in &d.session {
         for (i, cells) in crate::transcript::wrap(
             &[Span::styled(value.clone(), Style::default().fg(p.text))],
@@ -373,7 +451,7 @@ pub fn details_rows(
             out.push(crate::transcript::line(
                 vec![Span::styled(
                     if i == 0 {
-                        format!("{label:<11}")
+                        format!("{:<11}", format!("{label}:"))
                     } else {
                         " ".repeat(11)
                     },
@@ -385,13 +463,31 @@ pub fn details_rows(
             ));
         }
     }
+    if d.session.is_empty() {
+        out.push(quiet("No session metadata available."));
+    }
     out.push(Line::default());
     let mut file_rows: Vec<Option<usize>> = vec![None; out.len()];
-    out.push(title(&if d.files.is_empty() {
-        "MODIFIED FILES".to_string()
-    } else {
-        format!("MODIFIED FILES  {}", d.files.len())
-    }));
+    out.push(title(&format!(
+        "CHANGES · {} {}",
+        d.files.len(),
+        if d.files.len() == 1 { "file" } else { "files" }
+    )));
+    if !d.files.is_empty() {
+        out.push(Line::from(vec![
+            Span::styled(
+                format!("+{}", d.files.iter().map(|file| file.added).sum::<u64>()),
+                Style::default().fg(p.success),
+            ),
+            Span::styled(
+                format!(
+                    " -{} lines",
+                    d.files.iter().map(|file| file.removed).sum::<u64>()
+                ),
+                Style::default().fg(p.error),
+            ),
+        ]));
+    }
     out.push(Line::default());
     if d.files.is_empty() {
         out.push(quiet("No files changed yet."));
@@ -418,7 +514,10 @@ pub fn details_rows(
                 Style::default().fg(p.quiet),
             ));
         }
-        spans.push(Span::raw(base.to_string()));
+        spans.push(Span::styled(
+            base.to_string(),
+            Style::default().fg(p.text).add_modifier(Modifier::BOLD),
+        ));
         spans.push(Span::raw("  "));
         if file.added > 0 || file.removed > 0 {
             spans.push(Span::styled(
@@ -431,6 +530,8 @@ pub fn details_rows(
             ));
         } else if file.created {
             spans.push(Span::styled("new", Style::default().fg(p.success)));
+        } else {
+            spans.push(Span::styled("+0 -0", Style::default().fg(p.quiet)));
         }
         file_rows.resize(out.len(), None);
         out.push(Line::from(spans));
@@ -494,8 +595,9 @@ pub fn details_rows(
         .position(|line| text(line) == "MCP SERVERS")
         .unwrap_or(out.len());
     let range = match d.tab.as_str() {
-        "Session" => Some(0..files),
-        "Files" => Some(files..mcp),
+        // A missing section falls back to `out.len()`, so clamp to keep every range ordered.
+        "Session" => Some(0..files.min(mcp)),
+        "Files" => Some(files..mcp.max(files)),
         "MCP" => Some(mcp..out.len()),
         _ => None,
     };
@@ -555,11 +657,16 @@ fn notice_width(s: &Snapshot, area: Rect) -> usize {
 fn breadcrumb_row(s: &Snapshot, area: Rect, p: &Palette, _spin: usize) -> Line<'static> {
     let width = area.width as usize;
     let notice = crate::transcript::truncate(&s.update_notice, notice_width(s, area));
-    let suffix = " ";
+    let suffix = if width == 0 { "" } else { " " };
     let reserved = suffix.width() + notice.width();
     // Match the composer inset (two cells) plus its three-cell rail padding.
-    let indent = 5;
-    let crumb = crate::transcript::truncate(&s.breadcrumb, width.saturating_sub(reserved + indent));
+    let indent = 5.min(width.saturating_sub(reserved));
+    let available = width.saturating_sub(reserved + indent);
+    let crumb = if available == 0 {
+        String::new()
+    } else {
+        crate::transcript::truncate(&s.breadcrumb, available)
+    };
     let gap = width.saturating_sub(crumb.width() + reserved + indent);
     Line::from(vec![
         Span::styled(
@@ -569,6 +676,75 @@ fn breadcrumb_row(s: &Snapshot, area: Rect, p: &Palette, _spin: usize) -> Line<'
         Span::styled(notice.clone(), Style::default().fg(p.accent)),
         Span::styled(suffix, Style::default().fg(p.border_strong)),
     ])
+}
+
+#[cfg(test)]
+mod chrome_tests {
+    use super::*;
+
+    #[test]
+    fn breadcrumb_matches_editable_composer_column_and_keeps_suffix() {
+        let s = Snapshot {
+            breadcrumb: "~/repo › main".into(),
+            ..Snapshot::default()
+        };
+        let p = Palette::new(false);
+        let line = breadcrumb_row(&s, Rect::new(0, 0, 48, 1), &p, 0);
+        let text: String = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(text.starts_with("     ~/repo › main"));
+        assert_eq!(text.width(), 48);
+        for width in 0..8 {
+            assert!(
+                breadcrumb_row(&s, Rect::new(0, 0, width as u16, 1), &p, 0).width() <= width.max(1)
+            );
+        }
+    }
+
+    #[test]
+    fn details_sections_and_file_hit_rows_survive_expansion() {
+        let s: Snapshot = serde_json::from_value(serde_json::json!({
+            "details_panel": {
+                "session": [["Title", "Test"]],
+                "files": [{"path":"src/main.rs", "added":3, "removed":1,
+                    "open":true, "diff":["+new", "-old"]}]
+            }
+        }))
+        .unwrap();
+        let (rows, hits) = details_rows(&s, &Palette::new(false), 36);
+        let text = |line: &Line<'_>| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        };
+        assert_eq!(text(&rows[0]), "SESSION METADATA");
+        assert!(rows.iter().any(|row| text(row).contains("Title:")));
+        assert!(rows.iter().any(|row| text(row) == "CHANGES · 1 file"));
+        let file_row = hits.iter().position(|hit| *hit == Some(0)).unwrap();
+        assert!(text(&rows[file_row]).contains("src/main.rs"));
+        assert!(rows[file_row]
+            .spans
+            .iter()
+            .any(|span| span.content == "main.rs"
+                && span.style.add_modifier.contains(Modifier::BOLD)));
+        assert_eq!(text(&rows[file_row + 1]), "  +new");
+        assert_eq!(hits[file_row + 1], None);
+        assert_eq!(hits.len(), rows.len());
+    }
+
+    #[test]
+    fn empty_details_have_explicit_status() {
+        let (rows, hits) = details_rows(&Snapshot::default(), &Palette::new(false), 36);
+        assert!(rows.iter().any(|row| row
+            .spans
+            .iter()
+            .any(|span| span.content == "No files changed yet.")));
+        assert!(hits.iter().all(Option::is_none));
+    }
 }
 pub fn update_notice_at(s: &Snapshot, area: Rect, x: u16, y: u16) -> bool {
     if s.update_notice.is_empty() || !area.contains((x, y).into()) || y != area.y {

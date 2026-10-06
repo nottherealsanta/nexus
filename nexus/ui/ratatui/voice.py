@@ -1,7 +1,8 @@
 """Bounded host-backed native dictation (VOICE_PLAN §8.2).
 
 Reuse the neutral Recorder; previews are paced and never inserted as final text.
-Stopping keys finish; Escape discards. Closing the shell always releases capture.
+Stopping keys finish; Escape keeps the transcript without sending. Closing the shell
+always releases capture. Explicit discard remains separate from stopping.
 """
 from __future__ import annotations
 
@@ -107,7 +108,7 @@ class Voice:
         except asyncio.CancelledError:
             raise
 
-    async def stop(self, discard=False, *, send=False):
+    async def stop(self, discard=False, *, send=None):
         recorder, self.recorder = self.recorder, None
         if not recorder:
             return
@@ -127,7 +128,7 @@ class Voice:
                 if (self.generation == self.shell.generation and self.phase == "transcribing"
                         and not self.shell.panel_title and result.request_id == self.request):
                     self.shell.composer_insert = getattr(result, "text", "")
-                    self.shell.composer_auto_send = send or self.auto_send
+                    self.shell.composer_auto_send = self.auto_send if send is None else send
                     self.shell.composer_insert_kind = "voice"
             finally:
                 self.phase = "idle"

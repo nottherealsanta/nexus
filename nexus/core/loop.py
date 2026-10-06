@@ -2146,23 +2146,26 @@ async def run_turn(
                 )
             )
 
+            # An explicit provider failure must not execute collected tool calls.
+            if effective_stop == "error":
+                terminal = state.fail("model stopped with stop_reason 'error'")
+                _release_manifest()
+                break
+
             if not has_tools:
                 consume_steering = getattr(session, "consume_steering", None)
                 if effective_stop != "error" and callable(consume_steering) and await _maybe_await(consume_steering()):
                     state = msgspec.structs.replace(state, iteration=state.iteration + 1)
                     _release_manifest()
                     continue
-                if effective_stop == "error":
-                    terminal = state.fail("model stopped with stop_reason 'error'")
-                else:
-                    complete_reason = (
-                        effective_stop
-                        if effective_stop in _COMPLETION_REASONS
-                        else "end_turn"
-                    )
-                    terminal = state.model_responded(
-                        has_tool_use=False, stop_reason=complete_reason
-                    )
+                complete_reason = (
+                    effective_stop
+                    if effective_stop in _COMPLETION_REASONS
+                    else "end_turn"
+                )
+                terminal = state.model_responded(
+                    has_tool_use=False, stop_reason=complete_reason
+                )
                 _release_manifest()
                 break
 

@@ -98,9 +98,13 @@ List dialogs (model picker first) use a borderless panel: bold title with a
 dim `esc` at the right, a `Search` row, purple group headings, the selected row
 as a solid accent bar, and `●` plus an accent name on the active choice. The
 model picker is a centred modal titled `Select model`; each row is the model
-name followed by its dim `provider/model` ref, and the sort, favorite and
-refresh keys sit on the bottom row (`panel_hint`). The `Search` box matches the
-label and the `provider/model` detail, so a provider name such as `open` finds
+name once followed by a provider discriminator on a single line. Ctrl+I opens
+read-only details for the highlighted model, including its full original metadata;
+missing token limits and pricing are explicitly `unknown`. Escape returns to the
+picker without selecting a model. Sort, favorite, refresh and details keys sit
+on the bottom row (`panel_hint`). Agent model/fallback pickers share compact
+names and Ctrl+I details. The `Search` box matches the
+label and the hidden `provider/model` reference, so a provider name such as `open` finds
 OpenCode Go (the browser and desktop clients already did this; the native filter
 previously matched the label only). Not verified visually in a
 real terminal; the `Free` price tag and the "Connect an integration" action from
@@ -236,10 +240,56 @@ uses the existing Markdown renderer; the system prompt remains literal text.
 Context usage shows shared accounting and the assembled request in
 labelled groups; unavailable previews still open with observed usage and an error.
 
-The details sidebar (SESSION, MODIFIED FILES, MCP SERVERS)
+### Shared native components and hover contract
+
+`render/components.rs` provides button, toggle, section and selectable style
+primitives. Composer agent/model/effort/tier controls and the context indicator
+use the shared button style and the same layout ranges as their click handlers.
+Mouse movement changes only local presentation: a bounded 100 ms background-color
+transition, including a smooth reversal on exit. It never sends host commands,
+changes focus, text, padding, hit geometry or selected state. Disabled styles
+suppress hover; selected and focused styles remain distinct (accent/bold and
+underline respectively). The event loop requests component redraws only while a
+transition or its final endpoint frame is pending, not continuously at rest.
+Filtered model/menu rows now use the shared selectable style; selected rows retain
+an accent bar with a separate hover tint. Menu toggle hit zones use the shared
+toggle style (locked toggles suppress their own hover). Top tab controls and
+details-sidebar tabs tint their existing cells using their existing click ranges.
+Panel overlays resolve their own menu hover rather than suppressing it, and do
+not hover the composer/tabs underneath. Generation, panel/filter/selection and
+layout changes clear stale targets; a fresh pointer movement is needed afterwards.
+Prompt/completion overlays suppress underlying hover and tint their own choices
+and completion rows. Settings navigation uses shared selectable styles and hover
+targets; heading rows are not actionable. Form buttons, session rows and
+agent/detail-page actions are not migrated yet; section primitive adoption is
+also still incremental.
+
+### Composer chrome and details sidebar
+
+Context inventory rows share their headings' gutter and occupy at most 100
+terminal cells, so wide windows do not scatter short tool names across the
+viewport. Skills/MCP headings show one total count rather than unlabelled scope
+pairs. Overflow footers appear only when entries are omitted; empty sections say
+`None included`. Skill rows label the estimated tokens of their actual included
+index entry, not the full skill body; missing entries say `tokens unknown`.
+
+The workspace breadcrumb starts at the editable composer text column (five cells
+from the conversation edge), reserving its right-hand update/status target when
+truncated. Only the true home directory or its descendants abbreviate to `~`;
+similarly prefixed sibling directories do not. This is display-only: workspace,
+session metadata and file paths retain their full values. Build uses `#5C9CF5` and
+orchestrator uses orange as fallback identity colors; explicit host colors win.
+Composer context metadata uses the darker quiet foreground while retaining its
+hover affordance and usage meter.
+
+The details sidebar (SESSION METADATA, CHANGES, MCP SERVERS)
 and context header come from the toolkit-free `ui_support/details.py` and
 `ui_support/context_header.py`; the tool row, turn footer and agent label text
 come from `ui_support/timeline.py`, which the native client uses.
+Metadata has labelled values and an explicit unavailable state. Changes show
+file and aggregate line counts, bold basenames with quieter directories, and an
+explicit empty status. Expansion previews, wheel scrolling and file-row hit
+targets remain attached to the rendered rows, including after section spacing.
 
 `tests/playwright_ratatui_check.py` captures reference, permission, picker,
 panel and light-theme screens for both clients in `artifacts/ratatui-parity/`.
@@ -294,7 +344,34 @@ using only the warning foreground colour (no separate background highlight),
 fences and quotes on the panel colour (fences show
 their language label, quotes a `▌` bar), nested ordered/bullet lists with
 hanging indent, task markers, strikethrough and column-aligned tables. HTML stays
-literal and link targets stay visible. Fence syntax highlighting is not done.
+literal and link targets stay visible.
+
+Item 12 reuses [ratatui-markdown](https://github.com/celestia-island/ratatui-markdown)
+0.3.6's `MarkdownRenderer` for code-fence borders and language labels through a
+native palette adapter. License/compatibility were checked before integration:
+upstream declares **MIT OR Apache-2.0**, Rust 1.74/edition 2021, and ratatui 0.29,
+matching this crate's ratatui types. Cargo pins 0.3.6 with defaults disabled and
+only `markdown` enabled; no copied upstream source or graphical dependencies.
+The upstream line parser and character-count wrapping are deliberately not used:
+the existing CommonMark event walker, grapheme/cell-width wrapper and per-block
+incremental transcript cache remain in place. Copy operations retain original
+source, including Markdown and control characters; only display text is escaped.
+Streaming incomplete fences are rendered as code. Structured tool results keep
+their existing rendering path.
+
+Supported reply features: ATX/setext headings, bold/emphasis/strikethrough, inline
+code, fenced/indented code, nested ordered/bullet lists, task markers, quotes,
+rules, links (including reference links), and tables. Explicit terminal-only
+fallbacks: Markdown images show `[image: alt (target)]`, including empty alt;
+HTML is shown literally, never executed; Mermaid is labelled literal source,
+not a dropped diagram. Unknown languages are literal labelled code. Escape and
+other non-tab/newline control characters display as `\\u{hhhh}`. Syntax
+highlighting, image decoding, Mermaid drawing, browser HTML/CSS and clickable
+URL protocols are not enabled. Upstream JSON/tree/rich-scroll widgets are outside
+reply Markdown scope; tables remain plain aligned cells, not graphical widgets.
+Focused Rust tests cover these fallbacks, incomplete fences, literal code,
+Unicode/grapheme wrapping, source/copy preservation and existing styling; the
+full Rust suite also exercises incremental caching and structured tool outputs.
 
 Inline file diffs under Edit and Patch rows follow a split
 layout: `path (+a, -r)`, real file line numbers, removed lines tinted red on the
@@ -461,7 +538,9 @@ Native dictation now previews directly inside the editable composer, at the capt
 insertion position. Recording shows only a one-cell pulsing orange outline square
 below the agent control; the floating waveform/status strip is removed. Typing
 stops capture and also applies the typed key. Final text replaces the temporary
-preview at the captured position, preserving typed suffix text; Escape discards.
+preview at the captured position, preserving typed suffix text. Escape keeps the
+final transcript without sending; Enter sends it. These explicit stops override
+`auto_send`; a capture-limit stop retains the preference. Explicit discard cancels.
 The composer grows for live previews. Real microphone/model latency is unverified.
 
 The native activity meter has two-cell side margins and an independent 60 Hz
@@ -687,3 +766,146 @@ not establish zero latency or live-provider timing on every terminal.
 MCP Settings server details expose persistent On/Off and Search/All choices
 through host commands with optimistic hashes and JSONC-preserving edits. The
 MCP inspector displays config diagnostics, including failures with zero servers.
+
+## Toasts (2026-10 overhaul, step 1)
+
+Shell notices are dismissible toasts, not a transcript line. `ShellActions.toast(text,
+level, key=, body=, action=)` queues one on a bounded deque (20) and every snapshot
+carries the list as `toasts` (`{id, level, title, body, key, action}`); ids are
+millisecond-seeded and monotonic, so the client shows each id once even across a
+Python restart. `shell.notice = "..."` still works (it sets the legacy string and
+raises a toast whose level comes from `notice_level`); `shell.flash(text, level)` is
+the explicit form, and exceptions are `error`. A `Disconnected…` notice stays a
+banner and disables the composer; the reconnect message is a success toast.
+Identical text within 5 s is not repeated, so a refresh loop cannot spam. Projection
+failures (`could not be shown`) remain in the transcript as durable context; shell
+notices no longer produce the `Error:` line or the `notice` block.
+
+Rust (`render/toasts.rs`, drawing and layout from the `nexus-widgets` kit) owns the
+timers and hit rectangles like hover state: info 4 s, success 3 s, warning 8 s,
+error 12 s, paused while the pointer is on a toast, same-key toasts merge (`×2`), at
+most three visible plus `+N more`. They float at the top-right of the conversation
+area over everything (dialogs included) and never reflow it; the countdown hairline is
+deliberately faint. Click `×` to dismiss, click the action to run its operation.
+`Ctrl+X x` dismisses all, `Ctrl+X a` runs the newest toast's action (`Ctrl+X t` stays "cycle reasoning effort"). Esc does not
+dismiss toasts (it already means stop/close). Every toast is also a `client · toast`
+line in the Logs tab (warnings and errors always, info and success with the routine
+entries), so a dismissed toast is never lost. Not done yet: the notifications list
+(`Ctrl+X n` is already `/new`; a different key is needed), toasts for the remaining
+direct `shell.notice` call sites beyond the classifier, and the composer, activity
+and dictation indicators are intentionally unchanged.
+Covered by `tests/test_ratatui_toasts.py`, `tests/test_ratatui_pty_toasts.py` (real
+controlling PTY, full-redraw absence checks) and `render/toasts.rs` unit tests.
+Not verified against a live provider.
+
+## Context header always shows its contents (2026-10 overhaul, step 2)
+
+The header that opens every conversation has one mode. Besides the tools, skills and
+MCP inventories, the System prompt and AGENTS.md rows now show a one-line preview
+under their heading (the first non-empty line, `… +N more lines` counted, clipped
+with an ellipsis; `None included` once a preview exists and the block is empty).
+The preview opens the same host dialog as the heading (`context_show`), so the full
+text stays one click away. Skills and MCP counts are one total of enabled entries
+(not project/global). Not done: strike-through for disabled tools (the host header
+projection filters disabled tools out of the inventory instead of listing them).
+Covered by `render/context.rs` tests and `tests/test_ratatui_workflows.py`.
+
+## One sessions surface (2026-10 overhaul, step 3)
+
+`/session`, `/sessions`, `Ctrl+O`, `Ctrl+B` and `Ctrl+X b` open the same thing: the
+left sessions sidebar, with keyboard focus in it. There is no separate Sessions
+dialog. `/sessions` (no argument) refreshes the list and bumps the snapshot field
+`sessions_request`; the client opens and focuses the sidebar when it sees a new value.
+`/sessions <id>` still switches directly. `Ctrl+B` opens and focuses it; with focus
+already inside it hides it again.
+
+With focus: `↑ ↓ Home End PgUp PgDn` move the selection (a raised row with a bar),
+`Enter` opens the session, typing or `/` filters (title, id, workspace, group;
+the first match is selected, and `Enter` while typing opens it), `Esc` clears the
+filter and then leaves, a click elsewhere leaves. Keys that do not apply (Ctrl
+combinations) still reach the normal handlers.
+
+Below 90 columns the sidebar is a **drawer** (up to 40 columns) over the
+conversation, never a column, and it opens only on request: it is a local flag, not
+the saved `sessions_sidebar` preference (which defaults on), so a narrow window does
+not cover the transcript by itself. Choosing a session or `Esc` closes it.
+Covered by `render.rs` tests (regions, selection, shared filter), `tests/test_ratatui_toasts.py`
+(`/sessions` request) and `tests/test_ratatui_pty_sessions.py` (real PTY, docked and
+drawer). Not done yet: row actions (rename, fork, archive, multi-select) and
+`Load more` paging; they need host commands and are tracked in the plan.
+
+## One-page Settings (2026-10 overhaul, step 4)
+
+Every Settings area is one page, not a menu with pages inside. Python builds a typed
+page (`ui_support/settings_page.py`: headings, notes, rows with a control, tabs,
+ordered lists, collapsible sections, buttons, tables, progress, callouts) and sends
+it as the snapshot field `settings_page`; the Rust client (`settings_page/`) renders it
+with the `rust/widgets` kit and owns focus, scroll, select popups, text editing and
+section open state. A change is one operation sent back with `value` (and, for an
+ordered list, `action` and `index`); the host applies it through the same host commands
+as before and **rebuilds the page after every operation**, so what is shown is what the
+host reports. The page lives and dies with the Settings panel (`panel_title`), so a
+stale page is never drawn over another dialog. Text from the host is control-safe and
+bounded; an unknown block type is shown as a visible note, never dropped.
+
+Areas: Appearance, Layout, Keyboard (read-only), Providers, Models, Voice & speech,
+Agents, Tools, MCP servers, Skills. `/settings` opens on Appearance. **Scope** (the
+Global/Project control and per-row badges) appears only on Tools, Skills and MCP
+servers, the per-file areas that can differ per project; everything else is always
+global and shows no scope. Models holds the default chain, the session-title model,
+the Low/Medium/High **tabs** (each an ordered list: `Alt+↑↓` reorders, `Delete`
+removes, `Add model…` opens the one allowed picker), the subagent ceiling and the
+catalogue. Providers is one section per provider (connected first), with API key,
+sign-in code and device code handled in place in masked fields. Voice and speech are one
+page; downloads always ask first. Agents, Tools, Skills and MCP list their files with
+Edit/New/Reset through the existing editor pages. Session titles moved into Models and
+Speech into Voice & speech (their nav entries are gone).
+
+Keys on a page: `↑↓` move, `←→` change a segmented control, stepper or tab (Left on a
+plain row moves to the area list), `Space`/`Enter` toggle or open, `Ctrl+PgUp/PgDn`
+switch tab from anywhere, `Esc` closes a popup or edit first and then Settings; the
+mouse clicks any control and the wheel scrolls. Drill-ins that remain: file and agent
+editors, model pickers, and confirmations; they stack on the page and `Esc` returns to it.
+Removed: the old per-area menu pages, the `tier_*`/`models_default*`/`title_*`/`provider_*`
+/`voice_*`/`speech_*` operations and the legacy Sessions-style Settings home.
+Not done: inline agent detail (an agent still opens the agent editor page), settings
+search, and scope on Models. Covered by `settings_page/` unit tests (model, input,
+draw), `tests/test_ratatui_pty_settings.py` (real PTY: render, toggle, segmented, popup,
+tab, reorder, area list, Escape, focus across a host rebuild) and the Python side by `tests/test_ratatui_settings_*.py` and the ported journeys. Not verified
+against a live provider or a real daemon.
+
+## Keyboard polish (2026-10 overhaul, step 5)
+
+`F6` moves keyboard focus between the composer and the sessions sidebar (opening the
+sidebar or drawer if needed). On a Settings page `?` opens Settings → Keyboard (the page
+`/hotkeys` opens), and `Alt+1…9` jumps to the n-th area (`Ctrl+digit` is not delivered by
+terminals). The Keyboard page lists every shortcut from the one table the app uses.
+Covered by `tests/test_ratatui_pty_settings.py` and `settings_page/input.rs` tests. Not
+built: a hint bar under the composer (the composer is intentionally unchanged), type-ahead
+in lists, and a `?` sheet per region.
+
+## Settings fixes after first use (2026-10)
+
+Four defects found by using the Settings pages, each now covered by a test that fails without
+its fix:
+
+- **Nothing on a page worked.** The bridge runs only operations a snapshot offered, matched
+  exactly. A control sends its offered operation plus a `value` (`action` and `index` for an
+  ordered list), so every control was silently refused (the tier tabs, toggles, selects).
+  `ui_support/settings_page.accepts()` now accepts an offered operation completed with a valid
+  client field: the value must be an offered option, in range, or of the right type; anything
+  else, another area's operation, or a stale page is refused. `prototype.operation_allowed()` is
+  the gate. Tests: `tests/test_settings_page_operations.py` (every operation the client can build
+  from every area's real page is accepted, forged ones are not) and the end-to-end tests below.
+- **Wheel scrolling stopped early.** The scroll container re-followed the focused row on every
+  frame, undoing a wheel scroll. It now follows focus only when focus changes (kit `Scroll`).
+- **Settings was only ~36 columns wide** beside both sidebars, because it was sized from the
+  transcript; tables and labels clipped. Settings now spans the whole window (`panel_host`).
+  Tables also drop or shrink fixed columns before squeezing their main column.
+- **First run called a removed menu** (`Workflows.providers`). It now opens Settings on
+  Providers, whose page carries the "Choose default model" action.
+
+`tests/test_ratatui_e2e_settings.py` runs the real Python bridge, the real native binary and a
+real host (scripted model) under a pseudo-terminal, driven only by keystrokes and read through a
+small screen emulator: Models opens from the host, a tier tab changes the tier, a toggle saves and
+the page shows it, and the Keyboard page scrolls past its second section by wheel and by keys.

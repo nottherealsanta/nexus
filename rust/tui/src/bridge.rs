@@ -73,12 +73,19 @@ pub struct Snapshot {
     /// Queued, steering and interrupt messages waiting for the running turn.
     pub queue_lines: Vec<String>,
     pub update_notice: String,
+    /// Dismissible notices from the host (plan §8). Always the newest bounded list;
+    /// the client shows each id once and owns timers, dedup and dismissal.
+    pub toasts: Vec<ToastWire>,
     /// Settings area list: (label, key, is heading), and the selected index (-1 = none).
     pub nav: Option<Nav>,
     pub sessions: Vec<Session>,
     pub tabs: Vec<Session>,
     pub archived_label: String,
     pub sessions_truncated: bool,
+    /// The typed one-page Settings area (`nexus/ui_support/settings_page.py`), or null.
+    pub settings_page: Option<Value>,
+    /// Bumped by `/sessions`: the client opens and focuses the sessions sidebar.
+    pub sessions_request: u64,
     pub breadcrumb: String,
     pub details_panel: DetailsPanel,
     pub logs: Vec<String>,
@@ -90,6 +97,10 @@ pub struct Snapshot {
     pub details_sidebar: bool,
     /// Local width arbitration, preserved across Python snapshots.
     pub last_opened: String,
+    /// Local only: the sessions drawer is open (terminals under 90 columns). Never the
+    /// persisted sidebar preference, so a narrow window does not open a drawer by itself.
+    #[serde(skip)]
+    pub sessions_drawer: bool,
     pub context_preview: bool,
     pub voice_phase: String,
     pub voice_preview: String,
@@ -98,6 +109,23 @@ pub struct Snapshot {
     pub completion_query: String,
     pub completion_prefix: String,
 }
+#[derive(Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ToastWire {
+    pub id: u64,
+    pub level: String,
+    pub title: String,
+    pub body: String,
+    pub key: String,
+    pub action: Option<ToastAction>,
+}
+#[derive(Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ToastAction {
+    pub label: String,
+    pub operation: Option<Value>,
+}
+
 #[derive(Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct InlineImage {
@@ -148,6 +176,8 @@ pub struct Item {
     pub remove: Option<serde_json::Value>,
     /// Dim text after the label (model picker: the provider/model ref).
     pub detail: String,
+    pub search: String,
+    pub info_operation: Option<Value>,
     /// The active choice: drawn with a leading `●` in the accent colour.
     pub current: bool,
 }
@@ -160,7 +190,9 @@ impl Item {
     /// already do.
     pub fn matches(&self, filter: &str) -> bool {
         let needle = filter.to_lowercase();
-        self.label.to_lowercase().contains(&needle) || self.detail.to_lowercase().contains(&needle)
+        self.label.to_lowercase().contains(&needle)
+            || self.detail.to_lowercase().contains(&needle)
+            || self.search.to_lowercase().contains(&needle)
     }
 }
 #[derive(Deserialize)]
@@ -452,6 +484,10 @@ impl Snapshot {
         if !present.contains_key("details_sidebar") {
             self.details_sidebar = std::mem::take(&mut previous.details_sidebar);
         }
+        self.sessions_drawer = previous.sessions_drawer;
+        if !present.contains_key("settings_page") {
+            self.settings_page = std::mem::take(&mut previous.settings_page);
+        }
         if !present.contains_key("last_opened") {
             self.last_opened = previous.last_opened.clone();
         }
@@ -606,10 +642,10 @@ mod section_tests {
         assert_eq!(next.blocks[0].id, "a");
     }
     #[test]
-    fn picker_filter_matches_the_provider_detail() {
+    fn picker_filter_matches_hidden_model_reference() {
         let item = Item {
             label: "Kimi K3".into(),
-            detail: "opencode-go/kimi-k3".into(),
+            search: "opencode-go/kimi-k3".into(),
             ..Default::default()
         };
         assert!(item.matches("open"));

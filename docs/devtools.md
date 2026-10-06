@@ -105,3 +105,14 @@ steps.
   with `git config core.hooksPath scripts/hooks` ([release.md](release.md)).
 - `install.sh`, `install.ps1`: installers ([release.md](release.md)); design in
   `plans/install.md`.
+
+## Ratatui design mock-ups
+
+`design-mockups/` is a standalone Cargo project that renders every native-TUI
+screen and state from fake data using the real component kit in `rust/widgets`
+(`nexus-widgets`). It is a design and UX prototype, not product code: it never
+talks to the daemon, and deleting it removes nothing the TUI needs. Run
+`cargo run` (viewer), `cargo run -- shoot` (screenshots and `shots/index.html`)
+and `cargo test` in that folder; see its README. The spec and phase checklist are
+in `plans/RATATUI_DESIGN_MOCKUPS_PLAN.md`. `rust/tui` does not use the kit yet
+(Phase 3); not verified against a real terminal beyond the SVG/text renders.

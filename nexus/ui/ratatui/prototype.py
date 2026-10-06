@@ -29,9 +29,37 @@ _OUTPUT_SECTIONS = frozenset({"Result", "Summary", "Error", "Progress"})
 _EXPAND_AFTER_LINES = 12  # outputs longer than this expand in place on click
 
 
+def _display_breadcrumb(breadcrumb: str, home: Path | None = None) -> str:
+    """Abbreviate only the actual home component; keep the source path intact."""
+    home_text = str(Path.home() if home is None else home).rstrip("/")
+    path, separator, branch = breadcrumb.partition(" › ")
+    # Root is not a useful home abbreviation, nor is a relative home path.
+    if home_text and Path(home_text).is_absolute():
+        if path == home_text:
+            path = "~"
+        elif path.startswith(home_text + "/"):
+            path = "~" + path[len(home_text):]
+    return path + separator + branch
+
+
 #: Read-only lookups that collapse into one `Explored: 1 search, 1 read` row.
 _EXPLORE_KINDS = {"grep": ("search", "searches"), "glob": ("search", "searches"),
                   "read": ("read", "reads"), "ls": ("list", "lists")}
+
+
+def operation_allowed(shell, allowed: set, operation) -> bool:
+    """May the client run ``operation``? Only operations this snapshot offered: list rows, transcript
+    blocks, and the controls of the open Settings page (an offered operation the client completed with
+    a valid ``value``, ``action`` or ``index``)."""
+    import json
+    from ...ui_support import settings_page as sp
+    if not operation:
+        return False
+    if json.dumps(operation, sort_keys=True) in allowed:
+        return True
+    workflows = shell.workflows
+    page = workflows.settings_page if shell.panel_title and shell.panel_title == workflows.page_title else None
+    return sp.accepts(page, operation)
 
 
 def _block_operations(blocks):
@@ -356,8 +384,16 @@ def _context_blocks(shell, view):
     else:
         found = [HeaderBlock(key, label, "", "", None, NEUTRAL) for key, label in (
             ("system", "System prompt"), ("tools", "Tools"), ("agents", "AGENTS.md"), ("skills", "Skills"), ("mcp", "MCP"))]
-    return [{"id": "context:" + block.key, "kind": "context", "title": block.label, "text": block.body,
-             "status": f"~{_compact_tokens(block.tokens)} tokens" if block.tokens else "", "color": _agent_color(shell, getattr(getattr(shell, "controller", None), "agent_name", (getattr(preview, "agent", {}) or {}).get("name", "build"))),
+    def token_status(block):
+        if block.key == "skills":
+            return (f"Included index · ~{_compact_tokens(block.tokens)} tokens"
+                    if block.tokens is not None else "Included index · tokens unknown")
+        return f"~{_compact_tokens(block.tokens)} tokens" if block.tokens is not None else "tokens unknown"
+
+    return [{"id": "context:" + block.key, "kind": "context", "title": block.label,
+             "text": "\n".join(block.inventory) if block.key in {"tools", "skills", "mcp"} else block.body,
+             "local_preview": block.inventory_note,
+             "status": token_status(block), "color": _agent_color(shell, getattr(getattr(shell, "controller", None), "agent_name", (getattr(preview, "agent", {}) or {}).get("name", "build"))),
              "gap": 1, "operation": {"kind": "context_show", "key": block.key}}
             for block in found]
 
@@ -375,9 +411,16 @@ def _compact_header(shell, view):
         return [project, len(rows) - project]
 
     counts = {"context:tools": [sum(1 for t in getattr(preview, "tools", []) if not isinstance(t, dict) or t.get("enabled") is not False)],
-              "context:skills": scoped(getattr(preview, "skills_index", []), "global"),
-              "context:mcp": scoped(getattr(preview, "mcp_servers", []), "project")}
-    chips = [{**chip, "text": "", "counts": counts.get(chip["id"], []) if preview else [], "gap": 0} for chip in chips]
+              "context:skills": [sum(scoped(getattr(preview, "skills_index", []), "global"))],
+              "context:mcp": [sum(scoped(getattr(preview, "mcp_servers", []), "project"))]}
+    # Every block shows what it holds: inventories for tools/skills/MCP, a one-line
+    # preview for the system prompt and AGENTS.md ("None included" once a preview exists).
+    def shown(chip):
+        if chip["id"] in {"context:system", "context:agents"} and preview is not None and not chip["text"]:
+            return "None included"
+        return chip["text"]
+
+    chips = [{**chip, "text": shown(chip), "counts": counts.get(chip["id"], []) if preview else [], "gap": 0} for chip in chips]
     total = "Context total · tokens unavailable"
     if preview is not None and hasattr(preview, "tools"):
         total = f"Context total · ~{sum(block.tokens or 0 for block in header_blocks(preview, chips[0]["color"])):,} tokens"
@@ -647,7 +690,8 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
         for choice in prompt["choices"]:
             choice["label"] = escape_controls(choice["label"])
     details_panel = {} if on_agent_page else _guarded(failures, "Details sidebar", lambda: _details_panel(controller, view, shell), {})
-    notice = "\n".join(part for part in [error or (shell.notice if shell else ""), *failures] if part)
+    # Projection failures stay in the transcript (durable context); shell notices are toasts.
+    notice = "\n".join(part for part in [error, *failures] if part)
     if notice:
         lines.append(escape_controls(f"Error: {notice}"))
         blocks.append({"id": "notice", "title": "Notice", "text": escape_controls(notice), "kind": "literal"})
@@ -677,6 +721,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "composer_key": json.dumps([shell.workspace if shell else "", getattr(controller, "session", view.session_id)]),
             "nav": _settings_nav(shell),
             "update_notice": escape_controls(shell.update_notice) if shell else "",
+            "toasts": list(shell.toasts) if shell else [],
             "disconnected": bool(
                 shell and str(getattr(shell, "notice", "")).startswith("Disconnected")
             ),
@@ -689,8 +734,10 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "sessions": shell.sessions if shell else [],
             "archived_label": shell.archived_label if shell else "",
             "sessions_truncated": bool(shell and shell.sessions_truncated),
+            "sessions_request": shell.sessions_request if shell else 0,
+            "settings_page": (shell.workflows.settings_page if shell.panel_title and shell.panel_title == shell.workflows.page_title else None) if shell else None,
             "tabs": _tab_rows(controller, shell) if shell else [],
-            "breadcrumb": escape_controls(shell.breadcrumb) if shell else "",
+            "breadcrumb": escape_controls(_display_breadcrumb(shell.breadcrumb)) if shell else "",
             "details_panel": details_panel,
             "logs": shell.logs.lines() if shell else [],
             **({"logs_all": shell.logs.lines(show_all=True), "logs_folded": shell.logs.lines(show_all=False),
@@ -1001,11 +1048,10 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
             limit=16 * 1024 * 1024)
         try:
             setup = await shell.client.setup_status()
-            if setup.required:
-                await shell.workflows.providers()
-                shell.items.append({"label": "Choose default model", "command": "", "operation": {"kind": "setup"}})
+            if setup.required:  # first run: open Settings on Providers (its page offers "Choose default model")
+                await shell.workflows.open_page("providers")
         except Exception as exc:
-            shell.notice = str(exc)
+            shell.flash(str(exc), "error")
         await update()
         controller.resume(update)
         poll_task = asyncio.create_task(poll())
@@ -1044,6 +1090,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                             ("Discard draft", {"kind": "discard_form"})], [form["status"], form["body"]])
                     else:
                         shell.workflows.back()
+                        await shell.workflows.refresh_page()
                 elif action["type"] == "command":
                     await shell.submit(action["text"])
                 elif action["type"] == "pick":
@@ -1072,7 +1119,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                                 shell.notice = "Question already answered by another client"
                 elif action["type"] == "operation":
                     operation = action.get("operation")
-                    if operation and json.dumps(operation, sort_keys=True) in allowed_operations and not shell.panel_loading:
+                    if operation_allowed(shell, allowed_operations, operation) and not shell.panel_loading:
                         if operation["kind"] in {"block_toggle", "turn_toggle"} and shell.local_transcript:
                             continue  # disclosure belongs exclusively to Rust
                         if operation["kind"] == "block_toggle":
@@ -1097,7 +1144,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                         try:
                             await shell.voice.stop(discard, send=send)
                         except Exception as exc:
-                            shell.notice = str(exc)
+                            shell.flash(str(exc), "error")
                         await update()
                     if not shell.voice.finish_task or shell.voice.finish_task.done():
                         shell.voice.finish_task = asyncio.create_task(finish_voice(action.get("discard", False), action.get("send", False)))
@@ -1146,7 +1193,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     index = int(action["text"])
                     if not shell.panel_loading and 0 <= index < len(SETTINGS_SECTIONS) and SETTINGS_SECTIONS[index][0]:
                         key = SETTINGS_SECTIONS[index][0]
-                        await shell.workflows.settings_area("speech" if key == "speech" else key)
+                        await shell.workflows.settings_area(key)
                 elif action["type"] == "model_sort":
                     shell.model_sort = "name" if shell.model_sort == "updated" else "updated"
                     await shell.command("/model", ())
@@ -1179,15 +1226,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                         await shell.switch_project(row["workspace"], row["id"])
                         await shell.workflows.operate({"kind": "session_actions", **row})
                 elif action["type"] == "tab_close":
-                    index = next((i for i,row in enumerate(shell.tabs) if row["id"] == action["text"] and row["workspace"] == action["workspace"]), None)
-                    if index is not None and len(shell.tabs) == 1:
-                        await shell.command("/new", ())
-                    elif index is not None:
-                        shell.tabs.pop(index)
-                        controller.forget(action["text"])
-                        if controller.session == action["text"] and shell.tabs:
-                            row = shell.tabs[min(index, len(shell.tabs)-1)]
-                            await shell.switch_project(row["workspace"], row["id"])
+                    await shell.close_tab(action["workspace"], action["text"])
                 elif action["type"] == "session_open":
                     if any(row["id"] == action["text"] and row["workspace"] == action["workspace"] for row in [*shell.sessions, *shell.tabs]):
                         await shell.switch_project(action["workspace"], action["text"])
@@ -1196,7 +1235,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     controller.resume(update)
                 await update()
             except Exception as exc:
-                shell.notice = str(exc)
+                shell.flash(str(exc), "error")
                 await update()
         return await process.wait()
     finally:

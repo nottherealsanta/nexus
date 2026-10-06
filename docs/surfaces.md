@@ -231,6 +231,13 @@ commands ([extensions.md](extensions.md#settings-files-host)).
 
 ## Dictation
 
+The current native Ratatui client uses Ctrl+X, V to start bounded dictation and
+previews directly in the composer. Escape stops and keeps the final transcript
+without sending; Enter stops and sends. Other stopping keys keep without sending
+and typed keys are also applied. These explicit choices override `auto_send`;
+capture-limit stops retain the preference. Explicit discard is separate.
+
+The legacy/web flow below retains its own stop/cancel semantics:
 `Ctrl+Space` toggles bounded dictation, `/voice status|download|on|off` and
 Settings → Voice manage it. First use asks before downloading the model;
 preparation is silent. An orange dot at the far left of the context-size row shows

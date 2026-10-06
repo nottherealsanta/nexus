@@ -12,7 +12,13 @@ pub fn completion_area(transcript: Rect, count: usize) -> Rect {
         height,
     )
 }
-pub fn completion(frame: &mut Frame, s: &Snapshot, transcript: Rect, selected: usize) {
+pub fn completion(
+    frame: &mut Frame,
+    s: &Snapshot,
+    transcript: Rect,
+    selected: usize,
+    hover: &components::Hover,
+) {
     let p = Palette::new(s.theme == "nexus-light");
     let area = completion_area(transcript, s.completions.len());
     let start = selected.saturating_sub(7);
@@ -30,13 +36,17 @@ pub fn completion(frame: &mut Frame, s: &Snapshot, transcript: Rect, selected: u
             let pad = usize::from(area.width.saturating_sub(2)).saturating_sub(text.width());
             Line::styled(
                 format!("{text}{}", " ".repeat(pad)),
-                Style::default()
-                    .fg(if i == selected { p.text } else { p.muted })
-                    .bg(if i == selected {
-                        p.element_hi
-                    } else {
-                        p.dialog
-                    }),
+                components::selectable(
+                    &p,
+                    components::State {
+                        selected: i == selected,
+                        hover: hover.amount_id(
+                            components::HoverId::CompletionRow(i),
+                            std::time::Instant::now(),
+                        ),
+                        ..Default::default()
+                    },
+                ),
             )
         })
         .collect();
@@ -50,6 +60,16 @@ pub fn completion(frame: &mut Frame, s: &Snapshot, transcript: Rect, selected: u
         Paragraph::new(rows).style(Style::default().bg(p.dialog).fg(p.text)),
         area,
     );
+}
+/// Where a panel is laid out. Settings (it has the area list) spans the whole window width so it
+/// keeps a usable page beside open sidebars; every other panel stays within the transcript.
+pub fn panel_host(r: &super::Regions, s: &Snapshot) -> Rect {
+    if s.nav.is_none() {
+        return r.transcript;
+    }
+    let left = if r.sessions.width > 0 { r.sessions.x } else { r.transcript.x };
+    let right = if r.details.width > 0 { r.details.right() } else { r.transcript.right() };
+    Rect::new(left, r.transcript.y, right.saturating_sub(left), r.transcript.height)
 }
 /// A shared rectangle for painting and input; legacy snapshots retain full pages.
 pub fn panel_area(transcript: Rect, s: &Snapshot) -> Rect {
@@ -141,7 +161,11 @@ pub fn item_height(item: &crate::bridge::Item) -> u16 {
     1 + u16::from(!item.detail.is_empty()) + u16::from(!item.description.is_empty())
 }
 pub fn settings_header_height(s: &Snapshot, width: u16, height: u16) -> u16 {
-    let full: usize = s.panel_lines.iter().map(|text| crate::transcript::wrap(&[Span::raw(text.clone())], width as usize).len()).sum();
+    let full: usize = s
+        .panel_lines
+        .iter()
+        .map(|text| crate::transcript::wrap(&[Span::raw(text.clone())], width as usize).len())
+        .sum();
     (full as u16).min(height.saturating_sub(5).min(8))
 }
 pub fn panel_item_at(
@@ -180,7 +204,9 @@ pub fn panel_item_at(
         if i == selection {
             selected_line = body.len();
         }
-        for _ in 0..item_height(item) { body.push(Some(i)); }
+        for _ in 0..item_height(item) {
+            body.push(Some(i));
+        }
     }
     let start = (selected_line + 1).saturating_sub(room.max(1));
     let row = usize::from(y.saturating_sub(inner.y));
@@ -399,6 +425,24 @@ mod tests {
         }
     }
     #[test]
+    fn settings_spans_the_window_beside_both_sidebars_and_other_panels_stay_in_the_transcript() {
+        let regions = crate::render::Regions {
+            sessions: Rect::new(0, 0, 30, 50),
+            transcript: Rect::new(30, 0, 60, 43),
+            details: Rect::new(90, 0, 40, 50),
+            ..Default::default()
+        };
+        let mut s = Snapshot::default();
+        assert_eq!(panel_host(&regions, &s), regions.transcript, "ordinary panels stay in the transcript");
+        s.nav = Some(crate::bridge::Nav::default());
+        let host = panel_host(&regions, &s);
+        assert_eq!((host.x, host.right(), host.y, host.height), (0, 130, 0, 43));
+        assert!(panel_area(host, &s).width > panel_area(regions.transcript, &s).width * 2, "a far wider settings window");
+        let narrow = crate::render::Regions { transcript: Rect::new(0, 1, 80, 22), ..Default::default() };
+        assert_eq!(panel_host(&narrow, &s), narrow.transcript, "with no sidebars it is the transcript");
+    }
+
+    #[test]
     fn settings_modal_is_large_and_inset_even_for_page_layout() {
         let parent = Rect::new(5, 4, 120, 40);
         let mut s = Snapshot::default();
@@ -416,6 +460,24 @@ mod tests {
         assert_eq!(panel_area(parent, &s), Rect::new(6, 7, 156, 50));
         let tiny = Rect::new(3, 2, 4, 2);
         assert_eq!(panel_area(tiny, &s), Rect::new(5, 3, 0, 0));
+    }
+    #[test]
+    fn model_picker_rows_are_single_line_and_reference_searchable() {
+        use crate::bridge::Item;
+        let item = Item {
+            label: "Kimi K3 · opencode-go".into(),
+            search: "opencode-go/kimi-k3".into(),
+            info_operation: Some(serde_json::json!({"kind":"model_details"})),
+            group: "Favorites".into(),
+            ..Default::default()
+        };
+        assert_eq!(item_height(&item), 1);
+        let mut s = Snapshot::default();
+        s.items = vec![item];
+        let area = Rect::new(0, 0, 60, 20);
+        let y = dialog_inner(area).y;
+        assert_eq!(panel_item_at(&s, area, "kimi-k3", 0, y + 3), Some(0));
+        assert_eq!(panel_item_at(&s, area, "kimi-k3", 0, y + 4), None);
     }
     #[test]
     fn grouped_picker_mouse_rows_match_display_selection() {
@@ -440,4 +502,248 @@ mod tests {
         assert_eq!(panel_item_at(&s, area, "", 0, y + 5), Some(1));
         assert_eq!(panel_item_at(&s, area, "two", 0, y + 3), Some(0));
     }
+}
+
+/// Filtered menu rows share the component states used by other interactive controls.
+pub fn draw_menu(
+    frame: &mut Frame,
+    s: &Snapshot,
+    inner: Rect,
+    filter: &str,
+    selection: usize,
+    p: &Palette,
+    hover: &super::components::Hover,
+) {
+    let needle = filter.to_lowercase();
+    let rows: Vec<_> = s
+        .items
+        .iter()
+        .filter(|item| item.matches(&needle))
+        .collect();
+    // Settings pages: the scope path and the area's help sit above the list.
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if s.nav.is_some() {
+        let note_lines: Vec<_> = s
+            .panel_lines
+            .iter()
+            .flat_map(|text| {
+                crate::transcript::wrap(&[Span::raw(text.clone())], inner.width as usize)
+            })
+            .collect();
+        let height = dialogs::settings_header_height(s, inner.width, inner.height) as usize;
+        for cells in note_lines.iter().take(height) {
+            lines.push(crate::transcript::line(
+                vec![],
+                cells.clone(),
+                None,
+                Style::default().fg(p.quiet).bg(p.dialog),
+            ));
+        }
+        if note_lines.len() > height && height > 0 {
+            lines[height - 1] = Line::styled(
+                "More notes — Tab opens full details",
+                Style::default().fg(p.accent),
+            );
+        }
+    }
+    lines.push(Line::from(if filter.is_empty() {
+        vec![
+            Span::styled("Search", Style::default().fg(p.quiet)),
+            Span::styled("   Tab inspect details", Style::default().fg(p.quiet)),
+        ]
+    } else {
+        vec![
+            Span::styled(format!("{filter}█"), Style::default().fg(p.text)),
+            Span::styled("   Tab inspect details", Style::default().fg(p.quiet)),
+        ]
+    }));
+    lines.push(Line::default());
+    // Group headings sit above the first item of each group; selection counts items only.
+    let mut body: Vec<Line<'static>> = Vec::new();
+    let mut selected_line = 0usize;
+    let mut group = "";
+    for (i, item) in rows.iter().enumerate() {
+        if !item.group.is_empty() && item.group != group {
+            body.push(Line::styled(
+                item.group.clone(),
+                Style::default()
+                    .fg(p.purple)
+                    .bg(p.dialog)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+        group = &item.group;
+        let on = i == selection;
+        // Selected: solid accent bar with dark text. Active choice: `●` + accent name.
+        let amount = hover
+            .amount(&format!("item:{i}"), std::time::Instant::now())
+            .max(hover.amount(&format!("toggle:{i}"), std::time::Instant::now()));
+        let base = super::components::selectable(
+            p,
+            super::components::State {
+                selected: on,
+                hover: amount,
+                ..Default::default()
+            },
+        );
+        let (name_style, detail_style, fill) = if on {
+            (base, base.remove_modifier(Modifier::BOLD), base)
+        } else {
+            (
+                base.fg(if item.current { p.accent } else { p.text }),
+                base.fg(p.quiet),
+                base,
+            )
+        };
+        let toggle = item.toggle_operation.as_ref().map(|_| {
+            if item.toggle_locked {
+                "[ LOCKED ]".to_string()
+            } else if item.toggle_enabled.unwrap_or(false) {
+                "[ ON ]".to_string()
+            } else {
+                "[ OFF ]".to_string()
+            }
+        });
+        let marker = if item.current { "●" } else { " " };
+        let width = usize::from(inner.width);
+        let available = width.saturating_sub(3 + toggle.as_ref().map_or(0, |t| t.width() + 1));
+        let structured = if item.name.is_empty() {
+            item.label.clone()
+        } else {
+            format!(
+                "{}{}  {}  {} [{}]{}",
+                item.name,
+                if item.changed { " *" } else { "" },
+                item.value,
+                item.status,
+                item.scope,
+                if item.move_up.is_some() || item.move_down.is_some() || item.remove.is_some() {
+                    "  ↑ ↓ ×"
+                } else {
+                    ""
+                }
+            )
+        };
+        let label = truncate_width(&structured, available);
+        let mut spans = vec![
+            Span::styled(
+                format!(" {marker} "),
+                if on {
+                    name_style
+                } else {
+                    name_style.fg(p.accent)
+                },
+            ),
+            Span::styled(label.clone(), name_style),
+        ];
+        let mut used = 3 + label.width();
+        if !item.detail.is_empty() {
+            let detail = truncate_width(&item.detail, available.saturating_sub(label.width() + 1));
+            if !detail.is_empty() {
+                used += 1 + detail.width();
+                spans.push(Span::styled(format!(" {detail}"), detail_style));
+            }
+        }
+        if let Some(toggle) = toggle {
+            let gap = width.saturating_sub(used + toggle.width());
+            spans.push(Span::styled(" ".repeat(gap), fill));
+            used += gap + toggle.width();
+            spans.push(Span::styled(
+                toggle,
+                super::components::toggle(
+                    p,
+                    super::components::State {
+                        selected: item.toggle_enabled.unwrap_or(false),
+                        disabled: item.toggle_locked,
+                        hover: hover.amount(&format!("toggle:{i}"), std::time::Instant::now()),
+                        ..Default::default()
+                    },
+                ),
+            ));
+        }
+        spans.push(Span::styled(" ".repeat(width.saturating_sub(used)), fill));
+        if on {
+            selected_line = body.len();
+        }
+        body.push(Line::from(spans));
+        if !item.description.is_empty() {
+            body.push(Line::styled(
+                truncate_width(&format!("   {}", item.description), width),
+                base.fg(if on { p.background } else { p.quiet }),
+            ));
+        }
+        if !item.detail.is_empty() {
+            body.push(Line::styled(
+                truncate_width(&format!("   {}", item.detail), width),
+                base.fg(if on { p.background } else { p.quiet }),
+            ));
+        }
+    }
+    let reserved = if s.panel_hint.is_empty() { 0 } else { 2 };
+    let room = inner.height.saturating_sub(lines.len() as u16 + reserved) as usize;
+    let start = (selected_line + 1).saturating_sub(room.max(1));
+    lines.extend(body.into_iter().skip(start).take(room));
+    frame.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(p.dialog)),
+        inner,
+    );
+    if !s.panel_hint.is_empty() && inner.height > 0 {
+        // Key hints: the key text is dim, its action label bright.
+        let spans: Vec<Span<'static>> = s
+            .panel_hint
+            .split("  ")
+            .flat_map(|part| {
+                let (label, key) = part
+                    .rsplit_once(" ctrl+")
+                    .map_or((part, String::new()), |(l, k)| (l, format!(" ctrl+{k}")));
+                [
+                    Span::styled(
+                        label.to_string(),
+                        Style::default().fg(p.text).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(format!("{key}  "), Style::default().fg(p.quiet)),
+                ]
+            })
+            .collect();
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)).style(Style::default().bg(p.dialog)),
+            Rect::new(inner.x, inner.bottom() - 1, inner.width, 1),
+        );
+    }
+}
+
+/// Shared click/hover geometry excludes the completion help line and clipped rows.
+pub fn completion_at(parent: Rect, count: usize, selected: usize, x: u16, y: u16) -> Option<usize> {
+    let area = completion_area(parent, count);
+    if !area.contains((x, y).into()) || y == area.y {
+        return None;
+    }
+    let index = selected.saturating_sub(7) + usize::from(y - area.y - 1);
+    (index < count).then_some(index)
+}
+pub fn nav_at(s: &Snapshot, area: Rect, x: u16, y: u16) -> Option<usize> {
+    let list = nav_rect(area);
+    if !list.contains((x, y).into()) {
+        return None;
+    }
+    let i = usize::from(y - list.y);
+    s.nav
+        .as_ref()?
+        .items
+        .get(i)
+        .filter(|item| !item.2)
+        .map(|_| i)
+}
+pub fn prompt_choice_at(
+    parent: Rect,
+    prompt: &crate::bridge::Prompt,
+    x: u16,
+    y: u16,
+) -> Option<usize> {
+    let (_, choices) = prompt_regions(prompt_area(parent, prompt), prompt.choices.len());
+    if !choices.contains((x, y).into()) {
+        return None;
+    }
+    let i = usize::from(y - choices.y);
+    prompt.choices.get(i).filter(|c| !c.disabled).map(|_| i)
 }

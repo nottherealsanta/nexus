@@ -28,6 +28,11 @@ AGENT_COLORS = (
 
 def agent_color(name: str) -> str:
     """Return a stable readable identity color when the host has none yet."""
+    # Primary composer identities are semantic; other agents retain stable hues.
+    if name.casefold() == "build":
+        return "#5C9CF5"
+    if name.casefold() == "orchestrator":
+        return "#d18a38"
     digest = hashlib.sha256(name.casefold().encode("utf-8")).digest()
     return AGENT_COLORS[int.from_bytes(digest[:4], "big") % len(AGENT_COLORS)]
 
@@ -43,6 +48,8 @@ class HeaderBlock:
     detail: str
     tokens: int | None
     color: str
+    inventory: tuple[str, ...] = ()
+    inventory_note: str = ""
 
 
 def one_line_preview(text: str, limit: int = 100) -> str:
@@ -65,6 +72,13 @@ def render_columns(labels: list[str], columns: int = 3) -> str:
         "".join(label.ljust(width) for label in labels[start:start + columns]).rstrip()
         for start in range(0, len(labels), columns)
     )
+
+
+def inventory_preview(labels: list[str], columns: int, rows: int = 5) -> str:
+    """Bounded fallback preview; native layout chooses columns at viewport width."""
+    shown = labels[:columns * rows]
+    return "\n".join(filter(None, (render_columns(shown, columns),
+        f"{len(labels)} total · {len(labels) - len(shown)} omitted")))
 
 
 def group_tools(tools: list[dict]) -> tuple[dict[str, list[dict]], dict[str, list[dict]]]:
@@ -139,32 +153,43 @@ def header_blocks(result: Any, color: str) -> list[HeaderBlock]:
         (str(part.get("text") or "") for part in result.included_parts
          if isinstance(part, Mapping) and part.get("name") == "agents_md"), "")
     skills = [row for row in result.skills_index if isinstance(row, dict)]
-    skill_names = [str(row.get("name", "")) + (" (off)" if row.get("enabled") is False else "") for row in skills if row.get("name")]
     skill_details = [f"{row.get('name', '?')} · {row.get('scope', '')} · {row.get('origin', '')}\n{row.get('description', '')}" for row in skills]
-    skill_tokens = estimate_tokens("\n".join(f"{row.get('name', '')}: {row.get('description', '')}"
-                                            for row in skills if row.get("enabled") is not False))
+    skill_part = next((part for part in result.included_parts if isinstance(part, Mapping)
+                       and part.get("name") in {"skills", "skills_index", "skills index"}), None)
+    # Estimate the actual included prompt contribution, never the available catalogue.
+    skill_tokens = estimate_tokens(str(skill_part.get("text") or "")) if skill_part is not None else None
+    index_lines = str(skill_part.get("text") or "").splitlines() if skill_part else []
+    skill_names = []
+    for row in skills:
+        name = str(row.get("name") or "")
+        if not name:
+            continue
+        entry = next((line for line in index_lines if line.startswith(name + ":")), None)
+        token_label = f"~{estimate_tokens(entry)} tokens" if entry is not None else "tokens unknown"
+        skill_names.append(f"{name} · {token_label}" + (" (off)" if row.get("enabled") is False else ""))
     servers = list(getattr(result, "mcp_servers", ()) or ())
     if servers:
-        mcp_labels = [f"{row.get('name')}({row.get('tool_count', 0)} · {row.get('tool_loading', 'all')})" + (" (off)" if row.get("enabled") is False else "") for row in servers]
+        mcp_labels = [f"{row.get('name')}({row.get('tool_count', 0)} · {row.get('tool_loading', 'all')})" + (" (off)" if row.get("enabled") is False else "") + f" · {row.get('status') or 'unknown'}" for row in servers]
         mcp_detail = "\n".join(f"{row.get('name')} · {row.get('status')} · {row.get('tool_loading', 'all')}\n  " + ", ".join(row.get("tools", ())) for row in servers)
     else:
-        mcp_labels = [f"{name}({len(rows)})" for name, rows in mcp_tools.items()]
+        mcp_labels = [f"{name}({len(rows)}) · unknown" for name, rows in mcp_tools.items()]
         mcp_detail = result.mcp_index or "(none)"
     deferred = sum(row.get("schema_tokens", 0) for row in servers
                    if row.get("enabled") is not False and row.get("tool_loading") == "search")
     if deferred:
         mcp_detail += f"\n~{deferred} tokens deferred"
     mcp_tokens = sum(tool_entry(tool).tokens for rows in mcp_tools.values() for tool in rows)
-    def block(key, label, body, detail, tokens, paint=color):
-        return HeaderBlock(key, label, body, detail, tokens, paint if body else NEUTRAL)
+    def block(key, label, body, detail, tokens, paint=color, inventory=(), note=""):
+        return HeaderBlock(key, label, body, detail, tokens, paint if body else NEUTRAL, tuple(inventory), note)
     return [
         block("system", "System prompt", one_line_preview(prompt), prompt or "(empty)", estimate_tokens(prompt)),
-        block("tools", "Tools", render_columns(labels), "\n".join(tool_detail_lines(groups)) or "(none)",
-              sum(tool_entry(tool).tokens for tool in builtin)),
+        block("tools", "Tools", inventory_preview(labels, 3), "\n".join(tool_detail_lines(groups)) or "(none)",
+              sum(tool_entry(tool).tokens for tool in builtin), inventory=labels),
         block("agents", "AGENTS.md", one_line_preview(agents), agents or "(none)", estimate_tokens(agents)),
-        block("skills", "Skills", scope_counts(skills) + ("\n" + render_columns(skill_names) if skills else ""),
-              "\n\n".join(skill_details) or "(none)", skill_tokens, color if skills else NEUTRAL),
-        block("mcp", "MCP", scope_counts(servers) + ("\n" + render_columns(mcp_labels) if mcp_labels else "")
+        block("skills", "Skills", scope_counts(skills) + ("\n" + inventory_preview(skill_names, 2) if skills else ""),
+              "\n\n".join(skill_details) or "(none)", skill_tokens, color if skills else NEUTRAL, inventory=skill_names),
+        block("mcp", "MCP", scope_counts(servers) + ("\n" + inventory_preview(mcp_labels, 1) if mcp_labels else "")
               + (f"\n~{deferred} tokens deferred" if deferred else ""), mcp_detail, mcp_tokens,
-              color if servers or mcp_labels else NEUTRAL),
+              color if servers or mcp_labels else NEUTRAL, inventory=mcp_labels,
+              note=f"~{deferred} tokens deferred" if deferred else ""),
     ]

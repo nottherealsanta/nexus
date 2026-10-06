@@ -40,14 +40,13 @@ async def test_stale_form_does_not_save(shell):
 
 @pytest.mark.asyncio
 async def test_provider_secret_not_returned_in_snapshot(shell):
-    shell.client.provider_key_set = AsyncMock()
-    shell.client.providers_status = AsyncMock(return_value=p.ProvidersStatusResult())
-    await shell.workflows.operate({"kind": "provider_key", "id": "openai"})
-    form = shell.workflows.form
-    await shell.workflows.save(form["id"], "test-secret", 1)
+    shell.client.provider_key_set = AsyncMock(return_value=SimpleNamespace(message="Key saved"))
+    shell.client.providers_status = AsyncMock(return_value=p.ProvidersStatusResult(providers=[
+        {"id": "openai", "label": "OpenAI", "connected": True, "methods": ["api_key"]}]))
+    await shell.workflows.operate({"kind": "sp_providers", "area": "providers", "key": "api_key", "provider": "openai", "value": " test-secret "})
     shell.client.provider_key_set.assert_awaited_once_with("openai", "test-secret")
     assert shell.workflows.form is None
-    assert "test-secret" not in repr(shell.panel_lines)
+    assert "test-secret" not in repr((shell.panel_lines, shell.toasts, shell.workflows.settings_page))
 
 
 @pytest.mark.asyncio
@@ -73,12 +72,13 @@ async def test_settings_validation_keeps_editor_and_disables_autosave(shell):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("send", [False, True])
-async def test_voice_finish_inserts_final_not_partial(shell, monkeypatch, send):
+@pytest.mark.parametrize("auto_send", [False, True])
+@pytest.mark.parametrize("send", [False, True, None], ids=["escape-keeps", "enter-sends", "default-stop"])
+async def test_voice_finish_inserts_final_not_partial(shell, monkeypatch, send, auto_send):
     from nexus.ui.ratatui import voice
     recorder = SimpleNamespace(start=lambda: None, stop=lambda: b"wav", snapshot=lambda: b"wav", full=False, duration=0)
     monkeypatch.setattr(voice, "Recorder", lambda **kwargs: recorder)
-    shell.client.voice_status = AsyncMock(return_value=p.VoiceStatusResult(enabled=True, state="ready"))
+    shell.client.voice_status = AsyncMock(return_value=p.VoiceStatusResult(enabled=True, state="ready", auto_send=auto_send))
     shell.client.voice_cancel = AsyncMock()
     async def transcribe(audio, request_id, **kwargs):
         return p.VoiceTranscribeResult(request_id=request_id, text="final transcript", duration_s=1, elapsed_s=.1)
@@ -86,11 +86,73 @@ async def test_voice_finish_inserts_final_not_partial(shell, monkeypatch, send):
     await shell.voice.open()
     assert shell.panel_title == ""
     assert shell.voice.phase == "recording"
+    shell.voice.preview = "partial transcript"
     await shell.voice.stop(send=send)
     assert shell.composer_insert == "final transcript"
-    assert shell.composer_auto_send is send
+    assert shell.composer_auto_send is (auto_send if send is None else send)
     assert shell.voice.phase == "idle"
+    assert shell.voice.preview == ""
     assert not shell.client.voice_transcribe.await_args.kwargs.get("partial", False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auto_send", [False, True])
+async def test_voice_capture_cap_stop_retains_auto_send(shell, monkeypatch, auto_send):
+    from nexus.ui.ratatui import voice
+    monkeypatch.setattr(voice.asyncio, "sleep", AsyncMock())
+    shell.voice.recorder = SimpleNamespace(full=True, stop=lambda: b"wav")
+    shell.voice.request = "capture"
+    shell.voice.generation = shell.generation
+    shell.voice.auto_send = auto_send
+    shell.voice.phase = "recording"
+    shell.client.voice_transcribe = AsyncMock(return_value=p.VoiceTranscribeResult(
+        request_id="capture", text="final transcript", duration_s=1, elapsed_s=.1))
+    await shell.voice._previews()
+    assert shell.composer_insert == "final transcript"
+    assert shell.composer_auto_send is auto_send
+    assert shell.voice.recorder is None
+    assert shell.voice.phase == "idle"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auto_send", [False, True])
+async def test_voice_explicit_discard_cancels_without_transcription(shell, auto_send):
+    from unittest.mock import Mock, call
+    recorder = SimpleNamespace(stop=Mock(return_value=b"wav"))
+    shell.voice.recorder = recorder
+    shell.voice.request = "capture"
+    shell.voice.preview_request = "capture-p1"
+    shell.voice.preview = "partial transcript"
+    shell.voice.auto_send = auto_send
+    shell.voice.phase = "recording"
+    shell.client.voice_cancel = AsyncMock()
+    shell.client.voice_transcribe = AsyncMock()
+    before = (shell.composer_insert, shell.composer_auto_send)
+    await shell.voice.discard()
+    recorder.stop.assert_called_once_with()
+    assert shell.client.voice_cancel.await_args_list == [call("capture-p1"), call("capture")]
+    shell.client.voice_transcribe.assert_not_awaited()
+    assert (shell.composer_insert, shell.composer_auto_send) == before
+    assert shell.voice.recorder is None and shell.voice.phase == "idle"
+    assert shell.voice.preview == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("send", [False, True, None])
+async def test_voice_finish_rejects_stale_generation(shell, send):
+    shell.voice.recorder = SimpleNamespace(stop=lambda: b"wav")
+    shell.voice.request = "capture"
+    shell.voice.generation = shell.generation
+    shell.voice.phase = "recording"
+    shell.voice.auto_send = True
+    async def transcribe(*args, **kwargs):
+        shell.generation += 1
+        return p.VoiceTranscribeResult(request_id="capture", text="stale transcript", duration_s=1, elapsed_s=.1)
+    shell.client.voice_transcribe = AsyncMock(side_effect=transcribe)
+    before = (shell.composer_insert, shell.composer_auto_send)
+    await shell.voice.stop(send=send)
+    assert (shell.composer_insert, shell.composer_auto_send) == before
+    assert shell.voice.phase == "idle"
 
 
 def test_preferences_preserve_saved_keys_and_bound_favorites(tmp_path):
@@ -299,16 +361,17 @@ async def test_image_more_info_uses_daemon_preview(shell):
 
 @pytest.mark.asyncio
 async def test_layout_and_appearance_toggle_and_reset_to_defaults(shell):
+    # The pages themselves are covered in test_ratatui_settings_simple_pages.py.
     await shell.workflows.operate({"kind": "layout"})
-    assert [item["label"] for item in shell.items][:2] == ["Sessions sidebar  ctrl+b · on", "Details sidebar  ctrl+l · on"]
-    await shell.workflows.operate(shell.items[0]["operation"])
+    rows = {b["id"]: b for b in shell.workflows.settings_page["blocks"] if b.get("t") == "row"}
+    await shell.workflows.operate({**rows["sessions_sidebar"]["control"]["operation"], "value": False})
     assert shell.preferences.values["sessions_sidebar"] is False
-    assert shell.items[0]["label"].endswith("· off")
-    await shell.workflows.operate(shell.items[-1]["operation"])  # Reset to default
+    await shell.workflows.operate({"kind": "sp_layout", "area": "layout", "key": "reset"})
     assert shell.preferences.values["sessions_sidebar"] is True
-    await shell.workflows.operate({"kind": "theme", "value": "nexus-light"})
-    assert shell.panel_title == "Appearance" and shell.items[1]["label"] == "Light · selected"
-    await shell.workflows.operate(shell.items[-1]["operation"])
+    await shell.workflows.settings_area("appearance")
+    await shell.workflows.operate({"kind": "sp_appearance", "area": "appearance", "key": "theme", "value": "nexus-light"})
+    assert shell.panel_title == "Settings · Appearance" and shell.preferences.values["theme"] == "nexus-light"
+    await shell.workflows.operate({"kind": "sp_appearance", "area": "appearance", "key": "reset"})
     assert shell.preferences.values["theme"] == "nexus-dark"
 
 
@@ -324,10 +387,10 @@ async def test_settings_pages_carry_the_area_list_and_switching_replaces_the_pag
     assert labels[:3] == ["GENERAL", "Appearance", "Layout"] and nav["items"][nav["selected"]][1] == "layout"
     assert nav["items"][0][2] is True  # a heading
     await shell.workflows.settings_area("appearance")
-    assert shell.panel_title == "Appearance" and _settings_nav(shell)["items"][_settings_nav(shell)["selected"]][1] == "appearance"
+    assert shell.panel_title == "Settings · Appearance" and _settings_nav(shell)["items"][_settings_nav(shell)["selected"]][1] == "appearance"
     assert shell.workflows.stack == []
     await shell.workflows.settings_area("tools")
-    assert shell.panel_title == "Settings · global · tools" and _settings_nav(shell)["items"][_settings_nav(shell)["selected"]][1] == "tools"
+    assert shell.panel_title == "Settings · Tools" and _settings_nav(shell)["items"][_settings_nav(shell)["selected"]][1] == "tools"
     shell.refresh_preview = AsyncMock(return_value=True)
     shell.preview = SimpleNamespace(system_text="prompt")
     await shell.workflows.operate({"kind": "context_show", "key": "system"})
@@ -347,32 +410,6 @@ async def test_agents_document_uses_markdown_and_preserves_newlines(shell):
     shell.workflows.menu("Next", [("Back", {"kind": "back"})])
     shell.workflows.back()
     assert shell.panel_format == "markdown" and shell.panel_layout == "context"
-
-
-@pytest.mark.asyncio
-async def test_voice_settings_never_starts_capture_and_saves_options(shell):
-    shell.client.voice_status = AsyncMock(return_value=p.VoiceStatusResult(enabled=True, state="ready", configured_device="cpu"))
-    shell.client.settings_read = AsyncMock(return_value=p.SettingsReadResult(body="config_version = 2\n", rel_path="config.toml", builtin=False, sha256="h"))
-    shell.client.settings_write = AsyncMock(return_value=p.SettingsWriteResult(status="saved"))
-    await shell.workflows.settings_area("voice")
-    assert shell.voice.phase == "idle"
-    assert shell.settings_nav == "voice"
-    assert any("Processing device · cpu" in item["label"] for item in shell.items)
-    await shell.workflows.operate(shell.items[1]["operation"])
-    assert "auto_send = true" in shell.client.settings_write.await_args.args[3]
-    assert shell.settings_nav == "voice"
-    assert shell.voice.phase == "idle"
-
-
-@pytest.mark.asyncio
-async def test_provider_options_have_headings_and_connection_status(shell):
-    shell.client.providers_status = AsyncMock(return_value=p.ProvidersStatusResult(providers=[
-        {"id": "openai", "label": "OpenAI", "connected": True, "methods": ["api_key"]}]))
-    await shell.workflows.settings_area("providers")
-    await shell.workflows.operate(shell.items[0]["operation"])
-    assert shell.panel_lines[0] == "Connection: connected"
-    assert [item["group"] for item in shell.items] == ["Sign-in options", "Connection management"]
-    assert shell.settings_nav == "providers"
 
 
 async def test_subagent_page_context_nested_back_and_child_tool_details(shell):
@@ -420,7 +457,7 @@ async def test_remembered_model_skips_effort_prompt(shell):
     shell.controller.select_model_and_effort.assert_awaited_once_with("openai/example", "high")
 
 
-def test_compact_header_chips_open_their_section_and_count_project_then_global():
+def test_compact_header_chips_open_their_section_and_show_one_total_count():
     from nexus.ui.ratatui.prototype import _compact_header
     preview = SimpleNamespace(
         tools=[{"name": "read", "group": "files"}, {"name": "write", "group": "files", "enabled": False}],
@@ -429,10 +466,12 @@ def test_compact_header_chips_open_their_section_and_count_project_then_global()
     shell = SimpleNamespace(preview=preview, controller=SimpleNamespace(agent_name="build"), agent_definitions={})
     [header, footer] = _compact_header(shell, None)
     chips = {chip["id"]: chip for chip in header["members"]}
-    assert chips["context:skills"]["counts"] == [1, 2]
-    assert chips["context:mcp"]["counts"] == [0, 0]
+    assert chips["context:skills"]["counts"] == [3], "one total of enabled skills, not project/global"
+    assert chips["context:mcp"]["counts"] == [0]
     assert chips["context:tools"]["counts"] == [1]
     assert chips["context:skills"]["operation"] == {"kind": "context_show", "key": "skills"}
+    # System prompt and AGENTS.md always show a one-line preview under their heading.
+    assert "text" in chips["context:system"] and "text" in chips["context:agents"]
     from nexus.ui_support.context_header import header_blocks
     total = sum(block.tokens or 0 for block in header_blocks(preview, header["color"]))
     assert footer == {"id": "context:total", "kind": "summary", "text": f"Context total · ~{total:,} tokens"}
@@ -532,19 +571,6 @@ async def test_voice_failed_load_does_not_retry_on_poll(shell):
     shell.client.voice_prepare.assert_not_awaited()
     assert shell.items[0]["label"] == "Retry loading voice model · Model load failed"
     assert shell.voice.phase == "idle"
-
-
-@pytest.mark.asyncio
-async def test_voice_settings_cached_model_needs_no_download_consent(shell):
-    shell.client.voice_status = AsyncMock(return_value=p.VoiceStatusResult(
-        enabled=True, state="absent", cached=True,
-    ))
-    await shell.workflows.voice_settings()
-    assert not any(item["label"] == "Download local model…" for item in shell.items)
-    operation = next(item["operation"] for item in shell.items if item["label"] == "Load / prepare local model")
-    shell.client.voice_prepare = AsyncMock()
-    await shell.workflows.operate(operation)
-    shell.client.voice_prepare.assert_awaited_once_with(allow_download=False)
 
 
 @pytest.mark.asyncio

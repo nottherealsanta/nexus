@@ -38,3 +38,14 @@ def test_help_lists_aliases_next_to_their_command():
     assert "/new, /clear " in text
     assert "/exit, /quit" in text
     assert "/effort, /reasoning " in text
+
+
+def test_close_is_a_distinct_discoverable_command():
+    parsed = commands.parse("/close")
+    assert parsed.name == "/close"
+    assert parsed.args == ()
+    assert parsed.spec is commands.BY_NAME["/close"]
+    assert not parsed.spec.aliases
+    assert "/close" in commands.help_text()
+    assert parsed.spec in commands.SPECS
+    assert not parsed.spec.hidden

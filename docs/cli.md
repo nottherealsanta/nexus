@@ -65,7 +65,7 @@ names, usage, summaries, aliases). `parse` resolves aliases to the canonical nam
 | --- | --- | --- | --- |
 | `/attach` | `<path> \| clear` | | attach an image or document |
 | `/new` | `[id]` | `/clear` | start a new session |
-| `/sessions` | `[id]` | `/session` | list and switch |
+| `/sessions` | `[id]` | `/session` | switch to `[id]`, or (native TUI) open and focus the sessions sidebar, the same surface as `Ctrl+B` |
 | `/model` | `[list\|tier\|provider/model\|id]` | | list models or set this session's model |
 | `/effort` | `[LEVEL]` | `/reasoning` | reasoning effort |
 | `/agent` | `[list\|current\|reset\|NAME]` | | root agent |
@@ -74,9 +74,10 @@ names, usage, summaries, aliases). `parse` resolves aliases to the canonical nam
 | `/context` | | | assembled prompt, tools, messages, accounting |
 | `/reconnect` | | | reattach and replay missed events |
 | `/cancel` | | | cancel the active turn |
+| `/close` | | | close the current tab (native TUI only; same action as the tab close button) |
 | `/fork` | `[at_seq]` | | branch this session |
 | `/export` | `[json\|markdown\|jsonl]` | | export |
-| `/help`, `/hotkeys` | | | help, keyboard shortcuts |
+| `/help`, `/hotkeys` | | | help; `/hotkeys` opens Settings → Keyboard (native TUI) |
 | `/exit` | | `/quit` | leave |
 | `/worktrees` | | | review and manage child worktrees |
 | `/copy` | | | copy assembled context as JSON |
@@ -96,6 +97,14 @@ names, usage, summaries, aliases). `parse` resolves aliases to the canonical nam
 
 Multiline input: a trailing backslash or an unclosed triple quote continues the
 prompt (`is_continuation`).
+
+In the native TUI, `/close` takes no arguments and does not exit, delete or
+archive a session, or cancel its active turn. It uses the tab close button's
+existing policy: with multiple tabs, remove the current tab and select the tab
+at the same position (or the previous tab if it was last). With just one tab,
+start a new session via `/new` instead; the original session tab is retained.
+Running sessions may appear again through the existing background-tab discovery.
+Use `/cancel` explicitly to stop a turn, or `/exit` (`/quit`) to leave chat.
 
 ## Adding a command
 

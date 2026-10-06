@@ -1,6 +1,6 @@
 """Native shell host actions never leak slash commands into model input."""
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -106,6 +106,85 @@ def _shell(tmp_path, monkeypatch, **client):
     controller = SimpleNamespace(client=SimpleNamespace(**client), session="s", view=view,
                                  switch_session=AsyncMock(), bootstrap=AsyncMock())
     return ShellActions(controller)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("index", [0, 1, 2])
+async def test_close_current_tab_selects_neighbor_without_cancelling(tmp_path, monkeypatch, index):
+    shell = _shell(tmp_path, monkeypatch, enqueue=AsyncMock(), cancel=AsyncMock(),
+                   delete_session=AsyncMock(), archive_session=AsyncMock())
+    shell.workspace = "current"
+    shell.tabs = [dict(id="left", workspace="other"),
+                  dict(id="middle", workspace="current"),
+                  dict(id="right", workspace="third")]
+    shell.controller.session = shell.tabs[index]["id"]
+    shell.workspace = shell.tabs[index]["workspace"]
+    shell.controller.forget = Mock()
+    shell.controller.cancel = AsyncMock()
+    shell.switch_project = AsyncMock()
+    closed = shell.tabs[index]
+    assert await shell.submit("/close") is True
+    assert closed not in shell.tabs
+    neighbor = shell.tabs[min(index, len(shell.tabs) - 1)]
+    shell.switch_project.assert_awaited_once_with(neighbor["workspace"], neighbor["id"])
+    shell.controller.forget.assert_called_once_with(closed["id"])
+    shell.controller.cancel.assert_not_awaited()
+    for method in vars(shell.client).values():
+        method.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_close_only_tab_uses_new_and_retains_original(tmp_path, monkeypatch):
+    shell = _shell(tmp_path, monkeypatch, select_agent=AsyncMock(), enqueue=AsyncMock())
+    shell.workspace = "current"
+    original = dict(id="s", workspace=shell.workspace, state="running")
+    shell.tabs = [original]
+    shell.controller.agent_name = "plan"
+    shell.controller.forget = Mock()
+    shell.controller.cancel = AsyncMock()
+
+    async def switch(session):
+        shell.controller.session = session
+        shell.tabs.append(dict(id=session, workspace=shell.workspace))
+
+    shell.switch = AsyncMock(side_effect=switch)
+    assert await shell.submit("/close") is True
+    assert shell.tabs[0] is original
+    assert len(shell.tabs) == 2
+    fresh = shell.controller.session
+    assert fresh != "s" and len(fresh) == 12
+    shell.client.select_agent.assert_awaited_once_with(fresh, "plan")
+    shell.controller.bootstrap.assert_awaited_once()
+    shell.controller.forget.assert_not_called()
+    shell.controller.cancel.assert_not_awaited()
+    shell.client.enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_close_rejects_arguments_and_routes_current_workspace(tmp_path, monkeypatch):
+    shell = _shell(tmp_path, monkeypatch, enqueue=AsyncMock())
+    shell.workspace = "project"
+    shell.close_tab = AsyncMock()
+    with pytest.raises(ValueError, match="Usage: /close"):
+        await shell.submit("/close other")
+    shell.close_tab.assert_not_awaited()
+    await shell.submit("/close")
+    shell.close_tab.assert_awaited_once_with("project", "s")
+    shell.client.enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_native_close_missing_and_background_tabs(tmp_path, monkeypatch):
+    shell = _shell(tmp_path, monkeypatch)
+    shell.tabs = [dict(id="s", workspace="current"), dict(id="s", workspace="other")]
+    shell.controller.forget = Mock()
+    shell.switch_project = AsyncMock()
+    await shell.close_tab("missing", "s")
+    assert len(shell.tabs) == 2
+    shell.controller.forget.assert_not_called()
+    await shell.close_tab("other", "s")
+    assert shell.tabs == [dict(id="s", workspace="current")]
+    shell.controller.forget.assert_called_once_with("s")
 
 
 def test_background_tab_completion_notifies_once(tmp_path, monkeypatch):

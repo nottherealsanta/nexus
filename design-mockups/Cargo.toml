@@ -1,0 +1,11 @@
+[package]
+name = "nexus-mockups"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.88"
+publish = false
+description = "Static, keyboard-operable Ratatui mock-ups of the Nexus native TUI (deletable; not part of the product)"
+
+[dependencies]
+nexus-widgets = { path = "../rust/widgets" }
+ratatui = "0.29"

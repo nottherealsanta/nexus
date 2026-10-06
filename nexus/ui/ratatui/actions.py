@@ -11,6 +11,8 @@ from ...ui_support.completion import root_agents
 
 import uuid
 import asyncio
+import time
+from collections import deque
 
 from ..cli.commands import help_text, parse
 from ...ui_support.tool_details import flatten
@@ -31,6 +33,38 @@ def plain(value):
 
 def labelled(value) -> list[str]:
     return [f"{row.label}: {row.value}" for row in flatten(plain(value))]
+
+
+_SUCCESS = ("Copied", "Saved", "Theme saved", "Reset", "Deleted", "Reconnected", "Speech model is ready")
+_WARNING = ("No session matching", "UI background actions busy", "Session changed", "Permission already",
+            "Question already", "Context details are unavailable", "Subagent transcript is unavailable", "Usage:",
+            "Showing the last successful")
+_ERROR = ("Display update failed", "Save failed", "Conflict", "Error")
+
+
+def notice_level(text: str) -> str:
+    """Toast level for a legacy notice string (plan §8.6); explicit levels win."""
+    if text.startswith(_ERROR) or "could not be shown" in text:
+        return "error"
+    if text.startswith(_SUCCESS) or text.endswith(" reset to default"):
+        return "success"
+    if text.startswith(_WARNING):
+        return "warning"
+    return "info"
+
+
+def split_toast(text: str) -> tuple[str, str]:
+    """Title and body of a toast: long messages split at the first natural break."""
+    text = " ".join(str(text).split())
+    if len(text) <= 48:
+        return text, ""
+    for sep in (" · ", ": ", ". ", "; "):
+        head, found, rest = text.partition(sep)
+        if found and 8 <= len(head) <= 80:
+            return head, rest
+    cut = text.rfind(" ", 0, 60)
+    cut = cut if cut > 20 else 60
+    return text[:cut], text[cut:].strip()
 
 
 class ShellActions:
@@ -64,7 +98,10 @@ class ShellActions:
         self.preview_image_media = ""
         self.preview_image_attachment_id = ""
         self.agent_definitions = {}
-        self.notice = ""
+        self._notice = ""  # the last legacy notice string (also the Disconnected banner state)
+        self.toasts = deque(maxlen=20)  # newest bounded list, sent in every snapshot
+        self._toast_id = int(time.time() * 1000)  # monotonic across restarts: the client shows each id once
+        self._last_toast = ("", "", 0.0)
         self.composer_restore = ""
         self.composer_insert = ""
         self.composer_auto_send = False
@@ -88,6 +125,7 @@ class ShellActions:
         self.model_sort = "updated"  # model picker order: updated|name (Ctrl+S)
         self.update_notice = ""  # "<version> available: <command>" shown in the footer
         self.sessions_truncated = False  # the host list hit its cap
+        self.sessions_request = 0  # bumped by /sessions: the client opens and focuses the sidebar
         self.archived_label = ""  # "Archived · N" under the sessions list, "" when none
         self.seen_seq: dict[str, int] = {}  # completion sequence viewed per session
         self.open_files: set[str] = set()  # modified files expanded in the details sidebar
@@ -105,6 +143,42 @@ class ShellActions:
     @property
     def client(self):
         return self.controller.client
+
+    @property
+    def notice(self) -> str:
+        return self._notice
+
+    @notice.setter
+    def notice(self, value: str) -> None:
+        self._notice = value
+        if value and not value.startswith("Disconnected"):  # a disconnect is a banner, not an event
+            self.toast(value)
+
+    def flash(self, text: str, level: str | None = None, **options) -> None:
+        """Set the legacy notice string and raise a toast with an explicit level."""
+        self._notice = str(text)
+        self.toast(text, level, **options)
+
+    def toast(self, text, level: str | None = None, *, key: str = "", body: str = "", action: dict | None = None) -> None:
+        """Queue a dismissible toast and mirror it to the Logs tab (plan §8.6)."""
+        from ...ui_support.text import escape_controls
+        text = str(text).strip()
+        if not text:
+            return
+        level = level or notice_level(text)
+        now = time.monotonic()
+        if self._last_toast[:2] == (text, level) and now - self._last_toast[2] < 5:
+            return  # a refresh loop must not repeat the same toast
+        self._last_toast = (text, level, now)
+        title, rest = split_toast(text)
+        self._toast_id += 1
+        self.toasts.append({
+            "id": self._toast_id, "level": level, "title": escape_controls(title)[:200],
+            "body": escape_controls(body or rest)[:400], "key": key, "action": action,
+        })
+        logs = getattr(self, "logs", None)
+        if logs is not None:
+            logs.add_notice(level, text)
 
     def refresh_session_tabs(self, rows):
         """Notify once when a known background tab finishes, never on discovery."""
@@ -264,7 +338,7 @@ class ShellActions:
         except (BrokenPipeError, ConnectionResetError):
             pass  # The terminal closed while the read-only refresh completed.
         except Exception as exc:  # noqa: BLE001 - surfaced like any other action failure
-            self.notice = str(exc)
+            self.flash(str(exc), "error")
 
     async def refresh_preview(self, session: str | None = None) -> bool:
         """Reload the next-turn context preview; an active session has none yet.
@@ -324,6 +398,19 @@ class ShellActions:
         result = await self.controller.cancel()
         self.composer_restore = "\n\n".join(result.returned_messages)
 
+    async def close_tab(self, workspace, session):
+        """Use the native tab-close policy without deleting or cancelling work."""
+        index = next((i for i, row in enumerate(self.tabs)
+                      if row["id"] == session and row["workspace"] == workspace), None)
+        if index is not None and len(self.tabs) == 1:
+            await self.command("/new", ())
+        elif index is not None:
+            self.tabs.pop(index)
+            self.controller.forget(session)
+            if self.controller.session == session and self.tabs:
+                row = self.tabs[min(index, len(self.tabs) - 1)]
+                await self.switch_project(row["workspace"], row["id"])
+
     async def submit(self, text, mode="steer"):
         command = parse(text)
         if command:
@@ -378,8 +465,11 @@ class ShellActions:
                                    ("Ctrl+X G · Agents", "/agent")):
                 self.items.append({"label": label, "command": command})
         elif name == "/hotkeys":
-            from ...ui_support.shortcuts import KEYBOARD_SHORTCUTS
-            self.show("Keyboard shortcuts", "\n".join(KEYBOARD_SHORTCUTS))
+            await self.workflows.open_page("keys")  # the same page as Settings → Keyboard
+        elif name == "/close":
+            if args:
+                raise ValueError("Usage: /close")
+            await self.close_tab(self.workspace, session)
         elif name == "/new":
             session_id = argument or uuid.uuid4().hex[:12]
             agent = self.controller.agent_name
@@ -419,6 +509,7 @@ class ShellActions:
                 rows = [row for row in recent_models(await self.client.list_models(selectable_only=True))
                         if row.get("provider") and row.get("id")]
                 for row in rows:
+                    row["original_metadata"] = dict(row)
                     row["ref"] = f"{row['provider']}/{row['id']}"
                 favorites = self.preferences.values["model_favorites"]
                 recent = self.preferences.values["model_recent"]
@@ -430,10 +521,11 @@ class ShellActions:
                         rows.append({**row, "group": title, "name": str(row.get("name") or row["ref"])})
                 self.picker("Select model", rows, "/model", "ref", layout="modal")
                 sort = "Updated ↓" if self.model_sort == "updated" else "Name A–Z"
-                self.panel_hint = f"Sort ctrl+s {sort}  Favorite ctrl+f  Refresh ctrl+r"
+                self.panel_hint = f"Details ctrl+i  Sort ctrl+s {sort}  Favorite ctrl+f  Refresh ctrl+r"
                 for item, row in zip(self.items, rows):
-                    # The name leads; the provider/model ref trails it dimmed. `●` marks the active model.
-                    item.update(group=row["group"], detail=row["ref"], current=row["ref"] == current)
+                    item.update(label=f"{row['original_metadata'].get('name') or row['id']} · {row['provider']}",
+                                group=row["group"], detail="", current=row["ref"] == current)
+                    self.workflows.model_item_metadata(item, row["original_metadata"])
                     state = dict(current=current, current_effort=self.controller.reasoning_effort, stored_override=self.controller.stored_override)
                     from ...ui_support.model_choice import preselected_effort, selection_effort
                     keep, commit = selection_effort(row, effort_source=self.controller.reasoning_effort_source, pending=None, touched=False, **state)

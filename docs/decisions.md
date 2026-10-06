@@ -146,7 +146,7 @@ platform support beyond macOS and glibc Linux is not verified (see [voice.md](vo
 
 ## The 2026-10 UI redesign: picks from the design mock-ups
 
-The 26 elements in `design-mockups/` were judged variant by variant and the
+The 26 elements in the (since removed) Textual `design-mockups/` were judged variant by variant and the
 picks applied to both surfaces ([surfaces.md](surfaces.md) has the result).
 Notable choices and why:
 
@@ -384,3 +384,32 @@ Settings is left only by an explicit close, never by an operation kind missing f
 an allow-list. A run-mode switch on an agent removes the other mode's fields so the
 file never holds a model and tiers that contradict each other. Not verified: native
 PTY rendering of the revamp.
+
+## Toasts replace the shell notice (2026-10)
+
+A notice was one string rendered as an `Error:` transcript line, whatever it was
+("Copied 120 characters" and an exception looked alike) and it lingered until the
+next event. Toasts carry a level, expire, and can be dismissed. The host owns *what*
+happened (id, level, text, optional action); the client owns *when* it disappears
+(timers, hover pause, dedup, dismissal), the same split as hover state, so no
+round-trip is needed to expire one. Ids are time-seeded so a restarted Python process
+cannot produce ids the client has already seen. Persistent conditions stay where
+they were (disconnected banner, update chip, transcript projection failures);
+toasts are for events. Every toast is mirrored to the Logs tab, so ephemerality never
+hides information. Esc does not dismiss toasts because Esc already stops and closes.
+The widget kit lives in `rust/widgets` so the design mock-ups and the TUI share one
+implementation.
+
+## Settings are typed pages the host builds and the client renders (2026-10)
+
+Settings had grown into menus with pages inside pages, and the rule that kept it
+"still Settings" (an allow-list of operation kinds) was the likely cause of Settings
+closing unexpectedly. A page is now data: the host builds it from host results, the
+client renders it, and every operation rebuilds it. That makes "never close
+unexpectedly" structural (an operation cannot replace the page with a panel), keeps
+the client free of settings logic (it only knows controls), and keeps what is shown
+equal to what the host reports (no optimistic local values to drift). The cost is a
+host round trip per change, which is local and fast. Scope is a property of the area
+(only per-file areas have it), not of the page chrome, so always-global areas never
+imply a choice that does not exist. Drill-ins are limited to editors, pickers and
+confirmations, which stack on the page and return to it.

@@ -130,6 +130,24 @@ default 120s) or cancel. At the window a running command is **yielded**: it
 becomes a background job and the result says `status: running` with a `job_id`.
 See [tools.md](tools.md#shell-jobs).
 
+## Post-tool continuation reliability
+
+Deterministic core tests verify that successful and error tool results, including
+a simulated subagent exhausting its iteration limit, reach the parent's next
+model request exactly once. A normal answer completes; a provider exception or
+`MessageStop(error)` fails. Bare EOF and an empty `MessageStop(end_turn)` complete
+without an answer. These cases release the lease and emit one terminal event;
+none retries the provider or redispatches the tool.
+
+Provider inspection confirms OpenAI Chat/Responses synthesize a final
+`MessageStop` even for an empty stream, defaulting to `end_turn`; collected tools
+promote an absent/`end_turn` stop to `tool_use`. Anthropic also defaults its final
+stop to `end_turn`. The reproduced core bug was an explicit error stop with
+collected tool calls: it previously dispatched them and continued. It now fails
+before dispatch, with a regression test. The original reported post-tool stall
+was not reproduced by these tests and remains unverified; no speculative retry
+was added. Provider tests here use fixtures, not live service requests.
+
 ## Changing the loop
 
 - New loop behavior needs a protocol method, not an import of a manager.
