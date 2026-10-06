@@ -1,5 +1,6 @@
 //! Viewer state: screen/state selection, theme, size, keys and mouse.
 use crate::ctx::Ctx;
+use crate::context::BLOCKS;
 use crate::fixture::*;
 use crate::screens::{registry, ScreenDef};
 use crate::{sessions, settings};
@@ -151,6 +152,16 @@ impl App {
                     self.v.picker_q = TextState::new("son");
                 }
                 self.focus.set("picker:search");
+            }
+            "context-header" => {
+                self.v.ctx_mode = match st { 3 => 2, 4 => 3, _ => 0 };
+                match st {
+                    0 => BLOCKS.iter().for_each(|b| { self.v.open.insert(format!("ctx:{b}")); }),
+                    2 => { self.v.open.insert("ctx:tools".into()); }
+                    _ => {}
+                }
+                if st == 3 { self.v.open.insert("ctx:tools".into()); }
+                self.focus.set("ctx:tools");
             }
             "palette" => self.focus.set("palette:search"),
             "confirm" => self.focus.set("confirm:cancel"),
@@ -754,6 +765,13 @@ impl App {
                 }
                 return self.toast(Level::Info, "Opened session", &format!("{sid} in this tab (mock)"));
             }
+            _ if id.starts_with("ctx:") && id != "ctx:retry" => {
+                if !self.v.open.remove(id) {
+                    self.v.open.insert(id.into());
+                }
+                return;
+            }
+            "ctx:retry" => return self.toast(Level::Info, "Retrying context preview", "(mock)"),
             "sessions:new" => return self.toast(Level::Success, "New session", "started in ~/repos/nexus"),
             "sessions:search" => {
                 self.focus.set("session:s1");

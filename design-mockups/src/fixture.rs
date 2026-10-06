@@ -185,6 +185,7 @@ impl World {
             Family { name: "Files", tools: vec![tool("read", true, 210), tool("write", true, 240), tool("edit", true, 380), tool("glob", true, 150)] },
             Family { name: "Search", tools: vec![tool("grep", true, 260), tool("web_search", false, 340), tool("web_fetch", true, 220)] },
             Family { name: "Shell", tools: vec![Tool { name: "bash", on: true, locked: true, tokens: 520 }, tool("bash_output", true, 180), tool("kill_shell", true, 90)] },
+            Family { name: "Other", tools: vec![tool("notebook_edit", true, 300), tool("todo_write", true, 140), tool("list_dir", true, 120), tool("apply_patch", true, 330), tool("search_replace", false, 210), tool("git_diff", true, 190), tool("git_log", true, 150), tool("http_get", false, 200), tool("sleep", true, 60), tool("screenshot", true, 280), tool("clipboard", false, 110), tool("speak", true, 130), tool("memory_read", true, 120), tool("memory_write", true, 140)] },
             Family { name: "Agents", tools: vec![tool("task", true, 410), tool("question", true, 160)] },
         ];
         let mcp = vec![
@@ -269,6 +270,7 @@ pub struct View {
     pub picker_target: Option<usize>,
     pub chat_state: usize,
     pub sidebar: bool,
+    pub ctx_mode: usize,
     pub page_scroll: Scroll,
     pub sess_scroll: nexus_widgets::ListState,
 }
@@ -304,6 +306,7 @@ impl View {
             picker_target: None,
             chat_state: 0,
             sidebar: false,
+            ctx_mode: 0,
             page_scroll: Scroll::default(),
             sess_scroll: Default::default(),
         }

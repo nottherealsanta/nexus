@@ -109,8 +109,12 @@ pub fn to_svg(buf: &Buffer, area: Rect, theme: usize) -> String {
                 if c.modifier.contains(Modifier::BOLD) {
                     attrs.push_str(r#" font-weight="bold""#);
                 }
-                if c.modifier.contains(Modifier::UNDERLINED) {
-                    attrs.push_str(r#" text-decoration="underline""#);
+                let (ul, st) = (c.modifier.contains(Modifier::UNDERLINED), c.modifier.contains(Modifier::CROSSED_OUT));
+                if ul || st {
+                    attrs.push_str(&format!(r#" text-decoration="{}{}""#, if ul { "underline" } else { "" }, if st { if ul { " line-through" } else { "line-through" } } else { "" }));
+                }
+                if c.modifier.contains(Modifier::ITALIC) {
+                    attrs.push_str(r#" font-style="italic""#);
                 }
                 if c.modifier.contains(Modifier::DIM) {
                     attrs.push_str(r#" opacity="0.6""#);

@@ -1,7 +1,7 @@
 //! Chat shell, gallery, toasts and the overlay screens.
 use crate::ctx::*;
 use crate::fixture::*;
-use crate::{sessions, settings};
+use crate::{context, sessions, settings};
 use nexus_widgets::layout::{centered, inset};
 use nexus_widgets::lists::*;
 use nexus_widgets::theme::Level;
@@ -19,6 +19,7 @@ pub fn registry() -> Vec<ScreenDef> {
     let mut v = vec![
         ScreenDef { key: "gallery", title: "Component gallery", states: &["controls", "inputs & lists", "feedback"], draw: gallery },
         ScreenDef { key: "chat", title: "Chat", states: &["idle", "streaming", "permission", "question", "recording", "empty", "disconnected"], draw: chat },
+        ScreenDef { key: "context-header", title: "Context header", states: &["all expanded", "compact (default)", "tools open", "loading", "error"], draw: context_header },
         ScreenDef { key: "toasts", title: "Toasts", states: &["one of each", "stacked + more", "dedup ×2", "with action"], draw: toasts },
         ScreenDef { key: "sessions", title: "Sessions (docked)", states: &["default", "searching", "archived", "rename", "multi-select", "empty"], draw: sessions_docked },
         ScreenDef { key: "sessions-drawer", title: "Sessions (narrow drawer)", states: &["default", "searching"], draw: sessions_drawer },
@@ -65,7 +66,7 @@ fn top_bar(c: &mut Ctx, area: Rect) {
     }
     c.text(x, area.y, "+", t.dim(), 1);
     let sid = c.ui.stop("top:sessions", Rect::new(area.x + area.width.saturating_sub(5), area.y, 4, 1));
-    c.text(area.x + area.width.saturating_sub(5), area.y, "[≡]", if sid.focused { t.text_style().add_modifier(Modifier::REVERSED) } else { t.dim() }, 3);
+    c.text(area.x + area.width.saturating_sub(5), area.y, " ≡ ", if sid.focused { t.text_style().add_modifier(Modifier::REVERSED) } else { t.dim() }, 3);
     c.text(area.x + 1, area.y + 1, "~/repos/nexus  ·  main  ·  no worktree", t.dim(), area.width / 2);
     let status = if c.v.chat_state == 6 { "disconnected".to_string() } else { "build · sonnet-5.5 · 41%".to_string() };
     put_right(c.buf, area.x + area.width - 1, area.y + 1, &status, if c.v.chat_state == 6 { Style::default().fg(t.error) } else { t.dim() });
@@ -74,7 +75,6 @@ fn top_bar(c: &mut Ctx, area: Rect) {
 
 fn transcript(c: &mut Ctx, area: Rect) {
     let t = c.theme();
-    let ctx_rows = [("System prompt", "2,140"), ("AGENTS.md", "3,880"), ("Tools · 24", "6,010"), ("Skills · 7", "1,120"), ("MCP · 3", "4,100")];
     let mut y = area.y;
     if c.v.chat_state == 5 {
         let m = centered(area, 56, 8);
@@ -86,16 +86,9 @@ fn transcript(c: &mut Ctx, area: Rect) {
         }
         return;
     }
-    for (name, tok) in ctx_rows {
-        c.text(area.x + 4, y, "◈", Style::default().fg(t.purple), 1);
-        c.text(area.x + 6, y, name, t.text_style().add_modifier(Modifier::BOLD), 24);
-        let dots = (area.width as usize).saturating_sub(40).min(40);
-        c.text(area.x + 6 + name.len() as u16 + 1, y, &"·".repeat(dots.saturating_sub(name.len())), Style::default().fg(t.border_strong), dots as u16);
-        put_right(c.buf, area.x + area.width - 3, y, &format!("{tok} tok"), t.dim());
-        y += 1;
-    }
-    put_right(c.buf, area.x + area.width - 3, y, "Context total · ~17,250 tokens", t.dim());
-    y += 2;
+    let mode = c.v.ctx_mode;
+    let used = context::draw(c, Rect::new(area.x, y, area.width, area.height), mode);
+    y += used + 1;
     let lines: Vec<(String, Style)> = vec![
         ("┃ Fix the token refresh race in auth/session.py".into(), Style::default().fg(t.accent)),
         ("".into(), t.text_style()),
@@ -161,11 +154,18 @@ fn composer(c: &mut Ctx, area: Rect) {
         c.text(box_.x + 2, box_.y + 1, " ", Style::default().add_modifier(Modifier::REVERSED), 1);
     }
     let y = box_.y + 3;
+    // Composer controls stay exactly as the TUI draws them today: plain words, no chips.
     let mut x = box_.x + 2;
-    for (i, (l, w)) in [("build", 7u16), ("sonnet-5.5", 12), ("medium", 8)].iter().enumerate() {
+    for (i, (l, col)) in [("build", t.blue), ("sonnet-5.5", t.text), ("medium", t.muted)].iter().enumerate() {
         let id = format!("composer:ctl{i}");
-        select(c.buf, c.ui, x, y, *w + 4, &id, l);
-        x += *w + 5;
+        let w = width(l) as u16;
+        let r = c.ui.stop(&id, Rect::new(x, y, w, 1));
+        let mut st = Style::default().fg(*col).bg(t.surface);
+        if r.focused {
+            st = st.add_modifier(Modifier::UNDERLINED | Modifier::BOLD);
+        }
+        c.text(x, y, l, st, w);
+        x += w + 2;
     }
     let ctxl = "41% · 82k/200k";
     put_right(c.buf, box_.x + box_.width - 12, y, ctxl, t.dim().bg(t.surface));
@@ -226,6 +226,11 @@ fn sessions_drawer(c: &mut Ctx) {
     c.area = narrow;
     chat(c);
     c.area = saved;
+}
+
+fn context_header(c: &mut Ctx) {
+    c.v.chat_state = 0;
+    chat(c);
 }
 
 // ---------------------------------------------------------------- toasts

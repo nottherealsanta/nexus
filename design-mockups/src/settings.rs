@@ -168,6 +168,9 @@ fn page(buf: &mut ratatui::buffer::Buffer, ui: &mut Ui, w: &World, v: &mut View,
     let name = AREAS.iter().find(|a| a.0 == area).map(|a| a.1).unwrap_or("");
     put(buf, f.x, f.y, name, title_st, f.w);
     f.y += 1;
+    if matches!(area, "voice" | "agents" | "mcp" | "tools") {
+        f.y += 1;
+    }
     match area {
         "appearance" => {
             intro_s(buf, ui, f, "How Nexus looks in this terminal.");

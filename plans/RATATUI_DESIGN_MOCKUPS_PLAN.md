@@ -22,6 +22,34 @@ UI redesign").
 
 ---
 
+## Revision 1 (after reviewing the mock-ups)
+
+These supersede anything below that says otherwise.
+
+1. **No square brackets around controls.** In dark and light themes buttons, toggles,
+   selects, segmented controls, steppers, icon buttons, list actions, the toast
+   `×` and the modal close are **filled chips** (padding plus a background); the
+   ordered-list add row is plain accent text (`+ Add model…`). The **mono** theme
+   has no fill, so it keeps brackets as its only affordance (`kit::br`).
+2. **The composer stays as it is today.** Its controls are plain words (agent in
+   the build colour, model, effort), not selects or chips; no composer redesign.
+3. **Toast countdown is barely visible**: the hairline is the level colour mixed
+   about 22% into the toast background (DIM in mono). It hints at time left; it is
+   not something to watch.
+4. **Context header redesigned, same look.** Keeps `◈` in the block colour, bold
+   title, dot leader, counts, right-aligned tokens, a blank row between blocks and
+   the `Context total` footer. Each block (system prompt, AGENTS.md, tools, skills,
+   MCP) is one focus/click target that expands in place (Enter or click, per block):
+   - Tools: grid of names, 2/3/4/5 columns by width, up to five rows, off tools
+     struck through, footer `N tools · M on · K not shown`.
+   - Skills: two columns, up to five rows, `~tokens` per skill.
+   - MCP: up to five servers with status dot, tool count, tokens, loading mode and
+     scope; failures show their message in the error colour.
+   - System prompt and AGENTS.md: a one-line preview.
+   - Loading shows `— tok` and `tokens unavailable` (never an invented estimate);
+     error shows a callout with Retry above the counts.
+   Mock-up screen: `context-header` (all expanded, compact, tools open, loading, error).
+
 ## Contents
 
 0. [What was asked](#0-what-was-asked)

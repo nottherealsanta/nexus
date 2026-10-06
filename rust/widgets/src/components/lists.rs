@@ -119,12 +119,14 @@ pub fn list(buf: &mut Buffer, ui: &mut Ui, area: Rect, items: &[ListItem], st: &
         if focused && !it.actions.is_empty() {
             let mut ax = x;
             for (k, a) in it.actions.iter().enumerate() {
-                let label = format!("[{a}]");
+                let (l, rr) = br(ui);
+                let label = format!("{l}{a}{rr}");
                 let w = width(&label) as u16;
                 if ax + w > area.x + area.width {
                     break;
                 }
-                put(buf, ax, ly, &label, Style::default().fg(t.muted).bg(bst.bg.unwrap_or(t.bg)), w);
+                let chip = if t.is_mono() { Style::default() } else { Style::default().fg(t.muted).bg(t.element) };
+                put(buf, ax, ly, &label, chip, w);
                 ui.hits.add(Rect::new(ax, ly, w, 1), &it.id, Part::Named(format!("action:{k}")));
                 ax += w + 1;
             }
@@ -183,7 +185,8 @@ pub fn ordered_list(buf: &mut Buffer, ui: &mut Ui, area: Rect, id: &str, items: 
         for (k, (name, gl)) in [("up", g.up), ("down", g.down), ("remove", g.close)].iter().enumerate() {
             let x = bx + k as u16 * 4;
             let bst = if *name == "remove" { st.fg(t.error) } else { st.fg(t.muted) };
-            put(buf, x, y, &format!("[{gl}]"), bst, 3);
+            let (l, rr) = br(ui);
+            put(buf, x, y, &format!("{l}{gl}{rr}"), bst, 3);
             ui.hits.add(Rect::new(x, y, 3, 1), &rid, Part::Named((*name).into()));
         }
     }
@@ -196,7 +199,7 @@ pub fn ordered_list(buf: &mut Buffer, ui: &mut Ui, area: Rect, id: &str, items: 
         if r.focused {
             focus_bar(buf, ui, area.x, ay, 1);
         }
-        put(buf, area.x + 7, ay, &format!("[ + {add_label} ]"), st.fg(t.accent), area.width.saturating_sub(7));
+        put(buf, area.x + 7, ay, &if t.is_mono() { format!("[ + {add_label} ]") } else { format!("+ {add_label}") }, st.fg(t.accent), area.width.saturating_sub(7));
     }
     ordered_list_height(items.len())
 }

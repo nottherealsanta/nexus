@@ -114,10 +114,11 @@ pub fn select(buf: &mut Buffer, ui: &mut Ui, x: u16, y: u16, w: u16, id: &str, v
         st = st.add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
     }
     fill(buf, Rect::new(x, y, w, 1), st);
-    put(buf, x, y, "[", st, 1);
+    let (l, rr) = br(ui);
+    put(buf, x, y, l, st, 1);
     let inner = w.saturating_sub(5) as usize;
     put(buf, x + 2, y, &truncate(value, inner, ui.glyphs.ellipsis), st, inner as u16);
-    put(buf, x + w - 3, y, &format!(" {}]", ui.glyphs.caret), st, 3);
+    put(buf, x + w - 3, y, &format!(" {}{rr}", ui.glyphs.caret), st, 3);
     r
 }
 

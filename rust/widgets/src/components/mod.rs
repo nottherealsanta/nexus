@@ -20,6 +20,16 @@ pub use inputs::*;
 pub use lists::*;
 pub use scroll::*;
 
+/// Edge characters for controls. Colour themes draw filled chips with padding; the
+/// mono theme has no fill, so it keeps brackets as the only affordance.
+pub fn br(ui: &Ui) -> (&'static str, &'static str) {
+    if ui.theme.is_mono() {
+        ("[", "]")
+    } else {
+        (" ", " ")
+    }
+}
+
 pub fn width(s: &str) -> usize {
     UnicodeWidthStr::width(s)
 }

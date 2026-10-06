@@ -55,7 +55,8 @@ pub fn button(buf: &mut Buffer, ui: &mut Ui, x: u16, y: u16, b: &Button) -> Resp
     }
     let label = if b.loading { ui.spinner().to_string() } else { b.label.to_string() };
     let inner = w as usize - 4;
-    let shown = format!("[ {:^inner$} ]", truncate(&label, inner, ui.glyphs.ellipsis), inner = inner);
+    let (l, rr) = br(ui);
+    let shown = format!("{l} {:^inner$} {rr}", truncate(&label, inner, ui.glyphs.ellipsis), inner = inner);
     put(buf, x, y, &shown, st, w);
     r
 }
@@ -65,11 +66,12 @@ pub fn icon_button(buf: &mut Buffer, ui: &mut Ui, x: u16, y: u16, id: &str, glyp
     let t = ui.theme;
     let r = ui.stop(id, Rect::new(x, y, 3, 1));
     let h = ui.hover_of(id);
-    let mut st = Style::default().fg(if danger { t.error } else { t.muted }).bg(mix(t.surface, t.element_hi, h));
+    let mut st = Style::default().fg(if danger { t.error } else { t.muted }).bg(mix(t.element, t.element_hi, h));
+    let (l, rr) = br(ui);
     if r.focused {
         st = st.add_modifier(Modifier::REVERSED | Modifier::BOLD);
     }
-    put(buf, x, y, &format!("[{glyph}]"), st, 3);
+    put(buf, x, y, &format!("{l}{glyph}{rr}"), st, 3);
     r
 }
 
@@ -79,12 +81,14 @@ pub const TOGGLE_W: u16 = 8;
 pub fn toggle_view(buf: &mut Buffer, ui: &Ui, x: u16, y: u16, on: bool, locked: bool, focused: bool) {
     let t = ui.theme;
     let g = ui.glyphs;
+    let (l, rr) = br(ui);
+    let chip = |fg, bg| Style::default().fg(fg).bg(bg);
     let (text, mut st) = if locked {
-        ("[LOCKED]".to_string(), t.quiet_style())
+        (format!("{l}LOCKED{rr}"), if t.is_mono() { t.quiet_style() } else { chip(t.quiet, t.element) })
     } else if on {
-        (format!("[{}]", g.toggle_on), t.strong(Style::default().fg(t.success)))
+        (format!("{l}{}{rr}", g.toggle_on), if t.is_mono() { t.strong(Style::default()) } else { chip(t.success, mix(t.surface, t.success, 0.22)).add_modifier(Modifier::BOLD) })
     } else {
-        (format!("[{}]", g.toggle_off), t.dim())
+        (format!("{l}{}{rr}", g.toggle_off), if t.is_mono() { t.dim() } else { chip(t.muted, t.element) })
     };
     if on && t.is_mono() {
         st = st.add_modifier(Modifier::BOLD);
@@ -185,11 +189,13 @@ pub fn segmented_view(buf: &mut Buffer, ui: &mut Ui, x: u16, y: u16, id: &str, o
     let t = ui.theme;
     let sep = if ui.glyphs.ascii { "|" } else { "│" };
     let mut cx = x;
-    put(buf, cx, y, "[", t.dim(), 1);
+    let (l, rr) = br(ui);
+    let strip = if t.is_mono() { Style::default() } else { Style::default().bg(t.element) };
+    put(buf, cx, y, l, t.dim().patch(strip), 1);
     cx += 1;
     for (i, o) in opts.iter().enumerate() {
         if i > 0 {
-            put(buf, cx, y, sep, t.dim(), 1);
+            put(buf, cx, y, if t.is_mono() { sep } else { " " }, t.dim().patch(strip), 1);
             cx += 1;
         }
         let w = (width(o) + 2) as u16;
@@ -200,7 +206,7 @@ pub fn segmented_view(buf: &mut Buffer, ui: &mut Ui, x: u16, y: u16, id: &str, o
                 Style::default().fg(t.bg).bg(t.accent)
             }
         } else {
-            Style::default().fg(t.text)
+            Style::default().fg(t.text).patch(strip)
         };
         if focused == Some(i) {
             st = st.add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
@@ -209,7 +215,7 @@ pub fn segmented_view(buf: &mut Buffer, ui: &mut Ui, x: u16, y: u16, id: &str, o
         ui.hits.add(Rect::new(cx, y, w, 1), id, Part::Named(format!("segment:{i}")));
         cx += w;
     }
-    put(buf, cx, y, "]", t.dim(), 1);
+    put(buf, cx, y, rr, t.dim().patch(strip), 1);
     cx + 1 - x
 }
 pub fn segmented(buf: &mut Buffer, ui: &mut Ui, x: u16, y: u16, id: &str, opts: &[&str], active: usize) -> Response {
@@ -263,11 +269,12 @@ pub fn stepper(buf: &mut Buffer, ui: &mut Ui, x: u16, y: u16, id: &str, value: &
     if r.focused {
         st = st.add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
     }
-    put(buf, x, y, &format!("[ {minus} ]"), st, 5);
+    let (l, rr) = br(ui);
+    put(buf, x, y, &format!("{l} {minus} {rr}"), st, 5);
     ui.hits.add(Rect::new(x, y, 5, 1), id, Part::Named("dec".into()));
     put(buf, x + 5, y, &format!("  {value}  "), Style::default().fg(t.text), width(value) as u16 + 4);
     let px = x + 5 + width(value) as u16 + 4;
-    put(buf, px, y, "[ + ]", st, 5);
+    put(buf, px, y, &format!("{l} + {rr}"), st, 5);
     ui.hits.add(Rect::new(px, y, 5, 1), id, Part::Named("inc".into()));
     r
 }

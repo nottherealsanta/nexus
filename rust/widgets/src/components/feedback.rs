@@ -134,7 +134,8 @@ pub fn toast_stack(buf: &mut Buffer, ui: &mut Ui, area: Rect, stack: &ToastStack
         let used = put(buf, x + 4, y, &title, st.add_modifier(Modifier::BOLD), tw);
         put(buf, x + 4 + used, y, &count, t.dim().bg(t.raised), 6);
         let id = format!("toast:{}", to.id);
-        put(buf, x + w - 4, y, &format!("[{}]", g.close), Style::default().fg(t.muted).bg(t.raised), 3);
+        let (l, rr) = br(ui);
+        put(buf, x + w - 4, y, &format!("{l}{}{rr}", g.close), Style::default().fg(t.muted).bg(t.raised), 3);
         // Body first: later registrations win, so the close button stays clickable.
         ui.hits.add(rect, &id, Part::Body);
         ui.hits.add(Rect::new(x + w - 4, y, 3, 1), &id, Part::Named("close".into()));
@@ -144,8 +145,9 @@ pub fn toast_stack(buf: &mut Buffer, ui: &mut Ui, area: Rect, stack: &ToastStack
             ly += 1;
         }
         if !to.action.is_empty() {
-            let label = format!("[ {} ]", to.action);
-            put(buf, x + 4, ly, &label, Style::default().fg(t.accent).bg(t.raised), w - 6);
+            let label = if t.is_mono() { format!("[ {} ]", to.action) } else { format!(" {} ", to.action) };
+            let ast = if t.is_mono() { Style::default() } else { Style::default().fg(t.accent).bg(t.element) };
+            put(buf, x + 4, ly, &label, ast, w - 6);
             ui.hits.add(Rect::new(x + 4, ly, width(&label) as u16, 1), &id, Part::Named("action".into()));
             ly += 1;
         }
@@ -153,7 +155,9 @@ pub fn toast_stack(buf: &mut Buffer, ui: &mut Ui, area: Rect, stack: &ToastStack
         let left = 1.0 - (to.age.as_secs_f32() / to.lifetime().as_secs_f32()).clamp(0.0, 1.0);
         let n = ((w - 2) as f32 * left).round() as usize;
         let rule = if g.ascii { "-" } else { "─" };
-        put(buf, x + 1, ly, &rule.repeat(n), Style::default().fg(c).bg(t.raised), w - 2);
+        // Deliberately faint: a hint of time left, not an animation to watch.
+        let faint = if t.is_mono() { Style::default().bg(t.raised).add_modifier(Modifier::DIM) } else { Style::default().fg(crate::theme::mix(t.raised, c, 0.22)).bg(t.raised) };
+        put(buf, x + 1, ly, &rule.repeat(n), faint, w - 2);
         out.push((to.id, rect));
         y += h;
     }
@@ -271,7 +275,8 @@ pub fn modal(buf: &mut Buffer, ui: &mut Ui, area: Rect, m: &Modal) -> (Rect, Rec
     fill(buf, area, Style::default().fg(t.text).bg(t.raised));
     draw_box(buf, ui, area, t.border_strong);
     put(buf, area.x + 2, area.y, &format!(" {} ", truncate(m.title, area.width.saturating_sub(16) as usize, g.ellipsis)), Style::default().fg(t.text).bg(t.raised).add_modifier(Modifier::BOLD), area.width - 4);
-    let close = format!(" [{}] esc ", g.close);
+    let (l, rr) = br(ui);
+    let close = if ui.theme.is_mono() { format!(" {l}{}{rr} esc ", g.close) } else { format!(" {} esc ", g.close) };
     put_right(buf, area.x + area.width - 2, area.y, &close, Style::default().fg(t.muted).bg(t.raised));
     ui.hits.add(Rect::new(area.x + area.width - 2 - width(&close) as u16, area.y, width(&close) as u16, 1), m.id, Part::Named("close".into()));
     let inner = Rect::new(area.x + 1, area.y + 1, area.width - 2, area.height.saturating_sub(3));
