@@ -61,6 +61,10 @@ def _bounded_value(value: Any, remaining: list[int]) -> Any:
     return f"<{type(value).__name__}>"
 
 
+def _count(value: Any) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
+
 def project_context_preview(result: Mapping[str, Any]) -> dict[str, Any]:
     """Bound and redact the runtime preview before it crosses the facade."""
     data = dict(result)
@@ -90,6 +94,15 @@ def project_context_preview(result: Mapping[str, Any]) -> dict[str, Any]:
             "enabled": bool(row.get("enabled", True)),
             "scope": safe_text(row.get("scope"), 40),
             "origin": safe_text(row.get("origin"), 256),
+            # Declared fields, flat and capped; the cost now (index line) and the recorded full size.
+            "frontmatter": {
+                safe_text(key, 40): redact_secrets(str(value)[:300])
+                for key, value in list((row.get("frontmatter") or {}).items())[:32]
+            } if isinstance(row.get("frontmatter"), Mapping) else {},
+            "index_line": redact_secrets(str(row.get("index_line") or "")[:2_048]),
+            "context_tokens": _count(row.get("context_tokens")),
+            "skill_tokens": _count(row.get("skill_tokens")),
+            "resources": _count(row.get("resources")),
         }
         for row in data.get("skills_index", ())[:512]
         if isinstance(row, Mapping)

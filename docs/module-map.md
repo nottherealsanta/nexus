@@ -130,6 +130,7 @@ here, so add a row when you add a file.
 | `checks.py` | Reusable verdict checks |
 | `directive.py` | The `⟦mock …⟧` actor directive |
 | `dsl.py` | Scenario DSL |
+| `mcp_server.py` | Dummy stdio MCP server (`tracker`, `docs`, `broken` profiles) wired only by the sandbox's generated `mcp.json` |
 | `provider.py` | `MockProvider`: stateless, request-keyed replay |
 | `runner.py` | Headless scenario runner |
 | `sandbox.py` | Dev-mode sandbox workspace |
@@ -145,9 +146,10 @@ here, so add a row when you add a file.
 | `context_pressure.py` | Large tool outputs and climbing scripted usage to exercise budgets and /cost |
 | `diff_review.py` | Edits that produce a real git diff in the sandbox repo |
 | `errors.py` | Provider failures and tool failures: everything must surface, nothing may hang |
+| `extensions.py` | A stdio MCP call, deferred MCP search and call, then a skill load, against the sandbox seeds |
 | `hello.py` | Smallest run: one streamed markdown reply |
 | `parallel_subagents.py` | Five `subagent` calls at once against the concurrency cap, mixed outcomes |
-| `parallel_tools.py` | Single, batched, failing-member and write batches: the TUI/web gutter states (⎾ │ ⎿) |
+| `parallel_tools.py` | Single, batched, failing-member and write batches: parallel call states |
 | `provider_failure.py` | Interactive: the provider fails once; the next message recovers |
 | `question.py` | Interactive: the question tool, branching on the answers |
 | `streaming_rich.py` | Rich markdown, wide lines, unicode and escape-looking text, with thinking |
@@ -465,6 +467,7 @@ here, so add a row when you add a file.
 | --- | --- |
 | `__init__.py` | Experimental native surface package |
 | `prototype.py` | Host adapter and labelled snapshot projection |
+| `context_sections.py` | Skills and MCP context sections: multi-line cards, the skill page and the MCP server page |
 | `wire.py` | Terminal schema-3 section deltas and ordered transcript suffixes |
 | `stream_projection.py` | Changed-tail projection for ordinary root text/thought deltas |
 | `transcript_data.py` | Bounded immutable-tool presentation cache |

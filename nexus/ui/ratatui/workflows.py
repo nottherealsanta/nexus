@@ -304,7 +304,7 @@ class Workflows(TierPages, SpeakPages):
             self.shell.items = []
         elif kind == "context_menu":
             self.menu("Context sections", [(label, {"kind": "context_show", "key": key}) for key,label in
-                (("system","System prompt"),("tools","Tools"),("agents","AGENTS.md"),("skills","Skills"),("mcp","MCP"))])
+                (("system","System prompt"),("environment","Environment"),("tools","Tools"),("agents","AGENTS.md"),("memory","MEMORY.md"),("skills","Skills"),("mcp","MCP"))])
         elif kind == "new_session":
             await self.shell.switch(operation["id"])
             await self.shell.select_agent(operation["agent"])
@@ -392,19 +392,18 @@ class Workflows(TierPages, SpeakPages):
                 if not fresh:
                     self.shell.notice = "Showing the last successful context preview from before the running turn"
             key = operation["key"]
-            if key == "system":
-                from ...ui_support.context import header_system_prompt
-                self.shell.show("System prompt · literal", header_system_prompt(preview) or "(empty)", layout="context")
+            if key in {"system", "environment", "memory"}:
+                from ...ui_support.context import header_prompt_sections
+                label = {"system": "System prompt", "environment": "Environment", "memory": "MEMORY.md"}[key]
+                self.shell.show(f"{label} · literal", header_prompt_sections(preview)[0][key] or "(empty)", layout="detail")
             elif key == "agents":
-                parts = [part for part in preview.included_parts if part.get("name") == "agents_md"]
+                from ...ui_support.context import header_prompt_sections
                 source = field(preview.system_files.get("agents", {}), "source", "AGENTS.md") or "AGENTS.md"
-                body = "\n\n---\n\n".join(str(part.get("text") or "") for part in parts)
+                body = header_prompt_sections(preview)[0]["agents"]
                 if field(preview.system_files.get("agents", {}), "truncated", False):
                     body += "\n\n---\n\nContent truncated by the host."
-                self.shell.show(f"AGENTS.md · {source}", body or "No AGENTS.md content is included in this request.", layout="context", format="markdown")
+                self.shell.show(f"AGENTS.md · {source}", body or "No AGENTS.md content is included in this request.", layout="detail", format="markdown")
             elif key == "tools":
-                from ...ui_support.context import tool_groups
-                self.tools_expanded = {group.key for group in tool_groups(list(preview.tools))}
                 self.tools_modal()
             elif key in {"skills", "mcp"}:
                 await self.context_extensions(key)
@@ -422,33 +421,34 @@ class Workflows(TierPages, SpeakPages):
             await self.agent_write(operation["field"], operation.get("index", 0), operation["ref"])
         elif kind == "agent_clear":
             await self.agent_write(operation["field"], operation.get("index", 0), "")
-        elif kind == "tools_toggle":
-            self.tools_expanded ^= {operation["key"]}
-            self.tools_modal()
-        elif kind == "tool_definition":
-            from ...ui_support.context import _compact_tokens, tool_groups
-            group = next(g for g in tool_groups(list(self.shell.preview.tools)) if g.key == operation["group"])
-            entry = group.entries[operation["index"]]
-            self.menu(f"Tool · {entry.title} · ~{_compact_tokens(entry.tokens)} tokens", [("Back", {"kind": "back"})], entry.body.splitlines(), layout="context")
+        elif kind in {"tool_show", "tool_definition"}:
+            self.tool_page(operation.get("name", ""), operation.get("fallback"))
         elif kind == "context_toggle":
             self.shell.preview = await self.client.select_context_extension(self.shell.controller.session,
                 operation["category"], operation["name"], operation["enabled"])
             if operation["category"] == "tools":
+                on_page = (self.shell.panel_toggle or {}).get("name") == operation["name"]
+                if on_page:
+                    self.back()  # the list underneath, rebuilt with the new state, then the page again
                 self.shell.panel_title = ""  # same dialog, new counts: replace it rather than stacking
                 self.tools_modal()
+                if on_page:
+                    self.tool_page(operation["name"])
             else:
                 self.shell.panel_title = ""  # refresh without growing the Back stack
                 await self.context_extensions(operation["category"])
-        elif kind == "tool_definitions":
-            from ...ui_support.context import tool_groups
-            groups = tool_groups(list(self.shell.preview.tools))
-            self.menu("Tool definitions", [(f"{g.title.removeprefix('MCP · ')} · {e.title}", {"kind": "tool_definition", "group": g.key, "index": i})
-                                           for g in groups for i, e in enumerate(g.entries)], layout="context")
         elif kind == "context_extension_details":
-            preview = self.shell.preview
-            rows = preview.skills_index if operation["category"] == "skills" else preview.mcp_servers
-            row = next((row for row in rows if (row.get("name") or row.get("id")) == operation["name"]), {})
-            self.menu(str(operation["name"]), [("Back", {"kind": "back"})], labelled(row), layout="context")
+            from . import context_sections
+            if operation["category"] == "skills":
+                await context_sections.skill_page(self, operation["name"])
+            else:
+                await context_sections.server_page(self, operation["name"])
+        elif kind == "context_index":
+            from . import context_sections
+            context_sections.literal_index(self, operation["category"])
+        elif kind == "mcp_detail":
+            self.menu(f"{operation['title']} · {operation['value'].get('name') or operation['value'].get('uri')}",
+                      [("Back", {"kind": "back"})], labelled(operation["value"]), layout="context")
         elif kind == "context_extensions":
             await self.context_extensions(operation["category"])
         elif kind == "agent_page":
@@ -717,7 +717,6 @@ class Workflows(TierPages, SpeakPages):
             self.edit("New file body · " + name, new_file_body(target["category"], name), {"kind": "settings_read", "scope": target["scope"],
                 "category": target["category"], "id": name, "sha256": "", "builtin": False, "overrides_builtin": False,
                 "refresh": True}, autosave=True, replace=True)
-    tools_expanded: set = set()
     agent_draft: dict = {}
 
     def builtin_note(self):
@@ -857,60 +856,45 @@ class Workflows(TierPages, SpeakPages):
         self.agent_page()
 
     def tools_modal(self):
-        """Expand families for definitions; right-side controls select session tools."""
-        from ...ui_support.context import _compact_tokens, tool_groups
+        """Thin list, one line per tool in the order sent: name, tokens, toggle. Enter opens the tool page."""
+        from ...ui_support.context import _compact_tokens, tool_entry
         preview = self.shell.preview
-        groups = tool_groups(list(preview.tools))
-        state = {str(row.get("name")): row.get("enabled") is not False for row in preview.tools if isinstance(row, dict)}
+        tools = [row for row in preview.tools if isinstance(row, dict)]
         locked = bool(getattr(preview, "context_locked", False)) or bool(self.agent_page_id)
-        rows, toggles = [], []
-        count = tokens = total = 0
-        for group in groups:
-            live = [entry for entry in group.entries if state.get(entry.title, True)]
-            count += len(live)
-            total += len(group.entries)
-            tokens += sum(entry.tokens for entry in live)
-            mark = "▾" if group.key in self.tools_expanded else "▸"
-            rows.append((f"{mark} {group.title} · {len(live)}/{len(group.entries)} · ~{_compact_tokens(sum(e.tokens for e in live))} tokens",
-                         {"kind": "tools_toggle", "key": group.key}))
-            toggles.append(None)
-            # Families start expanded; users may fold them explicitly.
-            if group.key not in self.tools_expanded:
-                continue
-            for index, entry in enumerate(group.entries):
-                enabled = state.get(entry.title, True)
-                rows.append((f"    {entry.title} · {entry.detail[:60]} · ~{_compact_tokens(entry.tokens)}",
-                             {"kind": "tool_definition", "group": group.key, "index": index}))
-                toggles.append((enabled, {"kind": "context_toggle", "category": "tools", "name": entry.title, "enabled": not enabled}))
+        entries = [(tool, tool_entry(tool)) for tool in tools]
+        live = [entry for tool, entry in entries if tool.get("enabled") is not False]
+        rows = [(entry.title, {"kind": "tool_show", "name": entry.title}) for _, entry in entries]
         rows.append(("Edit tools…", {"kind": "settings", "scope": "global", "category": "tools"}))
-        toggles.append(None)
-        note = ["Context locked after first turn" if locked else "Click a right-side toggle or press Space to switch a tool; Enter reads its definition."]
+        note = ["Context locked after first turn" if locked else "Enter details · Space or click toggle a tool"]
         if getattr(preview, "tools_supported", True) is False:
             note.append("The selected model does not support tools; none are sent.")
-        self.menu(f"Tools · {count} of {total} definitions · ~{_compact_tokens(tokens)} tokens", rows,
-                  note + ([] if groups else ["(none)"]), layout="context")
-        for item, toggle in zip(self.shell.items, toggles):
-            if toggle is not None:
-                item.update(toggle_enabled=toggle[0], toggle_operation=toggle[1], toggle_locked=locked)
+        self.menu(f"Tools · {len(live)} of {len(entries)} on · ~{_compact_tokens(sum(e.tokens for e in live))} tokens", rows,
+                  note + ([] if entries else ["(none)"]), layout="list")
+        for item, (tool, entry) in zip(self.shell.items, entries):
+            enabled = tool.get("enabled") is not False
+            item.update(trailing=f"~{_compact_tokens(entry.tokens)}", toggle_enabled=enabled, toggle_locked=locked,
+                        toggle_operation={"kind": "context_toggle", "category": "tools", "name": entry.title, "enabled": not enabled})
+
+    def tool_page(self, name, fallback=None):
+        """The second modal: everything about one tool definition, rendered as Markdown."""
+        from ...ui_support.context import page_markdown
+        tool = next((row for row in self.shell.preview.tools if isinstance(row, dict) and row.get("name") == name), fallback)
+        if tool is None:
+            self.shell.notice = f"Unknown tool {name}"
+            return
+        title, body = page_markdown(tool)
+        locked = bool(getattr(self.shell.preview, "context_locked", False)) or bool(self.agent_page_id)
+        body = ("*Context locked after first turn.*" if locked else "*Space switches this tool on or off.*") + "\n\n" + body
+        self.stack.append((self.shell.panel_title, self.shell.panel_lines, self.shell.items, self.form, self.form_target, self.shell.panel_layout, self.shell.panel_format, self.shell.panel_tones))
+        self.shell.show(title, body, layout="detail", format="markdown")
+        if not locked and name in {row.get("name") for row in self.shell.preview.tools if isinstance(row, dict)}:
+            on = tool.get("enabled") is not False
+            self.shell.panel_toggle = {"kind": "context_toggle", "category": "tools", "name": name, "enabled": not on}
 
     async def context_extensions(self, category):
+        from . import context_sections
         self.shell.preview = await self.client.inspect_context(self.shell.controller.session)
-        preview = self.shell.preview
-        rows = [row for row in (preview.skills_index if category == "skills" else preview.mcp_servers) if row.get("config_enabled") is not False]
-        locked = bool(getattr(preview, "context_locked", False)) or bool(self.agent_page_id)
-        ordered = sorted(rows, key=lambda row: (row.get("scope", "global"), str(row.get("name") or row.get("id"))))
-        items = []
-        for row in ordered:
-            name = row.get("name") or row.get("id")
-            scope = row.get("scope", "project" if category == "mcp" else "global")
-            items.append((f"{scope:<8} {name}", {"kind": "context_extension_details", "category": category, "name": name}))
-        self.menu(category.upper(), items,
-                  ["Context locked after first turn" if locked else "Click a right-side toggle or press Space to switch; Enter shows details."], layout="context")
-        for item, row in zip(self.shell.items, ordered):
-            enabled = row.get("enabled") is not False
-            item.update(toggle_enabled=enabled, toggle_locked=locked,
-                        toggle_operation={"kind": "context_toggle", "category": category,
-                                          "name": row.get("name") or row.get("id"), "enabled": not enabled})
+        context_sections.section(self, category)
 
     async def sessions(self):
         """The sessions surface is the left sidebar: refresh it and ask the client to open and focus it.

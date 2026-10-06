@@ -18,20 +18,50 @@ MAX_TEXT = 1_000_000
 MAX_ROWS = 512
 
 
-def header_system_prompt(result: p.ContextInspectResult) -> str:
-    """Exclude the separately displayed AGENTS.md from a complete header snapshot.
+def header_prompt_sections(result: p.ContextInspectResult) -> tuple[dict[str, str], bool]:
+    """Project only a complete, understood prompt; otherwise retain its literal text.
 
-    Keep the original text when parts are missing or clipped rather than lose
-    context that cannot be reconstructed from the inspection.
+    The boolean marks independent contributions (false means detail-only rows,
+    whose estimates must not double-count the full literal fallback).
     """
     system = result.system_text or ""
-    parts = [part for part in getattr(result, "included_parts", ()) if isinstance(part, Mapping)]
-    if any(part.get("name") == "agents_md" for part in parts):
-        texts = [str(part.get("text") or "") for part in parts]
-        if "\n\n".join(texts) == system:
-            return "\n\n".join(
-                text for part, text in zip(parts, texts) if part.get("name") != "agents_md")
-    return system
+    sections = {key: [] for key in ("system", "environment", "agents", "memory")}
+    names = {"system": "system", "identity": "system", "soul": "system", "core_prompt": "system",
+             "environment": "environment", "agents_md": "agents", "memory": "memory"}
+    parts = list(getattr(result, "included_parts", ()) or ())
+    texts = []
+    known = True
+    for part in parts:
+        if not isinstance(part, Mapping):
+            known = False
+            continue
+        text = str(part.get("text") or "")
+        texts.append(text)
+        name = part.get("name")
+        if name in names:
+            sections[names[name]].append(text)
+        elif name == "instructions":
+            # Scope wrappers are part of the literal request, not file metadata.
+            pattern = r'<instructions\s+scope=["\'](soul|agent|core|memory|agents)["\']\s*>.*?</instructions>'
+            matches = list(re.finditer(pattern, text, re.DOTALL))
+            remainder = re.sub(pattern, "", text, flags=re.DOTALL)
+            if not matches or remainder.strip():
+                known = False
+            for match in matches:
+                key = {"memory": "memory", "agents": "agents"}.get(match[1], "system")
+                sections[key].append(match[0])
+        elif name not in {"skills", "skills_index", "skills index", "mcp_index"}:
+            known = False
+    complete = known and "\n\n".join(texts) == system
+    projected = {key: "\n\n".join(values) for key, values in sections.items()}
+    if not complete:
+        projected["system"] = system
+    return projected, complete
+
+
+def header_system_prompt(result: p.ContextInspectResult) -> str:
+    """Return core instructions only when the complete named prompt is known."""
+    return header_prompt_sections(result)[0]["system"]
 
 
 def _plain(value: object, limit: int | None = MAX_TEXT) -> str:
@@ -414,6 +444,52 @@ def tool_entry(tool: Mapping[str, object]) -> ContextEntry:
         tokens=estimate_tokens(raw),
         detail=f"{len(rows)} param{'s' if len(rows) != 1 else ''}" + (f" · {first[:90]}" if first else ""),
     )
+
+
+def _flat_params(schema: object, prefix: str = "", depth: int = 0) -> list[tuple[str, str, str, str, str]]:
+    """Parameter rows (name, type, required, default, description); nested objects and arrays are flattened."""
+    properties = schema.get("properties") if isinstance(schema, Mapping) else None
+    if not isinstance(properties, Mapping):
+        return []
+    required = set(schema.get("required") or ())
+    rows = []
+    for name, prop in list(properties.items())[:64]:
+        prop = prop if isinstance(prop, Mapping) else {}
+        kind = prop.get("type", "any")
+        kind = " \\| ".join(map(str, kind)) if isinstance(kind, list) else str(kind)
+        enum = prop.get("enum")
+        if isinstance(enum, list):
+            shown = " \\| ".join(map(str, enum[:32]))
+            kind = shown + (f" … +{len(enum) - 32} more" if len(enum) > 32 else "")
+        default = prop.get("default")
+        key = f"{prefix}{name}"
+        rows.append((_plain(key, 120), kind.replace("\n", " "), "yes" if name in required else "no",
+                     "—" if default is None else _plain(default, 80).replace("|", "\\|"),
+                     _plain(prop.get("description", ""), 300).replace("\n", " ").replace("|", "\\|")))
+        if depth < 3:
+            nested = prop.get("items") if prop.get("type") == "array" and isinstance(prop.get("items"), Mapping) else prop
+            rows.extend(_flat_params(nested, f"{key}{'[]' if nested is not prop else ''}.", depth + 1))
+    return rows
+
+
+def page_markdown(tool: Mapping[str, object]) -> tuple[str, str]:
+    """Title and Markdown body for one tool's full definition page."""
+    entry = tool_entry(tool)
+    enabled = tool.get("enabled") is not False
+    schema = tool.get("input_schema") or {}
+    meta = [("Group", tool.get("group")), ("Bundle", tool.get("bundle")), ("Source", tool.get("source")),
+            ("Permission", tool.get("permission")), ("Read-only", tool.get("read_only")), ("Timeout", tool.get("timeout_s"))]
+    facts = " · ".join(f"**{k}** {_plain(v, 80)}" for k, v in meta if v not in (None, ""))
+    params = _flat_params(schema)
+    table = ["| Name | Type | Required | Default | Description |", "| --- | --- | --- | --- | --- |"]
+    table += [f"| `{n}` | {t} | {r} | {d} | {desc} |" for n, t, r, d, desc in params]
+    body = "\n\n".join(part for part in (
+        facts,
+        "## Description\n" + (_plain(tool.get("description") or "", MAX_TEXT) or "(no description)"),
+        "## Parameters\n" + ("\n".join(table) if params else "(none)"),
+        f"## Schema (as sent)\n```json\n{_plain(schema, None)}\n```",
+    ) if part)
+    return f"Tool · {entry.title} · {'on' if enabled else 'off'} · ~{_compact_tokens(entry.tokens)} tokens", body
 
 
 def tool_groups(tools: list[object]) -> list[ContextGroup]:

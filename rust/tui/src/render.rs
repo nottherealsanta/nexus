@@ -483,7 +483,11 @@ fn same_block(a: &crate::bridge::Content, b: &crate::bridge::Content) -> bool {
 }
 impl Cache {
     /// The page for this snapshot, parsed once per revision.
-    pub fn page_for(&mut self, revision: u64, raw: &serde_json::Value) -> std::sync::Arc<crate::settings_page::Page> {
+    pub fn page_for(
+        &mut self,
+        revision: u64,
+        raw: &serde_json::Value,
+    ) -> std::sync::Arc<crate::settings_page::Page> {
         if let Some((rev, page)) = &self.settings_page {
             if *rev == revision {
                 return page.clone();
@@ -982,6 +986,29 @@ pub fn editor_text(editor: &Editor, secret: bool, palette: &Palette) -> Vec<Line
     }
     lines
 }
+/// First paint, before the host's first snapshot: the product name on the plain
+/// background, so the terminal answers the launch immediately while the session loads.
+pub fn draw_splash(frame: &mut Frame) {
+    let p = Palette::new(false);
+    let area = frame.area();
+    frame.render_widget(
+        Block::default().style(Style::default().bg(p.background).fg(p.text)),
+        area,
+    );
+    if area.height == 0 {
+        return;
+    }
+    let row = Rect::new(area.x, area.y + area.height / 2, area.width, 1);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "Nexus",
+            Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
+        )))
+        .alignment(ratatui::layout::Alignment::Center),
+        row,
+    );
+}
+
 pub fn draw(
     frame: &mut Frame,
     s: &Snapshot,
@@ -1563,7 +1590,14 @@ pub fn draw(
         } else if let Some(raw) = s.settings_page.as_ref() {
             let page = cache.page_for(s.revision, raw);
             let mut state = std::mem::take(&mut cache.page_state);
-            crate::settings_page::draw(frame, inner, &page, &mut state, &p, s.theme == "nexus-light");
+            crate::settings_page::draw(
+                frame,
+                inner,
+                &page,
+                &mut state,
+                &p,
+                s.theme == "nexus-light",
+            );
             cache.page_state = state;
         } else if !s.items.is_empty() && !panel_detail {
             dialogs::draw_menu(
@@ -2189,7 +2223,11 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(visible_sessions(&s, ""), vec![0, 1, 2]);
-        assert_eq!(visible_sessions(&s, "REFRESH"), vec![0, 1], "case-insensitive");
+        assert_eq!(
+            visible_sessions(&s, "REFRESH"),
+            vec![0, 1],
+            "case-insensitive"
+        );
         assert_eq!(visible_sessions(&s, "licenc"), vec![2]);
         assert!(visible_sessions(&s, "zzz").is_empty());
         let p = Palette::new(false);
@@ -2203,10 +2241,17 @@ mod tests {
         };
         let picked = line(2);
         assert_eq!(picked.spans[0].content, "▌", "the selected row has the bar");
-        assert_eq!(picked.spans[2].style.bg, Some(p.element_hi), "and a raised row");
+        assert_eq!(
+            picked.spans[2].style.bg,
+            Some(p.element_hi),
+            "and a raised row"
+        );
         assert!(picked.spans[2].style.add_modifier.contains(Modifier::BOLD));
         let plain = line(1);
-        assert_eq!(plain.spans[0].content, " ", "unselected, not current, no bar");
+        assert_eq!(
+            plain.spans[0].content, " ",
+            "unselected, not current, no bar"
+        );
         // The selection never changes what is shown or how hits map.
         let without = session_sidebar(&s, &p, 27, 0, "", false, None);
         assert_eq!(rows.len(), without.len());
@@ -2233,14 +2278,26 @@ mod tests {
                             assert_eq!(r.tabs.height, u16::from(width < 90));
                         }
                         if width == 80 {
-                            assert_eq!(r.sessions.width, 0, "the preference alone never opens a drawer");
-                            let opened = Snapshot { sessions_drawer: true, ..Default::default() };
+                            assert_eq!(
+                                r.sessions.width, 0,
+                                "the preference alone never opens a drawer"
+                            );
+                            let opened = Snapshot {
+                                sessions_drawer: true,
+                                ..Default::default()
+                            };
                             let r = regions(Rect::new(0, 0, width, 50), &opened, 7, false);
                             assert!(r.sessions.width > 0 && r.sessions.width <= 40);
-                            assert_eq!(r.transcript.width, 80, "a drawer never shrinks the conversation");
+                            assert_eq!(
+                                r.transcript.width, 80,
+                                "a drawer never shrinks the conversation"
+                            );
                             if false {
                                 assert!(r.sessions.width <= 40);
-                                assert_eq!(r.transcript.width, 80, "a drawer never shrinks the conversation");
+                                assert_eq!(
+                                    r.transcript.width, 80,
+                                    "a drawer never shrinks the conversation"
+                                );
                             }
                         }
                         if r.details.width > 0 {

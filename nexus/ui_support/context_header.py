@@ -1,7 +1,7 @@
 """Pure context-header blocks for the native shell.
 
 ``header_blocks`` reduces an inspected request into the labelled blocks that
-open every conversation (System prompt, Tools, AGENTS.md, Skills, MCP): label,
+open every conversation (System prompt, Environment, AGENTS.md, MEMORY.md, Skills, Tools, MCP): label,
 one-line/column preview, full detail, token estimate and colour. No UI toolkit
 is imported, so both surfaces show the same content.
 """
@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .context import estimate_tokens, header_system_prompt, tool_entry
+from .context import estimate_tokens, header_prompt_sections, tool_entry
 
 import hashlib
 
@@ -42,7 +42,7 @@ NEUTRAL = "$nx-label-neutral"
 
 @dataclass(frozen=True)
 class HeaderBlock:
-    key: str  # system | tools | agents | skills | mcp (the context_show keys)
+    key: str  # system | environment | tools | agents | memory | skills | mcp (the context_show keys)
     label: str
     body: str
     detail: str
@@ -53,15 +53,14 @@ class HeaderBlock:
 
 
 def one_line_preview(text: str, limit: int = 100) -> str:
-    """The header's preview: the first non-empty line, the rest counted."""
+    """The header's preview: the first non-empty line, clipped."""
     lines = [line for line in text.splitlines() if line.strip()]
     if not lines:
         return ""
     first = lines[0].strip()
     if len(first) > limit:
         first = first[:limit - 1].rstrip() + "…"
-    rest = len(lines) - 1
-    return first + (f"  … +{rest} more line{'s' if rest != 1 else ''}" if rest else "")
+    return first
 
 
 def render_columns(labels: list[str], columns: int = 3) -> str:
@@ -144,14 +143,15 @@ def tool_detail_lines(groups: Mapping[str, list[dict]]) -> list[str]:
 
 
 def header_blocks(result: Any, color: str) -> list[HeaderBlock]:
-    """The five header blocks of an inspected request, in display order."""
-    prompt = header_system_prompt(result)
+    """The named header blocks of an inspected request, in display order."""
+    sections, split = header_prompt_sections(result)
+    prompt = sections["system"]
     groups, mcp_tools = group_tools([t for t in result.tools if not isinstance(t, Mapping) or t.get('enabled') is not False])
     labels = [f"{group}({len(rows)})" if len(rows) > 1 else group for group, rows in groups.items()]
     builtin = [tool for rows in groups.values() for tool in rows]
-    agents = next(
-        (str(part.get("text") or "") for part in result.included_parts
-         if isinstance(part, Mapping) and part.get("name") == "agents_md"), "")
+    agents = sections["agents"]
+    environment = sections["environment"]
+    memory = sections["memory"]
     skills = [row for row in result.skills_index if isinstance(row, dict)]
     skill_details = [f"{row.get('name', '?')} · {row.get('scope', '')} · {row.get('origin', '')}\n{row.get('description', '')}" for row in skills]
     skill_part = next((part for part in result.included_parts if isinstance(part, Mapping)
@@ -183,11 +183,15 @@ def header_blocks(result: Any, color: str) -> list[HeaderBlock]:
         return HeaderBlock(key, label, body, detail, tokens, paint if body else NEUTRAL, tuple(inventory), note)
     return [
         block("system", "System prompt", one_line_preview(prompt), prompt or "(empty)", estimate_tokens(prompt)),
+        block("environment", "Environment", one_line_preview(environment), environment or "(none)",
+              estimate_tokens(environment) if split else None, color),
+        block("agents", "AGENTS.md", one_line_preview(agents), agents or "(none)", estimate_tokens(agents) if split else None),
+        block("memory", "MEMORY.md", one_line_preview(memory), memory or "(none)",
+              estimate_tokens(memory) if split else None),
+        block("skills", "Skills", scope_counts(skills) + ("\n" + inventory_preview(skill_names, 2) if skills else ""),
+              "\n\n".join(skill_details) or "(none)", skill_tokens if split else None, color if skills else NEUTRAL, inventory=skill_names),
         block("tools", "Tools", inventory_preview(labels, 3), "\n".join(tool_detail_lines(groups)) or "(none)",
               sum(tool_entry(tool).tokens for tool in builtin), inventory=labels),
-        block("agents", "AGENTS.md", one_line_preview(agents), agents or "(none)", estimate_tokens(agents)),
-        block("skills", "Skills", scope_counts(skills) + ("\n" + inventory_preview(skill_names, 2) if skills else ""),
-              "\n\n".join(skill_details) or "(none)", skill_tokens, color if skills else NEUTRAL, inventory=skill_names),
         block("mcp", "MCP", scope_counts(servers) + ("\n" + inventory_preview(mcp_labels, 1) if mcp_labels else "")
               + (f"\n~{deferred} tokens deferred" if deferred else ""), mcp_detail, mcp_tokens,
               color if servers or mcp_labels else NEUTRAL, inventory=mcp_labels,

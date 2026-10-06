@@ -502,6 +502,22 @@ class ContextInspect(msgspec.Struct, tag=True, frozen=True):
     session: str
 
 
+class McpServerShow(msgspec.Struct, tag=True, frozen=True):
+    """Read retained MCP state without connecting or listing remote catalogs."""
+
+    session: str
+    name: str
+    max_bytes: int = 262_144
+
+
+class SkillInspect(msgspec.Struct, tag=True, frozen=True):
+    """Read a pinned skill snapshot without enabling or invoking it."""
+
+    session: str
+    name: str
+    max_body_bytes: int = 65_536
+
+
 class FileSearch(msgspec.Struct, tag=True, frozen=True):
     """Search workspace-relative file paths for composer completion."""
 
@@ -741,6 +757,8 @@ Command = (
     | AgentDefaultSet
     | ToolsList
     | ContextInspect
+    | SkillInspect
+    | McpServerShow
     | ContextMcpLoadingSelect
     | ContextExtensionSelect
     | FileSearch
@@ -834,6 +852,8 @@ COMMANDS: tuple[type, ...] = (
     AgentDefaultSet,
     ToolsList,
     ContextInspect,
+    SkillInspect,
+    McpServerShow,
     ContextMcpLoadingSelect,
     ContextExtensionSelect,
     FileSearch,
@@ -1286,6 +1306,43 @@ class ContextInspectResult(msgspec.Struct, tag=True, frozen=True):
     omitted: list[str] = msgspec.field(default_factory=list)
 
 
+class McpServerShowResult(msgspec.Struct, tag=True, frozen=True):
+    name: str
+    status: str = "unavailable"
+    scope: str = "unavailable"
+    enabled: bool = False
+    transport: str = ""
+    command_label: str = ""
+    tool_loading: str = ""
+    tool_loading_source: str = ""
+    server_info: dict[str, Any] = msgspec.field(default_factory=dict)
+    instructions: str = ""
+    tools: list[dict[str, Any]] = msgspec.field(default_factory=list)
+    resources: list[dict[str, Any]] = msgspec.field(default_factory=list)
+    prompts: list[dict[str, Any]] = msgspec.field(default_factory=list)
+    detail: dict[str, Any] = msgspec.field(default_factory=dict)
+    error: str = ""
+    clipped: bool = False
+    redacted_for_display: bool = True
+
+
+class SkillInspectResult(msgspec.Struct, tag=True, frozen=True):
+    session: str
+    name: str
+    status: Literal["ok", "error"] = "ok"
+    error: str | None = None
+    manifest_generation: int | None = None
+    enabled: bool = False
+    scope: str = ""
+    origin: str = ""
+    metadata: dict[str, Any] = msgspec.field(default_factory=dict)
+    frontmatter_text: str = ""
+    body: str = ""
+    body_bytes: int = 0
+    truncated: bool = False
+    redacted_for_display: bool = True
+
+
 class FileSearchResult(msgspec.Struct, tag=True, frozen=True):
     paths: list[str] = msgspec.field(default_factory=list)
 
@@ -1498,6 +1555,8 @@ Result = (
     | AgentDefaultSetResult
     | ToolsListResult
     | ContextInspectResult
+    | SkillInspectResult
+    | McpServerShowResult
     | FileSearchResult
     | GitDiffResult
     | WorktreeListResult
@@ -1578,6 +1637,8 @@ RESULTS: tuple[type, ...] = (
     AgentDefaultSetResult,
     ToolsListResult,
     ContextInspectResult,
+    SkillInspectResult,
+    McpServerShowResult,
     FileSearchResult,
     GitDiffResult,
     WorktreeListResult,

@@ -69,7 +69,7 @@ Pure presentation helpers, importable by all surfaces. Rich is used only by
   a left accent bar. Glyphs: braille spinner while working, `●` needs input,
   `✓` done, `·` idle, `◇` archived.
 - **Conversation:** the **context header** opens every conversation (System
-  prompt, Tools, AGENTS.md, Skills, MCP), then the timeline.
+  prompt, Environment, AGENTS.md, MEMORY.md, Skills, Tools, MCP), then the timeline.
 - **Composer:** editor (no border, no key-hint row), then
   `Agent  model provider  effort`, then context `3k (2%)` (plus `price ↑ at
   272K` for a tiered model); the activity bar under it marks the price-tier
@@ -97,14 +97,19 @@ footers share the same left inset in both surfaces.
 - The first reply of a turn sits under its agent label (`◆ Build`, agent
   color), indented two cells.
 - Ordinary tool calls are one muted, clipped summary line, consecutive calls
-  tightly stacked; calls in one model iteration share batch glyphs (`⎾ │ ⎿`).
+  tightly stacked. Native Ratatui uses no batch glyphs or result gutters; the
+  legacy browser retains its existing batch decoration.
   Read and Grep show arguments without appending a repeated result summary.
   Todo shows up to five item rows; longer lists show the first four and `X more`.
   Activating a call opens its full parameters/result in a modal, never inline.
   A **running shell** (Bash) additionally shows its latest four output lines
   under the call (`⎿`) with the earlier lines counted, until it completes.
-- **Subagent calls** use two lines: type and description, then recent tool calls
-  while running (no elapsed time), or tool count and elapsed time when finished.
+- **Subagent calls** in native Ratatui have a colored `◆` identity/description
+  header, the latest child tool activity while running, and a muted metrics row.
+  Completed calls retain the header and metrics, not the activity preview. A
+  running header animates the diamond color; there is no checkmark or result
+  gutter. A blank line separates each card from adjacent transcript blocks.
+  The legacy browser keeps its existing recent-tool preview.
   Subagent metrics elsewhere also omit duration while the child is working. Clicking opens the
   child's page, laid out like the root (its own context header showing the request
   it actually sent, a grey Task block, a read-only composer, details panel); Esc

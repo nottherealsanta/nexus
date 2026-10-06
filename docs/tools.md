@@ -18,6 +18,28 @@ translated one-way by `tools/names.py` and never widen anything.
 | `loader.py` | hot-loads `.py` tool modules ([extensions.md](extensions.md)) |
 | `builtin/` | the built-in tools and their private helpers |
 
+## Per-session selection
+
+Before the first turn, the host's `ContextExtensionSelect` can switch individual
+tools, skills, and MCP servers off and back on. Tool names match exactly (use
+canonical names such as `read` and `subagent`). Disabled tools are removed from
+the provider's schemas and dispatch catalogue, including dynamically added
+subagent tools and MCP search wrappers. Agent allowlists remain authoritative:
+tools excluded by the selected agent are hidden rather than offered as toggles.
+Settings-disabled tools cannot be re-enabled by session selection.
+
+The selection is persisted and replayed with the session. It locks while a turn
+is active and permanently after the first `turn.started`; there is no additional
+last-tool guard. Context inspection retains disabled selectable rows with
+`enabled: false`, and `config_enabled: false` where Settings disabled a tool.
+These rows retain the full description and input schema from the pinned tool
+catalogue, so inspection can show the cost of re-enabling them. Enabled and
+disabled rows include `source` (`built-in`, `extension`, or `mcp:<server>`),
+`bundle`, and `read_only` (the inverse of the spec's `mutates`). Extension rows
+include their source path as `origin`, workspace-relative where possible.
+`timeout_s` is included only when declared; `permission` is omitted because
+the current `ToolSpec` does not declare a permission category.
+
 ## The contract
 
 ```python

@@ -24,16 +24,29 @@ pub struct Scope {
 #[derive(Clone, Debug)]
 pub enum Block {
     Heading(String),
-    Note { text: String, tone: String },
+    Note {
+        text: String,
+        tone: String,
+    },
     Gap,
     Row(Row),
     Tabs(Tabs),
     Ordered(Ordered),
     Buttons(Buttons),
     Section(Section),
-    Table { cols: Vec<(String, u16)>, rows: Vec<Vec<String>> },
-    Progress { fraction: f32, label: String },
-    Callout { level: String, text: String, action: Option<Btn> },
+    Table {
+        cols: Vec<(String, u16)>,
+        rows: Vec<Vec<String>>,
+    },
+    Progress {
+        fraction: f32,
+        label: String,
+    },
+    Callout {
+        level: String,
+        text: String,
+        action: Option<Btn>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -48,11 +61,36 @@ pub struct Row {
 
 #[derive(Clone, Debug)]
 pub enum Control {
-    Toggle { on: bool, locked: String, op: Value },
-    Segmented { options: Vec<String>, values: Vec<Value>, active: usize, op: Value },
-    Select { value: String, options: Vec<(String, Value)>, op: Value },
-    Stepper { display: String, value: f64, min: f64, max: f64, step: f64, op: Value },
-    Text { value: String, secret: bool, placeholder: String, op: Value },
+    Toggle {
+        on: bool,
+        locked: String,
+        op: Value,
+    },
+    Segmented {
+        options: Vec<String>,
+        values: Vec<Value>,
+        active: usize,
+        op: Value,
+    },
+    Select {
+        value: String,
+        options: Vec<(String, Value)>,
+        op: Value,
+    },
+    Stepper {
+        display: String,
+        value: f64,
+        min: f64,
+        max: f64,
+        step: f64,
+        op: Value,
+    },
+    Text {
+        value: String,
+        secret: bool,
+        placeholder: String,
+        op: Value,
+    },
     Button(Btn),
     Readout(String),
 }
@@ -122,18 +160,32 @@ fn op(v: &Value) -> Value {
     v.get("operation").cloned().unwrap_or(Value::Null)
 }
 fn arr<'a>(v: &'a Value, key: &str) -> &'a [Value] {
-    v.get(key).and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[])
+    v.get(key)
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
 }
 
 fn btn(v: &Value) -> Btn {
-    Btn { label: s(v, "label"), variant: s(v, "variant"), op: op(v) }
+    Btn {
+        label: s(v, "label"),
+        variant: s(v, "variant"),
+        op: op(v),
+    }
 }
 
 fn control(v: &Value) -> Control {
     match s(v, "c").as_str() {
-        "toggle" => Control::Toggle { on: b(v, "on", false), locked: s(v, "locked"), op: op(v) },
+        "toggle" => Control::Toggle {
+            on: b(v, "on", false),
+            locked: s(v, "locked"),
+            op: op(v),
+        },
         "segmented" => Control::Segmented {
-            options: arr(v, "options").iter().map(|o| o.as_str().unwrap_or("").to_string()).collect(),
+            options: arr(v, "options")
+                .iter()
+                .map(|o| o.as_str().unwrap_or("").to_string())
+                .collect(),
             values: arr(v, "values").to_vec(),
             active: u(v, "active"),
             op: op(v),
@@ -142,7 +194,12 @@ fn control(v: &Value) -> Control {
             value: s(v, "value"),
             options: arr(v, "options")
                 .iter()
-                .map(|o| (o.get(0).and_then(Value::as_str).unwrap_or("").to_string(), o.get(1).cloned().unwrap_or(Value::Null)))
+                .map(|o| {
+                    (
+                        o.get(0).and_then(Value::as_str).unwrap_or("").to_string(),
+                        o.get(1).cloned().unwrap_or(Value::Null),
+                    )
+                })
                 .collect(),
             op: op(v),
         },
@@ -154,7 +211,12 @@ fn control(v: &Value) -> Control {
             step: n(v, "step", 1.0),
             op: op(v),
         },
-        "text" => Control::Text { value: s(v, "value"), secret: b(v, "secret", false), placeholder: s(v, "placeholder"), op: op(v) },
+        "text" => Control::Text {
+            value: s(v, "value"),
+            secret: b(v, "secret", false),
+            placeholder: s(v, "placeholder"),
+            op: op(v),
+        },
         "button" => Control::Button(btn(v)),
         _ => Control::Readout(s(v, "value")),
     }
@@ -167,7 +229,10 @@ pub fn blocks(list: &[Value]) -> Vec<Block> {
 fn block(v: &Value) -> Block {
     match s(v, "t").as_str() {
         "heading" => Block::Heading(s(v, "text")),
-        "note" => Block::Note { text: s(v, "text"), tone: s(v, "tone") },
+        "note" => Block::Note {
+            text: s(v, "text"),
+            tone: s(v, "tone"),
+        },
         "gap" => Block::Gap,
         "row" => Block::Row(Row {
             id: s(v, "id"),
@@ -181,7 +246,12 @@ fn block(v: &Value) -> Block {
             id: s(v, "id"),
             items: arr(v, "items")
                 .iter()
-                .map(|i| (i.get(0).and_then(Value::as_str).unwrap_or("").to_string(), i.get(1).and_then(Value::as_str).unwrap_or("").to_string()))
+                .map(|i| {
+                    (
+                        i.get(0).and_then(Value::as_str).unwrap_or("").to_string(),
+                        i.get(1).and_then(Value::as_str).unwrap_or("").to_string(),
+                    )
+                })
                 .collect(),
             active: u(v, "active"),
             op: op(v),
@@ -200,7 +270,11 @@ fn block(v: &Value) -> Block {
             editable: b(v, "editable", true),
             op: op(v),
         }),
-        "buttons" => Block::Buttons(Buttons { id: s(v, "id"), label: s(v, "label"), items: arr(v, "items").iter().map(btn).collect() }),
+        "buttons" => Block::Buttons(Buttons {
+            id: s(v, "id"),
+            label: s(v, "label"),
+            items: arr(v, "items").iter().map(btn).collect(),
+        }),
         "section" => Block::Section(Section {
             id: s(v, "id"),
             title: s(v, "title"),
@@ -213,17 +287,39 @@ fn block(v: &Value) -> Block {
         "table" => Block::Table {
             cols: arr(v, "cols")
                 .iter()
-                .map(|c| (c.get(0).and_then(Value::as_str).unwrap_or("").to_string(), c.get(1).and_then(Value::as_u64).unwrap_or(0) as u16))
+                .map(|c| {
+                    (
+                        c.get(0).and_then(Value::as_str).unwrap_or("").to_string(),
+                        c.get(1).and_then(Value::as_u64).unwrap_or(0) as u16,
+                    )
+                })
                 .collect(),
-            rows: arr(v, "rows").iter().map(|r| r.as_array().map(|c| c.iter().map(|x| x.as_str().unwrap_or("").to_string()).collect()).unwrap_or_default()).collect(),
+            rows: arr(v, "rows")
+                .iter()
+                .map(|r| {
+                    r.as_array()
+                        .map(|c| {
+                            c.iter()
+                                .map(|x| x.as_str().unwrap_or("").to_string())
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                })
+                .collect(),
         },
-        "progress" => Block::Progress { fraction: n(v, "fraction", 0.0) as f32, label: s(v, "label") },
+        "progress" => Block::Progress {
+            fraction: n(v, "fraction", 0.0) as f32,
+            label: s(v, "label"),
+        },
         "callout" => Block::Callout {
             level: s(v, "level"),
             text: s(v, "text"),
             action: v.get("action").filter(|a| !a.is_null()).map(btn),
         },
-        other => Block::Note { text: format!("[unsupported settings block: {other}]"), tone: "warning".into() },
+        other => Block::Note {
+            text: format!("[unsupported settings block: {other}]"),
+            tone: "warning".into(),
+        },
     }
 }
 
@@ -235,7 +331,10 @@ impl Page {
             intro: s(v, "intro"),
             footer: s(v, "footer"),
             scope: v.get("scope").filter(|x| !x.is_null()).map(|x| Scope {
-                options: arr(x, "options").iter().map(|o| o.as_str().unwrap_or("").to_string()).collect(),
+                options: arr(x, "options")
+                    .iter()
+                    .map(|o| o.as_str().unwrap_or("").to_string())
+                    .collect(),
                 value: u(x, "value"),
                 op: op(x),
             }),
@@ -307,7 +406,10 @@ fn find_in<'a>(blocks: &'a [Block], id: &str) -> Option<Target<'a>> {
                 if id == format!("{base}:add") {
                     return Some(Target::OrderedAdd(o));
                 }
-                if let Some(i) = id.strip_prefix(&format!("{base}:")).and_then(|i| i.parse::<usize>().ok()) {
+                if let Some(i) = id
+                    .strip_prefix(&format!("{base}:"))
+                    .and_then(|i| i.parse::<usize>().ok())
+                {
                     if i < o.items.len() {
                         return Some(Target::OrderedItem(o, i));
                     }
@@ -320,7 +422,11 @@ fn find_in<'a>(blocks: &'a [Block], id: &str) -> Option<Target<'a>> {
                     }
                 }
             }
-            Block::Callout { action: Some(a), text, .. } if id == co_id(text) => return Some(Target::Button(a)),
+            Block::Callout {
+                action: Some(a),
+                text,
+                ..
+            } if id == co_id(text) => return Some(Target::Button(a)),
             Block::Section(sec) => {
                 if sec_id(&sec.id) == id {
                     return Some(Target::Section(sec));
@@ -363,15 +469,31 @@ pub(crate) mod tests {
     fn parses_every_block_and_control() {
         let page = Page::from_value(&sample());
         assert_eq!((page.area.as_str(), page.blocks.len()), ("models", 8));
-        assert!(matches!(&page.blocks[1], Block::Row(Row { control: Control::Toggle { on: true, .. }, .. })));
-        assert!(matches!(&page.blocks[2], Block::Row(Row { control: Control::Segmented { active: 1, .. }, .. })));
-        assert!(matches!(&page.blocks[3], Block::Row(Row { control: Control::Select { options, .. }, .. }) if options.len() == 2));
+        assert!(matches!(
+            &page.blocks[1],
+            Block::Row(Row {
+                control: Control::Toggle { on: true, .. },
+                ..
+            })
+        ));
+        assert!(matches!(
+            &page.blocks[2],
+            Block::Row(Row {
+                control: Control::Segmented { active: 1, .. },
+                ..
+            })
+        ));
+        assert!(
+            matches!(&page.blocks[3], Block::Row(Row { control: Control::Select { options, .. }, .. }) if options.len() == 2)
+        );
     }
 
     #[test]
     fn unknown_blocks_are_visible_not_dropped() {
         let page = Page::from_value(&sample());
-        assert!(matches!(page.blocks.last(), Some(Block::Note { text, tone }) if text.contains("mystery") && tone == "warning"));
+        assert!(
+            matches!(page.blocks.last(), Some(Block::Note { text, tone }) if text.contains("mystery") && tone == "warning")
+        );
     }
 
     #[test]
@@ -379,8 +501,14 @@ pub(crate) mod tests {
         let page = Page::from_value(&sample());
         assert!(matches!(page.find("row:titles"), Some(Target::Row(_))));
         assert!(matches!(page.find("tabs:tiers"), Some(Target::Tabs(_))));
-        assert!(matches!(page.find("ord:tier:low:1"), Some(Target::OrderedItem(_, 1))));
-        assert!(matches!(page.find("ord:tier:low:add"), Some(Target::OrderedAdd(_))));
+        assert!(matches!(
+            page.find("ord:tier:low:1"),
+            Some(Target::OrderedItem(_, 1))
+        ));
+        assert!(matches!(
+            page.find("ord:tier:low:add"),
+            Some(Target::OrderedAdd(_))
+        ));
         assert!(matches!(page.find("sec:prov"), Some(Target::Section(_))));
         assert!(matches!(page.find("btn:act:0"), Some(Target::Button(_))));
         assert!(page.find("ord:tier:low:9").is_none() && page.find("nope").is_none());

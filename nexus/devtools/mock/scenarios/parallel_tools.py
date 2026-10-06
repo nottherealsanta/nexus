@@ -1,4 +1,4 @@
-"""Single, batched, failing-member and write batches: the TUI/web gutter states (⎾ │ ⎿)."""
+"""Single, batched, failing-member and write batches: parallel call states."""
 from ..checks import no_unexpected_errors, tool_called, tool_errors
 from ..dsl import Scenario, call, calls, verdict
 

@@ -73,9 +73,14 @@ pub fn edit(editor: &mut Editor, key: KeyEvent, multiline: bool) {
         }
         KeyCode::Backspace => editor.backspace(),
         KeyCode::Delete => editor.delete(),
+        // Terminals send Cmd+Left / Cmd+Right as Ctrl+A / Ctrl+E: line start / end.
         KeyCode::Char('a') if control => {
-            editor.anchor = Some(0);
-            editor.cursor = editor.text.len()
+            editor.select_move(shift);
+            editor.home()
+        }
+        KeyCode::Char('e') if control => {
+            editor.select_move(shift);
+            editor.end()
         }
         KeyCode::Char('z') if control => {
             if shift {

@@ -160,7 +160,6 @@ impl Disclosure {
             chip_operation: source.chip_operation.clone(),
             heading: source.heading.clone(),
             status: source.status.clone(),
-            batch_glyph: source.batch_glyph.clone(),
             color: source.color.clone(),
             rev: source.rev.clone(),
             count: source.count,
@@ -229,17 +228,6 @@ impl Disclosure {
                 .skip(start)
                 .filter_map(|member| self.block(member).map(Cow::into_owned))
                 .collect();
-            if start > 0 {
-                shown.members.insert(
-                    0,
-                    Content {
-                        kind: "activity_more".into(),
-                        heading: format!("… {start} earlier items · Enter for all"),
-                        operation: source.operation.clone(),
-                        ..Default::default()
-                    },
-                );
-            }
         }
         for member in &shown.members {
             shown.rev.push_str(&member.rev);
@@ -374,13 +362,13 @@ mod tests {
     }
 
     #[test]
-    fn live_activity_previews_five_then_expands_all_and_honors_collapse() {
+    fn live_activity_previews_latest_then_expands_all_and_honors_collapse() {
         let op = json!({"kind":"block_toggle","id":"activity"});
         let group = Content {
             id: "activity".into(),
             kind: "tool_group".into(),
             local_ui: true,
-            preview_limit: 5,
+            preview_limit: 1,
             operation: Some(op.clone()),
             members: (0..8)
                 .map(|i| Content {
@@ -396,9 +384,8 @@ mod tests {
         let rows = vec![group];
         let preview = ui.project(&rows);
         assert!(!preview[0].collapsed);
-        assert_eq!(preview[0].members.len(), 6);
-        assert_eq!(preview[0].members[0].kind, "activity_more");
-        assert_eq!(preview[0].members[1].id, "tool-3");
+        assert_eq!(preview[0].members.len(), 1);
+        assert_eq!(preview[0].members[0].id, "tool-7");
         assert!(ui.toggle(&op, &rows));
         assert_eq!(ui.project(&rows)[0].members.len(), 8);
         assert!(ui.toggle(&op, &rows));

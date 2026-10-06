@@ -109,7 +109,7 @@ class AutoTitler:
     async def _run(self, session: str, text: str) -> None:
         _, model = self._settings()
         async with self._slots:
-            result = await generate_title(self._runtime.router, model, text)
+            result = await generate_title(self._runtime.router, model, text, session)
         if result is None:
             return
         sessions = self._runtime.sessions

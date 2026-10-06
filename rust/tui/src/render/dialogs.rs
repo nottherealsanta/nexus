@@ -67,15 +67,75 @@ pub fn panel_host(r: &super::Regions, s: &Snapshot) -> Rect {
     if s.nav.is_none() {
         return r.transcript;
     }
-    let left = if r.sessions.width > 0 { r.sessions.x } else { r.transcript.x };
-    let right = if r.details.width > 0 { r.details.right() } else { r.transcript.right() };
-    Rect::new(left, r.transcript.y, right.saturating_sub(left), r.transcript.height)
+    let left = if r.sessions.width > 0 {
+        r.sessions.x
+    } else {
+        r.transcript.x
+    };
+    let right = if r.details.width > 0 {
+        r.details.right()
+    } else {
+        r.transcript.right()
+    };
+    Rect::new(
+        left,
+        r.transcript.y,
+        right.saturating_sub(left),
+        r.transcript.height,
+    )
 }
 /// A shared rectangle for painting and input; legacy snapshots retain full pages.
 pub fn panel_area(transcript: Rect, s: &Snapshot) -> Rect {
     if s.panel_layout == "context" {
         let width = transcript.width.saturating_sub(4);
         let height = transcript.height.saturating_sub(2);
+        return Rect::new(
+            transcript.x + (transcript.width - width) / 2,
+            transcript.y + (transcript.height - height) / 2,
+            width,
+            height,
+        );
+    }
+    if s.panel_layout == "detail" && transcript.width >= 44 {
+        // A reading page that fits its text: at most 88 columns, as tall as the body (min 12 rows).
+        let width = transcript.width.saturating_sub(4).clamp(44, 88);
+        // Wrapped rows plus the spacing Markdown adds around headings, tables and code.
+        let room = usize::from(width.saturating_sub(6)).max(1);
+        let body: usize = s
+            .panel_lines
+            .iter()
+            .map(|l| l.width().div_ceil(room).max(1) + usize::from(l.starts_with('#')))
+            .sum::<usize>()
+            .max(1)
+            + 8;
+        let body = body.min(usize::from(u16::MAX)) as u16;
+        let height = body
+            .max(12)
+            .min(transcript.height.saturating_sub(2))
+            .min(transcript.height * 3 / 4 + 2);
+        return Rect::new(
+            transcript.x + (transcript.width - width) / 2,
+            transcript.y + (transcript.height - height) / 2,
+            width,
+            height,
+        );
+    }
+    if s.panel_layout == "list" && transcript.width >= 44 {
+        // Thin one-line-per-row list: widest row plus chrome, clamped, centred.
+        let widest = s
+            .items
+            .iter()
+            .map(|i| i.label.width() + if i.trailing.is_empty() { 0 } else { 8 } + 11)
+            .max()
+            .unwrap_or(0) as u16;
+        let width = (widest + 6).clamp(44, 72).min(
+            transcript
+                .width
+                .saturating_sub(4)
+                .max(44.min(transcript.width)),
+        );
+        let rows: u16 = s.items.iter().map(item_height).sum();
+        let height = (rows + 8).min(transcript.height.saturating_sub(2));
         return Rect::new(
             transcript.x + (transcript.width - width) / 2,
             transcript.y + (transcript.height - height) / 2,
@@ -158,7 +218,7 @@ pub fn panel_area(transcript: Rect, s: &Snapshot) -> Rect {
 }
 /// Filtered item index under the pointer, using the same grouping and scroll as drawing.
 pub fn item_height(item: &crate::bridge::Item) -> u16 {
-    1 + u16::from(!item.detail.is_empty()) + u16::from(!item.description.is_empty())
+    1 + u16::from(!item.detail.is_empty()) + u16::from(!item.description.is_empty()) + item.lines.len() as u16
 }
 pub fn settings_header_height(s: &Snapshot, width: u16, height: u16) -> u16 {
     let full: usize = s
@@ -433,13 +493,27 @@ mod tests {
             ..Default::default()
         };
         let mut s = Snapshot::default();
-        assert_eq!(panel_host(&regions, &s), regions.transcript, "ordinary panels stay in the transcript");
+        assert_eq!(
+            panel_host(&regions, &s),
+            regions.transcript,
+            "ordinary panels stay in the transcript"
+        );
         s.nav = Some(crate::bridge::Nav::default());
         let host = panel_host(&regions, &s);
         assert_eq!((host.x, host.right(), host.y, host.height), (0, 130, 0, 43));
-        assert!(panel_area(host, &s).width > panel_area(regions.transcript, &s).width * 2, "a far wider settings window");
-        let narrow = crate::render::Regions { transcript: Rect::new(0, 1, 80, 22), ..Default::default() };
-        assert_eq!(panel_host(&narrow, &s), narrow.transcript, "with no sidebars it is the transcript");
+        assert!(
+            panel_area(host, &s).width > panel_area(regions.transcript, &s).width * 2,
+            "a far wider settings window"
+        );
+        let narrow = crate::render::Regions {
+            transcript: Rect::new(0, 1, 80, 22),
+            ..Default::default()
+        };
+        assert_eq!(
+            panel_host(&narrow, &s),
+            narrow.transcript,
+            "with no sidebars it is the transcript"
+        );
     }
 
     #[test]
@@ -451,6 +525,36 @@ mod tests {
         let area = panel_area(parent, &s);
         assert_eq!(area, Rect::new(7, 5, 116, 38));
         assert!(nav_rect(area).right() < area.right());
+    }
+    #[test]
+    fn list_layout_is_thin_clamped_and_falls_back_below_44_columns() {
+        let parent = Rect::new(0, 0, 160, 50);
+        let mut s = Snapshot::default();
+        s.panel_layout = "list".into();
+        s.items = vec![crate::bridge::Item {
+            label: "bash".into(),
+            trailing: "~1.4K".into(),
+            ..Default::default()
+        }];
+        let area = panel_area(parent, &s);
+        assert_eq!(area.width, 44);
+        assert!(area.height <= 48);
+        let narrow = Rect::new(0, 0, 40, 20);
+        assert!(panel_area(narrow, &s).width <= 40);
+    }
+    #[test]
+    fn detail_layout_is_bounded_and_centred() {
+        let parent = Rect::new(0, 0, 160, 50);
+        let mut s = Snapshot::default();
+        s.panel_layout = "detail".into();
+        s.panel_lines = vec!["x".into(); 200];
+        let area = panel_area(parent, &s);
+        assert_eq!(area.width, 88);
+        assert!(area.height <= 39 && area.x == 36);
+        s.panel_lines = vec!["x".into(); 3];
+        assert_eq!(panel_area(parent, &s).height, 12);
+        s.panel_lines = vec!["x".repeat(160)];
+        assert_eq!(panel_area(parent, &s).height, 12, "wrapped rows count");
     }
     #[test]
     fn context_layout_is_exact_transcript_inset_without_modal_caps() {
@@ -606,7 +710,11 @@ pub fn draw_menu(
         });
         let marker = if item.current { "●" } else { " " };
         let width = usize::from(inner.width);
-        let available = width.saturating_sub(3 + toggle.as_ref().map_or(0, |t| t.width() + 1));
+        let tail = (!item.trailing.is_empty()).then(|| format!("{:>7} ", item.trailing));
+        let available = width.saturating_sub(
+            3 + toggle.as_ref().map_or(0, |t| t.width() + 1)
+                + tail.as_ref().map_or(0, |t| t.width()),
+        );
         let structured = if item.name.is_empty() {
             item.label.clone()
         } else {
@@ -644,6 +752,13 @@ pub fn draw_menu(
                 spans.push(Span::styled(format!(" {detail}"), detail_style));
             }
         }
+        if let Some(tail) = tail {
+            let gap = width
+                .saturating_sub(used + tail.width() + toggle.as_ref().map_or(0, |t| t.width()));
+            spans.push(Span::styled(" ".repeat(gap), fill));
+            used += gap + tail.width();
+            spans.push(Span::styled(tail, detail_style));
+        }
         if let Some(toggle) = toggle {
             let gap = width.saturating_sub(used + toggle.width());
             spans.push(Span::styled(" ".repeat(gap), fill));
@@ -669,6 +784,12 @@ pub fn draw_menu(
         if !item.description.is_empty() {
             body.push(Line::styled(
                 truncate_width(&format!("   {}", item.description), width),
+                base.fg(if on { p.background } else { p.quiet }),
+            ));
+        }
+        for text in &item.lines {
+            body.push(Line::styled(
+                truncate_width(&format!("   {text}"), width),
                 base.fg(if on { p.background } else { p.quiet }),
             ));
         }

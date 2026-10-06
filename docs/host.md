@@ -50,6 +50,65 @@ The browser may send any command except `Shutdown` and `WebLaunch`.
 Streaming is the one verb a request/response cannot model: `SessionSubscribe`
 names it and the transport attaches through `HostFacade.subscribe`.
 
+### Session context selection
+
+`ContextExtensionSelect(session, category, name, enabled)` accepts `tools`,
+`skills`, and `mcp`. Names must exist in the current context inspection; tool
+and MCP names match exactly, while skill names are case-insensitive. Selection
+returns the refreshed `ContextInspectResult` and persists a
+`context.extension_selected` event. It is refused while a turn is active or
+once the session has its first `turn.started` event.
+
+### Skill and MCP rows in the context preview
+
+Each `skills_index` row also carries `frontmatter` (flat, ≤ 32 keys, ≤ 300 chars per
+value), `index_line` (the exact line in this request, empty when off or dropped),
+`context_tokens` (the index line: the cost now), `skill_tokens` (recorded
+`SKILL.md` size ÷ 4: no file is read during preview) and `resources` (a count).
+Each `mcp_servers` row also carries `context_tokens` (its index lines plus, when
+`tool_loading` is `all` and the server is on, its schemas), `resource_count`,
+`prompt_count` and a redacted `error` (≤ 300 chars). Clients use these for the
+Skills and MCP cards; the pages use `SkillInspect` and `McpServerShow`
+(`client.skill_inspect`, `client.mcp_server_show`).
+
+### Read-only skill inspection
+
+`SkillInspect(session, name, max_body_bytes=65536)` reads an individual skill,
+including disabled skills, from a pinned manifest snapshot. `SkillInspectResult`
+reports `status`/`error`, `manifest_generation`, enabled state, scope, origin,
+metadata, `frontmatter_text`, and a redacted body. The body limit is in UTF-8
+bytes (0 through 262144); `truncated` explicitly marks omitted display text and
+`body_bytes` gives the original snapshot size. Missing sessions, skills, or
+source snapshots and invalid limits return explicit errors. Inspection never
+enables, invokes, activates, or recovers a session.
+
+`frontmatter_text` is the original declaration payload, redacted for display;
+it is not reconstructed metadata or a complete source file with delimiters.
+Both declaration and body come from refresh-time bytes, not current disk reads.
+
+### Read-only MCP detail
+
+`McpServerShow(session, name, max_bytes=262144)` returns `McpServerShowResult`.
+`Client.mcp_server_show(...)` exposes the same request to local and remote
+clients. This reads existing manager snapshots only: it does not call runtime
+startup, open/unarchive a session, connect a server, list remote catalogs, or
+change selection/loading. A live session's existing loading/selection overrides
+are read when available; unavailable per-tool sent state is labeled, not inferred.
+
+The result contains status, scope when known, effective enabled/loading state,
+safe transport summary, stored server info/instructions, full input schemas,
+resources/templates and prompts in `detail`. Unknown servers or absent manager
+state return an explicit error. Strings (including errors and schema contents)
+are redacted using configured MCP secrets and the general display redactor.
+Transport summaries omit endpoint URLs, headers, environment, argument contents,
+and working directories. `max_bytes` accepts 0 through 1048576 UTF-8 bytes.
+Oversized detail becomes a labeled JSON preview with `clipped=true`; increase the
+limit to retrieve complete schemas. Missing retained metadata is explicitly
+unavailable; no remote fetch is attempted to fill it in. Resource, template and
+prompt catalogs each have a 256-entry cap and an explicit per-catalog clipping
+flag. Summary fields are also exposed at the result's top level when the complete
+snapshot fits; `detail` carries availability notices and resource templates.
+
 ### Adding a capability a UI can use
 
 1. Add `FooCommand` and `FooResult` to `protocol.py` and register both in the

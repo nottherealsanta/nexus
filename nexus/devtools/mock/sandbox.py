@@ -8,14 +8,18 @@ permission ``PathGuard`` already confines them to.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 __all__ = [
     "DEFAULT_DEV_HOME",
+    "GLOBAL_SEED_FILES",
     "SEED_FILES",
+    "generated_seed_files",
     "dev_home",
     "ensure_sandbox",
     "reset_sandbox",
@@ -81,7 +85,60 @@ SEED_FILES: dict[str, str] = {
         "---\n\n"
         "# Mock skill\n\nWhen invoked, list the files under `src/` and stop.\n"
     ),
+    ".gitignore": ".agents/mcp.json\n",  # generated per machine (sys.executable moves between venvs)
+    ".agents/skills/code-review/SKILL.md": (
+        "---\nname: code-review\ndescription: Review a diff for correctness and style.\n"
+        "allowed-tools: [read, grep, glob]\nversion: 2\n---\n\n"
+        "# Code review\n\nReview the change in this order:\n\n"
+        "## Checklist\n\n| Area | Question |\n| --- | --- |\n"
+        "| Correctness | Does it do what the title says? |\n| Tests | Is the new behaviour covered? |\n"
+        "| Style | Does it match the surrounding code? |\n\n"
+        "See `references/checklist.md` and `references/examples/bad.diff`.\n\n"
+        "```python\ndef review(diff):\n    return [hunk for hunk in diff if hunk.risky]\n```\n"
+    ),
+    ".agents/skills/code-review/references/checklist.md": "- [ ] logic\n- [ ] tests\n- [ ] naming\n",
+    ".agents/skills/code-review/references/examples/bad.diff": "--- a/x.py\n+++ b/x.py\n@@\n-return 1\n+return None  # oops\n",
+    ".agents/skills/release-notes/SKILL.md": (
+        "---\nname: release-notes\ndescription: Draft release notes from merged pull requests.\n"
+        "allowed-tools: [read, bash]\nmodel: mock/hello\nversion: 3\n---\n\n"
+        "# Release notes\n\nGroup merged changes under Added, Changed and Fixed.\n"
+    ),
+    ".agents/skills/sql-style/SKILL.md": (
+        "---\nname: sql-style\ndescription: " + "Format and review SQL queries so that keywords are upper case, joins are explicit, "
+        "every column is qualified, CTEs are preferred over nested subqueries, and long statements stay readable. " * 3
+        + "\n---\n\n# SQL style\n\nUpper-case keywords; one clause per line.\n"
+    ),
 }
+
+# Global (dev home) skills: the second scope, so both appear in the Skills section.
+GLOBAL_SEED_FILES: dict[str, str] = {
+    "skills/writing-style/SKILL.md": (
+        "---\nname: writing-style\ndescription: Keep prose short, concrete and active.\nversion: 1\n---\n\n"
+        "# Writing style\n\nPrefer short sentences. Cut filler words.\n"
+    ),
+    "skills/git-hygiene/SKILL.md": (
+        "---\nname: git-hygiene\ndescription: Small commits with Conventional Commit subjects.\nversion: 1\n---\n\n"
+        "# Git hygiene\n\nOne logical change per commit.\n"
+    ),
+}
+
+
+def generated_seed_files(home: Path | str | None = None) -> dict[Path, str]:
+    """Machine-dependent seed files, keyed by absolute path (rewritten when they differ).
+
+    The dummy MCP servers run with this interpreter, so the commands are absolute.
+    """
+    base = (Path(home).expanduser() if home is not None else dev_home())
+
+    def server(profile: str, **extra: object) -> dict:
+        return {"command": sys.executable, "args": ["-m", "nexus.devtools.mock.mcp_server", "--profile", profile], **extra}
+
+    project = {"servers": {"mock-tracker": server("tracker", tool_loading="all"), "mock-broken": server("broken")}}
+    global_ = {"servers": {"mock-docs": server("docs", tool_loading="search")}}
+    return {
+        sandbox_path(base) / ".agents" / "mcp.json": json.dumps(project, indent=2) + "\n",
+        base / "mcp.json": json.dumps(global_, indent=2) + "\n",
+    }
 
 
 def dev_home(environ: dict[str, str] | None = None) -> Path:
@@ -121,8 +178,34 @@ def _seed(root: Path) -> None:
         pass
 
 
+def _write_missing(files: dict[Path, str]) -> None:
+    for target, content in files.items():
+        if not target.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+
+
+def _write_generated(home: Path | str | None) -> None:
+    """Never touches anything outside the dev home or the sandbox."""
+    for target, content in generated_seed_files(home).items():
+        if not target.is_file() or target.read_text(encoding="utf-8") != content:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+
+
+def _seed_extras(root: Path, home: Path | str | None) -> None:
+    base = Path(home).expanduser() if home is not None else dev_home()
+    _write_missing({root / relative: content for relative, content in SEED_FILES.items()})
+    _write_missing({base / relative: content for relative, content in GLOBAL_SEED_FILES.items()})
+    _write_generated(home)
+
+
 def ensure_sandbox(home: Path | str | None = None) -> Path:
-    """Create (once) and return the sandbox workspace."""
+    """Create (once) and return the sandbox workspace.
+
+    Seed files that are missing are written on every call (never overwritten), so new
+    seeds reach an existing sandbox; generated files follow ``sys.executable``.
+    """
     root = sandbox_path(home)
     config = root / "nexus.toml"
     if not config.is_file():
@@ -130,6 +213,7 @@ def ensure_sandbox(home: Path | str | None = None) -> Path:
         _seed(root)
     elif config.read_text(encoding="utf-8") != SEED_FILES["nexus.toml"]:
         config.write_text(SEED_FILES["nexus.toml"], encoding="utf-8")  # dev config is ours: keep it current
+    _seed_extras(root, home)
     return root.resolve()
 
 
@@ -164,11 +248,7 @@ def restore_sandbox(root: Path | str, home: Path | str | None = None) -> bool:
             if entry.name == ".git":
                 continue
             shutil.rmtree(entry) if entry.is_dir() and not entry.is_symlink() else entry.unlink()
-    for relative, content in SEED_FILES.items():
-        seeded = target / relative
-        if not seeded.is_file():
-            seeded.parent.mkdir(parents=True, exist_ok=True)
-            seeded.write_text(content, encoding="utf-8")
+    _seed_extras(target, home)
     return True
 
 

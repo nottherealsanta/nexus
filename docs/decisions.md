@@ -14,6 +14,7 @@ this page and the code win.
 | **Browser-native finish, not "Signal".** Sans-serif text, Monaspace Argon for code, three radius tokens, soft shadows. The older 0-radius, hard-offset-shadow look is history (`design.md`). | The CSS mixed both looks; one consistent system was asked for. | `ui/web/styles/tokens.css` |
 | **First run only asks to connect a provider**, then picks that provider's newest tool-calling model. | Minimum steps to a working chat; credentials never enter setup commands. | `host_support/setup.py` |
 | **Skill, MCP and root-agent choices lock after a session's first turn.** | Changing the prompt prefix would invalidate the prompt cache and confuse the record. | `session/session.py:context_locked` |
+| **Native tool/task rows omit failure badges and result gutters.** | The loop handles tool failures; expanded details and the agent page retain errors without adding noisy duplicate status marks to the transcript. | [surfaces.md](surfaces.md), `rust/tui/src/transcript.rs` |
 
 The desktop's latest visual direction uses neutral greys, curved controls and
 compact activity trees, following the supplied native references. Its composer
@@ -377,6 +378,14 @@ parses them (32 MB over 8,000 events, 2.6 MB paced), so a reversal waited behind
 backlog. The spinner clock advances on every loop pass, not only when input is idle.
 Slow phases (over 50 ms) are logged to `~/.nexus/tui-stalls.log`.
 
+Startup paints before it loads: the native client is spawned before the daemon connection
+and shows a splash until the first snapshot. Only the session bootstrap and context preview
+gate that snapshot; `doctor`, `list_models` and `setup_status` were each awaited in sequence
+before the process even started (about 0.9 s) and now run in the background. Typing during the
+splash is discarded, not buffered, because a draft would otherwise be submitted against a
+session the host has not opened. Known gap: `doctor` still takes about 0.7 s because it waits on
+`runtime.ensure_started()`, which parses the whole model catalogue; the branch appears late.
+
 ## Settings revamp (native client)
 
 Workspace, Config, Soul and Hooks are hidden from the native Settings list for now;
@@ -413,3 +422,18 @@ host round trip per change, which is local and fast. Scope is a property of the 
 (only per-file areas have it), not of the page chrome, so always-global areas never
 imply a choice that does not exist. Drill-ins are limited to editors, pickers and
 confirmations, which stack on the page and return to it.
+
+## Context header sections (identity-only System prompt, thin Tools list)
+
+The System prompt row is identity and soul only; Environment, AGENTS.md, MEMORY.md,
+Skills, Tools and MCP each own their part, so rows sum without double counting and
+nothing the agent sees is hidden. Tools is a one-line-per-tool `list` panel with the
+detail on a second `detail` page (≤ 88 columns, as tall as its text), because a
+full-width grouped list buried the one number people look for (the token cost).
+Skills and MCP are cards (one selectable item with dim rows) that open a skill page
+or a server page, all through host commands. The dev MCP server lives in `devtools`
+and is wired only by the sandbox's generated `mcp.json`, so the product path never
+imports it. Empty blocks are greyed, and the header has no total footer or overflow
+text; the five-row inventory cap is therefore silent (a known tension with "clipping
+is announced"). Toggling from a tool page works in place (the list underneath is
+rebuilt); not verified on the desktop client.

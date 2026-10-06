@@ -42,11 +42,34 @@ snapshots ring only when it increases, so redraws and historical replay stay
 silent. Cancellation and subagent activity do not ring. Terminal emulator bell
 settings determine whether the notification is audible or visual.
 
-Context-header inspection uses a large inset modal spanning the available
-conversation area, rather than the compact picker dialog. The System prompt
-uses the shared header projection to exclude the separately displayed AGENTS.md
-when the inspected parts reconstruct the complete prompt (clipped/incomplete
-previews retain their literal text rather than silently dropping context).
+Context-header inspection uses an inset modal (System prompt, Environment, AGENTS.md, MEMORY.md and tool pages use the compact `detail` layout; Skills/MCP lists keep the full-width one) spanning the available
+conversation area, rather than the compact picker dialog. The header and context
+picker show System prompt, Environment (neutral rail), AGENTS.md,
+MEMORY.md, Skills, Tools and MCP in that order. Each header line's title uses the
+agent colour and carries a `│` left rail (the same glyph and column as the user card rail, no
+opacity change); inventories and previews under it have no rail. System prompt, Environment and MEMORY.md
+open literal viewers using the same shared projection as the header. System
+prompt contains only core instructions when known parts reconstruct the exact
+complete prompt; MEMORY.md also includes memory-scoped instruction wrappers.
+Clipped, incomplete or unclassified previews retain the full literal system text
+rather than silently dropping context, and separate prompt-row estimates become
+unavailable so that fallback text is not counted twice.
+
+Skills and MCP open card lists (`ui/ratatui/context_sections.py`): one selectable
+item per skill or server whose dim rows (`Item.lines`, wrapped at 100 columns) carry
+the frontmatter and token figures (skills) or the command label, counts, error and
+schema tokens (MCP). Enter opens the skill page (`SkillInspect`: frontmatter table
+and the full Markdown body, `detail` layout) or the MCP server page (a `list` of its
+tools with tokens and toggles, resources and prompts, instructions marked untrusted);
+a server tool opens the shared tool page. `Show literal index` shows the exact index
+text sent. Space or a click toggles; locked after the first turn.
+
+Tools opens a thin `list` panel (width `clamp(widest row + 6, 44, 72)`, centred; below
+44 columns it uses the default modal): one line per tool in the order sent, with the
+name, a right-aligned token column (`Item.trailing`, aligned by Rust) and the toggle.
+Enter opens the tool page (`tool_show`, `detail` layout: at most 88 columns, as tall as its text, Markdown): facts, full
+description, a flattened parameter table and the exact schema sent. Esc returns to
+the same list. Space on the page toggles the tool in place (`Snapshot.panel_toggle`; absent when locked).
 Tools open with their families expanded. Each tool, skill and MCP server has a
 right-aligned ON/OFF switch: click it or press Space to change the session
 selection, and click the label or press Enter to inspect definitions/details.
@@ -60,7 +83,7 @@ Each reply closes the preceding group; task/subagent cards remain separate.
 Totals describe the work (`Ran 2 commands · Edited 2 files · Read 2 files ·
 Thought 3 times`) rather than listing tool names or a separate Explored row.
 Older/completed groups collapse by default. The trailing group in an active turn
-previews its latest five items, announcing earlier hidden items. Click/Enter
+previews only its latest item, announcing earlier hidden items. Click/Enter
 expands the full group; another toggle explicitly collapses it even while live.
 Member toggles retain all labelled parameters, results, reasoning and diffs;
 `/verbose` reveals everything. Group identity follows its first durable member.
@@ -118,6 +141,15 @@ controls; the workspace line sits under the card on the plain background.
 beside the interpreter, `rust/tui/target/{release,debug}` and `PATH`, so a fresh
 `cargo build` is used on the next launch; `NEXUS_TUI_BINARY` overrides this.
 
+Launch order: `nexus chat` starts the native client first (`ui/ratatui/run.py:spawn`), then
+connects to the daemon. Until the first snapshot arrives the client draws a splash (the word
+"Nexus", centred) and ignores input except Ctrl-Q and resize (`loaded` in `rust/tui/src/main.rs`).
+The first snapshot needs only the session bootstrap and the context preview. The git branch
+(`doctor`), catalogue display names (`list_models`) and first-run `setup_status` run
+concurrently afterwards (`finish_startup` in `prototype.py`) and each repaints when it lands, so
+the breadcrumb first shows the bare workspace path. Measured with a warm daemon over a PTY:
+splash about 0.2 s, full UI about 0.3 s (was about 1.0 s); cold daemon start not measured.
+
 The workspace/branch/worktree/status bar uses the black conversation background,
 with its path aligned to the composer agent label. It sits below the composer controls and
 directly above the activity meter. Session tabs remain at the top when the
@@ -136,10 +168,8 @@ The composer border and agent name share the active agent's context-header
 color, including configured identity colors. One blank line precedes the
 System prompt header, matching the spacing between context blocks.
 
-Parallel tool calls keep the same text column as standalone calls. Their `┌│└`
-markers occupy the cell immediately before that column; the snapshot sends
-`batch_glyph` separately from tool text, including subagent metrics.
-Verified with Rust column tests, Python projection/PTY tests and native
+Parallel tool calls render exactly like standalone calls: no `┌│└` or `∥` gutter
+markers, so every tool row shares one text column. Verified with Rust column tests, Python projection/PTY tests and native
 browser screenshots. The web browser suite is not verified: its existing
 `wait_for_function` fails against the page's Content Security Policy before
 reaching tool rows.
@@ -269,8 +299,8 @@ also still incremental.
 Context inventory rows share their headings' gutter and occupy at most 100
 terminal cells, so wide windows do not scatter short tool names across the
 viewport. Skills/MCP headings show one total count rather than unlabelled scope
-pairs. Overflow footers appear only when entries are omitted; empty sections say
-`None included`. Skill rows label the estimated tokens of their actual included
+pairs. There is no overflow footer, no `None included` text and no `Context total` line;
+an empty block (no MEMORY.md, no MCP servers, no skills) is greyed out. Skill rows label the estimated tokens of their actual included
 index entry, not the full skill body; missing entries say `tokens unknown`.
 
 The workspace breadcrumb starts at the editable composer text column (five cells
@@ -343,7 +373,7 @@ rules: headings coloured by level (accent, purple, success, warning), inline cod
 using only the warning foreground colour (no separate background highlight),
 fences and quotes on the panel colour (fences show
 their language label, quotes a `▌` bar), nested ordered/bullet lists with
-hanging indent, task markers, strikethrough and column-aligned tables. HTML stays
+hanging indent, task markers, strikethrough and boxed tables whose cells wrap inside fitted columns. HTML stays
 literal and link targets stay visible.
 
 Item 12 reuses [ratatui-markdown](https://github.com/celestia-island/ratatui-markdown)
@@ -391,7 +421,7 @@ transcript, not a floating modal.
 Tool rows are not clickable by default. Only a row whose output (Result, Summary,
 Error, Progress) exceeds 8 lines gets `N lines ▸`; clicking or Enter expands the
 full details in place (`block_toggle` on `<call_id>:output`, kept in `shell.expanded`).
-Only a subagent row opens a page. On that page the top bar shows the child's
+Only a subagent row opens a page; it never expands the tool details in place (verbose mode included), and only a failed child's `Error:` line shows inline. On that page the top bar shows the child's
 model, and Up returns to the parent like Escape (PageUp/PageDown/wheel scroll).
 The page keeps 30% of the viewport as blank padding below the last row so tools never
 sit on the bottom edge, and every scroll key clamps to the same `max_scroll` as the
@@ -630,7 +660,7 @@ Consecutive tools and thoughts form stable native activity groups, interrupted
 by visible replies or task/subagent boundaries. Groups report activity totals
 and running status. Single-item groups use the same summary (`Read 1 file` or
 `Ran 1 command`); parameters and results stay behind member expansion, not in
-the group heading. Only the latest active group auto-previews five members.
+the group heading. Only the latest active group auto-previews its latest member.
 Members reveal labelled parameters/results and independently folded output;
 `/verbose` reveals all details. User cards put their chevron in the left margin (column 0) and
 text in column 5, the common transcript column. Assistant footers have no preceding blank row.
@@ -802,8 +832,8 @@ Not verified against a live provider.
 
 The header that opens every conversation has one mode. Besides the tools, skills and
 MCP inventories, the System prompt and AGENTS.md rows now show a one-line preview
-under their heading (the first non-empty line, `… +N more lines` counted, clipped
-with an ellipsis; `None included` once a preview exists and the block is empty).
+under their heading (the first non-empty line, clipped with an ellipsis; nothing is drawn when the
+block is empty).
 The preview opens the same host dialog as the heading (`context_show`), so the full
 text stays one click away. Skills and MCP counts are one total of enabled entries
 (not project/global). Not done: strike-through for disabled tools (the host header

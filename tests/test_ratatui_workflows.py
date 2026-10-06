@@ -289,22 +289,24 @@ async def test_voice_config_retries_a_host_hash_conflict(shell):
 
 
 @pytest.mark.asyncio
-async def test_tools_dialog_groups_expands_and_opens_a_definition(shell):
-    tools = [{"name": "read", "group": "files", "description": "Read a file", "parameters": {"type": "object"}},
-             {"name": "write", "group": "files", "description": "Write a file", "parameters": {"type": "object"}},
-             {"name": "mcp__fs__list", "description": "List", "parameters": {"type": "object"}}]
+async def test_tools_dialog_is_a_thin_list_and_opens_a_tool_page(shell):
+    tools = [{"name": "read", "group": "files", "description": "Read a file", "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}}},
+             {"name": "write", "group": "files", "description": "Write a file", "input_schema": {}},
+             {"name": "mcp__fs__list", "description": "List", "input_schema": {}}]
     shell.preview = SimpleNamespace(tools=tools, tools_supported=True)
     shell.refresh_preview = AsyncMock(return_value=True)
     await shell.workflows.operate({"kind": "context_show", "key": "tools"})
     labels = [item["label"] for item in shell.items]
-    assert shell.panel_title.startswith("Tools · 3 of 3 definitions · ~")
-    assert shell.panel_layout == "context"
-    assert labels[0].startswith("▾ files") and labels[1].strip().startswith("read")
-    assert labels[-1] == "Edit tools…"
-    assert shell.items[1]["toggle_enabled"] is True
-    await shell.workflows.operate(shell.items[1]["operation"])
-    assert shell.panel_title.startswith("Tool · read · ~") and "Read a file" in "\n".join(shell.panel_lines)
-    assert shell.panel_layout == "context"
+    assert shell.panel_title.startswith("Tools · 3 of 3 on · ~")
+    assert shell.panel_layout == "list"
+    assert labels == ["read", "write", "mcp__fs__list", "Edit tools…"]
+    assert shell.items[0]["trailing"].startswith("~") and shell.items[0]["toggle_enabled"] is True
+    await shell.workflows.operate(shell.items[0]["operation"])
+    assert shell.panel_title.startswith("Tool · read · on · ~")
+    assert shell.panel_layout == "detail" and shell.panel_format == "markdown"
+    assert "| `path` | string | no |" in "\n".join(shell.panel_lines)
+    shell.workflows.back()
+    assert shell.panel_layout == "list" and shell.items[0]["label"] == "read"
 
 
 @pytest.mark.asyncio
@@ -316,16 +318,44 @@ async def test_tools_dialog_switches_a_tool_off_and_on_before_the_first_turn(she
     after = SimpleNamespace(tools=[{**tools[0], "enabled": False}, tools[1]], tools_supported=True, context_locked=False)
     shell.client.select_context_extension = AsyncMock(return_value=after)
     await shell.workflows.operate({"kind": "context_show", "key": "tools"})
-    await shell.workflows.operate(shell.items[1]["toggle_operation"])  # read
+    await shell.workflows.operate(shell.items[0]["toggle_operation"])  # read
     shell.client.select_context_extension.assert_awaited_with(shell.controller.session, "tools", "read", False)
-    assert shell.panel_title.startswith("Tools · 1 of 2 definitions")
-    assert shell.items[1]["toggle_enabled"] is False and shell.items[2]["toggle_enabled"] is True
-    assert shell.items[1]["toggle_operation"]["enabled"] is True
-    assert shell.items[1]["operation"]["kind"] == "tool_definition"
+    assert shell.panel_title.startswith("Tools · 1 of 2 on")
+    assert shell.items[0]["toggle_enabled"] is False and shell.items[1]["toggle_enabled"] is True
+    assert shell.items[0]["toggle_operation"]["enabled"] is True
+    assert shell.items[0]["operation"]["kind"] == "tool_show"
     assert len(shell.workflows.stack) == 0
     shell.client.select_context_extension.return_value = shell.preview = SimpleNamespace(tools=tools, tools_supported=True, context_locked=False)
-    await shell.workflows.operate(shell.items[1]["toggle_operation"])
+    await shell.workflows.operate(shell.items[0]["toggle_operation"])
     shell.client.select_context_extension.assert_awaited_with(shell.controller.session, "tools", "read", True)
+
+
+@pytest.mark.asyncio
+async def test_tool_page_toggles_in_place_without_stacking(shell):
+    tools = [{"name": "read", "group": "files", "description": "Read a file", "input_schema": {}}]
+    shell.preview = SimpleNamespace(tools=tools, tools_supported=True, context_locked=False)
+    shell.refresh_preview = AsyncMock(return_value=True)
+    shell.client.select_context_extension = AsyncMock(return_value=SimpleNamespace(
+        tools=[{**tools[0], "enabled": False}], tools_supported=True, context_locked=False))
+    await shell.workflows.operate({"kind": "context_show", "key": "tools"})
+    await shell.workflows.operate(shell.items[0]["operation"])
+    depth = len(shell.workflows.stack)
+    assert shell.panel_toggle == {"kind": "context_toggle", "category": "tools", "name": "read", "enabled": False}
+    assert "Space switches this tool" in "\n".join(shell.panel_lines)
+    await shell.workflows.operate(shell.panel_toggle)
+    assert shell.panel_title.startswith("Tool · read · off") and len(shell.workflows.stack) == depth
+    assert shell.panel_toggle["enabled"] is True
+    shell.workflows.back()
+    assert shell.panel_title.startswith("Tools · 0 of 1 on") and shell.items[0]["toggle_enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_locked_tool_page_has_no_toggle(shell):
+    shell.preview = SimpleNamespace(tools=[{"name": "read", "description": "R", "input_schema": {}}], tools_supported=True, context_locked=True)
+    shell.refresh_preview = AsyncMock(return_value=True)
+    await shell.workflows.operate({"kind": "context_show", "key": "tools"})
+    await shell.workflows.operate(shell.items[0]["operation"])
+    assert shell.panel_toggle is None and "Context locked after first turn" in "\n".join(shell.panel_lines)
 
 
 @pytest.mark.asyncio
@@ -334,9 +364,9 @@ async def test_locked_tools_dialog_has_no_toggles(shell):
     shell.preview = SimpleNamespace(tools=tools, tools_supported=True, context_locked=True)
     shell.refresh_preview = AsyncMock(return_value=True)
     await shell.workflows.operate({"kind": "context_show", "key": "tools"})
-    assert shell.items[1]["toggle_locked"] is True
-    assert shell.items[1]["operation"]["kind"] == "tool_definition"
-    assert "●" not in shell.items[1]["label"] and "Context locked after first turn" in shell.panel_lines
+    assert shell.items[0]["toggle_locked"] is True
+    assert shell.items[0]["operation"]["kind"] == "tool_show"
+    assert "●" not in shell.items[0]["label"] and "Context locked after first turn" in shell.panel_lines
 
 
 @pytest.mark.asyncio
@@ -404,12 +434,12 @@ async def test_agents_document_uses_markdown_and_preserves_newlines(shell):
         system_files={"agents": {"source": "/workspace/AGENTS.md"}})
     shell.client.inspect_context = AsyncMock(return_value=preview)
     await shell.workflows.operate({"kind": "context_show", "key": "agents"})
-    assert shell.panel_format == "markdown" and shell.panel_layout == "context"
+    assert shell.panel_format == "markdown" and shell.panel_layout == "detail"
     assert "/workspace/AGENTS.md" in shell.panel_title
     assert "\n".join(shell.panel_lines) == preview.included_parts[0]["text"]
     shell.workflows.menu("Next", [("Back", {"kind": "back"})])
     shell.workflows.back()
-    assert shell.panel_format == "markdown" and shell.panel_layout == "context"
+    assert shell.panel_format == "markdown" and shell.panel_layout == "detail"
 
 
 async def test_subagent_page_context_nested_back_and_child_tool_details(shell):
@@ -457,14 +487,14 @@ async def test_remembered_model_skips_effort_prompt(shell):
     shell.controller.select_model_and_effort.assert_awaited_once_with("openai/example", "high")
 
 
-def test_compact_header_chips_open_their_section_and_show_one_total_count():
+def test_compact_header_chips_open_their_section_and_show_no_total_footer():
     from nexus.ui.ratatui.prototype import _compact_header
     preview = SimpleNamespace(
         tools=[{"name": "read", "group": "files"}, {"name": "write", "group": "files", "enabled": False}],
         skills_index=[{"name": "a", "scope": "project"}, {"name": "b", "scope": "global"}, {"name": "c", "scope": "global"}, {"name": "d", "scope": "global", "enabled": False}],
         mcp_servers=[], mcp=[], tools_supported=True, system_text="", included_parts=[], mcp_index="", agent={"name": "build"})
     shell = SimpleNamespace(preview=preview, controller=SimpleNamespace(agent_name="build"), agent_definitions={})
-    [header, footer] = _compact_header(shell, None)
+    [header] = _compact_header(shell, None)
     chips = {chip["id"]: chip for chip in header["members"]}
     assert chips["context:skills"]["counts"] == [3], "one total of enabled skills, not project/global"
     assert chips["context:mcp"]["counts"] == [0]
@@ -472,18 +502,13 @@ def test_compact_header_chips_open_their_section_and_show_one_total_count():
     assert chips["context:skills"]["operation"] == {"kind": "context_show", "key": "skills"}
     # System prompt and AGENTS.md always show a one-line preview under their heading.
     assert "text" in chips["context:system"] and "text" in chips["context:agents"]
-    from nexus.ui_support.context_header import header_blocks
-    total = sum(block.tokens or 0 for block in header_blocks(preview, header["color"]))
-    assert footer == {"id": "context:total", "kind": "summary", "text": f"Context total · ~{total:,} tokens"}
 
 
-def test_compact_header_total_is_unavailable_without_preview():
+def test_compact_header_renders_without_preview():
     from nexus.ui.ratatui.prototype import _compact_header
     shell = SimpleNamespace(preview=None, controller=SimpleNamespace(agent_name="build"), agent_definitions={})
-    [header, footer] = _compact_header(shell, None)
+    [header] = _compact_header(shell, None)
     assert header["kind"] == "context_header"
-    assert footer["kind"] == "summary"
-    assert footer["text"] == "Context total · tokens unavailable"
 
 
 @pytest.mark.asyncio
@@ -493,23 +518,57 @@ async def test_system_prompt_dialog_excludes_separate_agents_document(shell):
     shell.refresh_preview = AsyncMock(return_value=True)
     await shell.workflows.operate({"kind": "context_show", "key": "system"})
     assert shell.panel_lines == ["System rules"]
-    assert shell.panel_layout == "context"
+    assert shell.panel_layout == "detail"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("category", ["skills", "mcp"])
-async def test_extension_dialog_has_separate_inspection_and_toggle(shell, category):
-    row = {"name": "example", "scope": "project", "enabled": True, "description": "Helpful extension"}
-    shell.preview = p.ContextInspectResult(session="s", skills_index=[row], mcp_servers=[row])
+async def test_skills_section_cards_and_skill_page(shell):
+    row = {"name": "review", "scope": "project", "enabled": True, "description": "Review diffs",
+           "frontmatter": {"description": "Review diffs", "version": "2"}, "context_tokens": 38, "skill_tokens": 1900, "resources": 2}
+    shell.preview = p.ContextInspectResult(session="s", skills_index=[row], included_parts=[{"name": "skills_index", "text": "review: Review diffs"}])
     shell.client.inspect_context = AsyncMock(return_value=shell.preview)
-    await shell.workflows.context_extensions(category)
+    shell.client.skill_inspect = AsyncMock(return_value=p.SkillInspectResult(
+        session="s", name="review", enabled=True, scope="project", origin=".agents/skills/review/SKILL.md",
+        metadata={"description": "Review diffs", "version": "2", "allowed_tools": ["read"]}, body="# Review\n\nBody", body_bytes=16))
+    await shell.workflows.context_extensions("skills")
     item = shell.items[0]
-    assert shell.panel_layout == "context" and item["toggle_enabled"] is True
-    assert item["toggle_operation"] == {"kind": "context_toggle", "category": category, "name": "example", "enabled": False}
+    assert shell.panel_title.startswith("Skills · 1 of 1 on · ~38 in context")
+    assert item["lines"][0] == "description  Review diffs" and "~38 in context · ~1.9K full skill · 2 resources" in item["lines"][-1]
+    assert item["toggle_operation"]["name"] == "review"
+    assert [i["label"] for i in shell.items[1:]] == ["Show literal index (~5 tokens)", "Edit skills…"]
     await shell.workflows.operate(item["operation"])
-    assert "Helpful extension" in "\n".join(shell.panel_lines)
-    await shell.workflows.operate({"kind": "back"})
-    assert shell.items[0]["toggle_enabled"] is True
+    assert shell.panel_title == "Skill · review · project · .agents/skills/review/SKILL.md"
+    body = "\n".join(shell.panel_lines)
+    assert shell.panel_format == "markdown" and "| allowed-tools | read |" in body and "# Review" in body
+    shell.workflows.back()
+    assert shell.items[0]["label"].startswith("review")
+    await shell.workflows.operate(shell.items[1]["operation"])
+    assert "review: Review diffs" in "\n".join(shell.panel_lines)
+
+
+@pytest.mark.asyncio
+async def test_mcp_section_cards_server_page_and_tool_page(shell):
+    row = {"name": "tracker", "scope": "project", "enabled": True, "status": "connected", "transport": "stdio", "command_label": "python (3 args)",
+           "tool_loading": "all", "tool_count": 1, "schema_tokens": 410, "context_tokens": 410, "resource_count": 2}
+    broken = {"name": "broken", "scope": "project", "enabled": True, "status": "failed", "transport": "stdio", "tool_count": 0, "error": "exited (code 3)"}
+    tool = {"name": "mcp__tracker__create_issue", "group": "mcp:tracker", "description": "Create", "input_schema": {
+        "type": "object", "properties": {"assignee": {"type": "object", "properties": {"name": {"type": "string"}}}}}}
+    shell.preview = p.ContextInspectResult(session="s", mcp_servers=[row, broken], tools=[tool], mcp_index="tracker: issues")
+    shell.client.inspect_context = AsyncMock(return_value=shell.preview)
+    shell.client.mcp_server_show = AsyncMock(return_value=p.McpServerShowResult(
+        name="tracker", status="connected", scope="project", transport="stdio", tool_loading="all", tool_loading_source="default",
+        instructions="Be careful", tools=[{"name": "create_issue", "description": "Create", "input_schema": tool["input_schema"], "tokens": 340}]))
+    await shell.workflows.context_extensions("mcp")
+    assert shell.panel_title.startswith("MCP · 2 of 2 on")
+    assert shell.items[1]["lines"][0] == "python (3 args) · 1 tools · 2 resources"
+    assert shell.items[0]["lines"][-1] == "error: exited (code 3)"
+    await shell.workflows.operate(shell.items[1]["operation"])
+    assert shell.panel_layout == "list" and shell.items[0]["label"] == "create_issue" and shell.items[0]["trailing"] == "~340"
+    assert shell.items[0]["toggle_operation"]["name"] == "mcp__tracker__create_issue"
+    assert any("untrusted" in line for line in shell.panel_lines)
+    await shell.workflows.operate(shell.items[0]["operation"])
+    assert shell.panel_title.startswith("Tool · mcp__tracker__create_issue")
+    assert "`assignee.name`" in "\n".join(shell.panel_lines)
 
 
 @pytest.mark.asyncio
@@ -583,3 +642,41 @@ async def test_mcp_persistent_toggle_workflow(shell):
     await shell.workflows.operate(operation)
     shell.client.settings_mcp_enabled_set.assert_awaited_once_with("project", "s", True, "hash")
     shell.workflows.settings.assert_awaited_once_with("project", "mcp")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key,label,text", [("system", "System prompt", "Core rules"),
+    ("environment", "Environment", "Facts"), ("memory", "MEMORY.md", "Remember")])
+async def test_named_prompt_literal_routes(shell, key, label, text):
+    parts = [{"name": "core_prompt", "text": "Core rules"},
+             {"name": "environment", "text": "Facts"}, {"name": "memory", "text": "Remember"}]
+    shell.preview = p.ContextInspectResult(session="s", system_text="\n\n".join(part["text"] for part in parts), included_parts=parts)
+    shell.refresh_preview = AsyncMock(return_value=True)
+    await shell.workflows.operate({"kind": "context_show", "key": key})
+    assert shell.panel_title == f"{label} · literal"
+    assert shell.panel_lines == [text]
+    assert shell.panel_layout == "detail"
+
+
+@pytest.mark.asyncio
+async def test_context_picker_named_sections(shell):
+    await shell.workflows.operate({"kind": "context_menu"})
+    assert [item["operation"]["key"] for item in shell.items] == [
+        "system", "environment", "tools", "agents", "memory", "skills", "mcp"]
+
+
+@pytest.mark.asyncio
+async def test_system_literal_route_keeps_future_part(shell):
+    shell.preview = p.ContextInspectResult(session="s", system_text="Core\n\nFuture", included_parts=[
+        {"name": "core_prompt", "text": "Core"}, {"name": "future", "text": "Future"}])
+    shell.refresh_preview = AsyncMock(return_value=True)
+    await shell.workflows.operate({"kind": "context_show", "key": "system"})
+    assert shell.panel_lines == ["Core", "", "Future"]
+
+
+def test_mcp_server_page_keeps_names_the_host_already_prefixed():
+    from nexus.ui.ratatui.context_sections import _full_name
+    preview = SimpleNamespace(tools=[{"name": "mcp__tracker__get"}])
+    assert _full_name(preview, "tracker", "mcp__tracker__get") == "mcp__tracker__get"
+    assert _full_name(preview, "tracker", "get") == "mcp__tracker__get"
+    assert _full_name(preview, "my-server", "x") == "mcp__my_server__x"

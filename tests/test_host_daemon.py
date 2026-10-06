@@ -338,6 +338,18 @@ async def _http_collect_sse(reader, *, stop=None, timeout: float = 5.0) -> list[
 # ---------------------------------------------------------------------------
 
 
+async def test_status_treats_a_connection_dropped_mid_health_as_not_running(short_dir, monkeypatch):
+    # A daemon that is shutting down accepts the connection, then drops it.
+    async with running_daemon(short_dir) as (_daemon, sock, workspace):
+        async def lost(self, *args, **kwargs):
+            raise ConnectionResetError("Connection lost")
+
+        monkeypatch.setattr(UDSClient, "call", lost)
+        report = await status(workspace, socket_path=sock)
+    assert report["running"] is False
+    assert "Connection lost" in report["error"]
+
+
 async def test_status_stop_and_logs(short_dir):
     async with running_daemon(short_dir) as (daemon, sock, workspace):
         report = await status(workspace, socket_path=sock)

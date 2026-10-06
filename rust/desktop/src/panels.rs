@@ -1437,9 +1437,23 @@ impl Desktop {
                                     .text_color(t.muted)
                                     .child(item.detail.clone()),
                             )
-                        }),
+                        })
+                        .children(item.lines.iter().map(|line| {
+                            div()
+                                .text_size(px(11.))
+                                .text_color(t.muted)
+                                .child(line.clone())
+                        })),
                 )
                 .on_click(cx.listener(move |this, _, w, cx| this.dispatch(action.clone(), w, cx)));
+            if !item.trailing.is_empty() {
+                row = row.child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(t.muted)
+                        .child(item.trailing.clone()),
+                );
+            }
             if let Some(enabled) = item.toggle_enabled {
                 if item.toggle_locked {
                     row = row.child(div().text_size(px(11.)).text_color(t.muted).child("Locked"));

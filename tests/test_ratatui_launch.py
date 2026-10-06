@@ -1,89 +1,75 @@
-"""Native launch/packaging seams stay lazy and preserve non-TUI imports."""
-import os
-from pathlib import Path
-import subprocess
-import sys
-from unittest.mock import AsyncMock
+"""Native client launch order: the process starts before the host connection (splash first)."""
+from __future__ import annotations
 
-import pytest
+import asyncio
 
-from nexus.ui.ratatui.run import binary_path
+from nexus.ui.ratatui import run as launch
 
 
-def test_binary_override_is_explicit_and_executable(tmp_path, monkeypatch):
-    path = tmp_path / "native"
-    path.write_text("#!/bin/sh\nexit 0\n")
-    path.chmod(0o700)
-    monkeypatch.setenv("NEXUS_TUI_BINARY", str(path))
-    assert binary_path() == path
-    path.chmod(0o600)
-    with pytest.raises(RuntimeError, match="missing"):
-        binary_path()
+class _Stdin:
+    def __init__(self, process):
+        self.process = process
+
+    def close(self):
+        self.process.returncode = 0  # the client restores the terminal and exits on EOF
 
 
-def test_native_import_does_not_import_textual():
-    result = subprocess.run([sys.executable, "-c", "import sys; import nexus.ui.ratatui.run; assert 'textual' not in sys.modules"], cwd=Path(__file__).resolve().parents[1], env={**os.environ, "PYTHONPATH": "."}, capture_output=True)
-    assert result.returncode == 0, result.stderr
+class _Process:
+    def __init__(self, *, exits_on_eof=True):
+        self.returncode = None
+        self.stdin = _Stdin(self) if exits_on_eof else type("S", (), {"close": lambda self: None})()
+        self.terminated = False
+
+    async def wait(self):
+        while self.returncode is None:
+            await asyncio.sleep(0)
+        return self.returncode
+
+    def terminate(self):
+        self.terminated = True
+        self.returncode = -15
 
 
-@pytest.mark.asyncio
-async def test_cli_launch_routes_native_without_textual(monkeypatch, tmp_path):
+async def test_release_closes_stdin_so_the_client_restores_the_terminal():
+    process = _Process()
+    await launch.release(process)
+    assert process.returncode == 0 and not process.terminated
+
+
+async def test_release_ignores_a_client_that_already_left():
+    process = _Process()
+    process.returncode = 0
+    await launch.release(process)
+    assert not process.terminated
+
+
+async def test_chat_spawns_the_client_before_connecting(monkeypatch, tmp_path):
     from nexus import cli
-    import nexus.ui.cli
-    import nexus.ui.ratatui.run
-    client = AsyncMock()
-    monkeypatch.setattr(nexus.ui.cli, "open_client", AsyncMock(return_value=client))
-    launch = AsyncMock(return_value=0)
-    monkeypatch.setattr(nexus.ui.ratatui.run, "run", launch)
-    assert await cli._chat(tmp_path, session="s", renderer="ratatui") == 0
-    assert launch.await_args.args == (client,)
-    assert launch.await_args.kwargs["workspace"] == tmp_path
-    client.aclose.assert_awaited_once()
+    order: list[str] = []
+    process = _Process()
 
+    async def spawn():
+        order.append("spawn")
+        return process
 
-def test_newest_source_build_wins_over_a_stale_one(tmp_path, monkeypatch):
-    import nexus.ui.ratatui.run as run
+    async def open_client(workspace):
+        order.append("connect")
 
-    root = tmp_path / "repo"
-    monkeypatch.delenv("NEXUS_TUI_BINARY", raising=False)
-    monkeypatch.setattr(run, "__file__", str(root / "nexus/ui/ratatui/run.py"))
-    monkeypatch.setattr(run.shutil, "which", lambda name: None)
-    monkeypatch.setattr(run.sys, "executable", str(tmp_path / "bin/python"))
-    for profile, age in (("debug", 100), ("release", 0)):
-        path = root / f"rust/tui/target/{profile}/nexus-ratatui"
-        path.parent.mkdir(parents=True)
-        path.write_text("#!/bin/sh\n")
-        path.chmod(0o700)
-        os.utime(path, (path.stat().st_mtime - age, path.stat().st_mtime - age))
-    assert "release" in str(binary_path())
-    debug = root / "rust/tui/target/debug/nexus-ratatui"
-    os.utime(debug, None)
-    assert "debug" in str(binary_path())
+        class Client:
+            async def aclose(self):
+                order.append("close")
 
+        return Client()
 
-def test_a_fresh_source_build_beats_a_stale_executable_next_to_the_interpreter(tmp_path, monkeypatch):
-    import nexus.ui.ratatui.run as run
+    async def run(client, **kwargs):
+        order.append("run")
+        assert kwargs["process"] is process
+        return 0
 
-    root = tmp_path / "repo"
-    monkeypatch.delenv("NEXUS_TUI_BINARY", raising=False)
-    monkeypatch.setattr(run, "__file__", str(root / "nexus/ui/ratatui/run.py"))
-    monkeypatch.setattr(run.shutil, "which", lambda name: None)
-    monkeypatch.setattr(run.sys, "executable", str(tmp_path / "venv/bin/python"))
-    stale = tmp_path / "venv/bin/nexus-ratatui"
-    fresh = root / "rust/tui/target/debug/nexus-ratatui"
-    for path, age in ((stale, 100), (fresh, 0)):
-        path.parent.mkdir(parents=True)
-        path.write_text("#!/bin/sh\n")
-        path.chmod(0o700)
-        os.utime(path, (path.stat().st_mtime - age, path.stat().st_mtime - age))
-    assert binary_path() == fresh.resolve()
-    os.utime(stale, None)
-    assert binary_path() == stale.resolve()
-
-
-def test_native_binary_build_is_optional_so_toolchainless_platforms_still_install():
-    import tomllib
-
-    config = tomllib.loads((Path(__file__).resolve().parents[1] / "pyproject.toml").read_text())
-    (native,) = config["tool"]["setuptools-rust"]["bins"]
-    assert native["target"] == "nexus-ratatui" and native["optional"] is True
+    import nexus.ui.cli as ui_cli
+    monkeypatch.setattr(launch, "spawn", spawn)
+    monkeypatch.setattr(launch, "run", run)
+    monkeypatch.setattr(ui_cli, "open_client", open_client)
+    assert await cli._chat(tmp_path, session="s") == 0
+    assert order == ["spawn", "connect", "run", "close"]
+    assert process.returncode == 0

@@ -51,7 +51,7 @@ def test_live_activity_preview_closes_at_reply_and_completion(tmp_path, monkeypa
         return next(b for b in _snapshot(tmp_path, monkeypatch, [value],
                     local_transcript=True)["blocks"] if b["kind"] == "tool_group")
     live = activity(turn)
-    assert live["preview_limit"] == 5
+    assert live["preview_limit"] == 1
     assert live["text"] == "Read 8 files"
     assert len(live["members"]) == 8  # Rust bounds the preview, never the full payload.
     completed = activity(replace(turn, phase="completed"))
@@ -62,7 +62,7 @@ def test_live_activity_preview_closes_at_reply_and_completion(tmp_path, monkeypa
     assert activity(replace(turn, tools=tools[:2]))["id"] == live["id"]
 
 
-def test_parallel_markers_are_separate_from_tool_text(tmp_path, monkeypatch):
+def test_parallel_tools_render_without_gutter_markers(tmp_path, monkeypatch):
     tools = [
         ToolCallView(call_id="a", name="read", event_seq=2, iteration=1,
                      status="completed", input={"path": "README.md"}),
@@ -72,12 +72,13 @@ def test_parallel_markers_are_separate_from_tool_text(tmp_path, monkeypatch):
                      status="completed", input={"pattern": "main"}),
     ]
     snapshot = _snapshot(tmp_path, monkeypatch, [replace(_turn(), tools=tools)])
-    blocks = [b for b in snapshot["blocks"] if b["kind"] in {"tool", "tool_group"}]
-    assert [b["kind"] for b in blocks] == ["tool_group", "tool", "tool_group"]
+    blocks = [b for b in snapshot["blocks"] if b["kind"] in {"task", "tool", "tool_group"}]
+    assert [b["kind"] for b in blocks] == ["tool_group", "task", "tool_group"]
     assert [b["count"] for b in blocks if b["kind"] == "tool_group"] == [1, 1]
     assert all(not b["text"].startswith(("┌", "│", "└")) for b in blocks)
     assert blocks[1]["text"].splitlines() == [blocks[1]["text"]]  # one row
-    assert "Subagent — Scan" in blocks[1]["text"]
+    assert "Subagent — Scan" in blocks[1]["title"]
+    assert blocks[1]["gap"] == blocks[2]["gap"] == 1
 
 
 def test_blocks_follow_event_order_with_textual_gaps(tmp_path, monkeypatch):
@@ -161,7 +162,11 @@ def test_task_card_links_child_and_hides_duplicate_agent_entry(tmp_path, monkeyp
     shell.preferences.values["context_preview"] = False
     blocks = project(SimpleNamespace(view=view, session="s"), 1, shell=shell)["blocks"]
     card = next(block for block in blocks if block["id"] == "task-1")
-    assert card["text"] == "\ue000 Explore Subagent — Scan"  # spinner slot, one row
+    assert card["kind"] == "task"
+    assert card["title"] == "Explore Subagent — Scan"
+    assert card["status"] == "running"
+    assert card["text"] == "Starting…"
+    assert card["gap"] == 1
     assert card["operation"] == {"kind": "agent_page", "id": "a1"}
     assert [block["id"] for block in blocks if block["id"] in {"a1", "a2"}] == ["a2"]
 
@@ -169,12 +174,12 @@ def test_task_card_links_child_and_hides_duplicate_agent_entry(tmp_path, monkeyp
 @pytest.mark.parametrize(
     ("status", "spawned", "completed", "suffix"),
     [
-        ("completed", 100.0, 165.0, " · 1m 5s"),
+        ("completed", 100.0, 165.0, "1m 5s"),
         ("running", 100.0, None, ""),
-        ("completed", 100.0, 100.25, " · 250ms"),
+        ("completed", 100.0, 100.25, "0.2s"),
         ("completed", None, None, ""),
         ("completed", 100.0, None, ""),
-        ("failed", 100.0, 105.0, " · 5.0s"),
+        ("failed", 100.0, 105.0, "5.0s"),
     ],
 )
 def test_subagent_elapsed_time_only_when_finished(tmp_path, monkeypatch, status, spawned, completed, suffix):
@@ -197,8 +202,13 @@ def test_subagent_elapsed_time_only_when_finished(tmp_path, monkeypatch, status,
     controller = SimpleNamespace(view=view, session="s")
     shell = ShellActions(controller)
     shell.preferences.values["context_preview"] = False
-    row = next(row for row in project(controller, 1, shell=shell)["blocks"] if row["kind"] == "tool")
-    assert row["text"].endswith(f" · gpt-x (medium){suffix}")
+    row = next(row for row in project(controller, 1, shell=shell)["blocks"] if row["kind"] == "task")
+    assert row["title"].endswith(" · gpt-x (medium)")
+    assert row["status"] == ("running" if status == "running" else "done")
+    assert row["text"] == ("Starting…" if status == "running" else "")
+    assert row["metrics"].startswith("0 tools")
+    if suffix:
+        assert suffix in row["metrics"]
 
 
 def test_details_mcp_accepts_doctor_report_dict_not_struct(tmp_path, monkeypatch):
@@ -483,3 +493,47 @@ def test_folded_turn_summary_lists_tool_calls_tokens_and_model():
     assert _fold_summary(turn(2, UsageTotals(input_tokens=1000, output_tokens=234), "gpt")) == "2 tools · 1.2K tokens · gpt"
     assert _fold_summary(turn(1, UsageTotals(), None)) == "1 tool"
     assert _fold_summary(turn(0, UsageTotals(), None)) == "0 tools"
+
+
+def test_task_latest_activity_metrics_and_error_detail(tmp_path, monkeypatch):
+    from nexus.ui_support.timeline import _task_child_activity, tool_heading
+    from nexus.view.model import AgentView
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    old = ToolCallView(call_id="old", name="read", event_seq=2, status="completed", input={"path": "old.py"})
+    latest = ToolCallView(call_id="new", name="bash", event_seq=3,
+                          input={"command": "echo latest"},
+                          progress=["stale", "fresh\n" + "x" * 150 + "\x1b[31m"])
+    child = AgentView(id="kid", type="explore", status="spawned", error="private failure")
+    child.body.turns = [TurnView(id="child-turn", tools=[latest, old])]
+    activity = _task_child_activity(child)
+    assert activity.startswith(tool_heading(latest) + " · fresh ")
+    assert "x" * 150 in activity
+    assert "stale" not in activity and "old.py" not in activity
+    assert "\x1b" not in activity and "\n" not in activity
+    task = ToolCallView(call_id="task", name="Task", event_seq=2, status="running",
+                        input={"description": "Scan"}, child_agent_ids=["kid"])
+    view = initial_state("s")
+    view.turns = [replace(_turn(), tools=[task])]
+    view.agents = {"kid": child}
+    controller = SimpleNamespace(view=view, session="s")
+    shell = ShellActions(controller)
+    shell.preferences.values["context_preview"] = False
+    blocks = project(controller, 1, shell=shell)["blocks"]
+    card = next(b for b in blocks if b["kind"] == "task")
+    assert card["text"] == activity
+    assert card["metrics"].startswith("1 tool")
+    assert card["detail"] == "Error: private failure"  # only the error, never the tool details
+    shell.expanded.add("task:detail")
+    shell.verbose = True
+    card = next(b for b in project(controller, 1, shell=shell)["blocks"] if b["kind"] == "task")
+    assert card["detail"] == "Error: private failure"
+    assert "private failure" not in card["text"] + card["title"] + card["metrics"]
+    child.status = "failed"
+    shell = ShellActions(controller)
+    shell.preferences.values["context_preview"] = False
+    shell.expanded.add("task:detail")
+    card = next(b for b in project(controller, 2, shell=shell)["blocks"] if b["kind"] == "task")
+    assert card["status"] == "done" and card["text"] == ""
+    assert "private failure" in card["detail"]

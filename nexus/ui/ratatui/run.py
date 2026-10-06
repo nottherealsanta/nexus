@@ -5,6 +5,8 @@ executable beside Python; source checkouts may use a Cargo build.
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import os
 from pathlib import Path
 import shutil
@@ -41,6 +43,32 @@ def available() -> bool:
     return True
 
 
-async def run(client, *, session="default", reconnect=None, workspace=None):
+async def spawn():
+    """Start the native client now, so its splash answers the launch before the host is ready.
+
+    The bridge protocol is unchanged: the process draws "Nexus" until the first snapshot
+    reaches its stdin, which the controller sends once the session has loaded.
+    """
+    return await asyncio.create_subprocess_exec(
+        str(binary_path()), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+        limit=16 * 1024 * 1024)
+
+
+async def release(process) -> None:
+    """Stop a spawned client that never reached (or already left) the bridge loop.
+
+    Closing stdin makes it restore the terminal itself; a kill would leave raw mode on.
+    """
+    if process.returncode is None:
+        with contextlib.suppress(Exception):
+            process.stdin.close()
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(process.wait(), 2)
+        if process.returncode is None:
+            process.terminate()
+            await process.wait()
+
+
+async def run(client, *, session="default", reconnect=None, workspace=None, process=None):
     from .prototype import run as run_native
-    return await run_native(Path(workspace or Path.cwd()).resolve(), session, binary_path(), client=client, reconnect=reconnect)
+    return await run_native(Path(workspace or Path.cwd()).resolve(), session, binary_path(), client=client, reconnect=reconnect, process=process)

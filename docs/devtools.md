@@ -19,7 +19,8 @@ them); nothing touches the network or your workspace. Setup is never required.
 | Stateless provider | `devtools/mock/provider.py` |
 | `⟦mock …⟧` actor directive | `devtools/mock/directive.py` |
 | Headless runner and verdict checks | `devtools/mock/runner.py`, `checks.py` |
-| Sandbox (`SEED_FILES`, `ensure_sandbox`, `reset_sandbox`, `tree_hash`) | `devtools/mock/sandbox.py` |
+| Sandbox (`SEED_FILES`, `GLOBAL_SEED_FILES`, `generated_seed_files`, `ensure_sandbox`, `reset_sandbox`, `tree_hash`) | `devtools/mock/sandbox.py` |
+| Dummy MCP server (`tracker`, `docs`, `broken`) | `devtools/mock/mcp_server.py` |
 | Catalogue | `devtools/mock/scenarios/__init__.py` (`_MODULES`) |
 | Host dispatch | `host_support/mock.py`; commands `MockList`, `MockStart`, `MockClean` (error outside dev mode) |
 | Surfaces | `ui_support/mock_args.py`, `mock_cli.py`, `ui/ratatui/actions.py`, `ui/web/js/mock.js` |
@@ -30,12 +31,25 @@ messages already in the request, so parallel subagents, forks and replays all
 work. A request without a directive fails closed. Every scenario ends with an
 in-band `✓ mock verdict — …` message. The sandbox seeds `nexus.toml`
 (`mock/hello`, offline, `mode = "allow"`, `bash_yield_s = 3`), a README and a
-small `src/app.py`.
+small `src/app.py`. It also seeds extensions so the context header has real
+data: project skills (`mock-skill`, `code-review` with `references/` files,
+`release-notes`, `sql-style` with a very long description), global skills in the dev
+home (`writing-style`, `git-hygiene`) and dummy MCP servers from
+`devtools/mock/mcp_server.py`: `mock-tracker` (project, six rich tools, resources,
+a prompt, instructions; `tool_loading: all`), `mock-docs` (global, 24 `lookup_*`
+tools, loaded via search) and `mock-broken` (project, exits 3 before `initialize`,
+so it shows `failed`). `--profile` selects the identity. The `mcp.json` files are
+**generated** (they hold `sys.executable`), rewritten when they differ, and
+git-ignored in the sandbox. **Seeding rule:** `ensure_sandbox` writes any *missing*
+seed file on every start and never overwrites existing ones, so new seeds reach an
+existing sandbox; global seeds are written only inside the dev home. The
+`extensions` scenario does a real stdio MCP call, a deferred `McpSearch`/`McpCall`
+and then loads `code-review` (last, because its `allowed-tools` narrows later calls).
 
 **Scenarios** (`nexus mock list`): `hello`, `tool_marathon`, `parallel_tools`,
 `parallel_subagents`, `agent_limits`, `streaming_rich`, `errors`,
 `provider_failure`, `cancel`, `question`, `context_pressure`, `diff_review`,
-`stress`, `bash_wait`. Interactive ones (`cancel`, `provider_failure`, `question`)
+`stress`, `bash_wait`, `extensions`. Interactive ones (`cancel`, `provider_failure`, `question`)
 need a person; `stress` is slow.
 
 **Use:**

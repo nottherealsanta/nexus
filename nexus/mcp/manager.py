@@ -53,7 +53,7 @@ import re
 import tempfile
 import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Self
 
@@ -720,6 +720,55 @@ class MCPManager:
 
     def server_snapshot(self, name: str) -> MCPServerSnapshot | None:
         return self._snapshots.get(name)
+
+    def server_detail(self, name: str) -> dict[str, Any] | None:
+        """Read existing state only; never initialize, list, or connect a server.
+
+        This is internal data. The host must bound and redact it before display.
+        Instructions and metadata come from the retained initialize result.
+        """
+        state = self._states.get(name)
+        snapshot = self.server_snapshot(name)
+        if state is None or snapshot is None:
+            return None
+        config = state.definition.config
+        label = ""
+        if config.transport == "stdio":
+            # Never disclose arguments, working directories, env, headers or URLs.
+            label = f"{config.command.replace(chr(92), '/').rsplit('/', 1)[-1]} ({len(config.args)} args)"
+        info = state.info
+        return {
+            "name": name,
+            "transport": config.transport,
+            "command_label": label,
+            "status": "connected" if snapshot.connected else "disabled" if not self._is_enabled(state) else "failed" if snapshot.error else "disconnected",
+            "health": snapshot.health.value,
+            "tool_loading": snapshot.tool_loading,
+            "tool_loading_source": snapshot.tool_loading_source,
+            "session_availability": "unavailable: session sent-tool state is not retained here",
+            "enabled": self._is_enabled(state),
+            "error": snapshot.error,
+            "server_info": {"name": info.name, "version": info.version} if info is not None else None,
+            "server_info_availability": "stored" if info is not None else "unavailable: no initialize result",
+            "instructions": info.instructions if info is not None else None,
+            "instructions_availability": "stored" if info is not None else "unavailable: no initialize result",
+            "tools": [{"name": tool.name, "description": tool.spec.description,
+                       "input_schema": tool.spec.to_schema().input_schema, "annotations": None,
+                       "annotations_availability": "unavailable: bridge does not retain raw annotations",
+                       "sent": None, "tokens": len(json.dumps(tool.spec.to_schema().input_schema)) // 4}
+                      for tool in snapshot.tools],
+            "resources": [asdict(item) for item in snapshot.resources[:256]],
+            "resources_clipped": len(snapshot.resources) > 256,
+            "resource_templates": [asdict(item) for item in snapshot.resource_templates[:256]],
+            "resource_templates_clipped": len(snapshot.resource_templates) > 256,
+            "prompts": [asdict(item) for item in snapshot.prompts[:256]],
+            "prompts_clipped": len(snapshot.prompts) > 256,
+            "catalog_availability": "stored" if snapshot.connected else "unavailable: server is not connected",
+        }
+
+    def redact_display(self, text: str) -> str:
+        """Scrub display data with credentials from all configured servers."""
+        return self._scrub(text)
 
     def status(self, name: str) -> MCPServerStatus:
         state = self._require_state(name)

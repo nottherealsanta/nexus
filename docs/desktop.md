@@ -272,7 +272,7 @@ it does not establish a frame-rate guarantee for every conversation or machine.
 
 ## Overhaul performance foundation
 
-Phase 0 of [the overhaul plan](../plans/DESKTOP_OVERHAUL_PLAN.md) is in progress.
+Phase 0 of [the overhaul plan](../plans/in-progress/DESKTOP_OVERHAUL_PLAN.md) is in progress.
 Composer edits paint locally. Draft synchronization waits for 250 ms of quiet;
 completion waits for 120 ms, and Tab requests completion immediately. Transcript
 re-measurement is debounced the same way: a width change during a window drag

@@ -583,6 +583,7 @@ class SkillManager:
             body_size=skill_file.body_size,
             file_sha256=skill_file.file_sha256,
             snapshotted=True,
+            parsed=parsed,
         )
 
     def _root_for(self, directory: Path) -> Path:

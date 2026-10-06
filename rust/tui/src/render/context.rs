@@ -67,15 +67,7 @@ fn inventory(block: &Content, width: usize, inset: usize, palette: &Palette) -> 
         }
         rows.push((Line::from(spans), block.operation.clone()));
     }
-    let omitted = labels.len() - shown;
-    let summary = if omitted > 0 {
-        format!("[{} {key}] · {omitted} more", labels.len())
-    } else if labels.is_empty() {
-        "None included".to_owned()
-    } else {
-        String::new()
-    };
-    for text in [summary, block.local_preview.clone()] {
+    for text in [block.local_preview.clone()] {
         if !text.is_empty() {
             rows.push((
                 Line::from(vec![
@@ -92,7 +84,12 @@ fn inventory(block: &Content, width: usize, inset: usize, palette: &Palette) -> 
 /// One muted line under the System prompt / AGENTS.md heading: the first line of
 /// the text, clipped with an ellipsis. The full text stays in the host dialog.
 fn preview(block: &Content, width: usize, inset: usize, palette: &Palette) -> Rows {
-    let text = block.text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+    let text = block
+        .text
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim();
     if text.is_empty() {
         return Vec::new();
     }
@@ -163,11 +160,7 @@ mod tests {
                 ..Default::default()
             };
             let rows = inventory(&block, width, 0, &palette);
-            assert_eq!(rows.len(), 6);
-            assert!(rows[5]
-                .0
-                .to_string()
-                .contains(&format!("{} more", 30 - expected)));
+            assert_eq!(rows.len(), 5, "capped at five rows of {expected} labels");
             assert!(rows
                 .iter()
                 .all(|(line, op)| line.width() <= width && op == &block.operation));
@@ -183,12 +176,7 @@ mod tests {
                 ..Default::default()
             };
             let rows = inventory(&block, 40, 0, &palette);
-            assert!(rows
-                .last()
-                .unwrap()
-                .0
-                .to_string()
-                .contains(&format!("{} more", 12 - shown)));
+            assert!(rows.len() <= 5, "{key} stays capped (shown {shown})");
             assert!(rows.iter().all(|(line, _)| line.width() <= 40));
         }
     }
@@ -210,7 +198,7 @@ mod tests {
         };
         let rows = build(&block, 160, &palette);
         assert_eq!(rows.len(), 2);
-        assert!(rows[0].0.to_string().starts_with("     Tools [2]"));
+        assert!(rows[0].0.to_string().starts_with("  │  Tools [2]"));
         assert!(rows[1].0.to_string().starts_with("     read"));
         assert!(rows[1].0.width() <= 105);
         assert!(!rows.iter().any(|row| row.0.to_string().contains("omitted")));
@@ -230,30 +218,29 @@ mod tests {
         let block = Content {
             kind: "context_header".into(),
             members: vec![
-                member("context:system", "System prompt", "You are Nexus, a provider-agnostic agent.  … +40 more lines"),
-                member("context:agents", "AGENTS.md", "None included"),
+                member(
+                    "context:system",
+                    "System prompt",
+                    "You are Nexus, a provider-agnostic agent.",
+                ),
+                member("context:agents", "AGENTS.md", ""),
             ],
             ..Default::default()
         };
         let rows = build(&block, 80, &palette);
         let line = |i: usize| rows[i].0.to_string();
-        assert!(line(0).starts_with("     System prompt"), "{}", line(0));
+        assert!(line(0).starts_with("  │  System prompt"), "{}", line(0));
         assert!(line(1).starts_with("     You are Nexus"), "{}", line(1));
         assert!(rows[1].1.is_some(), "the preview opens the same dialog");
-        assert!(line(2).is_empty() && line(3).starts_with("     AGENTS.md"));
-        assert_eq!(line(4), "     None included");
+        assert!(line(2).is_empty() && line(3).starts_with("  │  AGENTS.md"));
         let narrow = build(&block, 30, &palette);
-        assert!(narrow.iter().all(|(l, _)| l.width() <= 30), "clipped, never overflowing");
-        assert!(narrow[1].0.to_string().ends_with('…'), "clipping is announced");
-    }
-
-    #[test]
-    fn empty_inventory_is_explicit_and_aligned() {
-        let block = Content {
-            id: "context:mcp".into(),
-            ..Default::default()
-        };
-        let rows = inventory(&block, 80, 5, &Palette::new(false));
-        assert_eq!(rows[0].0.to_string(), "     None included");
+        assert!(
+            narrow.iter().all(|(l, _)| l.width() <= 30),
+            "clipped, never overflowing"
+        );
+        assert!(
+            narrow[1].0.to_string().ends_with('…'),
+            "clipping is announced"
+        );
     }
 }

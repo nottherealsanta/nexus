@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from ..ui_support.text import escape_controls, sanitize
@@ -86,31 +86,6 @@ _TOOL_VERBS = {
     "task": "◉ Task", "subagent": "◉ Task", "question": "? Question",
 }
 _RAW_OUTPUT_TOOLS = frozenset({"bash", "bashoutput", "glob", "grep", "ls"})
-
-#: Gutter glyphs joining the calls one model response issued together.
-BATCH_GLYPHS = {"first": "┌", "middle": "│", "last": "└"}
-
-
-def tool_batches(tools: Sequence[ToolCallView]) -> dict[str, str]:
-    """Map call id -> ``first|middle|last`` for calls sharing a model iteration.
-
-    Only runs of two or more consecutive calls with the same iteration form a
-    batch; a lone call is absent so it renders exactly as before.
-    """
-    out: dict[str, str] = {}
-    ordered = sorted(tools, key=lambda tool: tool.event_seq)
-    start = 0
-    while start < len(ordered):
-        end = start + 1
-        while end < len(ordered) and ordered[end].iteration == ordered[start].iteration:
-            end += 1
-        if end - start > 1:
-            for offset, tool in enumerate(ordered[start:end]):
-                position = "first" if offset == 0 else "last" if end - start - 1 == offset else "middle"
-                out[tool.call_id] = position
-        start = end
-    return out
-
 
 @dataclass(frozen=True)
 class ToolGroup:
@@ -550,14 +525,11 @@ def _task_child_activity(agent: AgentView) -> str:
     )
     if not tools:
         return "Starting…"
-    calls = []
-    for tool in tools[-1:]:
-        name = _text(tool.name or "tool", 32)
-        target = "" if tool.name.casefold() in {"task", "subagent"} else format_arguments(tool)
-        progress = tool.progress[-1] if tool.progress else ""
-        detail = _text(" · ".join(part for part in (target, progress) if part), 90)
-        calls.append(f"{name}: {detail}" if detail else name)
-    return "  →  ".join(calls)
+    tool = tools[-1]
+    heading = tool_heading(tool)
+    progress = tool.progress[-1] if tool.progress else ""
+    # Width-dependent clipping belongs to the renderer, not the activity model.
+    return escape_controls(" · ".join(part for part in (heading, progress) if part)).replace("\n", " ").replace("\t", " ")
 
 
 def _task_children(tool: ToolCallView, agents: Mapping[str, AgentView]) -> tuple[AgentView, ...]:
@@ -735,8 +707,6 @@ def tool_row_text(tool: ToolCallView, spinner_index: int = 0, gutter: str = "") 
 
 __all__ = [
     "running_output_tail",
-    "BATCH_GLYPHS",
-    "tool_batches",
     "DIFF_TOOLS",
     "_DETAIL_LIMIT",
     "DiffSection",

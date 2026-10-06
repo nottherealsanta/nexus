@@ -378,6 +378,8 @@ def test_protocol_round_trips_every_command_and_result():
         p.AgentDefaultSet(name="build"),
         p.ToolsList(),
         p.ContextInspect(session="s"),
+        p.McpServerShow(session="s", name="example"),
+        p.SkillInspect(session="s", name="example"),
         p.ContextExtensionSelect(session="s", category="skills", name="example", enabled=False),
         p.ContextMcpLoadingSelect(session="s", server="example", mode="search"),
         p.SettingsMcpLoadingSet(scope="project", server="example", mode="all", expected_sha256="abc"),
@@ -473,6 +475,8 @@ def test_protocol_round_trips_every_command_and_result():
         p.AgentSelectResult(session="s", name="build"),
         p.AgentDefaultSetResult(name="build", effective="build", scope="global"),
         p.ToolsListResult(count=1, tools=[{"name": "Read"}]),
+        p.SkillInspectResult(session="s", name="example"),
+        p.McpServerShowResult(name="example"),
         p.ContextInspectResult(
             session="s",
             system_text="standing prompt",

@@ -36,6 +36,7 @@ from .frontmatter import (
     MAX_DESCRIPTION_CHARS,
     MAX_SKILL_FILE_BYTES,
     MODEL_TIERS,
+    ParsedFrontmatter,
     find_frontmatter_bounds,
     sanitize_description,
 )
@@ -160,6 +161,7 @@ class Skill:
     body_size: int = 0
     file_sha256: str = ""
     snapshotted: bool = False
+    parsed: ParsedFrontmatter | None = None
 
     # -- provenance conveniences ------------------------------------------
 

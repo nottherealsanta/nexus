@@ -80,6 +80,13 @@ user > builtin): `<workspace>/.agents/skills/` (and legacy `.nexus/skills/`),
   disabled skills leave the index, invocation and bundled tools. Locked after the
   first turn.
 - Events: `skill.invoked`, `skill.completed`.
+- Host `SkillInspect` is independent of invocation and is permitted for disabled
+  skills. It leases the manifest and displays refresh-time declaration bytes
+  (`parsed.raw`) and body, without reading the live file, activating bundled
+  tools, or changing session events. `frontmatter_text` is explicitly the
+  declaration payload, not a reconstructed `SKILL.md`. Host text is redacted;
+  body output is byte-bounded with explicit truncation and missing-snapshot
+  errors. Refresh is required to observe later file changes.
 
 ## Hooks (`hooks/`)
 
@@ -168,6 +175,24 @@ the write-a-tool-and-call-it walkthrough), `test_skills_*.py`, `test_hooks_manag
 `tests/fixtures/mcp_server.py`.
 
 ## MCP search loading
+
+### Read-only server detail
+
+`McpServerShow(session, name)` reads the MCP manager's already-retained state;
+it never initializes or connects a server, refreshes catalogs, or invokes tools.
+Detail includes connection health, a stdio command **basename and argument count**
+(never argument values, env, headers, working directory, or endpoint URL), retained
+initialize server info/instructions, full tool input schemas, resources/templates,
+and prompts. Unconnected catalogs and metadata not retained by the bridge (raw
+annotations and per-tool sent state) are explicitly marked unavailable. Connected
+empty catalogs remain empty rather than being fetched again.
+
+Display data is redacted at the host boundary, including configured MCP secrets.
+The UTF-8 snapshot limit defaults to 256 KiB (maximum 1 MiB); oversized snapshots
+return a labeled, possibly incomplete JSON preview with `clipped=true`, never a
+silently shortened schema. Each resource/template/prompt catalog is limited to
+256 retained entries with its own explicit clipping flag. Inspection does not
+alter loading or selection state.
 
 Servers default to `tool_loading: "search"`; their full schemas stay out of
 `ModelRequest.tools`. `McpSearch` discovers tools with local deterministic

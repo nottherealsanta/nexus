@@ -75,6 +75,7 @@ class ShellActions:
         self.panel_title = ""
         self.panel_layout = "modal"
         self.panel_format = "plain"
+        self.panel_toggle = None
         self.panel_loading = False
         self.panel_hint = ""
         self.panel_revision = 0
@@ -204,6 +205,7 @@ class ShellActions:
         self.panel_revision += 1
         self.panel_layout = layout
         self.panel_format = format
+        self.panel_toggle = None
         self.panel_loading = False
         self.panel_hint = ""
         self.items = []

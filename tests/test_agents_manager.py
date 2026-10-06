@@ -1171,13 +1171,11 @@ def test_builtin_build_prompt_names_no_optional_tools_or_roles() -> None:
         assert f"`{name}`" not in body and f"**{name}**" not in body, name
 
 @pytest.mark.parametrize("role", ["build", "orchestrator"])
-def test_packaged_root_prompts_are_minimal(role):
+def test_packaged_root_prompts_open_with_identity(role):
+    """Root prompts open with the Nexus identity line and stay short."""
     body = (_default_seed_source() / f"{role}.md").read_text().split("---", 2)[2].strip()
-    expected = "You are an expert coding assistant operating inside Nexus, a coding agent harness. You have tools."
+    identity = "You are an expert coding assistant operating inside Nexus, a coding agent harness. You have tools."
+    assert body.startswith(identity)
     if role == "orchestrator":
-        expected += (
-            " You operate by orchestrating different subagents."
-            "\nYou DELEGATE, COORDINATE, and VERIFY."
-            "\nYou never write code yourself. You orchestrate specialists who do."
-        )
-    assert body == expected
+        assert "You never write code yourself." in body
+    assert len(body) < 2400

@@ -104,7 +104,11 @@ fn sessions_surface(
 ) -> io::Result<()> {
     // Narrow terminals use a local drawer (never the saved preference); wide ones the sidebar.
     let drawer = width < 90;
-    let open = if drawer { s.sessions_drawer } else { s.sessions_sidebar };
+    let open = if drawer {
+        s.sessions_drawer
+    } else {
+        s.sessions_sidebar
+    };
     if open && cache.sessions_focus && toggle_off {
         cache.sessions_focus = false;
         if drawer {
@@ -133,7 +137,12 @@ fn sessions_surface(
 
 /// Keep the keyboard-selected session on screen: line index of its first row in the
 /// drawn sidebar (row 0 is the title row, which is not scrolled).
-fn sessions_follow(s: &Snapshot, cache: &render::Cache, region: ratatui::layout::Rect, scroll: usize) -> usize {
+fn sessions_follow(
+    s: &Snapshot,
+    cache: &render::Cache,
+    region: ratatui::layout::Rect,
+    scroll: usize,
+) -> usize {
     let Some(id) = cache.sessions_sel.as_deref() else {
         return scroll;
     };
@@ -147,15 +156,19 @@ fn sessions_follow(s: &Snapshot, cache: &render::Cache, region: ratatui::layout:
         false,
         None,
     );
-    let Some(line) = rows.iter().position(|(_, hit)| {
-        matches!(hit, Some(render::SidebarHit::Session(i)) if s.sessions[*i].id == id)
-    }) else {
+    let Some(line) = rows.iter().position(
+        |(_, hit)| matches!(hit, Some(render::SidebarHit::Session(i)) if s.sessions[*i].id == id),
+    ) else {
         return scroll;
     };
     let height = usize::from(region.height.saturating_sub(3)).max(1);
     let top = line.saturating_sub(1);
     // Show a group heading above the first row of its group.
-    let top = if top > 0 && rows[top].1.is_none() { top - 1 } else { top };
+    let top = if top > 0 && rows[top].1.is_none() {
+        top - 1
+    } else {
+        top
+    };
     if top < scroll {
         top
     } else if top + 2 > scroll + height {
@@ -251,6 +264,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut pending_sessions_focus = false;
     let mut escape = Instant::now() - Duration::from_secs(2);
     let mut history_loaded = false;
+    // False until the host's first snapshot: the splash is drawn and input is held back.
+    let mut loaded = false;
     'app: loop {
         // Coalesce a backlog (streamed tokens): only the newest snapshot is
         // parsed unless an older one carries a one-shot composer effect.
@@ -487,6 +502,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = tty.flush();
             }
             s = next;
+            loaded = true;
             animating = render::animating(&s);
             dirty = true;
         }
@@ -556,15 +572,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         dirty |= cache.component_hover.needs_redraw(Instant::now());
         dirty |= cache.toasts.tick(Instant::now(), cache.pointer);
-        if !(if terminal.size()?.width < 90 { s.sessions_drawer } else { s.sessions_sidebar }) {
+        if !(if terminal.size()?.width < 90 {
+            s.sessions_drawer
+        } else {
+            s.sessions_sidebar
+        }) {
             cache.sessions_focus = false;
         }
         if std::mem::take(&mut pending_sessions_focus) {
             details_focus = false;
-            sessions_surface(&mut s, &mut cache, &mut local_ui, false, terminal.size()?.width)?;
+            sessions_surface(
+                &mut s,
+                &mut cache,
+                &mut local_ui,
+                false,
+                terminal.size()?.width,
+            )?;
             dirty = true;
         }
-        if dirty && last_draw.elapsed() >= FRAME_INTERVAL {
+        if !loaded {
+            if dirty && last_draw.elapsed() >= FRAME_INTERVAL {
+                last_draw = Instant::now();
+                terminal.draw(render::draw_splash)?;
+                dirty = false;
+            }
+        } else if dirty && last_draw.elapsed() >= FRAME_INTERVAL {
             last_draw = Instant::now();
             cache.focus = nav.and_then(|index| render::targets(&cache).get(index).copied());
             let drawing_at = Instant::now();
@@ -733,6 +765,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             else { "input→frame" };
         // Consume the queued burst in order; scrolling accumulates before one draw.
         for queued_event in events {
+            if !loaded {
+                // The session is not here yet: only quit and a resize mean anything.
+                match &queued_event {
+                    Event::Key(key)
+                        if key.kind != event::KeyEventKind::Release
+                            && key.code == KeyCode::Char('q')
+                            && key.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
+                        break 'app;
+                    }
+                    Event::Resize(..) => dirty = true,
+                    _ => {}
+                }
+                continue;
+            }
             match queued_event {
                 Event::Key(key) if key.kind != event::KeyEventKind::Release => {
                     if s.voice_phase == "transcribing" && key.code == KeyCode::Esc {
@@ -884,7 +931,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 return None;
                             }
                             let base = from.map_or(if delta >= 0 { -1 } else { n }, |i| i as isize);
-                            visible.get((base + delta).clamp(0, n - 1) as usize).copied()
+                            visible
+                                .get((base + delta).clamp(0, n - 1) as usize)
+                                .copied()
                         };
                         let narrow = terminal.size()?.width < 90;
                         let mut handled = true;
@@ -918,13 +967,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                 }
                             }
-                            KeyCode::Char('/') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            KeyCode::Char('/')
+                                if !key.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
                                 cache.filtering = true;
                             }
                             KeyCode::Char(c)
-                                if !key.modifiers.intersects(
-                                    KeyModifiers::CONTROL | KeyModifiers::ALT,
-                                ) && cache.filter.chars().count() < 80 =>
+                                if !key
+                                    .modifiers
+                                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                                    && cache.filter.chars().count() < 80 =>
                             {
                                 cache.filter.push(c);
                                 cache.filtering = true;
@@ -942,8 +994,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     .map(|i| s.sessions[*i].id.clone());
                             }
                             if cache.sessions_focus {
-                                sessions_scroll =
-                                    sessions_follow(&s, &cache, drawn_regions.sessions, sessions_scroll);
+                                sessions_scroll = sessions_follow(
+                                    &s,
+                                    &cache,
+                                    drawn_regions.sessions,
+                                    sessions_scroll,
+                                );
                             }
                             dirty = true;
                             continue;
@@ -1066,7 +1122,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             match key.code {
                                 KeyCode::Char('b') => {
                                     details_focus = false;
-                                    sessions_surface(&mut s, &mut cache, &mut local_ui, true, terminal.size()?.width)?;
+                                    sessions_surface(
+                                        &mut s,
+                                        &mut cache,
+                                        &mut local_ui,
+                                        true,
+                                        terminal.size()?.width,
+                                    )?;
                                 }
                                 KeyCode::Char('l') => {
                                     s.last_opened = "details".into();
@@ -1260,11 +1322,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             continue;
                         }
                         // Alt+1…9 jumps to the n-th Settings area (Ctrl+digit is not delivered by terminals).
-                        if let (Some(nav), KeyCode::Char(digit @ '1'..='9')) = (s.nav.as_ref(), key.code) {
+                        if let (Some(nav), KeyCode::Char(digit @ '1'..='9')) =
+                            (s.nav.as_ref(), key.code)
+                        {
                             if key.modifiers.contains(KeyModifiers::ALT) && !s.panel_loading {
                                 let n = digit as usize - '1' as usize;
-                                if let Some((index, _)) =
-                                    nav.items.iter().enumerate().filter(|(_, item)| !item.2).nth(n)
+                                if let Some((index, _)) = nav
+                                    .items
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(_, item)| !item.2)
+                                    .nth(n)
                                 {
                                     send(
                                         json!({"type":"nav_select","text":index.to_string(),"generation":s.generation}),
@@ -1417,6 +1485,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 KeyCode::Enter if panel_detail => {
                                     panel_detail = false;
                                 }
+                                KeyCode::Char(' ') if s.panel_toggle.is_some() => {
+                                    send(
+                                        json!({"type":"operation","operation":s.panel_toggle,"generation":s.generation}),
+                                    )?;
+                                }
                                 KeyCode::PageDown => panel_scroll += 10,
                                 KeyCode::Down => panel_scroll += 1,
                                 KeyCode::Up => panel_scroll = panel_scroll.saturating_sub(1),
@@ -1528,12 +1601,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     }
                     // F6 moves keyboard focus between the composer and the sessions sidebar.
-                    if key.code == KeyCode::F(6) || key.code == KeyCode::BackTab && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    if key.code == KeyCode::F(6)
+                        || key.code == KeyCode::BackTab
+                            && key.modifiers.contains(KeyModifiers::CONTROL)
+                    {
                         if cache.sessions_focus {
                             cache.sessions_focus = false;
                         } else {
                             details_focus = false;
-                            sessions_surface(&mut s, &mut cache, &mut local_ui, false, terminal.size()?.width)?;
+                            sessions_surface(
+                                &mut s,
+                                &mut cache,
+                                &mut local_ui,
+                                false,
+                                terminal.size()?.width,
+                            )?;
                         }
                         dirty = true;
                         continue;
@@ -1559,7 +1641,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         match key.code {
                             KeyCode::Char('b') => {
                                 details_focus = false;
-                                sessions_surface(&mut s, &mut cache, &mut local_ui, true, terminal.size()?.width)?;
+                                sessions_surface(
+                                    &mut s,
+                                    &mut cache,
+                                    &mut local_ui,
+                                    true,
+                                    terminal.size()?.width,
+                                )?;
                                 dirty = true;
                                 continue;
                             }
@@ -1570,15 +1658,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     json!({"type":"toggle","key":"details_sidebar"}),
                                     &mut s,
                                 )?;
-                                continue;
-                            }
-                            KeyCode::Char('e') => {
-                                logs_open = !logs_open;
-                                details_focus = logs_open;
-                                s.last_opened = "details".into();
-                                local_ui
-                                    .dispatch(json!({"type":"logs","open":logs_open}), &mut s)?;
-                                dirty = true;
                                 continue;
                             }
                             KeyCode::Char('t') => {
@@ -1723,7 +1802,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     // A one-page Settings area takes the wheel and left clicks over its page
                     // (the area list on the left keeps its own handling).
-                    if let Some(raw) = s.settings_page.as_ref().filter(|_| !s.panel_title.is_empty()) {
+                    if let Some(raw) = s
+                        .settings_page
+                        .as_ref()
+                        .filter(|_| !s.panel_title.is_empty())
+                    {
                         let area = render::panel_area(render::panel_host(&r, &s), &s);
                         let at = ratatui::layout::Position::new(mouse.column, mouse.row);
                         if area.contains(at) && !render::nav_rect(area).contains(at) {
@@ -1734,14 +1817,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             };
                             if let Some(delta) = wheel {
                                 cache.page_state.scroll.offset =
-                                    (i32::from(cache.page_state.scroll.offset) + delta).clamp(0, 2000) as u16;
+                                    (i32::from(cache.page_state.scroll.offset) + delta)
+                                        .clamp(0, 2000) as u16;
                                 dirty = true;
                                 continue;
                             }
                             if mouse.kind == MouseEventKind::Down(event::MouseButton::Left) {
                                 let page = cache.page_for(s.revision, raw);
                                 let mut state = std::mem::take(&mut cache.page_state);
-                                let act = settings_page::click(&page, &mut state, mouse.column, mouse.row);
+                                let act = settings_page::click(
+                                    &page,
+                                    &mut state,
+                                    mouse.column,
+                                    mouse.row,
+                                );
                                 cache.page_state = state;
                                 match act {
                                     settings_page::Act::Pass => {}
@@ -1872,7 +1961,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         0,
                                         &cache.filter,
                                         cache.filtering,
-                                    None,
+                                        None,
                                     )
                                     .len()
                                     .saturating_sub(r.sessions.height.saturating_sub(3) as usize),
@@ -2036,8 +2125,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     continue;
                                 }
                                 if let Some(nav) = &s.nav {
-                                    let list =
-                                        render::nav_rect(render::panel_area(render::panel_host(&r, &s), &s));
+                                    let list = render::nav_rect(render::panel_area(
+                                        render::panel_host(&r, &s),
+                                        &s,
+                                    ));
                                     if list.contains((mouse.column, mouse.row).into()) {
                                         settings_nav_focus = true;
                                         let index = usize::from(mouse.row - list.y);

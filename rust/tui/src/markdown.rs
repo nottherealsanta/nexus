@@ -12,7 +12,7 @@ use ratatui_markdown::{
     markdown::{MarkdownBlock, MarkdownRenderer},
     theme::{Generation, RichTextTheme},
 };
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 // ratatui-markdown 0.3.6 (MIT OR Apache-2.0) shares our ratatui 0.29 types.
 // Reuse its fenced-code presentation, not its lossy line-oriented parser or
@@ -238,7 +238,19 @@ impl<'a> Walker<'a> {
             return;
         };
         let columns = table.rows.iter().map(Vec::len).max().unwrap_or(0);
-        let widths: Vec<usize> = (0..columns)
+        if columns == 0 {
+            return;
+        }
+        // Boxed table fitted to the row width: every cell wraps inside its
+        // column, so no row is ever wrapped by the transcript (which would
+        // tear the borders apart).
+        let avail = self
+            .width
+            .saturating_sub(self.quote * 2 + self.indent())
+            .max(columns * 4 + 1);
+        let overhead = columns * 3 + 1;
+        let budget = avail.saturating_sub(overhead).max(columns);
+        let natural: Vec<usize> = (0..columns)
             .map(|c| {
                 table
                     .rows
@@ -246,20 +258,21 @@ impl<'a> Walker<'a> {
                     .map(|row| row.get(c).map_or(0, |cell| cell.width()))
                     .max()
                     .unwrap_or(0)
+                    .max(1)
             })
             .collect();
-        let line = |cells: &[String]| {
-            (0..columns)
-                .map(|c| {
-                    let cell = cells.get(c).map(String::as_str).unwrap_or("");
-                    format!(
-                        "{cell}{}",
-                        " ".repeat(widths[c].saturating_sub(cell.width()))
-                    )
-                })
+        let widths = fit_columns(&natural, &longest_words(&table.rows, columns), budget);
+        let rule = |l: &str, m: &str, r: &str| {
+            let body = widths
+                .iter()
+                .map(|w| "─".repeat(w + 2))
                 .collect::<Vec<_>>()
-                .join(" │ ")
+                .join(m);
+            Span::styled(format!("{l}{body}{r}"), Style::default().fg(self.p.quiet))
         };
+        let border = Style::default().fg(self.p.quiet);
+        self.cur.push(rule("┌", "┬", "┐"));
+        self.flush();
         for (i, cells) in table.rows.iter().enumerate() {
             let head = i < table.head_rows;
             let style = if head {
@@ -267,21 +280,123 @@ impl<'a> Walker<'a> {
             } else {
                 Style::default()
             };
-            self.cur.push(Span::styled(line(cells), style));
-            self.flush();
+            let wrapped: Vec<Vec<String>> = (0..columns)
+                .map(|c| wrap_cell(cells.get(c).map_or("", String::as_str), widths[c]))
+                .collect();
+            let height = wrapped.iter().map(Vec::len).max().unwrap_or(1);
+            for line in 0..height {
+                self.cur.push(Span::styled("│", border));
+                for c in 0..columns {
+                    let text = wrapped[c].get(line).map_or("", String::as_str);
+                    let pad = widths[c].saturating_sub(text.width());
+                    self.cur
+                        .push(Span::styled(format!(" {text}{} ", " ".repeat(pad)), style));
+                    self.cur.push(Span::styled("│", border));
+                }
+                self.flush();
+            }
             if head && i + 1 == table.head_rows {
-                let rule = widths
-                    .iter()
-                    .map(|w| "─".repeat(*w))
-                    .collect::<Vec<_>>()
-                    .join("─┼─");
-                self.cur
-                    .push(Span::styled(rule, Style::default().fg(self.p.quiet)));
+                self.cur.push(rule("├", "┼", "┤"));
                 self.flush();
             }
         }
+        self.cur.push(rule("└", "┴", "┘"));
+        self.flush();
         self.blank();
     }
+}
+
+fn longest_words(rows: &[Vec<String>], columns: usize) -> Vec<usize> {
+    (0..columns)
+        .map(|c| {
+            rows.iter()
+                .filter_map(|row| row.get(c))
+                .flat_map(|cell| cell.split_whitespace())
+                .map(|word| word.width())
+                .max()
+                .unwrap_or(1)
+                .max(1)
+        })
+        .collect()
+}
+
+/// Column widths summing to at most `budget`: natural widths when they fit,
+/// otherwise shrink the widest columns first, never below the longest word
+/// (or 3) unless even that cannot fit.
+fn fit_columns(natural: &[usize], words: &[usize], budget: usize) -> Vec<usize> {
+    let mut widths = natural.to_vec();
+    let floor: Vec<usize> = words
+        .iter()
+        .zip(natural)
+        .map(|(w, n)| (*w).clamp(3, 16).min(*n))
+        .collect();
+    while widths.iter().sum::<usize>() > budget {
+        let pick = (0..widths.len())
+            .filter(|&c| widths[c] > floor[c])
+            .max_by_key(|&c| widths[c]);
+        match pick {
+            Some(c) => widths[c] -= 1,
+            None => break,
+        }
+    }
+    // Last resort: the longest words alone do not fit.
+    while widths.iter().sum::<usize>() > budget {
+        match (0..widths.len())
+            .filter(|&c| widths[c] > 1)
+            .max_by_key(|&c| widths[c])
+        {
+            Some(c) => widths[c] -= 1,
+            None => break,
+        }
+    }
+    widths
+}
+
+fn wrap_cell(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut cur = String::new();
+    let mut cur_w = 0;
+    for word in text.split_whitespace() {
+        let mut word = word.to_string();
+        while word.width() > width {
+            if cur_w > 0 {
+                lines.push(std::mem::take(&mut cur));
+                cur_w = 0;
+            }
+            let mut head = String::new();
+            let mut head_w = 0;
+            let mut rest = String::new();
+            for ch in word.chars() {
+                let w = ch.width().unwrap_or(0);
+                if rest.is_empty() && head_w + w <= width.max(1) {
+                    head.push(ch);
+                    head_w += w;
+                } else {
+                    rest.push(ch);
+                }
+            }
+            if head.is_empty() {
+                break;
+            }
+            lines.push(head);
+            word = rest;
+        }
+        let w = word.width();
+        if cur_w > 0 && cur_w + 1 + w > width {
+            lines.push(std::mem::take(&mut cur));
+            cur_w = 0;
+        }
+        if cur_w > 0 {
+            cur.push(' ');
+            cur_w += 1;
+        }
+        cur.push_str(&word);
+        cur_w += w;
+    }
+    if cur_w > 0 || lines.is_empty() {
+        lines.push(cur);
+    }
+    lines
 }
 
 pub fn lines(text: &str, p: &Palette, width: usize) -> Vec<Row> {
@@ -489,6 +604,25 @@ mod tests {
             .collect()
     }
     #[test]
+    fn wide_tables_wrap_inside_their_columns() {
+        let text = "| Name | Description |\n|---|---|\n| pattern | Shell glob relative to the root, e.g. '**/*.py' and more words to force wrapping |";
+        let rows = render(text);
+        assert!(rows.iter().all(|r| r.width() <= 60), "{rows:#?}");
+        assert!(rows.len() > 5, "{rows:#?}");
+        assert!(rows.iter().all(|r| r.starts_with(['┌', '│', '├', '└'])));
+        assert!(rows.join(" ").contains("wrapping"));
+    }
+    #[test]
+    fn tables_never_exceed_any_width() {
+        let text = "| Name | Type | Required | Default | Description |\n|---|---|---|---|---|\n| path | string | yes | — | File or directory to read, relative to the workspace. |\n| csv_as_markdown | boolean | no | — | Convert a CSV file to Markdown instead of reading its raw UTF-8 text. |";
+        for width in 30..140 {
+            for row in lines(text, &Palette::new(false), width) {
+                let w: usize = row.spans.iter().map(|s| s.content.width()).sum();
+                assert!(w <= width, "width {width}: row {w}");
+            }
+        }
+    }
+    #[test]
     fn literal_html_and_link_target() {
         let rows = lines(
             "**bold** [link](https://example.com)\n\n<environment>literal</environment>",
@@ -591,7 +725,16 @@ mod tests {
     fn quotes_have_a_bar_and_tables_align() {
         assert_eq!(render("> quoted"), vec!["▌ quoted"]);
         let table = render("| a | bb |\n|---|---|\n| ccc | d |");
-        assert_eq!(table, vec!["a   │ bb", "────┼───", "ccc │ d "]);
+        assert_eq!(
+            table,
+            vec![
+                "┌─────┬────┐",
+                "│ a   │ bb │",
+                "├─────┼────┤",
+                "│ ccc │ d  │",
+                "└─────┴────┘"
+            ]
+        );
     }
     #[test]
     fn inline_code_changes_colour_without_a_background() {

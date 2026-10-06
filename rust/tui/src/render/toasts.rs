@@ -7,11 +7,16 @@
 use super::{Palette, Snapshot};
 use crate::bridge::ToastWire;
 use nexus_widgets::{
-    anim, theme::{mix, Level, Mode}, toast_layout, toast_stack, Glyphs, Theme, ToastRect, ToastStack, Ui,
+    anim,
+    theme::{mix, Level, Mode},
+    toast_layout, toast_stack, Glyphs, Theme, ToastRect, ToastStack, Ui,
 };
 use ratatui::{buffer::Buffer, layout::Rect, Frame};
 use serde_json::Value;
-use std::{collections::HashMap, time::{Duration, Instant}};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 /// Redraw cadence while a toast is visible (the hairline moves; nothing else does).
 const REDRAW: Duration = Duration::from_millis(250);
@@ -71,7 +76,10 @@ impl Toasts {
         let mut added = false;
         for t in wire {
             let label = t.action.as_ref().map(|a| a.label.as_str()).unwrap_or("");
-            if self.stack.ingest(t.id, level_of(&t.level), &t.title, &t.body, &t.key, label) {
+            if self
+                .stack
+                .ingest(t.id, level_of(&t.level), &t.title, &t.body, &t.key, label)
+            {
                 if let Some(op) = t.action.as_ref().and_then(|a| a.operation.clone()) {
                     self.actions.insert(t.id, op);
                 }
@@ -101,7 +109,9 @@ impl Toasts {
             self.last_redraw = None;
             return expired;
         }
-        let due = self.last_redraw.map_or(true, |t| now.saturating_duration_since(t) >= REDRAW);
+        let due = self
+            .last_redraw
+            .map_or(true, |t| now.saturating_duration_since(t) >= REDRAW);
         expired || due
     }
 
@@ -132,7 +142,9 @@ impl Toasts {
     }
     /// The newest visible toast that has an action.
     pub fn newest_action(&self) -> Option<(u64, Value)> {
-        self.stack.visible().find_map(|t| self.actions.get(&t.id).map(|op| (t.id, op.clone())))
+        self.stack
+            .visible()
+            .find_map(|t| self.actions.get(&t.id).map(|op| (t.id, op.clone())))
     }
 
     /// Draw over everything else at the top-right of `area`.
@@ -162,7 +174,12 @@ mod tests {
     use super::*;
 
     fn wire(id: u64, level: &str, title: &str) -> ToastWire {
-        ToastWire { id, level: level.into(), title: title.into(), ..Default::default() }
+        ToastWire {
+            id,
+            level: level.into(),
+            title: title.into(),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -180,7 +197,10 @@ mod tests {
     fn actions_are_kept_by_id_and_the_newest_wins() {
         let mut t = Toasts::default();
         let mut a = wire(1, "warning", "Removed");
-        a.action = Some(crate::bridge::ToastAction { label: "Undo".into(), operation: Some(serde_json::json!({"kind": "undo"})) });
+        a.action = Some(crate::bridge::ToastAction {
+            label: "Undo".into(),
+            operation: Some(serde_json::json!({"kind": "undo"})),
+        });
         t.ingest(&[a, wire(2, "info", "Plain")]);
         assert_eq!(t.newest_action().unwrap().0, 1);
         assert_eq!(t.action_of(1).unwrap()["kind"], "undo");
@@ -207,7 +227,10 @@ mod tests {
         let mut t = Toasts::default();
         let mut a = wire(9, "error", "Could not reach OpenAI");
         a.body = "HTTP 503".into();
-        a.action = Some(crate::bridge::ToastAction { label: "Details".into(), operation: None });
+        a.action = Some(crate::bridge::ToastAction {
+            label: "Details".into(),
+            operation: None,
+        });
         t.ingest(&[a]);
         t.rects = toast_layout(Rect::new(0, 1, 120, 30), &t.stack);
         let l = t.rects[0];

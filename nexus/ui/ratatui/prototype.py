@@ -134,8 +134,8 @@ def _project_turn(turn, shell, agents=None, literal=True):
     so Rust only draws. Reply/tool/thought order follows the durable event seq.
     """
     from ...ui_support.timeline import (
-        BATCH_GLYPHS, _has_message_content, _literal, submitted_attachment_summary,
-        thought_title, tool_batches, tool_status, turn_footer_text,
+        _has_message_content, _literal, submitted_attachment_summary,
+        thought_title, tool_status, turn_footer_text,
         _turn_duration, _text, turn_agent_label)
     local_ui = bool(shell and getattr(shell, "local_transcript", False))
     collapsed = bool(not local_ui and shell and turn.id in shell.collapsed_turns)
@@ -185,7 +185,6 @@ def _project_turn(turn, shell, agents=None, literal=True):
             block = {"id": message.id + "text", "kind": "markdown", "text": message.text}
             entries.append((message.event_seq, 2, block, 0, 1, "assistant"))
             emit(f"assistant · text\n{message.text}")
-    batches = tool_batches(turn.tools)
     for tool in turn.tools:
         # Rows open nothing by default; only a long output expands in place (`out_id`),
         # and only a spawned subagent opens a page of its own.
@@ -212,26 +211,28 @@ def _project_turn(turn, shell, agents=None, literal=True):
                 body = "\n".join(body_rows[:end] + [f"… {len(body_rows) - end} more lines · Enter for all"])
 
         emit(body)
-        glyph = BATCH_GLYPHS.get(batches.get(tool.call_id, ""))
         operation = {"kind": "block_toggle", "id": tool.call_id + ":detail"}
         if tool.name.casefold() in {"task", "subagent"}:
-            from ...ui_support.timeline import _task_children, _task_header
+            from ...ui_support.timeline import _agent_metrics, _task_child_activity, _task_children, _task_header, _task_metrics
             child = next(iter(_task_children(tool, agents or {})), None)
-            # One row: `<spinner|✓> Explore Subagent — phrase · model (effort) · time`;
-            # the tick takes the muted tool tone, never green.
             head, running = _task_header(tool, child, 0)
             name, _, phrase = head.partition(" ")[2].partition(" · ")
             phrase = " ".join(phrase.split())[:64]
-            text = f"{SPINNER_SLOT if running else '✓'} {name} Subagent — {phrase}"
+            title = f"{name} Subagent — {phrase}"
             if child is not None and child.model:
                 effort = next((t.reasoning_effort for t in child.body.turns if t.reasoning_effort), None)
-                text += f" · {child.model.rsplit('/', 1)[-1]}" + (f" ({effort})" if effort else "")
-            if not running and child is not None and child.spawned_ts is not None:
-                end = child.completed_ts
-                if end is not None:
-                    elapsed_ms = max(0, int((end - child.spawned_ts) * 1000))
-                    text += f" · {_thought_took(elapsed_ms)}"
+                title += f" · {child.model.rsplit('/', 1)[-1]}" + (f" ({effort})" if effort else "")
             operation = {"kind": "agent_page", "id": child.id} if child is not None else None
+            # Never the tool details: a click opens the subagent page, so only a failure shows inline.
+            detail = f"Error: {child.error}" if child is not None and child.error else ""
+            block = {"id": tool.call_id, "kind": "task", "title": title,
+                     "status": "running" if running else "done",
+                     "text": (_task_child_activity(child) if child else "Starting…") if running else "",
+                     "metrics": _agent_metrics(child) if child else _task_metrics(tool, None, False),
+                     "color": _agent_color(shell, child.type or child.id) if child else "", "operation": operation,
+                     "detail": detail}
+            entries.append((tool.event_seq, 3, block, 1, 1, "task"))
+            continue
         else:
             text = cached_row
             if expandable:
@@ -240,7 +241,6 @@ def _project_turn(turn, shell, agents=None, literal=True):
         if tool_status(tool) == "running":  # the native client animates this slot (docs/ratatui-parity.md)
             text = text.replace(SPINNER_FRAMES[0], SPINNER_SLOT, 1)
         block = {"id": tool.call_id, "kind": "tool", "status": tool_status(tool), "text": text,
-                 "batch_glyph": glyph or "",
                  "detail": body if detail_open else "", "operation": operation,
                  "output_operation": {"kind": "block_toggle", "id": out_id} if (detail_open or local_ui) and expandable else None}
         if local_ui:
@@ -302,8 +302,7 @@ def _project_turn(turn, shell, agents=None, literal=True):
                     summary = f"+{sum(d.added for d in diffs)} −{sum(d.removed for d in diffs)}"
                 if name not in {"task", "subagent"}:
                     member = {**block, "heading": heading_full + (f" · {summary}" if summary else ""),
-                        "title": tool.name.title(), "text": heading.removeprefix(tool.name.title()).strip() + (f" · {summary}" if summary else ""),
-                        "batch_glyph": "∥" if block.get("batch_glyph") else ""}
+                        "title": tool.name.title(), "text": heading.removeprefix(tool.name.title()).strip() + (f" · {summary}" if summary else "")}
                 member = {**member, "members": diff_members[tool.call_id]}
             counts[category] = counts.get(category, 0) + 1
             members.append(member)
@@ -332,7 +331,7 @@ def _project_turn(turn, shell, agents=None, literal=True):
     # Only the trailing activity of an active turn previews automatically. Replies
     # close the previous run; explicit local expansion still reveals every item.
     if grouped and grouped[-1][2]["kind"] == "tool_group" and not turn.terminal:
-        grouped[-1][2]["preview_limit"] = 5
+        grouped[-1][2]["preview_limit"] = 1
     entries = grouped
     if collapsed:
         entries = [entry for entry in entries if entry[5] == "user"]
@@ -375,33 +374,29 @@ def _agent_color(shell, name):
 
 def _context_blocks(shell, view):
     """The request-context header that opens every conversation."""
-    from ...ui_support.context_header import NEUTRAL, HeaderBlock, header_blocks
+    from ...ui_support.context_header import HeaderBlock, header_blocks
     from ...ui_support.context import _compact_tokens
     preview = shell.preview
     if preview is not None and hasattr(preview, "tools"):
         color = _agent_color(shell, getattr(getattr(shell, "controller", None), "agent_name", (getattr(preview, "agent", {}) or {}).get("name", "build")))
         found = header_blocks(preview, color)
     else:
-        found = [HeaderBlock(key, label, "", "", None, NEUTRAL) for key, label in (
+        placeholder = _agent_color(shell, getattr(getattr(shell, "controller", None), "agent_name", "build"))
+        found = [HeaderBlock(key, label, "", "", None, placeholder) for key, label in (
             ("system", "System prompt"), ("tools", "Tools"), ("agents", "AGENTS.md"), ("skills", "Skills"), ("mcp", "MCP"))]
     def token_status(block):
-        if block.key == "skills":
-            return (f"Included index · ~{_compact_tokens(block.tokens)} tokens"
-                    if block.tokens is not None else "Included index · tokens unknown")
         return f"~{_compact_tokens(block.tokens)} tokens" if block.tokens is not None else "tokens unknown"
 
     return [{"id": "context:" + block.key, "kind": "context", "title": block.label,
              "text": "\n".join(block.inventory) if block.key in {"tools", "skills", "mcp"} else block.body,
              "local_preview": block.inventory_note,
-             "status": token_status(block), "color": _agent_color(shell, getattr(getattr(shell, "controller", None), "agent_name", (getattr(preview, "agent", {}) or {}).get("name", "build"))),
+             "status": token_status(block), "color": block.color,
              "gap": 1, "operation": {"kind": "context_show", "key": block.key}}
             for block in found]
 
 
 def _compact_header(shell, view):
     """Compact chip strip with a right-aligned estimated-token footer."""
-    from nexus.ui_support.context_header import header_blocks
-
     chips = _context_blocks(shell, view)
     preview = shell.preview
 
@@ -415,18 +410,9 @@ def _compact_header(shell, view):
               "context:mcp": [sum(scoped(getattr(preview, "mcp_servers", []), "project"))]}
     # Every block shows what it holds: inventories for tools/skills/MCP, a one-line
     # preview for the system prompt and AGENTS.md ("None included" once a preview exists).
-    def shown(chip):
-        if chip["id"] in {"context:system", "context:agents"} and preview is not None and not chip["text"]:
-            return "None included"
-        return chip["text"]
-
-    chips = [{**chip, "text": shown(chip), "counts": counts.get(chip["id"], []) if preview else [], "gap": 0} for chip in chips]
-    total = "Context total · tokens unavailable"
-    if preview is not None and hasattr(preview, "tools"):
-        total = f"Context total · ~{sum(block.tokens or 0 for block in header_blocks(preview, chips[0]["color"])):,} tokens"
-    return [{"id": "context:header", "kind": "context_header", "gap": 1, "color": chips[0]["color"],
-             "members": chips, "operation": {"kind": "context_menu"}},
-            {"id": "context:total", "kind": "summary", "text": total}]
+    chips = [{**chip, "counts": counts.get(chip["id"], []) if preview else [], "gap": 0} for chip in chips]
+    return [{"id": "context:header", "kind": "context_header", "gap": 1, "color": _agent_color(shell, getattr(getattr(shell, "controller", None), "agent_name", (getattr(preview, "agent", {}) or {}).get("name", "build"))),
+             "members": chips, "operation": {"kind": "context_menu"}}]
 
 
 def _modified_files_memo(shell, view, modified_files):
@@ -701,6 +687,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "status": view.phase,
             "panel_layout": shell.panel_layout if shell else "modal",
             "panel_format": shell.panel_format if shell else "plain",
+            "panel_toggle": getattr(shell, "panel_toggle", None) if shell else None,
             "preview_image": base64.b64encode(shell.preview_image).decode("ascii") if shell and shell.preview_image else "",
             "preview_image_media": shell.preview_image_media if shell else "",
             "panel_loading": bool(shell and shell.panel_loading),
@@ -817,7 +804,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
     return snapshot
 
 
-async def run(workspace: Path, session: str, binary: Path, client=None, reconnect=None, *, desktop=False) -> int:
+async def run(workspace: Path, session: str, binary: Path, client=None, reconnect=None, *, desktop=False, process=None) -> int:
     client = client or await open_client(workspace)
     controller = TuiController(client, session)
     shell = ShellActions(controller)
@@ -831,7 +818,6 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
     shell.reconnect = reconnect or (lambda: open_client(workspace))
     controller.reconnect = lambda: shell.reconnect()
     shell.history = load_history()
-    process = None
     write_lock = asyncio.Lock()
     revision = 0
     from .trace import BridgeTrace
@@ -956,6 +942,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
     background = BackgroundActions(shell, update)
     shell.on_update = update
     poll_task = None
+    startup_task = None
     async def poll():
         preview_cursor = -1
         while True:
@@ -1032,28 +1019,45 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
     try:
         await controller.bootstrap()
         await shell.refresh_preview(session)
-        try:
-            doctor = await client.doctor()
-            git = doctor.report.get("git", {})
-            shell.breadcrumb = str(workspace) + (" › " + str(git.get("branch")) if git.get("branch") else "")
-        except Exception:
-            shell.breadcrumb = str(workspace)
-        try:  # full catalogue names for the composer controls; ids remain the fallback
-            shell.model_names = {(str(row.get("provider") or ""), str(row.get("id") or "")): str(row["name"])
-                                 for row in await client.list_models() if row.get("name")}
-        except Exception:  # noqa: BLE001 - display names are advisory
-            shell.model_names = {}
-        process = await asyncio.create_subprocess_exec(
-            str(binary), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-            limit=16 * 1024 * 1024)
-        try:
-            setup = await shell.client.setup_status()
-            if setup.required:  # first run: open Settings on Providers (its page offers "Choose default model")
-                await shell.workflows.open_page("providers")
-        except Exception as exc:
-            shell.flash(str(exc), "error")
+        if process is None:
+            process = await asyncio.create_subprocess_exec(
+                str(binary), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                limit=16 * 1024 * 1024)
+        shell.breadcrumb = str(workspace)  # the branch joins it when the doctor report arrives
         await update()
         controller.resume(update)
+
+        async def finish_startup():
+            """Everything the first paint does not need, concurrently, each repainting when it lands."""
+            async def breadcrumb():
+                try:
+                    git = (await client.doctor()).report.get("git", {})
+                    shell.breadcrumb = str(workspace) + (" › " + str(git.get("branch")) if git.get("branch") else "")
+                except Exception:  # noqa: BLE001 - the path alone is enough
+                    pass
+
+            async def model_names():
+                try:  # full catalogue names for the composer controls; ids remain the fallback
+                    shell.model_names = {(str(row.get("provider") or ""), str(row.get("id") or "")): str(row["name"])
+                                         for row in await client.list_models() if row.get("name")}
+                except Exception:  # noqa: BLE001 - display names are advisory
+                    shell.model_names = {}
+
+            async def setup():
+                try:
+                    status = await shell.client.setup_status()
+                    if status.required:  # first run: open Settings on Providers (its page offers "Choose default model")
+                        await shell.workflows.open_page("providers")
+                except Exception as exc:  # noqa: BLE001 - surfaced as a toast
+                    shell.flash(str(exc), "error")
+
+            async def step(work):
+                await work()
+                await update(immediate=False)
+
+            await asyncio.gather(step(breadcrumb), step(model_names), step(setup), return_exceptions=True)
+
+        startup_task = asyncio.create_task(finish_startup())
         poll_task = asyncio.create_task(poll())
         while line := await process.stdout.readline():
             action = json.loads(line)
@@ -1246,6 +1250,10 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
             shell.usage_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await shell.usage_task
+        if startup_task:
+            startup_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await startup_task
         if poll_task:
             poll_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

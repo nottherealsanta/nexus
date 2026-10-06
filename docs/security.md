@@ -17,6 +17,7 @@ Do not weaken any boundary below to make a feature easier.
 | Permissions | `deny` absolute and daemon-side; `PathGuard` canonicalises before any allow; write roots and read-deny roots are hard; shared `nexus.db` is never tool-accessible | `tools/permissions.py` |
 | Approvals never broaden | `*_always` persists an exact-action rule; unattended policy defaults to deny | `tools/permissions.py`, `session/session.py` |
 | Child processes | command hooks and MCP children get a fixed safe environment plus explicitly configured names; shells are argv, not strings, unless opted in | `hooks/`, `mcp/client.py` |
+| MCP detail | `McpServerShow` and the context rows expose only the command basename and argument count; env, headers, URLs and working directories are never shown, and errors are redacted | `host/facade.py`, `runtime.py` |
 | Untrusted data | MCP descriptions/results, web pages and search results are wrapped with no-authority delimiters and sanitised; results' links are never fetched | `mcp/bridge.py`, `tools/builtin/webfetch.py`, `websearch.py` |
 | Outbound network | public-address-only, resolve once and pin the vetted address, validated redirects (≤ 5), size/time caps, rate limit | `net/outbound.py`, `net/local_search.py` |
 | Model catalogue | only descriptive fields read; cannot set endpoints or credentials | `model/registry.py` |

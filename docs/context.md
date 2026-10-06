@@ -16,6 +16,20 @@ sees is what the user can inspect (the context header in both UIs,
 | `counting.py` | request-aware token counting (`RequestTokenCounter`) and semantic keys |
 | `cache.py` | `TokenCountCache` (disk), `CacheBoundary`, `prompt_cache_boundaries` |
 
+## Session selections
+
+Before the first turn, `ContextExtensionSelect` can disable tools, skills, or
+MCP servers for this session. The replayed selection filters the frozen manifest
+and tool catalogue before assembly: disabled schemas and index entries are not
+sent to the provider. Inspection keeps selectable disabled rows with `enabled:
+false` (and `config_enabled: false` for Settings-disabled tools), while tools
+outside the selected agent's allowlist stay hidden. Token totals count the
+selected request, not these display-only rows.
+
+Selections change the assembled prompt/schema content and therefore its semantic
+token-count/cache key. They are locked while a turn is active and after the first
+`turn.started`, preserving the session's prompt-cache assumptions.
+
 ## Parts
 
 Rendered in a fixed order (`builtin_parts()`); the number is the budget priority
@@ -37,6 +51,24 @@ Rendered in a fixed order (`builtin_parts()`); the number is the budget priority
 
 `SOUL.md`/`MEMORY.md`/`AGENTS.md` resolve through `resolve_within` (escapes fail
 closed; oversized files are a named error, `max_file_bytes` default from `[ext]`).
+
+## Header sections and literal inspection
+
+The context header and `/context` picker expose System prompt, Environment,
+AGENTS.md, MEMORY.md, Skills, Tools and MCP, in that order. A populated
+Environment block uses the agent color like other included context; empty blocks
+remain neutral. The shared
+projection recognises legacy identity/soul parts and named `core_prompt` parts;
+`instructions` wrappers with a `memory` scope appear in MEMORY.md rather than
+System prompt. AGENTS.md remains separately inspectable.
+
+System prompt shows only core instructions when all known included parts
+reconstruct `system_text` exactly. Missing parts, clipping, unknown parts or
+unclassified instruction text keep the full literal system prompt visible.
+In that fallback, separate prompt rows remain inspectable but their estimates
+are unavailable, preventing them from counting the same prompt twice. Tools
+and MCP schema estimates are independent. System prompt, Environment and
+MEMORY.md open literal text viewers, not metadata/JSON summaries.
 
 ## Budget
 

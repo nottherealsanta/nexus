@@ -1300,6 +1300,10 @@ class _ManifestEnvironmentFactory:
             else skill_tools
         )
         base_catalog = runtime._filter_web_catalog(config, base_catalog)
+        base_catalog = tuple(
+            tool for tool in base_catalog
+            if tool.name not in self._session.disabled_extensions.get("tools", ())
+        )
         restrict = self._restrict_for(activation, skill_tools)
         runner = self._subagent_runner(
             runtime,
@@ -1315,6 +1319,10 @@ class _ManifestEnvironmentFactory:
             from .tools.builtin.task import build_task_tool
 
             catalog = (*base_catalog, build_task_tool(runner))
+        catalog = tuple(
+            tool for tool in catalog
+            if tool.name not in self._session.disabled_extensions.get("tools", ())
+        )
         manager = runtime._build_iteration_manager(
             config,
             manifest,
@@ -2770,6 +2778,22 @@ class Runtime:
                 "_context_agent_definition",
                 getattr(assembler, "agent_definition", None),
             )
+            selection_manager = self._build_iteration_manager(assembler.effective_config(), manifest)
+            _, unavailable_tools = self._web_tool_availability(assembler.effective_config())
+            selectable_tools = set(selection_manager.authority_names) | set(unavailable_tools)
+            if getattr(getattr(tool_turn, "dispatcher", None), "_subagents", None) is not None:
+                selectable_tools.add("subagent")
+            if agent is not None:
+                from .tools.bundles import BUNDLES
+
+                selectable_tools = set(self._agents.select_tools(
+                    agent,
+                    available=selectable_tools,
+                    profile=(selection_manager.authority_for_profile(agent.profile)
+                             if agent.profile else selectable_tools),
+                    bundle_map={name: bundle.tools for name, bundle in BUNDLES.items()},
+                    mutating=selection_manager.authority_mutating,
+                ).selected)
             system_files: dict[str, Any] = {}
             frozen_files = getattr(manifest, "system_files", None)
             getter = getattr(frozen_files, "get", None)
@@ -2807,16 +2831,101 @@ class Runtime:
                 if isinstance(getattr(manifest, "skills", None), Mapping)
                 else ()
             )
-            tool_specs = {
-                spec.name: spec for spec in tool_turn.manager.specs
-            } if tool_turn is not None else {}
+            # Resolve disabled rows against the same unfiltered generation,
+            # never against the session-filtered dispatch catalog.
+            from .tools.builtin import BUILTIN_TOOLS, OPT_IN_TOOLS, WEB_TOOLS
+
+            tool_definitions = {
+                tool.name: tool for tool in BUILTIN_TOOLS + OPT_IN_TOOLS + WEB_TOOLS
+            }
+            tool_definitions.update({tool.name: tool for tool in selection_manager.tools})
+            mcp_sources = {}
+            for server_name, server in getattr(manifest, "mcp", {}).items():
+                tool_definitions.update({tool.name: tool for tool in getattr(server, "tools", ())})
+                mcp_sources.update({tool.name: f"mcp:{server_name}" for tool in getattr(server, "tools", ())})
+            tool_definitions.update(getattr(manifest, "tools", {}))
+            runner = getattr(getattr(tool_turn, "dispatcher", None), "_subagents", None)
+            if runner is not None:
+                from .tools.builtin.task import build_task_tool
+
+                task_tool = build_task_tool(runner)
+                tool_definitions[task_tool.name] = task_tool
+
+            def tool_row(schema, *, enabled, config_enabled):
+                tool = tool_definitions.get(schema.name)
+                spec = getattr(tool, "spec", None)
+                row = {
+                    "name": schema.name,
+                    "enabled": enabled,
+                    "config_enabled": config_enabled,
+                    "description": schema.description,
+                    "input_schema": dict(schema.input_schema),
+                    "group": (
+                        f"mcp:{schema.name.split('__', 2)[1]}"
+                        if schema.name.startswith("mcp__") and schema.name.count("__") >= 2
+                        else getattr(spec, "group", "") or schema.name
+                    ),
+                    "bundle": getattr(spec, "bundle", ""),
+                }
+                if tool is not None:
+                    if tool.origin == "mcp" and schema.name.startswith("mcp__"):
+                        row["source"] = mcp_sources.get(
+                            schema.name, f"mcp:{schema.name.split('__', 2)[1]}"
+                        )
+                    elif tool.origin in {"builtin", "mcp"}:
+                        row["source"] = "built-in"
+                    else:
+                        row["source"] = "extension"
+                        if tool.source:
+                            source = Path(tool.source)
+                            row["origin"] = (
+                                str(source.relative_to(self.workspace))
+                                if source.is_relative_to(self.workspace) else str(source)
+                            )
+                if spec is not None:
+                    row["read_only"] = not spec.mutates
+                    # ToolSpec has no permission category today. Do not infer
+                    # one from its bundle or permission-key callback.
+                    permission = getattr(spec, "permission", None)
+                    if permission is not None:
+                        row["permission"] = permission
+                    if spec.timeout_s is not None:
+                        row["timeout_s"] = spec.timeout_s
+                return row
+
+            def skill_index_line(name: str) -> str:
+                return next((line for line in parts.get("skills_index", "").splitlines()
+                             if line.startswith(f"{name}:")), "")
+
+            def skill_frontmatter(entry: Any) -> dict[str, str]:
+                """Declared fields as flat, capped strings (name is the card heading)."""
+                fields = {
+                    "description": (entry.sanitized_description() if callable(getattr(entry, "sanitized_description", None))
+                                    else getattr(entry, "description", "")),
+                    "allowed-tools": ", ".join(getattr(entry, "allowed_tools", ()) or ()),
+                    "bundles": ", ".join(getattr(entry, "bundles", ()) or ()),
+                    "model": getattr(entry, "model", None) or "",
+                    "version": getattr(entry, "version", "") or "",
+                }
+                return {key: redact_secrets(str(value))[:300] for key, value in fields.items() if value}
+
+            enabled_names = {schema.name for schema in request.tools}
             mcp_servers = []
             if self._mcp is not None:
                 for status in self._mcp.statuses()[:64]:
                     snapshot = self._mcp.server_snapshot(status.name)
                     names = list(snapshot.tool_names())[:2000] if snapshot else []
+                    config = self._mcp.definition(status.name).config
+                    command_label = ""
+                    if config.transport == "stdio":
+                        basename = config.command.replace("\\", "/").rsplit("/", 1)[-1]
+                        command_label = redact_secrets(self._mcp.redact_display(
+                            f"{basename} ({len(config.args)} args)"
+                        ))
                     mcp_servers.append({
                         "name": status.name,
+                        "transport": config.transport,
+                        "command_label": command_label,
                         "status": "connected" if status.connected else "disabled" if not status.enabled else "failed",
                         "scope": getattr(self._extensions, "mcp_scopes", {}).get(status.name, "project"),
                         "config_enabled": status.enabled,
@@ -2828,6 +2937,19 @@ class Runtime:
                         "schema_tokens": sum(len(json.dumps(tool.spec.to_schema().input_schema)) + len(tool.spec.description) for tool in getattr(snapshot, "tools", ())) // 4,
                         "tool_count": status.tool_count,
                         "tools": names,
+                        # Cost now: this server's index lines, plus its schemas when they are sent in full.
+                        "context_tokens": (
+                            sum(len(line) for line in parts.get("mcp_index", "").splitlines() if status.name in line) // 4
+                            + (sum(len(json.dumps(tool.spec.to_schema().input_schema)) + len(tool.spec.description)
+                                   for tool in getattr(snapshot, "tools", ())) // 4
+                               if status.enabled and status.name not in session.disabled_extensions["mcp"]
+                               and (session.mcp_loading_frozen.get(status.name, "search") if session.mcp_loading_frozen is not None
+                                    else session.mcp_loading_choices.get(status.name, getattr(snapshot, "tool_loading", "search"))) == "all"
+                               else 0)
+                        ),
+                        "resource_count": len(getattr(snapshot, "resources", ()) or ()),
+                        "prompt_count": len(getattr(snapshot, "prompts", ()) or ()),
+                        "error": redact_secrets(self._mcp.redact_display(str(getattr(snapshot, "error", "") or "")))[:300],
                     })
             return {
                 "context_locked": session.context_locked,
@@ -2857,38 +2979,28 @@ class Runtime:
                         "enabled": getattr(entry, "name", "").casefold() not in session.disabled_extensions["skills"],
                         "scope": "project" if "workspace" in str(getattr(getattr(entry, "provenance", None), "tier", "")).lower() else "global",
                         "origin": str(getattr(getattr(entry, "provenance", None), "relpath", "")),
+                        "frontmatter": skill_frontmatter(entry),
+                        "index_line": skill_index_line(getattr(entry, "name", "")),
+                        "context_tokens": len(skill_index_line(getattr(entry, "name", ""))) // 4,
+                        # Recorded sizes only: no file is read during preview.
+                        "skill_tokens": int(getattr(getattr(entry, "provenance", None), "file_size", 0) or 0) // 4,
+                        "resources": len(getattr(entry, "resources", ()) or ()),
                     }
                     for entry in skills_snapshot[:512]
                 ],
                 "mcp_index": parts.get("mcp_index", ""),
                 "mcp_servers": mcp_servers,
                 "tools": [
-                    {
-                        "name": schema.name,
-                        "enabled": True,
-                        "description": schema.description,
-                        "input_schema": dict(schema.input_schema),
-                        "group": (
-                            f"mcp:{schema.name.split('__', 2)[1]}" if schema.name.startswith("mcp__")
-                            else getattr(tool_specs.get(schema.name), "group", "") or schema.name
-                        ),
-                        "bundle": getattr(tool_specs.get(schema.name), "bundle", ""),
-                    }
+                    tool_row(schema, enabled=True, config_enabled=True)
                     for schema in request.tools[:512]
                 ] + [
-                    {
-                        "name": name,
-                        "enabled": False,
-                        "description": str(getattr(getattr(manifest, "tools", {}).get(name), "description", "") or ""),
-                        "input_schema": {},
-                        "group": (
-                            f"mcp:{name.split('__', 2)[1]}" if name.startswith("mcp__") and name.count("__") >= 2
-                            else getattr(getattr(manifest, "tools", {}).get(name), "group", "") or name
-                        ),
-                        "bundle": "",
-                    }
-                    for name in sorted(session.disabled_extensions.get("tools", ()))[:256]
-                    if name not in {schema.name for schema in request.tools}
+                    tool_row(
+                        tool_definitions[name].to_schema(),
+                        enabled=False,
+                        config_enabled=name not in unavailable_tools,
+                    )
+                    for name in sorted(set(session.disabled_extensions.get("tools", ())) | set(unavailable_tools))[:512]
+                    if name in selectable_tools and name not in enabled_names and name in tool_definitions
                 ] if tools_supported else [],
                 "tools_supported": tools_supported,
                 "model": request.model,
@@ -3129,7 +3241,8 @@ class Runtime:
             for tool in build_search_tools(self._mcp, modes, disabled=servers,
                     allowed={target.name for server in search_servers.values() for target in getattr(server, "tools", ())
                              if target.name not in off_tools}):
-                tools[tool.name] = tool
+                if tool.name not in off_tools:
+                    tools[tool.name] = tool
         if not any(getattr(server, "resources", ()) or getattr(server, "resource_templates", ()) for server in selected_servers.values()):
             tools.pop("ReadMcpResource", None)
         resource_tool = tools.get("ReadMcpResource")
@@ -3732,8 +3845,9 @@ class Runtime:
         The catalog defaults to the manifest's registered tools (builtins plus
         external tools) and the profile selects among them exactly as before.
         Available web tools are runtime-owned capabilities and are added
-        independently of the manifest; their config/service availability is
-        checked before they can be advertised or executed.
+        independently of the manifest when deriving the default catalog.
+        Explicit catalogs are already selected and must not be expanded;
+        config/service availability is still checked before advertisement.
         When a skill is active for this session/turn the caller passes a
         ``catalog`` that also carries that skill's bundled tools, so they are
         selectable *only* for this iteration; ``restrict`` applies the skill's
@@ -3746,11 +3860,12 @@ class Runtime:
         ``tools=None`` as "all builtins" and ``tools=()`` as "none", so the
         runtime must never collapse an empty tuple back to ``None``.
         """
+        add_available = catalog is None
         if catalog is None:
             tools = getattr(manifest, "tools", None)
             catalog = tuple(tools.values()) if isinstance(tools, Mapping) else ()
         catalog = tuple(catalog)
-        catalog = self._filter_web_catalog(config, catalog)
+        catalog = self._filter_web_catalog(config, catalog, add_available=add_available)
         manager = ToolManager(
             config,
             workspace=self.workspace,

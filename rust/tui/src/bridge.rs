@@ -36,6 +36,8 @@ pub struct Snapshot {
     pub panel_hint: String,
     pub panel_layout: String,
     pub panel_format: String,
+    /// Space on an item-less page (the tool page) sends this operation; absent when locked.
+    pub panel_toggle: Option<Value>,
     pub preview_image: String,
     #[serde(default)]
     pub preview_image_media: String,
@@ -176,6 +178,10 @@ pub struct Item {
     pub remove: Option<serde_json::Value>,
     /// Dim text after the label (model picker: the provider/model ref).
     pub detail: String,
+    /// Right-aligned column before the toggle (tool list: token cost); Rust owns the alignment.
+    pub trailing: String,
+    /// Dim wrapped lines under the label (skill and MCP cards); the whole card is one selectable item.
+    pub lines: Vec<String>,
     pub search: String,
     pub info_operation: Option<Value>,
     /// The active choice: drawn with a leading `●` in the accent colour.
@@ -283,12 +289,11 @@ pub struct Content {
     pub turn_id: String,
     pub fold_summary: String,
     pub status: String,
-    /// Parallel-call marker occupies the left gutter, never the tool text.
-    pub batch_glyph: String,
     pub color: String,
     pub rev: String,
     pub count: usize,
     pub failures: usize,
+    pub metrics: String,
     /// Header chip counts: `[total]`, or `[project, global]` for skills and MCP.
     pub counts: Vec<usize>,
     pub members: Vec<Content>,

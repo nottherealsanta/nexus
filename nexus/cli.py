@@ -148,16 +148,21 @@ async def _mock(workspace: Path, args: argparse.Namespace, stdout: TextIO, stder
 async def _chat(workspace: Path, *, session: str, renderer: str = "ratatui") -> int:
     """Launch the only interactive chat shell over the host client."""
     from .ui.cli import open_client
-    from .ui.ratatui.run import run
+    from .ui.ratatui.run import release, run, spawn
 
-    client = await open_client(workspace)
+    # The native client starts first and shows its splash while the daemon connects.
+    process = await spawn()
     try:
-        async def reconnect():
-            return await open_client(workspace)
+        client = await open_client(workspace)
+        try:
+            async def reconnect():
+                return await open_client(workspace)
 
-        return await run(client, session=session, reconnect=reconnect, workspace=workspace)
+            return await run(client, session=session, reconnect=reconnect, workspace=workspace, process=process)
+        finally:
+            await client.aclose()
     finally:
-        await client.aclose()
+        await release(process)
 
 
 async def _web(workspace: Path, *, open_browser: bool) -> int:

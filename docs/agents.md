@@ -43,9 +43,12 @@ workspace definitions still follow the discovery precedence below.
 marker). Legacy names: `general` → `task` (`build` as a root); `explore`,
 `plan`, `planner` → read-only `advisor`.
 
-The packaged root prompts contain only the coding-assistant identity, Nexus
-harness context and tool availability; orchestrator additionally states that it
-works by orchestrating subagents.
+The packaged root prompts are short (a few hundred tokens): the Nexus identity
+line, then how to work (understand, change only what was asked, verify,
+delegate with self-contained briefs) and what to report. Orchestrator never
+edits code itself; it plans, delegates, and verifies subagent reports. Neither
+names a specific tool or role: those come from the tool list and the
+`subagent` roster at runtime.
 
 **Precedence** (low → high): packaged < `~/.nexus/agents/` < `<workspace>/.nexus/agents/`
 (legacy) < `<workspace>/.agents/agents/`. Lookups are case-insensitive;

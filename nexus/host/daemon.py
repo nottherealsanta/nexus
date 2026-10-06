@@ -1190,7 +1190,16 @@ async def status(
             "error": redact_secrets(str(exc)),
         }
     try:
-        result = await client.call(p.Health(), timeout=timeout)
+        try:
+            result = await client.call(p.Health(), timeout=timeout)
+        except (DaemonUnavailable, TransportError, OSError, asyncio.TimeoutError) as exc:
+            # A daemon that is shutting down still accepts a connection and then
+            # drops it ("Connection lost"); that is "not running", not a failure.
+            return {
+                "running": False,
+                "socket": str(path),
+                "error": redact_secrets(str(exc) or type(exc).__name__),
+            }
         data = msgspec.structs.asdict(result) if isinstance(result, p.HealthResult) else {}
         info = client.info
         # Health carries a ``running`` *turn* count; the daemon's own liveness

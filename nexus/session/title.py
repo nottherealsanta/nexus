@@ -157,13 +157,15 @@ def title_input(text: str) -> str:
     return text[: TITLE_INPUT_MAX_CHARS - 1].rstrip() + "…"
 
 
-def _request(model: str, message: str) -> ModelRequest:
+def _request(model: str, message: str, session_id: str | None = None) -> ModelRequest:
     return ModelRequest(
         messages=[Message(role="user", content=[Text(f"<message>\n{message}\n</message>")])],
         system=TITLE_PROMPT,
         tools=[],
         params=SamplingParams(temperature=0.0, max_output_tokens=TITLE_MAX_OUTPUT_TOKENS),
         model=model,
+        # OpenCode Go rejects a request with no session id (HTTP 400).
+        metadata={"session_id": session_id} if session_id else {},
     )
 
 
@@ -191,7 +193,9 @@ async def _collect(provider: Any, request: ModelRequest) -> tuple[str, int, int]
     return "".join(text), usage_in, usage_out
 
 
-async def generate_title(router: Any, model_ref: str, first_message: str) -> TitleResult | None:
+async def generate_title(
+    router: Any, model_ref: str, first_message: str, session_id: str | None = None
+) -> TitleResult | None:
     """Title ``first_message`` with ``model_ref`` (a tier or ``provider/model``).
 
     ``None`` when the model cannot be resolved, the call fails or times out, or
@@ -209,7 +213,7 @@ async def generate_title(router: Any, model_ref: str, first_message: str) -> Tit
     title = ""
     try:
         resolved = router.resolve(ModelRequest(messages=[], model=model_ref))
-        request = msgspec.structs.replace(_request(model_ref, message), model=resolved.model)
+        request = msgspec.structs.replace(_request(model_ref, message, session_id), model=resolved.model)
         async with asyncio.timeout(TITLE_TIMEOUT_S):
             reply, tokens_in, tokens_out = await _collect(resolved.provider, request)
         title = clean_title(reply)
@@ -221,6 +225,9 @@ async def generate_title(router: Any, model_ref: str, first_message: str) -> Tit
         outcome = "timeout"
     except Exception as exc:  # noqa: BLE001 - provider errors vary; the title is optional
         outcome = f"error:{type(exc).__name__}"
+        status = getattr(exc, "status_code", None)
+        if status:
+            outcome += f":{status}"
     seconds = time.monotonic() - started
     label = (
         f"{getattr(resolved.provider, 'name', '')}/{resolved.model}"

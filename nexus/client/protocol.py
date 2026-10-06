@@ -389,6 +389,18 @@ class Client:
     async def select_context_extension(self, session: str, category: str, name: str, enabled: bool) -> p.ContextInspectResult:
         return await self._request(p.ContextExtensionSelect(session=session, category=category, name=name, enabled=enabled))
 
+    async def mcp_server_show(
+        self, session: str, name: str, *, max_bytes: int = 262_144
+    ) -> p.McpServerShowResult:
+        """Read the host's retained, redacted MCP server detail; never connect."""
+        return await self._request(
+            p.McpServerShow(session=session, name=name, max_bytes=max_bytes)
+        )  # type: ignore[return-value]
+
+    async def skill_inspect(self, session: str, name: str, *, max_body_bytes: int = 65_536) -> p.SkillInspectResult:
+        """Read one pinned skill (frontmatter and body) without activating it."""
+        return await self._request(p.SkillInspect(session=session, name=name, max_body_bytes=max_body_bytes))  # type: ignore[return-value]
+
     async def inspect_context(self, session: str) -> p.ContextInspectResult:
         """Preview next-turn standing context; no prompt is persisted or sent."""
         return await self._request(p.ContextInspect(session=session))  # type: ignore[return-value]

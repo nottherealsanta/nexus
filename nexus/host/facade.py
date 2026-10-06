@@ -29,6 +29,7 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import json
 import os  # noqa: F401 - preserves the facade's historical scandir patch seam
 import secrets
 import threading
@@ -1243,6 +1244,81 @@ class HostFacade:
             raise TypeError("runtime returned invalid context inspection")
         return project_context_preview(result)
 
+    def _skill_inspect(self, command: p.SkillInspect) -> p.SkillInspectResult:
+        """Read only leased refresh-time bytes, never recover or invoke a skill."""
+        from ..errors import SessionError
+        from ..util import redact_secrets
+
+        def display(value: Any) -> str:
+            return redact_secrets(str(value))
+
+        base = {"session": display(command.session), "name": display(command.name)}
+
+        def error(message: str) -> p.SkillInspectResult:
+            return p.SkillInspectResult(**base, status="error", error=message)
+
+        if not 0 <= command.max_body_bytes <= 262_144:
+            return error("max_body_bytes must be between 0 and 262144")
+        try:
+            # Read the log directly: opening a handle would unarchive it.
+            from ..session.ids import validate_session_id
+
+            session_id = validate_session_id(command.session)
+            if not self.runtime.sessions.store.exists(session_id):
+                return error("session not found")
+            read = self.runtime.sessions.store.read(session_id)
+            disabled: set[str] = set()
+            for event in read.events():
+                if event.type != "context.extension_selected" or not isinstance(event.data, Mapping):
+                    continue
+                name = event.data.get("name")
+                if event.data.get("category") == "skills" and isinstance(name, str):
+                    if event.data.get("enabled") is False:
+                        disabled.add(name.casefold())
+                    elif event.data.get("enabled") is True:
+                        disabled.discard(name.casefold())
+        except SessionError:
+            return error("session not found")
+        store = self.runtime.manifest_ref
+        if store is None:
+            return error("skill manifest unavailable")
+        lease = store.pin()
+        try:
+            manifest = lease.manifest
+            skill = next((value for name, value in manifest.skills.items()
+                          if name.casefold() == command.name.casefold()), None)
+            if skill is None:
+                return error("skill not found in pinned manifest")
+            parsed = getattr(skill, "parsed", None)
+            body = getattr(skill, "body", None)
+            if parsed is None or body is None or not skill.snapshotted:
+                return error("skill source snapshot unavailable")
+            provenance = skill.provenance
+            text = display(body.decode("utf-8", errors="replace"))
+            encoded = text.encode("utf-8")
+            bounded = encoded[:command.max_body_bytes].decode("utf-8", errors="ignore")
+            return p.SkillInspectResult(
+                **{**base, "name": display(skill.name)},
+                manifest_generation=manifest.generation,
+                enabled=skill.name.casefold() not in disabled,
+                scope="project" if "workspace" in str(provenance.tier).lower() else "global",
+                origin=display(provenance.relpath),
+                metadata={
+                    "description": display(skill.description),
+                    "allowed_tools": [display(v) for v in skill.allowed_tools],
+                    "bundles": [display(v) for v in skill.bundles],
+                    "model": display(skill.model) if skill.model is not None else None,
+                    "version": display(skill.version),
+                    "file_sha256": display(skill.file_sha256),
+                },
+                frontmatter_text=display(parsed.raw.decode("utf-8", errors="replace")),
+                body=bounded,
+                body_bytes=len(body),
+                truncated=len(encoded) > command.max_body_bytes,
+            )
+        finally:
+            lease.release()
+
     # -- health / shutdown -------------------------------------------------
 
     def health(self) -> dict[str, Any]:
@@ -1719,6 +1795,73 @@ class HostFacade:
         if isinstance(command, p.ContextInspect):
             result = await self.inspect_context(command.session)
             return p.ContextInspectResult(session=command.session, **result)
+        if isinstance(command, p.McpServerShow):
+            from ..util import redact_secrets
+
+            manager = getattr(self.runtime, "_mcp", None)
+
+            def display(text: str) -> str:
+                if manager is not None:
+                    text = manager.redact_display(text)
+                return redact_secrets(text)
+
+            name = display(command.name)
+            if not 0 <= command.max_bytes <= 1_048_576:
+                return p.McpServerShowResult(name=name, error="max_bytes must be between 0 and 1048576")
+            # Do not ensure_started: even lazy initialization can connect servers.
+            detail = manager.server_detail(command.name) if manager is not None else None
+            if detail is None:
+                return p.McpServerShowResult(name=name, error="MCP server state unavailable")
+            extensions = getattr(self.runtime, "_extensions", None)
+            detail["scope"] = getattr(extensions, "mcp_scopes", {}).get(command.name, "unavailable")
+            # Peek only: opening a session could unarchive it or initialize state.
+            sessions = getattr(self.runtime, "sessions", None)
+            session = getattr(sessions, "_handles", {}).get(command.session)
+            if session is not None:
+                detail["enabled"] = detail["enabled"] and command.name not in session.disabled_extensions["mcp"]
+                choices = session.mcp_loading_choices
+                frozen = session.mcp_loading_frozen
+                detail["tool_loading"] = (frozen.get(command.name, "search") if frozen is not None
+                                          else choices.get(command.name, detail["tool_loading"]))
+                if command.name in choices:
+                    detail["tool_loading_source"] = "session"
+
+            def scrub(value: Any) -> Any:
+                if isinstance(value, str):
+                    return display(value)
+                if isinstance(value, dict):
+                    return {display(str(key)): scrub(item) for key, item in value.items()}
+                if isinstance(value, (tuple, list)):
+                    return [scrub(item) for item in value]
+                return value
+
+            detail = scrub(detail)
+            encoded = json.dumps(detail, ensure_ascii=False).encode("utf-8")
+            clipped = len(encoded) > command.max_bytes
+            fields = {key: detail[key] for key in (
+                "status", "scope", "enabled", "transport", "command_label", "tool_loading",
+                "tool_loading_source"
+            ) if key in detail}
+            if clipped:
+                # Keep metadata, but omit the entire detail rather than returning
+                # a raw JSON fragment or silently substituting compact schemas.
+                detail = {}
+                fields["error"] = (
+                    "MCP snapshot exceeds requested byte limit; increase max_bytes "
+                    "to include tools, resources, templates, prompts, instructions "
+                    "and server_info (all omitted)."
+                )
+            else:
+                fields.update({key: detail[key] for key in (
+                    "tools", "resources", "prompts"
+                ) if key in detail})
+                fields["server_info"] = detail.get("server_info") or {}
+                fields["instructions"] = detail.get("instructions") or ""
+                if "error" in detail:
+                    fields["error"] = detail["error"] or ""
+            return p.McpServerShowResult(name=name, detail=detail, clipped=clipped, **fields)
+        if isinstance(command, p.SkillInspect):
+            return self._skill_inspect(command)
         if isinstance(command, p.Doctor):
             # Construction is lazy: without this, a fresh daemon reports an
             # empty generation rather than discovering workspace MCP config.

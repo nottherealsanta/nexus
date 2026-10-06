@@ -18,7 +18,7 @@ SCENARIOS = sorted(n for n, s in catalog().items() if not s.slow)
 @pytest.mark.parametrize("name", SCENARIOS)
 async def test_scenario_passes(name, tmp_path, monkeypatch):
     monkeypatch.setenv("NEXUS_DEV", "1")
-    home = tmp_path / "home"
+    home = tmp_path / ".nexus"  # an explicit Runtime home resolves global config to <home>/.nexus
     sandbox = ensure_sandbox(home)
     outside = tmp_path / "outside"
     outside.mkdir()

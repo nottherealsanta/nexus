@@ -37,7 +37,10 @@ pub struct PageState {
 impl PageState {
     pub fn reset_for(&mut self, area: &str) {
         if self.area != area {
-            *self = PageState { area: area.to_string(), ..Default::default() };
+            *self = PageState {
+                area: area.to_string(),
+                ..Default::default()
+            };
         }
     }
     pub fn is_open(&self, sec: &Section) -> bool {
@@ -74,7 +77,14 @@ fn move_focus(st: &mut PageState, delta: i64) {
     if st.order.is_empty() {
         return;
     }
-    let at = st.order.iter().position(|i| *i == st.focus).map_or(if delta >= 0 { -1 } else { st.order.len() as i64 }, |i| i as i64);
+    let at = st.order.iter().position(|i| *i == st.focus).map_or(
+        if delta >= 0 {
+            -1
+        } else {
+            st.order.len() as i64
+        },
+        |i| i as i64,
+    );
     let to = (at + delta).clamp(0, st.order.len() as i64 - 1) as usize;
     st.focus = st.order[to].clone();
 }
@@ -95,14 +105,35 @@ fn num(v: f64) -> Value {
 fn adjust(page: &Page, st: &mut PageState, dir: i64) -> Act {
     match page.find(&st.focus) {
         Some(Target::Row(r)) => match &r.control {
-            Control::Segmented { values, options, active, op } => {
+            Control::Segmented {
+                values,
+                options,
+                active,
+                op,
+            } => {
                 let to = (*active as i64 + dir).clamp(0, options.len() as i64 - 1) as usize;
                 if to == *active {
                     return Act::Done;
                 }
-                Act::Send(with(op, &[("value", values.get(to).cloned().unwrap_or_else(|| json!(options[to])))]))
+                Act::Send(with(
+                    op,
+                    &[(
+                        "value",
+                        values
+                            .get(to)
+                            .cloned()
+                            .unwrap_or_else(|| json!(options[to])),
+                    )],
+                ))
             }
-            Control::Stepper { value, min, max, step, op, .. } => {
+            Control::Stepper {
+                value,
+                min,
+                max,
+                step,
+                op,
+                ..
+            } => {
                 let next = stepped(*value, dir as f64 * step, *min, *max);
                 if (next - value).abs() < f64::EPSILON {
                     return Act::Done;
@@ -159,12 +190,21 @@ fn activate(page: &Page, st: &mut PageState) -> Act {
                 }
             }
             Control::Select { value, options, .. } => {
-                let highlighted = options.iter().position(|(label, _)| label == value).unwrap_or(0);
-                st.popup = Some(Popup { id: st.focus.clone(), highlighted });
+                let highlighted = options
+                    .iter()
+                    .position(|(label, _)| label == value)
+                    .unwrap_or(0);
+                st.popup = Some(Popup {
+                    id: st.focus.clone(),
+                    highlighted,
+                });
                 Act::Done
             }
             Control::Text { value, .. } => {
-                st.edit = Some(Edit { id: st.focus.clone(), text: TextState::new(value) });
+                st.edit = Some(Edit {
+                    id: st.focus.clone(),
+                    text: TextState::new(value),
+                });
                 Act::Done
             }
             Control::Button(b) => Act::Send(b.op.clone()),
@@ -178,21 +218,32 @@ fn activate(page: &Page, st: &mut PageState) -> Act {
             }
             Act::Done
         }
-        Some(Target::OrderedAdd(o)) if o.editable => Act::Send(with(&o.op, &[("action", json!("add")), ("index", json!(o.items.len()))])),
+        Some(Target::OrderedAdd(o)) if o.editable => Act::Send(with(
+            &o.op,
+            &[("action", json!("add")), ("index", json!(o.items.len()))],
+        )),
         _ => Act::Done,
     }
 }
 
 /// Keys while a select popup is open.
 fn popup_key(page: &Page, st: &mut PageState, key: KeyEvent) -> Act {
-    let Some(popup) = st.popup.as_mut() else { return Act::Pass };
-    let Some(Target::Row(Row { control: Control::Select { options, op, .. }, .. })) = page.find(&popup.id) else {
+    let Some(popup) = st.popup.as_mut() else {
+        return Act::Pass;
+    };
+    let Some(Target::Row(Row {
+        control: Control::Select { options, op, .. },
+        ..
+    })) = page.find(&popup.id)
+    else {
         st.popup = None;
         return Act::Done;
     };
     match key.code {
         KeyCode::Up => popup.highlighted = popup.highlighted.saturating_sub(1),
-        KeyCode::Down => popup.highlighted = (popup.highlighted + 1).min(options.len().saturating_sub(1)),
+        KeyCode::Down => {
+            popup.highlighted = (popup.highlighted + 1).min(options.len().saturating_sub(1))
+        }
         KeyCode::Home => popup.highlighted = 0,
         KeyCode::End => popup.highlighted = options.len().saturating_sub(1),
         KeyCode::Esc => st.popup = None,
@@ -205,7 +256,10 @@ fn popup_key(page: &Page, st: &mut PageState, key: KeyEvent) -> Act {
         }
         KeyCode::Char(c) => {
             let lc = c.to_lowercase().next().unwrap_or(c);
-            if let Some(i) = options.iter().position(|(l, _)| l.to_lowercase().starts_with(lc)) {
+            if let Some(i) = options
+                .iter()
+                .position(|(l, _)| l.to_lowercase().starts_with(lc))
+            {
                 popup.highlighted = i;
             }
         }
@@ -216,21 +270,34 @@ fn popup_key(page: &Page, st: &mut PageState, key: KeyEvent) -> Act {
 
 /// Keys while a text field is being edited.
 fn edit_key(page: &Page, st: &mut PageState, key: KeyEvent) -> Act {
-    let Some(edit) = st.edit.as_mut() else { return Act::Pass };
+    let Some(edit) = st.edit.as_mut() else {
+        return Act::Pass;
+    };
     match key.code {
         KeyCode::Esc => st.edit = None,
         KeyCode::Enter => {
             let value = edit.text.value.clone();
             let id = edit.id.clone();
             st.edit = None;
-            if let Some(Target::Row(Row { control: Control::Text { op, .. }, .. })) = page.find(&id) {
+            if let Some(Target::Row(Row {
+                control: Control::Text { op, .. },
+                ..
+            })) = page.find(&id)
+            {
                 return Act::Send(with(op, &[("value", json!(value))]));
             }
         }
         KeyCode::Backspace => edit.text.backspace(),
         KeyCode::Left => edit.text.left(),
         KeyCode::Right => edit.text.right(),
-        KeyCode::Char(c) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) && edit.text.value.chars().count() < 400 => edit.text.insert(c),
+        KeyCode::Char(c)
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                && edit.text.value.chars().count() < 400 =>
+        {
+            edit.text.insert(c)
+        }
         _ => {}
     }
     Act::Done
@@ -252,7 +319,9 @@ pub fn key(page: &Page, st: &mut PageState, key: KeyEvent) -> Act {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     match key.code {
         KeyCode::Esc => Act::Close,
-        KeyCode::Up | KeyCode::Down if alt => reorder(page, st, if key.code == KeyCode::Up { -1 } else { 1 }),
+        KeyCode::Up | KeyCode::Down if alt => {
+            reorder(page, st, if key.code == KeyCode::Up { -1 } else { 1 })
+        }
         KeyCode::Up => {
             move_focus(st, -1);
             Act::Done
@@ -286,7 +355,11 @@ pub fn key(page: &Page, st: &mut PageState, key: KeyEvent) -> Act {
         KeyCode::Tab => {
             let n = st.order.len() as i64;
             if n > 0 {
-                let at = st.order.iter().position(|i| *i == st.focus).map_or(-1, |i| i as i64);
+                let at = st
+                    .order
+                    .iter()
+                    .position(|i| *i == st.focus)
+                    .map_or(-1, |i| i as i64);
                 st.focus = st.order[((at + 1).rem_euclid(n)) as usize].clone();
             }
             Act::Done
@@ -294,7 +367,11 @@ pub fn key(page: &Page, st: &mut PageState, key: KeyEvent) -> Act {
         KeyCode::BackTab => {
             let n = st.order.len() as i64;
             if n > 0 {
-                let at = st.order.iter().position(|i| *i == st.focus).map_or(0, |i| i as i64);
+                let at = st
+                    .order
+                    .iter()
+                    .position(|i| *i == st.focus)
+                    .map_or(0, |i| i as i64);
                 st.focus = st.order[((at - 1).rem_euclid(n)) as usize].clone();
             }
             Act::Done
@@ -311,7 +388,9 @@ pub fn key(page: &Page, st: &mut PageState, key: KeyEvent) -> Act {
 }
 
 fn tab_step(page: &Page, dir: i64) -> Act {
-    let Some(t) = page.first_tabs() else { return Act::Done };
+    let Some(t) = page.first_tabs() else {
+        return Act::Done;
+    };
     let to = (t.active as i64 + dir).clamp(0, t.items.len() as i64 - 1) as usize;
     if to == t.active {
         Act::Done
@@ -321,25 +400,38 @@ fn tab_step(page: &Page, dir: i64) -> Act {
 }
 
 fn reorder(page: &Page, st: &mut PageState, delta: i64) -> Act {
-    let Some(Target::OrderedItem(o, i)) = page.find(&st.focus) else { return Act::Done };
+    let Some(Target::OrderedItem(o, i)) = page.find(&st.focus) else {
+        return Act::Done;
+    };
     let to = i as i64 + delta;
     if !o.editable || to < 0 || to as usize >= o.items.len() {
         return Act::Done;
     }
     // Focus follows the moved item: ids are positions, and the host keeps the order.
     st.focus = format!("{}:{to}", ord_id(&o.id));
-    Act::Send(with(&o.op, &[("action", json!(if delta < 0 { "up" } else { "down" })), ("index", json!(i))]))
+    Act::Send(with(
+        &o.op,
+        &[
+            ("action", json!(if delta < 0 { "up" } else { "down" })),
+            ("index", json!(i)),
+        ],
+    ))
 }
 
 fn remove(page: &Page, st: &mut PageState) -> Act {
-    let Some(Target::OrderedItem(o, i)) = page.find(&st.focus) else { return Act::Pass };
+    let Some(Target::OrderedItem(o, i)) = page.find(&st.focus) else {
+        return Act::Pass;
+    };
     if !o.editable {
         return Act::Done;
     }
     if i + 1 == o.items.len() && i > 0 {
         st.focus = format!("{}:{}", ord_id(&o.id), i - 1);
     }
-    Act::Send(with(&o.op, &[("action", json!("remove")), ("index", json!(i))]))
+    Act::Send(with(
+        &o.op,
+        &[("action", json!("remove")), ("index", json!(i))],
+    ))
 }
 
 /// A left click at (x, y). Returns what to do; sets focus to what was clicked.
@@ -355,7 +447,11 @@ pub fn click(page: &Page, st: &mut PageState, x: u16, y: u16) -> Act {
         let (row, index) = rest.rsplit_once(':').unwrap_or((rest, "0"));
         let index: usize = index.parse().unwrap_or(0);
         st.popup = None;
-        if let Some(Target::Row(Row { control: Control::Select { options, op, .. }, .. })) = page.find(row) {
+        if let Some(Target::Row(Row {
+            control: Control::Select { options, op, .. },
+            ..
+        })) = page.find(row)
+        {
             if let Some((_, v)) = options.get(index) {
                 return Act::Send(with(op, &[("value", v.clone())]));
             }
@@ -371,27 +467,73 @@ pub fn click(page: &Page, st: &mut PageState, x: u16, y: u16) -> Act {
     };
     match page.find(&id) {
         Some(Target::Row(r)) => match (&r.control, named) {
-            (Control::Segmented { values, options, op, .. }, Some(n)) => {
-                let i: usize = n.strip_prefix("segment:").and_then(|x| x.parse().ok()).unwrap_or(0);
-                Act::Send(with(op, &[("value", values.get(i).cloned().unwrap_or_else(|| json!(options.get(i).cloned().unwrap_or_default())))]))
+            (
+                Control::Segmented {
+                    values,
+                    options,
+                    op,
+                    ..
+                },
+                Some(n),
+            ) => {
+                let i: usize = n
+                    .strip_prefix("segment:")
+                    .and_then(|x| x.parse().ok())
+                    .unwrap_or(0);
+                Act::Send(with(
+                    op,
+                    &[(
+                        "value",
+                        values
+                            .get(i)
+                            .cloned()
+                            .unwrap_or_else(|| json!(options.get(i).cloned().unwrap_or_default())),
+                    )],
+                ))
             }
-            (Control::Stepper { value, min, max, step, op, .. }, Some(n)) => {
+            (
+                Control::Stepper {
+                    value,
+                    min,
+                    max,
+                    step,
+                    op,
+                    ..
+                },
+                Some(n),
+            ) => {
                 let d = if n == "inc" { *step } else { -*step };
                 Act::Send(with(op, &[("value", num(stepped(*value, d, *min, *max)))]))
             }
             _ => activate(page, st),
         },
-        Some(Target::Tabs(t)) => match named.and_then(|n| n.strip_prefix("tab:")).and_then(|i| i.parse::<usize>().ok()) {
-            Some(i) if i != t.active && i < t.items.len() => Act::Send(with(&t.op, &[("value", json!(i))])),
+        Some(Target::Tabs(t)) => match named
+            .and_then(|n| n.strip_prefix("tab:"))
+            .and_then(|i| i.parse::<usize>().ok())
+        {
+            Some(i) if i != t.active && i < t.items.len() => {
+                Act::Send(with(&t.op, &[("value", json!(i))]))
+            }
             _ => Act::Done,
         },
         Some(Target::OrderedItem(o, i)) if o.editable => match named {
-            Some("up") if i > 0 => Act::Send(with(&o.op, &[("action", json!("up")), ("index", json!(i))])),
-            Some("down") if i + 1 < o.items.len() => Act::Send(with(&o.op, &[("action", json!("down")), ("index", json!(i))])),
-            Some("remove") => Act::Send(with(&o.op, &[("action", json!("remove")), ("index", json!(i))])),
+            Some("up") if i > 0 => {
+                Act::Send(with(&o.op, &[("action", json!("up")), ("index", json!(i))]))
+            }
+            Some("down") if i + 1 < o.items.len() => Act::Send(with(
+                &o.op,
+                &[("action", json!("down")), ("index", json!(i))],
+            )),
+            Some("remove") => Act::Send(with(
+                &o.op,
+                &[("action", json!("remove")), ("index", json!(i))],
+            )),
             _ => Act::Done,
         },
-        Some(Target::Scope(sc)) => match named.and_then(|n| n.strip_prefix("segment:")).and_then(|i| i.parse::<usize>().ok()) {
+        Some(Target::Scope(sc)) => match named
+            .and_then(|n| n.strip_prefix("segment:"))
+            .and_then(|i| i.parse::<usize>().ok())
+        {
             Some(i) if i != sc.value => Act::Send(with(&sc.op, &[("value", json!(i))])),
             _ => Act::Done,
         },
@@ -413,10 +555,19 @@ mod tests {
         // The drawn order of the sample page: toggle, segmented, select, tabs, two ordered rows, add, section.
         let _ = page;
         PageState {
-            order: ["row:titles", "row:eff", "row:dev", "tabs:tiers", "ord:tier:low:0", "ord:tier:low:1", "ord:tier:low:add", "sec:prov"]
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
+            order: [
+                "row:titles",
+                "row:eff",
+                "row:dev",
+                "tabs:tiers",
+                "ord:tier:low:0",
+                "ord:tier:low:1",
+                "ord:tier:low:add",
+                "sec:prov",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
             focus: "row:titles".into(),
             ..Default::default()
         }
@@ -445,15 +596,25 @@ mod tests {
     fn space_toggles_with_the_negated_value_and_a_locked_toggle_does_nothing() {
         let (p, mut st) = (page(), state(&page()));
         let act = key(&p, &mut st, press(KeyCode::Char(' ')));
-        assert_eq!(act, Act::Send(json!({"kind": "sp_models", "key": "titles", "value": false})));
+        assert_eq!(
+            act,
+            Act::Send(json!({"kind": "sp_models", "key": "titles", "value": false}))
+        );
     }
 
     #[test]
     fn left_right_change_a_segmented_control_and_left_elsewhere_goes_to_the_area_list() {
         let (p, mut st) = (page(), state(&page()));
         st.focus = "row:eff".into();
-        assert_eq!(key(&p, &mut st, press(KeyCode::Left)), Act::Send(json!({"kind": "sp_models", "key": "eff", "value": "low"})));
-        assert_eq!(key(&p, &mut st, press(KeyCode::Right)), Act::Done, "already on the last option");
+        assert_eq!(
+            key(&p, &mut st, press(KeyCode::Left)),
+            Act::Send(json!({"kind": "sp_models", "key": "eff", "value": "low"}))
+        );
+        assert_eq!(
+            key(&p, &mut st, press(KeyCode::Right)),
+            Act::Done,
+            "already on the last option"
+        );
         st.focus = "row:titles".into();
         assert_eq!(key(&p, &mut st, press(KeyCode::Left)), Act::Nav);
     }
@@ -465,7 +626,10 @@ mod tests {
         assert_eq!(key(&p, &mut st, press(KeyCode::Enter)), Act::Done);
         assert!(st.popup.is_some());
         key(&p, &mut st, press(KeyCode::Down));
-        assert_eq!(key(&p, &mut st, press(KeyCode::Enter)), Act::Send(json!({"kind": "sp_models", "key": "dev", "value": "cpu"})));
+        assert_eq!(
+            key(&p, &mut st, press(KeyCode::Enter)),
+            Act::Send(json!({"kind": "sp_models", "key": "dev", "value": "cpu"}))
+        );
         assert!(st.popup.is_none());
         // Escape closes the popup first and does not close Settings.
         key(&p, &mut st, press(KeyCode::Enter));
@@ -478,29 +642,58 @@ mod tests {
         let (p, mut st) = (page(), state(&page()));
         st.focus = "ord:tier:low:0".into();
         let act = key(&p, &mut st, alt(KeyCode::Down));
-        assert_eq!(act, Act::Send(json!({"kind": "sp_models", "key": "tier", "tier": "low", "action": "down", "index": 0})));
+        assert_eq!(
+            act,
+            Act::Send(
+                json!({"kind": "sp_models", "key": "tier", "tier": "low", "action": "down", "index": 0})
+            )
+        );
         assert_eq!(st.focus, "ord:tier:low:1");
-        assert_eq!(key(&p, &mut st, alt(KeyCode::Down)), Act::Done, "cannot move past the end");
+        assert_eq!(
+            key(&p, &mut st, alt(KeyCode::Down)),
+            Act::Done,
+            "cannot move past the end"
+        );
     }
 
     #[test]
     fn delete_removes_and_the_add_row_asks_to_add() {
         let (p, mut st) = (page(), state(&page()));
         st.focus = "ord:tier:low:1".into();
-        assert_eq!(key(&p, &mut st, press(KeyCode::Delete)), Act::Send(json!({"kind": "sp_models", "key": "tier", "tier": "low", "action": "remove", "index": 1})));
-        assert_eq!(st.focus, "ord:tier:low:0", "focus moves to the surviving neighbour");
+        assert_eq!(
+            key(&p, &mut st, press(KeyCode::Delete)),
+            Act::Send(
+                json!({"kind": "sp_models", "key": "tier", "tier": "low", "action": "remove", "index": 1})
+            )
+        );
+        assert_eq!(
+            st.focus, "ord:tier:low:0",
+            "focus moves to the surviving neighbour"
+        );
         st.focus = "ord:tier:low:add".into();
-        assert_eq!(key(&p, &mut st, press(KeyCode::Enter)), Act::Send(json!({"kind": "sp_models", "key": "tier", "tier": "low", "action": "add", "index": 2})));
+        assert_eq!(
+            key(&p, &mut st, press(KeyCode::Enter)),
+            Act::Send(
+                json!({"kind": "sp_models", "key": "tier", "tier": "low", "action": "add", "index": 2})
+            )
+        );
     }
 
     #[test]
     fn tabs_switch_with_arrows_and_ctrl_page_keys() {
         let (p, mut st) = (page(), state(&page()));
         st.focus = "tabs:tiers".into();
-        assert_eq!(key(&p, &mut st, press(KeyCode::Right)), Act::Send(json!({"kind": "sp_models", "key": "tab", "value": 1})));
+        assert_eq!(
+            key(&p, &mut st, press(KeyCode::Right)),
+            Act::Send(json!({"kind": "sp_models", "key": "tab", "value": 1}))
+        );
         st.focus = "row:titles".into();
         let ctrl = KeyEvent::new(KeyCode::PageDown, KeyModifiers::CONTROL);
-        assert_eq!(key(&p, &mut st, ctrl), Act::Send(json!({"kind": "sp_models", "key": "tab", "value": 1})), "from anywhere in the page");
+        assert_eq!(
+            key(&p, &mut st, ctrl),
+            Act::Send(json!({"kind": "sp_models", "key": "tab", "value": 1})),
+            "from anywhere in the page"
+        );
     }
 
     #[test]
@@ -516,16 +709,27 @@ mod tests {
         assert!(st.is_open(&sec));
         key(&p, &mut st, press(KeyCode::Left));
         assert!(!st.is_open(&sec));
-        assert_eq!(key(&p, &mut st, press(KeyCode::Left)), Act::Nav, "a closed section's Left leaves for the area list");
+        assert_eq!(
+            key(&p, &mut st, press(KeyCode::Left)),
+            Act::Nav,
+            "a closed section's Left leaves for the area list"
+        );
     }
 
     #[test]
     fn question_mark_opens_the_keyboard_page_but_is_text_while_editing() {
         let (p, mut st) = (page(), state(&page()));
-        assert_eq!(key(&p, &mut st, press(KeyCode::Char('?'))), Act::Send(json!({"kind": "keyboard"})));
+        assert_eq!(
+            key(&p, &mut st, press(KeyCode::Char('?'))),
+            Act::Send(json!({"kind": "keyboard"}))
+        );
         let v = json!({"area": "x", "blocks": [{"t": "row", "id": "k", "label": "Key", "control": {"c": "text", "value": "", "secret": false, "placeholder": "", "operation": {"kind": "sp_x", "key": "k"}}}]});
         let p = Page::from_value(&v);
-        let mut st = PageState { order: vec!["row:k".into()], focus: "row:k".into(), ..Default::default() };
+        let mut st = PageState {
+            order: vec!["row:k".into()],
+            focus: "row:k".into(),
+            ..Default::default()
+        };
         key(&p, &mut st, press(KeyCode::Enter));
         key(&p, &mut st, press(KeyCode::Char('?')));
         assert_eq!(st.edit.as_ref().unwrap().text.value, "?");
@@ -534,31 +738,56 @@ mod tests {
     #[test]
     fn keys_the_page_does_not_use_pass_through() {
         let (p, mut st) = (page(), state(&page()));
-        assert_eq!(key(&p, &mut st, KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)), Act::Pass);
+        assert_eq!(
+            key(
+                &p,
+                &mut st,
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
+            ),
+            Act::Pass
+        );
     }
 
     #[test]
     fn text_fields_edit_locally_and_send_once_on_enter() {
         let v = json!({"area": "x", "blocks": [{"t": "row", "id": "k", "label": "Key", "control": {"c": "text", "value": "ab", "secret": true, "placeholder": "", "operation": {"kind": "sp_x", "key": "k"}}}]});
         let p = Page::from_value(&v);
-        let mut st = PageState { order: vec!["row:k".into()], focus: "row:k".into(), ..Default::default() };
+        let mut st = PageState {
+            order: vec!["row:k".into()],
+            focus: "row:k".into(),
+            ..Default::default()
+        };
         key(&p, &mut st, press(KeyCode::Enter));
         assert!(st.edit.is_some());
         key(&p, &mut st, press(KeyCode::Char('c')));
         key(&p, &mut st, press(KeyCode::Backspace));
         key(&p, &mut st, press(KeyCode::Char('z')));
-        assert_eq!(key(&p, &mut st, press(KeyCode::Enter)), Act::Send(json!({"kind": "sp_x", "key": "k", "value": "abz"})));
+        assert_eq!(
+            key(&p, &mut st, press(KeyCode::Enter)),
+            Act::Send(json!({"kind": "sp_x", "key": "k", "value": "abz"}))
+        );
         key(&p, &mut st, press(KeyCode::Enter));
-        assert_eq!(key(&p, &mut st, press(KeyCode::Esc)), Act::Done, "Escape cancels the edit without sending or closing");
+        assert_eq!(
+            key(&p, &mut st, press(KeyCode::Esc)),
+            Act::Done,
+            "Escape cancels the edit without sending or closing"
+        );
         assert!(st.edit.is_none());
     }
 
     #[test]
     fn a_new_area_starts_with_fresh_focus_and_scroll() {
-        let mut st = PageState { focus: "row:x".into(), area: "models".into(), ..Default::default() };
+        let mut st = PageState {
+            focus: "row:x".into(),
+            area: "models".into(),
+            ..Default::default()
+        };
         st.scroll.offset = 12;
         st.reset_for("models");
-        assert_eq!(st.scroll.offset, 12, "same area keeps its place across host rebuilds");
+        assert_eq!(
+            st.scroll.offset, 12,
+            "same area keeps its place across host rebuilds"
+        );
         st.reset_for("voice");
         assert!(st.focus.is_empty() && st.scroll.offset == 0 && st.area == "voice");
     }

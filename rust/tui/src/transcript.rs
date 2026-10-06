@@ -107,6 +107,9 @@ pub fn line(
 }
 
 pub fn truncate(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
     if text.width() <= width {
         return text.to_string();
     }
@@ -412,7 +415,8 @@ pub fn build(b: &Content, width: u16, p: &Palette) -> Rows {
 }
 
 fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
-    let width = usize::from(width).max(8);
+    let viewport_width = usize::from(width);
+    let width = viewport_width.max(8);
     let mut out: Rows = (0..b.gap).map(|_| (Line::default(), None)).collect();
     let op = &b.operation;
     match b.kind.as_str() {
@@ -420,14 +424,22 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
         "context_header" => {
             // Compact, marker-free context rows. Counts sit beside their labels;
             // project/global counts retain their distinct tones inside one bracket.
-            let lead = 5usize;
+            let lead = 5usize.min(viewport_width);
+            // Agent colour for titles, plus a thin left rail like the user card's (header lines only).
+            let rail = color(&b.color, p.blue, p);
             for (n, chip) in b.members.iter().enumerate() {
                 if n > 0 {
                     out.push((Line::default(), None));
                 }
+                // Empty blocks arrive with the neutral colour and are drawn greyed out.
+                let rail = if chip.color.is_empty() {
+                    rail
+                } else {
+                    color(&chip.color, rail, p)
+                };
                 let mut parts = vec![Span::styled(
                     chip.title.clone(),
-                    Style::default().fg(p.text).add_modifier(Modifier::BOLD),
+                    Style::default().fg(rail).add_modifier(Modifier::BOLD),
                 )];
                 if !chip.counts.is_empty() {
                     parts.push(Span::styled(" [", Style::default().fg(p.muted)));
@@ -455,12 +467,17 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
                 }
                 let w: usize = parts.iter().map(|s| s.content.width()).sum();
                 let row = serde_json::json!({"kind":"context_chips","chips":[
-                    {"start":lead,"end":lead + w,"operation":chip.operation}]});
+                    {"start":lead,"end":(lead + w).min(viewport_width),"operation":chip.operation}]});
                 out.push((
                     Line::from(
-                        std::iter::once(Span::raw(" ".repeat(lead)))
-                            .chain(parts)
-                            .collect::<Vec<_>>(),
+                        [
+                            Span::raw(" ".repeat(2.min(lead))),
+                            Span::styled("│", Style::default().fg(rail)),
+                            Span::raw(" ".repeat(lead.saturating_sub(3))),
+                        ]
+                        .into_iter()
+                        .chain(parts)
+                        .collect::<Vec<_>>(),
                     ),
                     Some(row),
                 ));
@@ -575,7 +592,7 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
         }
         "markdown" => {
             let total = width.saturating_sub(2);
-            for row in markdown::lines(&b.text, p, width) {
+            for row in markdown::lines(&b.text, p, total.saturating_sub(4)) {
                 if row.blank {
                     out.push((Line::default(), op.clone()));
                     continue;
@@ -637,14 +654,7 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
                 };
                 out.push((
                     Line::from(vec![
-                        Span::styled(
-                            if member.batch_glyph.is_empty() {
-                                "    "
-                            } else {
-                                "   ∥"
-                            },
-                            Style::default().fg(p.muted),
-                        ),
+                        Span::styled("    ", Style::default().fg(p.muted)),
                         Span::styled(
                             truncate(&text, width.saturating_sub(4)),
                             Style::default().fg(p.quiet),
@@ -752,12 +762,68 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
                 }
             }
         }
+        "task" => {
+            // The host supplies only the latest activity, never arrow-joined history.
+            let running = b.status == "running";
+            let room = width.saturating_sub(6);
+            let title = truncate(&b.title, room);
+            let metrics = if running
+                && !b.metrics.is_empty()
+                && title.width() + b.metrics.width() + 2 <= room
+            {
+                format!(
+                    "{}{}",
+                    " ".repeat(room - title.width() - b.metrics.width()),
+                    b.metrics
+                )
+            } else {
+                String::new()
+            };
+            out.push((
+                Line::from(vec![
+                    Span::raw("    "),
+                    Span::styled(
+                        if running { "\u{e000}" } else { " " },
+                        Style::default().fg(color(&b.color, p.blue, p)),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(title, Style::default().fg(color(&b.color, p.blue, p))),
+                    Span::styled(metrics.clone(), Style::default().fg(p.muted)),
+                ]),
+                op.clone(),
+            ));
+            let activity = if running { &b.text } else { &b.metrics };
+            for text in activity.lines() {
+                out.push((
+                    Line::styled(
+                        format!("      {}", truncate(text, room)),
+                        Style::default().fg(p.muted),
+                    ),
+                    op.clone(),
+                ));
+            }
+            if running && metrics.is_empty() && !b.metrics.is_empty() {
+                out.push((
+                    Line::styled(
+                        format!("      {}", truncate(&b.metrics, room)),
+                        Style::default().fg(p.muted),
+                    ),
+                    op.clone(),
+                ));
+            }
+            for text in b.detail.lines() {
+                indented(
+                    &mut out,
+                    vec![Span::styled(text.to_string(), Style::default().fg(p.muted))],
+                    6,
+                    width,
+                    op,
+                );
+            }
+        }
         "tool" => {
             let tone = p.quiet;
-            let gutter = match b.batch_glyph.as_str() {
-                "┌" | "│" | "└" => format!("   {}", b.batch_glyph),
-                _ => "    ".to_string(),
-            };
+            let gutter = "    ";
             for text in b.text.lines() {
                 out.push((
                     Line::styled(
@@ -888,6 +954,25 @@ mod tests {
     }
 
     #[test]
+    fn markdown_tables_fit_without_rewrapping() {
+        let p = Palette::new(false);
+        let text = "| Name | Type | Required | Default | Description |\n|---|---|---|---|---|\n| offset | integer | no | — | 1-based first line to return (default 1). |\n| csv_as_markdown | boolean | no | — | Convert a CSV file to Markdown instead of reading its raw UTF-8 text. |";
+        let block = Content {
+            kind: "markdown".into(),
+            text: text.into(),
+            ..Default::default()
+        };
+        for width in 40u16..160 {
+            let rows = build(&block, width, &p);
+            let lines: Vec<String> = rows.iter().map(|(l, _)| l.to_string()).collect();
+            assert!(
+                lines.iter().all(|l| l.trim().is_empty() || l.trim_start().starts_with(['┌', '│', '├', '└'])),
+                "width {width}: {lines:#?}"
+            );
+        }
+    }
+
+    #[test]
     fn wraps_at_words_without_leading_spaces() {
         let rows = wrap(&[Span::raw("run nexus doctor or nexus run now")], 11);
         let lines = text(&rows);
@@ -968,30 +1053,6 @@ mod tests {
     }
 
     #[test]
-    fn parallel_tools_keep_the_same_text_column() {
-        let p = Palette::new(false);
-        for width in [12, 60, 120] {
-            for glyph in ["", "┌", "│", "└"] {
-                let block = Content {
-                    kind: "tool".into(),
-                    text: "✓ read README.md\n  0 tool calls · 7.5s".into(),
-                    batch_glyph: glyph.into(),
-                    operation: Some(serde_json::json!({"kind": "tool_page", "id": "c"})),
-                    ..Default::default()
-                };
-                let rows = build(&block, width, &p);
-                let first: String = rows[0].0.spans.iter().map(|s| s.content.as_ref()).collect();
-                let second: String = rows[1].0.spans.iter().map(|s| s.content.as_ref()).collect();
-                assert_eq!(first.chars().nth(5), Some('✓'));
-                assert_eq!(second.chars().nth(7), Some('0'));
-                assert!(rows
-                    .iter()
-                    .all(|(line, op)| line.width() <= width as usize && op == &block.operation));
-            }
-        }
-    }
-
-    #[test]
     fn thought_shows_amber_title_and_reasoning_behind_a_rule() {
         let p = Palette::new(false);
         let block = Content {
@@ -1036,6 +1097,83 @@ mod tests {
             assert!(displayed.contains("e\u{301}"));
             assert_eq!(block.text, source);
         }
+    }
+
+    #[test]
+    fn tasks_show_latest_activity_metrics_and_quiet_completion() {
+        let p = Palette::new(false);
+        let mut task = Content {
+            kind: "task".into(),
+            title: "Explore map files".into(),
+            status: "running".into(),
+            text: "Read config.json".into(),
+            metrics: "3 calls · 2s".into(),
+            operation: Some(serde_json::json!({"action":"task","key":"t1"})),
+            gap: 1,
+            ..Default::default()
+        };
+        for width in [20, 80] {
+            let rows = build(&task, width, &p);
+            assert_eq!(rows[0].0.width(), 1); // shared transcript inset on the gap
+            assert!(rows[1..]
+                .iter()
+                .all(|(line, op)| line.width() <= width as usize && op == &task.operation));
+            let rendered = rows
+                .iter()
+                .map(|(line, _)| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(rendered.contains("Read config"));
+            assert!(rendered.contains("3 calls · 2s"));
+            assert!(!rendered.contains('→'));
+            if width == 80 {
+                assert_eq!(rows[1].0.width(), 80);
+            }
+        }
+        task.status = "failed".into();
+        task.detail = "Error: missing file".into();
+        let rows = build(&task, 80, &p);
+        let rendered = rows
+            .iter()
+            .map(|(line, _)| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !rendered.contains('✓') && !rendered.contains('✗') && !rendered.contains('\u{e000}')
+        );
+        assert!(!rendered.contains("Read config"));
+        assert!(rendered.contains("Error: missing file"));
+    }
+
+    #[test]
+    fn context_hit_ranges_are_clipped_to_the_viewport() {
+        let block = Content {
+            kind: "context_header".into(),
+            members: vec![Content {
+                title: "界 Skills".into(),
+                counts: vec![0, 2],
+                operation: Some(serde_json::json!({"action":"context","key":"skills"})),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        for width in [0, 3, 12, 80] {
+            let rows = build(&block, width, &Palette::new(false));
+            let range = &rows[0].1.as_ref().unwrap()["chips"][0];
+            assert!(range["start"].as_u64().unwrap() <= range["end"].as_u64().unwrap());
+            assert!(range["end"].as_u64().unwrap() <= width as u64);
+        }
+        assert_eq!(truncate("界", 0), "");
     }
 
     #[test]
@@ -1109,10 +1247,10 @@ mod tests {
         let line =
             |i: usize| -> String { rows[i].0.spans.iter().map(|s| s.content.as_ref()).collect() };
         // Marker-free labels share an inset; bracketed counts follow immediately.
-        assert!(line(0).starts_with("     Tools [13]"), "{}", line(0));
-        assert!(line(2).starts_with("     Skills [1 3]"), "{}", line(2));
+        assert!(line(0).starts_with("  │  Tools [13]"), "{}", line(0));
+        assert!(line(2).starts_with("  │  Skills [1 3]"), "{}", line(2));
         assert!(line(2).contains("Skills [1 3]"), "{}", line(2));
-        assert!(rows[0].0.spans[1]
+        assert!(rows[0].0.spans[3]
             .style
             .add_modifier
             .contains(Modifier::BOLD));
