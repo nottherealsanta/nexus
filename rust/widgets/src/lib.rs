@@ -16,6 +16,7 @@ pub mod theme;
 pub mod ui;
 
 pub use components::*;
+pub use components::{controls, feedback, inputs, lists, scroll};
 pub use focus::{FocusRing, Region};
 pub use glyphs::Glyphs;
 pub use hit::HitMap;

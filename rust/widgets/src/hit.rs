@@ -32,6 +32,20 @@ impl HitMap {
     pub fn rect_of(&self, id: &str) -> Option<Rect> {
         self.hits.iter().rev().find(|(_, i, p)| i == id && *p == Part::Body).map(|(r, _, _)| *r)
     }
+    /// Move hits registered since `start` by (dx, dy) and drop those outside `clip`.
+    /// Used by scroll containers that draw into an off-screen buffer.
+    pub fn translate_from(&mut self, start: usize, dx: i32, dy: i32, clip: Rect) {
+        let tail = self.hits.split_off(start.min(self.hits.len()));
+        for (r, id, part) in tail {
+            let (x, y) = (r.x as i32 + dx, r.y as i32 + dy);
+            let top = y.max(clip.y as i32);
+            let bottom = (y + r.height as i32).min((clip.y + clip.height) as i32);
+            if bottom <= top || x < clip.x as i32 {
+                continue;
+            }
+            self.hits.push((Rect::new(x as u16, top as u16, r.width.min(clip.width), (bottom - top) as u16), id, part));
+        }
+    }
     pub fn len(&self) -> usize {
         self.hits.len()
     }

@@ -206,3 +206,30 @@ fn nothing_is_drawn_outside_the_buffer() {
     toast_stack(&mut buf, &mut ui, Rect::new(0, 0, 12, 3), &ToastStack::default());
     key_hints(&mut buf, &ui, Rect::new(0, 2, 12, 1), &[("Enter", "open"), ("Esc", "close")]);
 }
+
+#[test]
+fn scroll_container_keeps_focus_visible_and_translates_hits() {
+    let (th, g) = (Theme::dark(), Glyphs::unicode());
+    let mut ui = Ui::new(&th, &g);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 40, 12));
+    let mut sc = Scroll::default();
+    ui.focus.set("row:30");
+    for _ in 0..2 {
+        ui.begin_frame();
+        scrolled(&mut buf, &mut ui, Rect::new(2, 1, 38, 8), &mut sc, |b, ui, r| {
+            for i in 0..40u16 {
+                let id = format!("row:{i}");
+                ui.stop(&id, Rect::new(0, i, r.width, 1));
+                put(b, 0, i, &format!("line {i}"), ui.theme.text_style(), 20);
+            }
+            40
+        });
+        ui.end_frame();
+    }
+    assert!(sc.offset >= 23 && sc.offset <= 30, "focused row scrolled into view, offset {}", sc.offset);
+    let rect = ui.hits.rect_of("row:30").expect("focused row has a hit rect inside the viewport");
+    assert!(rect.y >= 1 && rect.y < 9, "hit translated to screen coordinates: {rect:?}");
+    assert!(ui.hits.rect_of("row:0").is_none(), "hits outside the viewport are dropped");
+    let drawn: String = (1..9).map(|y| text(&buf, y)).collect();
+    assert!(drawn.contains("line 30"));
+}

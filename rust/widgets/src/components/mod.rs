@@ -12,11 +12,13 @@ pub mod controls;
 pub mod feedback;
 pub mod inputs;
 pub mod lists;
+pub mod scroll;
 
 pub use controls::*;
 pub use feedback::*;
 pub use inputs::*;
 pub use lists::*;
+pub use scroll::*;
 
 pub fn width(s: &str) -> usize {
     UnicodeWidthStr::width(s)

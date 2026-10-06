@@ -151,6 +151,9 @@ impl Theme {
             s
         }
     }
+    pub fn text_style(&self) -> Style {
+        Style::default().fg(self.text)
+    }
     pub fn dim(&self) -> Style {
         let s = Style::default().fg(self.muted);
         if self.is_mono() {

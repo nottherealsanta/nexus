@@ -152,6 +152,8 @@ pub fn ordered_list_height(n: usize) -> u16 {
 pub fn ordered_list(buf: &mut Buffer, ui: &mut Ui, area: Rect, id: &str, items: &[OrderedItem], add_label: &str) -> u16 {
     let t = ui.theme;
     let g = ui.glyphs;
+    // Tags line up in one column after the longest visible label.
+    let label_w = items.iter().map(|i| width(i.label)).max().unwrap_or(0).min(area.width.saturating_sub(40) as usize) as u16;
     for (i, it) in items.iter().enumerate() {
         let y = area.y + i as u16;
         if y >= area.y + area.height {
@@ -169,15 +171,13 @@ pub fn ordered_list(buf: &mut Buffer, ui: &mut Ui, area: Rect, id: &str, items: 
         put(buf, area.x + 2, y, &format!("{}", i + 1), st, 2);
         put(buf, area.x + 4, y, g.handle, t.dim().bg(st.bg.unwrap_or(t.bg)), 2);
         let tag = if i == 0 { "in use" } else { "fallback" };
-        let tag_w = width(tag) as u16 + if it.note.is_empty() { 0 } else { width(it.note) as u16 + 3 };
-        let lw = right.saturating_sub(area.x + 7 + tag_w + btn_w + 2);
         let lab = if r.focused { st.add_modifier(Modifier::BOLD) } else { st };
-        let used = put(buf, area.x + 7, y, &truncate(it.label, lw as usize, g.ellipsis), lab, lw);
-        let mut tx = area.x + 9 + used.max(lw.min(used));
+        put(buf, area.x + 7, y, &truncate(it.label, label_w as usize, g.ellipsis), lab, label_w);
+        let mut tx = area.x + 7 + label_w + 3;
         let tag_st = if i == 0 { t.strong(st.fg(t.success)) } else { t.dim().bg(st.bg.unwrap_or(t.bg)) };
         tx += put(buf, tx, y, tag, tag_st, 12) + 1;
         if !it.note.is_empty() {
-            put(buf, tx + 1, y, &format!("{} {}", "·", it.note), st.fg(t.warning), 24);
+            put(buf, tx + 1, y, &format!("· {}", it.note), st.fg(t.warning), 24);
         }
         let bx = right.saturating_sub(btn_w);
         for (k, (name, gl)) in [("up", g.up), ("down", g.down), ("remove", g.close)].iter().enumerate() {
