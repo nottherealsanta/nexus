@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.6](https://github.com/nottherealsanta/nexus/compare/v0.3.5...v0.3.6) (2026-10-06)
+
+
+### Bug fixes
+
+* force a live PyPI lookup when updating ([f7d46d0](https://github.com/nottherealsanta/nexus/commit/f7d46d0134138d9a583ce3ee749ee502bb3f4132))
+* remove daemon token and pid files before the socket on shutdown ([#68](https://github.com/nottherealsanta/nexus/issues/68)) ([fb2f210](https://github.com/nottherealsanta/nexus/commit/fb2f210d5cbf644e27f8e37f386febfae078bf59))
+
 ## [0.3.5](https://github.com/nottherealsanta/nexus/compare/v0.3.4...v0.3.5) (2026-10-05)
 
 
