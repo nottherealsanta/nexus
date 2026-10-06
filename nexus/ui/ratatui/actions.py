@@ -11,6 +11,8 @@ from ...ui_support.completion import root_agents
 
 import uuid
 import asyncio
+import time
+from collections import deque
 
 from ..cli.commands import help_text, parse
 from ...ui_support.tool_details import flatten
@@ -31,6 +33,38 @@ def plain(value):
 
 def labelled(value) -> list[str]:
     return [f"{row.label}: {row.value}" for row in flatten(plain(value))]
+
+
+_SUCCESS = ("Copied", "Saved", "Theme saved", "Reset", "Deleted", "Reconnected", "Speech model is ready")
+_WARNING = ("No session matching", "UI background actions busy", "Session changed", "Permission already",
+            "Question already", "Context details are unavailable", "Subagent transcript is unavailable", "Usage:",
+            "Showing the last successful")
+_ERROR = ("Display update failed", "Save failed", "Conflict", "Error")
+
+
+def notice_level(text: str) -> str:
+    """Toast level for a legacy notice string (plan §8.6); explicit levels win."""
+    if text.startswith(_ERROR) or "could not be shown" in text:
+        return "error"
+    if text.startswith(_SUCCESS) or text.endswith(" reset to default"):
+        return "success"
+    if text.startswith(_WARNING):
+        return "warning"
+    return "info"
+
+
+def split_toast(text: str) -> tuple[str, str]:
+    """Title and body of a toast: long messages split at the first natural break."""
+    text = " ".join(str(text).split())
+    if len(text) <= 48:
+        return text, ""
+    for sep in (" · ", ": ", ". ", "; "):
+        head, found, rest = text.partition(sep)
+        if found and 8 <= len(head) <= 80:
+            return head, rest
+    cut = text.rfind(" ", 0, 60)
+    cut = cut if cut > 20 else 60
+    return text[:cut], text[cut:].strip()
 
 
 class ShellActions:
@@ -64,7 +98,10 @@ class ShellActions:
         self.preview_image_media = ""
         self.preview_image_attachment_id = ""
         self.agent_definitions = {}
-        self.notice = ""
+        self._notice = ""  # the last legacy notice string (also the Disconnected banner state)
+        self.toasts = deque(maxlen=20)  # newest bounded list, sent in every snapshot
+        self._toast_id = int(time.time() * 1000)  # monotonic across restarts: the client shows each id once
+        self._last_toast = ("", "", 0.0)
         self.composer_restore = ""
         self.composer_insert = ""
         self.composer_auto_send = False
@@ -105,6 +142,42 @@ class ShellActions:
     @property
     def client(self):
         return self.controller.client
+
+    @property
+    def notice(self) -> str:
+        return self._notice
+
+    @notice.setter
+    def notice(self, value: str) -> None:
+        self._notice = value
+        if value and not value.startswith("Disconnected"):  # a disconnect is a banner, not an event
+            self.toast(value)
+
+    def flash(self, text: str, level: str | None = None, **options) -> None:
+        """Set the legacy notice string and raise a toast with an explicit level."""
+        self._notice = str(text)
+        self.toast(text, level, **options)
+
+    def toast(self, text, level: str | None = None, *, key: str = "", body: str = "", action: dict | None = None) -> None:
+        """Queue a dismissible toast and mirror it to the Logs tab (plan §8.6)."""
+        from ...ui_support.text import escape_controls
+        text = str(text).strip()
+        if not text:
+            return
+        level = level or notice_level(text)
+        now = time.monotonic()
+        if self._last_toast[:2] == (text, level) and now - self._last_toast[2] < 5:
+            return  # a refresh loop must not repeat the same toast
+        self._last_toast = (text, level, now)
+        title, rest = split_toast(text)
+        self._toast_id += 1
+        self.toasts.append({
+            "id": self._toast_id, "level": level, "title": escape_controls(title)[:200],
+            "body": escape_controls(body or rest)[:400], "key": key, "action": action,
+        })
+        logs = getattr(self, "logs", None)
+        if logs is not None:
+            logs.add_notice(level, text)
 
     def refresh_session_tabs(self, rows):
         """Notify once when a known background tab finishes, never on discovery."""
@@ -264,7 +337,7 @@ class ShellActions:
         except (BrokenPipeError, ConnectionResetError):
             pass  # The terminal closed while the read-only refresh completed.
         except Exception as exc:  # noqa: BLE001 - surfaced like any other action failure
-            self.notice = str(exc)
+            self.flash(str(exc), "error")
 
     async def refresh_preview(self, session: str | None = None) -> bool:
         """Reload the next-turn context preview; an active session has none yet.

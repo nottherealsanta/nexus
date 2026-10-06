@@ -15,6 +15,7 @@ mod chrome;
 pub mod components;
 mod context;
 mod dialogs;
+pub mod toasts;
 pub use chrome::*;
 pub use dialogs::*;
 pub struct Palette {
@@ -234,6 +235,7 @@ pub struct Cache {
     pub focus: Option<(usize, usize)>,
     pub pointer: Option<(u16, u16)>,
     pub component_hover: components::Hover,
+    pub toasts: toasts::Toasts,
     /// Sessions sidebar filter text and whether it is being edited.
     pub filter: String,
     pub filtering: bool,
@@ -1681,6 +1683,8 @@ pub fn draw(
             Rect::new(box_area.x + 3, rows[5].y, 1, 1),
         );
     }
+    // Toasts float above everything, including dialogs; they never take layout.
+    cache.toasts.draw(frame, s, &p, r.transcript);
     r
 }
 

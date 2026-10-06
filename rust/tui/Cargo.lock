@@ -771,12 +771,22 @@ dependencies = [
  "base64",
  "crossterm",
  "image",
+ "nexus-widgets",
  "pulldown-cmark",
  "ratatui",
  "ratatui-image",
  "ratatui-markdown",
  "serde",
  "serde_json",
+ "unicode-segmentation",
+ "unicode-width 0.2.0",
+]
+
+[[package]]
+name = "nexus-widgets"
+version = "0.1.0"
+dependencies = [
+ "ratatui",
  "unicode-segmentation",
  "unicode-width 0.2.0",
 ]

@@ -82,7 +82,7 @@ class BackgroundActions:
             raise
         except Exception as exc:
             if current():
-                shell.notice = str(exc)
+                shell.flash(str(exc), "error")
                 await self.update()
 
     async def close(self):

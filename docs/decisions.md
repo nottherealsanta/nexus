@@ -384,3 +384,18 @@ Settings is left only by an explicit close, never by an operation kind missing f
 an allow-list. A run-mode switch on an agent removes the other mode's fields so the
 file never holds a model and tiers that contradict each other. Not verified: native
 PTY rendering of the revamp.
+
+## Toasts replace the shell notice (2026-10)
+
+A notice was one string rendered as an `Error:` transcript line, whatever it was
+("Copied 120 characters" and an exception looked alike) and it lingered until the
+next event. Toasts carry a level, expire, and can be dismissed. The host owns *what*
+happened (id, level, text, optional action); the client owns *when* it disappears
+(timers, hover pause, dedup, dismissal), the same split as hover state, so no
+round-trip is needed to expire one. Ids are time-seeded so a restarted Python process
+cannot produce ids the client has already seen. Persistent conditions stay where
+they were (disconnected banner, update chip, transcript projection failures);
+toasts are for events. Every toast is mirrored to the Logs tab, so ephemerality never
+hides information. Esc does not dismiss toasts because Esc already stops and closes.
+The widget kit lives in `rust/widgets` so the design mock-ups and the TUI share one
+implementation.

@@ -303,7 +303,7 @@ class TierPages:
             else:
                 tiers, error = ts.toggle_tier(current, operation["tier"], order)
                 if error:
-                    self.shell.notice = error
+                    self.shell.flash(error, "warning")
                     return True
             await self.agent_tiers_write(tiers)
         else:

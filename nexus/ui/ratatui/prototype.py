@@ -668,7 +668,8 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
         for choice in prompt["choices"]:
             choice["label"] = escape_controls(choice["label"])
     details_panel = {} if on_agent_page else _guarded(failures, "Details sidebar", lambda: _details_panel(controller, view, shell), {})
-    notice = "\n".join(part for part in [error or (shell.notice if shell else ""), *failures] if part)
+    # Projection failures stay in the transcript (durable context); shell notices are toasts.
+    notice = "\n".join(part for part in [error, *failures] if part)
     if notice:
         lines.append(escape_controls(f"Error: {notice}"))
         blocks.append({"id": "notice", "title": "Notice", "text": escape_controls(notice), "kind": "literal"})
@@ -698,6 +699,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "composer_key": json.dumps([shell.workspace if shell else "", getattr(controller, "session", view.session_id)]),
             "nav": _settings_nav(shell),
             "update_notice": escape_controls(shell.update_notice) if shell else "",
+            "toasts": list(shell.toasts) if shell else [],
             "disconnected": bool(
                 shell and str(getattr(shell, "notice", "")).startswith("Disconnected")
             ),
@@ -1026,7 +1028,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                 await shell.workflows.providers()
                 shell.items.append({"label": "Choose default model", "command": "", "operation": {"kind": "setup"}})
         except Exception as exc:
-            shell.notice = str(exc)
+            shell.flash(str(exc), "error")
         await update()
         controller.resume(update)
         poll_task = asyncio.create_task(poll())
@@ -1118,7 +1120,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                         try:
                             await shell.voice.stop(discard, send=send)
                         except Exception as exc:
-                            shell.notice = str(exc)
+                            shell.flash(str(exc), "error")
                         await update()
                     if not shell.voice.finish_task or shell.voice.finish_task.done():
                         shell.voice.finish_task = asyncio.create_task(finish_voice(action.get("discard", False), action.get("send", False)))
@@ -1209,7 +1211,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                     controller.resume(update)
                 await update()
             except Exception as exc:
-                shell.notice = str(exc)
+                shell.flash(str(exc), "error")
                 await update()
         return await process.wait()
     finally:

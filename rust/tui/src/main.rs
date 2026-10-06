@@ -221,6 +221,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
             next.merge_missing(&mut s, &fields);
+            if cache.toasts.ingest(&next.toasts) {
+                dirty = true;
+            }
             if next.schema == 3 && !transcript_changed {
                 next.blocks_from = s.blocks.len();
             }
@@ -474,6 +477,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         dirty |= cache.component_hover.needs_redraw(Instant::now());
+        dirty |= cache.toasts.tick(Instant::now(), cache.pointer);
         if dirty && last_draw.elapsed() >= FRAME_INTERVAL {
             last_draw = Instant::now();
             cache.focus = nav.and_then(|index| render::targets(&cache).get(index).copied());
@@ -841,6 +845,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         if key.code == KeyCode::Char('z') {
                             action("update_help", "")?;
+                            continue;
+                        }
+                        if key.code == KeyCode::Char('x') {
+                            cache.toasts.dismiss_all();
+                            dirty = true;
+                            continue;
+                        }
+                        if key.code == KeyCode::Char('t') {
+                            if let Some((id, operation)) = cache.toasts.newest_action() {
+                                send(
+                                    json!({"type":"operation","operation":operation,"generation":s.generation}),
+                                )?;
+                                cache.toasts.dismiss(id);
+                                dirty = true;
+                            }
                             continue;
                         }
                         let command = match key.code {
@@ -1675,6 +1694,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                         MouseEventKind::Down(event::MouseButton::Left) => {
+                            if let Some(hit) = cache.toasts.hit(mouse.column, mouse.row) {
+                                use render::toasts::Hit;
+                                match hit {
+                                    Hit::Close(id) => cache.toasts.dismiss(id),
+                                    Hit::Action(id) => {
+                                        if let Some(operation) = cache.toasts.action_of(id) {
+                                            send(
+                                                json!({"type":"operation","operation":operation,"generation":s.generation}),
+                                            )?;
+                                        }
+                                        cache.toasts.dismiss(id);
+                                    }
+                                    Hit::Body(_) => {}
+                                }
+                                dirty = true;
+                                continue;
+                            }
                             if render::update_notice_at(&s, r.workspace, mouse.column, mouse.row) {
                                 action("update_help", "")?;
                                 continue;

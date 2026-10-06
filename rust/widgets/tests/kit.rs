@@ -233,3 +233,27 @@ fn scroll_container_keeps_focus_visible_and_translates_hits() {
     let drawn: String = (1..9).map(|y| text(&buf, y)).collect();
     assert!(drawn.contains("line 30"));
 }
+
+#[test]
+fn toast_layout_matches_what_is_drawn_and_ingest_ignores_seen_ids() {
+    let (th, g) = (Theme::dark(), Glyphs::unicode());
+    for width in [80u16, 120, 200] {
+        let mut ui = Ui::new(&th, &g);
+        let mut s = ToastStack::default();
+        assert!(s.ingest(10, Level::Info, "a", "", "", ""));
+        assert!(s.ingest(11, Level::Error, "b", "body", "", "Details"));
+        assert!(!s.ingest(11, Level::Error, "again", "", "", ""), "already shown");
+        assert!(!s.ingest(3, Level::Info, "old", "", "", ""), "older than the last id");
+        let area = Rect::new(0, 2, width, 30);
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, 34));
+        ui.begin_frame();
+        let drawn = toast_stack(&mut buf, &mut ui, area, &s);
+        let laid = toast_layout(area, &s);
+        assert_eq!(drawn.len(), laid.len());
+        for (d, l) in drawn.iter().zip(&laid) {
+            assert_eq!((d.0, d.1), (l.id, l.rect), "width {width}");
+            assert!(l.close.x >= l.rect.x && l.close.x + l.close.width <= l.rect.x + l.rect.width);
+        }
+        assert!(laid[0].action.is_some(), "newest toast carries the action");
+    }
+}

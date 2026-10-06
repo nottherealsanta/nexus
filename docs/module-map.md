@@ -473,7 +473,7 @@ here, so add a row when you add a file.
 The Rust client lives in `rust/tui/src/`: `main.rs` (terminal loop, key and mouse
 handling), `input.rs` (action writers, editor keys, picking, OSC 52 base64),
 `bridge.rs` (the versioned snapshot contract), `editor.rs` (grapheme editor),
-`render.rs` (palette, layout regions, the draw pass), `render/components.rs`
+`render.rs` (palette, layout regions, the draw pass), `render/toasts.rs` (toasts: ingest by id, timers paused on hover, hit targets, drawn by the `rust/widgets` kit), `render/components.rs`
 (shared button/toggle/section/selectable styles and bounded local hover state;
 composer controls are the first adopters), `render/chrome.rs` (top bar,
 tabs, sessions and details sidebars), `render/context.rs` (reusable width-aware inventory sections: tools 1–5 columns, skills 1–2 columns, MCP one column, all capped at five rows with total/omitted indicators; unchanged host detail operations), `render/dialogs.rs` (dialog frames, toned

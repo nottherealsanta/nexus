@@ -73,6 +73,9 @@ pub struct Snapshot {
     /// Queued, steering and interrupt messages waiting for the running turn.
     pub queue_lines: Vec<String>,
     pub update_notice: String,
+    /// Dismissible notices from the host (plan §8). Always the newest bounded list;
+    /// the client shows each id once and owns timers, dedup and dismissal.
+    pub toasts: Vec<ToastWire>,
     /// Settings area list: (label, key, is heading), and the selected index (-1 = none).
     pub nav: Option<Nav>,
     pub sessions: Vec<Session>,
@@ -98,6 +101,23 @@ pub struct Snapshot {
     pub completion_query: String,
     pub completion_prefix: String,
 }
+#[derive(Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ToastWire {
+    pub id: u64,
+    pub level: String,
+    pub title: String,
+    pub body: String,
+    pub key: String,
+    pub action: Option<ToastAction>,
+}
+#[derive(Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ToastAction {
+    pub label: String,
+    pub operation: Option<Value>,
+}
+
 #[derive(Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct InlineImage {

@@ -39,11 +39,26 @@ pub struct ToastStack {
     pub toasts: Vec<Toast>,
     pub history: Vec<Toast>,
     next: u64,
+    last_id: u64,
     last_tick: Option<Instant>,
     clock: Duration,
 }
 impl ToastStack {
+    /// Add a toast whose id is assigned by the producer (the Python host); ids at or
+    /// below `last_id` were already shown and are ignored. Returns true when added.
+    pub fn ingest(&mut self, id: u64, level: Level, title: &str, body: &str, key: &str, action: &str) -> bool {
+        if id <= self.last_id {
+            return false;
+        }
+        self.last_id = id;
+        self.next = self.next.max(id);
+        self.push_inner(Some(id), level, title, body, key, action);
+        true
+    }
     pub fn push(&mut self, level: Level, title: &str, body: &str, key: &str, action: &str) -> u64 {
+        self.push_inner(None, level, title, body, key, action)
+    }
+    fn push_inner(&mut self, id: Option<u64>, level: Level, title: &str, body: &str, key: &str, action: &str) -> u64 {
         if !key.is_empty() {
             let clock = self.clock;
             if let Some(t) = self.toasts.iter_mut().find(|t| t.key == key && clock.saturating_sub(t.born) < Duration::from_secs(2)) {
@@ -54,8 +69,14 @@ impl ToastStack {
                 return t.id;
             }
         }
-        self.next += 1;
-        let t = Toast { id: self.next, level, title: title.into(), body: body.into(), key: key.into(), action: action.into(), count: 1, age: Duration::ZERO, born: self.clock };
+        let id = match id {
+            Some(id) => id,
+            None => {
+                self.next += 1;
+                self.next
+            }
+        };
+        let t = Toast { id, level, title: title.into(), body: body.into(), key: key.into(), action: action.into(), count: 1, age: Duration::ZERO, born: self.clock };
         self.history.push(t.clone());
         if self.history.len() > 50 {
             self.history.remove(0);
@@ -64,7 +85,7 @@ impl ToastStack {
         if self.toasts.len() > MAX_KEPT {
             self.toasts.remove(0);
         }
-        self.next
+        id
     }
     /// Advance timers; `hovered` pauses that toast. Returns true if anything expired.
     pub fn tick(&mut self, now: Instant, hovered: Option<u64>) -> bool {
@@ -98,6 +119,35 @@ impl ToastStack {
 pub fn toast_height(t: &Toast) -> u16 {
     1 + (!t.body.is_empty()) as u16 + (!t.action.is_empty()) as u16 + 1
 }
+/// Where one toast sits, plus its close button and action button (if any).
+#[derive(Clone, Copy, Debug)]
+pub struct ToastRect {
+    pub id: u64,
+    pub rect: Rect,
+    pub close: Rect,
+    pub action: Option<Rect>,
+}
+/// Pure layout, shared by drawing and mouse hit-testing so they cannot disagree.
+/// Floats at the top-right of `area`; never covers more than `area`.
+pub fn toast_layout(area: Rect, stack: &ToastStack) -> Vec<ToastRect> {
+    let narrow = area.width < 90;
+    let w = if narrow { area.width.saturating_sub(2) } else { (area.width * 40 / 100).clamp(32, 48) }.min(area.width);
+    let margin = if narrow { 1 } else { 2 }.min(area.width - w);
+    let x = area.x + area.width - w - margin;
+    let mut y = area.y;
+    let mut out = Vec::new();
+    for to in stack.visible() {
+        let h = toast_height(to);
+        if y + h > area.y + area.height {
+            break;
+        }
+        let action = (!to.action.is_empty()).then(|| Rect::new(x + 4, y + 1 + (!to.body.is_empty()) as u16, (width(&to.action) + 2) as u16, 1));
+        out.push(ToastRect { id: to.id, rect: Rect::new(x, y, w, h), close: Rect::new(x + w.saturating_sub(4), y, 3, 1), action });
+        y += h;
+    }
+    out
+}
+
 /// Draw the stack floating at the top-right of `area` (plan §8.1). Never reflows
 /// the page: it paints over cells. Returns the rects drawn (newest first).
 pub fn toast_stack(buf: &mut Buffer, ui: &mut Ui, area: Rect, stack: &ToastStack) -> Vec<(u64, Rect)> {

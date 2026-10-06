@@ -766,3 +766,34 @@ not establish zero latency or live-provider timing on every terminal.
 MCP Settings server details expose persistent On/Off and Search/All choices
 through host commands with optimistic hashes and JSONC-preserving edits. The
 MCP inspector displays config diagnostics, including failures with zero servers.
+
+## Toasts (2026-10 overhaul, step 1)
+
+Shell notices are dismissible toasts, not a transcript line. `ShellActions.toast(text,
+level, key=, body=, action=)` queues one on a bounded deque (20) and every snapshot
+carries the list as `toasts` (`{id, level, title, body, key, action}`); ids are
+millisecond-seeded and monotonic, so the client shows each id once even across a
+Python restart. `shell.notice = "..."` still works (it sets the legacy string and
+raises a toast whose level comes from `notice_level`); `shell.flash(text, level)` is
+the explicit form, and exceptions are `error`. A `Disconnected…` notice stays a
+banner and disables the composer; the reconnect message is a success toast.
+Identical text within 5 s is not repeated, so a refresh loop cannot spam. Projection
+failures (`could not be shown`) remain in the transcript as durable context; shell
+notices no longer produce the `Error:` line or the `notice` block.
+
+Rust (`render/toasts.rs`, drawing and layout from the `nexus-widgets` kit) owns the
+timers and hit rectangles like hover state: info 4 s, success 3 s, warning 8 s,
+error 12 s, paused while the pointer is on a toast, same-key toasts merge (`×2`), at
+most three visible plus `+N more`. They float at the top-right of the conversation
+area over everything (dialogs included) and never reflow it; the countdown hairline is
+deliberately faint. Click `×` to dismiss, click the action to run its operation.
+`Ctrl+X x` dismisses all, `Ctrl+X t` runs the newest toast's action. Esc does not
+dismiss toasts (it already means stop/close). Every toast is also a `client · toast`
+line in the Logs tab (warnings and errors always, info and success with the routine
+entries), so a dismissed toast is never lost. Not done yet: the notifications list
+(`Ctrl+X n` is already `/new`; a different key is needed), toasts for the remaining
+direct `shell.notice` call sites beyond the classifier, and the composer, activity
+and dictation indicators are intentionally unchanged.
+Covered by `tests/test_ratatui_toasts.py`, `tests/test_ratatui_pty_toasts.py` (real
+controlling PTY, full-redraw absence checks) and `render/toasts.rs` unit tests.
+Not verified against a live provider.

@@ -5,6 +5,8 @@ entries fold behind an explicit toggle. Session changes discard old session rows
 """
 from __future__ import annotations
 
+import time
+from collections import deque
 from datetime import datetime
 
 from ...ui_support.text import escape_controls
@@ -24,6 +26,11 @@ class Logs:
         self.cursors = {"daemon": None, "session": None}
         self.truncated = set()
         self.error = ""
+        self.notices = deque(maxlen=50)  # toasts of this window: (time, level, text)
+
+    def add_notice(self, level, text):
+        """Every toast is also a log line, so a dismissed toast is never lost."""
+        self.notices.append((time.time(), level, str(text)))
 
     def reset_session(self):
         self.rows["session"] = []
@@ -62,16 +69,21 @@ class Logs:
         problems = [row for row in rows if row.level != "info"]
         routine = [row for row in rows if row.level == "info"]
         selected = sorted(problems + (routine if show_all else []), key=lambda row: row.ts)
+        entries = [(row.ts, row.level, f"{row.source} · {row.kind} · {row.summary}") for row in selected]
+        # Toasts: warnings and errors always; info and success with the routine entries.
+        notices = [(ts, level, f"client · toast · {text}") for ts, level, text in self.notices]
+        shown = [n for n in notices if show_all or n[1] in ("warning", "error")]
+        routine_count = len(routine) + len(notices) - len(shown)
         lines = []
         if self.truncated:
             lines.append("[Earlier log entries clipped · " + ", ".join(sorted(self.truncated)) + "]")
-        for row in selected:
+        for ts, level, text in sorted(entries + shown, key=lambda entry: entry[0]):
             try:
-                stamp = datetime.fromtimestamp(row.ts).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+                stamp = datetime.fromtimestamp(ts).astimezone().strftime("%Y-%m-%d %H:%M:%S")
             except (ValueError, OverflowError, OSError):
                 stamp = "Unknown time"
-            lines.append(f"{stamp} [{row.level.upper()}] {row.source} · {row.kind} · {row.summary}")
-        lines.append(f"{len(routine)} routine entries {'shown' if show_all else 'folded'} · Ctrl+A toggle")
+            lines.append(f"{stamp} [{level.upper()}] {text}")
+        lines.append(f"{routine_count} routine entries {'shown' if show_all else 'folded'} · Ctrl+A toggle")
         if self.error:
             lines.append("Log read failed: " + self.error)
         return [escape_controls(line) for line in lines]
