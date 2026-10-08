@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/nottherealsanta/nexus/compare/v0.3.7...v0.4.0) (2026-10-08)
+
+
+### Features
+
+* web/TUI parity, uninstall, desktop settings and Paradee speech ([#71](https://github.com/nottherealsanta/nexus/issues/71)) ([0b9032b](https://github.com/nottherealsanta/nexus/commit/0b9032bb18256a73cd7799055764a00ff2d1f58c))
+
 ## [0.3.7](https://github.com/nottherealsanta/nexus/compare/v0.3.6...v0.3.7) (2026-10-06)
 
 
