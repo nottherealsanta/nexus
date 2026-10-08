@@ -147,7 +147,7 @@ async def test_real_mock_fixture_replays_complete_hidden_tool_content(tmp_path, 
         members = [member for group in snap["blocks"] if group["kind"]=="tool_group" for member in group["members"]]
         assert any("alpha" in member["local_detail"] for member in members)
         assert any("not found" in member["local_detail"].lower() for member in members)
-        assert any(member["members"] for member in members)  # edit diff remains available
+        assert any(block["diff_lines"] for block in snap["blocks"] if block["kind"] == "change")  # edit diff stands alone
         assert any(block.get("operation",{}).get("id")==CHILD_AGENT_ID for block in snap["blocks"] if block.get("operation"))
     finally:
         gate.release.set()

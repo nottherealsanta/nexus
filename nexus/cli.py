@@ -1110,10 +1110,11 @@ async def _update(args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> i
         )
         return 1
     source = install.install_source()
+    extras = install.update_extras(keep_voice=not args.no_voice, keep_speak=not args.no_speak)
     command = install.update_command(
         uv,
         source,
-        extras=install.installed_extras(),
+        extras=extras,
         python=f"{sys.version_info.major}.{sys.version_info.minor}",
         channel=args.channel,
         version=args.release,
@@ -1133,6 +1134,10 @@ async def _update(args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> i
             "Moving this install from git to PyPI releases "
             "(use --channel git to stay on git).\n"
         )
+    if install.VOICE_EXTRA in extras:
+        stdout.write("Keeping local dictation (voice); use --no-voice to drop it.\n")
+    if install.SPEAK_EXTRA in extras:
+        stdout.write("Keeping local speech (speak); use --no-speak to drop it.\n")
     stdout.write(f"Updating nexus (currently {before}) ...\n")
     stdout.flush()
     code = await asyncio.to_thread(install.run_update, command)
@@ -1168,6 +1173,77 @@ async def _update(args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> i
         else:
             failed += 1
             stderr.write(f"Could not restart the daemon for {workspace}\n")
+    return 1 if failed else 0
+
+
+async def _uninstall(args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> int:
+    """Remove Nexus and everything it stored here, after showing it and asking.
+
+    Daemons are stopped first so nothing rewrites the database while it is
+    deleted. The program itself is removed last (``uv tool uninstall``): this
+    process keeps running from memory, and everything it needs is imported first.
+    """
+    import subprocess
+
+    from .config.paths import nexus_home
+    from .host_support import install
+    from .host_support import uninstall as un
+
+    home = nexus_home()
+    targets = un.uninstall_plan()
+    if any(t.path == home for t in targets) and (reason := un.unsafe_home_reason(home)):
+        stderr.write(f"Error: {reason}. Nothing was removed.\n")
+        return 1
+    method = install.install_method()
+    program = un.program_uninstall_command(method, install.find_uv())
+    shown = " ".join(["uv", *program[1:]]) if program else ""
+    stdout.write("This removes Nexus and everything it stored on this computer:\n\n")
+    for target in targets:
+        stdout.write(f"  {target.path}  ({un.human_size(target.size)})\n      {target.label}\n")
+    if program:
+        stdout.write(f"  the nexus program  ({shown})\n")
+    else:
+        hint = "a source checkout; remove it yourself" if method == "editable" else f"pip uninstall {install.PACKAGE}"
+        stdout.write(f"  the nexus program is not removed ({method} install; {hint})\n")
+    if not targets and not program:
+        stdout.write("\nNothing to remove.\n")
+        return 0
+    stdout.write(
+        "\nNot touched: files inside your projects (.agents/, nexus.toml, AGENTS.md) and uv itself.\n"
+        "Sessions and credentials cannot be recovered afterwards.\n"
+    )
+    if not args.yes:
+        if not sys.stdin.isatty():
+            stderr.write("Error: confirmation needed; run in a terminal or pass --yes.\n")
+            return 1
+        stdout.write("Remove all of this? [y/N] ")
+        stdout.flush()
+        try:
+            answer = input()
+        except EOFError:
+            answer = ""
+        if answer.strip().lower() not in {"y", "yes"}:
+            stdout.write("Cancelled; nothing was removed.\n")
+            return 1
+    stopped = await install.stop_all_daemons()
+    if stopped:
+        stdout.write(f"Stopped {stopped} daemon{'s' if stopped != 1 else ''}.\n")
+    failed = 0
+    for target in targets:
+        error = un.remove(target)
+        if error:
+            failed += 1
+            stderr.write(f"Could not remove {error}\n")
+        else:
+            stdout.write(f"Removed {target.path}\n")
+    if program:
+        stdout.write("Removing the nexus program ...\n")
+        stdout.flush()
+        code = await asyncio.to_thread(subprocess.run, program, check=False)
+        if code.returncode != 0:
+            failed += 1
+            stderr.write(f"Error: `{shown}` exited with status {code.returncode}.\n")
+    stdout.write("Nexus is uninstalled.\n" if not failed else "Nexus was only partly removed; see the errors above.\n")
     return 1 if failed else 0
 
 
@@ -1539,6 +1615,21 @@ def build_parser() -> argparse.ArgumentParser:
     update.add_argument(
         "--no-restart", action="store_true", help="Leave running daemons on the old version"
     )
+    update.add_argument(
+        "--no-voice",
+        action="store_true",
+        help="Drop local dictation; by default it is kept when installed or its model is downloaded",
+    )
+    update.add_argument(
+        "--no-speak",
+        action="store_true",
+        help="Drop local speech (/speak); by default it is kept when installed or its model is downloaded",
+    )
+
+    uninstall = sub.add_parser(
+        "uninstall", help="Remove Nexus and all its data: sessions, credentials, settings, models"
+    )
+    uninstall.add_argument("--yes", action="store_true", help="Do not ask for confirmation")
 
     auth = sub.add_parser("auth", help="Manage local provider credentials")
     auth_sub = auth.add_subparsers(dest="auth_provider", required=True)
@@ -1787,6 +1878,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.release and args.channel == "git":
                 parser.error("--version cannot be combined with --channel git")
             return asyncio.run(_update(args, stdout, stderr))
+        if args.command == "uninstall":
+            return asyncio.run(_uninstall(args, stdout, stderr))
         parser.error(f"unknown command {args.command!r}")
         return 2
     except KeyboardInterrupt:

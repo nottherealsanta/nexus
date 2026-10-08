@@ -10,8 +10,8 @@ from nexus.ui_support.context_header import agent_color
     ("source", "expected"),
     [
         ("/home/me", "~"),
-        ("/home/me/repo › main", "~/repo › main"),
-        ("/home/me-too/repo › main", "/home/me-too/repo › main"),
+        ("/home/me/repo › main", "~/repo:main"),
+        ("/home/me-too/repo › main", "/home/me-too/repo:main"),
         ("/elsewhere/repo", "/elsewhere/repo"),
         ("relative/repo", "relative/repo"),
     ],
@@ -21,7 +21,7 @@ def test_breadcrumb_abbreviates_only_true_home(source, expected):
 
 
 def test_root_home_is_not_abbreviated():
-    assert _display_breadcrumb("/repo › main", Path("/")) == "/repo › main"
+    assert _display_breadcrumb("/repo › main", Path("/")) == "/repo:main"
 
 
 def test_primary_agent_identity_colors():

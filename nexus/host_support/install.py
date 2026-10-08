@@ -340,6 +340,84 @@ def voice_install_command(
     return [executable, "-m", "pip", "install", *requirements]
 
 
+def voice_model_downloaded(home: str | Path | None = None) -> bool:
+    """Whether any voice model was downloaded under ``~/.nexus/models/voice/``.
+
+    The cache outlives every reinstall, so it is the durable sign that this user
+    dictates even when the tool receipt has lost the ``voice`` extra.
+    """
+    from ..config.paths import nexus_home
+    from ..voice.store import models_root
+
+    try:
+        return any(path.is_dir() for path in models_root(nexus_home(home)).glob("*/*"))
+    except OSError:
+        return False
+
+
+SPEAK_EXTRA = "speak"
+
+
+def speak_runtime_installed() -> bool:
+    """Whether a ``/speak`` runtime is importable here: Paradee's, or Kokoro from earlier releases."""
+    import importlib
+    import importlib.util
+
+    importlib.invalidate_caches()
+    try:
+        return all(importlib.util.find_spec(name) is not None for name in ("onnxruntime", "misaki")) or (
+            importlib.util.find_spec("kokoro") is not None
+        )
+    except (ImportError, ValueError):
+        return False
+
+
+def speech_model_downloaded(home: str | Path | None = None) -> bool:
+    """Whether a ``/speak`` model was ever downloaded (or its download consented to).
+
+    Like the voice cache, ``~/.nexus/models/speech/`` and the Hugging Face cache
+    outlive a reinstall, so they mark a user who speaks answers.
+    """
+    from ..config.paths import nexus_home
+    from .speech import _LEGACY_REPO_DIR, _REPO_DIR, _hub_cache
+
+    try:
+        if (nexus_home(home) / "models" / "speech").is_dir():
+            return True
+        hub = _hub_cache()
+        return any((hub / name / "snapshots").is_dir() for name in (_REPO_DIR, _LEGACY_REPO_DIR))
+    except OSError:
+        return False
+
+
+def update_extras(
+    *, keep_voice: bool = True, keep_speak: bool = True, home: str | Path | None = None
+) -> list[str]:
+    """Extras for ``nexus update``: the receipt's, plus ``voice``/``speak`` for a user who uses them.
+
+    ``voice`` is kept when the receipt lists it, the runtime is importable now
+    (installed beside the receipt, as ``voice init`` did before 0.3.3), or a voice
+    model is downloaded, so an upgrade never silently drops dictation. ``speak``
+    follows the same rule with the speech runtime and model. musl has no runtime
+    wheels for either; ``keep_voice=False`` (``--no-voice``) and
+    ``keep_speak=False`` (``--no-speak``) drop them.
+    """
+    extras = set(installed_extras())
+    if not keep_voice:
+        extras.discard(VOICE_EXTRA)
+    elif VOICE_EXTRA not in extras and not is_musl() and (
+        voice_runtime_installed() or voice_model_downloaded(home)
+    ):
+        extras.add(VOICE_EXTRA)
+    if not keep_speak:
+        extras.discard(SPEAK_EXTRA)
+    elif SPEAK_EXTRA not in extras and not is_musl() and (
+        speak_runtime_installed() or speech_model_downloaded(home)
+    ):
+        extras.add(SPEAK_EXTRA)
+    return sorted(extras)
+
+
 def run_update(command: list[str]) -> int:
     """Run the upgrade, streaming uv's output. Returns uv's exit code."""
     try:

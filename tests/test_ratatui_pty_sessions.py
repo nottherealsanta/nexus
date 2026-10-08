@@ -144,3 +144,31 @@ def test_narrow_terminal_opens_a_drawer_only_on_request():
         assert t.action()["type"] == "quit"
     finally:
         t.close()
+
+
+@pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
+def test_escape_and_ctrl_c_close_the_docked_sidebar():
+    """Closing the docked sidebar asks the host to save the preference (a toggle)."""
+    t = Terminal(30, 120)
+    toggle = {"type": "toggle", "key": "sessions_sidebar"}
+    try:
+        t.send(sessions_sidebar=True, sessions=SESSIONS, composer_key="w/s1", generation=1)
+        time.sleep(.4)
+        t.redraw()
+        assert "Fix token refresh" in t.text()
+        # Without keyboard focus (as at startup), Escape still closes it.
+        t.key(b"\x1b")
+        assert t.action() == toggle, "Escape closes an unfocused sidebar"
+        t.key(b"\x02")  # Ctrl+B: still open (the host did not answer), so it takes focus
+        t.redraw()
+        assert "type to filter" in t.text()
+        t.key(b"/")  # the filter box is active but empty: one Escape closes
+        t.key(b"\x1b")
+        assert t.action() == toggle, "Escape on an empty filter closes"
+        t.key(b"\x02")
+        t.key(b"\x03")  # Ctrl+C
+        assert t.action() == toggle, "Ctrl+C closes the focused sidebar"
+        t.key(b"\x11")
+        assert t.action()["type"] == "quit"
+    finally:
+        t.close()

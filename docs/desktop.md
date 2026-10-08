@@ -21,6 +21,12 @@ GPUI is pinned to 0.2.2. macOS needs Xcode's Metal toolchain. Other platforms ha
 not been verified. No TTY is required. Closing the window detaches the viewer and
 leaves daemon turns running.
 
+For local development when the standalone Metal compiler is unavailable, GPUI's
+supported runtime shader feature can compile the same shader source on app startup:
+`cargo build --manifest-path rust/desktop/Cargo.toml --locked --features gpui/runtime_shaders`.
+Use the same feature flag with `cargo test`. This is a development fallback;
+the normal release build still uses precompiled shaders.
+
 For a local macOS bundle (also gives native automation a stable app identity):
 
 ```sh
@@ -72,9 +78,12 @@ unsent draft; durable queued messages stay in the daemon.
   virtualized variable-height transcript, focused Session/Files/MCP/Logs inspector tabs, tool/thought expansion, subagent pages,
   Markdown, diffs and complete parameter/result inspection. Diffs render as unified rows with tabular old/new gutters, a `+`/`-`
   marker and add/remove background tints rather than a colourless 50/50 split.
-- The transcript follows new content while the viewport still reaches the newest
-  item. Scrolling above it turns follow off and, when content then arrives, a
+- The transcript follows new content while the viewport is at the actual pixel
+  bottom. Scrolling upward, even within a tall final reply, turns follow off and, when content then arrives, a
   bottom-centre "↓ New messages" pill restores follow (also Ctrl+End / Cmd+J).
+  All earlier blocks remain in the scrollable list. Resize remeasurement preserves
+  the current block/offset while reading history; metadata updates do not announce
+  new messages. Session changes and reconnect generations reset list measurements.
 - Above 900 px a 12 px turn minimap sits at the left of the column: a long tick
   per user turn, a short tick per assistant turn, and a band for the visible
   range. Hovering shows the turn's first line; clicking scrolls to it. Ticks are
@@ -85,6 +94,13 @@ unsent draft; durable queued messages stay in the daemon.
 - Settings navigation, configuration file editing with 700 ms autosave where the host enables it, explicit Save and confirmed delete/reset, model pickers,
   providers, tiers, titles, voice/speech, tools, skills, MCP and hooks use the native
   shell workflows. All native slash commands remain available.
+  Typed Settings pages render the same host-projected labels, descriptions, scope,
+  current values and operations as Ratatui. Theme segments, toggles, bounded choice
+  lists, ordered model controls, file actions, provider sections and labelled
+  diagnostic tables remain reachable by keyboard. Dropdowns close on Escape
+  before the sheet closes. Provider text fields send only on Enter, never on a
+  draft change; their local input is released on page change or reconnect.
+  Settings and prompt sheets prevent background composer submission.
 - Permission and question sheets retain disabled approval choices and host validation.
 - Native attachment file picker; `/attach PATH` also works. Voice and speech use
   existing daemon consent/download workflows.
@@ -96,12 +112,18 @@ unsent draft; durable queued messages stay in the daemon.
   with an explicit Dismiss, and notices with a host action (Reconnect, Update
   help) render that button. Repeated identical messages replace the current
   toast instead of stacking. This replaces the previous fixed-position error box.
+  Host toasts (including failed requests and settings validation) join this stack
+  with their complete title/body and offered action. IDs prevent a dismissed
+  notice from reappearing on polling. Multiline notices grow upward above the
+  composer, and Dismiss is keyboard focusable.
 
 ## Keys
 
 The Ratatui Ctrl-key semantics are canonical; macOS Cmd bindings are aliases.
 `rust/desktop/src/keymap.rs` is a declarative table checked against the shared
 `ui_support/shortcuts.py` tables by `tests/test_desktop_keymap_parity.py`.
+The same check covers the documented macOS aliases and Option-key history routes,
+so a terminal keymap update cannot silently remove the desktop shortcuts.
 
 | Action | Key |
 | --- | --- |
@@ -118,12 +140,13 @@ The Ratatui Ctrl-key semantics are canonical; macOS Cmd bindings are aliases.
 | Cycle effort / toggle logs | Ctrl+T / Ctrl+E |
 | Dictation | Ctrl+Space |
 | Attach | Cmd+Shift+A |
-| Stop turn | Ctrl+C or Escape twice within 1.5 s (Cmd+.) |
+| Copy selection / dismiss panel / clear draft / stop | Ctrl+C, in that order; Ctrl+Z restores a cleared draft |
+| Stop turn directly | Escape twice within 1.5 s or Cmd+. |
 | Dismiss panel | Escape |
 | Reconnect / quit | Ctrl+R / Ctrl+Q |
 | Latest transcript | Ctrl+End (Cmd+J) |
 | Scroll transcript | PageUp / PageDown (outside the editor) |
-| Inspector tabs | `[` / `]` (outside the editor) |
+| Inspector tabs | `[` / `]` (outside the editor, including an open narrow drawer) |
 | Prompt history | Up / Down on a single-line draft, or Option+Up / Option+Down |
 | Completion selection / insert / dismiss | Up/Down / Enter or Tab / Escape |
 | Tab | insert a completion, force a completion, or enter transcript navigation on an empty draft |
@@ -162,17 +185,91 @@ not verified by the scripted UI checks.
 
 ## Visual direction
 
-OpenChamber's persistent sessions/work area/inspector composition informs density
-and hierarchy, rather than its web implementation. The dark workspace background
+The native TUI's persistent sessions/work area/details composition sets density
+and hierarchy, and its design language sets the colours. `theme.rs` mirrors the
+Ratatui `Palette` (`rust/tui/src/render.rs`): neutral greys without a blue cast,
+the warm brand accent (`#FAB283` dark, `#C8672F` light) for active markers
+(session rail, active details tab, picker selection and current choice), and the
+TUI's semantic hues. `Theme::resolve` maps host colour tokens (`$nx-blue`,
+`$nx-accent`, agent hex colours) as `transcript::color` does. Block kinds follow
+the TUI renderer: user cards, the context header and the composer carry the
+agent-coloured rail; the composer line reads `Agent · model provider · effort`
+with the agent in its colour; thoughts are amber with reasoning dimmed behind a
+rule (whole-line `**headings**` muted bold); subagent tasks take their agent colour
+and always show their metrics line (tools · duration) plus live activity while
+running; file changes (edit, multiedit, write, apply_patch) are never folded into a tool group and each shows its action and path, ending with `+added` green and `−removed` red counts (a multi-file change also shows muted `N files` before the counts); diff headers end the same way;
+expanded tool details split `  label: value` rows into a fixed muted label column
+with full values, uppercase section titles and muted block labels behind a thin
+rule; the context header lists each source in its colour with `[counts]` and
+token status; `agent` rows use `◆`, `hints` centre their keys, `error` rows are
+red, and the turn summary is a quiet right-aligned footer. Details metadata uses
+a fixed label column with left-aligned, wrapping values.
+The dark workspace background
 is #0B0B0B; only controls, code and raised decisions have near-black surfaces.
-Composer, user bubbles and floating decisions use matching 14 px curves; compact
-controls and session rows retain smaller radii. A subtly raised neutral sidebar
+Floating decisions use 12 px curves; controls use 8 px corners, chips and the
+borderless editor 4 px, and pills round corners. User messages follow the TUI:
+full-column, left-aligned cards with a thin rail and modest 4 px corners. A subtly
+raised neutral sidebar
 and quiet pane dividers separate navigation from the #0B0B0B reading surface.
 Send uses a contrasting neutral fill with readable hover and keyboard-focus states.
-Selection, focus and links use neutral greys; success, input and error colors
-retain their actual meanings. Lucide SVGs are embedded and licensed locally;
+Focus and text selection use neutral greys; the brand accent marks the active
+item; success, input and error colors retain their actual meanings. Lucide SVGs are embedded and licensed locally;
 consistent monochrome strokes follow SF Symbols' optical principles without
 shipping Apple-only assets.
+
+The TUI sets the workspace hierarchy: session tabs, a compact workspace/branch
+breadcrumb with status on the right, context header, left-aligned conversation,
+editor and agent/model/effort/context controls, plus Sessions and Details panes.
+An open session's title appears in its tab rather than a duplicated large heading.
+Short conversations begin below the header rather than sitting above the editor:
+up to 64 blocks measure their content height at the actual column width, while
+longer sessions keep a full virtualized viewport. Crossing this measurement boundary preserves the active
+history position.
+The active session row has a thin left rail. User cards retain the host's turn
+number and fold chevron. The native editor keeps its background and input controls
+but removes the enclosing border. Native window controls and pointer/keyboard
+access remain desktop-specific.
+Native dark/light captures and the focused verification record are in
+`artifacts/desktop/tui-style-review.md`.
+
+Trailing mock directives are separated from display titles in the header, tabs
+and session rows. A muted Mock chip names the scenario; hover retains the complete
+directive and activation shows labelled scenario/actor/speed/seed fields. Original
+host titles stay intact for search and session operations. Tabs have bounded widths,
+proper ellipses and full-title hover text. Workspace breadcrumbs shorten long
+middle paths while preserving the last two folders and branch; hover shows the
+complete path. Home-directory replacement checks a path-component boundary.
+
+The visual scale lives in `theme.rs`: 11/12/13/15/20 px typography, a 24 px
+body line height, spacing on a 4 px grid and shared chip/control/card/pill radii.
+Pane widths, responsive thresholds and icon geometry retain their own dimensions.
+Dark and light themes have separate tertiary text, hover, pressed, separator and
+shadow colors. Popovers and sheets use two shadow levels with a 1 px border.
+Code selects the first installed family from Monaspace Argon, SF Mono and Menlo.
+The font is selected once at application startup; no font is downloaded.
+
+Transcript content is centred in a column capped at 720 logical pixels. New user
+turns receive a larger gap; prose and tool rows within a turn remain compact.
+User cards and replies share the same left edge and column width; user messages
+are not right-aligned chat bubbles.
+Reply Copy actions take no separate line: hover over the reply or reach the action
+with Ctrl+Tab to reveal it, then Enter/Space copies the complete reply. User
+cards and fenced code blocks carry the same hover-revealed Copy action: a user
+card copies the full message text (the card's click still toggles collapse), and
+a code block copies its source from the block header. A small
+check beside the tool label represents completed status, with the original word
+on hover. Running, failed and unknown states keep their host wording beside the
+label. Parameters, results and full-output actions retain their existing routes.
+The minimap has a faint track behind its real turn ticks.
+
+Notices are anchored to the transcript viewport above the actual composer rather
+than a fixed window-bottom offset. Native selectable text wraps inside a padded
+card; the bounded stack scrolls when it exceeds the available timeline height.
+The card blocks clicks from reaching transcript controls behind it, and Dismiss
+consumes its click. Narrow and wide GPUI layout tests verify a long notice stays
+above a multiline draft; screenshot captures in both themes are recorded in
+`artifacts/desktop/visual-tokens-review.md`. Native narrow screenshots remain
+unverified because the capture tool expands the review viewport.
 
 The supplied screenshots inform compact title controls and activity trees. The
 latest density pass removes repeated user-role labels, reduces tool-row gaps,
@@ -321,3 +418,21 @@ input, light/dark transition and settings review. `artifacts/desktop/perf-baseli
 records post-change dev CPU timings and captures; no before/after or release
 frame-rate claim is made. Historical Phase 0 schema-2 traffic was above the planned
 8 KiB target; this is not a schema-3 performance measurement.
+
+### October 2026 parity follow-up
+
+Native review exposed missing Cmd aliases, blank typed Settings pages and host
+errors omitted from the desktop toast stack. These routes now use the shared
+workflow operations and notice data. Ctrl+C follows selection/dismiss/draft/stop
+semantics; Cmd+. stops directly. Inspector tab navigation also works in drawers.
+The new Settings renderer is `rust/desktop/src/settings.rs`; secret input stays
+local until explicit submission and is released on page changes and reconnect.
+
+Native captures used GPUI's runtime shader development feature while the local
+Metal toolchain installation was blocked. After the toolchain was installed,
+`xcrun metal --version`, the normal locked desktop build and all 76 Rust tests
+passed without the runtime shader feature. Focused Python
+desktop/action/projection/layering/docs checks: 295 passed, one existing broken
+link in `ratatui-parity.md` deselected. Native captures and the current journey
+record are in `artifacts/desktop/parity-review.md`. This verifies the recorded
+macOS journeys, not complete TUI parity or every provider/hardware workflow.

@@ -240,7 +240,7 @@ next_steps() {
   nexus web         # the same thing in the browser
 
 Update:    nexus update
-Uninstall: uv tool uninstall $PACKAGE   (your sessions in ~/.nexus are kept)
+Uninstall: nexus uninstall   (removes Nexus and all its data, after asking)
 EOF
     if [ "$PATH_WAS_SET" = 0 ]; then
         printf '\nOpen a new terminal (or run: export PATH="%s:$PATH") so `nexus` is found.\n' "$BIN_DIR"

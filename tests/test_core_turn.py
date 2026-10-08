@@ -147,6 +147,9 @@ def test_limits_validation_and_exceeded():
     assert limits.exceeded(TurnUsage(), 0.0, iterations=3) == "max_iterations"
     assert limits.exceeded(TurnUsage(), 10.0) == "max_seconds"
     assert TurnLimits().exceeded(TurnUsage(), 0.0, iterations=10_000) is None  # 0 = unlimited
+    assert TurnLimits().exceeded(TurnUsage(), 86_400.0) is None  # 0 seconds = unlimited
+    with pytest.raises(ValueError):
+        TurnLimits(max_seconds=-1)
     assert limits.exceeded(TurnUsage(input_tokens=60, output_tokens=40), 0.0) == "max_total_tokens"
     assert TurnLimits(max_output_tokens=5).exceeded(
         TurnUsage(output_tokens=5), 0.0

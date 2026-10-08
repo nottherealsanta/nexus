@@ -8,6 +8,7 @@ writes light/dark/mobile screenshots under ignored ``artifacts/web-e2e``.
 from __future__ import annotations
 
 import asyncio
+import re
 import json
 import tempfile
 import time
@@ -47,6 +48,13 @@ async def _wait_for(predicate, seconds: float = 5.0) -> None:
             return
         await asyncio.sleep(0.01)
     raise AssertionError("daemon did not become ready")
+
+
+# Activity groups fold runs of tools (docs/ratatui-parity.md); open every group and file change.
+EXPAND_ACTIVITY = """() => new Promise(resolve => {
+  document.querySelectorAll('.activity-group:not(.open) > .activity-head, .edit-card:not(.open) > .card-head[aria-expanded]').forEach(b => b.click());
+  requestAnimationFrame(() => requestAnimationFrame(resolve));
+})"""
 
 
 def _web_fixture(session: str) -> dict[str, object]:
@@ -143,11 +151,11 @@ async def verify_context_main_pane() -> None:
         page = await browser.new_page(viewport={"width": 1280, "height": 800})
         async def route_fixture(route) -> None:
             request = route.request
-            if request.url.endswith("/js/context-view.js"):
+            if request.url.endswith(("/js/context-view.js", "/js/markdown.js")):
                 await route.fulfill(
                     status=200,
                     content_type="text/javascript",
-                    body=(ROOT / "nexus" / "ui" / "web" / "js" / "context-view.js").read_text(encoding="utf-8"),
+                    body=(ROOT / "nexus" / "ui" / "web" / "js" / request.url.rsplit("/", 1)[-1]).read_text(encoding="utf-8"),
                 )
             elif request.url.endswith("/styles/context-preview.css"):
                 await route.fulfill(
@@ -240,6 +248,31 @@ async def verify_context_main_pane() -> None:
         assert markdown_safety == {
             "heading": True, "bold": True, "code": True, "list": 2,
             "scripts": 0, "unsafeLinks": 0, "literalHtml": True,
+        }
+        rich_markdown = await page.evaluate("""async () => {
+          const {renderMarkdown, markdownHTML} = await import('./js/markdown.js');
+          const content = renderMarkdown('3. third\\n4. fourth\\n\\n> quoted\\n\\n| Name | Value |\\n| --- | ---: |\\n| **safe** | 42 |\\n\\n- [x] done\\n\\n~~~python\\nprint("<safe>")\\n~~~\\n\\n[docs](https://example.com) [bad](data:text/html,evil)\\n<script>window.pwned=true</script>');
+          document.body.append(content);
+          const link = content.querySelector('a');
+          const result = {
+            start: content.querySelector('ol')?.start,
+            items: content.querySelectorAll('ol li').length,
+            quote: content.querySelector('blockquote')?.textContent,
+            table: content.querySelectorAll('table td').length,
+            language: content.querySelector('.code-language')?.textContent,
+            code: content.querySelector('pre code')?.textContent,
+            tasks: content.querySelector('.task-marker')?.getAttribute('aria-label'),
+            links: content.querySelectorAll('a').length,
+            safeLink: link?.href === 'https://example.com/' && link?.rel.includes('noopener'),
+            scripts: content.querySelectorAll('script').length,
+            incomplete: markdownHTML('```js\\nconst x = "<safe>"').includes('&lt;safe&gt;'),
+          };
+          content.remove(); return result;
+        }""")
+        assert rich_markdown == {
+            "start": 3, "items": 2, "quote": "quoted", "table": 2,
+            "language": "python", "code": 'print("<safe>")', "tasks": "Checked",
+            "links": 1, "safeLink": True, "scripts": 0, "incomplete": True,
         }
         preview_result = await page.evaluate("""async () => {
           const mount = document.querySelector('#context-inline-content');
@@ -367,7 +400,8 @@ async def main() -> None:
                 static_failures: list[str] = []
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 page.on("console", lambda message: console_errors.append(message.text)
-                        if message.type == "error" and "status of 503 (Service Unavailable)" not in message.text else None)
+                        if message.type == "error" and "status of 503 (Service Unavailable)" not in message.text
+                        and "net::ERR_FAILED" not in message.text else None)  # ERR_FAILED: ProvidersUsage fault injection
                 page.on("response", lambda response: static_failures.append(f"{response.status} {response.url}")
                         if response.status >= 400 and any(part in response.url for part in ("/js/", "/styles/", "/assets/")) else None)
                 context_commands: list[dict[str, object]] = []
@@ -514,7 +548,7 @@ async def main() -> None:
                 assert await page.locator("#setup-overlay").is_hidden()
                 # Voice status polling is read-only: explicitly dismissing first use
                 # must not prepare or download the model.
-                await page.wait_for_function("window.__nexusEventSources.length > 0")
+                await page.wait_for_function("() => window.__nexusEventSources.length > 0")
                 assert await page.locator("#composer-voice").count() == 0
                 assert await page.locator("#voice-indicator, #voice-top-status, #voice-progress, #voice-ready").count() == 0
 
@@ -694,6 +728,32 @@ async def main() -> None:
                 session = page.url.rsplit("/s/", 1)[1]
                 assert session
                 await page.locator("#connection-label").get_by_text("Live sync").wait_for(timeout=5_000)
+                await page.locator("#timeline > .context-header").get_by_text(f"Session marker {session}", exact=False).wait_for(timeout=5_000)
+                # Paging navigates output, not the draft; Ctrl+End resumes following.
+                await page.evaluate("""() => {
+                  const timeline = document.querySelector('#timeline');
+                  const spacer = document.createElement('div');
+                  spacer.id = 'paging-fixture'; spacer.style.height = '3000px';
+                  timeline.append(spacer); timeline.scrollTop = timeline.scrollHeight;
+                }""")
+                editor = page.locator("#composer-input")
+                await editor.fill("paging draft")
+                await editor.focus()
+                await page.evaluate("document.querySelector('#composer-input').setSelectionRange(3, 3)")
+                await editor.press("PageUp")
+                assert await page.evaluate("""() => {
+                  const timeline = document.querySelector('#timeline');
+                  return timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight > 100
+                    && document.querySelector('#composer-input').selectionStart === 3;
+                }""")
+                await editor.press("Control+End")
+                assert await page.evaluate("""() => {
+                  const timeline = document.querySelector('#timeline');
+                  return timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 2
+                    && document.querySelector('#composer-input').selectionStart === 12;
+                }""")
+                await editor.fill("")
+                await page.evaluate("document.querySelector('#paging-fixture').remove()")
                 await terminal.call(p.SessionOpen(session="sidebar-check"))
                 await terminal.call(p.SessionArchive(session="sidebar-check"))
                 archived_row = page.locator('#archived-list .session-item').filter(
@@ -1555,12 +1615,17 @@ async def main() -> None:
                 await page.get_by_text("Current live response remains fully visible.").wait_for(timeout=5_000)
                 await page.locator("#timeline").evaluate("e=>e.scrollTop=0")
                 assert await page.locator("html").get_attribute("data-detail") == "balanced"
+                # Runs of tools fold into activity groups; edits and subagent calls stand alone.
+                assert await page.locator("#timeline .activity-summary").all_text_contents() == ["Read 2 files · Searched 1 time · Ran 1 command", "Read 2 files", "Read 1 file · Ran 1 command"]
+                assert await page.locator(".tool-card").count() == 2
+                assert await page.locator('#timeline .tool-card[data-call-id="edit-1"] .edit-stats').inner_text() == "+1−1"
+                await page.evaluate(EXPAND_ACTIVITY)
                 assert await page.locator(".tool-card").count() == 10
                 tool_rows = page.locator("#timeline .tool-card")
                 assert await tool_rows.nth(0).evaluate("e=>e.getBoundingClientRect().height") <= 24
                 assert await tool_rows.nth(0).locator(".tool-preview,.tool-details,.tool-inline-diff").count() == 0
                 assert await page.get_by_text("Result for read-1", exact=True).count() == 0
-                # Edit and Patch rows carry their diff inline, like native split diffs in the TUI.
+                # Edit and Patch rows open their split diff in place, like native file changes in the TUI.
                 edit_diff = page.locator('#timeline .tool-card[data-call-id="edit-1"] .tool-inline-diff')
                 assert "Result for read-1" not in await tool_rows.nth(0).inner_text()
                 assert await edit_diff.count() == 1
@@ -1701,7 +1766,7 @@ async def main() -> None:
                 await settings.get_by_role("link", name="Soul").click()
                 assert await settings.locator("#files-heading").text_content() == "Soul"
                 await settings.locator('input[name="files-scope"][value="project"]').check()
-                await settings.get_by_role("link", name="Agents", exact=True).click()
+                await settings.get_by_role("link", name=re.compile(r"^Agents\s*\d*$")).click()
                 assert await settings.locator("#files-scope").is_hidden()
                 assert await settings.locator('input[name="files-scope"][value="global"]').is_checked()
                 await settings.get_by_role("link", name="Soul").click()
@@ -1764,7 +1829,8 @@ async def main() -> None:
                 assert await expanded_preview.locator(".message-full script").count() == 0
                 assert await expanded_preview.locator(".message-full pre code").inner_text() == "*x* and **y**"
                 await page.screenshot(path=str(ARTIFACTS / "focused-dark-large.png"), full_page=True)
-                assert await page.locator(".tool-group").count() == 0
+                await page.evaluate(EXPAND_ACTIVITY)
+                assert await page.locator("#timeline .activity-group").count() == 3
                 assert await page.locator("#timeline .tool-card").count() == 10
                 adjacent_gap = await page.locator("#timeline .tool-card").nth(1).evaluate("e=>e.getBoundingClientRect().top") - await page.locator("#timeline .tool-card").nth(0).evaluate("e=>e.getBoundingClientRect().bottom")
                 assert adjacent_gap <= 2, adjacent_gap
@@ -1780,9 +1846,9 @@ async def main() -> None:
                 await boundary_settings.get_by_role("link", name="Conversation detail").click()
                 await boundary_settings.locator('input[name="session-detail"][value="focused"]').check()
                 await page.keyboard.press("Escape")
-                assert await page.locator(".tool-group").count()==0
+                await page.evaluate(EXPAND_ACTIVITY)
                 assert await page.locator('.tool-card[data-call-id="task-1"]').count()==1
-                boundary_order=await page.evaluate("""()=>[...document.querySelector('#timeline').children].map(e=>e.dataset.key||e.className)""")
+                boundary_order=await page.evaluate("""()=>[...document.querySelectorAll('#timeline [data-key]')].map(e=>e.dataset.key)""")
                 assert boundary_order.index("tool:read-1")<boundary_order.index("tool:task-1")<boundary_order.index("tool:read-3"),boundary_order
                 assert await page.locator('.tool-card[data-call-id="task-1"] .task-summary-metrics').count() == 1
                 fixture_done = "ui-fixture-task-done"
@@ -1844,6 +1910,8 @@ async def main() -> None:
                 await settings.get_by_role("link", name="Conversation detail").click()
                 await settings.locator('input[name="session-detail"][value="complete"]').check()
                 await page.keyboard.press("Escape")
+                # Complete opens every activity group and file change.
+                assert await page.locator("#timeline .activity-group.open").count() == 3
                 assert await page.locator(".tool-card").count() == 10
                 assert await page.locator(".tool-details[open]").count() == 0
                 assert await page.get_by_text("@@ -1 +1 @@", exact=False).count() == 0
@@ -1880,6 +1948,8 @@ async def main() -> None:
                 assert await agent_modal.locator(".context-header .context-block").count() == 5
                 assert await agent_modal.locator(".agent-readonly").is_visible()
                 assert await agent_modal.get_by_text("Child agent transcript is available.").count() == 1
+                assert await agent_modal.locator(".activity-summary").all_text_contents() == ["Read 1 file"]
+                await page.evaluate(EXPAND_ACTIVITY)
                 assert await agent_modal.locator(".tool-card").count() == 1
                 assert await agent_modal.locator(".tool-hint").count() == 0
                 await page.evaluate("""() => { const s=window.__nexusEventSources.at(-1); s.dispatchEvent(new MessageEvent('view',{data:JSON.stringify({schema_version:1,session:'ui-fixture-a',seq:23,ops:[{op:'replace',path:'/agents/0/body/turns/0/tools/0/display',value:'Live child update'}]})})); }""")

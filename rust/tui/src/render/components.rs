@@ -179,8 +179,17 @@ impl Hover {
                 }
                 return super::panel_item_at(s, area, &filter.to_lowercase(), selection, y).map(
                     |i| {
-                        if super::panel_toggle_at(s, area, &filter.to_lowercase(), selection, x, y)
+                        if super::panel_action_at(s, area, &filter.to_lowercase(), selection, x, y)
                         {
+                            format!("action:{i}")
+                        } else if super::panel_toggle_at(
+                            s,
+                            area,
+                            &filter.to_lowercase(),
+                            selection,
+                            x,
+                            y,
+                        ) {
                             format!("toggle:{i}")
                         } else {
                             format!("item:{i}")

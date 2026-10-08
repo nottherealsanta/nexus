@@ -1,7 +1,7 @@
 """Pure logic for Settings -> Models, Session titles and an agent's Tiers row.
 
 Both terminal clients render these pages from the same rows, labels and help
-text, so they say the same thing (plans/SESSION_TITLE_PLAN.md). Nothing here
+text, so they say the same thing (plans/done/SESSION_TITLE_PLAN.md). Nothing here
 touches a widget or the host: it turns host results into labelled rows and
 turns user actions into the values a host command takes.
 """

@@ -86,6 +86,22 @@ def test_leader_shortcuts_have_matching_desktop_routes():
         assert ACTIONS[action_id] in _global(f"ctrl-x {letter}"), f"ctrl+x {letter} -> {action_id}"
 
 
+def test_documented_macos_aliases_remain_reachable():
+    aliases = {
+        "cmd-n": "NewSession", "cmd-k": "Palette", "cmd-o": "Sessions",
+        "cmd-b": "ToggleSessions", "cmd-l": "ToggleDetails", "cmd-,": "Settings",
+        "cmd-m": "Models", "cmd-i": "InspectContext", "cmd-u": "Usage",
+        "cmd-r": "Reconnect", "cmd-q": "Quit", "cmd-j": "JumpLatest",
+        "cmd-enter": "FocusComposer", "cmd-.": "StopTurn", "cmd-shift-a": "Attach",
+        "cmd-shift-g": "CycleAgent", "cmd-shift-e": "CycleEffort",
+        "cmd-shift-l": "ToggleLogs", "cmd-shift-t": "ThemeToggle",
+    }
+    for key, action in aliases.items():
+        assert action in _global(key), f"documented macOS alias {key} should route to {action}"
+    for key, action in (("alt-up", "HistoryPrevious"), ("alt-down", "HistoryNext")):
+        assert (key, action, "Editor") in _rows()
+
+
 def test_scoped_picker_keys_never_shadow_global_ones_in_the_same_context():
     seen: dict[tuple[str, str], str] = {}
     for key, action, context in _rows():

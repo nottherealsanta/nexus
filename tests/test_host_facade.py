@@ -379,12 +379,16 @@ def test_protocol_round_trips_every_command_and_result():
         p.ToolsList(),
         p.ContextInspect(session="s"),
         p.McpServerShow(session="s", name="example"),
+        p.McpServerRestart(session="s", name="example"),
         p.SkillInspect(session="s", name="example"),
         p.ContextExtensionSelect(session="s", category="skills", name="example", enabled=False),
         p.ContextMcpLoadingSelect(session="s", server="example", mode="search"),
         p.SettingsMcpLoadingSet(scope="project", server="example", mode="all", expected_sha256="abc"),
         p.Doctor(explain_reload=True),
         p.UpdateStatus(),
+        p.UpdateStatus(announce=True),
+        p.SessionQueueMove(session="s", queued_id="q", offset=1),
+        p.SessionQueueRemove(session="s", queued_id="q"),
         p.Health(),
         p.MockList(),
         p.MockStart(scenario="hello", speed=0.0, seed=1, session="mock-hello-1"),
@@ -421,6 +425,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.SessionStartResult(session="s", turn_id="t"),
         p.SessionEnqueueResult(session="s", queued_id="q", depth=1),
         p.SessionCancelResult(session="s", cancelled=True, dropped=2),
+        p.SessionQueueEditResult(session="s", changed=True),
         p.SessionSubscribeResult(session="s", from_seq=0),
         p.SessionStateResult(session="s", seq=4, view={"session_id": "s"}),
         p.LogsReadResult(
@@ -443,7 +448,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.ModelTiersResult(order=["low", "medium", "high"], default="medium"),
         p.DefaultModelSettingsResult(refs=["openai/gpt-5-mini"]),
         p.SessionTitleSettingsResult(enabled=True, model="low", resolved="openai/gpt-5-mini"),
-        p.SpeechStatusResult(state="absent", bytes_total=345_000_000),
+        p.SpeechStatusResult(state="absent", bytes_total=25_000_000),
         p.AttachmentPreviewResult(attachment_id="att-1", media_type="image/png", data=b"png"),
         p.ModelSelectResult(session="s", provider="p", model="m", tier="high"),
         p.ReasoningEffortSelectResult(
@@ -477,13 +482,14 @@ def test_protocol_round_trips_every_command_and_result():
         p.ToolsListResult(count=1, tools=[{"name": "Read"}]),
         p.SkillInspectResult(session="s", name="example"),
         p.McpServerShowResult(name="example"),
+        p.McpServerRestartResult(name="example"),
         p.ContextInspectResult(
             session="s",
             system_text="standing prompt",
             included_parts=[{"name": "identity", "text": "standing prompt"}],
         ),
         p.DoctorResult(ok=True, report={"workspace": "/tmp/ws"}),
-        p.SpeakResult(message="Finished speaking", backend="kokoro-cpu"),
+        p.SpeakResult(message="Finished speaking", backend="paradee-cpu"),
         p.VoiceStatusResult(state="ready", enabled=True),
         p.VoiceTranscribeResult(request_id="req_1", text="hello", duration_s=1.0, elapsed_s=0.1),
         p.VoiceCancelResult(cancelled=True),
@@ -634,7 +640,9 @@ async def test_context_inspect_is_a_read_only_current_request_projection(tmp_pat
         )
         assert result.omitted[0] == "draft input (not provided)"
         assert list(session.events) == before
-        assert "history" not in (result.system_text or "")
+        assert "history" not in (result.system_text or "").replace(
+            "rewriting history", ""
+        )
         assert result.history_included
         assert result.messages
         assert result.messages[0]["role"] == "user"
@@ -1254,6 +1262,38 @@ async def test_facade_enqueue_runs_at_the_next_turn_boundary(tmp_path):
     assert queued[0].data["queued_id"] == consumed[0].data["queued_id"]
     assert kinds[-1] == "turn.completed"
     assert handle.queue_depth == 0
+    await runtime.aclose()
+
+
+async def test_facade_queue_move_and_remove_change_what_runs(tmp_path):
+    gate = asyncio.Event()
+    provider = ScriptedProvider(
+        [MessageStart(model="m", provider="scripted"), TextDelta(text="working"), Wait(gate),
+         MessageStop(stop_reason="stop")],
+        text_response("next"),
+    )
+    runtime = _runtime(tmp_path, provider)
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+    await facade.start_turn("s", "one")
+    await wait_for(lambda: runtime.session("s").active)
+    a, _ = await facade.enqueue("s", "a", mode="queue")
+    b, _ = await facade.enqueue("s", "b", mode="queue")
+    c, _ = await facade.enqueue("s", "c", mode="queue")
+
+    moved = await facade.handle(p.SessionQueueMove(session="s", queued_id=c, offset=-1))
+    removed = await facade.handle(p.SessionQueueRemove(session="s", queued_id=a))
+    gone = await facade.handle(p.SessionQueueRemove(session="s", queued_id=a))
+    assert moved.changed and removed.changed and not gone.changed
+    assert runtime.session("s").queued_ids == (c, b)
+    bad = await facade.handle(p.SessionQueueMove(session="s", queued_id=b, offset=3))
+    assert isinstance(bad, p.ErrorResult) and bad.kind == "ValueError"
+
+    gate.set()
+    await facade.wait_idle(timeout=5.0)
+    handle = runtime.session("s")
+    consumed = [event.data["queued_id"] for event in handle.events if event.type == "input.consumed"]
+    assert consumed == [c, b] and handle.queue_depth == 0
     await runtime.aclose()
 
 

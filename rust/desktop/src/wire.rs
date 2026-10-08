@@ -1,4 +1,4 @@
-//! Decodes desktop wire deltas as described in `plans/DESKTOP_OVERHAUL_PLAN.md` §3.3.
+//! Decodes desktop wire deltas as described in `plans/in-progress/DESKTOP_OVERHAUL_PLAN.md` §3.3.
 
 use crate::bridge::{Content, Snapshot};
 use base64::Engine as _;

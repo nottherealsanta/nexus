@@ -1,8 +1,13 @@
 """Skills and MCP sections of the context header (docs/ratatui-parity.md; plans CONTEXT_SECTIONS_PLAN §2-3).
 
-Cards are one selectable item each (``Item.lines`` carries the dim rows); Enter opens the skill
-page or the MCP server page, Space/click toggles. Everything is read through host commands
-(``SkillInspect``, ``McpServerShow``) and the inspected request; nothing here reads files.
+Skills are cards (``Item.lines`` carries the dim rows); Enter opens the skill page, Space/click
+toggles. MCP mirrors the Tools list: one line per server with ``~indexed / ~full`` tokens, a
+Restart chip (click it or Ctrl+R on the row) and the on/off toggle, under a Refresh row that
+re-reads ``mcp.json`` through ``ExtensionsReload`` and reconnects servers that are not connected.
+Enter opens the server page: the server row, then its index entry (what the model sees now), then
+the full tool schemas, one line per tool; Enter on a tool opens the tool page. Everything is read
+through host commands (``SkillInspect``, ``McpServerShow``, ``McpServerRestart``) and the
+inspected request; nothing here reads files.
 """
 from __future__ import annotations
 
@@ -10,14 +15,15 @@ import textwrap
 
 from ...ui_support.context import _compact_tokens
 
-CARD_WIDTH = 100  # wrap card rows here; the panel never exceeds this much text
+CARD_WIDTH = 76  # wrap card rows here: the context dialog is at most 88 columns (render/dialogs.rs)
+LIST_WIDTH = 62  # MCP rows sit in the thin list dialog, at most 72 columns with a 3-column indent
 
 
-def wrapped(lines):
+def wrapped(lines, width=CARD_WIDTH):
     """Wrap each card row, indenting continuations; nothing is cut."""
     out = []
     for line in lines:
-        out += textwrap.wrap(line, CARD_WIDTH, subsequent_indent="  ", break_long_words=True) or [""]
+        out += textwrap.wrap(line, width, subsequent_indent="  ", break_long_words=True) or [""]
     return out
 
 
@@ -53,23 +59,64 @@ def skill_card(row) -> list[str]:
     return lines
 
 
-def mcp_card(row) -> list[str]:
-    bits = [row.get("command_label") or row.get("transport") or "", f"{row.get('tool_count', 0)} tools"]
-    for key, word in (("resource_count", "resource"), ("prompt_count", "prompt")):
-        if row.get(key):
-            bits.append(f"{row[key]} {word}{'s' if row[key] != 1 else ''}")
-    lines = [" · ".join(b for b in bits if b)]
-    if row.get("error"):
-        lines.append(f"error: {row['error']}")
-    else:
-        full = _compact_tokens(row.get("schema_tokens", 0))
-        loading = row.get("tool_loading", "all")
-        lines.append(f"~{full} full schemas" + (" (loaded via search)" if loading == "search" else " (sent)"))
-    return lines
+def _mcp_index(preview) -> str:
+    return getattr(preview, "mcp_index", "") or _part(preview, "mcp_index")
+
+
+def server_index(index: str, name: str) -> list[str]:
+    """This server's entry in the frozen MCP index: its ``- server:`` line and the indented lines under it."""
+    out: list[str] = []
+    for line in index.splitlines():
+        if line.startswith("- server: "):
+            if out:
+                break
+            if line[len("- server: "):].split(" · ", 1)[0] == name:
+                out.append(line)
+        elif out:
+            if not line.startswith("  "):
+                break
+            out.append(line)
+    return out
+
+
+def _tokens(row, index) -> tuple[int, int]:
+    """(indexed, full): the server's index entry as sent now, and every tool schema it offers."""
+    from ...ui_support.context import estimate_tokens
+    entry = server_index(index, str(row.get("name") or ""))
+    return (estimate_tokens("\n".join(entry)) if entry else 0), int(row.get("schema_tokens") or 0)
+
+
+def _pair(indexed, full) -> str:
+    return f"~{_compact_tokens(indexed)} / ~{_compact_tokens(full)}"
+
+
+def mcp_list(wf):
+    """Thin list like Tools: one line per server with indexed/full tokens, Restart, and on/off."""
+    preview = wf.shell.preview
+    locked = bool(getattr(preview, "context_locked", False)) or bool(wf.agent_page_id)
+    rows, index = _rows(preview, "mcp"), _mcp_index(preview)
+    on = [r for r in rows if r.get("enabled") is not False]
+    items = [("↻ Refresh all · re-read mcp.json, reconnect servers", {"kind": "mcp_refresh"})]
+    for row in rows:
+        name, status = row.get("name") or row.get("id"), row.get("status") or "?"
+        label = str(name) if status == "connected" else f"{name} · {status}"
+        items.append((label, {"kind": "context_extension_details", "category": "mcp", "name": name}))
+    items.append(("Edit MCP servers…", {"kind": "settings", "scope": "global", "category": "mcp"}))
+    indexed = sum(_tokens(r, index)[0] for r in on)
+    full = sum(r.get("schema_tokens", 0) for r in on)
+    title = f"MCP · {len(on)} of {len(rows)} on · ~{_compact_tokens(indexed)} indexed / ~{_compact_tokens(full)} full"
+    note = ["Context locked after first turn" if locked else "Enter details · Space or click toggle · Ctrl+R restart"]
+    wf.menu(title, items, note + ([] if rows else ["(none)"]), layout="list")
+    for item, row in zip(wf.shell.items[1:], rows):
+        _toggle(item, row, "mcp", locked)
+        item.update(trailing=_pair(*_tokens(row, index)),
+                    action_label="Restart", action_operation={"kind": "mcp_restart", "name": row.get("name") or row.get("id")})
 
 
 def section(wf, category):
-    """The Skills or MCP card list (replaces the generic extension picker)."""
+    """The Skills card list or the MCP server list (replaces the generic extension picker)."""
+    if category == "mcp":
+        return mcp_list(wf)
     preview = wf.shell.preview
     locked = bool(getattr(preview, "context_locked", False)) or bool(wf.agent_page_id)
     rows = _rows(preview, category)
@@ -77,30 +124,71 @@ def section(wf, category):
     items = []
     for row in rows:
         name = row.get("name") or row.get("id")
-        scope = row.get("scope", "global" if category == "skills" else "project")
-        status = f"  {row.get('status')} · {row.get('transport') or '?'} · {row.get('tool_loading', 'all')}" if category == "mcp" else ""
-        items.append((f"{name}  {scope}{status}", {"kind": "context_extension_details", "category": category, "name": name}))
-    index = _part(preview, "skills_index", "skills") if category == "skills" else (getattr(preview, "mcp_index", "") or _part(preview, "mcp_index"))
+        items.append((f"{name}  {row.get('scope', 'global')}", {"kind": "context_extension_details", "category": category, "name": name}))
+    index = _part(preview, "skills_index", "skills")
     from ...ui_support.context_header import estimate_tokens
     items.append((f"Show literal index (~{_compact_tokens(estimate_tokens(index))} tokens)", {"kind": "context_index", "category": category}))
-    items.append((f"Edit {'skills' if category == 'skills' else 'MCP servers'}…", {"kind": "settings", "scope": "global", "category": category}))
+    items.append(("Edit skills…", {"kind": "settings", "scope": "global", "category": category}))
     now = sum(r.get("context_tokens", 0) for r in on)
-    deferred = sum(r.get("schema_tokens", 0) for r in on if r.get("tool_loading") == "search") if category == "mcp" else 0
-    title = f"{'Skills' if category == 'skills' else 'MCP'} · {len(on)} of {len(rows)} on · ~{_compact_tokens(now)} in context"
-    if deferred:
-        title += f" · ~{_compact_tokens(deferred)} deferred"
+    title = f"Skills · {len(on)} of {len(rows)} on · ~{_compact_tokens(now)} in context"
     note = ["Context locked after first turn" if locked else "Enter opens · Space or click toggles"]
     if not rows:
         note.append("(none)")
     wf.menu(title, items, note, layout="context")
     for item, row in zip(wf.shell.items, rows):
         _toggle(item, row, category, locked)
-        item["lines"] = wrapped(skill_card(row) if category == "skills" else mcp_card(row))
+        item["lines"] = wrapped(skill_card(row))
+
+
+async def refresh(wf):
+    """Re-read mcp.json, reconnect every enabled server that is not connected, redraw in place.
+
+    ``ExtensionsReload`` adds, removes and reconfigures servers but skips a failed server until its
+    backoff expires, so the not-connected ones get a ``McpServerRestart`` each (at most 64 rows).
+    """
+    import asyncio
+    report = await wf.client.reload_extensions(trigger="mcp_refresh")
+    failures = [f"{row.get('name', 'mcp')}: {row.get('error', '')}" for row in getattr(report, "failed", ()) or ()
+                if isinstance(row, dict) and row.get("kind") == "mcp"]
+    session = wf.shell.controller.session
+    wf.shell.preview = await wf.client.inspect_context(session)
+    stale = [str(r.get("name")) for r in _rows(wf.shell.preview, "mcp")
+             if r.get("enabled") is not False and r.get("status") != "connected"][:64]
+    results = await asyncio.gather(*(wf.client.mcp_server_restart(session, name) for name in stale), return_exceptions=True)
+    for name, result in zip(stale, results):
+        error = str(result) if isinstance(result, BaseException) else getattr(result, "error", "")
+        if error:
+            failures.append(f"{name}: {error}")
+    wf.shell.mcp_due = 0.0  # the details sidebar re-reads server health too
+    wf.shell.panel_title = ""  # same dialog, new rows: replace it rather than stacking
+    await wf.context_extensions("mcp")
+    servers = len(_rows(wf.shell.preview, "mcp"))
+    summary = f"MCP refreshed · {servers} server{'s' if servers != 1 else ''}" + (f" · {len(stale)} reconnected" if stale else "")
+    if failures:
+        wf.shell.flash(f"{summary} · {len(failures)} problem(s): {failures[0]}", "warning")
+    else:
+        wf.shell.flash(summary, "success")
+
+
+async def restart(wf, name, page=False):
+    """Restart one server, then redraw whichever MCP view asked."""
+    result = await wf.client.mcp_server_restart(wf.shell.controller.session, name)
+    wf.shell.mcp_due = 0.0
+    wf.shell.panel_title = ""
+    if page:
+        wf.shell.preview = await wf.client.inspect_context(wf.shell.controller.session)
+        await server_page(wf, name)
+    else:
+        await wf.context_extensions("mcp")
+    if result.error:
+        wf.shell.flash(f"{name} · restart failed: {result.error}", "error")
+    else:
+        wf.shell.flash(f"{name} restarted · {result.status}", "success")
 
 
 def literal_index(wf, category):
     preview = wf.shell.preview
-    text = _part(preview, "skills_index", "skills") if category == "skills" else (getattr(preview, "mcp_index", "") or _part(preview, "mcp_index"))
+    text = _part(preview, "skills_index", "skills") if category == "skills" else _mcp_index(preview)
     label = "Skills index" if category == "skills" else "MCP index (untrusted, from servers)"
     wf.stack.append((wf.shell.panel_title, wf.shell.panel_lines, wf.shell.items, wf.form, wf.form_target,
                      wf.shell.panel_layout, wf.shell.panel_format, wf.shell.panel_tones))
@@ -146,36 +234,56 @@ def _full_name(preview, server, tool):
 
 
 async def server_page(wf, name):
+    """One server: its row (Restart, on/off), its index entry on top, then each full tool schema on one line."""
     preview = wf.shell.preview
-    row = next((r for r in preview.mcp_servers if r.get("name") == name), {})
+    row = next((r for r in preview.mcp_servers if r.get("name") == name), {"name": name})
     result = await wf.client.mcp_server_show(wf.shell.controller.session, name)
     locked = bool(getattr(preview, "context_locked", False)) or bool(wf.agent_page_id)
     state = {str(t.get("name")): t.get("enabled") is not False for t in preview.tools if isinstance(t, dict)}
     info = result.server_info or {}
-    lines = [f"{result.status} · {result.transport or '?'} · {result.scope} · loading {result.tool_loading} ({result.tool_loading_source})"]
-    if info.get("name"):
-        lines.append(f"server {info.get('name')} {info.get('version') or ''}".strip())
-    lines.append(f"~{_compact_tokens(row.get('schema_tokens', 0))} full schemas · {len(result.tools)} tools")
+    about = " ".join(str(info.get(k) or "") for k in ("name", "version")).strip()
+    entry = server_index(_mcp_index(preview), name)
+    indexed, full = _tokens(row, _mcp_index(preview))
+    loading = "deferred to McpSearch" if result.tool_loading == "search" else "sent every request"
+    server = {"name": name, "status": result.status, "transport": result.transport, "command": row.get("command_label"),
+              "scope": result.scope, "tool loading": f"{result.tool_loading} ({result.tool_loading_source})",
+              "server": about, "error": result.error,
+              "instructions (untrusted, from the server)": result.instructions}
+    lines = [f"{result.status} · {result.transport or '?'} · {result.scope} · loading {result.tool_loading}"]
     if result.error:
         lines.append(f"error: {result.error}")
-    elif not result.tools and result.status != "connected":
-        lines.append("not connected yet: no tools listed")
-    if result.instructions:
-        lines.append("Instructions (untrusted, from the server):")
-        lines += [f"  {line}" for line in result.instructions.splitlines()[:12]]
-    items, tools = [], list(result.tools)
+    head_label = " · ".join(b for b in (result.status, result.transport or "?", result.scope, about) if b)
+    items = [(head_label, {"kind": "mcp_detail", "title": "Server", "value": server})]
+    if entry:
+        items.append((entry[0], {"kind": "context_index", "category": "mcp"}))
+    else:
+        items.append((f"not in the index: only connected servers are listed ({result.status})", {"kind": "context_index", "category": "mcp"}))
+    tools = list(result.tools)
     for tool in tools:
-        full = _full_name(preview, name, str(tool.get("name")))
-        items.append((str(tool.get("name")), {"kind": "tool_show", "name": full, "fallback": {**tool, "name": full}}))
+        full_name = _full_name(preview, name, str(tool.get("name")))
+        items.append((str(tool.get("name")), {"kind": "tool_show", "name": full_name, "fallback": {**tool, "name": full_name}, "server": name}))
     for res in result.resources:
-        items.append((f"resource · {res.get('name') or res.get('uri')}", {"kind": "mcp_detail", "title": "Resource", "value": res}))
+        items.append((str(res.get("name") or res.get("uri")), {"kind": "mcp_detail", "title": "Resource", "value": res}))
     for prompt in result.prompts:
-        items.append((f"prompt · {prompt.get('name')}", {"kind": "mcp_detail", "title": "Prompt", "value": prompt}))
-    wf.menu(f"MCP · {name} · {result.status}", items, lines, layout="list")
-    for item, tool in zip(wf.shell.items, tools):
-        full = item["operation"]["name"]
-        item["trailing"] = f"~{_compact_tokens(int(tool.get('tokens') or 0))}"
-        if full in state:
-            on = state[full]
-            item.update(toggle_enabled=on, toggle_locked=locked,
-                        toggle_operation={"kind": "context_toggle", "category": "tools", "name": full, "enabled": not on})
+        items.append((str(prompt.get("name")), {"kind": "mcp_detail", "title": "Prompt", "value": prompt}))
+    if not tools:
+        items.append(("no tools listed · Restart reconnects", {"kind": "mcp_restart", "name": name, "page": True}))
+    wf.menu(f"MCP · {name} · ~{_compact_tokens(indexed)} indexed / ~{_compact_tokens(full)} full", items, lines, layout="list")
+    head, index_row, *rest = wf.shell.items
+    _toggle(head, row, "mcp", locked)
+    head["toggle_operation"]["page"] = True
+    head.update(group="Server", action_label="Restart", action_operation={"kind": "mcp_restart", "name": name, "page": True},
+                lines=wrapped([f"error: {result.error}"], LIST_WIDTH) if result.error else [])
+    index_row.update(group=f"Indexed · ~{_compact_tokens(indexed)} tokens in context now", lines=wrapped(entry[1:], LIST_WIDTH))
+    full_group = f"Full · ~{_compact_tokens(full)} tokens · {len(tools)} tools · {loading}"
+    for item, tool in zip(rest, tools):
+        full_name = item["operation"]["name"]
+        item.update(group=full_group, trailing=f"~{_compact_tokens(int(tool.get('tokens') or 0))}")
+        if full_name in state:
+            enabled = state[full_name]
+            item.update(toggle_enabled=enabled, toggle_locked=locked,
+                        toggle_operation={"kind": "context_toggle", "category": "tools", "name": full_name,
+                                          "enabled": not enabled, "server": name})
+    for item in rest[len(tools):]:
+        kind = item["operation"].get("title")
+        item["group"] = {"Resource": "Resources", "Prompt": "Prompts"}.get(kind, full_group)

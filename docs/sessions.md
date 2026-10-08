@@ -84,7 +84,11 @@ Legacy JSONL session directories are not imported. JSONL is an export format onl
   explicit input does not drain the queue. This applies to automatic starts,
   `start_turn(None)`, and `send(None)`; prompt hooks see the combined message.
   `consume_steering()` injects steering at a safe model
-  boundary ([loop.md](loop.md#steering-queue-interrupt)).
+  boundary ([loop.md](loop.md#steering-queue-interrupt)). `move_queued(id, ±1)`
+  swaps a pending submission with its neighbour and appends `input.moved` with the
+  full new `order`; `remove_queued(id)` appends `input.dropped`
+  (`reason: "removed by user"`). Replay (`_rehydrate_queue`, the reducer) applies
+  both, so an edited queue survives a reopen.
 - **Crash recovery.** `recover_dangling_tool_uses()` appends an error
   `ToolResult` for every unresolved `ToolUse`, executing nothing.
 - **Presence.** `attended` is derived from the live subscriber count; dropping

@@ -10,9 +10,9 @@ from nexus.ui_support.speech_settings import (
 )
 
 
-def test_speech_choices_and_language_pairing():
-    assert compatible_voices("a") == ("af_heart", "af_bella", "af_nicole", "am_adam", "am_michael")
-    assert compatible_voices("b") == ("bf_emma", "bm_george")
+def test_speech_choices_are_paradee_single_voice():
+    assert compatible_voices("a") == ("af_heart",)
+    assert compatible_voices("b") == ()
 
 
 def test_toml_updates_preserve_other_sections_and_comments():
@@ -21,7 +21,9 @@ def test_toml_updates_preserve_other_sections_and_comments():
     assert '[model]\nname = "local"' in updated
     assert '[speech]\nvoice = "af_heart" # note\nlanguage = "a"\nspeed = 1.25' in updated
     assert '[other]\nvalue = true' in updated
-    assert _set_speech_toml_value(updated, "device", "mps").count("[speech]") == 1
+    assert _set_speech_toml_value(updated, "device", "cpu").count("[speech]") == 1
+    with pytest.raises(ValueError):
+        _set_speech_toml_value(updated, "device", "mps")  # retired: CPU only
 
 
 def test_invalid_choice_does_not_modify_body():
@@ -52,9 +54,9 @@ class FakeClient:
 @pytest.mark.asyncio
 async def test_host_settings_persist_and_reset_only_speech_section():
     client = FakeClient('[model]\nname = "test"\n')
-    await set_speech_config(client, language="b")
+    await set_speech_config(client, speed=1.25)
     values = await read_speech_settings(client)
-    assert values == {**SPEECH_DEFAULTS, "language": "b", "voice": "bf_emma"}
+    assert values == {**SPEECH_DEFAULTS, "speed": 1.25}
     assert '[model]\nname = "test"' in client.body
     await reset_speech_config(client)
     assert await read_speech_settings(client) == SPEECH_DEFAULTS

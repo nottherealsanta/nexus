@@ -1857,6 +1857,7 @@ _CHILD_RELAY_SUPPRESS = frozenset(
         "permission.requested",
         "permission.resolved",
         "input.queued",
+        "input.moved",
         "input.consumed",
         "input.dropped",
         "input.started",
@@ -1974,7 +1975,11 @@ class _ChildRuntime:
                 ),
             )
             max_iterations = int(spec.max_iterations or 0)
-            limits = TurnLimits(max_iterations=max_iterations, max_seconds=1800.0)
+            # The wall clock follows ``[agent] max_turn_seconds`` (0 = unlimited)
+            # like a root turn; a hardcoded cap silently ended long children.
+            agent_section = getattr(getattr(config, "v2", None), "agent", None)
+            max_seconds = float(getattr(agent_section, "max_turn_seconds", 0) or 0)
+            limits = TurnLimits(max_iterations=max_iterations, max_seconds=max_seconds)
             lease = session.begin_turn(limits=limits)
             sink = _ChildEventSink(session, spec.emit)
             crash: Exception | None = None

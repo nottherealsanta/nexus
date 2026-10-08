@@ -61,6 +61,8 @@ pub struct Row {
     pub spans: Vec<Span<'static>>,
     pub bg: Option<ratatui::style::Color>,
     pub blank: bool,
+    /// Index of the fenced code block this row draws (see [`fence_sources`]).
+    pub fence: Option<usize>,
 }
 
 struct Level {
@@ -83,6 +85,7 @@ struct Walker<'a> {
     links: Vec<String>,
     table: Option<Table>,
     item_depth: usize,
+    fences: usize,
 }
 
 #[derive(Default)]
@@ -140,6 +143,7 @@ impl<'a> Walker<'a> {
             spans,
             bg: self.bg(),
             blank: false,
+            fence: None,
         });
     }
     fn blank(&mut self) {
@@ -194,6 +198,8 @@ impl<'a> Walker<'a> {
         }
     }
     fn fence(&mut self, body: &str, language: &str) {
+        let index = self.fences;
+        self.fences += 1;
         // Keep the literal, labelled mermaid fallback without invoking diagram
         // hooks: this text-only transcript cannot place graphical output.
         if language != "mermaid" {
@@ -203,7 +209,7 @@ impl<'a> Walker<'a> {
                     span.style = span.style.bg(self.p.panel);
                     span
                 }));
-                self.fence_row();
+                self.fence_row(index);
             }
             return;
         }
@@ -214,15 +220,15 @@ impl<'a> Walker<'a> {
                 language.to_string(),
                 Style::default().fg(self.p.quiet).bg(bg),
             ));
-            self.fence_row();
+            self.fence_row(index);
         }
         for line in body.trim_end_matches('\n').split('\n') {
             self.cur
                 .push(Span::styled(line.replace('\t', "    "), style));
-            self.fence_row();
+            self.fence_row(index);
         }
     }
-    fn fence_row(&mut self) {
+    fn fence_row(&mut self, index: usize) {
         let (mut prefix, _) = self.prefix();
         prefix.push(Span::styled(" ", Style::default().bg(self.p.panel)));
         let spans = std::mem::take(&mut self.cur);
@@ -231,6 +237,7 @@ impl<'a> Walker<'a> {
             spans,
             bg: Some(self.p.panel),
             blank: false,
+            fence: Some(index),
         });
     }
     fn finish_table(&mut self) {
@@ -399,6 +406,33 @@ fn wrap_cell(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
+/// The literal source of each fenced or indented code block, in the order
+/// [`lines`] numbers them; Copy buttons recover their text from here.
+pub fn fence_sources(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut body: Option<String> = None;
+    for event in Parser::new_ext(
+        text,
+        Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS,
+    ) {
+        match event {
+            Event::Start(Tag::CodeBlock(_)) => body = Some(String::new()),
+            Event::Text(value) => {
+                if let Some(body) = &mut body {
+                    body.push_str(&value);
+                }
+            }
+            Event::End(TagEnd::CodeBlock) => {
+                if let Some(body) = body.take() {
+                    out.push(body.trim_end_matches('\n').to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 pub fn lines(text: &str, p: &Palette, width: usize) -> Vec<Row> {
     let safe_text = terminal_safe(text);
     let mut w = Walker {
@@ -417,6 +451,7 @@ pub fn lines(text: &str, p: &Palette, width: usize) -> Vec<Row> {
         links: Vec::new(),
         table: None,
         item_depth: 0,
+        fences: 0,
     };
     let mut fence_body = String::new();
     for event in Parser::new_ext(

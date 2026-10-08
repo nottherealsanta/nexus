@@ -6,7 +6,7 @@ every screen and state from one fake world (`src/fixture.rs`) and never talk to 
 daemon or import `nexus`. This folder is standalone and deletable: removing it
 removes no product code (`rust/widgets` stays).
 
-The spec is [`plans/RATATUI_DESIGN_MOCKUPS_PLAN.md`](../plans/RATATUI_DESIGN_MOCKUPS_PLAN.md).
+The spec is [`plans/done/RATATUI_DESIGN_MOCKUPS_PLAN.md`](../plans/done/RATATUI_DESIGN_MOCKUPS_PLAN.md).
 
 ## Run
 

@@ -313,7 +313,7 @@ pub fn render_parsed(
                 div()
                     .flex()
                     .w_full()
-                    .rounded(px(2.))
+                    .rounded(px(crate::theme::radius::CHIP))
                     .border_b_1()
                     .border_color(t.border)
                     .bg(if block.table_head {
@@ -327,7 +327,7 @@ pub fn render_parsed(
                             .min_w_0()
                             .px_3()
                             .py_1()
-                            .text_size(px(12.))
+                            .text_size(px(crate::theme::size::SMALL))
                             .font_weight(if block.table_head {
                                 FontWeight::SEMIBOLD
                             } else {
@@ -342,9 +342,11 @@ pub fn render_parsed(
         if let Some(lang) = &block.code {
             let source = block.text.clone();
             let line_count = source.lines().count();
+            let group = SharedString::from(format!("{key}-code"));
             rows.push(
                 div()
-                    .rounded(px(6.))
+                    .group(group.clone())
+                    .rounded(px(crate::theme::radius::CONTROL))
                     .border_1()
                     .border_color(t.border)
                     .bg(t.surface)
@@ -357,7 +359,7 @@ pub fn render_parsed(
                             .py_1()
                             .border_b_1()
                             .border_color(t.border)
-                            .text_size(px(10.))
+                            .text_size(px(crate::theme::size::CAPTION))
                             .text_color(t.muted)
                             .child(if lang.is_empty() {
                                 "CODE".into()
@@ -368,9 +370,14 @@ pub fn render_parsed(
                             .child(
                                 div()
                                     .id(SharedString::from(format!("{key}-copy")))
-                                    .rounded(px(4.))
+                                    .debug_selector(|| "code-copy".into())
+                                    .focusable()
+                                    .rounded(px(crate::theme::radius::CHIP))
                                     .px_2()
                                     .text_color(t.muted)
+                                    .opacity(0.)
+                                    .group_hover(group, |s| s.opacity(1.))
+                                    .focus(move |s| s.opacity(1.).bg(t.hover).text_color(t.accent))
                                     .hover(move |s| s.bg(t.raised).text_color(t.text))
                                     .cursor(CursorStyle::Arrow)
                                     .child("Copy")
@@ -388,9 +395,9 @@ pub fn render_parsed(
                             .whitespace_nowrap()
                             .px_3()
                             .py_2()
-                            .font_family("Menlo")
-                            .text_size(px(12.))
-                            .line_height(px(21.))
+                            .font_family(crate::theme::code_font())
+                            .text_size(px(crate::theme::size::SMALL))
+                            .line_height(px(crate::theme::size::BODY_LINE))
                             .child(selectable(&block, format!("{key}-source").into(), t)),
                     )
                     .into_any_element(),
@@ -400,11 +407,15 @@ pub fn render_parsed(
         let mut row = div()
             .w_full()
             .text_size(px(if block.heading > 0 {
-                24. - block.heading as f32 * 2.
+                if block.heading <= 2 {
+                    crate::theme::size::TITLE
+                } else {
+                    crate::theme::size::BODY
+                }
             } else {
-                15.
+                crate::theme::size::BODY
             }))
-            .line_height(px(26.))
+            .line_height(px(crate::theme::size::BODY_LINE))
             .text_color(t.text)
             .child(selectable(&block, key, t));
         if block.heading > 0 {

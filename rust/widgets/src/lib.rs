@@ -1,6 +1,6 @@
 //! Nexus widget kit: stateless Ratatui components plus small state structs.
 //!
-//! Contract (plans/RATATUI_DESIGN_MOCKUPS_PLAN.md §3): components render into a
+//! Contract (plans/done/RATATUI_DESIGN_MOCKUPS_PLAN.md §3): components render into a
 //! `Buffer`, register their focus stop and hit rectangle on the shared [`Ui`], and
 //! return a [`Response`]. They never mutate application state; the owner maps
 //! [`keys::Intent`] values to host operations. Hover and focus change colour only,

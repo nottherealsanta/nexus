@@ -1,5 +1,6 @@
 //! Virtualized transcript blocks retain every host-projected detail action.
 use super::*;
+use crate::panels::ControlHint;
 impl Desktop {
     pub(crate) fn selectable(
         &self,
@@ -29,11 +30,15 @@ impl Desktop {
                 input.set(block.text.clone(), cx);
             }
             input.font_size = if block.heading > 0 {
-                24. - block.heading as f32 * 2.
+                if block.heading <= 2 {
+                    theme::size::TITLE
+                } else {
+                    theme::size::BODY
+                }
             } else if block.code.is_some() {
-                12.
+                theme::size::SMALL
             } else {
-                15.
+                theme::size::BODY
             };
             input.foreground = t.text;
             input.accent = t.accent;
@@ -68,7 +73,7 @@ impl Desktop {
             .id(SharedString::from(format!("image-{}", image.id)))
             .focusable()
             .tab_stop(self.snapshot.panel_title.is_empty() && self.snapshot.prompt.is_none())
-            .rounded(px(8.))
+            .rounded(px(crate::theme::radius::CONTROL))
             .overflow_hidden()
             .border_1()
             .border_color(t.border)
@@ -91,7 +96,7 @@ impl Desktop {
                 div()
                     .px_2()
                     .py_1()
-                    .text_size(px(10.))
+                    .text_size(px(crate::theme::size::CAPTION))
                     .text_color(t.muted)
                     .truncate()
                     .child(image.label.clone()),
@@ -113,8 +118,8 @@ impl Desktop {
         let t = self.theme();
         div().size_full().flex().flex_col().items_center().justify_center().gap_4().p_6()
             .child(div().w_full().max_w(px(740.)).flex().flex_col().gap_4()
-                .child(div().flex().items_center().gap_3().child(icons::icon("terminal", t.muted)).child(div().text_size(px(22.)).font_weight(FontWeight::MEDIUM).child("New conversation")))
-                .child(div().text_size(px(14.)).text_color(t.muted).child("Describe a task, attach context, or choose a starting point."))
+                .child(div().flex().items_center().gap_3().child(icons::icon("terminal", t.muted)).child(div().text_size(px(crate::theme::size::TITLE)).font_weight(FontWeight::MEDIUM).child("New conversation")))
+                .child(div().text_size(px(crate::theme::size::BODY)).text_color(t.muted).child("Describe a task, attach context, or choose a starting point."))
                 .child(div().mt_2().flex().flex_col().gap_2().children([
                     ("Inspect workspace", "Explain the architecture of this project and the important entry points."),
                     ("Review changes", "Review the current workspace changes for correctness."),
@@ -127,14 +132,65 @@ impl Desktop {
             .into_any_element()
     }
     pub(crate) fn context_header(&self, block: &Content, cx: &mut Context<Self>) -> AnyElement {
+        // The TUI's context rows: an agent-coloured rail, bold titles in their own
+        // colour, `[counts]` and status muted. Empty sources arrive neutral.
         let t = self.theme();
-        div().flex().flex_wrap().items_center().gap_2().py_3()
-            .child(div().text_size(px(10.)).text_color(t.muted).mr_2().child("CONTEXT"))
-            .children(block.members.iter().enumerate().map(|(i,chip)| {
-                let count=chip.counts.iter().map(|n|n.to_string()).collect::<Vec<_>>().join(" / ");
-                self.button(("context-chip",i),format!("{}{}",chip.title,if count.is_empty(){String::new()}else{format!("  {count}")}),json!({"type":"context_header","key":chip.operation.as_ref().and_then(|op|op["key"].as_str()).unwrap_or("")}),cx)
-                    .py_1().px_2().text_size(px(11.)).bg(t.surface).border_1().border_color(t.border)
-            })).into_any_element()
+        let rail = t.resolve(&block.color, t.blue);
+        div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap_x(px(theme::space::LG))
+            .gap_y(px(theme::space::XS))
+            .mt_3()
+            .py_1()
+            .pl_3()
+            .border_l_2()
+            .border_color(rail)
+            .children(block.members.iter().enumerate().map(|(i, chip)| {
+                let tone = if chip.color.is_empty() { rail } else { t.resolve(&chip.color, rail) };
+                let counts = (!chip.counts.is_empty()).then(|| {
+                    format!(
+                        "[{}]",
+                        chip.counts.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(" ")
+                    )
+                });
+                let status = chip.status.replace(" tokens", "");
+                let key = chip
+                    .operation
+                    .as_ref()
+                    .and_then(|op| op["key"].as_str())
+                    .unwrap_or("")
+                    .to_string();
+                div()
+                    .id(("context-chip", i))
+                    .debug_selector(|| "context-chip".into())
+                    .focusable()
+                    .tab_stop(self.snapshot.panel_title.is_empty() && self.snapshot.prompt.is_none())
+                    .flex()
+                    .items_baseline()
+                    .gap_1()
+                    .px_1()
+                    .rounded(px(theme::radius::CHIP))
+                    .cursor(CursorStyle::Arrow)
+                    .hover(move |s| s.bg(t.hover))
+                    .focus(move |s| s.bg(t.raised))
+                    .text_size(px(theme::size::SMALL))
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(tone)
+                            .child(chip.title.clone()),
+                    )
+                    .when_some(counts, |d, counts| d.child(div().text_color(t.muted).child(counts)))
+                    .when(!status.is_empty(), |d| {
+                        d.child(div().text_color(t.text_tertiary).child(status))
+                    })
+                    .on_click(cx.listener(move |this, _, w, cx| {
+                        this.dispatch(json!({"type":"context_header","key":key}), w, cx)
+                    }))
+            }))
+            .into_any_element()
     }
     pub(crate) fn render_block(
         &self,
@@ -156,17 +212,17 @@ impl Desktop {
             .w_full()
             .flex()
             .justify_center()
-            .px(px(if depth == 0 { 24. } else { 0. }))
+            .px(px(if depth == 0 { theme::space::XL } else { 0. }))
             .pt(px(if depth == 0 && block.gap > 0 {
-                if matches!(block.kind.as_str(), "tool" | "tool_group" | "thought") {
-                    4.
+                if block.kind == "user" {
+                    theme::space::XL
                 } else {
-                    10.
+                    theme::space::XS
                 }
             } else {
                 0.
             }))
-            .pb(px(if depth == 0 { 2. } else { 0. }));
+            .pb(px(if depth == 0 { theme::space::XS } else { 0. }));
         let copy = block.text.clone();
         let content = match block.kind.as_str() {
             "context_header" => self.context_header(block, cx),
@@ -179,32 +235,95 @@ impl Desktop {
                 } else {
                     format!("{}\n{}", block.title, block.text)
                 };
+                let user_copy = user_text.clone();
+                let user_group = SharedString::from(format!("user-{}", block.id));
                 div()
                     .id(SharedString::from(block.id.clone()))
+                    .group(user_group.clone())
                     .focusable()
                     .tab_stop(
                         self.snapshot.panel_title.is_empty() && self.snapshot.prompt.is_none(),
                     )
-                    .focus(move |s| s.bg(t.raised))
-                    .bg(t.raised)
-                    .rounded(px(14.))
-                    .max_w(relative(0.85))
-                    .ml_auto()
+                    .focus(move |s| s.bg(t.hover))
+                    .bg(t.surface)
+                    .debug_selector(|| "user-card".into())
+                    .rounded(px(crate::theme::radius::CHIP))
+                    .w_full()
+                    .border_l_2()
+                    .border_color(t.resolve(&block.color, t.blue))
                     .px_4()
-                    .py_3()
+                    .py_2()
                     .flex()
                     .flex_col()
                     .gap_2()
                     .when(!user_text.is_empty(), |d| {
-                        d.child(self.selectable(
-                            &markdown::Block {
-                                text: user_text,
-                                ..Default::default()
-                            },
-                            SharedString::from(format!("user-text-{}", block.id)),
-                            t,
-                            cx,
-                        ))
+                        d.child(
+                            div()
+                                .flex()
+                                .items_start()
+                                .gap_2()
+                                .when(block.operation.is_some(), |d| {
+                                    d.child(icons::icon(
+                                        if block.collapsed {
+                                            "chevron-right"
+                                        } else {
+                                            "chevron-down"
+                                        },
+                                        t.text_tertiary,
+                                    ))
+                                })
+                                .child(div().flex_1().min_w_0().child(self.selectable(
+                                    &markdown::Block {
+                                        text: user_text,
+                                        ..Default::default()
+                                    },
+                                    SharedString::from(format!("user-text-{}", block.id)),
+                                    t,
+                                    cx,
+                                )))
+                                .child(
+                                    div()
+                                        .id(SharedString::from(format!("user-copy-{}", block.id)))
+                                        .debug_selector(|| "user-copy".into())
+                                        .focusable()
+                                        .tab_stop(
+                                            self.snapshot.panel_title.is_empty()
+                                                && self.snapshot.prompt.is_none(),
+                                        )
+                                        .flex_shrink_0()
+                                        .opacity(0.)
+                                        .group_hover(user_group, |s| s.opacity(1.))
+                                        .focus(move |s| {
+                                            s.opacity(1.).bg(t.hover).text_color(t.accent)
+                                        })
+                                        .rounded(px(crate::theme::radius::CHIP))
+                                        .px_2()
+                                        .text_size(px(crate::theme::size::CAPTION))
+                                        .text_color(t.muted)
+                                        .hover(move |s| s.bg(t.raised).text_color(t.text))
+                                        .cursor(CursorStyle::Arrow)
+                                        .tooltip(|_, cx| {
+                                            cx.new(|_| ControlHint("Copy message".into())).into()
+                                        })
+                                        .child("Copy")
+                                        .on_click(move |_, _, cx| {
+                                            // The card's own click toggles collapse.
+                                            cx.stop_propagation();
+                                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                                user_copy.clone(),
+                                            ))
+                                        }),
+                                )
+                                .when(block.number > 0, |d| {
+                                    d.child(
+                                        div()
+                                            .flex_shrink_0()
+                                            .text_size(px(theme::size::CAPTION))
+                                            .text_color(t.text_tertiary)
+                                            .child(format!("#{}", block.number)),
+                                    )
+                                }),
+                        )
                     })
                     .child(
                         div().flex().flex_wrap().gap_2().children(
@@ -226,7 +345,7 @@ impl Desktop {
                                 )
                                 .px_2()
                                 .py_1()
-                                .text_size(px(11.))
+                                .text_size(px(crate::theme::size::CAPTION))
                                 .bg(t.accent_bg)
                                 .text_color(t.accent)
                             }),
@@ -240,6 +359,11 @@ impl Desktop {
                     .into_any_element()
             }
             "markdown" => div()
+                .id(SharedString::from(format!("reply-card-{}", block.id)))
+                .debug_selector(|| "reply-card".into())
+                .relative()
+                .group(SharedString::from(format!("reply-{}", block.id)))
+                .pr(px(theme::space::XL * 2.))
                 .flex()
                 .flex_col()
                 .gap_1()
@@ -259,35 +383,136 @@ impl Desktop {
                 .child(
                     div()
                         .id(SharedString::from(format!("copy-{}", block.id)))
+                        .debug_selector(|| "reply-copy".into())
                         .focusable()
                         .tab_stop(
                             self.snapshot.panel_title.is_empty() && self.snapshot.prompt.is_none(),
                         )
-                        .focus(move |s| s.text_color(t.accent))
+                        .absolute()
+                        .top_0()
+                        .right_0()
+                        .opacity(0.)
+                        .group_hover(SharedString::from(format!("reply-{}", block.id)), |s| {
+                            s.opacity(1.)
+                        })
+                        .focus(move |s| s.opacity(1.).bg(t.hover).text_color(t.accent))
                         .map(|mut d| {
                             d.style().align_self = Some(AlignSelf::FlexStart);
                             d
                         })
-                        .rounded(px(4.))
+                        .rounded(px(crate::theme::radius::CHIP))
                         .px_2()
                         .py_1()
-                        .text_size(px(11.))
+                        .text_size(px(crate::theme::size::CAPTION))
                         .text_color(t.muted)
                         .hover(move |s| s.bg(t.raised).text_color(t.text))
                         .cursor(CursorStyle::Arrow)
-                        .child("Copy reply")
+                        .tooltip(|_, cx| cx.new(|_| ControlHint("Copy reply".into())).into())
+                        .child("Copy")
                         .on_click(move |_, _, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))
                         }),
                 )
                 .into_any_element(),
             "summary" => div()
-                .py_3()
-                .border_t_1()
-                .border_color(t.border)
-                .text_size(px(11.))
-                .text_color(t.muted)
+                .flex()
+                .justify_end()
+                .pt_1()
+                .text_size(px(crate::theme::size::CAPTION))
+                .text_color(t.text_tertiary)
                 .child(block.text.clone())
+                .into_any_element(),
+            "agent" => div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .py_1()
+                .text_color(t.resolve(&block.color, t.blue))
+                .child("◆")
+                .child(div().font_weight(FontWeight::SEMIBOLD).child(block.title.clone()))
+                .into_any_element(),
+            "hints" => div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap_1()
+                .py_4()
+                .text_size(px(crate::theme::size::SMALL))
+                .children(block.text.lines().map(|row| {
+                    let (keys, text) = row.split_once('\t').unwrap_or(("", row));
+                    div()
+                        .flex()
+                        .gap_3()
+                        .child(
+                            div()
+                                .w(px(140.))
+                                .text_right()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(t.muted)
+                                .child(keys.trim().to_string()),
+                        )
+                        .child(div().w(px(220.)).text_color(t.text_tertiary).child(text.trim().to_string()))
+                }))
+                .into_any_element(),
+            "context" => div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .py_1()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .px_2()
+                                .rounded(px(theme::radius::CHIP))
+                                .bg(t.resolve(&block.color, t.text_tertiary))
+                                .text_color(t.background)
+                                .text_size(px(crate::theme::size::SMALL))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(block.title.clone()),
+                        )
+                        .when(!block.status.is_empty(), |d| {
+                            d.child(
+                                div()
+                                    .text_size(px(crate::theme::size::SMALL))
+                                    .text_color(t.text_tertiary)
+                                    .child(block.status.clone()),
+                            )
+                        }),
+                )
+                .when(!block.text.is_empty(), |d| {
+                    d.child(
+                        div()
+                            .pl_4()
+                            .text_size(px(crate::theme::size::SMALL))
+                            .line_height(px(theme::size::CODE_LINE))
+                            .text_color(t.muted)
+                            .child(block.text.clone()),
+                    )
+                })
+                .into_any_element(),
+            "collapsed" => div()
+                .flex()
+                .flex_wrap()
+                .gap_2()
+                .py_1()
+                .text_size(px(crate::theme::size::SMALL))
+                .child(div().text_color(t.muted).child(block.title.clone()))
+                .child(div().text_color(t.text_tertiary).child(block.text.clone()))
+                .into_any_element(),
+            "error" => div()
+                .flex()
+                .items_start()
+                .gap_2()
+                .py_1()
+                .text_size(px(crate::theme::size::UI))
+                .line_height(px(theme::size::CODE_LINE))
+                .text_color(t.red)
+                .child(icons::icon("triangle-alert", t.red))
+                .child(div().flex_1().min_w_0().child(block.text.clone()))
                 .into_any_element(),
             "diff" => {
                 let gutter = |text: String| {
@@ -307,9 +532,9 @@ impl Desktop {
                         div()
                             .flex()
                             .items_center()
-                            .text_size(px(11.))
-                            .font_family("Menlo")
-                            .line_height(px(18.))
+                            .text_size(px(crate::theme::size::CAPTION))
+                            .font_family(crate::theme::code_font())
+                            .line_height(px(theme::size::CODE_LINE))
                             .bg(if added {
                                 t.diff_add_bg
                             } else if removed {
@@ -362,11 +587,26 @@ impl Desktop {
                     );
                 }
                 div()
-                    .rounded(px(3.))
+                    .rounded(px(crate::theme::radius::CHIP))
                     .border_1()
                     .border_color(t.border)
                     .overflow_hidden()
-                    .child(div().px_3().py_2().bg(t.surface).child(block.path.clone()))
+                    .child(
+                        div()
+                            .px_3()
+                            .py_2()
+                            .bg(t.surface)
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .text_size(px(crate::theme::size::SMALL))
+                            .child(div().text_color(t.muted).child(if block.path.is_empty() {
+                                block.title.clone()
+                            } else {
+                                block.path.clone()
+                            }))
+                            .child(diff_counts(block, t)),
+                    )
                     .child(
                         div()
                             .id(SharedString::from(format!("diff-{}", block.id)))
@@ -378,12 +618,33 @@ impl Desktop {
                     .into_any_element()
             }
             "thought" | "tool" | "task" | "explored" | "tool_group" => {
+                // TUI hierarchy: thoughts are amber with reasoning behind a rule; tasks
+                // take their agent colour and show metrics; tool rows stay quiet and
+                // expand into labelled parameter/result rows.
                 let op = block.operation.clone();
+                let running = block.status == "running";
+                let agent_tone = t.resolve(&block.color, t.blue);
+                let (title_tone, weight) = match block.kind.as_str() {
+                    "thought" => (t.amber, FontWeight::NORMAL),
+                    "task" => (agent_tone, FontWeight::MEDIUM),
+                    _ => (t.muted, FontWeight::NORMAL),
+                };
+                let title = if block.title.is_empty() {
+                    if block.heading.is_empty() {
+                        // The host's spinner slot; the status icon already shows activity.
+                        block.text.lines().next().unwrap_or("").replace("\u{e000} ", "").replace('\u{e000}', "")
+                    } else {
+                        block.heading.clone()
+                    }
+                } else {
+                    block.title.clone()
+                };
+                let inline_text = block.kind == "thought" && !block.title.is_empty();
                 let mut card = div()
                     .id(SharedString::from(block.id.clone()))
                     .flex()
                     .flex_col()
-                    .when(depth > 0, |d| d.ml_3().border_l_1().border_color(t.border))
+                    .when(depth > 0, |d| d.ml_3().pl_1().border_l_1().border_color(t.border))
                     .child(
                         div()
                             .id(SharedString::from(format!("heading-{}", block.id)))
@@ -392,67 +653,77 @@ impl Desktop {
                                 self.snapshot.panel_title.is_empty()
                                     && self.snapshot.prompt.is_none(),
                             )
-                            .focus(move |s| s.bg(t.raised).text_color(t.accent))
+                            .focus(move |s| s.bg(t.raised))
                             .px_2()
-                            .py_1()
-                            .rounded(px(5.))
+                            .py(px(3.))
+                            .rounded(px(crate::theme::radius::CHIP))
                             .flex()
                             .items_center()
                             .gap_2()
+                            .text_size(px(crate::theme::size::SMALL))
                             .text_color(t.muted)
-                            .child(icons::icon(
-                                if block.collapsed {
-                                    "chevron-right"
-                                } else {
-                                    "chevron-down"
-                                },
-                                t.muted,
-                            ))
+                            .when(op.is_some(), |d| {
+                                d.child(icons::icon(
+                                    if block.collapsed {
+                                        "chevron-right"
+                                    } else {
+                                        "chevron-down"
+                                    },
+                                    t.text_tertiary,
+                                ))
+                            })
                             .cursor(CursorStyle::Arrow)
-                            .hover(move |s| s.bg(t.raised))
-                            .child(icons::icon(
-                                if block.kind == "thought" {
-                                    "brain"
-                                } else if block.kind == "task" {
-                                    "network"
-                                } else if block.kind == "error" {
-                                    "triangle-alert"
-                                } else {
-                                    "terminal"
-                                },
-                                if block.kind == "error" {
-                                    t.red
-                                } else {
-                                    t.muted
-                                },
-                            ))
+                            .hover(move |s| s.bg(t.hover))
                             .child(
                                 div()
-                                    .flex_1()
                                     .min_w_0()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_size(px(12.))
-                                    .child(if block.title.is_empty() {
-                                        if block.heading.is_empty() {
-                                            block
-                                                .text
-                                                .lines()
-                                                .next()
-                                                .unwrap_or("")
-                                                .replace("\u{e000}", "●")
-                                        } else {
-                                            block.heading.clone()
-                                        }
+                                    .truncate()
+                                    .font_weight(weight)
+                                    .text_color(if running && block.kind != "thought" {
+                                        agent_tone
                                     } else {
-                                        block.title.clone()
-                                    }),
+                                        title_tone
+                                    })
+                                    .child(title),
                             )
-                            .when(!block.status.is_empty(), |d| {
+                            .when(inline_text && !block.text.is_empty(), |d| {
                                 d.child(
                                     div()
-                                        .text_size(px(10.))
-                                        .text_color(t.muted)
-                                        .child(block.status.clone()),
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_color(t.text_tertiary)
+                                        .child(block.text.clone()),
+                                )
+                            })
+                            .when(!block.path.is_empty() && block.kind == "tool_group", |d| {
+                                d.child(diff_counts(block, t))
+                            })
+                            .when(!block.status.is_empty(), |d| {
+                                let (symbol, label) = status_label(&block.status);
+                                let color = match symbol {
+                                    "check" => t.text_tertiary,
+                                    "x" => t.red,
+                                    "refresh-cw" => t.amber,
+                                    _ => t.muted,
+                                };
+                                d.child(
+                                    div()
+                                        .id(SharedString::from(format!("status-{}", block.id)))
+                                        .flex()
+                                        .items_center()
+                                        .flex_shrink_0()
+                                        .gap_1()
+                                        .text_size(px(theme::size::CAPTION))
+                                        .text_color(color)
+                                        .child(icons::icon(symbol, color))
+                                        .when(!label.is_empty(), |d| d.child(label.to_owned()))
+                                        .tooltip({
+                                            let status = block.status.clone();
+                                            move |_, cx| {
+                                                cx.new(|_| ControlHint(status.clone().into()))
+                                                    .into()
+                                            }
+                                        }),
                                 )
                             })
                             .on_click(cx.listener(move |this, _, w, cx| {
@@ -465,42 +736,62 @@ impl Desktop {
                                 }
                             })),
                     );
-                if !block.text.is_empty() && !block.title.is_empty() {
+                // Tasks: latest activity while running, metrics (tools · duration) always.
+                if block.kind == "task" {
+                    let activity = if running { &block.text } else { &String::new() };
+                    for line in activity.lines().chain(block.metrics.lines()) {
+                        card = card.child(
+                            div()
+                                .pl(px(theme::space::XL + 2.))
+                                .text_size(px(crate::theme::size::SMALL))
+                                .line_height(px(theme::size::CODE_LINE))
+                                .text_color(t.text_tertiary)
+                                .child(line.to_string()),
+                        );
+                    }
+                } else if !block.text.is_empty() && !block.title.is_empty() && !inline_text {
                     card = card.child(
                         div()
                             .px_4()
                             .pb_1()
-                            .text_size(px(12.))
-                            .line_height(px(18.))
-                            .text_color(if block.kind == "error" {
-                                t.red
-                            } else {
-                                t.muted
-                            })
+                            .text_size(px(crate::theme::size::SMALL))
+                            .line_height(px(theme::size::CODE_LINE))
+                            .text_color(t.muted)
                             .child(block.text.clone()),
                     );
                 }
                 if !block.detail.is_empty() {
-                    card = card.child(
+                    card = card.child(if block.kind == "thought" {
+                        thought_detail(&block.detail, t)
+                    } else if block.kind == "task" {
                         div()
-                            .px_4()
-                            .pb_1()
-                            .text_size(px(12.))
-                            .line_height(px(18.))
-                            .font_family("Menlo")
-                            .child(block.detail.clone()),
-                    );
+                            .pl(px(theme::space::XL + 2.))
+                            .text_size(px(crate::theme::size::SMALL))
+                            .line_height(px(theme::size::CODE_LINE))
+                            .text_color(t.muted)
+                            .child(block.detail.clone())
+                            .into_any_element()
+                    } else {
+                        labelled_detail(&block.detail, t)
+                    });
                 }
                 for member in &block.members {
                     card = card.child(self.render_block_depth(member, _w, cx, depth + 1));
                 }
                 if let Some(op) = &block.output_operation {
-                    card = card.child(self.button(
-                        SharedString::from(format!("output-{}", block.id)),
-                        "Show full output",
-                        json!({"type":"operation","operation":op}),
-                        cx,
-                    ));
+                    card = card.child(
+                        div().pl(px(theme::space::XL)).child(
+                            self.button(
+                                SharedString::from(format!("output-{}", block.id)),
+                                "Show full output",
+                                json!({"type":"operation","operation":op}),
+                                cx,
+                            )
+                            .py_0()
+                            .text_size(px(crate::theme::size::CAPTION))
+                            .text_color(t.brand),
+                        ),
+                    );
                 }
                 card.into_any_element()
             }
@@ -513,13 +804,14 @@ impl Desktop {
                     d.child(
                         div()
                             .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(t.brand)
                             .child(block.title.clone()),
                     )
                 })
                 .child(
                     div()
-                        .line_height(px(23.))
-                        .text_size(px(13.))
+                        .line_height(px(theme::size::BODY_LINE))
+                        .text_size(px(crate::theme::size::UI))
                         .text_color(t.muted)
                         .child(block.text.clone()),
                 )
@@ -543,10 +835,154 @@ impl Desktop {
         outer = outer.child(
             div()
                 .w_full()
-                .max_w(px(920.))
-                .when(block.kind == "user", |d| d.flex().justify_end())
+                .max_w(px(theme::size::READING))
                 .child(content),
         );
         outer.into_any_element()
+    }
+}
+
+/// `N files +added −removed` in diff colours, as the TUI ends a file-change row.
+/// The `N files` prefix appears only when a standalone file-change row touched more
+/// than one file (`block.files > 1`).
+fn diff_counts(block: &Content, t: Theme) -> AnyElement {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .gap_1()
+        .text_size(px(theme::size::CAPTION))
+        .font_family(theme::code_font())
+        .when(block.files > 1, |d| {
+            d.child(div().text_color(t.muted).child(format!("{} files", block.files)))
+        })
+        .child(div().text_color(t.green).child(format!("+{}", block.added)))
+        .child(div().text_color(t.red).child(format!("−{}", block.removed)))
+        .into_any_element()
+}
+
+/// One parsed detail line: a `  label: value` parameter row, or plain text that is
+/// emphasised when indented (result content) and muted otherwise (section labels).
+#[derive(Debug, PartialEq)]
+enum DetailRow<'a> {
+    Pair(&'a str, &'a str),
+    Text(&'a str, bool),
+}
+fn detail_rows(detail: &str) -> Vec<DetailRow<'_>> {
+    detail
+        .lines()
+        .map(|row| {
+            let pair = (row.starts_with("  ") && !row.starts_with("    "))
+                .then(|| row.trim_start().split_once(": "))
+                .flatten();
+            match pair {
+                Some((label, value)) => DetailRow::Pair(label, value),
+                None => DetailRow::Text(row.strip_prefix("  ").unwrap_or(row), row.starts_with(' ')),
+            }
+        })
+        .collect()
+}
+/// Tool parameters and results behind a thin rule: labels in a fixed muted column,
+/// values in full text colour, nothing clipped (the TUI's `│ label  value`).
+fn labelled_detail(detail: &str, t: Theme) -> AnyElement {
+    div()
+        .ml(px(theme::space::LG))
+        .mb_1()
+        .pl_3()
+        .border_l_1()
+        .border_color(t.border)
+        .flex()
+        .flex_col()
+        .text_size(px(theme::size::SMALL))
+        .line_height(px(theme::size::CODE_LINE))
+        .font_family(theme::code_font())
+        .children(detail_rows(detail).into_iter().map(|row| match row {
+            DetailRow::Pair(label, value) => div()
+                .flex()
+                .gap_3()
+                .child(
+                    div()
+                        .w(px(104.))
+                        .flex_shrink_0()
+                        .text_color(t.muted)
+                        .child(label.to_string()),
+                )
+                .child(div().flex_1().min_w_0().text_color(t.text).child(value.to_string())),
+            // Unindented rows are section titles (PARAMETERS, RESULT): bold, muted.
+            DetailRow::Text(text, false) if !text.is_empty() => div()
+                .pt_1()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_size(px(theme::size::CAPTION))
+                .text_color(t.muted)
+                .child(text.to_string()),
+            // `label:` introduces a multi-line value; the label stays muted.
+            DetailRow::Text(text, _) if !text.starts_with(' ') && text.ends_with(':') => {
+                div().text_color(t.muted).child(text.to_string())
+            }
+            DetailRow::Text(text, _) => div()
+                .text_color(t.text)
+                .child(if text.is_empty() { " ".to_string() } else { text.to_string() }),
+        }))
+        .into_any_element()
+}
+/// Reasoning dimmed behind a rule; whole-line `**headings**` become muted bold.
+fn thought_detail(detail: &str, t: Theme) -> AnyElement {
+    div()
+        .ml(px(theme::space::LG))
+        .mb_1()
+        .pl_3()
+        .border_l_1()
+        .border_color(t.border)
+        .flex()
+        .flex_col()
+        .text_size(px(theme::size::SMALL))
+        .line_height(px(theme::size::CODE_LINE))
+        .children(detail.lines().map(|line| {
+            let trimmed = line.trim();
+            let heading = trimmed.len() > 4
+                && trimmed.starts_with("**")
+                && trimmed.ends_with("**")
+                && !trimmed[2..trimmed.len() - 2].contains("**");
+            if heading {
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(t.muted)
+                    .child(trimmed[2..trimmed.len() - 2].to_string())
+            } else {
+                div()
+                    .text_color(t.text_tertiary)
+                    .child(if line.is_empty() { " ".to_string() } else { line.replace("**", "") })
+            }
+        }))
+        .into_any_element()
+}
+
+/// Only successful terminal status becomes an icon; all other host wording
+/// remains visible, including cancellations and unknown provider states.
+fn status_label(status: &str) -> (&'static str, &str) {
+    match status {
+        "completed" | "complete" | "done" | "success" => ("check", ""),
+        "failed" | "error" => ("x", status),
+        "running" | "pending" => ("refresh-cw", status),
+        _ => ("circle-dot", status),
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn status_keeps_failure_running_and_unknown_words() {
+        assert_eq!(status_label("completed"), ("check", ""));
+        assert_eq!(status_label("failed"), ("x", "failed"));
+        assert_eq!(status_label("running"), ("refresh-cw", "running"));
+        assert_eq!(status_label("cancelled"), ("circle-dot", "cancelled"));
+    }
+    #[test]
+    fn detail_rows_split_parameters_like_the_tui() {
+        let rows = detail_rows("Parameters\n  path: src/a.py\n  url: http://x: y\n    nested: no\n plain");
+        assert_eq!(rows[0], DetailRow::Text("Parameters", false));
+        assert_eq!(rows[1], DetailRow::Pair("path", "src/a.py"));
+        assert_eq!(rows[2], DetailRow::Pair("url", "http://x: y"));
+        assert_eq!(rows[3], DetailRow::Text("  nested: no", true));
+        assert_eq!(rows[4], DetailRow::Text(" plain", true));
     }
 }

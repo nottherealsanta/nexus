@@ -9,40 +9,40 @@
        url("/assets/monaspace-argon-latin-400.woff") format("woff");
 }
 
-/* Design tokens: the "Signal" finish (design.md). Role names map one to one
-   to rust/tui/src/render.rs (nx-accent -> --accent, nx-blue -> --info, ...); the
-   values are the web's five signal colors on a near-black canvas. Dark is
-   the default; light mirrors every role. */
+/* Design tokens: the minimal finish (docs/web.md "Visual system"). Role names map
+   one to one to rust/tui/src/render.rs (nx-accent -> --accent, nx-blue -> --info,
+   ...). Panes share one canvas and are separated by hairlines; color is reserved
+   for state. Dark is the default; light mirrors every role. */
 :root {
   --control-h: 28px;
   color-scheme: dark;
-  --canvas: #141414;
-  --sidebar: #0f0f0f;
-  --elevated: #181818;
-  --raised: #1f1f1f;
-  --hover: #1f1f1f;
-  --active: #262626;
-  --border: #2e2e2e;
-  --border-strong: #4a4a4a;
+  --canvas: #0e0e0f;
+  --sidebar: #0e0e0f;
+  --elevated: #161618;
+  --raised: #1a1a1c;
+  --hover: #1a1a1c;
+  --active: #222225;
+  --border: #232326;
+  --border-strong: #3a3a3f;
   --frame: #d6d6d6;
-  --text: #ededed;
-  --muted: #a0a0a0;
-  --quiet: #6b6b6b;
+  --text: #ececee;
+  --muted: #a1a1a7;
+  --quiet: #64646b;
   --accent: #f55b1b;
-  --accent-ink: #f55b1b;
+  --accent-ink: #f8763f;
   --on-accent: #111111;
   --on-signal: #111111;
   --info: #3dbefa;
-  --purple: #f274f5;
-  --success: #7ee34a;
-  --warning: #fdd329;
-  --danger: #ff4d6a;
+  --purple: #c58af9;
+  --success: #6fd24a;
+  --warning: #f2c94c;
+  --danger: #ff5c74;
   --label-neutral: #8a8a8a;
-  --list: #0f0f0f;
-  --dialog: #0f0f0f;
-  --field: #121212;
-  --code: #181818;
-  --scrim: #070707b3;
+  --list: #131315;
+  --dialog: #131315;
+  --field: #121214;
+  --code: #131315;
+  --scrim: #050506b8;
   --drop: #000000;
   --tint-mix: 20%;
   --shade-mix: 55%;
@@ -89,18 +89,18 @@
 
 :root[data-theme=light] {
   color-scheme: light;
-  --canvas: #f4f4f2;
-  --sidebar: #ececea;
-  --elevated: #fafaf8;
-  --raised: #e6e6e2;
-  --hover: #e6e6e2;
-  --active: #dcdcd7;
-  --border: #d2d2cc;
-  --border-strong: #a9a9a2;
+  --canvas: #fbfbfa;
+  --sidebar: #fbfbfa;
+  --elevated: #f3f3f1;
+  --raised: #efefec;
+  --hover: #efefec;
+  --active: #e7e7e3;
+  --border: #e4e4e0;
+  --border-strong: #c6c6c0;
   --frame: #1a1a1a;
-  --text: #141414;
-  --muted: #555555;
-  --quiet: #8a8a86;
+  --text: #161616;
+  --muted: #5b5b5b;
+  --quiet: #96968f;
   --accent: #cc4a10;
   --accent-ink: #cc4a10;
   --on-accent: #ffffff;
@@ -111,10 +111,10 @@
   --warning: #9a7400;
   --danger: #cf2448;
   --label-neutral: #6f6f6f;
-  --list: #fafaf8;
-  --dialog: #fafaf8;
+  --list: #ffffff;
+  --dialog: #ffffff;
   --field: #ffffff;
-  --code: #fafaf8;
+  --code: #f6f6f4;
   --scrim: #1f232866;
   --drop: #a9a9a2;
   --tint-mix: 14%;
@@ -124,18 +124,18 @@
 @media (prefers-color-scheme: light) {
   :root[data-theme=system] {
     color-scheme: light;
-    --canvas: #f4f4f2;
-    --sidebar: #ececea;
-    --elevated: #fafaf8;
-    --raised: #e6e6e2;
-    --hover: #e6e6e2;
-    --active: #dcdcd7;
-    --border: #d2d2cc;
-    --border-strong: #a9a9a2;
+    --canvas: #fbfbfa;
+    --sidebar: #fbfbfa;
+    --elevated: #f3f3f1;
+    --raised: #efefec;
+    --hover: #efefec;
+    --active: #e7e7e3;
+    --border: #e4e4e0;
+    --border-strong: #c6c6c0;
     --frame: #1a1a1a;
-    --text: #141414;
-    --muted: #555555;
-    --quiet: #8a8a86;
+    --text: #161616;
+    --muted: #5b5b5b;
+    --quiet: #96968f;
     --accent: #cc4a10;
     --accent-ink: #cc4a10;
     --on-accent: #ffffff;
@@ -146,10 +146,10 @@
     --warning: #9a7400;
     --danger: #cf2448;
     --label-neutral: #6f6f6f;
-    --list: #fafaf8;
-    --dialog: #fafaf8;
+    --list: #ffffff;
+    --dialog: #ffffff;
     --field: #ffffff;
-    --code: #fafaf8;
+    --code: #f6f6f4;
     --scrim: #1f232866;
     --drop: #a9a9a2;
     --tint-mix: 14%;

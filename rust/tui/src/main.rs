@@ -1,5 +1,6 @@
 //! Presentation-only terminal client. Python owns all host commands/reduction.
 mod bridge;
+mod copy_button;
 mod disclosure;
 mod editor;
 mod input;
@@ -35,7 +36,7 @@ fn resolve_operation(
     operation: &Option<serde_json::Value>,
     column: Option<usize>,
 ) -> Option<serde_json::Value> {
-    let operation = operation.as_ref()?;
+    let operation = copy_button::inner(operation)?;
     if operation["kind"] != "context_chips" {
         return Some(operation.clone());
     }
@@ -49,6 +50,57 @@ fn resolve_operation(
         );
         (column >= start && column < end).then(|| chip["operation"].clone())
     })
+}
+
+/// Edit distance with adjacent swaps, so `mew` is one step from `new`.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let mut rows = vec![(0..=b.len()).collect::<Vec<_>>()];
+    for i in 1..=a.len() {
+        let mut row = vec![i];
+        for j in 1..=b.len() {
+            let mut c = (rows[i - 1][j] + 1)
+                .min(row[j - 1] + 1)
+                .min(rows[i - 1][j - 1] + usize::from(a[i - 1] != b[j - 1]));
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                c = c.min(rows[i - 2][j - 2] + 1);
+            }
+            row.push(c);
+        }
+        rows.push(row);
+    }
+    rows[a.len()][b.len()]
+}
+
+/// Ten slash commands: prefix matches, then substring and typo matches, then the rest
+/// (mirrors `ui_support.completion.rank_menu`), so the popup keeps a steady height.
+fn rank_commands(commands: &[(String, Vec<String>)], needle: &str) -> Vec<String> {
+    let needle = needle.trim_start_matches('/');
+    let tolerance = if needle.chars().count() < 5 { 1 } else { 2 };
+    let mut rows: Vec<(usize, &String)> = commands
+        .iter()
+        .map(|(name, aliases)| {
+            let tier = std::iter::once(name)
+                .chain(aliases)
+                .map(|n| {
+                    let n = n.trim_start_matches('/').to_lowercase();
+                    if n.starts_with(needle) {
+                        0
+                    } else if n.contains(needle) {
+                        1
+                    } else if !needle.is_empty() && edit_distance(needle, &n) <= tolerance {
+                        2
+                    } else {
+                        3
+                    }
+                })
+                .min()
+                .unwrap_or(3);
+            (tier, name)
+        })
+        .collect();
+    rows.sort();
+    rows.into_iter().take(10).map(|(_, n)| n.clone()).collect()
 }
 
 /// Reuse only ancestor requests in the same token context while the host responds.
@@ -68,11 +120,15 @@ fn completion_candidates(cache: &[(String, Vec<String>)], prefix: &str) -> Vec<S
                 return values.clone();
             }
             let needle = token.trim_start_matches('@').to_lowercase();
-            values
+            let (mut hits, rest): (Vec<_>, Vec<_>) = values
                 .iter()
-                .filter(|value| value.to_lowercase().starts_with(&needle))
-                .cloned()
-                .collect()
+                .partition(|value| value.to_lowercase().starts_with(&needle));
+            // File menus keep their height while the host re-ranks.
+            if token.starts_with('@') {
+                hits.extend(rest);
+                hits.truncate(10);
+            }
+            hits.into_iter().cloned().collect()
         })
         .unwrap_or_default()
 }
@@ -126,13 +182,68 @@ fn sessions_surface(
         }
     }
     cache.sessions_focus = true;
-    let visible = render::visible_sessions(s, &cache.filter);
-    cache.sessions_sel = visible
-        .iter()
-        .find(|i| s.sessions[**i].active)
-        .or(visible.first())
-        .map(|i| s.sessions[*i].id.clone());
+    select_visible_session(s, cache, true);
     Ok(())
+}
+
+/// `/sessions` or `/session` with no argument: the client opens the sidebar itself at
+/// once (the host still refreshes the list), so it never waits on a round trip.
+fn opens_sessions(text: &str) -> bool {
+    matches!(text.trim(), "/sessions" | "/session")
+}
+
+/// Keep the keyboard selection on a session the sidebar shows (preferring the
+/// current one when `prefer_active`), or the first match.
+fn select_visible_session(s: &Snapshot, cache: &mut render::Cache, prefer_active: bool) {
+    let visible = render::visible_sessions(s, &cache.filter, &cache.project);
+    let kept = !prefer_active
+        && cache
+            .sessions_sel
+            .as_deref()
+            .is_some_and(|id| visible.iter().any(|i| s.sessions[*i].id == id));
+    if !kept {
+        cache.sessions_sel = visible
+            .iter()
+            .find(|i| prefer_active && s.sessions[**i].active)
+            .or(visible.first())
+            .map(|i| s.sessions[*i].id.clone());
+    }
+}
+
+/// Escape or Ctrl+C in the focused sessions sidebar: close it (the drawer, or the
+/// docked sidebar's saved preference, like `Ctrl+B`).
+fn close_sessions(
+    s: &mut Snapshot,
+    cache: &mut render::Cache,
+    local_ui: &mut local_ui::LocalUi,
+    width: u16,
+) -> io::Result<()> {
+    cache.sessions_focus = false;
+    cache.filtering = false;
+    if width < 90 {
+        s.sessions_drawer = false;
+    } else if s.sessions_sidebar {
+        local_ui.dispatch(json!({"type":"toggle","key":"sessions_sidebar"}), s)?;
+    }
+    Ok(())
+}
+
+/// The sidebar's rows exactly as drawn and hit-tested (without the selection).
+fn sidebar_rows(
+    s: &Snapshot,
+    cache: &render::Cache,
+    region: ratatui::layout::Rect,
+) -> Vec<(ratatui::text::Line<'static>, Option<render::SidebarHit>)> {
+    render::session_sidebar(
+        s,
+        &render::Palette::new(s.theme == "nexus-light"),
+        usize::from(region.width.saturating_sub(3)),
+        0,
+        &cache.filter,
+        &cache.project,
+        cache.filtering,
+        None,
+    )
 }
 
 /// Keep the keyboard-selected session on screen: line index of its first row in the
@@ -146,33 +257,25 @@ fn sessions_follow(
     let Some(id) = cache.sessions_sel.as_deref() else {
         return scroll;
     };
-    let palette = render::Palette::new(s.theme == "nexus-light");
-    let rows = render::session_sidebar(
-        s,
-        &palette,
-        usize::from(region.width.saturating_sub(3)),
-        0,
-        &cache.filter,
-        false,
-        None,
-    );
+    let rows = sidebar_rows(s, cache, region);
     let Some(line) = rows.iter().position(
         |(_, hit)| matches!(hit, Some(render::SidebarHit::Session(i)) if s.sessions[*i].id == id),
     ) else {
         return scroll;
     };
-    let height = usize::from(region.height.saturating_sub(3)).max(1);
-    let top = line.saturating_sub(1);
-    // Show a group heading above the first row of its group.
-    let top = if top > 0 && rows[top].1.is_none() {
-        top - 1
+    let height = render::sessions_list_height(s, region);
+    // Scroll offsets count from row 1 (row 0 is the fixed title).
+    let at = line - 1;
+    // Show the group heading (and its blank row) above the first session of a group.
+    let top = if matches!(rows[line - 1].1, Some(render::SidebarHit::Heading(_))) {
+        at.saturating_sub(2)
     } else {
-        top
+        at
     };
     if top < scroll {
         top
-    } else if top + 2 > scroll + height {
-        top + 2 - height
+    } else if at + 1 > scroll + height {
+        at + 1 - height
     } else {
         scroll
     }
@@ -522,23 +625,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let token = prefix.rsplit(char::is_whitespace).next().unwrap_or("");
         let mut completion = Snapshot::default();
         completion.theme = s.theme.clone();
+        completion.command_help = s.command_help.clone();
         completion.completion_query = token.to_string();
         completion.completions =
             if token.starts_with('/') && !prefix.contains(' ') && !s.commands.is_empty() {
                 let needle = token.to_lowercase();
-                completion.completions = s
-                    .commands
-                    .iter()
-                    .filter(|(name, aliases)| {
-                        name.to_lowercase().starts_with(&needle)
-                            || aliases
-                                .iter()
-                                .any(|alias| alias.to_lowercase().starts_with(&needle))
-                    })
-                    .map(|(name, _)| name.clone())
-                    .collect();
-                completion.completions.sort();
-                completion.completions
+                rank_commands(&s.commands, &needle)
             } else {
                 completion_candidates(&completion_cache, prefix)
             };
@@ -878,11 +970,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // Sessions filter (click the box): typing edits it, Enter keeps it, Escape clears it.
                     // In the focused sidebar, Enter ends typing and opens the selected match at once.
                     let mut open_selected = false;
+                    if cache.sessions_focus
+                        && key.code == KeyCode::Char('c')
+                        && key.modifiers.contains(KeyModifiers::CONTROL)
+                    {
+                        close_sessions(&mut s, &mut cache, &mut local_ui, terminal.size()?.width)?;
+                        dirty = true;
+                        continue;
+                    }
                     if cache.filtering {
                         match key.code {
                             KeyCode::Enter => {
                                 cache.filtering = false;
                                 open_selected = cache.sessions_focus;
+                            }
+                            // Escape clears typed text; with nothing typed it closes the sidebar.
+                            KeyCode::Esc if cache.filter.is_empty() => {
+                                close_sessions(
+                                    &mut s,
+                                    &mut cache,
+                                    &mut local_ui,
+                                    terminal.size()?.width,
+                                )?;
+                                dirty = true;
+                                continue;
                             }
                             KeyCode::Esc => {
                                 cache.filter.clear();
@@ -901,15 +1012,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         if cache.sessions_focus {
                             // Keep the selection on a visible match while the filter changes.
-                            let visible = render::visible_sessions(&s, &cache.filter);
-                            let kept = cache
-                                .sessions_sel
-                                .as_deref()
-                                .is_some_and(|id| visible.iter().any(|i| s.sessions[*i].id == id));
-                            if !kept {
-                                cache.sessions_sel =
-                                    visible.first().map(|i| s.sessions[*i].id.clone());
-                            }
+                            select_visible_session(&s, &mut cache, false);
                         }
                         sessions_scroll = 0;
                         dirty = true;
@@ -918,9 +1021,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     // Keyboard focus in the sessions sidebar: arrows move, Enter opens, `/` or
-                    // typing filters, Escape clears the filter and then leaves.
+                    // typing filters, Escape clears the filter and then closes the sidebar.
                     if cache.sessions_focus {
-                        let visible = render::visible_sessions(&s, &cache.filter);
+                        let visible = render::visible_sessions(&s, &cache.filter, &cache.project);
                         let at = cache
                             .sessions_sel
                             .as_deref()
@@ -961,10 +1064,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     cache.filter.clear();
                                     sessions_scroll = 0;
                                 } else {
-                                    cache.sessions_focus = false;
-                                    if narrow {
-                                        s.sessions_drawer = false;
-                                    }
+                                    close_sessions(
+                                        &mut s,
+                                        &mut cache,
+                                        &mut local_ui,
+                                        terminal.size()?.width,
+                                    )?;
                                 }
                             }
                             KeyCode::Char('/')
@@ -989,9 +1094,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 cache.sessions_sel = Some(s.sessions[i].id.clone());
                             } else if matches!(key.code, KeyCode::Char(_)) {
                                 // The filter changed: select its first match.
-                                cache.sessions_sel = render::visible_sessions(&s, &cache.filter)
-                                    .first()
-                                    .map(|i| s.sessions[*i].id.clone());
+                                cache.sessions_sel =
+                                    render::visible_sessions(&s, &cache.filter, &cache.project)
+                                        .first()
+                                        .map(|i| s.sessions[*i].id.clone());
                             }
                             if cache.sessions_focus {
                                 sessions_scroll = sessions_follow(
@@ -1457,7 +1563,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 KeyCode::Char('r')
                                     if key.modifiers.contains(KeyModifiers::CONTROL) =>
                                 {
-                                    action("refresh_models", "")?
+                                    // A row button (MCP Restart) owns Ctrl+R; elsewhere it refreshes models.
+                                    match selected.and_then(|row| row.action_operation.clone()) {
+                                        Some(op) => send(
+                                            json!({"type":"operation","operation":op,"generation":s.generation}),
+                                        )?,
+                                        None => action("refresh_models", "")?,
+                                    }
                                 }
                                 KeyCode::Char('s')
                                     if key.modifiers.contains(KeyModifiers::CONTROL)
@@ -1536,6 +1648,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     [completion_index.min(completion.completions.len() - 1)]
                                 .clone();
                                 draft.take();
+                                if opens_sessions(&value) {
+                                    details_focus = false;
+                                    sessions_surface(&mut s, &mut cache, &mut local_ui, false, terminal.size()?.width)?;
+                                }
                                 send(
                                     json!({"type":"submit","text":value,"mode":"steer","generation":s.generation}),
                                 )?;
@@ -1574,14 +1690,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 if follow {
                                     scroll = cache.max_scroll;
                                 }
-                                follow = false;
                                 scroll = scroll.saturating_sub(10);
+                                follow = scroll >= cache.max_scroll;
                             }
                             KeyCode::PageDown | KeyCode::Down => {
-                                follow = false;
                                 scroll = (scroll
                                     + if key.code == KeyCode::PageDown { 10 } else { 1 })
                                 .min(cache.max_scroll);
+                                follow = scroll >= cache.max_scroll;
                             }
                             KeyCode::Home => {
                                 follow = false;
@@ -1672,6 +1788,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 action("copy_text", draft.selected())?;
                                 continue;
                             }
+                            // Text in the composer: Ctrl+C clears it first; an empty one cancels the turn.
+                            KeyCode::Char('c') if !draft.text.is_empty() => {
+                                draft.clear();
+                                dirty = true;
+                                continue;
+                            }
                             KeyCode::Char('c') => {
                                 action("cancel", "")?;
                                 continue;
@@ -1680,6 +1802,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     match key.code {
+                        // Escape closes a visible sessions sidebar first (focused or not);
+                        // otherwise a double Escape cancels the turn.
+                        KeyCode::Esc if drawn_regions.sessions.width > 0 => {
+                            close_sessions(
+                                &mut s,
+                                &mut cache,
+                                &mut local_ui,
+                                terminal.size()?.width,
+                            )?;
+                        }
                         KeyCode::Esc => {
                             if escape.elapsed() < Duration::from_millis(1500) {
                                 action("cancel", "")?;
@@ -1698,22 +1830,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 } else {
                                     "steer"
                                 };
+                                let text = draft.take();
+                                if opens_sessions(&text) {
+                                    details_focus = false;
+                                    sessions_surface(&mut s, &mut cache, &mut local_ui, false, terminal.size()?.width)?;
+                                }
                                 send(
-                                    json!({"type":"submit","text":draft.take(),"mode":mode,"generation":s.generation}),
+                                    json!({"type":"submit","text":text,"mode":mode,"generation":s.generation}),
                                 )?;
                                 follow = true;
                             }
                         }
                         KeyCode::PageDown => {
-                            follow = false;
                             scroll = (scroll + 10).min(cache.max_scroll);
+                            // Reaching the bottom resumes auto-scroll.
+                            follow = scroll >= cache.max_scroll;
                         }
                         KeyCode::PageUp => {
                             if follow {
                                 scroll = cache.max_scroll;
                             }
-                            follow = false;
                             scroll = scroll.saturating_sub(10);
+                            follow = scroll >= cache.max_scroll;
                         }
                         KeyCode::End if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             follow = true;
@@ -1886,8 +2024,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 if follow {
                                     scroll = cache.max_scroll;
                                 }
-                                follow = false;
                                 scroll = scroll.saturating_sub(3);
+                                follow = scroll >= cache.max_scroll;
                             } else {
                                 panel_scroll = panel_scroll.saturating_sub(3);
                             }
@@ -1954,24 +2092,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             if r.sessions.contains((mouse.column, mouse.row).into()) {
                                 sessions_scroll = (sessions_scroll + 3).min(
-                                    render::session_sidebar(
-                                        &s,
-                                        &render::Palette::new(s.theme == "nexus-light"),
-                                        usize::from(r.sessions.width.saturating_sub(3)),
-                                        0,
-                                        &cache.filter,
-                                        cache.filtering,
-                                        None,
-                                    )
-                                    .len()
-                                    .saturating_sub(r.sessions.height.saturating_sub(3) as usize),
+                                    sidebar_rows(&s, &cache, r.sessions).len().saturating_sub(
+                                        1 + render::sessions_list_height(&s, r.sessions),
+                                    ),
                                 );
                                 dirty = true;
                                 continue;
                             }
                             if s.panel_title.is_empty() && s.prompt.is_none() {
-                                follow = false;
                                 scroll = (scroll + 3).min(cache.max_scroll);
+                                // Back at the bottom: follow new output again.
+                                follow = scroll >= cache.max_scroll;
                             } else {
                                 panel_scroll += 3;
                             }
@@ -1981,22 +2112,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 continue;
                             }
                             if r.sessions.contains((mouse.column, mouse.row).into()) {
-                                if let Some(row) = render::session_sidebar(
+                                if let Some(row) = render::sessions_row_at(
                                     &s,
-                                    &render::Palette::new(s.theme == "nexus-light"),
-                                    usize::from(r.sessions.width.saturating_sub(3)),
-                                    0,
-                                    &cache.filter,
-                                    cache.filtering,
-                                    None,
+                                    r.sessions,
+                                    sessions_scroll,
+                                    mouse.row,
                                 )
-                                .get(
-                                    sessions_scroll
-                                        + (mouse.row - r.sessions.y).saturating_sub(1) as usize,
-                                )
+                                .and_then(|at| {
+                                    sidebar_rows(&s, &cache, r.sessions).into_iter().nth(at)
+                                })
                                 .and_then(|(_, hit)| match hit {
                                     Some(render::SidebarHit::Session(index)) => {
-                                        s.sessions.get(*index)
+                                        s.sessions.get(index)
                                     }
                                     _ => None,
                                 }) {
@@ -2032,7 +2159,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 };
                                 if text.is_empty() {
                                     cache.selection = None;
-                                    if let Some(operation) =
+                                    if let Some(copied) = copy_button::hit(
+                                        &cache.operations,
+                                        &cache.lines,
+                                        line,
+                                        column,
+                                    )
+                                    .and_then(|(block, fence)| {
+                                        copy_button::text(&s.blocks, &block, fence)
+                                    }) {
+                                        let mut tty = io::stderr();
+                                        write!(tty, "\x1b]52;c;{}\x07", base64(copied.as_bytes()))?;
+                                        tty.flush()?;
+                                        send(
+                                            json!({"type":"copy_selection","text":copied,"generation":s.generation}),
+                                        )?;
+                                    } else if let Some(operation) =
                                         cache.operations.get(line).and_then(|operation| {
                                             resolve_operation(operation, Some(column))
                                         })
@@ -2080,6 +2222,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 dirty = true;
                                 continue;
                             }
+                            if let Some((id, op)) =
+                                render::queue_control_at(r.composer, &s, mouse.column, mouse.row)
+                            {
+                                send(
+                                    json!({"type":"queue_edit","text":id,"key":op,"generation":s.generation}),
+                                )?;
+                                continue;
+                            }
                             if render::update_notice_at(&s, r.workspace, mouse.column, mouse.row) {
                                 action("update_help", "")?;
                                 continue;
@@ -2100,9 +2250,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     completion.completions.len(),
                                 );
                                 if area.contains((mouse.column, mouse.row).into()) {
-                                    let row = usize::from(mouse.row.saturating_sub(area.y + 1));
-                                    let index = completion_index.saturating_sub(7) + row;
-                                    if mouse.row > area.y && mouse.row < area.bottom() {
+                                    let row = usize::from(mouse.row.saturating_sub(area.y));
+                                    let index = completion_index.saturating_sub(9) + row;
+                                    if mouse.row >= area.y && mouse.row < area.bottom() {
                                         if let Some(value) = completion.completions.get(index) {
                                             let start = draft.cursor - query.len();
                                             let replacement = format!(
@@ -2152,7 +2302,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         &s, area, &filter, selection, mouse.row,
                                     ) {
                                         selection = index;
-                                        if render::panel_toggle_at(
+                                        let button = render::panel_action_at(
+                                            &s,
+                                            area,
+                                            &filter,
+                                            selection,
+                                            mouse.column,
+                                            mouse.row,
+                                        )
+                                        .then(|| {
+                                            s.items
+                                                .iter()
+                                                .filter(|row| row.matches(&filter))
+                                                .nth(selection)
+                                                .and_then(|row| row.action_operation.clone())
+                                        })
+                                        .flatten();
+                                        if let Some(op) = button {
+                                            send(
+                                                json!({"type":"operation","operation":op,"generation":s.generation}),
+                                            )?;
+                                        } else if render::panel_toggle_at(
                                             &s,
                                             area,
                                             &filter,
@@ -2267,47 +2437,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                     continue;
                                 }
-                                let hit = render::session_sidebar(
+                                // Project chips under the title filter the list to one project.
+                                if let Some(project) =
+                                    render::project_chip_at(&s, r.sessions, mouse.column, mouse.row)
+                                {
+                                    cache.project = project;
+                                    sessions_scroll = 0;
+                                    select_visible_session(&s, &mut cache, false);
+                                    dirty = true;
+                                    continue;
+                                }
+                                let rows = sidebar_rows(&s, &cache, r.sessions);
+                                let at = render::sessions_row_at(
                                     &s,
-                                    &render::Palette::new(s.theme == "nexus-light"),
-                                    usize::from(r.sessions.width.saturating_sub(3)),
-                                    0,
-                                    &cache.filter,
-                                    cache.filtering,
-                                    None,
-                                )
-                                .get(
-                                    sessions_scroll
-                                        + (mouse.row - r.sessions.y).saturating_sub(1) as usize,
-                                )
-                                .and_then(|(_, hit)| *hit);
+                                    r.sessions,
+                                    sessions_scroll,
+                                    mouse.row,
+                                );
+                                let hit = at.and_then(|at| rows.get(at)).and_then(|(_, hit)| *hit);
                                 match hit {
                                     Some(render::SidebarHit::New) => action("command", "/new")?,
 
                                     Some(render::SidebarHit::Archived) => {
                                         action("command", "/archived")?
                                     }
+                                    // A heading picks its project; again, all projects.
+                                    Some(render::SidebarHit::Heading(index)) => {
+                                        let key =
+                                            render::project_key(&s.sessions[index]).to_string();
+                                        cache.project = if cache.project == key {
+                                            String::new()
+                                        } else {
+                                            key
+                                        };
+                                        sessions_scroll = 0;
+                                        select_visible_session(&s, &mut cache, false);
+                                    }
                                     _ => {}
                                 }
-                                if let Some(row) = render::session_sidebar(
-                                    &s,
-                                    &render::Palette::new(s.theme == "nexus-light"),
-                                    usize::from(r.sessions.width.saturating_sub(3)),
-                                    0,
-                                    &cache.filter,
-                                    cache.filtering,
-                                    None,
-                                )
-                                .get(
-                                    sessions_scroll
-                                        + (mouse.row - r.sessions.y).saturating_sub(1) as usize,
-                                )
-                                .and_then(|(_, hit)| match hit {
-                                    Some(render::SidebarHit::Session(index)) => {
-                                        s.sessions.get(*index)
-                                    }
-                                    _ => None,
-                                }) {
+                                if let Some(row) =
+                                    at.and_then(|at| rows.get(at))
+                                        .and_then(|(_, hit)| match hit {
+                                            Some(render::SidebarHit::Session(index)) => {
+                                                s.sessions.get(*index)
+                                            }
+                                            _ => None,
+                                        })
+                                {
                                     send(
                                         json!({"type":"session_open","workspace":row.workspace,"text":row.id,"generation":s.generation}),
                                     )?;
@@ -2360,8 +2536,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         action("command", "/new")?
                                     }
                                     Some((render::TabHit::Sessions, _)) => {
+                                        // Narrow: open (or close) locally at once; the list is
+                                        // already kept fresh by the host's poll.
                                         if r.tabs.width < 110 {
-                                            action("command", "/sessions")?;
+                                            details_focus = false;
+                                            sessions_surface(
+                                                &mut s,
+                                                &mut cache,
+                                                &mut local_ui,
+                                                true,
+                                                terminal.size()?.width,
+                                            )?;
                                         } else {
                                             s.last_opened = "sessions".into();
                                             local_ui.dispatch(
@@ -2414,7 +2599,10 @@ mod tests {
         ];
         assert_eq!(completion_candidates(&cache, "/age"), vec!["/agent"]);
         assert_eq!(completion_candidates(&cache, "/a"), vec!["/agent"]);
-        assert_eq!(completion_candidates(&cache, "@sr"), vec!["src/main.rs"]);
+        assert_eq!(
+            completion_candidates(&cache, "@sr"),
+            vec!["src/main.rs", "docs/index.md"]
+        );
         assert_eq!(completion_candidates(&cache, "/effort h"), vec!["high"]);
         assert!(completion_candidates(&cache, "/agent h").is_empty());
         assert!(completion_candidates(&cache, "ordinary text").is_empty());

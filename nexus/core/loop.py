@@ -1630,16 +1630,20 @@ async def _emit_gate_decision(
     await emitter.emit("permission.resolved", data)
 
 
-async def _emit_terminal(emitter: _Emitter, state: TurnState) -> None:
+async def _emit_terminal(
+    emitter: _Emitter, state: TurnState, limit: str | None = None
+) -> None:
     if state.phase == "completed":
-        await emitter.emit(
-            "turn.completed",
-            {
-                "stop_reason": state.stop_reason,
-                "iterations": state.iteration,
-                "usage": _turn_usage_data(state.usage),
-            },
-        )
+        data: dict[str, Any] = {
+            "stop_reason": state.stop_reason,
+            "iterations": state.iteration,
+            "usage": _turn_usage_data(state.usage),
+        }
+        # Which ``TurnLimits`` field ended the turn, so a limit stop is never
+        # mistaken for the model choosing to stop.
+        if limit is not None:
+            data["limit"] = limit
+        await emitter.emit("turn.completed", data)
     elif state.phase == "failed":
         await emitter.emit(
             "turn.failed",
@@ -1814,6 +1818,7 @@ async def run_turn(
 
     malformed_total = 0
     terminal: TurnState | None = None
+    limit_reason: str | None = None
     #: The generation pinned for the iteration currently executing. Held across
     #: assembly, planning, dispatch, and result persistence, then released.
     manifest_lease: ManifestLeaseView | None = None
@@ -1857,6 +1862,7 @@ async def run_turn(
             )
             if reason is not None:
                 stop = "max_iterations" if reason == "max_iterations" else "budget"
+                limit_reason = reason
                 terminal = state.complete(stop)
                 break
             token.raise_if_cancelled()
@@ -2579,7 +2585,7 @@ async def run_turn(
                         "error": terminal.error,
                     },
                 )
-            await _emit_terminal(emitter, terminal)
+            await _emit_terminal(emitter, terminal, limit_reason)
         finally:
             _release_manifest()
             lease.release()

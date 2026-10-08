@@ -89,7 +89,7 @@ def test_blocks_follow_event_order_with_textual_gaps(tmp_path, monkeypatch):
     assert user["number"] == 1 and user["title"] == "hi there" and user["text"] == "second line"
     assert tool["gap"] == 1 and tool["text"] == "Read 1 file"  # margin after the prompt card
     assert reply["gap"] == 1  # a reply after a tool call is set apart
-    assert summary["gap"] == 0 and "3.3s" in summary["text"]  # reply bottom margin collapses with the footer's
+    assert summary["gap"] == 1 and "3.3s" in summary["text"]  # a blank row above the turn footer
     assert blocks[4]["id"].startswith("u:user") and blocks[4]["gap"] == 1  # turn margin-bottom
 
 
@@ -280,6 +280,31 @@ def test_session_cards_carry_status_words_age_and_the_current_marker():
     assert rows["c"]["status"] == "input" and rows["c"]["sub"] == "3 · 5m"
     assert rows["a"]["title"] == "Busy"
     assert rows["d"]["title"] == "New Session"
+    # The sidebar colors project and day separately in each "project · day" heading.
+    assert rows["a"]["project"] == "w" and rows["a"]["group"] == f"w · {rows['a']['day']}"
+
+
+def test_worktree_sessions_group_under_their_repository_after_the_main_checkout():
+    from nexus.host.protocol import ProjectSession, ProjectSessionsListResult
+    from nexus.session.manager import SessionSummary
+    from nexus.ui.ratatui.workflows import session_rows
+
+    def row(id, workspace, at, repo="", worktree=""):
+        return ProjectSession(workspace, "p", SessionSummary(id=id, title=id, state="idle", last_activity=at),
+                              repo=repo, worktree=worktree)
+
+    result = ProjectSessionsListResult(sessions=[
+        row("tree", "/w/nexus-feat", 900.0, repo="/w/nexus", worktree="feat/x"),
+        row("main", "/w/nexus", 800.0),
+        row("other", "/w/site", 850.0),
+    ])
+    rows = session_rows(result, now=1000.0)
+    assert [r["id"] for r in rows] == ["main", "tree", "other"], "main checkout first, worktree beside it"
+    tree = rows[1]
+    assert tree["project"] == "nexus" and tree["worktree"] == "feat/x" and tree["repo"] == "/w/nexus"
+    assert tree["workspace"] == "/w/nexus-feat", "opening still targets the worktree"
+    assert tree["group"] == f"nexus › feat/x · {tree['day']}"
+    assert rows[0]["repo"] == "/w/nexus" and rows[0]["worktree"] == ""
 
 
 def test_tabs_mark_the_current_session_and_its_running_turn(tmp_path, monkeypatch):
@@ -313,10 +338,9 @@ def test_diff_rows_carry_real_line_numbers_pairing_and_gaps():
 def test_diff_blocks_send_rows_and_counts(tmp_path, monkeypatch):
     edit = ToolCallView(call_id="e", name="Edit", event_seq=2, status="completed", input={"path": "a.py"},
                         diff={"path": "a.py", "hunk": "--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-old\n+new"})
-    group = next(b for b in _snapshot(tmp_path, monkeypatch, [replace(_turn(), tools=[edit])], verbose=True)["blocks"] if b["kind"] == "tool_group")
-    diff = group["members"][0]["members"][0]
-    assert diff["title"] == "a.py" and (diff["added"], diff["removed"]) == (1, 1)
-    assert diff["diff_rows"] == [[1, "old", 1, "new", "change"]]
+    change = next(b for b in _snapshot(tmp_path, monkeypatch, [replace(_turn(), tools=[edit])], verbose=True)["blocks"] if b["kind"] == "change")
+    assert change["path"] == "a.py" and (change["added"], change["removed"]) == (1, 1)
+    assert change["diff_lines"] == [["del", 1, "old"], ["add", 1, "new"]]
 
 
 def test_tool_detail_tones_mirror_the_plain_text_and_the_textual_modal():
@@ -328,6 +352,18 @@ def test_tool_detail_tones_mirror_the_plain_text_and_the_textual_modal():
     lines, tones = styled_lines(sections)
     assert "\n".join(lines) == sections_to_text(sections)
     assert tones == ["title", "kv", "header", "label", "", "", "", "title", "label", "hunk", "del", "add", ""]
+
+
+def test_queue_items_carry_durable_ids_and_s_q_tags():
+    from nexus.ui.ratatui.prototype import _queue_items
+    from nexus.view.model import QueuedInputView
+
+    view = initial_state("s")
+    view.input_queue = [QueuedInputView(queued_id=f"id{i}", mode=mode, content=[{"type": "text", "text": f"msg\x1b {i}"}])
+                        for i, mode in enumerate(["steer", "queue", "interrupt"])]
+    items = _queue_items(view)
+    assert [(item["id"], item["tag"]) for item in items] == [("id0", "S"), ("id1", "Q"), ("id2", "I")]
+    assert all("\x1b" not in item["text"] and item["text"].endswith(str(i)) for i, item in enumerate(items))
 
 
 def test_queue_lines_and_meter_extras_follow_the_textual_status_row(tmp_path, monkeypatch):
@@ -537,3 +573,56 @@ def test_task_latest_activity_metrics_and_error_detail(tmp_path, monkeypatch):
     card = next(b for b in project(controller, 2, shell=shell)["blocks"] if b["kind"] == "task")
     assert card["status"] == "done" and card["text"] == ""
     assert "private failure" in card["detail"]
+
+
+def test_edits_stand_alone_with_line_counts(tmp_path, monkeypatch):
+    hunk = "--- a/a.py\n+++ b/a.py\n@@ -1,2 +1,3 @@\n-old\n+new\n+more\n keep"
+    tools = [
+        ToolCallView(call_id="r1", name="Read", event_seq=2, status="completed", input={"path": "a.py"}),
+        ToolCallView(call_id="e", name="Edit", event_seq=3, status="completed", input={"path": "a.py"},
+                     diff={"path": "a.py", "hunk": hunk}),
+        ToolCallView(call_id="e2", name="Edit", event_seq=4, status="completed", input={"path": "a.py"},
+                     diff={"path": "a.py", "hunk": hunk}),
+        ToolCallView(call_id="r2", name="Read", event_seq=5, status="completed", input={"path": "b.py"}),
+        ToolCallView(call_id="r3", name="Grep", event_seq=6, status="completed", input={"pattern": "x"}),
+    ]
+    turn = replace(_turn(), tools=tools)
+    blocks = [b for b in _snapshot(tmp_path, monkeypatch, [turn], local_transcript=True)["blocks"] if b["kind"] in {"tool_group", "change"}]
+    assert [b["kind"] for b in blocks] == ["tool_group", "change", "change", "tool_group"], "each edit is its own row"
+    edit = blocks[1]
+    assert edit["text"] == "Edit a.py" and edit["path"] == "a.py" and "members" not in edit
+    assert (edit["added"], edit["removed"]) == (2, 1)
+    assert edit["diff_lines"] == [["del", 1, "old"], ["add", 1, "new"], ["add", 2, "more"], ["ctx", 3, "keep"]]
+    assert edit["local_open"] is True and edit["local_detail"] == ""
+
+
+def test_write_and_question_stand_alone(tmp_path, monkeypatch):
+    tools = [
+        ToolCallView(call_id="w", name="Write", event_seq=2, status="completed",
+                     input={"path": "t.md", "content": "hello\nworld"}),
+        ToolCallView(call_id="q", name="question", event_seq=3, status="completed",
+                     input={"questions": [{"question": "Which?"}]}),
+    ]
+    blocks = [b for b in _snapshot(tmp_path, monkeypatch, [replace(_turn(), tools=tools)])["blocks"] if b["kind"] in {"tool_group", "change"}]
+    assert [b["kind"] for b in blocks] == ["change", "change"]
+    write, question = blocks
+    assert (write["added"], write["removed"]) == (2, 0)
+    assert write["diff_lines"] == [["add", 1, "hello"], ["add", 2, "world"]]
+    assert question["diff_lines"] == [] and "Which?" in question["detail"]
+
+
+def test_multi_file_patch_stands_alone_with_file_count(tmp_path, monkeypatch):
+    patch = ("--- a/a.py\n+++ b/a.py\n@@ -1,2 +1,3 @@\n-old\n+new\n+more\n keep\n"
+             "--- a/b.py\n+++ b/b.py\n@@ -1 +1 @@\n-gone\n+fresh")
+    tools = [
+        ToolCallView(call_id="r1", name="Read", event_seq=2, status="completed", input={"path": "a.py"}),
+        ToolCallView(call_id="p", name="apply_patch", event_seq=3, status="completed", input={},
+                     diff={"path": "a.py", "hunk": patch}),
+    ]
+    turn = replace(_turn(), tools=tools)
+    blocks = [b for b in _snapshot(tmp_path, monkeypatch, [turn], local_transcript=True)["blocks"] if b["kind"] in {"tool_group", "change"}]
+    assert [b["kind"] for b in blocks] == ["tool_group", "change"], "the patch is its own block, not merged with the read"
+    patch_block = blocks[1]
+    assert patch_block["files"] == 2 and patch_block["path"] == "a.py, b.py"
+    assert (patch_block["added"], patch_block["removed"]) == (3, 2)
+    assert ["file", 0, "a.py"] in patch_block["diff_lines"] and ["file", 0, "b.py"] in patch_block["diff_lines"]

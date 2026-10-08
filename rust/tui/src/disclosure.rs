@@ -166,6 +166,10 @@ impl Disclosure {
             failures: source.failures,
             counts: source.counts.clone(),
             output_operation: source.output_operation.clone(),
+            path: source.path.clone(),
+            added: source.added,
+            removed: source.removed,
+            files: source.files,
             ..Default::default()
         };
         let id = source
@@ -213,6 +217,37 @@ impl Disclosure {
                     shown.output_operation = None;
                 }
                 shown.rev.push_str(if full { ":full" } else { ":preview" });
+            }
+            "change" => {
+                // Open by default; the first `fold_lines` diff rows until Enter shows all.
+                shown.collapsed = !open;
+                if open {
+                    let full = self.verbose
+                        || source.fold_lines == 0
+                        || source
+                            .output_operation
+                            .as_ref()
+                            .and_then(|op| op["id"].as_str())
+                            .is_none_or(|id| self.opened(id, false));
+                    let rows = &source.diff_lines;
+                    if full || rows.len() <= source.fold_lines {
+                        shown.diff_lines = rows.clone();
+                    } else {
+                        shown.diff_lines = rows[..source.fold_lines].to_vec();
+                        shown.diff_lines.push((
+                            "clip".into(),
+                            0,
+                            format!(
+                                "… {} more lines · Enter for all",
+                                rows.len() - source.fold_lines
+                            ),
+                        ));
+                    }
+                    shown.detail = source.local_detail.clone();
+                    shown.rev.push_str(if full { ":full" } else { ":preview" });
+                } else {
+                    shown.output_operation = None;
+                }
             }
             _ => {}
         }

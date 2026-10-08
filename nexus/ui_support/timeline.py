@@ -355,6 +355,43 @@ def diff_split_rows(hunk: str, limit: int = 400) -> list[DiffRow]:
     return rows
 
 
+UnifiedRow = tuple[str, int, str]
+
+
+def diff_unified_rows(hunk: str, limit: int = 400) -> list[UnifiedRow]:
+    """One-column rows ``(kind, line_no, text)`` for one file's hunks.
+
+    ``kind`` is ``ctx``, ``del`` (``line_no`` is the old line), ``add`` (the new
+    line), ``sep`` (a gap between hunks) or ``clip`` (``text`` says how many rows
+    were left out). Removals keep their place before the additions that replace them.
+    """
+    rows: list[UnifiedRow] = []
+    old = new = 0
+    started = False
+    for line in hunk.splitlines():
+        header = _HUNK_START.match(line)
+        if header:
+            if started:
+                rows.append(("sep", 0, ""))
+            started = True
+            old, new = int(header.group(1)), int(header.group(2))
+        elif not started or line.startswith("\\"):
+            continue
+        elif line.startswith("+"):
+            rows.append(("add", new, line[1:]))
+            new += 1
+        elif line.startswith("-"):
+            rows.append(("del", old, line[1:]))
+            old += 1
+        else:
+            rows.append(("ctx", new, line[1:]))
+            old += 1
+            new += 1
+    if len(rows) > limit:
+        rows = [*rows[:limit], ("clip", 0, f"… {len(rows) - limit} more rows")]
+    return rows
+
+
 _REVIEW_ROW_LIMIT = 4000
 
 
@@ -656,7 +693,16 @@ def turn_footer_text(turn: TurnView) -> str:
     # ``r`` is reasoning tokens; the count is additive provider usage for the
     # whole turn and does not distinguish shared from hidden reasoning.
     reasoning = f"{_compact_tokens(usage.reasoning_tokens)} r" if usage.reasoning_tokens else ""
-    return " · ".join(part for part in (model if model != "unknown" else "", _turn_duration(turn) or "", tokens, cached, reasoning) if part)
+    # A configured limit ended the turn, not the model: say so, or the turn
+    # looks like it simply stopped after its last tool result.
+    stopped = _LIMIT_STOPS.get(turn.stop_reason or "", "") if turn.phase == "completed" else ""
+    return " · ".join(part for part in (stopped, model if model != "unknown" else "", _turn_duration(turn) or "", tokens, cached, reasoning) if part)
+
+
+_LIMIT_STOPS = {
+    "budget": "stopped by turn limit",
+    "max_iterations": "stopped by iteration limit",
+}
 
 
 def turn_agent_label(turn: TurnView) -> tuple[str, str]:

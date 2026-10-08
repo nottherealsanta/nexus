@@ -46,7 +46,7 @@ async def test_voice_and_speech_are_one_page_and_opening_it_never_records(shell)
     assert shell.panel_title == "Settings · Voice & speech" and shell.settings_nav == "voice"
     assert shell.voice.phase == "idle", "opening the page never starts capture"
     headings = [b["text"] for b in page["blocks"] if b.get("t") == "heading"]
-    assert headings == ["VOICE INPUT · local dictation", "SPEECH · /speak, local Kokoro"]
+    assert headings == ["VOICE INPUT · local dictation", "SPEECH · /speak, local Paradee"]
     assert _row(page, "device")["control"]["value"] == "cpu"
     assert _row(page, "max_seconds")["control"]["value"] == "60 seconds"
     assert page["scope"] is None and all(b.get("scope", "") == "" for b in page["blocks"] if b.get("t") == "row")
@@ -97,11 +97,12 @@ async def test_downloading_always_asks_first_then_returns_to_the_page(shell):
 async def test_speech_settings_save_and_reset_and_the_voice_follows_the_language(shell):
     await shell.workflows.settings_area("voice")
     page = shell.workflows.settings_page
-    language = _row(page, "language")["control"]
-    assert language["value"] == "English (US)"
-    await shell.workflows.operate({**language["operation"], "value": "b"})
+    assert _row(page, "language")["control"]["value"] == "English (US)"
+    assert _row(page, "speech_voice")["control"]["value"] == "af_heart"
+    speed = _row(page, "speed")["control"]
+    await shell.workflows.operate({**speed["operation"], "value": 1.5})
     body = shell.client.settings_write.await_args.args[3]
-    assert 'language = "b"' in body and 'voice = "bf_emma"' in body, "a language change picks a matching voice"
+    assert "speed = 1.5" in body
     await shell.workflows.operate(sp.op("voice", "speech_reset"))
     assert shell.toasts[-1]["title"].startswith("Speech settings reset")
 
@@ -111,14 +112,14 @@ async def test_speech_model_download_asks_with_the_size_and_shows_progress(shell
     await shell.workflows.settings_area("voice")
     ask = _buttons(shell.workflows.settings_page)["Download speech model…"]
     await shell.workflows.operate(ask)
-    assert "about 345 MB" in shell.panel_title
+    assert "about 25 MB" in shell.panel_title
     await shell.workflows.operate(shell.items[1]["operation"])
     shell.client.speech_prepare.assert_awaited_once()
-    shell.client.speech_status = AsyncMock(return_value=p.SpeechStatusResult(state="downloading", progress=0.4, bytes_done=138_000_000, bytes_total=345_000_000))
+    shell.client.speech_status = AsyncMock(return_value=p.SpeechStatusResult(state="downloading", progress=0.4, bytes_done=10_000_000, bytes_total=25_000_000))
     await shell.workflows.refresh_page()
     page = shell.workflows.settings_page
     bar = next(b for b in page["blocks"] if b.get("t") == "progress")
-    assert 0.39 < bar["fraction"] < 0.41 and "138 / 345 MB" in bar["label"]
+    assert 0.39 < bar["fraction"] < 0.41 and "10 / 25 MB" in bar["label"]
     assert "Refresh status" in _buttons(page)
 
 

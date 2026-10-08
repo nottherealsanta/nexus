@@ -4,11 +4,14 @@ use super::*;
 
 /// Completion is anchored to the actual composer, including a growing editor.
 pub fn completion_area(transcript: Rect, count: usize) -> Rect {
-    let height = ((count.min(8) + 1) as u16).min(transcript.height);
+    let height = (count.min(10) as u16).min(transcript.height);
+    // Same columns as the composer box (2 in from each side); the list also covers the
+    // card's blank margin row, so it sits directly on the composer.
+    let margin = if transcript.width > 4 { 2 } else { 0 };
     Rect::new(
-        transcript.x,
-        transcript.bottom().saturating_sub(height),
-        transcript.width,
+        transcript.x + margin,
+        (transcript.bottom() + 1).saturating_sub(height),
+        transcript.width - 2 * margin,
         height,
     )
 }
@@ -21,41 +24,56 @@ pub fn completion(
 ) {
     let p = Palette::new(s.theme == "nexus-light");
     let area = completion_area(transcript, s.completions.len());
-    let start = selected.saturating_sub(7);
-    let lines: Vec<Line> = s
+    let start = selected.saturating_sub(9);
+    let name_width = s
+        .completions
+        .iter()
+        .map(|v| v.width())
+        .max()
+        .unwrap_or(0)
+        .min(24)
+        + 3;
+    let rows: Vec<Line> = s
         .completions
         .iter()
         .enumerate()
         .skip(start)
-        .take(8)
+        .take(10)
         .map(|(i, value)| {
+            let width = usize::from(area.width.saturating_sub(1));
+            let help = s.command_help.get(value).map_or("", String::as_str);
             let text = crate::transcript::truncate(
-                &format!("  {} {}", if i == selected { "▸" } else { " " }, value),
-                usize::from(area.width.saturating_sub(2)),
+                &format!("  {value:<name_width$}{help}"),
+                width.saturating_sub(1),
             );
-            let pad = usize::from(area.width.saturating_sub(2)).saturating_sub(text.width());
-            Line::styled(
-                format!("{text}{}", " ".repeat(pad)),
-                components::selectable(
-                    &p,
-                    components::State {
-                        selected: i == selected,
-                        hover: hover.amount_id(
-                            components::HoverId::CompletionRow(i),
-                            std::time::Instant::now(),
-                        ),
-                        ..Default::default()
-                    },
-                ),
-            )
+            let pad = width.saturating_sub(text.width());
+            let selected = i == selected;
+            let base = components::selectable(
+                &p,
+                components::State {
+                    selected,
+                    hover: hover.amount_id(
+                        components::HoverId::CompletionRow(i),
+                        std::time::Instant::now(),
+                    ),
+                    ..Default::default()
+                },
+            );
+            let name = crate::transcript::truncate(&format!("  {value}"), name_width + 1);
+            let rest: String = format!("{text}{}", " ".repeat(pad))
+                .chars()
+                .skip(name.chars().count())
+                .collect();
+            let muted = if selected { base } else { base.fg(p.quiet) };
+            Line::from(vec![
+                // The composer's rail, always gray.
+                Span::styled("┃", Style::default().fg(p.quiet).bg(p.background)),
+                Span::styled(name, base),
+                Span::styled(rest, muted),
+            ])
         })
         .collect();
     frame.render_widget(Clear, area);
-    let mut rows = vec![Line::styled(
-        "  ↑↓ choose · Enter select · Esc close",
-        Style::default().fg(p.quiet),
-    )];
-    rows.extend(lines);
     frame.render_widget(
         Paragraph::new(rows).style(Style::default().bg(p.dialog).fg(p.text)),
         area,
@@ -87,7 +105,8 @@ pub fn panel_host(r: &super::Regions, s: &Snapshot) -> Rect {
 /// A shared rectangle for painting and input; legacy snapshots retain full pages.
 pub fn panel_area(transcript: Rect, s: &Snapshot) -> Rect {
     if s.panel_layout == "context" {
-        let width = transcript.width.saturating_sub(4);
+        // Card lists (tools, skills, MCP) read best at a page width, not the whole window.
+        let width = transcript.width.saturating_sub(4).min(88);
         let height = transcript.height.saturating_sub(2);
         return Rect::new(
             transcript.x + (transcript.width - width) / 2,
@@ -121,11 +140,30 @@ pub fn panel_area(transcript: Rect, s: &Snapshot) -> Rect {
         );
     }
     if s.panel_layout == "list" && transcript.width >= 44 {
-        // Thin one-line-per-row list: widest row plus chrome, clamped, centred.
+        // Thin one-line-per-row list: widest row plus chrome, clamped, centred. The row counts
+        // its inline detail, token column and `[ Restart ]` chip; past 72 columns the label clips.
         let widest = s
             .items
             .iter()
-            .map(|i| i.label.width() + if i.trailing.is_empty() { 0 } else { 8 } + 11)
+            .map(|i| {
+                i.label.width()
+                    + if i.detail.is_empty() {
+                        0
+                    } else {
+                        i.detail.width() + 1
+                    }
+                    + if i.trailing.is_empty() {
+                        0
+                    } else {
+                        i.trailing.width().max(7) + 1
+                    }
+                    + if i.action_label.is_empty() {
+                        0
+                    } else {
+                        i.action_label.width() + 5
+                    }
+                    + 11
+            })
             .max()
             .unwrap_or(0) as u16;
         let width = (widest + 6).clamp(44, 72).min(
@@ -134,7 +172,13 @@ pub fn panel_area(transcript: Rect, s: &Snapshot) -> Rect {
                 .saturating_sub(4)
                 .max(44.min(transcript.width)),
         );
-        let rows: u16 = s.items.iter().map(item_height).sum();
+        let groups = s
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(n, i)| !i.group.is_empty() && (*n == 0 || s.items[n - 1].group != i.group))
+            .count() as u16;
+        let rows: u16 = s.items.iter().map(item_height).sum::<u16>() + groups;
         let height = (rows + 8).min(transcript.height.saturating_sub(2));
         return Rect::new(
             transcript.x + (transcript.width - width) / 2,
@@ -218,7 +262,9 @@ pub fn panel_area(transcript: Rect, s: &Snapshot) -> Rect {
 }
 /// Filtered item index under the pointer, using the same grouping and scroll as drawing.
 pub fn item_height(item: &crate::bridge::Item) -> u16 {
-    1 + u16::from(!item.detail.is_empty()) + u16::from(!item.description.is_empty()) + item.lines.len() as u16
+    1 + u16::from(!item.detail.is_empty())
+        + u16::from(!item.description.is_empty())
+        + item.lines.len() as u16
 }
 pub fn settings_header_height(s: &Snapshot, width: u16, height: u16) -> u16 {
     let full: usize = s
@@ -297,6 +343,45 @@ pub fn panel_toggle_at(
             && !item.toggle_locked
             && x >= area.right().saturating_sub(10)
     })
+}
+/// True when a pointer is on the row button (`[ Restart ]`), which sits left of the toggle.
+pub fn panel_action_at(
+    s: &Snapshot,
+    area: Rect,
+    filter: &str,
+    selection: usize,
+    x: u16,
+    y: u16,
+) -> bool {
+    let Some(index) = panel_item_at(s, area, filter, selection, y) else {
+        return false;
+    };
+    let Some(item) = s
+        .items
+        .iter()
+        .filter(|item| item.matches(filter))
+        .nth(index)
+    else {
+        return false;
+    };
+    if item.action_operation.is_none() || item.action_label.is_empty() {
+        return false;
+    }
+    // Same geometry as the row painter: toggle flush right in the inner area, button before it.
+    let inner = panel_inner(area, s.panel_layout == "drawer");
+    let toggle = match (
+        item.toggle_operation.is_some(),
+        item.toggle_locked,
+        item.toggle_enabled,
+    ) {
+        (false, _, _) => 0,
+        (true, true, _) => 10,
+        (true, false, Some(true)) => 6,
+        (true, false, _) => 7,
+    };
+    let end = inner.right().saturating_sub(toggle);
+    let start = end.saturating_sub((item.action_label.width() + 5) as u16);
+    (start..end).contains(&x)
 }
 /// Dialog background with an accent title and a rule (The terminal modal look);
 /// returns the padded content area.
@@ -479,8 +564,11 @@ mod tests {
             }
             s.panel_layout = "drawer".into();
             assert_eq!(panel_area(parent, &s).bottom(), parent.bottom());
-            assert_eq!(completion_area(parent, 30).bottom(), parent.bottom());
-            assert_eq!(completion_area(parent, 30).width, parent.width);
+            assert_eq!(completion_area(parent, 30).bottom(), parent.bottom() + 1);
+            assert_eq!(
+                completion_area(parent, 30).width,
+                parent.width.saturating_sub(4 * u16::from(parent.width > 4))
+            );
             assert_eq!(panel_area(parent, &s).width, parent.width);
         }
     }
@@ -557,13 +645,39 @@ mod tests {
         assert_eq!(panel_area(parent, &s).height, 12, "wrapped rows count");
     }
     #[test]
-    fn context_layout_is_exact_transcript_inset_without_modal_caps() {
+    fn context_layout_is_an_88_column_centred_page() {
         let parent = Rect::new(4, 6, 160, 52);
         let mut s = Snapshot::default();
         s.panel_layout = "context".into();
-        assert_eq!(panel_area(parent, &s), Rect::new(6, 7, 156, 50));
+        assert_eq!(panel_area(parent, &s), Rect::new(40, 7, 88, 50));
+        let narrow = Rect::new(4, 6, 60, 52);
+        assert_eq!(panel_area(narrow, &s), Rect::new(6, 7, 56, 50));
         let tiny = Rect::new(3, 2, 4, 2);
         assert_eq!(panel_area(tiny, &s), Rect::new(5, 3, 0, 0));
+    }
+    #[test]
+    fn restart_button_sits_left_of_the_toggle() {
+        let mut s = Snapshot::default();
+        s.panel_title = "MCP".into();
+        s.panel_layout = "context".into();
+        s.items = vec![crate::bridge::Item {
+            label: "demo".into(),
+            toggle_operation: Some(serde_json::json!({"kind":"context_toggle"})),
+            toggle_enabled: Some(true),
+            action_label: "Restart".into(),
+            action_operation: Some(serde_json::json!({"kind":"mcp_restart","name":"demo"})),
+            ..Default::default()
+        }];
+        let area = Rect::new(0, 0, 60, 20);
+        let inner = panel_inner(area, false);
+        let row = (0..area.height)
+            .find(|&y| panel_item_at(&s, area, "", 0, y) == Some(0))
+            .expect("item row");
+        let toggle_start = inner.right() - 6;
+        assert!(panel_action_at(&s, area, "", 0, toggle_start - 1, row));
+        assert!(panel_action_at(&s, area, "", 0, toggle_start - 12, row));
+        assert!(!panel_action_at(&s, area, "", 0, toggle_start, row));
+        assert!(!panel_action_at(&s, area, "", 0, toggle_start - 13, row));
     }
     #[test]
     fn model_picker_rows_are_single_line_and_reference_searchable() {
@@ -711,9 +825,12 @@ pub fn draw_menu(
         let marker = if item.current { "●" } else { " " };
         let width = usize::from(inner.width);
         let tail = (!item.trailing.is_empty()).then(|| format!("{:>7} ", item.trailing));
+        let button = (item.action_operation.is_some() && !item.action_label.is_empty())
+            .then(|| format!("[ {} ] ", item.action_label));
         let available = width.saturating_sub(
             3 + toggle.as_ref().map_or(0, |t| t.width() + 1)
-                + tail.as_ref().map_or(0, |t| t.width()),
+                + tail.as_ref().map_or(0, |t| t.width())
+                + button.as_ref().map_or(0, |t| t.width()),
         );
         let structured = if item.name.is_empty() {
             item.label.clone()
@@ -753,11 +870,31 @@ pub fn draw_menu(
             }
         }
         if let Some(tail) = tail {
-            let gap = width
-                .saturating_sub(used + tail.width() + toggle.as_ref().map_or(0, |t| t.width()));
+            // The token column sits left of the `[ Restart ]` chip when there is one.
+            let gap = width.saturating_sub(
+                used + tail.width()
+                    + button.as_ref().map_or(0, |b| b.width())
+                    + toggle.as_ref().map_or(0, |t| t.width()),
+            );
             spans.push(Span::styled(" ".repeat(gap), fill));
             used += gap + tail.width();
             spans.push(Span::styled(tail, detail_style));
+        }
+        if let Some(button) = button {
+            let gap = width
+                .saturating_sub(used + button.width() + toggle.as_ref().map_or(0, |t| t.width()));
+            spans.push(Span::styled(" ".repeat(gap), fill));
+            used += gap + button.width();
+            spans.push(Span::styled(
+                button,
+                super::components::toggle(
+                    p,
+                    super::components::State {
+                        hover: hover.amount(&format!("action:{i}"), std::time::Instant::now()),
+                        ..Default::default()
+                    },
+                ),
+            ));
         }
         if let Some(toggle) = toggle {
             let gap = width.saturating_sub(used + toggle.width());
@@ -836,10 +973,10 @@ pub fn draw_menu(
 /// Shared click/hover geometry excludes the completion help line and clipped rows.
 pub fn completion_at(parent: Rect, count: usize, selected: usize, x: u16, y: u16) -> Option<usize> {
     let area = completion_area(parent, count);
-    if !area.contains((x, y).into()) || y == area.y {
+    if !area.contains((x, y).into()) {
         return None;
     }
-    let index = selected.saturating_sub(7) + usize::from(y - area.y - 1);
+    let index = selected.saturating_sub(9) + usize::from(y - area.y);
     (index < count).then_some(index)
 }
 pub fn nav_at(s: &Snapshot, area: Rect, x: u16, y: u16) -> Option<usize> {

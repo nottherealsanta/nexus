@@ -3,7 +3,8 @@
 The daemon asks PyPI at most once a day which release of ``nexus-harness`` is
 newest and every surface shows the answer; nothing is ever upgraded silently. The
 answer, including a failed lookup, is cached in ``~/.nexus/cache/update-check.json``
-so an offline machine does not retry on every start. Only the version string
+so an offline machine does not retry on every start. Each newer release is
+announced (a client toast) once, recorded in ``update-announced.json``. Only the version string
 leaves this module: no credential, path, or workspace data is sent, and the
 response is size-capped and parsed defensively.
 """
@@ -214,6 +215,46 @@ def update_status(
     if latest and is_newer(latest, current):
         status["available"] = latest
     return status
+
+
+def announced_path(home: Path | str | None = None) -> Path:
+    return nexus_home(home) / "cache" / "update-announced.json"
+
+
+def claim_announcement(available: str | None, *, home: Path | str | None = None) -> bool:
+    """True exactly once per newer release: the first caller toasts it, later ones stay quiet.
+
+    The announced version is recorded in ``~/.nexus/cache/update-announced.json`` so
+    restarting a client does not repeat the toast. An unwritable record also answers
+    False, so a broken cache never makes the toast appear on every start.
+    """
+    if not available or not _release_key(available):
+        return False
+    path = announced_path(home)
+    try:
+        with path.open("rb") as record:
+            raw = record.read(_CACHE_MAX_BYTES + 1)
+        data = json.loads(raw) if len(raw) <= _CACHE_MAX_BYTES else {}
+        if isinstance(data, dict) and data.get("announced") == available:
+            return False
+    except (OSError, ValueError):
+        pass  # missing or unreadable: not announced yet
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(prefix=f"{path.name}.{os.getpid()}.", suffix=".tmp", dir=path.parent)
+        tmp = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as record:
+                json.dump({"announced": available}, record)
+            os.replace(tmp, path)
+        finally:
+            try:
+                tmp.unlink()
+            except FileNotFoundError:
+                pass
+    except OSError:
+        return False
+    return True
 
 
 def notice(status: Mapping[str, Any]) -> str:

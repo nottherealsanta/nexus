@@ -27,10 +27,15 @@ from ...ui_support.tool_details import sections_to_text
 
 _OUTPUT_SECTIONS = frozenset({"Result", "Summary", "Error", "Progress"})
 _EXPAND_AFTER_LINES = 12  # outputs longer than this expand in place on click
+#: File changes each get their own transcript row (never an activity run), with +/- line counts.
+EDIT_TOOLS = frozenset({"edit", "multiedit", "write", "apply_patch", "patch"})
+#: Calls drawn one per row (`change` blocks), never folded into an activity run.
+STANDALONE_TOOLS = EDIT_TOOLS | {"question"}
+_CHANGE_ROW_LIMIT = 400  # diff rows sent per call; the rest is announced by a clip row
 
 
 def _display_breadcrumb(breadcrumb: str, home: Path | None = None) -> str:
-    """Abbreviate only the actual home component; keep the source path intact."""
+    """Abbreviate only the actual home component; show the branch as ``path:branch``."""
     home_text = str(Path.home() if home is None else home).rstrip("/")
     path, separator, branch = breadcrumb.partition(" › ")
     # Root is not a useful home abbreviation, nor is a relative home path.
@@ -39,7 +44,7 @@ def _display_breadcrumb(breadcrumb: str, home: Path | None = None) -> str:
             path = "~"
         elif path.startswith(home_text + "/"):
             path = "~" + path[len(home_text):]
-    return path + separator + branch
+    return path + (":" if separator else "") + branch
 
 
 #: Read-only lookups that collapse into one `Explored: 1 search, 1 read` row.
@@ -80,6 +85,69 @@ def _explored_summary(tools) -> str:
     for one, many in kinds:
         counts[(one, many)] = counts.get((one, many), 0) + 1
     return ", ".join(f"{n} {one if n == 1 else many}" for (one, many), n in counts.items())
+
+
+def _change_rows(tool) -> tuple[list[list], int, int, list[str]]:
+    """Unified diff rows ``[kind, line_no, text]``, ``+added``, ``-removed`` and paths.
+
+    A durable ``diff`` artifact wins; a Write without one shows the content it wrote,
+    every line an addition. Multi-file diffs open each file with a ``file`` row.
+    """
+    from ...ui_support.timeline import diff_sections, diff_unified_rows, split_diff_files, tool_status
+    if tool.diff:
+        files = split_diff_files(tool.diff)
+        sections = diff_sections(tool.diff)
+        rows = []
+        for path, hunk in files:
+            if len(files) > 1:
+                rows.append(["file", 0, escape_controls(path)])
+            rows.extend([kind, number, escape_controls(text)] for kind, number, text in diff_unified_rows(hunk, _CHANGE_ROW_LIMIT))
+        return (rows, sum(s.added for s in sections), sum(s.removed for s in sections),
+                [s.path for s in sections])
+    content = tool.input.get("content") if isinstance(tool.input, dict) else None
+    if tool.name.casefold() == "write" and isinstance(content, str) and content and tool_status(tool) == "completed":
+        lines = content.splitlines()
+        rows = [["add", n, escape_controls(line)] for n, line in enumerate(lines[:_CHANGE_ROW_LIMIT], 1)]
+        if len(lines) > _CHANGE_ROW_LIMIT:
+            rows.append(["clip", 0, f"… {len(lines) - _CHANGE_ROW_LIMIT} more rows"])
+        return rows, len(lines), 0, [str(tool.input.get("path", ""))]
+    return [], 0, 0, []
+
+
+def _change_block(tool, shell, local_ui, body):
+    """One standalone row per file change or question: ``Edit a.py  +2 −1``.
+
+    Open by default: the diff follows in add/delete colours (first
+    ``_EXPAND_AFTER_LINES`` rows, the rest on Enter). Without a diff, the labelled
+    tool details (parameters, answer, error) are shown instead.
+    """
+    from ...ui_support.timeline import tool_heading, tool_status, tool_summary
+    status = tool_status(tool)
+    rows, added, removed, paths = _change_rows(tool)
+    heading = tool_heading(tool).split(" ", 1)[-1]
+    suffix = ""
+    if status == "failed":
+        suffix = tool_summary(tool)
+    elif tool.name.casefold() == "question" and status == "completed":
+        suffix = tool_summary(tool)
+    op_id, out_id = tool.call_id + ":change", tool.call_id + ":change-output"
+    detail = "" if rows else body
+    block = {"id": tool.call_id, "kind": "change", "status": status, "title": tool.name.title(),
+             "text": heading, "heading": suffix, "added": added, "removed": removed,
+             "files": len(paths), "path": ", ".join(p for p in paths if p),
+             "operation": {"kind": "block_toggle", "id": op_id},
+             "output_operation": {"kind": "block_toggle", "id": out_id} if len(rows) > _EXPAND_AFTER_LINES else None}
+    if local_ui:
+        block.update(local_ui=True, local_open=True, diff_lines=rows, local_detail=detail,
+                     fold_lines=_EXPAND_AFTER_LINES)
+        return block
+    verbose = bool(shell and shell.verbose)
+    opened = verbose or not (shell and op_id in shell.expanded)  # toggling closes an open change
+    full = verbose or bool(shell and out_id in shell.expanded)
+    if opened and not full and len(rows) > _EXPAND_AFTER_LINES:
+        rows = [*rows[:_EXPAND_AFTER_LINES], ["clip", 0, f"… {len(rows) - _EXPAND_AFTER_LINES} more lines · Enter for all"]]
+    block.update(collapsed=not opened, diff_lines=rows if opened else [], detail=detail if opened else "")
+    return block
 
 
 def _thought_took(ms: int) -> str:
@@ -233,6 +301,10 @@ def _project_turn(turn, shell, agents=None, literal=True):
                      "detail": detail}
             entries.append((tool.event_seq, 3, block, 1, 1, "task"))
             continue
+        if tool.name.casefold() in STANDALONE_TOOLS:
+            block = _change_block(tool, shell, local_ui, full_body or sections_to_text(sections))
+            entries.append((tool.event_seq, 3, block, 1, 1, "change"))
+            continue
         else:
             text = cached_row
             if expandable:
@@ -320,9 +392,8 @@ def _project_turn(turn, shell, agents=None, literal=True):
     for entry in entries:
         if entry[5] == "diff":
             continue
-        if entry[5] in {"tool", "thought"} and not (
-            entry[5] == "tool" and tools_by_id[entry[2]["id"]].name.casefold() in {"task", "subagent"}
-        ):
+        name = tools_by_id[entry[2]["id"]].name.casefold() if entry[5] == "tool" else ""
+        if entry[5] in {"tool", "thought"} and name not in {"task", "subagent"}:
             pending.append(entry)
         else:
             flush_activity()
@@ -340,7 +411,7 @@ def _project_turn(turn, shell, agents=None, literal=True):
         if previous is not None:
             if previous[0] == "user":
                 top = max(top, 1)
-            elif (previous[0] == "tool" and role in {"assistant", "agent"}) or (previous[0] == "assistant" and role == "tool"):
+            elif (previous[0] in {"tool", "change"} and role in {"assistant", "agent"}) or (previous[0] == "assistant" and role in {"tool", "change"}):
                 top = max(top, 1)
             block = {**block, "gap": max(previous[1], top)}
         blocks.append(block)
@@ -353,9 +424,10 @@ def _project_turn(turn, shell, agents=None, literal=True):
     elif turn.terminal:
         footer = turn_footer_text(turn)
         if footer:
-            last, bottom = previous if previous else ("", 0)
-            top = 0 if last in {"assistant", "diff"} else 1
-            blocks.append({"id": turn.id + ":summary", "kind": "summary", "text": footer, "gap": max(top, bottom)})
+            # One blank row above the turn footer; the next turn's card (or the composer
+            # margin) supplies the blank row below it.
+            bottom = previous[1] if previous else 0
+            blocks.append({"id": turn.id + ":summary", "kind": "summary", "text": footer, "gap": max(1, bottom)})
     if local_ui:
         summary = _fold_summary(turn)
         for block in blocks:
@@ -542,6 +614,20 @@ def _queue_lines(view):
     return [escape_controls(row) for row in rows]
 
 
+def _queue_items(view):
+    """Pending steering/queued messages for the boxed list above the composer.
+
+    Each row carries its durable ``queued_id`` so ↑ ↓ ✕ act on exactly that
+    message; the tag is ``S`` (steer), ``Q`` (queue) or ``I`` (interrupt).
+    """
+    from ...ui_support.text import sanitize
+    tags = {"steer": "S", "queue": "Q", "interrupt": "I"}
+    return [{"id": item.queued_id, "tag": tags.get(item.mode, "Q"), "mode": item.mode,
+             "text": escape_controls(sanitize("".join(
+                 block.get("text", "") for block in item.content if isinstance(block, dict)), 160))}
+            for item in list(view.input_queue)[:64] if item.queued_id]
+
+
 def _tab_rows(controller, shell):
     """Tabs with the current one marked; the current tab reads "working" while its turn runs."""
     rows = []
@@ -696,6 +782,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "local_ui_enabled": bool(shell and getattr(shell, "local_transcript", False)),
             "ui_ack": getattr(shell, "ui_ack", 0) if shell else 0,
             "commands": getattr(shell, "static_commands", []) if shell else [],
+            "command_help": getattr(shell, "command_help", {}) if shell else {},
             "context_lines": [escape_controls(line) for line in context_lines],
             "context_used": used,
             "context_window": window,
@@ -705,9 +792,10 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "context_note": "",
             "context_label": _context_label(display_view),
             "queue_lines": _queue_lines(view),
+            "queue_items": _queue_items(view),
             "composer_key": json.dumps([shell.workspace if shell else "", getattr(controller, "session", view.session_id)]),
             "nav": _settings_nav(shell),
-            "update_notice": escape_controls(shell.update_notice) if shell else "",
+            "update_notice": "",  # announced once as a toast, never pinned to the footer
             "toasts": list(shell.toasts) if shell else [],
             "disconnected": bool(
                 shell and str(getattr(shell, "notice", "")).startswith("Disconnected")
@@ -718,6 +806,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "sessions_sidebar": shell.preferences.values["sessions_sidebar"] if shell else True,
             "details_sidebar": shell.preferences.values["details_sidebar"] if shell else True,
             "context_preview": shell.preferences.values["context_preview"] if shell else True,
+            "centered_layout": shell.preferences.values["centered_layout"] if shell else False,
             "sessions": shell.sessions if shell else [],
             "archived_label": shell.archived_label if shell else "",
             "sessions_truncated": bool(shell and shell.sessions_truncated),
@@ -810,6 +899,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
     shell = ShellActions(controller)
     from ..cli.commands import SPECS
     shell.static_commands = sorted((spec.name, list(spec.aliases)) for spec in SPECS if not spec.hidden)
+    shell.command_help = {spec.name: spec.summary for spec in SPECS if not spec.hidden}
     shell.local_transcript = not desktop
     shell.ui_ack = 0
     shell.inline_images_enabled = desktop
@@ -887,6 +977,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
             if full_projection:
                 allowed_operations = {json.dumps(op, sort_keys=True) for op in [
                 *[item["operation"] for item in snapshot.get("inline_images", [])],
+                *[item.get("action", {}).get("operation") for item in snapshot.get("toasts", []) if item.get("action")],
                 *[item.get("operation") for item in shell.items],
                 *[item.get("toggle_operation") for item in shell.items if not item.get("toggle_locked")],
                 *[item.get(key) for item in shell.items for key in ("move_up", "move_down", "remove")],
@@ -983,8 +1074,11 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                 except Exception as exc:  # health is advisory; the sidebar names the failure
                     shell.mcp_error = str(exc)
                 try:
-                    update = await shell.client.update_status()
+                    update = await shell.client.update_status(announce=True)
                     shell.update_notice = f"{sanitize(str(update.available), 80)} available: {sanitize(str(update.command), 120)}" if update.available else ""
+                    if getattr(update, "announce", False):  # once per release, then only /update shows it
+                        shell.toast(f"Nexus {sanitize(str(update.available), 80)} is available", "info",
+                                    key="update", body=f"Run {sanitize(str(update.command), 120)} in your terminal to update.")
                 except Exception:  # noqa: BLE001 - the notice is advisory
                     shell.update_notice = ""
             async def context():
@@ -1154,6 +1248,13 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                         shell.voice.finish_task = asyncio.create_task(finish_voice(action.get("discard", False), action.get("send", False)))
                 elif action["type"] == "voice_discard":
                     await shell.voice.discard()
+                elif action["type"] == "queue_edit":
+                    queued_id, op = action.get("text"), action.get("key")
+                    if op in {"up", "down", "remove"} and any(item.queued_id == queued_id for item in controller.view.input_queue):
+                        if op == "remove":
+                            await shell.client.queue_remove(controller.session, queued_id)
+                        else:
+                            await shell.client.queue_move(controller.session, queued_id, -1 if op == "up" else 1)
                 elif action["type"] == "context_header":
                     key = action.get("key")
                     if key in {"system", "agents", "tools", "skills", "mcp"}:

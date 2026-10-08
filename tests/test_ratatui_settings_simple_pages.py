@@ -40,13 +40,17 @@ async def test_layout_toggles_each_panel_and_resets(shell):
     await shell.workflows.operate({"kind": "layout"})
     page = shell.workflows.settings_page
     rows = _rows(page)
-    assert set(rows) == {"sessions_sidebar", "details_sidebar", "context_preview"}
-    assert all(row["control"]["on"] for row in rows.values()) and all(row["scope"] == "" for row in rows.values())
+    assert set(rows) == {"sessions_sidebar", "details_sidebar", "context_preview", "centered_layout"}
+    assert [key for key, row in rows.items() if not row["control"]["on"]] == ["centered_layout"]  # off by default
+    assert all(row["scope"] == "" for row in rows.values())
+    await shell.workflows.operate({**rows["centered_layout"]["control"]["operation"], "value": True})
+    assert shell.preferences.values["centered_layout"] is True
     await shell.workflows.operate({**rows["details_sidebar"]["control"]["operation"], "value": False})
     assert shell.preferences.values["details_sidebar"] is False
     assert _rows(shell.workflows.settings_page)["details_sidebar"]["control"]["on"] is False
     await shell.workflows.operate(sp.op("layout", "reset"))
     assert shell.preferences.values["details_sidebar"] is True
+    assert shell.preferences.values["centered_layout"] is False
     with pytest.raises(ValueError):
         await shell.workflows.operate(sp.op("layout", "toggle", pref="theme", value=True))
 
@@ -78,3 +82,4 @@ async def test_every_operation_the_client_can_send_is_accepted_by_the_bridge(she
     for area in ("appearance", "layout", "keys"):
         await shell.workflows.settings_area(area)
         assert_every_client_op_is_accepted(shell)
+

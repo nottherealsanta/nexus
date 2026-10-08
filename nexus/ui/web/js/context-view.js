@@ -1,3 +1,5 @@
+import {renderMarkdown as markdown} from './markdown.js';
+
 function node(tag, className = '', text = '') {
   const element = document.createElement(tag);
   if (className) element.className = className;
@@ -67,113 +69,6 @@ function appendPart(parent, value, {preview, openDetails}) {
     observer.observe(content);
   }
   requestAnimationFrame(updateTruncation);
-}
-
-function safeLink(value) {
-  try {
-    const url = new URL(value, document.baseURI);
-    return ['http:', 'https:', 'mailto:'].includes(url.protocol) ? url.href : null;
-  } catch {
-    return null;
-  }
-}
-
-function inlineMarkdown(parent, source) {
-  const pattern = /(`[^`\n]+`|\[[^\]]+\]\([^\s)]+(?:\s+"[^"]*")?\)|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_[^_\n]+_)/g;
-  let offset = 0;
-  for (const match of source.matchAll(pattern)) {
-    if (match.index > offset) parent.append(document.createTextNode(source.slice(offset, match.index)));
-    const token = match[0];
-    let element;
-    if (token.startsWith('`')) {
-      element = node('code', '', token.slice(1, -1));
-    } else if (token.startsWith('[')) {
-      const link = token.match(/^\[([^\]]+)\]\(([^\s)]+)(?:\s+"([^"]*)")?\)$/);
-      const href = link && safeLink(link[2]);
-      if (href) {
-        element = node('a', '', link[1]);
-        element.href = href;
-        element.rel = 'noopener noreferrer';
-        element.target = '_blank';
-        if (link[3]) element.title = link[3];
-      } else {
-        parent.append(document.createTextNode(token));
-      }
-    } else if (token.startsWith('**') || token.startsWith('__')) {
-      element = node('strong', '', token.slice(2, -2));
-    } else {
-      element = node('em', '', token.slice(1, -1));
-    }
-    if (element) parent.append(element);
-    offset = match.index + token.length;
-  }
-  if (offset < source.length) parent.append(document.createTextNode(source.slice(offset)));
-}
-
-// A deliberately small Markdown renderer. Every node and text fragment is
-// created with DOM APIs; raw HTML is always text and links are protocol-filtered.
-function markdown(value) {
-  const root = node('div', 'context-markdown');
-  const lines = String(value ?? '').replace(/\r\n?/g, '\n').split('\n');
-  let paragraph = [];
-  let list = null;
-  let code = null;
-  const flushParagraph = () => {
-    if (!paragraph.length) return;
-    const block = node('p');
-    paragraph.forEach((line, index) => {
-      if (index) block.append(document.createElement('br'));
-      inlineMarkdown(block, line);
-    });
-    root.append(block);
-    paragraph = [];
-  };
-  const flushList = () => { list = null; };
-  for (const line of lines) {
-    const fence = line.match(/^\s*(```+|~~~+)\s*([\w+-]*)/);
-    if (code) {
-      if (fence && fence[1][0] === code.marker) {
-        code.code.textContent = code.text.join('\n');
-        root.append(code.pre);
-        code = null;
-      } else code.text.push(line);
-      continue;
-    }
-    if (fence) {
-      flushParagraph(); flushList();
-      const pre = node('pre', 'context-code');
-      code = {marker: fence[1][0], pre, text: []};
-      code.code = node('code');
-      code.pre.append(code.code);
-      continue;
-    }
-    const heading = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/);
-    const item = line.match(/^\s*([-+*]|\d+[.)])\s+(.+)$/);
-    if (!line.trim()) { flushParagraph(); flushList(); continue; }
-    if (heading) {
-      flushParagraph(); flushList();
-      const block = node(`h${heading[1].length}`);
-      inlineMarkdown(block, heading[2]);
-      root.append(block);
-    } else if (item) {
-      flushParagraph();
-      const ordered = /^\d/.test(item[1]);
-      if (!list || list.tagName !== (ordered ? 'OL' : 'UL')) {
-        flushList();
-        list = node(ordered ? 'ol' : 'ul');
-        root.append(list);
-      }
-      const li = node('li');
-      inlineMarkdown(li, item[2]);
-      list.append(li);
-    } else {
-      flushList();
-      paragraph.push(line);
-    }
-  }
-  if (code) { code.code.textContent = code.text.join('\n'); root.append(code.pre); }
-  flushParagraph();
-  return root;
 }
 
 function blockText(block) {

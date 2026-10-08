@@ -24,7 +24,7 @@ from nexus.events import (
 
 # The exact planned groups from PLAN.md §14.10.
 PLAN_GROUPS = {
-    "input": ("input.started", "input.queued", "input.consumed", "input.dropped"),
+    "input": ("input.started", "input.queued", "input.moved", "input.consumed", "input.dropped"),
     "presence": ("presence.joined", "presence.left"),
     "daemon": (
         "daemon.started",

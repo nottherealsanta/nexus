@@ -111,6 +111,7 @@ def test_parser_exposes_the_canonical_command_set():
         "auth",
         "claude",
         "update",
+        "uninstall",
         "mock",
         "voice",
     } == choices

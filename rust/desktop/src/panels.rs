@@ -14,6 +14,75 @@ thread_local! {
 fn panel_scroll_handle() -> ScrollHandle {
     PANEL_SCROLL.with(|scroll| scroll.borrow().clone())
 }
+/// Separate only a trailing canonical mock directive; original titles remain
+/// untouched in the snapshot, search index, operations and full-title tooltip.
+fn session_title(title: &str) -> (&str, Option<&str>) {
+    for (open, close) in [("⟦mock scenario=", "⟧"), ("[mock scenario=", "]")] {
+        if let Some(start) = title.rfind(open) {
+            let tail = title[start..].trim_end();
+            if tail.ends_with(close) {
+                let clean = title[..start].trim_end();
+                return (
+                    if clean.is_empty() {
+                        "Mock session"
+                    } else {
+                        clean
+                    },
+                    Some(tail),
+                );
+            }
+        }
+    }
+    (
+        if title.is_empty() {
+            "Untitled conversation"
+        } else {
+            title
+        },
+        None,
+    )
+}
+
+fn compact_workspace(breadcrumb: &str, home: Option<&str>) -> String {
+    let (path, branch) = breadcrumb
+        .rsplit_once(" › ")
+        .map_or((breadcrumb, None), |(p, b)| (p, Some(b)));
+    if !path.starts_with('/') {
+        return breadcrumb.to_owned();
+    }
+    let path = home
+        .filter(|home| !home.is_empty())
+        .and_then(|home| {
+            path.strip_prefix(home)
+                .filter(|suffix| suffix.is_empty() || suffix.starts_with('/'))
+        })
+        .map_or_else(|| path.to_owned(), |suffix| format!("~{suffix}"));
+    let parts: Vec<_> = path.split('/').filter(|part| !part.is_empty()).collect();
+    let compact = if parts.len() > 3 {
+        format!(
+            "{}/…/{}/{}",
+            if path.starts_with('~') { "~" } else { "" },
+            parts[parts.len() - 2],
+            parts[parts.len() - 1]
+        )
+    } else {
+        path
+    };
+    match branch {
+        Some(branch) => format!("{compact} › {branch}"),
+        None => compact,
+    }
+}
+
+fn mock_label(directive: &str) -> String {
+    let scenario = directive
+        .split_whitespace()
+        .find_map(|part| part.strip_prefix("scenario="))
+        .unwrap_or("session")
+        .trim_end_matches(['⟧', ']']);
+    format!("Mock · {scenario}")
+}
+
 impl Desktop {
     pub(crate) fn button(
         &self,
@@ -48,18 +117,19 @@ impl Desktop {
             .gap_2()
             .px_3()
             .py_2()
-            .rounded(px(6.))
-            .text_size(px(12.))
+            .rounded(px(crate::theme::radius::CONTROL))
+            .text_size(px(crate::theme::size::SMALL))
             .text_color(t.muted)
             .cursor(CursorStyle::Arrow)
             .hover(move |s| {
                 s.bg(if primary {
                     t.accent.opacity(0.9)
                 } else {
-                    t.raised
+                    t.hover
                 })
                 .text_color(if primary { t.background } else { t.text })
             })
+            .active(move |s| s.bg(t.pressed))
             .focusable()
             .tab_stop(
                 (self.snapshot.panel_title.is_empty() && self.snapshot.prompt.is_none())
@@ -111,7 +181,7 @@ impl Desktop {
             .bg(t.amber.opacity(0.16))
             .border_b_1()
             .border_color(t.border)
-            .text_size(px(12.))
+            .text_size(px(crate::theme::size::SMALL))
             .text_color(t.text)
             .child("Disconnected — the daemon is unreachable. Your draft is kept.")
             .child(self.button(
@@ -143,7 +213,7 @@ impl Desktop {
                 .left(px(if tick.long { 0. } else { 3. }))
                 .w(px(if tick.long { 12. } else { 6. }))
                 .h(px(if tick.long { 3. } else { 2. }))
-                .rounded(px(1.))
+                .rounded(px(crate::theme::radius::CHIP))
                 .bg(if tick.long {
                     t.muted
                 } else {
@@ -165,19 +235,20 @@ impl Desktop {
             .w(px(12.))
             .flex_shrink_0()
             .h_full()
-            .py(px(8.))
+            .py(px(crate::theme::space::SM))
             .child(
                 div()
                     .relative()
                     .w_full()
                     .h_full()
+                    .bg(t.separator.opacity(0.5))
                     .child(
                         div()
                             .absolute()
                             .top(relative(band_top))
                             .h(relative(band_height))
                             .w_full()
-                            .rounded(px(2.))
+                            .rounded(px(crate::theme::radius::CHIP))
                             .bg(t.accent.opacity(0.12)),
                     )
                     .children(ticks),
@@ -204,12 +275,12 @@ impl Desktop {
                     .id("follow-latest")
                     .px_3()
                     .py_2()
-                    .rounded(px(999.))
+                    .rounded(px(crate::theme::radius::PILL))
                     .bg(t.raised)
                     .border_1()
                     .border_color(t.border)
-                    .shadow_lg()
-                    .text_size(px(12.))
+                    .shadow(t.popover_shadow())
+                    .text_size(px(crate::theme::size::SMALL))
                     .text_color(t.text)
                     .cursor(CursorStyle::Arrow)
                     .hover(move |s| s.bg(t.accent_bg).text_color(t.accent))
@@ -234,25 +305,40 @@ impl Desktop {
             let id = notice.id;
             let mut row = div()
                 .id(SharedString::from(format!("toast-{id}")))
-                .w_full()
-                .max_w(px(460.))
+                .occlude()
+                .w(px(460.))
+                .max_w(relative(0.92))
+                .flex_shrink_0()
                 .flex()
+                .flex_col()
                 .items_start()
                 .gap_3()
                 .p_3()
-                .rounded(px(10.))
+                .rounded(px(crate::theme::radius::CARD))
                 .bg(t.raised)
                 .border_1()
                 .border_l_4()
                 .border_color(accent)
-                .shadow_lg()
+                .shadow(t.popover_shadow())
                 .child(
                     div()
-                        .flex_1()
+                        .w_full()
+                        .flex_shrink_0()
                         .min_w_0()
-                        .text_size(px(12.))
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .text_size(px(crate::theme::size::SMALL))
                         .text_color(t.text)
-                        .child(notice.text.clone()),
+                        .child(self.selectable(
+                            &markdown::Block {
+                                text: notice.text.clone(),
+                                ..Default::default()
+                            },
+                            SharedString::from(format!("notice-text-{id}")),
+                            t,
+                            cx,
+                        )),
                 );
             match notice.action {
                 NoticeAction::Reconnect => {
@@ -272,19 +358,42 @@ impl Desktop {
                     ));
                 }
                 NoticeAction::None => {}
+                NoticeAction::Host(host_id) => {
+                    if let Some(action) = self
+                        .snapshot
+                        .toasts
+                        .iter()
+                        .find(|toast| toast.id == host_id)
+                        .and_then(|toast| toast.action.as_ref())
+                    {
+                        row = row.child(self.button(
+                            SharedString::from(format!("toast-action-{id}")),
+                            action.label.clone(),
+                            json!({"type":"operation", "operation":action.operation}),
+                            cx,
+                        ));
+                    }
+                }
             }
             if notice.kind != NoticeKind::Info {
                 row = row.child(
                     div()
                         .id(SharedString::from(format!("toast-dismiss-{id}")))
+                        .debug_selector(|| "notice-dismiss".into())
+                        .focusable()
+                        .tab_stop(true)
                         .px_2()
                         .py_1()
-                        .rounded(px(6.))
-                        .text_size(px(11.))
+                        .rounded(px(crate::theme::radius::CONTROL))
+                        .text_size(px(crate::theme::size::CAPTION))
                         .text_color(t.muted)
                         .cursor(CursorStyle::Arrow)
                         .hover(move |s| s.bg(t.accent_bg).text_color(t.text))
-                        .on_click(cx.listener(move |this, _, _, cx| this.dismiss_notice(id, cx)))
+                        .focus(move |s| s.bg(t.accent_bg).text_color(t.text))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.dismiss_notice(id, cx);
+                        }))
                         .child("Dismiss"),
                 );
             }
@@ -292,13 +401,16 @@ impl Desktop {
         });
         div()
             .absolute()
-            .bottom(px(150.))
+            .bottom(px(crate::theme::space::LG))
             .left_0()
             .right_0()
             .flex()
             .flex_col()
             .items_center()
             .gap_2()
+            .max_h(relative(0.9))
+            .id("notice-stack")
+            .overflow_y_scroll()
             .children(items)
             .into_any_element()
     }
@@ -320,7 +432,7 @@ impl Desktop {
             )
             .child(
                 div()
-                    .text_size(px(15.))
+                    .text_size(px(crate::theme::size::BODY))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(t.muted)
                     .child("nexus"),
@@ -328,7 +440,7 @@ impl Desktop {
             .child(
                 div()
                     .ml_3()
-                    .text_size(px(10.))
+                    .text_size(px(crate::theme::size::CAPTION))
                     .text_color(t.muted)
                     .child(if self.preview { "PREVIEW" } else { "" }),
             )
@@ -391,12 +503,17 @@ impl Desktop {
                     self.snapshot.title.clone()
                 }
             });
+        let (display_title, mock) = session_title(&title);
+        let workspace = compact_workspace(
+            &self.snapshot.breadcrumb,
+            std::env::var("HOME").ok().as_deref(),
+        );
         let status = match self.snapshot.status.as_str() {
             "running" | "working" => "Working",
             "waiting" | "awaiting_permission" | "awaiting_input" => "Needs input",
             "failed" => "Failed",
             "done" => "Complete",
-            _ => "Ready",
+            _ => "Idle",
         };
         let mut row = div()
             .flex()
@@ -429,34 +546,41 @@ impl Desktop {
                             .gap_2()
                             .px_3()
                             .py_2()
-                            .rounded(px(6.))
-                            .max_w(px(230.))
-                            .bg(if s.active { t.raised } else { t.background })
-                            .text_color(if s.active { t.text } else { t.muted })
+                            .rounded(px(crate::theme::radius::CONTROL))
+                            .w(px(230.))
+                            .flex_shrink_0()
+                            .bg(if s.active { t.surface } else { t.background })
+                            .when(s.active, |d| d.font_weight(FontWeight::SEMIBOLD))
+                            .text_color(if s.active { t.text } else { t.text_tertiary })
                             .cursor(CursorStyle::Arrow)
                             .child(
                                 div()
-                                    .text_size(px(10.))
+                                    .text_size(px(crate::theme::size::CAPTION))
                                     .text_color(
-                                        if s.state == "running"
-                                            || matches!(s.status.as_str(), "running" | "done")
-                                        {
-                                            t.accent
-                                        } else {
-                                            t.muted
-                                        },
+                                        session_status(&s.status, t)
+                                            .map(|(_, tone)| tone)
+                                            .unwrap_or(t.text_tertiary),
                                     )
                                     .child(
-                                        if s.state == "running"
-                                            || matches!(s.status.as_str(), "running" | "done")
-                                        {
-                                            "●"
-                                        } else {
-                                            "◦"
-                                        },
+                                        session_status(&s.status, t)
+                                            .map(|(glyph, _)| glyph)
+                                            .unwrap_or("·"),
                                     ),
                             )
-                            .child(div().truncate().child(s.title.clone()))
+                            .child(
+                                div()
+                                    .id(("tab-title", i))
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .tooltip({
+                                        let title = s.title.clone();
+                                        move |_, cx| {
+                                            cx.new(|_| ControlHint(title.clone().into())).into()
+                                        }
+                                    })
+                                    .child(session_title(&s.title).0.to_owned()),
+                            )
                             .on_click(cx.listener(move |this, _, w, cx| {
                                 this.dispatch(
                                     json!({"type":"session_open","text":id,"workspace":workspace}),
@@ -488,27 +612,101 @@ impl Desktop {
                 .flex()
                 .items_center()
                 .justify_between()
+                .gap_4()
                 .px_6()
-                .py_3()
+                .py_2()
                 .child(
                     div()
                         .flex()
                         .flex_col()
                         .gap_1()
+                        .flex_1()
                         .min_w_0()
+                        .when(self.snapshot.tabs.is_empty(), |d| {
+                            d.child(
+                                div()
+                                    .id("session-header-title")
+                                    .tooltip({
+                                        let title = title.clone();
+                                        move |_, cx| {
+                                            cx.new(|_| ControlHint(title.clone().into())).into()
+                                        }
+                                    })
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_size(px(crate::theme::size::BODY))
+                                    .truncate()
+                                    .child(display_title.to_owned()),
+                            )
+                        })
                         .child(
                             div()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_size(px(15.))
-                                .truncate()
-                                .child(title),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(t.muted)
-                                .truncate()
-                                .child(self.snapshot.breadcrumb.clone()),
+                                .flex()
+                                .flex_wrap()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .id("workspace-breadcrumb")
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_size(px(crate::theme::size::CAPTION))
+                                        .text_color(t.muted)
+                                        .tooltip({
+                                            let path = self.snapshot.breadcrumb.clone();
+                                            move |_, cx| {
+                                                cx.new(|_| ControlHint(path.clone().into())).into()
+                                            }
+                                        })
+                                        .child(workspace),
+                                )
+                                .when_some(mock, |d, directive| {
+                                    let full = directive.to_owned();
+                                    d.child(
+                                        div()
+                                            .id("mock-directive")
+                                            .debug_selector(|| "mock-directive".into())
+                                            .focusable()
+                                            .tab_stop(
+                                                self.snapshot.panel_title.is_empty()
+                                                    && self.snapshot.prompt.is_none(),
+                                            )
+                                            .px_2()
+                                            .py_1()
+                                            .rounded(px(crate::theme::radius::CHIP))
+                                            .bg(t.surface)
+                                            .text_size(px(crate::theme::size::CAPTION))
+                                            .text_color(t.muted)
+                                            .hover(move |s| s.bg(t.hover).text_color(t.text))
+                                            .focus(move |s| s.bg(t.hover).text_color(t.text))
+                                            .tooltip({
+                                                let full = full.clone();
+                                                move |_, cx| {
+                                                    cx.new(|_| ControlHint(full.clone().into()))
+                                                        .into()
+                                                }
+                                            })
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                cx.stop_propagation();
+                                                let fields = full
+                                                    .trim_matches(['⟦', '⟧', '[', ']'])
+                                                    .split_whitespace()
+                                                    .filter_map(|field| {
+                                                        field.split_once('=').map(|(key, value)| {
+                                                            format!("{key}: {value}")
+                                                        })
+                                                    })
+                                                    .collect::<Vec<_>>()
+                                                    .join("\n");
+                                                this.push_notice(
+                                                    NoticeKind::Info,
+                                                    format!("Mock scenario\n{fields}"),
+                                                    NoticeAction::None,
+                                                    cx,
+                                                );
+                                            }))
+                                            .child(mock_label(directive)),
+                                    )
+                                }),
                         ),
                 )
                 .child(
@@ -517,7 +715,7 @@ impl Desktop {
                         .items_center()
                         .gap_2()
                         .flex_shrink_0()
-                        .text_size(px(11.))
+                        .text_size(px(crate::theme::size::CAPTION))
                         .text_color(if status == "Complete" {
                             t.green
                         } else if status == "Needs input" {
@@ -584,14 +782,15 @@ impl Desktop {
             .gap_1()
             .px_2()
             .py_1()
-            .rounded(px(8.))
+            .rounded(px(crate::theme::radius::CHIP))
+            .when(s.active, |d| d.border_l_2().border_color(t.brand))
             .mb_0()
             .cursor(CursorStyle::Arrow)
-            .when(selected, |d| d.border_1().border_color(t.accent))
+            .when(selected, |d| d.border_1().border_color(t.brand.opacity(0.7)))
             .bg(if selected {
                 t.accent_bg
             } else if s.active {
-                t.raised
+                t.surface
             } else {
                 t.sidebar
             })
@@ -601,6 +800,14 @@ impl Desktop {
                     .flex()
                     .items_center()
                     .gap_2()
+                    .when_some(session_status(&s.status, t), |d, (glyph, tone)| {
+                        d.child(
+                            div()
+                                .text_size(px(crate::theme::size::CAPTION))
+                                .text_color(tone)
+                                .child(glyph),
+                        )
+                    })
                     .child(
                         div()
                             .flex_1()
@@ -610,8 +817,13 @@ impl Desktop {
                             } else {
                                 FontWeight::NORMAL
                             })
+                            .id(("session-title", i))
+                            .tooltip({
+                                let title = s.title.clone();
+                                move |_, cx| cx.new(|_| ControlHint(title.clone().into())).into()
+                            })
                             .truncate()
-                            .child(s.title.clone()),
+                            .child(session_title(&s.title).0.to_owned()),
                     )
                     .child(
                         self.button(
@@ -626,7 +838,7 @@ impl Desktop {
             )
             .child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(px(crate::theme::size::CAPTION))
                     .text_color(t.muted)
                     .truncate()
                     .child(if s.sub.is_empty() {
@@ -664,7 +876,7 @@ impl Desktop {
                         .mt_5()
                         .mb_2()
                         .px_3()
-                        .text_size(px(10.))
+                        .text_size(px(crate::theme::size::CAPTION))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(t.muted)
                         .child(s.group.to_uppercase()),
@@ -727,7 +939,7 @@ impl Desktop {
                         div()
                             .px_3()
                             .py_2()
-                            .rounded(px(6.))
+                            .rounded(px(crate::theme::radius::CONTROL))
                             .bg(t.surface)
                             .border_1()
                             .border_color(t.border)
@@ -740,7 +952,7 @@ impl Desktop {
                                     div()
                                         .id("search-clear")
                                         .px_2()
-                                        .rounded(px(4.))
+                                        .rounded(px(crate::theme::radius::CHIP))
                                         .text_color(t.muted)
                                         .cursor(CursorStyle::Arrow)
                                         .hover(move |s| s.bg(t.accent_bg).text_color(t.text))
@@ -792,7 +1004,7 @@ impl Desktop {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .text_size(px(11.))
+                    .text_size(px(crate::theme::size::CAPTION))
                     .text_color(t.muted)
                     .child(if self.preview {
                         "Fixture workspace"
@@ -832,8 +1044,8 @@ impl Desktop {
             for line in &self.snapshot.logs {
                 rows.push(
                     div()
-                        .text_size(px(11.))
-                        .font_family("Menlo")
+                        .text_size(px(crate::theme::size::CAPTION))
+                        .font_family(crate::theme::code_font())
                         .line_height(px(19.))
                         .child(line.replace(" · Ctrl+A toggle", ""))
                         .into_any_element(),
@@ -864,7 +1076,7 @@ impl Desktop {
                     rows.push(
                         div()
                             .text_color(t.muted)
-                            .text_size(px(12.))
+                            .text_size(px(crate::theme::size::SMALL))
                             .child("No files changed yet")
                             .into_any_element(),
                     );
@@ -895,26 +1107,26 @@ impl Desktop {
                                             .flex_1()
                                             .min_w_0()
                                             .truncate()
-                                            .text_size(px(12.))
+                                            .text_size(px(crate::theme::size::SMALL))
                                             .child(file.path.clone()),
                                     )
                                     .child(
                                         div()
                                             .text_color(t.green)
-                                            .text_size(px(11.))
+                                            .text_size(px(crate::theme::size::CAPTION))
                                             .child(format!("+{}", file.added)),
                                     )
                                     .child(
                                         div()
                                             .text_color(t.red)
-                                            .text_size(px(11.))
+                                            .text_size(px(crate::theme::size::CAPTION))
                                             .child(format!("−{}", file.removed)),
                                     ),
                             )
                             .children(file.diff.iter().map(|line| {
                                 div()
-                                    .font_family("Menlo")
-                                    .text_size(px(10.))
+                                    .font_family(crate::theme::code_font())
+                                    .text_size(px(crate::theme::size::CAPTION))
                                     .text_color(if line.starts_with('+') {
                                         t.green
                                     } else if line.starts_with('-') {
@@ -933,7 +1145,7 @@ impl Desktop {
                 if !panel.files_summary.is_empty() {
                     rows.push(
                         div()
-                            .text_size(px(11.))
+                            .text_size(px(crate::theme::size::CAPTION))
                             .text_color(t.muted)
                             .child(panel.files_summary.clone())
                             .into_any_element(),
@@ -946,7 +1158,7 @@ impl Desktop {
                     rows.push(
                         div()
                             .text_color(t.muted)
-                            .text_size(px(12.))
+                            .text_size(px(crate::theme::size::SMALL))
                             .child("No servers configured")
                             .into_any_element(),
                     );
@@ -960,13 +1172,13 @@ impl Desktop {
                             .py_1()
                             .child(
                                 div()
-                                    .text_size(px(12.))
+                                    .text_size(px(crate::theme::size::SMALL))
                                     .text_color(if tone == "error" { t.red } else { t.text })
                                     .child(text.clone()),
                             )
                             .child(
                                 div()
-                                    .text_size(px(11.))
+                                    .text_size(px(crate::theme::size::CAPTION))
                                     .text_color(t.muted)
                                     .child(note.clone()),
                             )
@@ -999,16 +1211,15 @@ impl Desktop {
                             cx,
                         )
                         .px_2()
-                        .bg(if panel.tab == tab {
-                            t.raised
+                        .rounded_none()
+                        .bg(t.sidebar)
+                        .border_b_2()
+                        .border_color(if panel.tab == tab {
+                            t.brand
                         } else {
                             t.sidebar
                         })
-                        .text_color(if panel.tab == tab {
-                            t.accent
-                        } else {
-                            t.muted
-                        })
+                        .text_color(if panel.tab == tab { t.text } else { t.muted })
                     })),
             )
             .child(
@@ -1020,7 +1231,7 @@ impl Desktop {
                     .p_5()
                     .flex()
                     .flex_col()
-                    .gap_3()
+                    .gap_2()
                     .children(rows),
             )
             .into_any_element()
@@ -1060,9 +1271,9 @@ impl Desktop {
                 d.child(
                     div()
                         .p_3()
-                        .rounded(px(6.))
+                        .rounded(px(crate::theme::radius::CONTROL))
                         .bg(t.raised)
-                        .text_size(px(12.))
+                        .text_size(px(crate::theme::size::SMALL))
                         .text_color(t.muted)
                         .children(self.snapshot.queue_lines.iter().cloned()),
                 )
@@ -1073,7 +1284,7 @@ impl Desktop {
                     d.child(
                         div()
                             .p_3()
-                            .rounded(px(6.))
+                            .rounded(px(crate::theme::radius::CONTROL))
                             .bg(t.accent_bg)
                             .flex()
                             .flex_col()
@@ -1171,10 +1382,11 @@ impl Desktop {
             .child(
                 div()
                     .relative()
-                    .rounded(px(14.))
-                    .border_1()
-                    .border_color(t.border)
+                    .rounded(px(crate::theme::radius::CHIP))
                     .bg(t.surface)
+                    // The TUI editor's agent-coloured left rail.
+                    .border_l_2()
+                    .border_color(t.resolve(&self.snapshot.agent_color, t.blue))
                     .flex()
                     .flex_col()
                     .when(
@@ -1230,7 +1442,7 @@ impl Desktop {
                                             .px_2()
                                             .py_1()
                                             .bg(t.accent_bg)
-                                            .text_size(px(11.))
+                                            .text_size(px(crate::theme::size::CAPTION))
                                             .text_color(t.accent)
                                         }),
                                 ),
@@ -1307,7 +1519,7 @@ impl Desktop {
                                         cx,
                                     )
                                     .bg(t.accent)
-                                    .rounded(px(10.))
+                                    .rounded(px(crate::theme::radius::CARD))
                                     .text_color(t.background)
                                     .on_click(cx.listener(|this, _, w, cx| this.submit(w, cx)))
                                 },
@@ -1350,19 +1562,24 @@ impl Desktop {
             .child(
                 self.button(
                     "agent",
-                    format!("{} ▾", self.snapshot.agent),
+                    format!("{} ▾", agent_label(&self.snapshot.agent)),
                     json!({"type":"command","text":"/agent"}),
                     cx,
                 )
                 .py_1()
                 .px_2()
-                .text_color(t.muted),
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(t.resolve(&self.snapshot.agent_color, t.blue)),
             )
-            .child(div().mx_1().w(px(1.)).h(px(12.)).bg(t.border))
+            .child(div().text_color(t.text_tertiary).child("·"))
             .child(
                 self.button(
                     "model",
-                    format!("{} ▾", self.snapshot.model),
+                    if self.snapshot.provider.is_empty() {
+                        format!("{} ▾", self.snapshot.model)
+                    } else {
+                        format!("{}  {} ▾", self.snapshot.model, self.snapshot.provider)
+                    },
                     json!({"type":"command","text":"/model"}),
                     cx,
                 )
@@ -1370,9 +1587,10 @@ impl Desktop {
                 .px_2()
                 .text_color(t.text)
                 .font_weight(FontWeight::MEDIUM)
-                .max_w(px(280.))
+                .max_w(px(320.))
                 .overflow_hidden(),
             )
+            .child(div().text_color(t.text_tertiary).child("·"))
             .child(
                 self.button(
                     "effort",
@@ -1408,18 +1626,21 @@ impl Desktop {
                 .gap_3()
                 .px_4()
                 .py_3()
-                .rounded(px(6.))
+                .rounded(px(crate::theme::radius::CONTROL))
                 .cursor(CursorStyle::Arrow)
                 .bg(if i == self.selection {
                     t.raised
                 } else {
                     t.surface
                 })
+                // The TUI's `▌` selection rail, in the brand colour.
+                .border_l_2()
+                .border_color(if i == self.selection { t.brand } else { t.surface })
                 .hover(move |s| s.bg(t.raised))
                 .child(
                     div()
                         .w(px(16.))
-                        .text_color(t.accent)
+                        .text_color(t.brand)
                         .child(if item.current { "●" } else { "" }),
                 )
                 .child(
@@ -1433,14 +1654,14 @@ impl Desktop {
                         .when(!item.detail.is_empty(), |d| {
                             d.child(
                                 div()
-                                    .text_size(px(11.))
+                                    .text_size(px(crate::theme::size::CAPTION))
                                     .text_color(t.muted)
                                     .child(item.detail.clone()),
                             )
                         })
                         .children(item.lines.iter().map(|line| {
                             div()
-                                .text_size(px(11.))
+                                .text_size(px(crate::theme::size::CAPTION))
                                 .text_color(t.muted)
                                 .child(line.clone())
                         })),
@@ -1449,14 +1670,19 @@ impl Desktop {
             if !item.trailing.is_empty() {
                 row = row.child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(px(crate::theme::size::CAPTION))
                         .text_color(t.muted)
                         .child(item.trailing.clone()),
                 );
             }
             if let Some(enabled) = item.toggle_enabled {
                 if item.toggle_locked {
-                    row = row.child(div().text_size(px(11.)).text_color(t.muted).child("Locked"));
+                    row = row.child(
+                        div()
+                            .text_size(px(crate::theme::size::CAPTION))
+                            .text_color(t.muted)
+                            .child("Locked"),
+                    );
                 } else if let Some(operation) = &item.toggle_operation {
                     row = row.child(
                         self.button(
@@ -1535,7 +1761,7 @@ impl Desktop {
                     .py_2()
                     .border_1()
                     .border_color(t.border)
-                    .rounded(px(6.))
+                    .rounded(px(crate::theme::radius::CONTROL))
                     .child(self.filter.clone()),
             );
         }
@@ -1576,7 +1802,11 @@ impl Desktop {
                             ("Cmd+I / Cmd+U", "Context / provider usage"),
                             ("Cmd+Shift+A", "Attach files"),
                             ("Ctrl+Space", "Dictation"),
-                            ("Cmd+. / Ctrl+C", "Stop turn (Esc twice)"),
+                            (
+                                "Ctrl+C",
+                                "Copy selection, close panel, clear draft, or stop",
+                            ),
+                            ("Cmd+. / Esc twice", "Stop turn"),
                             ("Ctrl+Enter / Alt+Enter", "Queue / interrupt"),
                             ("Cmd+S / Ctrl+S", "Save file"),
                             ("Ctrl+T / Ctrl+E", "Cycle effort / Logs"),
@@ -1608,7 +1838,9 @@ impl Desktop {
                     .child(section("TERMINAL SHORTCUT REFERENCE", t)),
             );
         }
-        if self.snapshot.form.is_some() {
+        if let Some(page) = &self.snapshot.settings_page {
+            body = body.child(self.settings_view(page, _window, cx));
+        } else if self.snapshot.form.is_some() {
             body = body.child(
                 div()
                     .id("form-scroll")
@@ -1617,7 +1849,7 @@ impl Desktop {
                     .min_h_0()
                     .overflow_y_scroll()
                     .p_5()
-                    .font_family("Menlo")
+                    .font_family(crate::theme::code_font())
                     .child(self.form.clone()),
             );
         } else {
@@ -1689,7 +1921,9 @@ impl Desktop {
                                                             div()
                                                                 .w(relative(0.34))
                                                                 .flex_shrink_0()
-                                                                .text_size(px(11.))
+                                                                .text_size(px(
+                                                                    crate::theme::size::CAPTION,
+                                                                ))
                                                                 .text_color(t.muted)
                                                                 .child(key.to_owned()),
                                                         )
@@ -1697,7 +1931,9 @@ impl Desktop {
                                                             div()
                                                                 .flex_1()
                                                                 .min_w_0()
-                                                                .text_size(px(12.))
+                                                                .text_size(px(
+                                                                    crate::theme::size::SMALL,
+                                                                ))
                                                                 .text_color(t.text)
                                                                 .child(value.to_owned()),
                                                         );
@@ -1705,7 +1941,7 @@ impl Desktop {
                                             }
                                         }
                                         let mut row = div()
-                                            .text_size(px(12.))
+                                            .text_size(px(crate::theme::size::SMALL))
                                             .line_height(px(21.))
                                             .text_color(match tone {
                                                 "add" => t.diff_add,
@@ -1742,7 +1978,7 @@ impl Desktop {
             );
         }
         if let Some(form) = &self.snapshot.form {
-            body = body.child(div().p_4().border_t_1().border_color(t.border).flex().items_center().justify_between().child(div().text_size(px(11.)).text_color(t.muted).child(form.status.clone())).child(div().flex().gap_2()
+            body = body.child(div().p_4().border_t_1().border_color(t.border).flex().items_center().justify_between().child(div().text_size(px(crate::theme::size::CAPTION)).text_color(t.muted).child(form.status.clone())).child(div().flex().gap_2()
                 .when(!form.secret, |d| d.child(self.button("delete-form", "Delete / reset", json!({"type":"form_delete"}), cx)))
                 .child(self.button("save-form","Save changes  ⌘S",json!({"type":"save","form":form.id,"body":self.form.read(cx).content,"revision":self.form_revision}),cx).bg(t.accent_bg).text_color(t.accent))));
         }
@@ -1751,9 +1987,13 @@ impl Desktop {
                 div()
                     .px_4()
                     .py_3()
-                    .text_size(px(10.))
+                    .text_size(px(crate::theme::size::CAPTION))
                     .text_color(t.muted)
-                    .child(self.snapshot.panel_hint.clone()),
+                    .child(if self.snapshot.settings_page.is_some() {
+                        "Ctrl+Tab / Ctrl+Shift+Tab move · Enter select · Esc back".to_string()
+                    } else {
+                        self.snapshot.panel_hint.clone()
+                    }),
             );
         }
         div()
@@ -1774,12 +2014,12 @@ impl Desktop {
                     .max_w(relative(0.92))
                     .h(px(if self.snapshot.panel_format == "image" { if self.snapshot.items.is_empty() { 500. } else { 620. } } else { 660. }))
                     .max_h(relative(0.88))
-                    .rounded(px(14.))
+                    .rounded(px(crate::theme::radius::CARD))
                     .relative()
                     .border_1()
                     .border_color(t.border)
                     .bg(t.surface)
-                    .shadow_xl()
+                    .shadow(t.sheet_shadow())
                     .overflow_hidden()
                     .flex()
                     .flex_col()
@@ -1806,14 +2046,14 @@ impl Desktop {
                                     ))
                                     .child(
                                         div()
-                                            .text_size(px(15.))
+                                            .text_size(px(crate::theme::size::BODY))
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .child(self.snapshot.panel_title.clone()),
                                     ),
                             )
                             .child(div().flex().items_center().gap_2()
                                 .when(!self.snapshot.panel_lines.is_empty(), |d| d.child(self.button("copy-panel", "Copy details", json!({"type":"copy_text","text":self.snapshot.panel_lines.join("\n")}), cx).tab_stop(true)))
-                                .child(div().text_size(px(11.)).text_color(t.muted).child("esc"))),
+                                .child(div().text_size(px(crate::theme::size::CAPTION)).text_color(t.muted).child("esc"))),
                     )
                     .child(div().flex().flex_1().min_h_0().children(nav).child(body)),
             )
@@ -1833,16 +2073,16 @@ impl Desktop {
             .flex()
             .items_center()
             .justify_center();
-        let sheet = div().w(px(680.)).max_w(relative(0.92)).max_h(relative(0.88)).rounded(px(14.)).relative().border_1().border_color(t.border).bg(t.surface).shadow_xl().flex().flex_col()
-                .child(div().px_6().pt_6().text_size(px(11.)).text_color(t.amber).font_weight(FontWeight::SEMIBOLD).child(if prompt.kind=="permission" { "YOUR APPROVAL IS NEEDED" } else { "A QUESTION FOR YOU" }))
-                .child(div().px_6().pt_2().pb_4().text_size(px(22.)).font_weight(FontWeight::SEMIBOLD).child(if prompt.kind=="permission" { "Review this action" } else { "Choose how to proceed" }))
-                .child(div().id("prompt-scroll").px_6().max_h(px(310.)).overflow_y_scroll().children(prompt.lines.iter().map(|line|div().py_1().text_size(px(13.)).line_height(px(21.)).child(line.clone()))))
+        let sheet = div().w(px(680.)).max_w(relative(0.92)).max_h(relative(0.88)).rounded(px(crate::theme::radius::CARD)).relative().border_1().border_color(t.border).bg(t.surface).shadow(t.sheet_shadow()).flex().flex_col()
+                .child(div().px_6().pt_6().text_size(px(crate::theme::size::CAPTION)).text_color(t.amber).font_weight(FontWeight::SEMIBOLD).child(if prompt.kind=="permission" { "YOUR APPROVAL IS NEEDED" } else { "A QUESTION FOR YOU" }))
+                .child(div().px_6().pt_2().pb_4().text_size(px(crate::theme::size::TITLE)).font_weight(FontWeight::SEMIBOLD).child(if prompt.kind=="permission" { "Review this action" } else { "Choose how to proceed" }))
+                .child(div().id("prompt-scroll").px_6().max_h(px(310.)).overflow_y_scroll().children(prompt.lines.iter().map(|line|div().py_1().text_size(px(crate::theme::size::UI)).line_height(px(21.)).child(line.clone()))))
                 .when(prompt.kind=="question", |d| d.child(div().px_6().pt_4().flex().flex_col().gap_2()
-                    .child(div().p_3().rounded(px(6.)).border_1().border_color(t.border).child(self.filter.clone()))
+                    .child(div().p_3().rounded(px(crate::theme::radius::CONTROL)).border_1().border_color(t.border).child(self.filter.clone()))
                     .child(self.button("custom-answer","Send answer",json!({"type":"answer","text":prompt.id,"value":self.filter.read(cx).content}),cx).bg(t.accent_bg).text_color(t.accent))))
                 .child(div().p_6().flex().flex_col().gap_2().children(prompt.choices.iter().enumerate().map(|(i,choice)| {
                     let action=json!({"type":"answer","text":id,"value":choice.value});
-                    if choice.disabled { div().px_4().py_3().rounded(px(6.)).text_color(t.muted).child(format!("{} · unavailable",choice.label)).into_any_element() }
+                    if choice.disabled { div().px_4().py_3().rounded(px(crate::theme::radius::CONTROL)).text_color(t.muted).child(format!("{} · unavailable",choice.label)).into_any_element() }
                     else { self.button(("answer",i),choice.label.clone(),action,cx).justify_start().bg(if i==0 { t.accent_bg } else { t.raised }).text_color(if i==0 { t.accent } else { t.text }).into_any_element() }
                 })));
         if self.snapshot.panel_title.is_empty() {
@@ -1971,28 +2211,103 @@ fn section(label: &str, t: Theme) -> AnyElement {
         .child(primitives::section_label(label.to_uppercase(), t))
         .into_any_element()
 }
+/// The TUI's metadata rows: a fixed muted label column, values left-aligned and
+/// wrapping in full (paths and IDs are never right-ragged or clipped).
 fn kv(key: &str, value: &str, t: Theme) -> AnyElement {
     div()
         .flex()
-        .justify_between()
+        .items_start()
         .gap_3()
-        .text_size(px(12.))
-        .child(div().text_color(t.muted).child(key.to_string()))
-        .child(div().min_w_0().text_color(t.text).child(value.to_string()))
+        .text_size(px(crate::theme::size::SMALL))
+        .line_height(px(18.))
+        .child(
+            div()
+                .w(px(76.))
+                .flex_shrink_0()
+                .text_color(t.muted)
+                .child(key.trim_end_matches(':').to_string()),
+        )
+        .child(div().flex_1().min_w_0().text_color(t.text).child(value.to_string()))
         .into_any_element()
 }
 
-struct ControlHint(SharedString);
+pub(crate) struct ControlHint(pub(crate) SharedString);
 impl Render for ControlHint {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
+            .max_w(px(480.))
+            .whitespace_normal()
             .px_3()
             .py_2()
-            .rounded(px(6.))
-            .bg(rgb(0x2c2e33))
-            .text_color(rgb(0xf0f0f2))
-            .text_size(px(12.))
+            .rounded(px(crate::theme::radius::CONTROL))
+            .bg(rgb(0x2a2a2a))
+            .text_color(rgb(0xeeeeee))
+            .text_size(px(crate::theme::size::SMALL))
             .shadow_md()
             .child(self.0.clone())
+    }
+}
+
+#[cfg(test)]
+mod header_tests {
+    use super::*;
+    #[test]
+    fn mock_title_keeps_complete_directive_separate() {
+        let title = "Run the marathon. ⟦mock scenario=tool-marathon actor=main speed=12 seed=0⟧";
+        let (label, directive) = session_title(title);
+        assert_eq!(label, "Run the marathon.");
+        assert!(directive.unwrap().contains("seed=0"));
+        assert_eq!(mock_label(directive.unwrap()), "Mock · tool-marathon");
+        assert_eq!(
+            session_title("日本語 [mock scenario=hello seed=2]").0,
+            "日本語"
+        );
+        assert_eq!(
+            session_title("A [mock scenario=hello] in prose"),
+            ("A [mock scenario=hello] in prose", None)
+        );
+    }
+    #[test]
+    fn workspace_shortening_preserves_branch_and_home_boundaries() {
+        assert_eq!(
+            compact_workspace("/Users/me/repos/nexus › main", Some("/Users/me")),
+            "~/repos/nexus › main"
+        );
+        assert_eq!(
+            compact_workspace("/private/tmp/review/sandbox/workspace › feature/ui", None),
+            "/…/sandbox/workspace › feature/ui"
+        );
+        assert_eq!(
+            compact_workspace("/Users/mel/project", Some("/Users/me")),
+            "/Users/mel/project"
+        );
+        assert_eq!(
+            compact_workspace("Read-only fixture", None),
+            "Read-only fixture"
+        );
+        assert_eq!(
+            compact_workspace("/项目/目录/长路径/工作区 › 主分支", None),
+            "/…/长路径/工作区 › 主分支"
+        );
+    }
+}
+
+/// The TUI capitalises the agent name in the composer line (`build` → `Build`).
+fn agent_label(agent: &str) -> String {
+    let mut chars = agent.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+
+/// The TUI's session status marks: working in the brand colour, waiting for input
+/// amber, finished-unseen blue. Idle sessions carry no mark.
+fn session_status(status: &str, t: crate::theme::Theme) -> Option<(&'static str, Hsla)> {
+    match status {
+        "working" | "running" => Some(("●", t.brand)),
+        "input" => Some(("●", t.amber)),
+        "done" => Some(("●", t.blue)),
+        _ => None,
     }
 }

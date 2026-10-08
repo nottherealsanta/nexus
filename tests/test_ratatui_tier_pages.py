@@ -1,6 +1,6 @@
 """An agent's Tiers row in the native client (the Models and titles pages are in test_ratatui_settings_models.py).
 
-Plan: plans/SESSION_TITLE_PLAN.md. The pages come from shared rows and help text
+Plan: plans/done/SESSION_TITLE_PLAN.md. The pages come from shared rows and help text
 (``ui_support/tier_settings.py``) and every change goes through a host command.
 """
 from types import SimpleNamespace

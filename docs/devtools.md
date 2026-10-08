@@ -128,5 +128,5 @@ screen and state from fake data using the real component kit in `rust/widgets`
 talks to the daemon, and deleting it removes nothing the TUI needs. Run
 `cargo run` (viewer), `cargo run -- shoot` (screenshots and `shots/index.html`)
 and `cargo test` in that folder; see its README. The spec and phase checklist are
-in `plans/RATATUI_DESIGN_MOCKUPS_PLAN.md`. `rust/tui` does not use the kit yet
+in `plans/done/RATATUI_DESIGN_MOCKUPS_PLAN.md`. `rust/tui` does not use the kit yet
 (Phase 3); not verified against a real terminal beyond the SVG/text renders.

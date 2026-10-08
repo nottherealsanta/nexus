@@ -1,6 +1,6 @@
 """Automatic session titles: cleaning, the side call, storage, and the trigger.
 
-Plan: plans/SESSION_TITLE_PLAN.md, Part 2.
+Plan: plans/done/SESSION_TITLE_PLAN.md, Part 2.
 """
 from __future__ import annotations
 

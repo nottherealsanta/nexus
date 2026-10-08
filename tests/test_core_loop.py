@@ -753,6 +753,31 @@ async def test_wall_clock_limit_completes_as_budget():
     assert outcome.stop_reason == "budget"
     assert provider.calls == 1
     _assert_single_terminal(sink, "turn.completed")
+    completed = [r.event for r in sink.events if r.event.type == "turn.completed"]
+    assert completed[0].data["limit"] == "max_seconds"
+
+
+async def test_default_limits_never_stop_a_long_turn_after_a_tool_result():
+    """A turn that runs past 30 minutes still sends the tool result to the model."""
+
+    provider = ScriptedProvider(
+        tool_response(("c1", "Read", {"path": "a"})),
+        text_response("done"),
+    )
+    session = FakeSession()
+    sink = FakeSink()
+    lease = FakeLease("t")
+    ticks = iter([0.0] + [86_400.0] * 50)
+
+    outcome = await _run(
+        session, provider, sink, lease, limits=TurnLimits(), clock=lambda: next(ticks)
+    )
+
+    assert outcome.phase == "completed"
+    assert outcome.stop_reason == "end_turn"
+    assert provider.calls == 2
+    completed = [r.event for r in sink.events if r.event.type == "turn.completed"]
+    assert "limit" not in completed[0].data
 
 
 # ---------------------------------------------------------------------------

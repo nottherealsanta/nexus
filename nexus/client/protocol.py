@@ -205,6 +205,12 @@ class Client:
         result = await self._request(p.SessionEnqueue(session=session, content=content, mode=mode, attachments=attachments or [], attachment_labels=attachment_labels or []))
         return result.queued_id, result.turn_id  # type: ignore[union-attr]
 
+    async def queue_move(self, session: str, queued_id: str, offset: int) -> bool:
+        return (await self._request(p.SessionQueueMove(session=session, queued_id=queued_id, offset=offset))).changed
+
+    async def queue_remove(self, session: str, queued_id: str) -> bool:
+        return (await self._request(p.SessionQueueRemove(session=session, queued_id=queued_id))).changed
+
     async def cancel(self, session: str, *, reason: str = "", drop_queue: bool = True) -> tuple[bool, int]:
         result = await self._request(p.SessionCancel(session=session, reason=reason, drop_queue=drop_queue))
         return result.cancelled, result.dropped  # type: ignore[union-attr]
@@ -397,6 +403,10 @@ class Client:
             p.McpServerShow(session=session, name=name, max_bytes=max_bytes)
         )  # type: ignore[return-value]
 
+    async def mcp_server_restart(self, session: str, name: str) -> p.McpServerRestartResult:
+        """Close one MCP server's connection and connect it again."""
+        return await self._request(p.McpServerRestart(session=session, name=name))  # type: ignore[return-value]
+
     async def skill_inspect(self, session: str, name: str, *, max_body_bytes: int = 65_536) -> p.SkillInspectResult:
         """Read one pinned skill (frontmatter and body) without activating it."""
         return await self._request(p.SkillInspect(session=session, name=name, max_body_bytes=max_body_bytes))  # type: ignore[return-value]
@@ -405,7 +415,7 @@ class Client:
         """Preview next-turn standing context; no prompt is persisted or sent."""
         return await self._request(p.ContextInspect(session=session))  # type: ignore[return-value]
 
-    async def update_status(self) -> Any: return await self._request(p.UpdateStatus())
+    async def update_status(self, *, announce: bool = False) -> Any: return await self._request(p.UpdateStatus(announce=announce))
     async def doctor(self, *, explain_reload: bool = False) -> Any: return await self._request(p.Doctor(explain_reload=explain_reload))
 
     async def shutdown(self, reason: str = "") -> bool: return bool((await self._request(p.Shutdown(reason=reason))).stopping)  # type: ignore[union-attr]

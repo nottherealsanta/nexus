@@ -422,18 +422,27 @@ class Workflows(TierPages, SpeakPages):
         elif kind == "agent_clear":
             await self.agent_write(operation["field"], operation.get("index", 0), "")
         elif kind in {"tool_show", "tool_definition"}:
-            self.tool_page(operation.get("name", ""), operation.get("fallback"))
+            self.tool_page(operation.get("name", ""), operation.get("fallback"), server=operation.get("server"))
         elif kind == "context_toggle":
             self.shell.preview = await self.client.select_context_extension(self.shell.controller.session,
                 operation["category"], operation["name"], operation["enabled"])
             if operation["category"] == "tools":
                 on_page = (self.shell.panel_toggle or {}).get("name") == operation["name"]
+                server = operation.get("server")
                 if on_page:
                     self.back()  # the list underneath, rebuilt with the new state, then the page again
                 self.shell.panel_title = ""  # same dialog, new counts: replace it rather than stacking
-                self.tools_modal()
+                if server:
+                    from . import context_sections
+                    await context_sections.server_page(self, server)
+                else:
+                    self.tools_modal()
                 if on_page:
-                    self.tool_page(operation["name"])
+                    self.tool_page(operation["name"], server=server)
+            elif operation["category"] == "mcp" and operation.get("page"):
+                from . import context_sections
+                self.shell.panel_title = ""
+                await context_sections.server_page(self, operation["name"])
             else:
                 self.shell.panel_title = ""  # refresh without growing the Back stack
                 await self.context_extensions(operation["category"])
@@ -443,12 +452,21 @@ class Workflows(TierPages, SpeakPages):
                 await context_sections.skill_page(self, operation["name"])
             else:
                 await context_sections.server_page(self, operation["name"])
+        elif kind == "mcp_refresh":
+            from . import context_sections
+            await context_sections.refresh(self)
+        elif kind == "mcp_restart":
+            from . import context_sections
+            await context_sections.restart(self, operation["name"], page=bool(operation.get("page")))
         elif kind == "context_index":
             from . import context_sections
             context_sections.literal_index(self, operation["category"])
         elif kind == "mcp_detail":
-            self.menu(f"{operation['title']} · {operation['value'].get('name') or operation['value'].get('uri')}",
-                      [("Back", {"kind": "back"})], labelled(operation["value"]), layout="context")
+            # A detail page, not a menu: a menu's note lines only show behind Tab.
+            value = {k: v for k, v in operation["value"].items() if v not in (None, "", [], {})}
+            self.stack.append((self.shell.panel_title, self.shell.panel_lines, self.shell.items, self.form, self.form_target,
+                               self.shell.panel_layout, self.shell.panel_format, self.shell.panel_tones))
+            self.shell.show(f"{operation['title']} · {value.get('name') or value.get('uri')}", "\n".join(labelled(value)), layout="detail")
         elif kind == "context_extensions":
             await self.context_extensions(operation["category"])
         elif kind == "agent_page":
@@ -875,7 +893,7 @@ class Workflows(TierPages, SpeakPages):
             item.update(trailing=f"~{_compact_tokens(entry.tokens)}", toggle_enabled=enabled, toggle_locked=locked,
                         toggle_operation={"kind": "context_toggle", "category": "tools", "name": entry.title, "enabled": not enabled})
 
-    def tool_page(self, name, fallback=None):
+    def tool_page(self, name, fallback=None, server=None):
         """The second modal: everything about one tool definition, rendered as Markdown."""
         from ...ui_support.context import page_markdown
         tool = next((row for row in self.shell.preview.tools if isinstance(row, dict) and row.get("name") == name), fallback)
@@ -889,7 +907,8 @@ class Workflows(TierPages, SpeakPages):
         self.shell.show(title, body, layout="detail", format="markdown")
         if not locked and name in {row.get("name") for row in self.shell.preview.tools if isinstance(row, dict)}:
             on = tool.get("enabled") is not False
-            self.shell.panel_toggle = {"kind": "context_toggle", "category": "tools", "name": name, "enabled": not on}
+            self.shell.panel_toggle = {"kind": "context_toggle", "category": "tools", "name": name, "enabled": not on,
+                                       **({"server": server} if server else {})}
 
     async def context_extensions(self, category):
         from . import context_sections
@@ -935,24 +954,45 @@ def session_rows(result, current: str = "", seen: dict | None = None, now: float
 
     ``seen`` records the last terminal-turn sequence viewed per session, so
     presence-only log activity cannot make a session appear newly finished.
+    Linked Git worktrees (``repo`` set by the host) group with their repository:
+    one project, and within each project · day group the main checkout first, then
+    each worktree as ``project › branch · day``.
     """
     from ...ui_support.session_groups import _session_groups
+    seen = {} if seen is None else seen
+    entries = {id(row.session): row for row in result.sessions}
+    groups = _session_groups([(_repo_of(row), row.session) for row in result.sessions], "")
+    rows = []
+    for label, members in groups:
+        project, _, day = label.rpartition(" · ")  # day labels never contain " · "
+        trees: dict[str, list] = {}
+        for summary in members:
+            trees.setdefault(getattr(entries[id(summary)], "worktree", ""), []).append(summary)
+        for tree in sorted(trees, key=lambda name: name != ""):  # main checkout first
+            for summary in trees[tree]:
+                rows.append(_session_row(summary, entries[id(summary)], project, day, tree, current, seen, now))
+    return rows
+
+
+def _repo_of(entry) -> str:
+    """The project a session belongs to: its worktree's repository, else its workspace."""
+    return getattr(entry, "repo", "") or entry.workspace
+
+
+def _session_row(summary, entry, project, day, tree, current, seen, now):
     from ...ui_support.session_status import session_status, session_subline
     from ...ui_support.text import escape_controls
-    seen = {} if seen is None else seen
-    groups = _session_groups([(row.workspace, row.session) for row in result.sessions], "")
-    workspace_for = {id(row.session): row.workspace for row in result.sessions}
-    rows = []
-    for group, members in groups:
-        for row in members:
-            if row.id not in seen or row.id == current:
-                seen[row.id] = max(
-                    seen.get(row.id, 0),
-                    getattr(row, "completion_seq", getattr(row, "last_seq", 0)),
-                )
-            status = session_status(row, seen, current)
-            rows.append({"id": row.id, "title": escape_controls(row.title or "New Session"),
-                         "workspace": workspace_for[id(row)], "state": row.state, "group": escape_controls(group),
-                         "status": status, "sub": escape_controls(session_subline(row, status, now, compact=True)),
-                         "active": row.id == current})
-    return rows
+    if summary.id not in seen or summary.id == current:
+        seen[summary.id] = max(
+            seen.get(summary.id, 0),
+            getattr(summary, "completion_seq", getattr(summary, "last_seq", 0)),
+        )
+    status = session_status(summary, seen, current)
+    head = f"{project} › {tree}" if tree else project
+    group = f"{head} · {day}" if project else day
+    return {"id": summary.id, "title": escape_controls(summary.title or "New Session"),
+            "workspace": entry.workspace, "state": summary.state, "group": escape_controls(group),
+            "project": escape_controls(project), "day": escape_controls(day),
+            "repo": _repo_of(entry), "worktree": escape_controls(tree),
+            "status": status, "sub": escape_controls(session_subline(summary, status, now, compact=True)),
+            "active": summary.id == current}

@@ -9,7 +9,7 @@ from pathlib import Path
 
 class Preferences:
     DEFAULTS = {"theme": "nexus-dark", "sessions_sidebar": True, "details_sidebar": True,
-                "details_tab": "Session", "context_preview": True, "model_favorites": [], "model_recent": []}
+                "details_tab": "Session", "context_preview": True, "centered_layout": False, "model_favorites": [], "model_recent": []}
 
     def __init__(self, path=None):
         self._worker = None

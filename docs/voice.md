@@ -41,7 +41,10 @@ and cache-only preparation check runtime availability first and report the
    with `--no-voice`; `sounddevice` is always installed. Any other install gets
    both pieces from `nexus voice init`: when `kestrel` is not importable it adds
    the runtime (a uv tool is reinstalled at the same version and source with
-   `voice` added to its extras, so `nexus update` keeps it; editable and pip
+   `voice` added to its extras, so `nexus update` keeps it; `nexus update` also
+   keeps `voice` whenever the runtime is importable or a model is downloaded, so a
+   receipt that lost the extra (installs from before 0.3.3, a plain reinstall) does
+   not drop dictation, and `--no-voice` opts out; editable and pip
    installs get the extra's requirements, read from package metadata, through
    `uv pip install --python <interpreter>` or `pip`), restarts the workspace
    daemon and downloads the model in a fresh interpreter, since a uv reinstall
@@ -181,44 +184,62 @@ Install in the environment used to run the daemon (source checkout shown):
 ```sh
 uv sync --extra speak
 # macOS (Intel or Apple Silicon)
-brew install espeak-ng portaudio
+brew install portaudio
 # Debian/Ubuntu instead
-sudo apt-get install espeak-ng libportaudio2
+sudo apt-get install libportaudio2
 nexus daemon restart
 ```
 
-The official [Kokoro pipeline](https://github.com/hexgrad/kokoro) loads
-[`hexgrad/Kokoro-82M`](https://huggingface.co/hexgrad/Kokoro-82M), using American
-English voice `af_heart`, speed 1, and 24 kHz mono audio.
+The speak extra is onnxruntime (CPU), [misaki](https://github.com/hexgrad/misaki)
+(Kokoro's grapheme-to-phoneme library, with spaCy's `en_core_web_sm`), huggingface_hub,
+numpy and sounddevice. It does not install torch.
+
+The model is [`sahilmahendrakar/Paradee-8M-v1.0`](https://huggingface.co/sahilmahendrakar/Paradee-8M-v1.0)
+at revision `v1.0` (Apache 2.0): an 8M-parameter int8 ONNX model distilled from
+[Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) that speaks one voice, Kokoro's
+`af_heart`, US English, 24 kHz mono. Two files are cached: `onnx/paradee_int8.onnx`
+(9 MB) and `config.json` (the phoneme vocabulary). The worker phonemizes each
+sentence with misaki (`fallback=None`, so no espeak), maps the phonemes to ids with
+a 0 pad at each end (at most 510 phonemes per chunk, so 512 positions) and runs the
+graph at speed 1.
 
 **Download flow (like `/voice download`).** `/speak` first asks the host for the
 model status (`SpeechStatus`: `unsupported`, `absent`, `downloading`, `ready`,
-`error`; status never imports torch, it looks for the packages and the Hugging
+`error`; status never imports onnxruntime, it looks for the packages and the Hugging
 Face cache files). When the model is missing both clients show a consent dialog
-with the size (about 345 MB: weights, the default voice, the English phonemizer)
-and say it runs on this device. Confirming sends `SpeechPrepare`, which starts one
+with the size (about 25 MB: the 9 MB model, its config and the English phonemizer
+package) and say it runs on this device. Confirming sends `SpeechPrepare`, which starts one
 background download in the isolated worker; the dialog polls the status and shows
-`Downloading… 42% · 145 / 345 MB` (progress is the Hugging Face cache growing
-against the approximate total), then offers "Speak latest answer" (or "Done"
+`Downloading… 42% · 10 / 25 MB` (progress is the Hugging Face cache and the
+phonemizer folder growing against the approximate total), then offers "Speak latest answer" (or "Done"
 when opened from `/speak download` or Settings → Speech). A failed download shows
 the reason and a Retry; missing packages show the install steps below and only a
 Close button. `/speak download` with the model present just says it is ready.
 Settings → Speech shows the model state with a Download button.
 
+**Upgrades never ask again.** Consent is durable: `SpeechPrepare` writes
+`~/.nexus/models/speech/consent`, and a Paradee or Kokoro model already in the
+Hugging Face cache counts as earlier consent (both were only fetched after the
+dialog). When the model is missing after that (a release that switches models,
+an upgrade, a cleared cache), `SpeechStatus` starts the download itself and
+reports `downloading`; `/speak` then shows the progress, refreshes it every
+second (bounded to 10 minutes) and speaks when it is ready, with no dialog. Leaving
+the page stops the wait; the download continues. A failed automatic download
+shows the error and Retry and is not retried in a loop. spaCy's `en_core_web_sm`
+wheel is unpacked under `~/.nexus/models/speech/python` (never pip-installed into
+the tool venv: uv tool venvs have no pip, and `nexus update` replaces the venv),
+and `nexus update` keeps the `speak` extra (see [release.md](release.md)).
+
 Playing is cached-only: Hugging Face is offline and a missing spaCy English
-package is refused before its automatic download. `Speak.download` still exists
+package is reported as not cached, never downloaded. `Speak.download` still exists
 on the wire for scripts but the clients use `SpeechPrepare`. Installing dependencies and the initial
 download require network access; the answer is synthesized locally, not sent
 to a speech service. Hugging Face stores model files in its standard cache.
 
-CPU is the portable default on macOS, Linux and Windows (Windows needs an
-eSpeak NG installation and working PortAudio output). For Apple Silicon,
-optionally launch/restart the daemon with `NEXUS_SPEAK_DEVICE=mps`. The isolated
-worker sets `PYTORCH_ENABLE_MPS_FALLBACK=1` before importing torch, as required by
-Kokoro's pipeline, so unsupported MPS operations can use CPU. Return to
-`NEXUS_SPEAK_DEVICE=cpu` if MPS fails; the command does not silently retry.
-Apple-native MLX ports exist, but this implementation uses the official weights
-and pipeline rather than an additional converted model/runtime.
+Synthesis runs on the CPU only, through onnxruntime's CPU provider with its
+default intra-op thread count. There is no device setting and no GPU or MPS path, and
+`NEXUS_SPEAK_DEVICE` is ignored (the previous torch/MPS option is gone). Windows
+needs working PortAudio output; not verified.
 
 **Esc.** Speaking shows no notice (only a failure does). Both clients run the
 request in the background so keys are still read; Esc sends `SpeakStop`, which
@@ -226,8 +247,9 @@ tells the warm worker to stop playing (the model stays loaded). Esc does nothing
 extra when nothing is playing.
 
 **Warm worker.** The first `/speak` starts a long-lived worker process that
-loads torch/Kokoro/spaCy and the model (about 8 s on CPU, measured on one Mac).
-The model then stays in memory, so later answers start in a couple of seconds.
+loads onnxruntime, misaki/spaCy and the model (about 2 s on an Apple M4, see the
+benchmark below). The model then stays in memory, so later answers start in about
+0.1 s.
 The daemon unloads it (kills the worker, freeing the memory) after 10 idle minutes
 (`IDLE_UNLOAD_SECONDS`) and the next `/speak` loads it again. Esc stops the
 current answer without unloading. A failed request, a timeout or a download-mode
@@ -235,9 +257,16 @@ change also drops the worker.
 
 One speech request runs at a time, with no queue. The worker has a five-minute
 wall-clock timeout, a 20,000-character input limit and a three-minute generated
-audio limit; exceeding a limit is reported, not silently clipped. Generation
-is bounded and completed before playback, so oversized answers are never
-partially spoken. The worker lives between requests (see Warm worker) and exits on idle unload or daemon exit.
-Environment changes require restarting the daemon. Model inference, actual
-speaker playback, Windows support and Apple Silicon performance are **not
-verified** on physical hardware; offline tests use fake models/output devices.
+audio limit; exceeding a limit is reported, not silently clipped. Each sentence
+plays as soon as it is synthesized, so an answer that crosses the audio limit is
+spoken up to that point and then reported. The worker lives between requests (see Warm worker) and exits on idle unload or daemon exit.
+Environment changes require restarting the daemon. Actual speaker playback, Windows
+support and other CPUs are **not verified**; offline tests use fake onnxruntime,
+misaki, huggingface_hub and sounddevice modules. The model card reports about
+18x real time on one CPU thread. One benchmark on an Apple M4 (3 fresh runs,
+median) measured: cold load 2.0 s (Kokoro-82M: 2.5 s with a warm file cache),
+first short sentence 0.10 s (Kokoro 0.34 s), a 645-character paragraph in 1.1 s,
+about 34x real time with default threads and 18x with one (Kokoro 9x), peak
+memory 0.5 GB (Kokoro 2.6 GB). Other machines are not verified. Words misaki does not know (for
+example "Paradee") are dropped from the phonemes rather than spelled out, because
+the fallback is disabled; the speech is then missing that word.

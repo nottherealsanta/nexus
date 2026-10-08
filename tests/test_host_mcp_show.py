@@ -101,3 +101,26 @@ async def test_http_transport_omits_credentials_and_endpoint():
     assert detail["command_label"] == ""
     assert "example.invalid" not in str(detail)
     assert SECRET not in str(detail)
+
+
+def test_restart_protocol_roundtrip():
+    command = p.McpServerRestart(session="s", name="demo")
+    assert p.decode_command(msgspec.json.encode(command)) == command
+    result = p.McpServerRestartResult(name="demo", status="connected")
+    assert p.decode_result(msgspec.json.encode(result)) == result
+
+
+async def test_restart_reconnects_one_server():
+    manager, factory = make_manager({"s": raw_definition(env={"TOKEN": SECRET})})
+    await manager.ensure_connected("s")
+    first = factory.clients[-1]
+    facade = HostFacade(SimpleNamespace(_mcp=manager))
+    try:
+        result = await facade.handle(p.McpServerRestart(session="x", name="s"))
+        assert isinstance(result, p.McpServerRestartResult), result
+        assert result.status == "connected" and not result.error
+        assert len(factory.clients) == 2 and factory.clients[-1] is not first
+        missing = await facade.handle(p.McpServerRestart(session="x", name="missing"))
+        assert missing.error == "Unknown MCP server"
+    finally:
+        await manager.aclose()

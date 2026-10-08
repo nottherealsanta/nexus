@@ -2,6 +2,8 @@
 // same SettingsInventory/Read/Write/Delete/Reset host commands. Edits autosave
 // 700 ms after typing stops; agent model/fallbacks are a form over the frontmatter
 // (port of ui_support/agent_frontmatter.py).
+import {createAgentSettings} from './agent-settings.js';
+
 export const FILE_CATEGORIES = {
   agents: ['Agents', 'Build is the default root agent; advisor, task and quick are subagents. Blank model fields inherit the session model. Fallbacks are tried in order when the model fails before replying.'],
   tools: ['Tools', 'Python tools loaded from <scope>/tools.'],
@@ -49,11 +51,47 @@ export function setAgentFields(body, updates) {
   return [...lines.slice(0, b[0]), ...head, ...lines.slice(b[1])].join('');
 }
 
-export function createSettingsFiles({api, el, $, notify, onChange = () => {}}) {
+export function createSettingsFiles({api, el, $, notify, onChange = () => {}, pickModel}) {
   const s = {category: 'agents', scope: 'global', items: [], id: '', sha: null, saved: '', builtin: false, overrides: false, pendingNew: false, revision: 0, timer: null, models: null, saving: Promise.resolve()};
   const editor = () => $('files-editor'), dirty = () => s.id !== '' && (s.pendingNew || editor().value !== s.saved);
   const status = text => { $('files-status').textContent = text; };
   const whereText = () => s.scope === 'global' ? '~/.nexus' : '<project>/.agents';
+  const guidedRoot = el('section', 'agent-settings');
+  guidedRoot.hidden = true;
+  const guided = createAgentSettings({api, el, root: guidedRoot, notify,
+    isOpen: () => !$('settings-overlay').hidden && s.category === 'agents' && !!s.id,
+    pickModel: pickModel || (async callback => {
+      const models = await loadModels();
+      const ref = window.prompt(`Choose a provider/model reference:\n${models.map(m => `${m.provider}/${m.id}`).join('\n')}`);
+      if (ref?.trim()) callback(ref.trim());
+    }),
+    runSave: action => {
+      const {id, scope, revision} = s;
+      const pending = s.saving.then(() => {
+        if (dirty() || revision !== s.revision || id !== s.id || scope !== s.scope || $('settings-overlay').hidden) throw new Error('Save raw changes and reload guided settings before saving.');
+        return action();
+      });
+      s.saving = pending.catch(() => {});
+      return pending;
+    },
+    onChange: async target => {
+      if (s.category !== 'agents' || s.id !== target.id || s.scope !== target.scope) return;
+      const revision = s.revision;
+      const r = await api.command({type: 'SettingsRead', category: 'agents', ...target});
+      if (revision !== s.revision || s.id !== target.id || s.scope !== target.scope) return;
+      const hadDraft = dirty();
+      Object.assign(s, {sha: r.sha256, saved: String(r.body ?? ''), builtin: !!r.builtin, overrides: !!r.overrides_builtin});
+      if (!hadDraft) editor().value = s.saved;
+      syncForm(); syncActions();
+      await loadInventory(); onChange('agents');
+    },
+  });
+  function invalidateGuided() { guided.invalidate(); guidedRoot.hidden = true; }
+  function loadGuided() {
+    if (s.category !== 'agents' || !s.id || dirty() || $('settings-overlay').hidden) return;
+    guidedRoot.hidden = false;
+    guided.load({id: s.id, scope: s.scope});
+  }
 
   function renderList() {
     const box = $('files-list'), rows = s.items.filter(r => r.category === s.category)
@@ -71,6 +109,7 @@ export function createSettingsFiles({api, el, $, notify, onChange = () => {}}) {
     $('files-editor').disabled = !s.id;
   }
   function clearEditor() {
+    invalidateGuided();
     s.revision++; s.pendingNew = false; s.id = ''; s.sha = null; s.saved = ''; s.builtin = s.overrides = false;
     editor().value = ''; $('files-title').textContent = 'Select an item'; syncForm(); syncActions(); status('');
   }
@@ -87,6 +126,7 @@ export function createSettingsFiles({api, el, $, notify, onChange = () => {}}) {
   async function leave() { await flush(); return !dirty() || window.confirm('Discard invalid changes?'); }
   async function openItem(id) {
     if (!(await leave())) return;
+    invalidateGuided();
     const revision = ++s.revision, {scope, category} = s;
     try {
       const r = await api.command({type: 'SettingsRead', scope, category, id});
@@ -94,6 +134,7 @@ export function createSettingsFiles({api, el, $, notify, onChange = () => {}}) {
       Object.assign(s, {id, sha: r.sha256, builtin: !!r.builtin, overrides: !!r.overrides_builtin, saved: String(r.body ?? ''), pendingNew: false});
       editor().value = s.saved; $('files-title').textContent = r.rel_path || id;
       syncForm(); syncActions(); renderList();
+      loadGuided();
       status(s.builtin ? `Built-in default · saving writes an override to ${whereText()}` : '');
     } catch (e) { status(e.message); }
   }
@@ -106,10 +147,11 @@ export function createSettingsFiles({api, el, $, notify, onChange = () => {}}) {
       Object.assign(s, {sha: r.sha256, saved: body, pendingNew: false, overrides: s.overrides || s.builtin, builtin: false});
       syncActions(); status(`Saved · ${(r.loaded || []).length} loaded · ${(r.failed || []).length} failed`);
       await loadInventory(); onChange(s.category);
+      loadGuided();
     } catch (e) { status(e.message); }
   }
   function flush() { clearTimeout(s.timer); s.timer = null; s.saving = s.saving.then(() => dirty() ? save() : undefined); return s.saving; }
-  function scheduleSave() { clearTimeout(s.timer); if (dirty()) s.timer = setTimeout(flush, 700); if (s.category === 'agents' && s.id) syncForm(); }
+  function scheduleSave() { clearTimeout(s.timer); if (dirty()) { invalidateGuided(); s.timer = setTimeout(flush, 700); } if (s.category === 'agents' && s.id) syncForm(); }
 
   // Agent model form over the frontmatter.
   const modelRef = f => { const m = f.model || '', p = f.provider || ''; return m && p && !m.includes('/') ? `${p}/${m}` : m || (p ? `${p}/…` : ''); };
@@ -176,6 +218,10 @@ export function createSettingsFiles({api, el, $, notify, onChange = () => {}}) {
   }
 
   function install() {
+    $('agent-form').after(guidedRoot);
+    // The existing parent closes the overlay by changing hidden, not by calling
+    // leave(). Drop pending loads and picker callbacks on that path as well.
+    new MutationObserver(() => { if ($('settings-overlay').hidden) invalidateGuided(); }).observe($('settings-overlay'), {attributes: true, attributeFilter: ['hidden']});
     editor().addEventListener('input', scheduleSave);
     document.querySelectorAll('input[name="files-scope"]').forEach(r => r.addEventListener('change', () => r.checked && setScope(r.value)));
     $('files-new').onclick = () => { const i = $('files-new-name'); i.hidden = !i.hidden; if (!i.hidden) i.focus(); };

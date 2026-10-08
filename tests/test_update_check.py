@@ -226,3 +226,19 @@ def test_doctor_prints_the_notice():
         out,
     )
     assert "update: 0.1.2 available: nexus update" in out.getvalue()
+
+
+def test_each_release_is_announced_once(tmp_path):
+    assert uc.claim_announcement("0.3.7", home=tmp_path) is True
+    assert uc.claim_announcement("0.3.7", home=tmp_path) is False  # a restart stays quiet
+    assert uc.claim_announcement("0.3.8", home=tmp_path) is True  # a newer release is new news
+    assert uc.claim_announcement(None, home=tmp_path) is False
+    assert uc.claim_announcement("not a version", home=tmp_path) is False
+    assert json.loads(uc.announced_path(tmp_path).read_text()) == {"announced": "0.3.8"}
+
+
+def test_unwritable_announcement_record_stays_quiet(tmp_path):
+    cache = uc.announced_path(tmp_path).parent
+    cache.parent.mkdir(parents=True)
+    cache.write_text("a file where the directory should be")
+    assert uc.claim_announcement("0.3.7", home=tmp_path) is False

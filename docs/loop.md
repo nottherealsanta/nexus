@@ -62,9 +62,13 @@ Phases: `new → awaiting_model ⇄ awaiting_tools → completed | failed | canc
 Stop reasons: `end_turn`, `tool_use`, `max_tokens`, `stop_sequence`, `refusal`,
 `error`, `budget`, `max_iterations`, `cancelled`.
 
-`TurnLimits` (defaults from `[agent]`): `max_iterations` 0 (unlimited; a positive value caps model iterations), `max_seconds` 1800,
-optional `max_input_tokens`, `max_output_tokens`, `max_total_tokens`. `exceeded()`
-returns the first tripped limit; the loop records `max_iterations` or `budget`.
+`TurnLimits` (defaults from `[agent]`): `max_iterations` 0 (unlimited; a positive value caps model iterations), `max_seconds` 0
+(unlimited; from `max_turn_seconds`, a positive value caps wall-clock time), optional `max_input_tokens`, `max_output_tokens`, `max_total_tokens`. `exceeded()`
+returns the first tripped limit; the loop records `max_iterations` or `budget`,
+and `turn.completed` carries `limit` (for example `max_seconds`). Limits are
+checked at the top of an iteration, so a tripped limit ends the turn right after
+a tool result without a model call; the turn footer says `stopped by turn limit`
+or `stopped by iteration limit` so it is never mistaken for the model stopping.
 `TurnUsage` is additive across iterations (input, output, cache read/write,
 reasoning). The completed-turn footer's `turn ↑… ↓…` is this cumulative usage;
 the composer context meter instead shows the latest request's prompt size and
@@ -147,6 +151,13 @@ collected tool calls: it previously dispatched them and continued. It now fails
 before dispatch, with a regression test. The original reported post-tool stall
 was not reproduced by these tests and remains unverified; no speculative retry
 was added. Provider tests here use fixtures, not live service requests.
+
+The reported stall was later traced in the session database: every turn that
+ended right after a tool result had `turn.completed` with `stop_reason: budget`
+about 1800 s after it started. That was the old 30-minute default of
+`max_turn_seconds`. A parent's clock includes time spent waiting on subagents, so
+long subagent work hit it most. The default is now 0 (unlimited), and subagents
+use the configured value instead of a hardcoded 1800.
 
 ## Changing the loop
 
