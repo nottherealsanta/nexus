@@ -37,10 +37,11 @@ use their own preview in the same way.
 User-message borders use the turn's recorded agent color, falling back to the
 active agent color when the turn has no recorded color.
 
-Live turn completion and failure emit the terminal notification bell. The Python bridge carries a monotonic `completion_bell` counter; native
-snapshots ring only when it increases, so redraws and historical replay stay
-silent. Cancellation and subagent activity do not ring. Terminal emulator bell
-settings determine whether the notification is audible or visual.
+Live turn completion and failure advance a monotonic `completion_bell` counter
+in the Python bridge; the shell plays the cue above only when it increases, so
+redraws and historical replay stay silent. Cancellation and subagent activity do
+not notify. The native client does not also write a terminal bell (`\x07`):
+doing both made one completion sound twice.
 
 Context-header inspection uses an inset modal (System prompt, Environment, AGENTS.md, MEMORY.md and tool pages use the compact `detail` layout; Skills/MCP lists keep the full-width one) spanning the available
 conversation area, rather than the compact picker dialog. The header and context

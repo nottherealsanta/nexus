@@ -111,7 +111,7 @@ def test_native_bridge_keyboard_and_terminal_restoration():
                     {"id": "t2", "kind": "tool", "text": "Read b.py", "operation": {"kind": "tool_page", "id": "t2"}}]}) + "\n").encode())
             process.stdin.flush()
             time.sleep(.1)
-        assert bells == [True]
+        assert not bells, "the Python shell plays the completion cue; the native client never rings"
         os.write(master, b"\t\x1b[A\r")
         assert read_action() == {"type": "operation", "operation": {"kind": "tool_page", "id": "t1"}, "generation": 0}
         process.stdin.write((json.dumps({"schema": 1, "revision": 5,
