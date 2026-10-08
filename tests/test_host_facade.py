@@ -1054,9 +1054,10 @@ def test_web_projection_pairs_agent_wire_reuse_by_stable_id():
     assert new_wire["agents"][1]["description"] == "must not reuse first"
 
 
-def test_web_projection_only_preserves_unbounded_assistant_text():
+def test_projections_keep_long_message_text_whole():
     from nexus.host.facade import _web_view
     from nexus.view.model import (
+        MAX_MESSAGE_TEXT,
         MAX_TEXT,
         BlockView,
         MessageView,
@@ -1070,10 +1071,15 @@ def test_web_projection_only_preserves_unbounded_assistant_text():
     permission = PermissionView(preview=long_text)
     tool = ToolCallView(error=long_text)
 
-    assert _web_view(assistant)["blocks"][0]["text"] == long_text
-    assert _web_view(user)["blocks"][0]["text"] == long_text[:MAX_TEXT] + "…"
-    assert _web_view(permission)["preview"] == long_text[:MAX_TEXT] + "…"
-    assert _web_view(tool)["error"] == long_text[:MAX_TEXT] + "…"
+    for project in (_web_view, lambda view: view.to_dict()):
+        assert project(assistant)["blocks"][0]["text"] == long_text
+        assert project(user)["blocks"][0]["text"] == long_text
+        assert project(permission)["preview"] == long_text[:MAX_TEXT] + "…"
+        assert project(tool)["error"] == long_text[:MAX_TEXT] + "…"
+
+    huge = MessageView(role="user", blocks=[BlockView(kind="text", text="y" * (MAX_MESSAGE_TEXT + 1))])
+    assert _web_view(huge)["blocks"][0]["text"] == "y" * MAX_MESSAGE_TEXT + "…"
+    assert huge.to_dict()["blocks"][0]["text"] == "y" * MAX_MESSAGE_TEXT + "…"
 
 
 async def test_web_workspace_feed_emits_session_index_changes():

@@ -4,16 +4,14 @@ from __future__ import annotations
 from dataclasses import fields, is_dataclass
 from typing import Any
 
-from ..view import BlockView, ConversationView, MessageView, jsonable
-from ..view.model import MAX_TEXT
+from ..view import BlockView, ConversationView, jsonable
+from ..view.model import MAX_TEXT, message_text
 
 
 def web_view(
     value: Any,
     old_value: Any = None,
     old_wire: Any = None,
-    *,
-    assistant_prose: bool = False,
 ) -> Any:
     """Encode reducer values, reusing serialized branches with structural sharing.
 
@@ -33,12 +31,11 @@ def web_view(
         )
         result = {}
         if isinstance(value, BlockView):
+            text = message_text(value)
             return {
                 item.name: (
-                    getattr(value, item.name)
-                    if item.name == "image_url" or (item.name == "text"
-                    and (assistant_prose or value.text.startswith("\n\nAttachment:"))
-                    and value.kind in {"text", "thinking"})
+                    getattr(value, item.name) if item.name == "image_url"
+                    else text if item.name == "text" and text is not None
                     else web_view(getattr(value, item.name))
                 )
                 for item in fields(value)
@@ -55,11 +52,6 @@ def web_view(
                 getattr(value, item.name),
                 previous,
                 old_wire.get(item.name) if can_reuse else None,
-                assistant_prose=(
-                    isinstance(value, MessageView)
-                    and item.name == "blocks"
-                    and value.role == "assistant"
-                ),
             )
         if isinstance(value, ConversationView):
             result["messages"] = []
@@ -105,12 +97,11 @@ def web_view(
                 item,
                 old_value[index] if can_reuse and index < len(old_value) else None,
                 old_wire[index] if can_reuse and index < len(old_wire) else None,
-                assistant_prose=assistant_prose,
             )
             for index, item in enumerate(value)
         ]
     if isinstance(value, str):
-        return value if assistant_prose else (value if len(value) <= MAX_TEXT else value[:MAX_TEXT] + "\u2026")
+        return value if len(value) <= MAX_TEXT else value[:MAX_TEXT] + "\u2026"
     return jsonable(value)
 
 

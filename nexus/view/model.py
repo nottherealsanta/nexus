@@ -38,10 +38,19 @@ __all__ = [
 
 #: Longest string kept verbatim in a snapshot; a hostile payload is clipped.
 MAX_TEXT = 8192
+#: Longest message text/thinking block kept verbatim: what the user typed or
+#: pasted and what the model wrote are shown whole, well inside the 16 MiB frame.
+MAX_MESSAGE_TEXT = 8 * 1024 * 1024
 
-def _clip(value: object) -> str:
+def _clip(value: object, limit: int = MAX_TEXT) -> str:
     text = value if isinstance(value, str) else str(value)
-    return text if len(text) <= MAX_TEXT else text[:MAX_TEXT] + "\u2026"
+    return text if len(text) <= limit else text[:limit] + "\u2026"
+
+def message_text(block: BlockView) -> str | None:
+    """A text/thinking block's text under the message bound, else ``None``."""
+    if block.kind not in {"text", "thinking"}:
+        return None
+    return _clip(block.text, MAX_MESSAGE_TEXT)
 
 def _dump(value: object) -> Any:
     """Deep-convert any view value to JSON-native types, never raising."""
@@ -59,8 +68,8 @@ def _dump(value: object) -> Any:
                 if field_value is not None:
                     result[item.name] = field_value[:12 * 1024 * 1024]
                 continue
-            if isinstance(value, BlockView) and item.name == "text" and field_value.startswith("\n\nAttachment:"):
-                result[item.name] = field_value[:8 * 1024 * 1024]
+            if isinstance(value, BlockView) and item.name == "text" and value.kind in {"text", "thinking"}:
+                result[item.name] = message_text(value)
                 continue
             # UI reconciliation identifiers are reducer-local implementation
             # detail, preserving the established daemon projection wire shape.
