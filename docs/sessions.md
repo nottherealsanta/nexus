@@ -90,7 +90,14 @@ Legacy JSONL session directories are not imported. JSONL is an export format onl
   (`reason: "removed by user"`). Replay (`_rehydrate_queue`, the reducer) applies
   both, so an edited queue survives a reopen.
 - **Crash recovery.** `recover_dangling_tool_uses()` appends an error
-  `ToolResult` for every unresolved `ToolUse`, executing nothing.
+  `ToolResult` for every unresolved `ToolUse`, executing nothing. Under the
+  exclusive lock it also closes what a stopped process left open, once per
+  handle: a last `turn.started` with no terminal event gets `turn.failed`
+  (`reason: "interrupted"`); a `shell.started` with no completion gets a
+  `shell.completed` with `status: "interrupted"` when no task in this process
+  runs it and its recorded `pid` is gone. Every turn holds the lock and
+  `turn.started` is written after the lease, so holding it proves the turn is
+  dead. A reused `pid` can keep a dead `!` run open (not handled).
 - **Presence.** `attended` is derived from the live subscriber count; dropping
   to zero applies the unattended policy to pending approvals
   (`DEFAULT_UNATTENDED_DECISION = "deny_once"`, overridden by `on_unattended`).

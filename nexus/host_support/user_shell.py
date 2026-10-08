@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -90,7 +91,9 @@ class UserShells:
         shell_id = new_id()
         handle.emit_session_event(
             "shell.started",
-            {"shell_id": shell_id, "command": command, "shell": _SHELL, "cwd": str(workspace)},
+            # ``pid`` lets a later open tell a crashed run from a live one.
+            {"shell_id": shell_id, "command": command, "shell": _SHELL, "cwd": str(workspace),
+             "pid": os.getpid()},
         )
         task = asyncio.create_task(self._run(handle, shell_id, command, workspace))
         tasks = self._tasks.setdefault(session_id, set())

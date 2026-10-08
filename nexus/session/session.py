@@ -33,6 +33,7 @@ import asyncio
 import base64
 import binascii
 import contextlib
+import os
 from collections import deque
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
@@ -72,6 +73,28 @@ _INTERRUPTED_TEMPLATE = (
     "process stopped mid-turn. It was NOT executed. Re-issue the call if you still "
     "need its result."
 )
+
+#: Error recorded on a turn or ``!`` run the process stopped before it ended.
+INTERRUPTED_ERROR = "Interrupted: Nexus stopped before this finished"
+
+#: ``!`` runs (``shell_id``) this process is running now. Process-wide, so a
+#: run is never recovered as interrupted while a live task still owns it.
+_LIVE_SHELLS: set[str] = set()
+
+
+def _pid_alive(pid: object) -> bool:
+    """Whether ``pid`` names a running process (best effort; reuse is possible)."""
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    if pid == os.getpid():
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:  # EPERM: alive, owned by someone else
+        return True
+    return True
 
 #: Marks the producer task's completion on the fan-out buffer.
 _SENTINEL = object()
@@ -463,6 +486,9 @@ class Session:
         self.snapshot_error: Exception | None = None
         #: Records appended by the last :meth:`recover_dangling_tool_uses` call.
         self.recovered: tuple[MessageRecord, ...] = ()
+        #: Set once interrupted turns and ``!`` runs were closed under the lock;
+        #: the scan reads the whole log, so it runs once per handle.
+        self._interrupted_checked = False
         #: The last durable ``model.selected`` for this session, or ``None`` when
         #: the session still uses the configured default. Rehydrated from the log
         #: on open and refreshed as the event is observed, so a mid-turn selection
@@ -1121,7 +1147,13 @@ class Session:
     ) -> EventRecord | None:
         """Persist and publish a turn-less session event (``shell.*``)."""
         self._ensure_writable()
-        return self._emit(event_type, data)
+        shell_id = (data or {}).get("shell_id")
+        if event_type == "shell.completed":
+            _LIVE_SHELLS.discard(shell_id)
+        record = self._emit(event_type, data)
+        if event_type == "shell.started" and record is not None and isinstance(shell_id, str):
+            _LIVE_SHELLS.add(shell_id)
+        return record
 
     def _events_after(self, from_seq: int) -> list[Event]:
         """All persisted events with ``seq > from_seq`` (append-only, ordered)."""
@@ -1470,10 +1502,61 @@ class Session:
             except SessionBusy:
                 return []
             try:
+                self._recover_interrupted_locked()
                 return self._recover_locked()
             finally:
                 self._lock.release()
+        self._recover_interrupted_locked()
         return self._recover_locked()
+
+    def _recover_interrupted_locked(self) -> None:
+        """Close turns and ``!`` runs a stopped process left open (under the lock).
+
+        Holding the exclusive lock proves no turn runs anywhere (every turn
+        holds it, and ``turn.started`` is written after the lease), so a last
+        ``turn.started`` with no terminal event was abandoned: it gets a
+        ``turn.failed`` with reason ``interrupted``. ``!`` runs do not hold the
+        lock; one is closed only when no task in this process runs it and the
+        process that started it (``pid``) is gone. Idempotent: closed items
+        are not found again.
+        """
+        if self._interrupted_checked or self._retired:
+            return
+        open_turn: str | None = None
+        turn_open = False
+        shells: dict[str, Mapping[str, Any]] = {}
+        for event in self.read().events():
+            if event.type == "turn.started":
+                turn_open, open_turn = True, event.turn
+            elif event.type in TERMINAL_EVENTS:
+                turn_open = False
+            elif event.type == "shell.started" and isinstance(event.data, dict):
+                shell_id = event.data.get("shell_id")
+                if isinstance(shell_id, str):
+                    shells[shell_id] = event.data
+            elif event.type == "shell.completed" and isinstance(event.data, dict):
+                shells.pop(event.data.get("shell_id"), None)  # type: ignore[arg-type]
+        if turn_open:
+            event = Event(
+                type="turn.failed",
+                data={"error": INTERRUPTED_ERROR, "reason": "interrupted", "iterations": 0,
+                      **({"turn_id": open_turn} if open_turn else {})},
+                session=self._id,
+                turn=open_turn,
+            )
+            record = self.append_event(event)
+            self._observe_event(event)
+            self._publish(record.event)
+        for shell_id, data in shells.items():
+            pid = data.get("pid")
+            if shell_id in _LIVE_SHELLS or (pid != os.getpid() and _pid_alive(pid)):
+                continue
+            self._emit("shell.completed", {
+                "shell_id": shell_id, "command": data.get("command", ""), "status": "interrupted",
+                "exit_code": None, "duration_ms": None,
+                "output": f"[{INTERRUPTED_ERROR}; the output was not kept]", "context": "none",
+            })
+        self._interrupted_checked = True
 
     def _recover_locked(self) -> list[MessageRecord]:
         issued: dict[str, ToolUse] = {}

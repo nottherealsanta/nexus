@@ -469,7 +469,8 @@ def test_delete_and_restore_roundtrip_preserves_records(tmp_path):
 
     restored_id = manager.restore(record.trash_id)
     assert restored_id == "s"
-    reopened = manager.open("s")
+    # The fixture's turn never ended; skip recovery so only restore is compared.
+    reopened = manager.open("s", recover=False)
     assert reopened.records == before
     assert manager.list_trashed() == []
 

@@ -44,7 +44,7 @@ def test_history_and_event_apis_round_trip(tmp_path):
     session.append_message(Message(role="user", content=[Text(text="hi")]))
     session.append_message(Message(role="assistant", content=[Text(text="hello")]))
 
-    reopened = SessionManager(tmp_path).open("main")
+    reopened = SessionManager(tmp_path).open("main", recover=False)
     assert [m.content[0].text for m in reopened.messages] == ["hi", "hello"]
     assert [e.type for e in reopened.events] == ["turn.started"]
     assert reopened.next_seq() == 4
@@ -608,3 +608,76 @@ def test_existing_zero_user_sessions_hidden_without_purge(tmp_path):
     assert manager.store.db.project_sessions() == []
     assert manager.store.exists("empty")
     assert len(manager.store.read("empty").records) == 1
+
+
+def _dead_pid():
+    import subprocess
+    process = subprocess.Popen(["true"])
+    process.wait()
+    return process.pid
+
+
+def test_a_turn_left_open_by_a_stopped_process_is_closed_on_reopen(tmp_path):
+    from nexus.view import fold
+
+    crashed = SessionManager(tmp_path).open("main")
+    crashed.append_message(_msg("go"))
+    crashed.append_event(Event(type="turn.started", data={}, session="main", turn="t1"))
+    crashed.append_event(Event(type="tool.started", data={"id": "c1", "name": "bash"},
+                               session="main", turn="t1"))
+
+    reopened = SessionManager(tmp_path).open("main")
+    failed = [e for e in reopened.events if e.type == "turn.failed"]
+    assert len(failed) == 1 and failed[0].turn == "t1"
+    assert failed[0].data["reason"] == "interrupted"
+    turn = fold(reopened.events).turns[-1]
+    assert turn.phase == "failed" and "Interrupted" in turn.error
+    # Idempotent: another process opening it finds nothing open.
+    again = SessionManager(tmp_path).open("main")
+    assert len([e for e in again.events if e.type == "turn.failed"]) == 1
+
+
+def test_a_completed_turn_is_not_touched_by_recovery(tmp_path):
+    session = SessionManager(tmp_path).open("main")
+    session.append_message(_msg("go"))
+    session.append_event(Event(type="turn.started", data={}, session="main", turn="t1"))
+    session.append_event(Event(type="turn.completed", data={}, session="main", turn="t1"))
+    reopened = SessionManager(tmp_path).open("main")
+    assert [e.type for e in reopened.events] == ["turn.started", "turn.completed"]
+
+
+def test_a_running_turn_is_not_recovered_by_another_handle(tmp_path):
+    owner = SessionManager(tmp_path).open("main")
+    owner.append_message(_msg("go"))
+    lease = owner.begin_turn()
+    try:
+        owner.append_event(Event(type="turn.started", data={}, session="main", turn=lease.turn_id))
+        other = SessionManager(tmp_path).open("main")  # lock busy: skipped
+        assert not any(e.type == "turn.failed" for e in other.events)
+    finally:
+        lease.release()
+
+
+def test_shell_runs_left_open_by_a_stopped_process_are_closed(tmp_path):
+    import os
+
+    from nexus.view import fold
+
+    crashed = SessionManager(tmp_path).open("main")
+    crashed.append_message(_msg("go"))
+    for shell_id, pid in (("dead", _dead_pid()), ("other", os.getppid())):
+        crashed.append_event(Event(type="shell.started", session="main", data={
+            "shell_id": shell_id, "command": "sleep 99", "shell": "/bin/bash", "pid": pid}))
+    # A run this process is executing right now is never closed.
+    crashed.emit_session_event("shell.started", {"shell_id": "live", "command": "sleep 1",
+                                                 "pid": os.getpid()})
+
+    reopened = SessionManager(tmp_path).open("main")
+    done = [e for e in reopened.events if e.type == "shell.completed"]
+    assert [e.data["shell_id"] for e in done] == ["dead"]
+    assert done[0].data["status"] == "interrupted" and done[0].data["context"] == "none"
+    turns = {t.id: t for t in fold(reopened.events).turns}
+    assert turns["shell:dead"].phase == "failed"
+    assert turns["shell:dead"].tools[0].display == "interrupted · not added to context"
+    assert turns["shell:live"].phase == "active" and turns["shell:other"].phase == "active"
+    crashed.emit_session_event("shell.completed", {"shell_id": "live", "status": "completed"})

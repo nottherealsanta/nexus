@@ -207,10 +207,12 @@ concurrent runs per session. Stop (`SessionCancel`) kills running `!` commands.
   a tool call and its result, and it never makes the loop take another step.
 - A Stop that lands before a run's task starts still records a cancelled
   `shell.completed`, so no row is left looking like it is running.
+- A run the daemon never finished (a crash or `kill -9`) is closed on the next
+  open as `interrupted · not added to context`; its output is lost
+  ([sessions.md](sessions.md) crash recovery). `shell.started` records the
+  daemon `pid` for this.
 - Not done: a daemon crash while a turn holds a deferred result loses it from
-  model context (the timeline still shows it); a crash mid-run leaves a
-  `shell.started` with no completion, drawn as running on replay (agent turns
-  share this gap); no live progress rows.
+  model context (the timeline still shows it); no live progress rows.
 
 ## Adding or changing a tool
 

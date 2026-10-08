@@ -1138,14 +1138,15 @@ def _on_shell(state: ConversationView, event: Event, data: Mapping[str, Any]) ->
             result=[{"type": "text", "text": _as_str(data.get("output")) or ""}],
             display=(
                 f"{status if status != 'completed' else f'exit {exit_code}'} · "
-                + ("added to context" if context == "added" else "added to context at the next step")
+                + {"added": "added to context", "none": "not added to context"}.get(
+                    context, "added to context at the next step")
             ),
             metrics=metrics,
         )
         if tool.call_id == shell_id else tool
         for tool in turn.tools
     ]
-    phase = "cancelled" if status == "cancelled" else ("failed" if status == "failed" else "completed")
+    phase = {"cancelled": "cancelled", "failed": "failed", "interrupted": "failed"}.get(status, "completed")
     return _put(state, index, replace(turn, tools=tools, phase=phase, updated_ts=event.ts))
 
 def _content_text(content: Sequence[Any]) -> str:
