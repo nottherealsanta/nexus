@@ -259,7 +259,8 @@
         "output_tokens": 7,
         "reasoning_tokens": 0
       },
-      "user_ts": 5.0
+      "user_ts": 5.0,
+      "kind": "agent"
     },
     {
       "context": [],
@@ -304,7 +305,8 @@
         "input_tokens": 3,
         "output_tokens": 2,
         "reasoning_tokens": 0
-      }
+      },
+      "kind": "agent"
     }
   ],
   "usage": {

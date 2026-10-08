@@ -205,6 +205,11 @@ class Client:
         result = await self._request(p.SessionEnqueue(session=session, content=content, mode=mode, attachments=attachments or [], attachment_labels=attachment_labels or []))
         return result.queued_id, result.turn_id  # type: ignore[union-attr]
 
+    async def shell(self, session: str, command: str) -> str:
+        """Run a composer ``!`` command; its output joins the context, no turn starts."""
+        result = await self._request(p.SessionShell(session=session, command=command))
+        return result.shell_id  # type: ignore[union-attr]
+
     async def queue_move(self, session: str, queued_id: str, offset: int) -> bool:
         return (await self._request(p.SessionQueueMove(session=session, queued_id=queued_id, offset=offset))).changed
 

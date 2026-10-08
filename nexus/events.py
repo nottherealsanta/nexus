@@ -99,6 +99,10 @@ MISC_EVENTS = ("provider.raw", "error", *REGISTRY_EVENTS)
 # queue items in projections.
 INPUT_EVENTS = ("input.started", "input.queued", "input.moved", "input.consumed", "input.dropped")
 
+# Composer ``!`` shell mode: a user-run command. Turn-less and durable; the
+# output is added to model context without starting a turn.
+SHELL_EVENTS = ("shell.started", "shell.completed")
+
 # Presence is a subscriber count, not identity (single user, many views).
 # Section 14.10 adds only the join/leave transitions; the derived
 # ``presence.changed`` event is retained as a compatibility alias below so
@@ -152,6 +156,7 @@ EVENT_GROUPS: dict[str, tuple[str, ...]] = {
     "agent": AGENT_EVENTS,
     "hook": HOOK_EVENTS,
     "input": INPUT_EVENTS,
+    "shell": SHELL_EVENTS,
     "presence": PRESENCE_EVENTS,
     "daemon": DAEMON_EVENTS,
     "misc": MISC_EVENTS,
@@ -180,6 +185,7 @@ __all__ = [
     "QUESTION_EVENTS",
     "REGISTRY_EVENTS",
     "SESSION_EVENTS",
+    "SHELL_EVENTS",
     "SKILL_EVENTS",
     "TOOL_EVENTS",
     "TURN_EVENTS",

@@ -65,12 +65,12 @@ from enum import StrEnum
 from pathlib import Path
 
 from ...errors import NexusError, OperationCancelled
+from ._output_limit import limit_output
 
 __all__ = [
     "DEFAULT_GRACE_S",
     "DEFAULT_KILL_WAIT_S",
     "DEFAULT_MAX_COMPLETED_JOBS",
-    "DEFAULT_MAX_RESULT_CHARS",
     "DEFAULT_MAX_RETAINED_BYTES",
     "DEFAULT_MAX_TOTAL_COMPLETED_JOBS",
     "DEFAULT_OUTPUT_LIMIT",
@@ -98,8 +98,6 @@ DEFAULT_OUTPUT_LIMIT = 1 << 20
 DEFAULT_GRACE_S = 2.0
 #: Extra seconds to await the group after SIGKILL.
 DEFAULT_KILL_WAIT_S = 2.0
-#: Model-facing text cap for a rendered result.
-DEFAULT_MAX_RESULT_CHARS = 200_000
 #: Retain at most this many completed jobs **per session** before evicting the
 #: oldest in that session. Each job can hold up to two output buffers (2 MiB by
 #: default), so an unbounded partition would leak that per job for the lifetime
@@ -954,7 +952,6 @@ def format_job_output(
     stdout_offset: int = 0,
     stderr_offset: int = 0,
     show_offsets: bool = False,
-    max_chars: int = DEFAULT_MAX_RESULT_CHARS,
 ) -> str:
     """Render a job's status plus captured output deterministically.
 
@@ -992,18 +989,9 @@ def format_job_output(
     if not body_parts:
         body_parts.append("(no new output)" if show_offsets else "(no output)")
     body = "\n".join(body_parts)
-    reserved = len("\n".join(header)) + sum(len(n) + 1 for n in notices)
-    budget = max(max_chars - reserved, 256)
-    if len(body) > budget:
-        # Head + tail: test runners and builds print their summary last.
-        head = budget * 2 // 5
-        tail = budget - head
-        omitted = len(body) - budget
-        body = (
-            body[:head]
-            + f"\n[... {omitted} chars omitted ...]\n"
-            + body[len(body) - tail :]
-        )
+    # Over 2,000 lines or 50 KiB: the full body goes to a temp file and the
+    # result keeps head + tail (summaries print last) plus that file's path.
+    body = limit_output(body, label=f"bash-{job.job_id}").text
     parts = header + notices + [body]
     return "\n".join(parts)
 

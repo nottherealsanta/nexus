@@ -29,7 +29,7 @@ inward-only exceptions. Errors are
 
 | Group | Commands |
 | --- | --- |
-| Sessions | `SessionList` `ProjectSessionsList` `ProjectSessionOpen` `SessionOpen` `SessionStart` `SessionEnqueue` `SessionQueueMove` `SessionQueueRemove` `SessionCancel` `SessionSubscribe` `SessionState` `SessionFork` `SessionDelete` `SessionRestore` `SessionExport` `SessionArchive` `SessionUnarchive` `SessionListArchived` `SessionSearch` `SessionPreview` |
+| Sessions | `SessionList` `ProjectSessionsList` `ProjectSessionOpen` `SessionOpen` `SessionStart` `SessionEnqueue` `SessionShell` `SessionQueueMove` `SessionQueueRemove` `SessionCancel` `SessionSubscribe` `SessionState` `SessionFork` `SessionDelete` `SessionRestore` `SessionExport` `SessionArchive` `SessionUnarchive` `SessionListArchived` `SessionSearch` `SessionPreview` |
 | Approvals | `PermissionResolve` `QuestionAnswer` |
 | Models | `ModelsList` `ModelShow` `ModelTiers` `ModelTierSet` `ModelTierReset` `AgentMaxTierSet` `ModelsRefresh` `ModelSelect` `ReasoningEffortSelect` |
 | Session titles | `SessionTitleSettings` `SessionTitleSettingsSet` |

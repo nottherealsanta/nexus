@@ -1414,7 +1414,8 @@ impl Desktop {
     }
     fn completion_active(&self, cx: &App) -> bool {
         let input = self.composer.read(cx);
-        !self.snapshot.completions.is_empty()
+        !is_shell_draft(&input.content)
+            && !self.snapshot.completions.is_empty()
             && self.completion_hidden.as_deref() != Some(self.snapshot.completion_prefix.as_str())
             && input.cursor() == self.snapshot.completion_prefix.len()
             && input.content.starts_with(&self.snapshot.completion_prefix)
@@ -1565,7 +1566,15 @@ fn window_focus(input: &Entity<Input>, w: &mut Window, cx: &mut App) {
     w.focus(&input.read(cx).focus);
 }
 
+/// A draft starting with `!` is a shell-mode command (`!git status`).
+pub(crate) fn is_shell_draft(text: &str) -> bool {
+    text.starts_with('!')
+}
+
 fn completion_request(text: &str, cursor: usize) -> Option<(String, String)> {
+    if is_shell_draft(text) {
+        return None;
+    }
     if cursor > text.len() || !text.is_char_boundary(cursor) {
         return None;
     }
@@ -2184,6 +2193,14 @@ mod native_tests {
         );
         assert_eq!(completion_request("é", 1), None);
     }
+    #[test]
+    fn shell_drafts_start_with_bang_and_skip_completion() {
+        assert!(is_shell_draft("!git status"));
+        assert!(!is_shell_draft("git !status"));
+        assert!(!is_shell_draft(""));
+        assert_eq!(completion_request("!ls @sr", 7), None);
+    }
+
     #[gpui::test]
     fn flushing_composer_cancels_pending_debounce_tasks(cx: &mut TestAppContext) {
         let handle = cx.add_window(|window, cx| Desktop::new(window, cx, true));
@@ -2294,6 +2311,7 @@ mod native_tests {
                         status: "Ready".into(),
                         sub: "1 · now".into(),
                         active: false,
+                        ..Default::default()
                     })
                     .collect();
                 cx.notify();

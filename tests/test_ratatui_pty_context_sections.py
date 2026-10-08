@@ -105,3 +105,20 @@ def test_ctrl_c_clears_a_draft_before_it_cancels():
         assert t.action()["type"] == "cancel"
     finally:
         t.close()
+
+
+@pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
+def test_ctrl_c_twice_on_an_empty_composer_quits():
+    t = Terminal(30, 120)
+    try:
+        t.send(composer_key="w/s1", generation=1)
+        time.sleep(.4)
+        t.key(b"draft")
+        t.key(b"\x03")  # clears the draft: not the first press of a double tap
+        t.key(b"\x03")
+        assert t.action()["type"] == "cancel"
+        t.key(b"\x03")  # second press on the empty composer within 1.5 s
+        assert t.action()["type"] == "quit"
+        t.process.wait(timeout=3)
+    finally:
+        t.close()

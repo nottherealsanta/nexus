@@ -169,8 +169,12 @@ def header_blocks(result: Any, color: str) -> list[HeaderBlock]:
         skill_names.append(f"{name} · {token_label}" + (" (off)" if row.get("enabled") is False else ""))
     servers = list(getattr(result, "mcp_servers", ()) or ())
     if servers:
-        mcp_labels = [f"{row.get('name')}({row.get('tool_count', 0)} · {row.get('tool_loading', 'all')})" + (" (off)" if row.get("enabled") is False else "") + f" · {row.get('status') or 'unknown'}" for row in servers]
-        mcp_detail = "\n".join(f"{row.get('name')} · {row.get('status')} · {row.get('tool_loading', 'all')}\n  " + ", ".join(row.get("tools", ())) for row in servers)
+        broken = lambda row: bool(row.get("invalid") or row.get("file_error"))  # noqa: E731 - entries that failed to parse
+        mcp_labels = [f"{row.get('name')} · {row.get('status') or 'invalid'}" if broken(row) else
+                      f"{row.get('name')}({row.get('tool_count', 0)} · {row.get('tool_loading', 'all')})" + (" (off)" if row.get("enabled") is False else "") + f" · {row.get('status') or 'unknown'}" for row in servers]
+        mcp_detail = "\n".join(f"{row.get('name')} · {row.get('status')}\n  error: {row.get('error') or 'invalid entry'}" if broken(row) else
+                               f"{row.get('name')} · {row.get('status')} · {row.get('tool_loading', 'all')}\n  " + ", ".join(row.get("tools", ())) + (f"\n  error: {row['error']}" if row.get("error") else "")
+                               for row in servers)
     else:
         mcp_labels = [f"{name}({len(rows)}) · unknown" for name, rows in mcp_tools.items()]
         mcp_detail = result.mcp_index or "(none)"

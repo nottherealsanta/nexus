@@ -56,6 +56,7 @@ from ..host_support.context_preview import (
 )
 from ..host_support import model_settings
 from ..host_support.auto_title import AutoTitler
+from ..host_support.user_shell import UserShells
 from ..host_support.doctor import doctor_report
 from ..host_support.update_check import claim_announcement, update_status
 from ..host_support.git_diff import git_diff
@@ -128,6 +129,7 @@ class HostFacade:
         self.daemon_info: dict[str, Any] = {}
         self.attachments = AttachmentStore(runtime)
         self.titles = AutoTitler(runtime)
+        self.shells = UserShells(runtime)
         self.presence = Presence()
         self.supervisor = Supervisor(max_concurrent=max_concurrent_turns, emit=emit)
         self._owns_runtime = bool(owns_runtime)
@@ -1366,6 +1368,7 @@ class HostFacade:
             return False
         self._closed = True
         await self.titles.aclose()
+        await self.shells.aclose()
         await self.supervisor.aclose()
         closer = getattr(self.runtime.sessions, "aclose_all", None)
         if callable(closer):
@@ -1549,6 +1552,11 @@ class HostFacade:
                 depth=self.supervisor.queued_for(command.session),
                 turn_id=turn_id,
             )
+        if isinstance(command, p.SessionShell):
+            handle = self._session(command.session)
+            return p.SessionShellResult(
+                session=command.session, shell_id=self.shells.start(handle, command.command)
+            )
         if isinstance(command, p.SessionCancel):
             returned_messages = []
             if command.return_queue:
@@ -1564,9 +1572,12 @@ class HostFacade:
                             if isinstance(block, dict) and block.get("type") == "text")
                     for item in view.input_queue if item.queued_id in pending
                 ]
+            # Stop also kills the session's running ``!`` shell commands.
+            stopped_shells = self.shells.cancel(command.session)
             cancelled, dropped = await self.cancel(
                 command.session, reason=command.reason or None, drop_queue=command.drop_queue
             )
+            cancelled = cancelled or stopped_shells > 0
             return p.SessionCancelResult(
                 session=command.session, cancelled=cancelled, dropped=dropped,
                 returned_messages=returned_messages,

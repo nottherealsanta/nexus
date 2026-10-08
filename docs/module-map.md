@@ -206,6 +206,7 @@ here, so add a row when you add a file.
 | `agent_context.py` | The request context one subagent actually sent, shaped for the context header |
 | `approval.py` | Bounded permission-request projection shared by attended host clients |
 | `auto_title.py` | Starts, bounds and cancels the background session-title call for a new root session |
+| `user_shell.py` | Composer `!` shell mode: runs the command with bash, records `shell.*` events, adds the output to context without a turn |
 | `archive_protocol.py` | Wire records for the bounded session archive commands |
 | `attachments.py` | Bounded attachment preparation (images stay image blocks, documents via the isolated AnyDoc worker); drafts expire |
 | `browser_view.py` | Browser-safe reducer projection and compact structural JSON patches |
@@ -345,6 +346,7 @@ here, so add a row when you add a file.
 | `_grep_scan.py` | Isolated, killable regex-scan worker for the `Grep` tool |
 | `_html_markdown.py` | Bounded, offline conversion of untrusted HTML into Markdown |
 | `_jobs.py` | Shell job registry and process-group lifecycle management |
+| `_output_limit.py` | Shell output limit (2,000 lines / 50 KiB) shared by `bash` and `!` mode; spills the full text to a private temp file |
 | `_patch_commit.py` | Guarded commit and rollback for immutable staged patch changes |
 | `_patch_parse.py` | Pure, bounded parser for the Nexus multi-file patch format |
 | `_patch_stage.py` | Pure snapshot-based planning for parsed Nexus patches |

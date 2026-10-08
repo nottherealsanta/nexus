@@ -1238,6 +1238,7 @@ impl Desktop {
     }
     pub(crate) fn composer_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme();
+        let shell = crate::is_shell_draft(&self.composer.read(cx).content);
         if !self.snapshot.agent_page.is_empty() {
             return div()
                 .px_6()
@@ -1386,9 +1387,38 @@ impl Desktop {
                     .bg(t.surface)
                     // The TUI editor's agent-coloured left rail.
                     .border_l_2()
-                    .border_color(t.resolve(&self.snapshot.agent_color, t.blue))
+                    .border_color(if shell {
+                        t.amber
+                    } else {
+                        t.resolve(&self.snapshot.agent_color, t.blue)
+                    })
+                    .when(shell, |d| d.border_1().border_color(t.amber))
                     .flex()
                     .flex_col()
+                    .when(shell, |d| {
+                        d.child(
+                            div()
+                                .px_4()
+                                .pt_2()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .text_size(px(crate::theme::size::CAPTION))
+                                .child(
+                                    div()
+                                        .px_2()
+                                        .rounded(px(crate::theme::radius::CHIP))
+                                        .bg(t.amber.opacity(0.18))
+                                        .text_color(t.amber)
+                                        .child("bash"),
+                                )
+                                .child(
+                                    div()
+                                        .text_color(t.muted)
+                                        .child("runs in the workspace, output goes to context"),
+                                ),
+                        )
+                    })
                     .when(
                         self.snapshot
                             .inline_images

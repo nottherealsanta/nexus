@@ -120,6 +120,13 @@ _TIER_OTHER = 0
 #: file exists (STATE_PLAN §5.4).
 _MCP_CONFIG_RELATIVE = ".agents/mcp.json"
 _MCP_CONFIG_LEGACY_RELATIVE = ".nexus/mcp.json"
+#: Top-level keys that hold a server map, in the dialects people paste:
+#: ``servers`` (VS Code), ``mcpServers`` (Claude, Cursor, Cline, Gemini…),
+#: ``mcp`` (OpenCode), ``context_servers`` (Zed). Several may appear; the first
+#: definition of a name wins and the duplicate is reported.
+_MCP_SERVER_MAPS = ("servers", "mcpServers", "mcp", "context_servers")
+#: Top-level keys accepted and ignored (VS Code's schema, prompts and sandbox).
+_MCP_IGNORED_TOP = frozenset({"$schema", "inputs", "sandbox"})
 #: A definition file larger than this is refused rather than read (it carries
 #: command/env/url strings, never a payload).
 _MCP_MAX_BYTES = 262_144
@@ -607,6 +614,12 @@ class ExtensionManager:
         #: later (outside ``__init__``) still fall back through ``$NEXUS_HOME``
         #: instead of the coerced literal ``Path.home()``.
         self._home_arg = home
+        #: MCP server name -> "global"/"project", -> the file it came from, and
+        #: the MCP files that could not be used (refreshed on every reconcile).
+        self.mcp_scopes: dict[str, str] = {}
+        self.mcp_sources: dict[str, str] = {}
+        self.mcp_file_errors: tuple[dict[str, str], ...] = ()
+        self._mcp_file_cache: dict[str, dict[str, Any]] = {}
         #: Trash is per-project machine state, not project content (STATE_PLAN
         #: §5.4): it lives under ``project_state_dir()``, in a dedicated
         #: ``extensions`` subdirectory so the session trash sweeper never reads
@@ -1593,40 +1606,67 @@ class ExtensionManager:
                     path=sanitize_text(str(path), limit=200),
                 ),
             )
-        unknown = sorted(set(document) - {"servers", "mcpServers"})
-        if unknown:
-            return None, (
-                ReloadFailure(
-                    kind="mcp",
-                    name="mcp.json",
-                    error="unknown top-level keys: " + ", ".join(unknown),
-                    error_type="MCPConfigError",
-                    path=sanitize_text(str(path), limit=200),
-                ),
-            )
-        servers = document.get("servers", document.get("mcpServers", {}))
-        if not isinstance(servers, Mapping):
-            return None, (
-                ReloadFailure(
-                    kind="mcp",
-                    name="mcp.json",
-                    error="mcp.json 'servers' must be an object",
-                    error_type="MCPConfigError",
-                    path=sanitize_text(str(path), limit=200),
-                ),
-            )
-        return dict(servers), ()
+        def problem(error: str) -> ReloadFailure:
+            return ReloadFailure(kind="mcp", name="mcp.json", error=error, error_type="MCPConfigError",
+                                 path=sanitize_text(str(path), limit=200))
 
-    def _load_mcp_definitions(self):
+        maps = [key for key in _MCP_SERVER_MAPS if key in document]
+        unknown = sorted(set(document) - set(_MCP_SERVER_MAPS) - _MCP_IGNORED_TOP)
+        warnings = [problem("ignored unknown top-level keys: " + ", ".join(unknown))] if unknown else []
+        servers: dict[str, Any] = {}
+        for key in maps:
+            block = document[key]
+            if not isinstance(block, Mapping):
+                return None, (problem(f"mcp.json {key!r} must be an object"),)
+            for name, entry in block.items():
+                if name in servers:
+                    warnings.append(problem(f"server {name!r} appears in more than one of {', '.join(maps)}; the first is used"))
+                    continue
+                servers[name] = entry
+        return servers, tuple(warnings)
+
+    def mcp_config_files(self) -> tuple[tuple[str, Path, str], ...]:
+        """``(scope, path, display)`` for each MCP file read, global first."""
         from ..config.paths import nexus_home
 
-        global_defs, global_failures = self._read_mcp_definitions(nexus_home(self._home_arg) / "mcp.json")
-        project_defs, project_failures = self._read_mcp_definitions(self.mcp_config_path())
-        if global_defs is None or project_defs is None:
-            return None, (*global_failures, *project_failures)
-        self.mcp_scopes = {name: "global" for name in global_defs}
-        self.mcp_scopes.update({name: "project" for name in project_defs})
-        return {**global_defs, **project_defs}, (*global_failures, *project_failures)
+        project = self.mcp_config_path()
+        try:
+            project_display = project.relative_to(self._workspace).as_posix()
+        except ValueError:
+            project_display = str(project)
+        return (("global", nexus_home(self._home_arg) / "mcp.json", "~/.nexus/mcp.json"),
+                ("project", project, project_display))
+
+    def _load_mcp_definitions(self):
+        """Merge global and project servers (project names win).
+
+        Each file is isolated: a file that cannot be used keeps its own last good
+        servers (or none) and is reported, and never hides the other file's.
+        """
+        merged: dict[str, Any] = {}
+        scopes: dict[str, str] = {}
+        sources: dict[str, str] = {}
+        failures: list[ReloadFailure] = []
+        cache = getattr(self, "_mcp_file_cache", {})
+        file_errors: list[dict[str, str]] = []
+        for scope, path, display in self.mcp_config_files():
+            definitions, problems = self._read_mcp_definitions(path)
+            failures.extend(problems)
+            if definitions is None:
+                definitions = cache.get(scope, {})
+                file_errors.extend({"scope": scope, "path": display, "error": item.error} for item in problems)
+            else:
+                cache[scope] = definitions
+                file_errors.extend({"scope": scope, "path": display, "error": item.error, "warning": "1"} for item in problems)
+            for name, entry in definitions.items():
+                merged[name] = entry
+                scopes[name] = scope
+                sources[name] = display
+        self._mcp_file_cache = cache
+        self.mcp_scopes = scopes
+        self.mcp_sources = sources
+        self.mcp_file_errors = tuple(file_errors)
+        return merged, tuple(failures)
 
     def _failure_from_apply(self, failure: Any) -> ReloadFailure:
         to_dict = getattr(failure, "to_dict", None)
@@ -2942,10 +2982,13 @@ class ExtensionManager:
             )
         )
         if self._mcp is not None:
-            mcp_path = self.mcp_config_path()
+            # Both project candidates, so creating ``.agents/mcp.json`` next to a
+            # legacy ``.nexus/mcp.json`` is noticed; the global file sits in the
+            # ``~/.nexus`` root watched above.
             watchers.append(
                 DirectoryWatcher(
-                    (mcp_path.parent,), pattern=mcp_path.name, recursive=False
+                    (self._workspace / ".agents", self._workspace / ".nexus"),
+                    pattern="mcp.json", recursive=False,
                 )
             )
         skill_roots = [root for _tier, root in self._skills.roots]

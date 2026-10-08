@@ -44,7 +44,10 @@ def _toggle(item, row, category, locked):
 def _rows(preview, category):
     rows = preview.skills_index if category == "skills" else preview.mcp_servers
     default = "global" if category == "skills" else "project"
-    rows = [r for r in rows if isinstance(r, dict) and r.get("config_enabled") is not False]
+    rows = [r for r in rows if isinstance(r, dict)]
+    if category == "mcp":  # every server stays listed (off in mcp.json, invalid) so nothing is hidden; Global first
+        return sorted(rows, key=lambda r: (r.get("scope", default) != "global", str(r.get("name") or r.get("id"))))
+    rows = [r for r in rows if r.get("config_enabled") is not False]
     return sorted(rows, key=lambda r: (r.get("scope", default) != "project", str(r.get("name") or r.get("id"))))
 
 
@@ -90,25 +93,64 @@ def _pair(indexed, full) -> str:
     return f"~{_compact_tokens(indexed)} / ~{_compact_tokens(full)}"
 
 
+def _broken(row) -> bool:
+    """A server entry that failed to parse, or a whole-file problem: nothing to toggle or restart."""
+    return bool(row.get("invalid") or row.get("file_error"))
+
+
+def _mcp_lines(row) -> list[str]:
+    if _broken(row):
+        return wrapped([str(row.get("error") or "invalid entry")], LIST_WIDTH)
+    target = row.get("url") or row.get("command_label")
+    summary = " · ".join(str(b) for b in (row.get("transport"), target) if b)
+    summary = " · ".join(b for b in (summary, f"{row.get('tool_count', 0)} tools") if b)
+    error = [f"error: {row['error']}"] if row.get("error") else []
+    return wrapped([summary, *error], LIST_WIDTH)
+
+
+def _mcp_group(scope, rows) -> str:
+    path = next((str(r["source_path"]) for r in rows if r.get("scope") == scope and r.get("source_path")), "")
+    return f"{scope.title()} · {path or ('~/.nexus/mcp.json' if scope == 'global' else '.agents/mcp.json')}"
+
+
 def mcp_list(wf):
-    """Thin list like Tools: one line per server with indexed/full tokens, Restart, and on/off."""
+    """Thin list like Tools: settings and refresh first, then Global and Project servers with their state."""
     preview = wf.shell.preview
     locked = bool(getattr(preview, "context_locked", False)) or bool(wf.agent_page_id)
     rows, index = _rows(preview, "mcp"), _mcp_index(preview)
-    on = [r for r in rows if r.get("enabled") is not False]
-    items = [("↻ Refresh all · re-read mcp.json, reconnect servers", {"kind": "mcp_refresh"})]
+    valid = [r for r in rows if not _broken(r)]
+    on = [r for r in valid if r.get("enabled") is not False]
+    open_settings = {"kind": "settings", "scope": "global", "category": "mcp"}
+    items = [("Open MCP settings…", open_settings), ("↻ Refresh all · re-read mcp.json, reconnect servers", {"kind": "mcp_refresh"})]
     for row in rows:
         name, status = row.get("name") or row.get("id"), row.get("status") or "?"
-        label = str(name) if status == "connected" else f"{name} · {status}"
-        items.append((label, {"kind": "context_extension_details", "category": "mcp", "name": name}))
-    items.append(("Edit MCP servers…", {"kind": "settings", "scope": "global", "category": "mcp"}))
+        if _broken(row):
+            label, operation = f"{name} · invalid", open_settings
+        else:
+            label = str(name) if status == "connected" else f"{name} · {status}"
+            if row.get("config_enabled") is False:
+                label += " · off in mcp.json"
+            operation = {"kind": "context_extension_details", "category": "mcp", "name": name}
+        items.append((label, operation))
     indexed = sum(_tokens(r, index)[0] for r in on)
     full = sum(r.get("schema_tokens", 0) for r in on)
-    title = f"MCP · {len(on)} of {len(rows)} on · ~{_compact_tokens(indexed)} indexed / ~{_compact_tokens(full)} full"
+    invalid = len(rows) - len(valid)
+    title = (f"MCP · {len(on)} of {len(valid)} on" + (f" · {invalid} invalid" if invalid else "")
+             + f" · ~{_compact_tokens(indexed)} indexed / ~{_compact_tokens(full)} full")
     note = ["Context locked after first turn" if locked else "Enter details · Space or click toggle · Ctrl+R restart"]
     wf.menu(title, items, note + ([] if rows else ["(none)"]), layout="list")
-    for item, row in zip(wf.shell.items[1:], rows):
-        _toggle(item, row, "mcp", locked)
+    shell_items = wf.shell.items
+    shell_items[0].update(group="Configure")
+    shell_items[1].update(group="Configure")
+    for item, row in zip(shell_items[2:], rows):
+        item.update(group=_mcp_group(row.get("scope") or "project", rows), lines=_mcp_lines(row))
+        if _broken(row):
+            continue
+        if row.get("config_enabled") is False:
+            _toggle(item, row, "mcp", True)  # a session switch cannot turn on what mcp.json turns off
+            item.update(toggle_enabled=False)
+        else:
+            _toggle(item, row, "mcp", locked)
         item.update(trailing=_pair(*_tokens(row, index)),
                     action_label="Restart", action_operation={"kind": "mcp_restart", "name": row.get("name") or row.get("id")})
 
@@ -153,7 +195,8 @@ async def refresh(wf):
     session = wf.shell.controller.session
     wf.shell.preview = await wf.client.inspect_context(session)
     stale = [str(r.get("name")) for r in _rows(wf.shell.preview, "mcp")
-             if r.get("enabled") is not False and r.get("status") != "connected"][:64]
+             if r.get("enabled") is not False and r.get("config_enabled") is not False and not _broken(r)
+             and r.get("status") != "connected"][:64]
     results = await asyncio.gather(*(wf.client.mcp_server_restart(session, name) for name in stale), return_exceptions=True)
     for name, result in zip(stale, results):
         error = str(result) if isinstance(result, BaseException) else getattr(result, "error", "")
@@ -162,7 +205,7 @@ async def refresh(wf):
     wf.shell.mcp_due = 0.0  # the details sidebar re-reads server health too
     wf.shell.panel_title = ""  # same dialog, new rows: replace it rather than stacking
     await wf.context_extensions("mcp")
-    servers = len(_rows(wf.shell.preview, "mcp"))
+    servers = len([r for r in _rows(wf.shell.preview, "mcp") if not _broken(r)])
     summary = f"MCP refreshed · {servers} server{'s' if servers != 1 else ''}" + (f" · {len(stale)} reconnected" if stale else "")
     if failures:
         wf.shell.flash(f"{summary} · {len(failures)} problem(s): {failures[0]}", "warning")
@@ -245,7 +288,11 @@ async def server_page(wf, name):
     entry = server_index(_mcp_index(preview), name)
     indexed, full = _tokens(row, _mcp_index(preview))
     loading = "deferred to McpSearch" if result.tool_loading == "search" else "sent every request"
+    ignored = ", ".join(str(k) for k in row.get("ignored_keys") or ())
+    filters = " · ".join(f"{label} {', '.join(map(str, row[key]))}" for key, label in (("include_tools", "include"), ("exclude_tools", "exclude")) if row.get(key))
     server = {"name": name, "status": result.status, "transport": result.transport, "command": row.get("command_label"),
+              "url": row.get("url"), "defined in": row.get("source_path"), "tool filters": filters,
+              "ignored keys (accepted from another client's format, not acted on)": ignored,
               "scope": result.scope, "tool loading": f"{result.tool_loading} ({result.tool_loading_source})",
               "server": about, "error": result.error,
               "instructions (untrusted, from the server)": result.instructions}
@@ -268,9 +315,10 @@ async def server_page(wf, name):
         items.append((str(prompt.get("name")), {"kind": "mcp_detail", "title": "Prompt", "value": prompt}))
     if not tools:
         items.append(("no tools listed · Restart reconnects", {"kind": "mcp_restart", "name": name, "page": True}))
+    items.append(("Open MCP settings…", {"kind": "settings", "scope": "global", "category": "mcp"}))
     wf.menu(f"MCP · {name} · ~{_compact_tokens(indexed)} indexed / ~{_compact_tokens(full)} full", items, lines, layout="list")
     head, index_row, *rest = wf.shell.items
-    _toggle(head, row, "mcp", locked)
+    _toggle(head, row, "mcp", locked or row.get("config_enabled") is False)  # off in mcp.json: the session switch cannot enable it
     head["toggle_operation"]["page"] = True
     head.update(group="Server", action_label="Restart", action_operation={"kind": "mcp_restart", "name": name, "page": True},
                 lines=wrapped([f"error: {result.error}"], LIST_WIDTH) if result.error else [])
@@ -287,3 +335,4 @@ async def server_page(wf, name):
     for item in rest[len(tools):]:
         kind = item["operation"].get("title")
         item["group"] = {"Resource": "Resources", "Prompt": "Prompts"}.get(kind, full_group)
+    rest[-1]["group"] = "Configure"  # the Open MCP settings… row closes the page

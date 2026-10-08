@@ -555,7 +555,11 @@ async def test_mcp_list_server_page_and_tool_page(shell):
         "type": "object", "properties": {"assignee": {"type": "object", "properties": {"name": {"type": "string"}}}}}}
     index = ("<mcp-index>\nConnected MCP servers follow.\n- server: tracker · health: ready · mode: search · 1 tools\n"
              "  tools: create_issue; use McpSearch\n- server: tracker-two · health: ready · mode: all · 0 tools\n</mcp-index>")
-    shell.preview = p.ContextInspectResult(session="s", mcp_servers=[row, broken], tools=[tool], mcp_index=index)
+    row["source_path"] = ".agents/mcp.json"
+    off = {"name": "legacy", "scope": "global", "enabled": False, "config_enabled": False, "status": "disabled", "transport": "http",
+           "url": "https://x/mcp", "tool_count": 0, "source_path": "~/.nexus/mcp.json"}
+    bad = {"name": "typo", "scope": "global", "invalid": True, "status": "invalid", "error": "command must be a string"}
+    shell.preview = p.ContextInspectResult(session="s", mcp_servers=[row, broken, off, bad], tools=[tool], mcp_index=index)
     shell.client.inspect_context = AsyncMock(return_value=shell.preview)
     shell.client.mcp_server_show = AsyncMock(return_value=p.McpServerShowResult(
         name="tracker", status="connected", scope="project", transport="stdio", tool_loading="search", tool_loading_source="default",
@@ -563,17 +567,25 @@ async def test_mcp_list_server_page_and_tool_page(shell):
         tools=[{"name": "create_issue", "description": "Create", "input_schema": tool["input_schema"], "tokens": 340}]))
     await shell.workflows.context_extensions("mcp")
     # Thin list like Tools: one line per server, indexed / full tokens, Restart and the toggle.
-    assert shell.panel_layout == "list" and shell.panel_title.startswith("MCP · 2 of 2 on · ~24 indexed / ~410 full")
-    assert shell.items[0]["operation"] == {"kind": "mcp_refresh"}
-    assert [i["label"] for i in shell.items[1:3]] == ["broken · failed", "tracker"]
-    assert all(not i.get("lines") for i in shell.items)
-    assert shell.items[2]["trailing"] == "~24 / ~410" and shell.items[2]["toggle_enabled"] is True
-    assert [i.get("action_operation") for i in shell.items[1:3]] == [
+    assert shell.panel_layout == "list" and shell.panel_title.startswith("MCP · 2 of 3 on · 1 invalid · ~24 indexed / ~410 full")
+    settings = {"kind": "settings", "scope": "global", "category": "mcp"}
+    assert shell.items[0]["label"] == "Open MCP settings…" and shell.items[0]["operation"] == settings
+    assert shell.items[1]["operation"] == {"kind": "mcp_refresh"}
+    labels = [i["label"] for i in shell.items[2:]]
+    assert labels == ["legacy · disabled · off in mcp.json", "typo · invalid", "broken · failed", "tracker"]
+    assert [i["group"] for i in shell.items[2:]] == ["Global · ~/.nexus/mcp.json"] * 2 + ["Project · .agents/mcp.json"] * 2
+    legacy, typo, broken_item, tracker = shell.items[2:]
+    assert legacy["toggle_locked"] is True and legacy["toggle_enabled"] is False
+    assert typo["operation"] == settings and typo["lines"] == ["command must be a string"] and "toggle_operation" not in typo and "action_operation" not in typo
+    assert tracker["lines"] == ["stdio · python (3 args) · 1 tools"] and broken_item["lines"][-1] == "error: exited (code 3)"
+    assert tracker["trailing"] == "~24 / ~410" and tracker["toggle_enabled"] is True
+    assert [i.get("action_operation") for i in (broken_item, tracker)] == [
         {"kind": "mcp_restart", "name": "broken"}, {"kind": "mcp_restart", "name": "tracker"}]
-    await shell.workflows.operate(shell.items[2]["operation"])
+    await shell.workflows.operate(tracker["operation"])
     # Server page: the server row, the indexed entry on top, the full tools below, one line each.
     assert shell.panel_layout == "list" and shell.panel_title == "MCP · tracker · ~24 indexed / ~410 full"
-    head, entry, issue, repo = shell.items
+    head, entry, issue, repo, configure = shell.items
+    assert configure["label"] == "Open MCP settings…" and configure["group"] == "Configure"
     assert head["group"] == "Server" and head["action_operation"] == {"kind": "mcp_restart", "name": "tracker", "page": True}
     assert head["toggle_operation"]["page"] is True
     assert entry["group"].startswith("Indexed · ~24") and entry["label"].startswith("- server: tracker ·")
@@ -615,14 +627,14 @@ async def test_mcp_refresh_picks_up_new_servers_and_reconnects_failed(shell):
     shell.client.reload_extensions = AsyncMock(return_value=p.ExtensionsReloadResult(changed=True))
     shell.client.inspect_context = AsyncMock(return_value=p.ContextInspectResult(session="s", mcp_servers=[old, new, off]))
     shell.client.mcp_server_restart = AsyncMock(return_value=p.McpServerRestartResult(name="added", status="connected"))
-    await shell.workflows.operate(shell.items[0]["operation"])
+    await shell.workflows.operate(shell.items[1]["operation"])
     shell.client.reload_extensions.assert_awaited_once()
     shell.client.mcp_server_restart.assert_awaited_once_with("s", "added")
-    assert [i["label"].split()[0] for i in shell.items[1:4]] == ["added", "off", "tracker"]
+    assert [i["label"].split()[0] for i in shell.items[2:5]] == ["added", "off", "tracker"]
     assert len(shell.workflows.stack) == depth and shell.mcp_due == 0.0
     assert "3 servers · 1 reconnected" in shell.notice
     shell.client.mcp_server_restart = AsyncMock(return_value=p.McpServerRestartResult(name="added", status="failed", error="exited (code 1)"))
-    await shell.workflows.operate(shell.items[1]["action_operation"])
+    await shell.workflows.operate(shell.items[2]["action_operation"])
     shell.client.mcp_server_restart.assert_awaited_once_with("s", "added")
     assert "restart failed: exited (code 1)" in shell.notice and shell.panel_title.startswith("MCP · ")
 

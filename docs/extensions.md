@@ -125,12 +125,12 @@ upstream `mcp` package.
 
 Health: `disabled`, `unknown`, `connecting`, `ready`, `degraded`, `backoff`,
 `failed`. A dead server never fails a turn: its tools vanish, `mcp.failed` is
-emitted, the rest are untouched. Config: `.agents/mcp.json` (JSONC) `servers` (or
-`mcpServers`) map, merged over `~/.nexus/mcp.json` (project names win; the legacy
-`.nexus/mcp.json` is read only when `.agents/mcp.json` is absent); per server
-`enabled` (boolean, defaults true), `transport`, `command`, `args`, `env`, `cwd`, `url`, `headers`, `*_timeout_s`;
-unknown keys are errors; only `${env:VAR}` interpolates. `[mcp]`:
-`connect_timeout_s` 20, `restart_max` 5. A corrupt file keeps the previous set.
+emitted, the rest are untouched. Config: `.agents/mcp.json` (JSONC), merged over
+`~/.nexus/mcp.json` (project names win; the legacy `.nexus/mcp.json` is read only
+when `.agents/mcp.json` is absent; both project candidates are watched). See
+[MCP config dialects](#mcp-config-dialects) for the accepted keys. `[mcp]`:
+`connect_timeout_s` 20, `restart_max` 5. Each file is isolated: a corrupt file
+keeps its own previous servers and is reported, never hiding the other file's.
 Stderr goes to `~/.nexus/projects/<hash>/logs/mcp/`, never into context.
 Stdio servers default to the selected workspace as their working directory;
 an explicit relative `cwd` is resolved against that workspace, and an absolute
@@ -141,6 +141,37 @@ characters, bounded, wrapped in `<untrusted-mcp-data>` with a no-authority
 notice; the permission engine remains the boundary. Events: `mcp.connected`,
 `mcp.disconnected`, `mcp.failed`, `mcp.tools_changed`. Per session a server can be
 switched off (`ContextExtensionSelect`).
+
+## MCP config dialects
+
+`mcp.json` accepts what other clients write, so a file copied from VS Code,
+Claude Code/Desktop, Cursor, Cline, Roo, Windsurf, Gemini CLI, OpenCode or Zed
+loads unchanged (`client.normalize_server_entry`; tests in `test_mcp_dialects.py`).
+
+| Where | Accepted |
+| --- | --- |
+| Top level | server maps `servers` (VS Code), `mcpServers` (most), `mcp` (OpenCode), `context_servers` (Zed); several may coexist, the first definition of a name wins and the duplicate is reported. `$schema`, `inputs`, `sandbox` are ignored; other keys are a warning, not a failure |
+| Transport | `transport`, `type` or `transportType`: `stdio`/`local`, `http`/`streamable-http`/`streamableHttp`/`remote`, `sse`. `ws` is refused. A `url` with no transport is HTTP, or SSE when the path ends in `/sse` |
+| Process | `command` as a string, an argv list (OpenCode) or `{path, args, env}` (Zed); `args`; `env` or `environment`; `envFile` (dotenv, bounded 64 KiB, explicit `env` wins); `cwd` |
+| Remote | `url`, `serverUrl` (Windsurf), `httpUrl` (Gemini, HTTP); `headers` |
+| Switch | `enabled` or `disabled` (Settings flips whichever the entry uses) |
+| Limits | `*_timeout_s`; `timeout` → call timeout, milliseconds when ≥ 1000 (Claude Code, OpenCode, Gemini) otherwise seconds (Roo) |
+| Tools | `tool_loading`; `alwaysLoad: true` (Claude Code) = `"all"`; `includeTools`, `excludeTools`/`disabledTools` filter the listed tools |
+| Shown, not acted on | `autoApprove`, `alwaysAllow`, `trust`, `oauth`, `auth`, `headersHelper`, `description`, `gallery`, `version`, `dev`, `icon`, `source`, `networkTimeout`, `settings`, `sandboxEnabled`, `watchPaths` (approval stays with the permission engine; OAuth is not implemented) |
+
+Any other key is an error for that server only. Interpolation in `command`,
+`args`, `env`, `envFile`, `cwd`, `url`, `headers`: `${env:VAR}`, `${VAR}`,
+`${VAR:-default}`, `{env:VAR}`, `${workspaceFolder}`, `${workspaceFolderBasename}`,
+`${userHome}`, `${pathSeparator}`, `${/}`. A missing variable without a default is
+an error naming it; `${input:id}` is refused (Nexus never prompts); bare `$VAR` is
+literal. Resolved values are secrets (redacted everywhere). Not verified against
+live GitHub Copilot MCP or OAuth-only servers.
+
+`InspectContext.mcp_servers` carries, per server, `scope`, `source_path`,
+`url`, `ignored_keys`, the tool filters and a `status` of `connected`,
+`disabled`, `failed`, `backoff`, `connecting` or `not connected` (lazy, never
+tried). Entries that failed to parse are rows with `invalid: true`; unusable
+files and file warnings are rows with `file_error: true` (name = the file).
 
 ## Settings files (host)
 

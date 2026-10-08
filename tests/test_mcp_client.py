@@ -142,7 +142,7 @@ def test_unknown_keys_are_refused():
         parse_server_config("s", {"transport": "stdio", "command": "x", "typo": 1})
 
 
-def test_only_explicit_env_interpolation_expands():
+def test_braced_env_interpolation_expands_but_bare_dollar_does_not():
     config = parse_server_config(
         "s",
         {
@@ -159,7 +159,7 @@ def test_only_explicit_env_interpolation_expands():
     )
     assert config.env["A"] == SECRET
     assert config.env["B"] == "$TOKEN"
-    assert config.env["C"] == "${TOKEN}"
+    assert config.env["C"] == SECRET  # Claude Code's ${VAR}
     assert config.env["D"] == f"pre-{SECRET}-post"
 
 

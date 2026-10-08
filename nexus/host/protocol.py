@@ -251,6 +251,17 @@ class SessionEnqueue(msgspec.Struct, tag=True, frozen=True):
     attachment_labels: list[str] = msgspec.field(default_factory=list)
 
 
+class SessionShell(msgspec.Struct, tag=True, frozen=True):
+    """Run a user-typed ``!`` command with bash in the workspace.
+
+    The output (bounded like the ``bash`` tool) is added to the model context;
+    it never starts a turn. A running turn sees it at its next safe boundary.
+    """
+
+    session: str
+    command: str
+
+
 class SessionCancel(msgspec.Struct, tag=True, frozen=True):
     session: str
     reason: str = ""
@@ -756,6 +767,7 @@ Command = (
     | AttachmentPreview
     | SessionStart
     | SessionEnqueue
+    | SessionShell
     | SessionCancel
     | SessionQueueMove
     | SessionQueueRemove
@@ -854,6 +866,7 @@ COMMANDS: tuple[type, ...] = (
     AttachmentPreview,
     SessionStart,
     SessionEnqueue,
+    SessionShell,
     SessionCancel,
     SessionQueueMove,
     SessionQueueRemove,
@@ -1046,6 +1059,11 @@ class SessionEnqueueResult(msgspec.Struct, tag=True, frozen=True):
     queued_id: str
     depth: int = 0
     turn_id: str = ""
+
+
+class SessionShellResult(msgspec.Struct, tag=True, frozen=True):
+    session: str
+    shell_id: str
 
 
 class SessionCancelResult(msgspec.Struct, tag=True, frozen=True):
@@ -1580,6 +1598,7 @@ Result = (
     | AttachmentPreviewResult
     | SessionStartResult
     | SessionEnqueueResult
+    | SessionShellResult
     | SessionCancelResult
     | SessionQueueEditResult
     | SessionSubscribeResult
@@ -1664,6 +1683,7 @@ RESULTS: tuple[type, ...] = (
     AttachmentPreviewResult,
     SessionStartResult,
     SessionEnqueueResult,
+    SessionShellResult,
     SessionCancelResult,
     SessionQueueEditResult,
     SessionSubscribeResult,
@@ -1846,6 +1866,8 @@ __all__ = [
     "SessionDeleteResult",
     "SessionEnqueue",
     "SessionEnqueueResult",
+    "SessionShell",
+    "SessionShellResult",
     "SessionExport",
     "SessionExportResult",
     "SessionFork",

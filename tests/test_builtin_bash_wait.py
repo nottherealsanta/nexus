@@ -235,13 +235,21 @@ async def test_legacy_bash_output_keeps_output_semantics(registry, ctx):
 # -- output and progress ----------------------------------------------------
 
 
-async def test_truncation_keeps_head_and_tail(registry, workspace):
+async def test_truncation_keeps_head_and_tail_and_saves_the_rest(
+    registry, workspace, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("NEXUS_OUTPUT_DIR", str(tmp_path / "spill"))
     job = await registry.spawn("seq 1 20000; echo SUMMARY-LINE", cwd=workspace)
     await job.wait(10)
-    text = _jobs.format_job_output(job, max_chars=2000)
-    assert "chars omitted" in text
+    text = _jobs.format_job_output(job)
+    assert "[output too large: 20002 lines" in text
     assert "\n1\n" in text and "SUMMARY-LINE" in text
-    assert len(text) < 2600
+    assert len(text.splitlines()) <= 2000 + 5
+    assert len(text.encode()) <= 50 * 1024 + 512
+    saved = list((tmp_path / "spill").iterdir())
+    assert len(saved) == 1 and str(saved[0]) in text
+    full = saved[0].read_text()
+    assert "\n12345\n" in full and full.rstrip().endswith("SUMMARY-LINE")
 
 
 async def test_progress_is_throttled_and_reports_last_line(registry, workspace):

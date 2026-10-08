@@ -2,7 +2,8 @@
 
 Each area lists the files the host reports for the current scope, with Edit, New file and Reset
 actions that reuse the host's editor pages (the one allowed drill-in). Areas that can differ per
-project (tools, skills, MCP) get the Global/Project scope control; agents are always global.
+project (tools, skills) get the Global/Project scope control; agents are always global. MCP shows both
+scopes one after another and passes the scope explicitly.
 """
 from __future__ import annotations
 
@@ -11,7 +12,7 @@ from ....ui_support.text import escape_controls
 
 SCOPES = ("global", "project")
 #: Areas that can differ per project (the page shows the scope control).
-SCOPED = {"tools", "skills", "mcp"}
+SCOPED = {"tools", "skills"}
 AGENT_ORDER = {"build": 0, "orchestrator": 1, "advisor": 2, "task": 3, "quick": 4}
 
 
@@ -25,25 +26,32 @@ def scope_control(workflows, area: str):
     return {"options": ["Global", "Project"], "value": SCOPES.index(scope_of(workflows, area)), "operation": sp.op(area, "scope")}
 
 
-async def file_blocks(workflows, area: str, *, empty: str = "No files yet. New file creates one.") -> tuple[list[dict], str]:
-    """Blocks listing this area's files, and the root the host reports (for the footer)."""
-    scope = scope_of(workflows, area)
+async def file_blocks(workflows, area: str, *, empty: str = "No files yet. New file creates one.",
+                      scope: str | None = None, heading: bool = True) -> tuple[list[dict], str]:
+    """Blocks listing this area's files, and the root the host reports (for the footer).
+
+    ``scope`` overrides the page's scope (MCP lists both); ids then carry the scope so they stay unique.
+    ``heading=False`` leaves out the FILES heading when the caller already shows one.
+    """
+    explicit = scope is not None
+    scope = scope or scope_of(workflows, area)
+    tag_id = f"{scope}:" if explicit else ""
     inventory = await workflows.client.settings_inventory(scope)
     items = [item for item in inventory.items if item.category == area]
     if area == "agents":
         items.sort(key=lambda item: (AGENT_ORDER.get(item.id, 9), item.id.casefold()))
-    blocks: list[dict] = [sp.heading(f"FILES · {scope}")]
+    blocks: list[dict] = [sp.heading(f"FILES · {scope}")] if heading else []
     if not items:
         blocks.append(sp.note(empty))
     for item in items:
         tag = " · built-in" if item.builtin else " · edited" if getattr(item, "overrides_builtin", False) else ""
         read = {"kind": "settings_read", "scope": scope, "category": area, "id": item.id}
-        blocks.append(sp.row(f"file:{item.id}", escape_controls(item.label) + tag, sp.button("Edit…", read),
+        blocks.append(sp.row(f"{tag_id}file:{item.id}", escape_controls(item.label) + tag, sp.button("Edit…", read),
                              description=escape_controls(str(getattr(item, "summary", "") or ""))[:160]))
     names = [item.id for item in items if not item.builtin and (area != "agents" or getattr(item, "overrides_builtin", False))]
     reset = {"kind": "confirm", "label": "Reset this category to default? Removed files move to trash.", "lines": names,
              "next": {"kind": "settings_reset", "scope": scope, "category": area}}
-    blocks.append(sp.buttons("file-actions", [("New file", {"kind": "settings_new", "scope": scope, "category": area}, "primary"),
+    blocks.append(sp.buttons(f"{tag_id}file-actions", [("New file", {"kind": "settings_new", "scope": scope, "category": area}, "primary"),
                                               ("Reset category…", reset, "ghost")]))
     return blocks, inventory.root_display
 

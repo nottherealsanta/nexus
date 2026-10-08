@@ -54,3 +54,38 @@ async def test_live_replay_and_tool_details_match_real_runtime(tmp_path, monkeyp
     finally:
         await controller.close()
         await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_bang_submit_runs_bash_into_context_without_a_turn(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("NEXUS_OUTPUT_DIR", str(tmp_path / "spill"))
+    config = Config(model="scripted/native", version=2, v2=ConfigV2(
+        model=ModelSection(default="scripted/native"), agent=AgentSection(profile="coding"),
+        permissions=PermissionsSection(mode="allow", on_unattended="allow"), tools=ToolsSection()))
+    runtime = Runtime(tmp_path, config=config, providers={"scripted": ScriptedProvider(text_response("unused"))})
+    facade = HostFacade(runtime)
+    controller = NativeController(Client(FacadeTransport(facade)), "native")
+    shell = ShellActions(controller)
+    done = asyncio.Event()
+    seen = []
+    async def update(event):
+        controller.ingest(event)
+        seen.append(event.type)
+        if event.type == "shell.completed": done.set()
+    try:
+        await controller.bootstrap()
+        controller.resume(update)
+        assert await shell.submit("!echo native-shell-output") is True
+        await asyncio.wait_for(done.wait(), 10)
+        assert "turn.started" not in seen
+        live = project(controller, 1, shell=shell)
+        text = "\n".join(live["lines"])
+        assert "echo native-shell-output" in text
+        await controller.switch_session("native")
+        await controller.bootstrap()
+        assert project(controller, 2, shell=shell)["lines"] == live["lines"]
+    finally:
+        await controller.close()
+        await runtime.aclose()

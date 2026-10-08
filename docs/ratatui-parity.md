@@ -60,11 +60,17 @@ skill whose dim rows (`Item.lines`, wrapped at 76 columns) carry the frontmatter
 token figures. Enter opens the skill page (`SkillInspect`: frontmatter table and the
 full Markdown body, `detail` layout). Space or a click toggles; locked after the first turn.
 
-The MCP dialog mirrors the Tools list: a thin `list` layout (≤ 72 columns), one line per
-server: name (plus ` · <status>` when not connected), a right-aligned `~indexed / ~full`
+The MCP dialog mirrors the Tools list: a thin `list` layout (≤ 72 columns). Its first rows
+are `Open MCP settings…` (the Settings → MCP page) and `↻ Refresh all`; servers follow
+grouped by scope (`Global · ~/.nexus/mcp.json`, `Project · <source_path>`). Every server is
+listed: one off in `mcp.json` is labelled `· off in mcp.json` with a locked toggle (a session
+switch cannot enable it), and an entry that failed to parse is `<name> · invalid` with its
+wrapped error and no toggle or Restart (Enter opens the settings page). Each server has dim
+second rows (`<transport> · <command or URL> · N tools`, then any error). A line shows the
+name (plus ` · <status>` when not connected), a right-aligned `~indexed / ~full`
 token column, a `[ Restart ]` chip (click, or Ctrl+R on the row, sends `McpServerRestart`)
 and the on/off toggle (Space or click; session-scoped, locked after the first turn).
-Title: `MCP · N of M on · ~X indexed / ~Y full`. "Indexed" is the server's own entry in
+Title: `MCP · N of M on [· K invalid] · ~X indexed / ~Y full` (N, M count valid servers only). "Indexed" is the server's own entry in
 the frozen MCP index (split on `- server: <name> ·` lines, ~4 chars/token); "full" is
 `schema_tokens`, every tool schema the server offers. The top row `↻ Refresh all` runs
 `ExtensionsReload` (re-reads `mcp.json`: adds, removes, reconfigures servers), then
@@ -212,6 +218,15 @@ column; nested content receives the padding only once.
 The composer border and agent name share the active agent's context-header
 color, including configured identity colors. One blank line precedes the
 System prompt header, matching the spacing between context blocks.
+
+**Shell mode indicator.** A draft starting with `!` (`render::is_shell_draft`) is sent
+unchanged as a normal `submit`; the daemon runs the rest as bash. While it is
+typed the composer rail turns the palette `warning` amber (both themes), and the
+blank row above the controls shows a ` ! bash ` tag plus "Enter runs in the
+workspace · output goes to context". A draft of exactly `!` shows the placeholder
+`!type a bash command`. The indicator uses the existing blank row, so layout and
+control hit-testing are unchanged. Shell drafts never open slash or `@`
+completion (`main.rs`). Covered by `shell_drafts_show_a_bash_indicator_and_warning_rail`.
 
 Parallel tool calls render exactly like standalone calls: no `┌│└` or `∥` gutter
 markers, so every tool row shares one text column. Verified with Rust column tests, Python projection/PTY tests and native
@@ -885,7 +900,10 @@ captured with a silent Python fixture. A 1 MB fully rendered output still incurs
 large first-wrap cost; viewport-only wrapping is not implemented. These checks do
 not establish zero latency or live-provider timing on every terminal.
 
-MCP Settings server details expose persistent On/Off and Search/All choices
+The MCP Settings page lists both scopes; each server section shows Status (with the error),
+Transport, Command or URL, Defined in, Tools, Tool filters and Ignored keys, an invalid entry
+shows only Status/Error/Defined in, and whole-file problems are callouts under the scope
+heading. It exposes persistent On/Off and Search/All choices
 through host commands with optimistic hashes and JSONC-preserving edits. The
 MCP inspector displays config diagnostics, including failures with zero servers.
 
@@ -978,8 +996,10 @@ bounded; an unknown block type is shown as a visible note, never dropped.
 
 Areas: Appearance, Layout, Keyboard (read-only), Providers, Models, Voice & speech,
 Agents, Tools, MCP servers, Skills. `/settings` opens on Appearance. **Scope** (the
-Global/Project control and per-row badges) appears only on Tools, Skills and MCP
-servers, the per-file areas that can differ per project; everything else is always
+Global/Project control and per-row badges) appears only on Tools and Skills, the
+per-file areas that can differ per project; MCP servers has no scope tab and shows
+`GLOBAL · ~/.nexus/mcp.json` then `PROJECT · <project>/.agents/mcp.json` one after another
+(each: servers as sections of labelled rows, then that scope's file rows); everything else is always
 global and shows no scope. Models holds the default chain, the session-title model,
 the Low/Medium/High **tabs** (each an ordered list: `Alt+↑↓` reorders, `Delete`
 removes, `Add model…` opens the one allowed picker), the subagent ceiling and the

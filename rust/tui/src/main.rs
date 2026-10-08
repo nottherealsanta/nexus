@@ -366,6 +366,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut leader = None;
     let mut pending_sessions_focus = false;
     let mut escape = Instant::now() - Duration::from_secs(2);
+    let mut last_ctrl_c = Instant::now() - Duration::from_secs(2);
     let mut history_loaded = false;
     // False until the host's first snapshot: the splash is drawn and input is held back.
     let mut loaded = false;
@@ -627,8 +628,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         completion.theme = s.theme.clone();
         completion.command_help = s.command_help.clone();
         completion.completion_query = token.to_string();
-        completion.completions =
-            if token.starts_with('/') && !prefix.contains(' ') && !s.commands.is_empty() {
+        completion.completions = if draft.text.starts_with('!') {
+            Vec::new() // shell mode: the draft is a bash command, never a slash or @ query
+        } else if token.starts_with('/') && !prefix.contains(' ') && !s.commands.is_empty() {
                 let needle = token.to_lowercase();
                 rank_commands(&s.commands, &needle)
             } else {
@@ -796,6 +798,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let argument = draft.text.starts_with('/') && draft.text[..draft.cursor].contains(' ');
             let local_command = query.starts_with('/') && !argument && !s.commands.is_empty();
             let triggers = !local_command
+                && !draft.text.starts_with('!')
                 && s.panel_title.is_empty()
                 && s.prompt.is_none()
                 && (query.starts_with('/') || query.starts_with('@') || argument);
@@ -1789,12 +1792,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 continue;
                             }
                             // Text in the composer: Ctrl+C clears it first; an empty one cancels the turn.
+                            // Ctrl+C twice on an empty composer within 1.5 s quits; clearing a
+                            // draft never counts as the first press, so clear-then-cancel is safe.
                             KeyCode::Char('c') if !draft.text.is_empty() => {
                                 draft.clear();
                                 dirty = true;
+                                last_ctrl_c = Instant::now() - Duration::from_secs(2);
                                 continue;
                             }
                             KeyCode::Char('c') => {
+                                if last_ctrl_c.elapsed() < Duration::from_millis(1500) {
+                                    action("quit", "")?;
+                                    break 'app;
+                                }
+                                last_ctrl_c = Instant::now();
                                 action("cancel", "")?;
                                 continue;
                             }

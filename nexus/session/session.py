@@ -392,6 +392,9 @@ class Session:
         self._viewers = 0
         #: Durable input submissions awaiting the next turn boundary.
         self._queue: deque[_QueuedInput] = deque()
+        # User-run ``!`` shell results waiting for a safe boundary in the
+        # running turn (never a turn trigger; see ``add_context``).
+        self._pending_context: list[list[ContentBlock]] = []
         #: Set when no detached turn is running. ``wait_idle`` awaits this
         #: instead of polling, so it never busy-waits.
         self._idle = asyncio.Event()
@@ -1113,6 +1116,13 @@ class Session:
         self._publish(record.event)
         return record
 
+    def emit_session_event(
+        self, event_type: str, data: dict[str, Any] | None = None
+    ) -> EventRecord | None:
+        """Persist and publish a turn-less session event (``shell.*``)."""
+        self._ensure_writable()
+        return self._emit(event_type, data)
+
     def _events_after(self, from_seq: int) -> list[Event]:
         """All persisted events with ``seq > from_seq`` (append-only, ordered)."""
         return [
@@ -1228,8 +1238,34 @@ class Session:
         )
         return queued_id
 
+    def add_context(self, user_input: str | list[ContentBlock]) -> bool:
+        """Add user-supplied context (a ``!`` shell result) without a turn.
+
+        Idle: appended now as a user message; no turn starts. During a turn it
+        is held and appended at the next safe boundary (``consume_steering``)
+        or when the turn ends, so it never splits a tool call from its result
+        and never makes the loop take another step. Returns True when it was
+        appended immediately.
+        """
+        self._ensure_writable()
+        content = _coerce_user_input(user_input)
+        if self._active is None:
+            self.append_message(Message(role="user", content=content))
+            return True
+        self._pending_context.append(content)
+        return False
+
+    def _flush_pending_context(self) -> None:
+        pending, self._pending_context = self._pending_context, []
+        for content in pending:
+            self.append_message(Message(role="user", content=content,
+                                        meta=MessageMeta(turn_id=self.active_turn_id)))
+
     async def consume_steering(self) -> bool:
         """Persist steering messages at a safe model boundary (plan section 4)."""
+        # Shell context is appended at the boundary but does not count as
+        # steering: it must not keep a finishing turn running.
+        self._flush_pending_context()
         items = [item for item in self._queue if item.mode == "steer"]
         consumed = False
         for item in items:
@@ -1391,6 +1427,9 @@ class Session:
         ended = active is not None
         self._active = None
         self._turn_unattended = None
+        if self._pending_context and not self._retired:
+            with contextlib.suppress(Exception):
+                self._flush_pending_context()
         # Defensive: release even when ``_active`` was already cleared, so a
         # lease that was detached without releasing cannot leak the flock.
         self._lock.release()

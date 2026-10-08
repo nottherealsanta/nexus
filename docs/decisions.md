@@ -115,6 +115,16 @@ paths themselves. See [desktop.md](desktop.md).
 | **Conventional Commits drive versions; never edit `version` or `CHANGELOG.md` by hand.** A version-bump request defaults to the next patch and authorises the full release; a minor bump needs explicit approval. | release-please owns the files; patch releases should be cheap. | [release.md](release.md) |
 | **Docs are the source of truth; code wins over plans.** | Agents need one place to look. | [README.md](README.md) |
 
+## mcp.json reads other clients' dialects (2026-10)
+
+People paste MCP config from VS Code, Claude Code, Cursor or OpenCode; refusing
+`type`, an argv `command` or `${VAR}` made those servers vanish silently. Each
+entry is now folded into Nexus keys first, foreign approval/OAuth keys are
+accepted but shown as ignored (never acted on), any other unknown key still fails
+that one server, and failures are rows in Settings and the context header. `${VAR}`
+now expands like Claude Code (it used to be literal); bare `$VAR` stays literal.
+Each file is isolated, so a broken project file no longer freezes the global set.
+
 ## Known gaps and drift (as of this writing)
 
 Stated so nobody builds on a false assumption.
@@ -514,3 +524,13 @@ are refused. It asks with a plain `[y/N]` after listing every path and size, and
 `--yes` without a terminal. The Hugging Face cache is shared with other tools, so only
 the two speech model folders are removed. Project files are not Nexus state and are kept.
 
+## Composer `!` shell output is context, not a prompt
+
+`!command` runs with bash and its bounded output is added to the model context
+as a user message without starting a turn: the user is showing the agent
+something, not asking it to act. During a turn the output waits for the next
+safe boundary (never between a tool call and its result) and does not extend
+the turn. Each run is drawn as a `shell` turn reusing the `bash` tool row, so
+the user sees exactly what the agent will see. Shell output (tool and `!`)
+is capped at 2,000 lines or 50 KiB; the full text goes to a private temp file
+named in the result instead of being silently cut.

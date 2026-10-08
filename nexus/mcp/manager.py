@@ -71,7 +71,7 @@ from .bridge import (
     build_tools,
     sanitize_controls,
 )
-from .client import MCPServerConfig, parse_server_config, redact_secrets
+from .client import MCPServerConfig, parse_server_config, redact_secrets, server_enabled
 from .errors import (
     MCPClosed,
     MCPConfigError,
@@ -175,6 +175,8 @@ def _config_fingerprint(config: MCPServerConfig) -> str:
         "init_timeout_s": config.init_timeout_s,
         "list_timeout_s": config.list_timeout_s,
         "call_timeout_s": config.call_timeout_s,
+        "include_tools": list(config.include_tools),
+        "exclude_tools": list(config.exclude_tools),
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -646,11 +648,10 @@ class MCPManager:
         if isinstance(raw, MCPServerConfig):
             return ServerDefinition(name=name, config=raw)
         if isinstance(raw, Mapping):
-            data = dict(raw)
-            enabled = data.pop("enabled", True)
-            if not isinstance(enabled, bool):
-                raise MCPConfigError(f"server {name!r}: enabled must be a bool")
-            config = parse_server_config(name, data, environ=self._environ)
+            enabled = server_enabled(name, raw)
+            config = parse_server_config(
+                name, raw, environ=self._environ, workspace=self._workspace, home=self._home
+            )
             return ServerDefinition(name=name, config=config, enabled=enabled)
         raise MCPConfigError(
             f"server {name!r} must be a config mapping or an MCPServerConfig"
@@ -678,6 +679,11 @@ class MCPManager:
     @property
     def definitions(self) -> dict[str, ServerDefinition]:
         return dict(self._definitions)
+
+    @property
+    def failures(self) -> tuple[ApplyFailure, ...]:
+        """Definitions the last apply could not parse (shown as invalid rows)."""
+        return self._failures
 
     @property
     def server_names(self) -> tuple[str, ...]:
@@ -1054,6 +1060,10 @@ class MCPManager:
                     },
                 )
 
+        config = state.definition.config
+        if config.include_tools or config.exclude_tools:
+            tools_raw = [tool for tool in tools_raw
+                         if not isinstance(tool, Mapping) or config.allows_tool(str(tool.get("name", "")))]
         call_tool = self._make_call_tool(state)
         tools, tool_issues = build_tools(
             state.name,
