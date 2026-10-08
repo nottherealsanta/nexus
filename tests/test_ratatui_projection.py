@@ -593,7 +593,7 @@ def test_edits_stand_alone_with_line_counts(tmp_path, monkeypatch):
     assert edit["text"] == "Edit a.py" and edit["path"] == "a.py" and "members" not in edit
     assert (edit["added"], edit["removed"]) == (2, 1)
     assert edit["diff_lines"] == [["del", 1, "old"], ["add", 1, "new"], ["add", 2, "more"], ["ctx", 3, "keep"]]
-    assert edit["local_open"] is True and edit["local_detail"] == ""
+    assert edit["local_open"] is False and edit["local_detail"] == "", "changes start closed"
 
 
 def test_write_and_question_stand_alone(tmp_path, monkeypatch):
@@ -607,8 +607,12 @@ def test_write_and_question_stand_alone(tmp_path, monkeypatch):
     assert [b["kind"] for b in blocks] == ["change", "change"]
     write, question = blocks
     assert (write["added"], write["removed"]) == (2, 0)
-    assert write["diff_lines"] == [["add", 1, "hello"], ["add", 2, "world"]]
-    assert question["diff_lines"] == [] and "Which?" in question["detail"]
+    assert write["collapsed"] and write["diff_lines"] == [], "a file change starts closed"
+    assert not question["collapsed"] and question["diff_lines"] == [] and "Which?" in question["detail"]
+    opened = [b for b in _snapshot(tmp_path, monkeypatch, [replace(_turn(), tools=tools)], expanded={"w:change"})["blocks"]
+              if b["kind"] == "change"][0]
+    assert not opened["collapsed"]
+    assert opened["diff_lines"] == [["add", 1, "hello"], ["add", 2, "world"]]
 
 
 def test_multi_file_patch_stands_alone_with_file_count(tmp_path, monkeypatch):

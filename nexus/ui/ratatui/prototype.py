@@ -117,9 +117,10 @@ def _change_rows(tool) -> tuple[list[list], int, int, list[str]]:
 def _change_block(tool, shell, local_ui, body):
     """One standalone row per file change or question: ``Edit a.py  +2 −1``.
 
-    Open by default: the diff follows in add/delete colours (first
-    ``_EXPAND_AFTER_LINES`` rows, the rest on Enter). Without a diff, the labelled
-    tool details (parameters, answer, error) are shown instead.
+    File changes start closed: the header row carries the path and counts; Enter opens the
+    diff in add/delete colours (first ``_EXPAND_AFTER_LINES`` rows, the rest on a
+    second Enter). Without a diff, the labelled tool details (parameters, answer,
+    error) are shown instead. A question starts open so its answer is visible.
     """
     from ...ui_support.timeline import tool_heading, tool_status, tool_summary
     status = tool_status(tool)
@@ -132,17 +133,18 @@ def _change_block(tool, shell, local_ui, body):
         suffix = tool_summary(tool)
     op_id, out_id = tool.call_id + ":change", tool.call_id + ":change-output"
     detail = "" if rows else body
+    default_open = tool.name.casefold() == "question"
     block = {"id": tool.call_id, "kind": "change", "status": status, "title": tool.name.title(),
              "text": heading, "heading": suffix, "added": added, "removed": removed,
              "files": len(paths), "path": ", ".join(p for p in paths if p),
              "operation": {"kind": "block_toggle", "id": op_id},
              "output_operation": {"kind": "block_toggle", "id": out_id} if len(rows) > _EXPAND_AFTER_LINES else None}
     if local_ui:
-        block.update(local_ui=True, local_open=True, diff_lines=rows, local_detail=detail,
+        block.update(local_ui=True, local_open=default_open, diff_lines=rows, local_detail=detail,
                      fold_lines=_EXPAND_AFTER_LINES)
         return block
     verbose = bool(shell and shell.verbose)
-    opened = verbose or not (shell and op_id in shell.expanded)  # toggling closes an open change
+    opened = verbose or default_open != bool(shell and op_id in shell.expanded)  # Enter flips the default
     full = verbose or bool(shell and out_id in shell.expanded)
     if opened and not full and len(rows) > _EXPAND_AFTER_LINES:
         rows = [*rows[:_EXPAND_AFTER_LINES], ["clip", 0, f"… {len(rows) - _EXPAND_AFTER_LINES} more lines · Enter for all"]]

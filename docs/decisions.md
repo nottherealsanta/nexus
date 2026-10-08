@@ -466,9 +466,10 @@ rebuilt); not verified on the desktop client.
 Activity groups fold reads, searches and commands into one summary line, which is
 right for exploration but hid the changes a reader most wants to check. Edits,
 writes, patches and questions are therefore never folded: each is its own `change`
-row with the path and `+added −removed`, open by default on a unified diff in
-add/delete colours (a group of one repeated its header as a member row and hid the
-diff behind a second click). MCP Restart is a host
+row with the path and `+added −removed`. The row starts closed (the header already
+names the file and the size of the change, and open diffs crowded out the reply);
+Enter opens a unified diff in add/delete colours (a group of one repeated its header
+as a member row and hid the diff behind a second click). MCP Restart is a host
 command (`McpServerRestart`) rather than a client-side reload because only the
 daemon owns connections; the connection is shared, so a restart is visible to every
 session. Refresh reuses `ExtensionsReload`, which already reconciles `mcp.json`, so
