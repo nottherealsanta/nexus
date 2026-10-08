@@ -11,3 +11,5 @@ import pytest
 @pytest.fixture(autouse=True)
 def _isolated_nexus_home(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("NEXUS_HOME", str(tmp_path_factory.mktemp("nexus-home")))
+    # PTY harnesses never answer the native client's graphics probe; skip its wait.
+    monkeypatch.setenv("NEXUS_IMAGE_PROTOCOL", "halfblocks")

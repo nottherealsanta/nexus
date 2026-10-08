@@ -70,8 +70,66 @@ pub struct Editor {
     pub history_index: usize,
     undo: Vec<(String, usize)>,
     redo: Vec<(String, usize)>,
+    /// Collapsed pastes: (marker text, full content), expanded again on `take`.
+    pastes: Vec<(String, String)>,
 }
+/// Pastes at or above this size collapse into a `[Pasted ~N tokens]` marker.
+const COLLAPSE_CHARS: usize = 200;
+const COLLAPSE_LINES: usize = 3;
 impl Editor {
+    fn paste_marker(content: &str) -> String {
+        format!("[Pasted ~{} tokens]", (content.chars().count() / 4).max(1))
+    }
+
+    /// Insert pasted text. Large pastes become one atomic marker, like images;
+    /// pasting the same content again right after its marker expands it in place.
+    pub fn paste(&mut self, text: &str) {
+        let big = text.chars().count() >= COLLAPSE_CHARS || text.lines().count() >= COLLAPSE_LINES;
+        if !big {
+            return self.insert(text);
+        }
+        let marker = Self::paste_marker(text);
+        let at = if self.selection().is_none() && self.text[..self.cursor].ends_with(&marker) {
+            self.pastes
+                .iter()
+                .rposition(|(m, c)| *m == marker && c == text)
+        } else {
+            None
+        };
+        if let Some(at) = at {
+            self.checkpoint();
+            let start = self.cursor - marker.len();
+            self.text.replace_range(start..self.cursor, text);
+            self.cursor = start + text.len();
+            // Keep the entry only if another marker with it remains in the draft.
+            if self.text.matches(&marker).count()
+                < self.pastes.iter().filter(|(m, _)| *m == marker).count()
+            {
+                self.pastes.remove(at);
+            }
+            return;
+        }
+        self.insert(&marker);
+        self.pastes.push((marker, text.to_string()));
+    }
+
+    /// The draft with every paste marker replaced by its full content.
+    pub fn expanded(&self) -> String {
+        let mut unused = self.pastes.clone();
+        let mut out = String::new();
+        let mut last = 0;
+        for (start, end) in self.markers() {
+            let marker = &self.text[start..end];
+            if let Some(i) = unused.iter().position(|(m, _)| m == marker) {
+                out.push_str(&self.text[last..start]);
+                out.push_str(&unused.remove(i).1);
+                last = end;
+            }
+        }
+        out.push_str(&self.text[last..]);
+        out
+    }
+
     /// Wrap whitespace-delimited words using terminal display columns. Words
     /// that fit a row move intact; only oversized tokens split at grapheme
     /// boundaries. Whitespace is retained, including at soft row boundaries.
@@ -142,6 +200,12 @@ impl Editor {
     }
 
     fn image_marker(content: &str) -> bool {
+        if let Some(n) = content
+            .strip_prefix("Pasted ~")
+            .and_then(|c| c.strip_suffix(" tokens"))
+        {
+            return !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit());
+        }
         let number = content
             .strip_prefix("image #")
             .or_else(|| content.strip_prefix("image "))
@@ -377,11 +441,14 @@ impl Editor {
     pub fn clear(&mut self) {
         self.checkpoint();
         self.text.clear();
+        self.pastes.clear();
         self.cursor = 0;
         self.anchor = None;
     }
     pub fn take(&mut self) -> String {
-        let text = std::mem::take(&mut self.text);
+        let text = self.expanded();
+        self.text.clear();
+        self.pastes.clear();
         self.cursor = 0;
         self.anchor = None;
         self.undo.clear();
@@ -572,5 +639,22 @@ mod tests {
         e.cursor = e.text.find("[document nope]").unwrap() + 3;
         e.delete();
         assert_eq!(e.text, "x[image 0] [doument nope] y");
+    }
+
+    #[test]
+    fn large_paste_collapses_and_repeat_expands() {
+        let mut e = Editor::default();
+        let big = "x".repeat(1370);
+        e.paste(&big);
+        assert_eq!(e.text, "[Pasted ~342 tokens]");
+        e.paste("small");
+        assert_eq!(e.text, "[Pasted ~342 tokens]small");
+        e.text.truncate("[Pasted ~342 tokens]".len());
+        e.cursor = e.text.len();
+        e.paste(&big);
+        assert_eq!(e.text, big);
+        e.paste(&big);
+        assert_eq!(e.text, format!("{big}[Pasted ~342 tokens]"));
+        assert_eq!(e.take(), format!("{big}{big}"));
     }
 }

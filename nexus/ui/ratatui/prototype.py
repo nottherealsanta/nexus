@@ -73,6 +73,7 @@ def _block_operations(blocks):
         for key in ("operation", "output_operation", "chip_operation"):
             if operation := block.get(key):
                 yield operation
+        yield from block.get("chip_operations", [])
         yield from _block_operations(block.get("members", []))
 
 
@@ -197,6 +198,26 @@ def _fold_summary(turn) -> str:
     return " · ".join(parts)
 
 
+def _chip_operations(message, count):
+    """One click operation per attachment chip, in chip order.
+
+    An image chip opens that image's preview (the image block follows its
+    ``Attachment: image N`` text block); a document chip opens the message page.
+    """
+    operations = []
+    blocks = message.blocks
+    for index, block in enumerate(blocks):
+        if block.kind != "text" or not block.text.startswith("\n\nAttachment: "):
+            continue
+        if block.text.startswith("\n\nAttachment: image "):
+            image = next((i for i in range(index + 1, len(blocks)) if blocks[i].kind == "image"), None)
+            if image is not None:
+                operations.append({"kind": "submitted_image", "id": message.id, "index": image})
+                continue
+        operations.append({"kind": "message_page", "id": message.id})
+    return operations[:count] + [{"kind": "message_page", "id": message.id}] * (count - len(operations))
+
+
 def _project_turn(turn, shell, agents=None, literal=True):
     """Blocks of one turn in canonical transcript order and spacing.
 
@@ -233,6 +254,7 @@ def _project_turn(turn, shell, agents=None, literal=True):
                      "operation": {"kind": "turn_toggle", "id": turn.id}}
             if chips and not collapsed:
                 block["chip_operation"] = {"kind": "message_page", "id": message.id}
+                block["chip_operations"] = _chip_operations(message, len(chips))
             entries.append((message.event_seq, 2, block, 0, 0, "user"))
             continue
         if message.role == "assistant" and any(block.kind == "thinking" for block in message.blocks):

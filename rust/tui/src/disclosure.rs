@@ -158,6 +158,7 @@ impl Disclosure {
             collapsed: source.collapsed,
             chips: source.chips.clone(),
             chip_operation: source.chip_operation.clone(),
+            chip_operations: source.chip_operations.clone(),
             heading: source.heading.clone(),
             status: source.status.clone(),
             color: source.color.clone(),
@@ -279,6 +280,7 @@ impl Disclosure {
             shown.text = source.fold_summary.clone();
             shown.chips.clear();
             shown.chip_operation = None;
+            shown.chip_operations.clear();
             shown.rev.push_str(":folded");
         }
         if source.rev.is_empty() {

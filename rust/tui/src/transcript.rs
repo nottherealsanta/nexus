@@ -5,7 +5,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -104,6 +104,27 @@ pub fn line(
         }
     }
     Line::from(spans)
+}
+
+/// Unwrapped cells for one row of text.
+fn plain_cells(text: &str, style: Style) -> Vec<Cell> {
+    text.graphemes(true)
+        .map(|g| Cell {
+            g: g.to_string(),
+            w: g.width(),
+            style,
+            space: g.chars().all(char::is_whitespace),
+        })
+        .collect()
+}
+
+/// `image 1 · a.png` → `Image 1 · a.png`.
+fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
 }
 
 pub fn truncate(text: &str, width: usize) -> String {
@@ -253,26 +274,59 @@ fn user_card(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
             &b.chip_operation.clone().or_else(|| b.operation.clone()),
         );
         out.push((line(bar(()), vec![], Some(width), base), chip_op.clone()));
-        let mut spans = Vec::new();
-        for chip in &b.chips {
-            spans.push(Span::styled(
-                format!(" ▣ {chip} "),
-                Style::default()
-                    .fg(p.blue)
-                    .bg(p.element_hi)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::raw("  "));
+        // Each chip is its own click target (`context_chips` ranges): an image chip
+        // opens that image, others the message page. Chips wrap whole, never split.
+        let chip_style = Style::default()
+            .fg(p.blue)
+            .bg(p.element)
+            .add_modifier(Modifier::BOLD);
+        let mut rows: Vec<Vec<(String, Option<Value>)>> = vec![Vec::new()];
+        let mut used = 0;
+        for (index, chip) in b.chips.iter().enumerate() {
+            let mut label = format!(" ▣ {} ", capitalized(chip));
+            if label.width() > inner {
+                label = truncate(&label, inner);
+            }
+            let w = label.width();
+            if used > 0 && used + w > inner {
+                rows.push(Vec::new());
+                used = 0;
+            }
+            used += w + 2;
+            let operation = b
+                .chip_operations
+                .get(index)
+                .cloned()
+                .or_else(|| b.chip_operation.clone());
+            rows.last_mut().unwrap().push((label, operation));
         }
-        for cells in wrap(&spans, inner) {
-            out.push((line(bar(()), cells, Some(width), base), chip_op.clone()));
+        for chips in rows {
+            let mut cells = Vec::new();
+            let mut ranges = Vec::new();
+            let mut at = 5;
+            for (label, operation) in chips {
+                let w = label.width();
+                ranges.push(json!({"start": at, "end": at + w, "operation": operation}));
+                cells.extend(plain_cells(&label, chip_style));
+                cells.extend(plain_cells("  ", Style::default()));
+                at += w + 2;
+            }
+            let row = Some(json!({
+                "kind": "context_chips",
+                "chips": ranges,
+                "default": b.chip_operation.clone().or_else(|| b.operation.clone()),
+            }));
+            out.push((
+                line(bar(()), cells, Some(width), base),
+                crate::copy_button::mark(&b.id, None, &row),
+            ));
         }
         out.push((
             line(
                 bar(()),
                 wrap(
                     &[Span::styled(
-                        "Click to inspect attached context",
+                        "Click an attachment to open it",
                         Style::default().fg(p.quiet),
                     )],
                     inner,
@@ -1170,6 +1224,41 @@ mod tests {
     }
 
     #[test]
+    fn user_card_chips_open_their_own_attachment() {
+        let p = Palette::new(false);
+        let image = serde_json::json!({"kind":"submitted_image","id":"m","index":2});
+        let page = serde_json::json!({"kind":"message_page","id":"m"});
+        let block = Content {
+            id: "m:user".into(),
+            kind: "user".into(),
+            title: "see [image 1]".into(),
+            chips: vec!["image 1 · a.png".into(), "document 2 · b.md · 1 KB".into()],
+            chip_operation: Some(page.clone()),
+            chip_operations: vec![image.clone(), page.clone()],
+            ..Default::default()
+        };
+        let rows = build(&block, 80, &p);
+        let (line, op) = rows
+            .iter()
+            .find(|(line, _)| line.to_string().contains("▣ Image 1"))
+            .unwrap();
+        let text = line.to_string();
+        let title_row = rows.iter().position(|(l, _)| l.to_string().contains("see [image 1]"));
+        let chip_row = rows.iter().position(|(l, _)| l.to_string().contains("▣ Image 1"));
+        assert!(title_row < chip_row, "chips sit below the message text");
+        let inner = crate::copy_button::inner(op).unwrap();
+        assert_eq!(inner["kind"], "context_chips");
+        let ranges = inner["chips"].as_array().unwrap();
+        assert_eq!(ranges.len(), 2);
+        let start = ranges[0]["start"].as_u64().unwrap() as usize;
+        let column = text.chars().take_while(|c| *c != '▣').count() - 1;
+        assert_eq!(start, column, "range starts at the chip's first cell");
+        assert_eq!(ranges[0]["operation"], image);
+        assert_eq!(ranges[1]["operation"], page);
+        assert_eq!(inner["default"], page);
+    }
+
+    #[test]
     fn user_card_fills_width_and_right_aligns_number() {
         let p = Palette::new(false);
         let block = Content {
@@ -1206,7 +1295,7 @@ mod tests {
             .flat_map(|(l, _)| l.spans.iter())
             .map(|s| s.content.as_ref())
             .collect();
-        assert!(all.contains("▣ image 1") && all.contains("Click to inspect attached context"));
+        assert!(all.contains("▣ Image 1") && all.contains("Click an attachment to open it"));
     }
 
     #[test]

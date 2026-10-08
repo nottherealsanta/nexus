@@ -771,6 +771,7 @@ dependencies = [
  "base64",
  "crossterm",
  "image",
+ "libc",
  "nexus-widgets",
  "pulldown-cmark",
  "ratatui",

@@ -522,6 +522,7 @@ loop over local state; splitting it further needs a state struct and is not done
 | --- | --- |
 | `rust/tui/src/copy_button.rs` | Hover-revealed Copy buttons on user cards and code fences: row markers, hit test, text recovery |
 | `rust/tui/src/disclosure.rs` | Rust-local transcript disclosure, session/page LRU choices and borrowed presentation |
+| `rust/tui/src/graphics.rs` | One-shot `/dev/tty` probe choosing the `ratatui-image` protocol (Kitty, Sixel, iTerm2, half blocks) and cell size; `NEXUS_IMAGE_PROTOCOL` override |
 | `rust/tui/src/local_ui.rs` | Optimistic sidebar/tab/file/log toggles with ordered acknowledgements |
 | `rust/tui/src/trace.rs` | Bounded opt-in native timing samples, percentile summaries and exit report |
 

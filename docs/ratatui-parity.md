@@ -261,7 +261,7 @@ Covered by native action regression tests and Textual functional journeys.
 | Prompts | Durable nested permission and question projection, disabled decisions, free text, arbitration feedback | Mouse choice focus and multiple-question journey checks |
 | Navigation | Searchable pickers, tabs with open/close clicks, sidebars, cross-project sessions, archive/trash/undo, model favorites/recents; `/model` picker uses shared `ui_support/model_choice.py` (freshness filter, Favorites/Recent/Recently-updated order, atomic model+effort with preselected effort); fuzzy filtering while typing is still the Rust substring filter | Focus navigation, visual group/last-tab checks |
 | Inspection | Context/tools/tasks/extensions/usage/diff/archive/export panels, explicit desktop clipboard copy | Export destination handling verification |
-| Attachments | Host preparation, eight-item limit, numbered references, previews (converted documents open their preview), clipboard images, individual removal keeping numbers (a new attachment never reuses a removed number), session-change guard while converting | Verified against the real host (`tests/test_ratatui_journeys.py`): png, txt, md, pdf and docx fixtures, labels sent with enqueue, failed conversion not attached. Not verified: rendering of submitted attachment chips (owned by `timeline.py`), clipboard on a real desktop |
+| Attachments | Host preparation, eight-item limit, numbered references, previews (converted documents open their preview), clipboard images, individual removal keeping numbers (a new attachment never reuses a removed number), session-change guard while converting | Verified against the real host (`tests/test_ratatui_journeys.py`): png, txt, md, pdf and docx fixtures, labels sent with enqueue, failed conversion not attached. Submitted attachment chips open their own image (Rust and Python unit tests). Not verified: clipboard on a real desktop |
 | Settings/providers | Scope/category editor, autosave/hash conflicts/reset/delete, default agent/model setup, login/key/code flows | Verified against the real host facade (`tests/test_ratatui_journeys.py`): nested Back stack (editor returns to its category list, lists refresh after new/delete/reset), hash conflict keeps the draft, host validation error keeps the draft, built-ins cannot be deleted and an edited agent resets to built-in, category reset lists the files it trashes, starter templates for agents/skills/mcp, API-key, Claude code, device-code, cancel/resume/logout flows, setup default selection. Not verified: Voice and Appearance/Layout reset, real browser/OAuth sign-in, Rust rendering of any of these pages |
 | Voice | Bounded capture, partial previews, final-only insertion, cancellation, preparation consent | Hardware/audio runtime verification |
 | Worktrees/Git | Review pages (cursor advances by whole 128 KiB diff pages, identity/digest pinned across pages), exact digest acknowledgement, integration/discard, explicit force discard, host confirmation tokens bound to child/review/digest | Verified against real `git init` worktrees through the real facade (`tests/test_ratatui_journeys.py`): multi-page review, acknowledge, integrate, cancel, clean discard, force discard, stale/forged token refusal, list after discard. Host bugs found and fixed: review digests were redacted to `***` by the facade and the list failed after a discard. Not verified: concurrent clients mutating the same child |
@@ -796,6 +796,7 @@ switching tabs restores text, cursor, selection and undo state, alongside pendin
 attachments and their stable numbering. This is not restart-persistent storage;
 prepared attachments retain the daemon's existing expiry policy.
 Pasted/attached images insert `[image N]` references (documents use `[document N]`).
+Large pastes (≥200 chars or ≥3 lines) collapse into one atomic `[Pasted ~N tokens]` marker (N = chars / 4); the full text is restored on submit. Pasting the same content again right after the marker expands it in place.
 The editor treats valid references as atomic navigation/deletion units; removing
 one excludes its payload from submission, and undo restores it. Up to eight
 attachments may be included in a message. The model receives the original bytes
@@ -803,11 +804,23 @@ alongside a labelled reference, not merely the marker text.
 
 Attachment More info uses `ratatui-image` for a resized native preview with name,
 media type and byte size. Image bytes come only from the daemon's bounded
-`AttachmentPreview` command, never a surface filesystem read. Rendering uses the
-library's non-query picker (half-block fallback) to avoid competing with the input
-thread for terminal capability replies. Decode dimensions/allocation are bounded;
-an undecodable image shows a labelled notice. Real graphics-protocol terminal
-rendering has not been verified.
+`AttachmentPreview` command, never a surface filesystem read. The image protocol
+is chosen once at startup (`rust/tui/src/graphics.rs`), before the event loop reads
+input: stdin/stdout are the bridge pipes, so the client asks `/dev/tty` for Kitty
+graphics support, the cell size in pixels and DA1 (Sixel), waiting at most 400 ms
+for the DA1 reply. iTerm2 and tmux come from the environment; anything else falls
+back to half blocks. `NEXUS_IMAGE_PROTOCOL` forces a protocol and skips the probe
+(the test suite sets `halfblocks`, since PTY harnesses never answer). Decode
+dimensions/allocation are bounded; an undecodable image shows a labelled notice.
+Parser covered by unit tests; real Kitty/Sixel/iTerm2 rendering not verified.
+
+Submitted user cards list attachments as highlighted chips (`▣ Image 1 · a.png`)
+below the message text, which keeps its `[image 1]` references. Each chip is its
+own click target (`chip_operations`, one per chip, carried as `context_chips`
+ranges): an image chip opens that image's preview (`submitted_image`), a document
+chip the message page; hover highlights only the chip under the pointer, and the
+keyboard opens the message page. Covered by `user_card_chips_open_their_own_attachment`
+and `test_each_attachment_chip_opens_its_own_image`.
 
 Normal sends (Enter, including attachment-only sends) steer an active turn at
 the next model step after the current operation; idle sends start a turn.
