@@ -417,6 +417,8 @@ class ShellActions:
         command = parse(text)
         if command:
             return await self.command(command.name, command.args)
+        if text.startswith("!"):
+            return await self.run_shell(text)
         try:
             await self.client.enqueue(self.controller.session, text, mode=mode,
                 attachments=[item.attachment_id for item in self.attachments],
@@ -428,6 +430,21 @@ class ShellActions:
         append_history(text)
         self.attachments.clear(); self.attachment_labels.clear()
         self.marker_attachments.clear()
+        return True
+
+    async def run_shell(self, text):
+        """``!command``: run it with bash; the output joins the context, no turn starts."""
+        command = text[1:].strip()
+        if not command:
+            self.composer_restore = text
+            raise ValueError("Type a command after ! to run it with bash")
+        try:
+            await self.client.shell(self.controller.session, command)
+        except Exception:
+            self.composer_restore = text
+            raise
+        from ...ui_support.prompt_history import append_history
+        append_history(text)
         return True
 
     def attachment_label(self, index):

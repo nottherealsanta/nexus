@@ -93,7 +93,7 @@ unsent draft; durable queued messages stay in the daemon.
   occupancy remains below it.
 - Settings navigation, configuration file editing with 700 ms autosave where the host enables it, explicit Save and confirmed delete/reset, model pickers,
   providers, tiers, titles, voice/speech, tools, skills, MCP and hooks use the native
-  shell workflows. All native slash commands remain available.
+  shell workflows (Settings → MCP shows Global then Project with no scope tab, each server as labelled rows). All native slash commands remain available.
   Typed Settings pages render the same host-projected labels, descriptions, scope,
   current values and operations as Ratatui. Theme segments, toggles, bounded choice
   lists, ordered model controls, file actions, provider sections and labelled
@@ -282,6 +282,11 @@ The composer follows Ratatui's editor → controls ordering: agent/model/effort
 choices and reported context figures share the row below the editor frame.
 The context label comes directly from the shared Ratatui projection, including
 reported pricing/window thresholds; missing limits never become invented totals.
+Shell mode: a draft starting with `!` (e.g. `!git status`) is sent unchanged as
+a normal submit and run as bash by the Python side. The composer frame turns the
+theme amber (rail and border, light and dark) and shows a `bash` chip with
+"runs in the workspace, output goes to context"; slash and `@` completion are
+suppressed for such drafts (`is_shell_draft` in `main.rs`).
 Attachments, dictation and speech are compact icons inside the frame. Context
 remains clickable. Floating sheets have a brief 140 ms entrance fade that uses a
 stable identity and does not restart on polling. New thumbnails fade in over 160 ms; there is no

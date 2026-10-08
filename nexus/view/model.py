@@ -340,6 +340,9 @@ class TurnView(_View):
     user_ts: float | None = None
     assistant_ts: float | None = None
     elapsed_ms: int | None = None
+    #: ``agent`` for a model turn; ``shell`` for a composer ``!`` run (one
+    #: user message and one ``bash`` row, no model call, no usage).
+    kind: str = "agent"
 
     @property
     def terminal(self) -> bool:

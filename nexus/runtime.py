@@ -2931,8 +2931,17 @@ class Runtime:
                         "name": status.name,
                         "transport": config.transport,
                         "command_label": command_label,
-                        "status": "connected" if status.connected else "disabled" if not status.enabled else "failed",
+                        # connected / disabled / failed / backoff / not connected (lazy, never tried)
+                        "status": ("connected" if status.connected else "disabled" if not status.enabled
+                                   else "failed" if status.health.value in {"failed", "closed"} or status.last_error
+                                   else "backoff" if status.health.value == "backoff"
+                                   else "connecting" if status.health.value == "connecting" else "not connected"),
                         "scope": getattr(self._extensions, "mcp_scopes", {}).get(status.name, "project"),
+                        "source_path": getattr(self._extensions, "mcp_sources", {}).get(status.name, ""),
+                        "url": redact_secrets(self._mcp.redact_display(config.url))[:300] if config.url else "",
+                        "ignored_keys": list(config.ignored_keys),
+                        "include_tools": list(config.include_tools)[:64],
+                        "exclude_tools": list(config.exclude_tools)[:64],
                         "config_enabled": status.enabled,
                         "enabled": status.enabled and status.name not in session.disabled_extensions["mcp"],
                         "tool_loading": (session.mcp_loading_frozen.get(status.name, "search")
@@ -2955,6 +2964,31 @@ class Runtime:
                         "resource_count": len(getattr(snapshot, "resources", ()) or ()),
                         "prompt_count": len(getattr(snapshot, "prompts", ()) or ()),
                         "error": redact_secrets(self._mcp.redact_display(str(getattr(snapshot, "error", "") or "")))[:300],
+                    })
+            if self._mcp is not None:
+                # Entries that could not be parsed, and files that could not be
+                # read, are rows too: a broken server is shown, never hidden.
+                scopes = getattr(self._extensions, "mcp_scopes", {})
+                sources = getattr(self._extensions, "mcp_sources", {})
+                for failure in tuple(getattr(self._mcp, "failures", ()))[:64]:
+                    mcp_servers.append({
+                        "name": failure.name, "status": "invalid", "invalid": True,
+                        "scope": scopes.get(failure.name, "project"), "source_path": sources.get(failure.name, ""),
+                        "transport": "", "command_label": "", "config_enabled": True, "enabled": False,
+                        "tool_loading": "search", "tool_loading_source": "default", "config_tool_loading": "search",
+                        "schema_tokens": 0, "tool_count": 0, "tools": [], "context_tokens": 0,
+                        "resource_count": 0, "prompt_count": 0,
+                        "error": redact_secrets(self._mcp.redact_display(failure.error))[:300],
+                    })
+                for problem in tuple(getattr(self._extensions, "mcp_file_errors", ()))[:8]:
+                    mcp_servers.append({
+                        "name": problem["path"], "status": "warning" if problem.get("warning") else "invalid file",
+                        "invalid": True, "file_error": True, "scope": problem["scope"], "source_path": problem["path"],
+                        "transport": "", "command_label": "", "config_enabled": True, "enabled": False,
+                        "tool_loading": "search", "tool_loading_source": "default", "config_tool_loading": "search",
+                        "schema_tokens": 0, "tool_count": 0, "tools": [], "context_tokens": 0,
+                        "resource_count": 0, "prompt_count": 0,
+                        "error": redact_secrets(self._mcp.redact_display(str(problem["error"])))[:300],
                     })
             return {
                 "context_locked": session.context_locked,

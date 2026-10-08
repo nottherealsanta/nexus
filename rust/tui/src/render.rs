@@ -1292,7 +1292,12 @@ pub fn draw(
         width: a.width.saturating_sub(left + right),
         ..a
     };
-    let agent_color = crate::transcript::color(&s.agent_color, p.blue, &p);
+    let shell = is_shell_draft(draft);
+    let agent_color = if shell {
+        p.warning
+    } else {
+        crate::transcript::color(&s.agent_color, p.blue, &p)
+    };
     // The composer draws on its own background; `panel` stays for other surfaces.
     let cp = Palette {
         panel: p.composer,
@@ -1399,7 +1404,16 @@ pub fn draw(
                 }
             }
         }
-        if displayed.text.is_empty() {
+        if displayed.text == "!" && draft.cursor == 1 {
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::styled("!", Style::default().fg(p.warning).add_modifier(Modifier::BOLD)),
+                    Span::styled("type a bash command", Style::default().fg(p.quiet)),
+                ]))
+                .style(Style::default().bg(cp.panel)),
+                editor_area,
+            );
+        } else if displayed.text.is_empty() {
             frame.render_widget(
                 Paragraph::new(Line::from(vec![
                     Span::styled("T", Style::default().bg(p.text).fg(p.background)),
@@ -1437,6 +1451,31 @@ pub fn draw(
             ),
         );
         draw_queue_box(frame, r.composer, s, &cp);
+        if shell {
+            // The blank row between the text and the controls names the mode.
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::styled(
+                        " ! bash ",
+                        Style::default()
+                            .fg(p.background)
+                            .bg(p.warning)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        SHELL_HINT,
+                        Style::default().fg(p.warning),
+                    ),
+                ]))
+                .style(Style::default().bg(cp.panel)),
+                Rect {
+                    x: box_area.x + 3,
+                    y: rows[2].y.saturating_sub(1),
+                    width: box_area.width.saturating_sub(5),
+                    height: 1,
+                },
+            );
+        }
         let controls = Rect {
             x: box_area.x + 3,
             y: rows[2].y,
@@ -3294,6 +3333,42 @@ mod editor_layout_tests {
     }
 
     #[test]
+    fn shell_drafts_show_a_bash_indicator_and_warning_rail() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let s = Snapshot::default();
+        let p = Palette::new(false);
+        let mut cache = Cache::default();
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        for (text, shell) in [("!git status", true), ("!", true), ("git status", false), ("", false)] {
+            let mut editor = Editor::default();
+            editor.insert(text);
+            let mut composer = Rect::default();
+            terminal
+                .draw(|frame| {
+                    composer = draw(
+                        frame, &s, &editor, &Editor::default(), &Editor::default(), "",
+                        0, 0, 0, &mut cache, false, false, false, false, 0, 0, 0,
+                    )
+                    .composer;
+                })
+                .unwrap();
+            let rows = composer_rows(composer, &s);
+            let buffer = terminal.backend().buffer();
+            let line = |y: u16| -> String {
+                (composer.x..composer.right()).map(|x| buffer[(x, y)].symbol().to_string()).collect()
+            };
+            let hint = line(rows[2].y - 1);
+            assert_eq!(hint.contains("! bash"), shell, "{text:?}: {hint:?}");
+            assert_eq!(hint.contains("output goes to context"), shell, "{text:?}");
+            let rail = &buffer[(rows[1].x + 2, rows[1].y)];
+            assert_eq!(rail.fg == p.warning, shell, "{text:?}: rail colour");
+            if text == "!" {
+                assert!(line(rows[1].y + 1).contains("type a bash command"));
+            }
+        }
+    }
+
+    #[test]
     fn composer_keeps_a_blank_row_above_the_controls() {
         use ratatui::{backend::TestBackend, Terminal};
         let s = Snapshot::default();
@@ -3558,6 +3633,11 @@ mod history_benchmark {
     }
 }
 
+/// Shell mode: a draft starting with `!` runs the rest as bash in the workspace.
+pub fn is_shell_draft(draft: &Editor) -> bool {
+    draft.text.starts_with('!')
+}
+const SHELL_HINT: &str = " Enter runs in the workspace · output goes to context";
 pub fn composer_rows(area: Rect, s: &Snapshot) -> Vec<Rect> {
     Layout::vertical([
         Constraint::Length(1 + above_card_rows(s)), // the last row is a blank margin

@@ -267,6 +267,9 @@ pub struct Session {
     pub state: String,
     #[serde(default)]
     pub status: String,
+    /// Compact "N messages · age" line; the desktop sessions list shows it.
+    #[serde(default)]
+    pub sub: String,
     #[serde(default)]
     pub active: bool,
     /// The project's display name and the local day label of the session's group.

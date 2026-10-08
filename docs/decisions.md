@@ -39,6 +39,7 @@ paths themselves. See [desktop.md](desktop.md).
 | **Per-turn freeze** of config, environment, `SOUL/MEMORY/AGENTS`, tool catalogue; one manifest generation per loop iteration. | Determinism and prompt-cache stability; a reload is visible next iteration/turn. | `runtime.py`, `context/manager.py` |
 | **Tool-level failures are model-visible results; harness-level failures end the turn.** | The model can self-correct; the user sees real failures. | [loop.md](loop.md#failure-handling) |
 | **Assistant message is persisted before any tool runs.** | No provider accepts a result without its call; crash recovery closes dangling calls without executing. | `core/loop.py` |
+| **Recovery closes turns and `!` runs a stopped process left open** (`turn.failed`/`shell.completed`, reason `interrupted`). Turns: proven dead by the session lock. `!` runs hold no lock: closed only when not live in this process and the recorded `pid` is gone. | A replay must never show work as running that nothing runs. A `!` run gets no lock because it must not block turns. | `session/session.py` |
 | **Whole-batch permission check before any tool runs.** | One approval covers several calls; a denial never leaves half a batch executed. | `core/loop.py` |
 | **Fallback models only on a provider error that produced no output.** A refusal or partial stream never falls back; no mid-stream rerouting. | Avoid duplicated or inconsistent output. | `model/router.py`, `core/loop.py` |
 | **Switching provider mid-session is allowed, lossy and visible** (`context.degraded`). | Flexibility without silent corruption. | `model/capabilities.py` |
@@ -114,6 +115,16 @@ paths themselves. See [desktop.md](desktop.md).
 | **No line caps;** new terminal behavior still gets its own module. | Caps produced contortions; layering is what matters. | `tests/test_phase3_exit.py` |
 | **Conventional Commits drive versions; never edit `version` or `CHANGELOG.md` by hand.** A version-bump request defaults to the next patch and authorises the full release; a minor bump needs explicit approval. | release-please owns the files; patch releases should be cheap. | [release.md](release.md) |
 | **Docs are the source of truth; code wins over plans.** | Agents need one place to look. | [README.md](README.md) |
+
+## mcp.json reads other clients' dialects (2026-10)
+
+People paste MCP config from VS Code, Claude Code, Cursor or OpenCode; refusing
+`type`, an argv `command` or `${VAR}` made those servers vanish silently. Each
+entry is now folded into Nexus keys first, foreign approval/OAuth keys are
+accepted but shown as ignored (never acted on), any other unknown key still fails
+that one server, and failures are rows in Settings and the context header. `${VAR}`
+now expands like Claude Code (it used to be literal); bare `$VAR` stays literal.
+Each file is isolated, so a broken project file no longer freezes the global set.
 
 ## Known gaps and drift (as of this writing)
 
@@ -514,3 +525,13 @@ are refused. It asks with a plain `[y/N]` after listing every path and size, and
 `--yes` without a terminal. The Hugging Face cache is shared with other tools, so only
 the two speech model folders are removed. Project files are not Nexus state and are kept.
 
+## Composer `!` shell output is context, not a prompt
+
+`!command` runs with bash and its bounded output is added to the model context
+as a user message without starting a turn: the user is showing the agent
+something, not asking it to act. During a turn the output waits for the next
+safe boundary (never between a tool call and its result) and does not extend
+the turn. Each run is drawn as a `shell` turn reusing the `bash` tool row, so
+the user sees exactly what the agent will see. Shell output (tool and `!`)
+is capped at 2,000 lines or 50 KiB; the full text goes to a private temp file
+named in the result instead of being silently cut.

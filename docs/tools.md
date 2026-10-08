@@ -176,10 +176,43 @@ events, or reprs; a command can still explicitly print its own environment.
   also bounds every background job. Cancel while blocking kills the process
   group; cancel during `wait` stops waiting and leaves the job running.
 - Throttled `tool.progress` events (last output line, 1 per 2s, ≤ 300 per call).
-  Truncated output keeps head and tail. Shells are an allow-list
+  Output limit (`builtin/_output_limit.py`): a result shows at most 2,000
+  lines or 50 KiB of output. Larger output keeps head (40%) and tail (60%) and
+  a notice; the full text is written to a private temp file
+  (`$TMPDIR/nexus-output-<uid>/`, dir `0700`, file `0600`, newest 200 kept;
+  `NEXUS_OUTPUT_DIR` overrides) whose path the notice names, so the agent can
+  `read` or `grep` the rest. The 1 MiB per-stream capture cap still applies
+  before that. Shells are an allow-list
   (`/bin/sh`, `/bin/bash`, `/bin/zsh`); `workdir` must be inside the workspace.
 - Not done: completion notifications for jobs still running at turn end.
 - Tests: `tests/test_builtin_bash_*.py`; scenario `/mock bash-wait`.
+
+### Shell mode (`!` in the composer)
+
+A composer draft starting with `!` runs the rest with `/bin/bash -c` in the
+workspace (`host_support/user_shell.py`, host command `SessionShell`). It is
+the user's own command, so no permission rule is consulted; it uses the
+runtime's `JobRegistry` (same environment, capture cap and process-group
+kill) and is bounded by `tools.bash_max_s`, 16,000 command characters and 4
+concurrent runs per session. Stop (`SessionCancel`) kills running `!` commands.
+
+- Durable events `shell.started` / `shell.completed` (`command`, `status`
+  completed/failed/timed_out/cancelled, `exit_code`, `duration_ms`, `output`,
+  `output_path`, `context`). The reducer draws each run as a `kind="shell"`
+  turn: the `!command` user message and one `bash` tool row.
+- The output uses the same limit as `bash` and is added to model context as a
+  user message (`Session.add_context`). **It never starts a turn.** Idle: it
+  is appended at once. During a turn it is held and appended at the next safe
+  boundary (top of the next iteration, or after a final reply), never between
+  a tool call and its result, and it never makes the loop take another step.
+- A Stop that lands before a run's task starts still records a cancelled
+  `shell.completed`, so no row is left looking like it is running.
+- A run the daemon never finished (a crash or `kill -9`) is closed on the next
+  open as `interrupted · not added to context`; its output is lost
+  ([sessions.md](sessions.md) crash recovery). `shell.started` records the
+  daemon `pid` for this.
+- Not done: a daemon crash while a turn holds a deferred result loses it from
+  model context (the timeline still shows it); no live progress rows.
 
 ## Adding or changing a tool
 

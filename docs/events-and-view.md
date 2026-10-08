@@ -39,6 +39,7 @@ names and `agent.selected`.
 | agent | `agent.spawned` `agent.completed` `agent.clamped` (and `agent.selected`) |
 | hook | `hook.fired` `hook.blocked` |
 | input | `input.started` `input.queued` `input.moved` `input.consumed` `input.dropped` |
+| shell | `shell.started` `shell.completed`: a composer `!` run, turn-less; reduced to a `TurnView(kind="shell")` with one `bash` row ([tools.md](tools.md#shell-mode--in-the-composer)) |
 | presence | `presence.joined` `presence.left` (count, not identity) |
 | daemon | `daemon.started` `daemon.stopping` `daemon.session_scheduled` `daemon.session_queued` |
 | misc | `provider.raw` `error` `registry.refreshed` `registry.stale` `registry.failed` `registry.mismatch` |

@@ -77,6 +77,7 @@ def test_catalogue_group_names_and_order():
         "agent",
         "hook",
         "input",
+        "shell",
         "presence",
         "daemon",
         "misc",

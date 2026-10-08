@@ -125,7 +125,22 @@ _MAX_FRAME_BYTES = 8 * 1024 * 1024
 _MAX_QUEUED_FRAMES = 1024
 
 #: The only interpolation form. ``${env:VAR}`` where VAR is a shell-style name.
-_ENV_REF = re.compile(r"\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}")
+#: Every interpolation form the common ``mcp.json`` dialects use: ``${env:VAR}``
+#: (VS Code, Cursor), ``${VAR}`` and ``${VAR:-default}`` (Claude Code),
+#: ``{env:VAR}`` (OpenCode), the editor variables ``${workspaceFolder}``,
+#: ``${workspaceFolderBasename}``, ``${userHome}``, ``${pathSeparator}`` and
+#: ``${/}``, and VS Code's ``${input:id}`` (refused: Nexus never prompts). A
+#: bare ``$VAR`` is never expanded.
+_ENV_REF = re.compile(
+    r"\$\{env:(?P<env>[A-Za-z_][A-Za-z0-9_]*)\}"
+    r"|(?<!\$)\{env:(?P<oc>[A-Za-z_][A-Za-z0-9_]*)\}"
+    r"|\$\{input:(?P<input>[^}]*)\}"
+    r"|\$\{(?P<slash>/)\}"
+    r"|\$\{(?P<var>[A-Za-z_][A-Za-z0-9_]*)(?::-(?P<default>[^}]*))?\}"
+)
+_EDITOR_VARS = frozenset({"workspaceFolder", "workspaceFolderBasename", "userHome", "pathSeparator"})
+#: An ``envFile`` larger than this is refused rather than read.
+_MAX_ENV_FILE_BYTES = 65_536
 
 #: Values shorter than this are not tracked as secrets: replacing "1" or "on"
 #: everywhere in a diagnostic would mangle the message without protecting
@@ -427,16 +442,33 @@ def _interpolate(
     *,
     field_name: str,
     secrets: list[str],
+    places: Mapping[str, str] | None = None,
 ) -> str:
-    """Resolve only explicit ``${env:VAR}`` references.
+    """Resolve the ``${...}`` forms listed at :data:`_ENV_REF`.
 
-    A missing variable is an error naming the variable (never a value); a bare
-    ``$VAR`` or ``${VAR}`` is left untouched rather than expanded.
+    A missing variable without a ``:-default`` is an error naming the variable
+    (never a value); every resolved environment value is tracked as a secret.
+    Editor variables (``${workspaceFolder}``…) come from ``places`` and are not
+    secrets. A bare ``$VAR`` is left untouched.
     """
+    places = places or {}
 
     def replace(match: re.Match[str]) -> str:
-        name = match.group(1)
+        if match.group("input") is not None:
+            raise MCPConfigError(
+                f"{field_name}: ${{input:{match.group('input')}}} prompts are not "
+                "supported; use ${env:VAR} instead"
+            )
+        if match.group("slash"):
+            return os.sep
+        name = match.group("env") or match.group("oc") or match.group("var")
+        if match.group("var") and name in _EDITOR_VARS:
+            if name not in places:
+                raise MCPConfigError(f"{field_name}: ${{{name}}} is not available here")
+            return places[name]
         if name not in environ:
+            if match.group("default") is not None:
+                return match.group("default")
             raise MCPConfigError(
                 f"{field_name}: environment variable {name!r} is not set"
             )
@@ -448,6 +480,169 @@ def _interpolate(
     if "\x00" in result:
         raise MCPConfigError(f"{field_name} contains a NUL byte")
     return result
+
+
+def _places(workspace: str | os.PathLike[str] | None, home: str | os.PathLike[str] | None) -> dict[str, str]:
+    places = {"userHome": str(Path(home) if home is not None else Path.home()), "pathSeparator": os.sep}
+    if workspace is not None:
+        places["workspaceFolder"] = str(Path(workspace))
+        places["workspaceFolderBasename"] = Path(workspace).name
+    return places
+
+
+def _read_env_file(path_text: str, *, base: str | os.PathLike[str] | None, field_name: str) -> dict[str, str]:
+    """Parse a bounded dotenv file: ``KEY=VALUE`` lines, ``export``, quotes, ``#`` comments."""
+    path = Path(path_text).expanduser()
+    if not path.is_absolute():
+        path = Path(base or ".") / path
+    try:
+        if path.stat().st_size > _MAX_ENV_FILE_BYTES:
+            raise MCPConfigError(f"{field_name}: {path.name} exceeds {_MAX_ENV_FILE_BYTES} bytes")
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise MCPConfigError(f"{field_name}: cannot read {path.name} ({type(exc).__name__})") from None
+    out: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        line = line.removeprefix("export ").lstrip()
+        key, sep, value = line.partition("=")
+        key = key.strip()
+        if not sep or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        elif " #" in value:
+            value = value.split(" #", 1)[0].rstrip()
+        if "\x00" not in value:
+            out[key] = value
+    return out
+
+
+#: Per-server keys other MCP clients write that Nexus accepts and shows but does
+#: not act on (approval lists, trust flags, OAuth blocks, catalogue metadata).
+#: The permission engine stays the only approval boundary.
+IGNORED_SERVER_KEYS = frozenset({
+    "autoApprove", "alwaysAllow", "trust", "description", "oauth", "gallery",
+    "version", "dev", "icon", "source", "networkTimeout", "settings",
+    "auth", "headersHelper", "sandboxEnabled", "watchPaths",
+})
+
+_TRANSPORT_ALIASES = {
+    "stdio": "stdio", "local": "stdio",
+    "http": "http", "streamable-http": "http", "streamable_http": "http",
+    "streamableHttp": "http", "remote": "http",
+    "sse": "sse",
+}
+
+
+def server_enabled(name: str, raw: Mapping[str, Any]) -> bool:
+    """The entry's on/off switch: ``enabled`` (Nexus, OpenCode) or ``disabled`` (Claude Desktop, Cline, Windsurf)."""
+    enabled = raw.get("enabled", True)
+    disabled = raw.get("disabled", False)
+    if not isinstance(enabled, bool):
+        raise MCPConfigError(f"server {name!r}: enabled must be a bool")
+    if not isinstance(disabled, bool):
+        raise MCPConfigError(f"server {name!r}: disabled must be a bool")
+    return enabled and not disabled
+
+
+def normalize_server_entry(name: str, raw: Mapping[str, Any]) -> tuple[dict[str, Any], tuple[str, ...]]:
+    """Fold one entry written in any common ``mcp.json`` dialect into Nexus keys.
+
+    Accepted besides the Nexus keys: ``type`` / ``transportType`` (``stdio``,
+    ``local``, ``http``, ``streamable-http``, ``remote``, ``sse``); ``command``
+    as an argv list (OpenCode) or a ``{path, args, env}`` object (Zed);
+    ``environment`` (OpenCode); ``envFile``; ``serverUrl`` (Windsurf) and
+    ``httpUrl`` (Gemini); ``timeout`` (milliseconds when ≥ 1000, otherwise
+    seconds); ``includeTools`` / ``excludeTools`` / ``disabledTools``;
+    ``enabled`` / ``disabled``; ``alwaysLoad`` (Claude Code) as
+    ``tool_loading = "all"``. A URL without a transport is HTTP, or SSE when
+    its path ends in ``/sse``. Returns the canonical mapping and the keys that
+    were accepted but are ignored (:data:`IGNORED_SERVER_KEYS`). Structural
+    errors raise :class:`MCPConfigError`; nothing is interpolated here.
+    """
+    if not isinstance(raw, Mapping):
+        raise MCPConfigError(f"server {name!r} must be an object")
+    data = dict(raw)
+    data.pop("enabled", None)
+    data.pop("disabled", None)
+    ignored = tuple(sorted(key for key in data if key in IGNORED_SERVER_KEYS))
+    for key in ignored:
+        data.pop(key)
+
+    kinds = {key: data.pop(key) for key in ("transport", "type", "transportType") if key in data}
+    transports: set[str] = set()
+    for key, value in kinds.items():
+        if not isinstance(value, str) or value not in _TRANSPORT_ALIASES:
+            raise MCPConfigError(
+                f"server {name!r}: {key} {value!r} is not supported; use one of "
+                + ", ".join(sorted(_TRANSPORT_ALIASES))
+            )
+        transports.add(_TRANSPORT_ALIASES[value])
+    if len(transports) > 1:
+        raise MCPConfigError(f"server {name!r}: {' and '.join(kinds)} disagree")
+
+    def take_alias(target: str, *aliases: str) -> None:
+        present = [key for key in (target, *aliases) if key in data]
+        if len(present) > 1:
+            raise MCPConfigError(f"server {name!r}: set only one of {', '.join(present)}")
+        if present and present[0] != target:
+            data[target] = data.pop(present[0])
+
+    take_alias("env", "environment")
+    if isinstance(data.get("env"), Mapping):  # VS Code allows number and null values
+        data["env"] = {key: value if isinstance(value, str) else str(value).lower() if isinstance(value, bool) else str(value)
+                       for key, value in data["env"].items() if value is not None}
+    if "alwaysLoad" in data:  # Claude Code: send every schema up front
+        always = data.pop("alwaysLoad")
+        if not isinstance(always, bool):
+            raise MCPConfigError(f"server {name!r}: alwaysLoad must be a bool")
+        if always:
+            data.setdefault("tool_loading", "all")
+    take_alias("env_file", "envFile")
+    if "httpUrl" in data:
+        transports.add("http")
+        if len(transports) > 1:
+            raise MCPConfigError(f"server {name!r}: httpUrl is Streamable HTTP but the transport says otherwise")
+    take_alias("url", "serverUrl", "httpUrl")
+    take_alias("exclude_tools", "excludeTools", "disabledTools")
+    take_alias("include_tools", "includeTools")
+
+    command = data.get("command")
+    if isinstance(command, Mapping):  # Zed: {"path": ..., "args": [...], "env": {...}}
+        extra = sorted(set(command) - {"path", "args", "env"})
+        if extra:
+            raise MCPConfigError(f"server {name!r}: command has unknown keys: {', '.join(extra)}")
+        if "args" in data or "env" in data and "env" in command:
+            raise MCPConfigError(f"server {name!r}: set args/env either inside command or beside it")
+        data["command"] = command.get("path", "")
+        if "args" in command:
+            data["args"] = command["args"]
+        if "env" in command:
+            data["env"] = command["env"]
+    elif isinstance(command, (list, tuple)):  # OpenCode: one argv list
+        argv = _string_list(command, field_name=f"{name}.command")
+        if not argv:
+            raise MCPConfigError(f"server {name!r}: command list is empty")
+        data["command"] = argv[0]
+        data["args"] = [*argv[1:], *_string_list(data.get("args"), field_name=f"{name}.args")]
+
+    if "timeout" in data:
+        value = data.pop("timeout")
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not value > 0:
+            raise MCPConfigError(f"server {name!r}: timeout must be a positive number")
+        data.setdefault("call_timeout_s", value / 1000 if value >= 1000 else float(value))
+
+    if transports:
+        data["transport"] = transports.pop()
+    elif data.get("url") and not data.get("command"):
+        url = data["url"]
+        path = urlsplit(url).path.rstrip("/") if isinstance(url, str) else ""
+        data["transport"] = "sse" if path.endswith("/sse") else "http"
+    return data, ignored
 
 
 @dataclass(frozen=True, slots=True)
@@ -475,6 +670,16 @@ class MCPServerConfig:
     secrets: tuple[str, ...] = ()
     tool_loading: str = "search"
     tool_loading_source: str = "default"
+    include_tools: tuple[str, ...] = ()
+    exclude_tools: tuple[str, ...] = ()
+    #: Keys from another client's dialect that were accepted but are not acted on.
+    ignored_keys: tuple[str, ...] = ()
+
+    def allows_tool(self, tool: str) -> bool:
+        """``includeTools`` keeps only the listed tools; ``excludeTools`` then removes some."""
+        if self.include_tools and tool not in self.include_tools:
+            return False
+        return tool not in self.exclude_tools
 
     def redact(self, text: str) -> str:
         """Redact this server's secrets and credential shapes from ``text``."""
@@ -498,18 +703,24 @@ def parse_server_config(
     raw: Mapping[str, Any],
     *,
     environ: Mapping[str, str] | None = None,
+    workspace: str | os.PathLike[str] | None = None,
+    home: str | os.PathLike[str] | None = None,
 ) -> MCPServerConfig:
     """Validate one ``mcp.json`` server entry into a normalized config.
 
-    Only the documented keys are accepted; a typo is a :class:`MCPConfigError`
-    rather than silently ignored. Interpolation is explicit ``${env:VAR}``
-    applied to ``command``/``args``/``env``/``cwd``/``url``/``headers``.
+    The entry is first folded from its dialect by :func:`normalize_server_entry`;
+    any other key is a :class:`MCPConfigError` rather than silently ignored.
+    Interpolation (:data:`_ENV_REF`) applies to ``command``/``args``/``env``/
+    ``env_file``/``cwd``/``url``/``headers``. ``env_file`` values sit under
+    ``env`` (explicit ``env`` keys win).
     """
     if not isinstance(name, str) or not name.strip():
         raise MCPConfigError("MCP server name must be a non-empty string")
     if not isinstance(raw, Mapping):
         raise MCPConfigError(f"server {name!r} must be an object")
     source = os.environ if environ is None else environ
+    raw, ignored = normalize_server_entry(name, raw)
+    places = _places(workspace, home)
 
     allowed = {
         "transport",
@@ -524,6 +735,9 @@ def parse_server_config(
         "list_timeout_s",
         "call_timeout_s",
         "tool_loading",
+        "env_file",
+        "include_tools",
+        "exclude_tools",
     }
     unknown = sorted(set(raw) - allowed)
     if unknown:
@@ -545,35 +759,43 @@ def parse_server_config(
     if command is not None and not isinstance(command, str):
         raise MCPConfigError(f"server {name!r}: command must be a string")
     command = _interpolate(
-        command or "", source, field_name=f"{name}.command", secrets=secrets
+        command or "", source, field_name=f"{name}.command", secrets=secrets, places=places
     )
 
     args = _string_list(raw.get("args"), field_name=f"{name}.args")
     args = tuple(
-        _interpolate(arg, source, field_name=f"{name}.args", secrets=secrets)
+        _interpolate(arg, source, field_name=f"{name}.args", secrets=secrets, places=places)
         for arg in args
     )
 
+    env_file = raw.get("env_file", "")
+    if env_file is not None and not isinstance(env_file, str):
+        raise MCPConfigError(f"server {name!r}: envFile must be a string")
+    env_file = _interpolate(env_file or "", source, field_name=f"{name}.envFile", secrets=secrets, places=places)
     env = {
         key: _interpolate(
-            value, source, field_name=f"{name}.env.{key}", secrets=secrets
+            value, source, field_name=f"{name}.env.{key}", secrets=secrets, places=places
         )
         for key, value in _string_map(raw.get("env"), field_name=f"{name}.env").items()
     }
 
+    if env_file:
+        loaded = _read_env_file(env_file, base=workspace, field_name=f"{name}.envFile")
+        env = {**loaded, **env}
+
     cwd = raw.get("cwd", "")
     if cwd is not None and not isinstance(cwd, str):
         raise MCPConfigError(f"server {name!r}: cwd must be a string")
-    cwd = _interpolate(cwd or "", source, field_name=f"{name}.cwd", secrets=secrets)
+    cwd = _interpolate(cwd or "", source, field_name=f"{name}.cwd", secrets=secrets, places=places)
 
     url = raw.get("url", "")
     if url is not None and not isinstance(url, str):
         raise MCPConfigError(f"server {name!r}: url must be a string")
-    url = _interpolate(url or "", source, field_name=f"{name}.url", secrets=secrets)
+    url = _interpolate(url or "", source, field_name=f"{name}.url", secrets=secrets, places=places)
 
     headers = {
         key: _interpolate(
-            value, source, field_name=f"{name}.headers.{key}", secrets=secrets
+            value, source, field_name=f"{name}.headers.{key}", secrets=secrets, places=places
         )
         for key, value in _string_map(
             raw.get("headers"), field_name=f"{name}.headers"
@@ -614,6 +836,9 @@ def parse_server_config(
         call_timeout_s=_timeout(raw, "call_timeout_s", DEFAULT_CALL_TIMEOUT_S),
         tool_loading=tool_loading,
         tool_loading_source="config" if "tool_loading" in raw else "default",
+        include_tools=_string_list(raw.get("include_tools"), field_name=f"{name}.includeTools"),
+        exclude_tools=_string_list(raw.get("exclude_tools"), field_name=f"{name}.excludeTools"),
+        ignored_keys=ignored,
         secrets=tuple(dict.fromkeys(secrets)),
     )
 

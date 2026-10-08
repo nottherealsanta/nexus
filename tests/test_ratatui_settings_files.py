@@ -53,7 +53,7 @@ def _labels(shell):
 
 @pytest.mark.asyncio
 async def test_scope_control_only_where_a_page_can_differ_per_project(shell):
-    for area, scoped in [("agents", False), ("tools", True), ("skills", True), ("mcp", True)]:
+    for area, scoped in [("agents", False), ("tools", True), ("skills", True), ("mcp", False)]:
         await shell.workflows.settings_area(area)
         page = shell.workflows.settings_page
         assert (page["scope"] is not None) == scoped, area
@@ -94,24 +94,51 @@ async def test_a_file_row_edits_through_the_host_editor_and_new_file_and_reset_a
 
 
 @pytest.mark.asyncio
-async def test_mcp_shows_each_servers_state_for_the_scope_with_switch_and_loading(shell):
+async def test_mcp_shows_global_then_project_servers_with_state_switch_and_loading(shell):
+    shell.client.inspect_context = AsyncMock(return_value=SimpleNamespace(mcp_servers=[
+        {"name": "github", "scope": "global", "config_enabled": True, "config_tool_loading": "search", "tool_count": 31, "status": "connected",
+         "schema_tokens": 4100, "transport": "stdio", "command_label": "docker (14 args)", "source_path": "~/.nexus/mcp.json",
+         "resource_count": 2, "include_tools": ["a"], "ignored_keys": ["autoApprove"]},
+        {"name": "postgres", "scope": "project", "config_enabled": False, "config_tool_loading": "all", "tool_count": 0, "status": "failed",
+         "error": "exit 1", "transport": "http", "url": "https://x/mcp", "source_path": ".agents/mcp.json"},
+        {"name": "bad", "scope": "project", "invalid": True, "status": "invalid", "error": "command must be a string", "source_path": ".agents/mcp.json"},
+        {"name": "/w/.agents/mcp.json", "scope": "project", "file_error": True, "status": "warning", "error": "ignored top-level keys: x"}]))
     await shell.workflows.settings_area("mcp")
-    sections = [b for b in _blocks(shell) if b.get("t") == "section"]
-    assert [s["title"] for s in sections] == ["github"], "only this scope's servers"
-    assert sections[0]["summary"] == "running · 31 tools" and sections[0]["tone"] == "success"
-    rows = {b["id"]: b for b in sections[0]["blocks"] if b.get("t") == "row"}
-    assert rows["github:on"]["control"]["on"] is True
-    loading = rows["github:load"]["control"]
+    assert shell.workflows.settings_page["scope"] is None
+    top = shell.workflows.settings_page["blocks"]
+    headings = [b["text"] for b in top if b.get("t") == "heading"]
+    assert headings[0] == "GLOBAL · ~/.nexus/mcp.json" and "PROJECT · <workspace>/.agents/mcp.json" in headings
+    assert [b["title"] for b in top if b.get("t") == "section"] == ["github", "postgres", "bad"]
+    assert any(b.get("t") == "callout" and b["level"] == "warning" for b in top)
+    sections = {b["title"]: b for b in top if b.get("t") == "section"}
+    assert sections["github"]["summary"] == "connected · stdio · 31 tools" and sections["github"]["tone"] == "success"
+    rows = {b["id"].split(":", 2)[2]: b for b in sections["github"]["blocks"] if b.get("t") == "row"}
+    assert rows["target"]["control"]["value"] == "docker (14 args)" and rows["filters"]["control"]["value"] == "include a"
+    assert rows["ignored"]["control"]["value"] == "autoApprove" and "does not act" in rows["ignored"]["description"]
+    assert rows["tools"]["control"]["value"] == "31 tools · 2 resources"
+    assert rows["on"]["control"]["on"] is True
+    loading = rows["load"]["control"]
     assert loading["options"] == ["Search", "All"] and loading["values"] == ["search", "all"] and loading["active"] == 0
-    assert "~4100 tokens" in rows["github:load"]["description"]
-    await shell.workflows.operate({**rows["github:on"]["control"]["operation"], "value": False})
+    assert "~4100 tokens" in rows["load"]["description"]
+    await shell.workflows.operate({**rows["on"]["control"]["operation"], "value": False})
     shell.client.settings_mcp_enabled_set.assert_awaited_once_with("global", "github", False, "h")
     await shell.workflows.operate({**loading["operation"], "value": "all"})
     shell.client.settings_mcp_loading_set.assert_awaited_once_with("global", "github", "all", "h")
-    # The other scope shows its own server, off and failed, with the reason visible.
-    await shell.workflows.operate({**shell.workflows.settings_page["scope"]["operation"], "value": 1})
-    section = next(b for b in _blocks(shell) if b.get("t") == "section")
-    assert section["title"] == "postgres" and section["tone"] == "error" and section["summary"] == "failed: exit 1 · 0 tools · off"
+    pg = sections["postgres"]
+    assert pg["tone"] == "error" and pg["summary"] == "failed · http · 0 tools · off"
+    assert next(b for b in pg["blocks"] if b["id"].endswith(":status"))["control"]["value"] == "failed: exit 1"
+    bad = sections["bad"]
+    assert bad["tone"] == "error" and not any(b["id"].endswith((":on", ":load")) for b in bad["blocks"])
+    new_files = [i["operation"] for b in top if b.get("t") == "buttons" for i in b["items"] if i["label"] == "New file"]
+    assert [o["scope"] for o in new_files] == ["global", "project"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_empty_scope_says_where_a_new_file_goes(shell):
+    shell.client.inspect_context = AsyncMock(return_value=SimpleNamespace(mcp_servers=[]))
+    await shell.workflows.settings_area("mcp")
+    notes = [b["text"] for b in shell.workflows.settings_page["blocks"] if b.get("t") == "note"]
+    assert "No servers in <workspace>/.agents/mcp.json. New file creates one." in notes
 
 
 @pytest.mark.asyncio
@@ -128,7 +155,7 @@ async def test_mcp_edit_conflicts_are_reported_not_overwritten(shell):
 async def test_mcp_page_still_lists_files_when_live_server_state_is_unavailable(shell):
     shell.client.inspect_context = AsyncMock(side_effect=RuntimeError("no session"))
     await shell.workflows.settings_area("mcp")
-    assert "mcp.json" in _labels(shell) and not any(b.get("t") == "section" for b in _blocks(shell))
+    assert "mcp.json" in _labels(shell) and not any(b.get("t") == "section" and b["id"].startswith("srv-") for b in _blocks(shell))
     assert shell.toasts[-1]["level"] == "warning"
 
 

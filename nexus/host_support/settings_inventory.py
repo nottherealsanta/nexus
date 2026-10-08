@@ -193,9 +193,19 @@ def _validate(category: str, item_id: str, body: str) -> None:
         document = _strict_json_object(body)
         if not isinstance(document, dict):
             raise ConfigError("mcp.json root must be an object")
-        servers = document.get("mcpServers", {})
-        if not isinstance(servers, dict) or any(not isinstance(key, str) for key in servers):
-            raise ConfigError("mcpServers must be an object with string keys")
+        from ..ext.manager import _MCP_SERVER_MAPS
+        from ..mcp.client import normalize_server_entry, server_enabled
+        from ..mcp.errors import MCPConfigError
+        for key in _MCP_SERVER_MAPS:
+            servers = document.get(key, {})
+            if not isinstance(servers, dict) or any(not isinstance(name, str) for name in servers):
+                raise ConfigError(f"{key} must be an object with string keys")
+            for name, entry in servers.items():
+                try:
+                    server_enabled(name, entry if isinstance(entry, dict) else {})
+                    normalize_server_entry(name, entry)
+                except MCPConfigError as exc:
+                    raise ConfigError(str(exc)) from None
 
 
 def write(runtime: object, scope: str, category: str, item_id: str, body: str, expected_sha256: str | None) -> dict[str, Any]:
@@ -233,7 +243,21 @@ def patch_mcp_loading(body: str, server: str, mode: str) -> str:
 def patch_mcp_enabled(body: str, server: str, enabled: bool) -> str:
     if not isinstance(enabled, bool):
         raise ConfigError("MCP enabled must be a bool")
+    from ..ext.manager import _strict_json_object
+    try:
+        document = _strict_json_object(body)
+    except (ValueError, TypeError):
+        document = {}
+    entry = next((block.get(server) for block in (document.get(key) for key in _server_maps(document))
+                  if isinstance(block, dict) and isinstance(block.get(server), dict)), None) if isinstance(document, dict) else None
+    if isinstance(entry, dict) and "disabled" in entry and "enabled" not in entry:
+        return _patch_mcp_value(body, server, "disabled", not enabled)  # Claude Desktop / Cline dialect
     return _patch_mcp_value(body, server, "enabled", enabled)
+
+
+def _server_maps(document: dict) -> list[str]:
+    from ..ext.manager import _MCP_SERVER_MAPS
+    return [key for key in _MCP_SERVER_MAPS if key in document]
 
 
 def _patch_mcp_value(body: str, server: str, key: str, new_value: object) -> str:
@@ -250,8 +274,9 @@ def _patch_mcp_value(body: str, server: str, key: str, new_value: object) -> str
         raise ConfigError("Cannot safely locate MCP server: invalid or ambiguous JSONC") from exc
     if not isinstance(document, dict):
         raise ConfigError("Cannot safely locate MCP server: root must be an object")
-    aliases = [key for key in ("servers", "mcpServers") if key in document]
-    if len(aliases) != 1 or not isinstance(document[aliases[0]], dict) or not isinstance(document[aliases[0]].get(server), dict):
+    aliases = [key for key in _server_maps(document)
+               if isinstance(document[key], dict) and isinstance(document[key].get(server), dict)]
+    if len(aliases) != 1:
         raise ConfigError(f"Cannot safely locate MCP server {server!r}")
     pattern = re.compile(r'\s+|//[^\r\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|[{}\[\]:,]|[^\s{}\[\]:,]+')
     tokens = [(match.group(), match.start(), match.end()) for match in pattern.finditer(body)

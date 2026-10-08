@@ -134,6 +134,10 @@ def _turn_for(state: ConversationView, event: Event) -> tuple[ConversationView, 
         )
         return _append_turn(state, turn), len(state.turns)
     if state.turns:
+        # A ``!`` shell turn never owns a turn-less content event.
+        for position in range(len(state.turns) - 1, -1, -1):
+            if state.turns[position].kind != "shell":
+                return state, position
         return state, len(state.turns) - 1
     turn = TurnView(id=f"turn@{event.seq}", index=0, phase="active", started_ts=event.ts)
     return _append_turn(state, turn), 0
@@ -1078,6 +1082,73 @@ def _on_input(state: ConversationView, event: Event, data: Mapping[str, Any]) ->
             )
     return state
 
+def _on_shell(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
+    """A composer ``!`` run: a ``shell`` turn with the command and one bash row."""
+    shell_id = _as_str(data.get("shell_id")) or event.id
+    turn_id = f"shell:{shell_id}"
+    command = _as_str(data.get("command")) or ""
+    index = _turn_index(state, turn_id)
+    if index < 0:
+        turn = TurnView(
+            id=turn_id,
+            index=len(state.turns),
+            phase="active",
+            kind="shell",
+            started_ts=event.ts,
+            updated_ts=event.ts,
+            user_ts=_opt_float(event.ts),
+            messages=[MessageView(
+                id=f"message:shell:{shell_id}",
+                event_seq=event.seq,
+                role="user",
+                blocks=[BlockView(kind="text", text=f"!{command}", finalized=True)],
+                done=True,
+            )],
+            tools=[ToolCallView(
+                call_id=shell_id,
+                event_seq=event.seq,
+                name="bash",
+                status="running",
+                bundle="shell",
+                executed=True,
+                requested_ts=event.ts,
+                started_ts=event.ts,
+                input={"command": command, "shell": _as_str(data.get("shell")) or "/bin/bash"},
+            )],
+        )
+        state = _append_turn(state, turn)
+        index = len(state.turns) - 1
+    if event.type != "shell.completed":
+        return state
+    turn = state.turns[index]
+    status = _as_str(data.get("status")) or "completed"
+    exit_code = data.get("exit_code") if isinstance(data.get("exit_code"), int) else None
+    failed = status != "completed" or exit_code != 0
+    context = _as_str(data.get("context")) or "added"
+    metrics: dict[str, Any] = {"exit_code": exit_code, "status": status, "context": context}
+    if _as_str(data.get("output_path")):
+        metrics["output_path"] = data["output_path"]
+    tools = [
+        replace(
+            tool,
+            status="failed" if failed else "completed",
+            is_error=failed,
+            finished_ts=event.ts,
+            duration_ms=data.get("duration_ms") if isinstance(data.get("duration_ms"), int) else None,
+            result=[{"type": "text", "text": _as_str(data.get("output")) or ""}],
+            display=(
+                f"{status if status != 'completed' else f'exit {exit_code}'} · "
+                + {"added": "added to context", "none": "not added to context"}.get(
+                    context, "added to context at the next step")
+            ),
+            metrics=metrics,
+        )
+        if tool.call_id == shell_id else tool
+        for tool in turn.tools
+    ]
+    phase = {"cancelled": "cancelled", "failed": "failed", "interrupted": "failed"}.get(status, "completed")
+    return _put(state, index, replace(turn, tools=tools, phase=phase, updated_ts=event.ts))
+
 def _content_text(content: Sequence[Any]) -> str:
     parts: list[str] = []
     for block in content:
@@ -1455,6 +1526,8 @@ _HANDLERS: dict[str, Any] = {
     "input.started": _on_input,
     "input.consumed": _on_input,
     "input.dropped": _on_input,
+    "shell.started": _on_shell,
+    "shell.completed": _on_shell,
     "ext.loaded": _on_ext,
     "ext.unloaded": _on_ext,
     "ext.failed": _on_ext,

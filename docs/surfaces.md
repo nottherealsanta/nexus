@@ -155,6 +155,17 @@ footers share the same left inset in both surfaces.
   price rises with prompt size (models.dev `cost.tiers`, carried in the request
   context as `pricing`), the meter marks each threshold.
 
+## Shell mode (`!`)
+
+A draft starting with `!` is a bash command, not a prompt. The composer shows
+it: the rail turns the warning (amber) colour and a `! bash` tag with "Enter
+runs in the workspace · output goes to context" appears; slash and `@`
+completion stay closed. Submit goes through `client.shell` (`SessionShell`),
+shared by Ratatui and desktop in `ui/ratatui/actions.py`. The run appears as a
+shell turn with a `bash` row; its output is added to the model context without
+starting the agent ([tools.md](tools.md#shell-mode--in-the-composer)). The web
+client (to be deprecated) does not have it.
+
 ## Messages during a turn
 
 Enter **steers** the active turn at the next model step, after the current
@@ -281,7 +292,9 @@ presses within 1.5 seconds cancel the active turn and return pending queued mess
 lines, followed by any existing unsent draft; they no longer run automatically.
 A single Escape shows a stop hint. On the main conversation Ctrl+C first clears
 a non-empty composer (Ctrl+Z brings the text back); with an empty composer it
-cancels the turn immediately. With a composer selection it copies.
+cancels the turn immediately. Pressing Ctrl+C twice on an empty composer within
+1.5 s quits the TUI (the first press still cancels); a press that clears a draft
+never counts toward the double tap. With a composer selection it copies.
 
 A message that opens with a path is sent as text, not run as a command:
 `commands.is_command` treats an unknown first word containing another `/` or a
@@ -303,7 +316,10 @@ clicking the message body opens the complete attached text and image metadata.
 ## MCP tool loading
 
 Native context dialogs show per-server On/Off controls and Search/All mode.
-The MCP dialog mirrors the Tools list: one line per server with its name (and
+The MCP dialog opens with `Open MCP settings…` and `↻ Refresh all`, then lists Global and
+Project servers as groups, including servers off in `mcp.json` (locked toggle) and invalid
+entries (error shown, no toggle); each server has dim rows with transport, command or URL,
+tool count and error. It mirrors the Tools list: one line per server with its name (and
 ` · <status>` when not connected), a `~indexed / ~full` token column, a **[ Restart ]**
 chip (click, or Ctrl+R on the row; `McpServerRestart`) and the On/Off toggle. Its top
 row, **↻ Refresh all**, runs `ExtensionsReload` (re-reading `mcp.json`, so added,
@@ -314,8 +330,8 @@ Indexed group (that server's entry in the frozen MCP index) and the Full group (
 tool schema, with one toggle per tool). Context dialogs (tools, skills, MCP) are at most
 88 columns wide, centered.
 Enter opens details with Search, Load all (estimated tokens), and Follow
-configuration actions before the first turn. Settings → MCP shows structured
-server rows above the file editor; loading choices patch the defining scope
+configuration actions before the first turn. Settings → MCP shows Global then Project
+(no scope tab), each server as labelled rows above its scope's file rows; loading choices patch the defining scope
 and refresh the page. Server details also offer persistent Switch On/Off controls
 (including disabled servers), distinct from session context toggles. Doctor and
 `/mcp` show redacted config diagnostics even when no servers are live.
