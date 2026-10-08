@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.4.2](https://github.com/nottherealsanta/nexus/compare/v0.4.0...v0.4.2) (2026-10-08)
+
+
+### Features
+
+* run shell commands from the composer with `!command`; output joins the context without starting a turn, and Stop kills the run ([ea7ed98](https://github.com/nottherealsanta/nexus/commit/ea7ed98e102106c2d3d13785c2ad3521149565cf))
+
+
+### Bug fixes
+
+* build the desktop client again ([ea7ed98](https://github.com/nottherealsanta/nexus/commit/ea7ed98e102106c2d3d13785c2ad3521149565cf))
+* cap bash and `!` output at 2,000 lines / 50 KiB, spilling the rest to a file ([ea7ed98](https://github.com/nottherealsanta/nexus/commit/ea7ed98e102106c2d3d13785c2ad3521149565cf))
+* collapse large pastes into one [Pasted ~N tokens] marker in the composer and send the full text on submit ([a225adb](https://github.com/nottherealsanta/nexus/commit/a225adb6768f47e74ccb7ede9ea708120b4b700b))
+* list a message's attachments as highlighted chips below its text, where clicking an image chip opens that image ([a225adb](https://github.com/nottherealsanta/nexus/commit/a225adb6768f47e74ccb7ede9ea708120b4b700b))
+* play the turn completion cue once instead of also ringing the bell ([589404f](https://github.com/nottherealsanta/nexus/commit/589404f7ffc8dd13edcd2fe34c545b62a76ed243))
+* quit the native client on a Ctrl+C double tap without arming it when Ctrl+C only clears the draft ([ea7ed98](https://github.com/nottherealsanta/nexus/commit/ea7ed98e102106c2d3d13785c2ad3521149565cf))
+* recall prompts up to 1M chars in history within a 16 MiB file budget ([d1fd604](https://github.com/nottherealsanta/nexus/commit/d1fd6049429807d03fb3be1fd469da32a55ea4c3))
+* render pasted images with the terminal's graphics protocol and open each attachment chip ([#75](https://github.com/nottherealsanta/nexus/issues/75)) ([a225adb](https://github.com/nottherealsanta/nexus/commit/a225adb6768f47e74ccb7ede9ea708120b4b700b))
+* show image previews as real images in Kitty, Ghostty, WezTerm, iTerm2 and Sixel terminals, detected once at startup; set NEXUS_IMAGE_PROTOCOL to force a protocol ([a225adb](https://github.com/nottherealsanta/nexus/commit/a225adb6768f47e74ccb7ede9ea708120b4b700b))
+* show long user messages in full instead of clipping at 8192 chars ([fc1433e](https://github.com/nottherealsanta/nexus/commit/fc1433e19af12a8d7929b06a173fda63bcac6b79))
+* show MCP config dialect errors, invalid entries and unreadable files as labelled rows instead of failing silently ([ea7ed98](https://github.com/nottherealsanta/nexus/commit/ea7ed98e102106c2d3d13785c2ad3521149565cf))
+* start file-change rows closed in the Ratatui transcript ([b33eb96](https://github.com/nottherealsanta/nexus/commit/b33eb964b25da6432c7b1231409f932bab3da137))
+
 ## [0.4.0](https://github.com/nottherealsanta/nexus/compare/v0.3.7...v0.4.0) (2026-10-08)
 
 
