@@ -8,11 +8,12 @@ import types
 from dataclasses import dataclass, field
 from unittest.mock import Mock
 
-import numpy as np
 import pytest
 
 from nexus.host_support import speech
 from nexus.host import protocol as p
+
+np = pytest.importorskip("numpy")
 
 
 @dataclass
