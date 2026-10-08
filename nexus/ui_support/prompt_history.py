@@ -8,8 +8,10 @@ import tempfile
 from pathlib import Path
 
 MAX_ENTRIES = 500
-MAX_PROMPT = 4096
-MAX_FILE_BYTES = MAX_ENTRIES * (MAX_PROMPT + 12)
+#: Longest prompt recalled, so a long paste comes back with Up like any other.
+MAX_PROMPT = 1_000_000
+#: Whole-file budget; the oldest entries are dropped to stay under it.
+MAX_FILE_BYTES = 16 * 1024 * 1024
 
 
 def history_path() -> Path:
@@ -41,14 +43,22 @@ def append_history(prompt: str, path: Path | None = None) -> None:
     if not prompt or len(prompt) > MAX_PROMPT:
         return
     path = path or history_path()
-    rows = [*load_history(path), prompt][-MAX_ENTRIES:]
+    rows = [
+        json.dumps(row, ensure_ascii=False)
+        for row in [*load_history(path), prompt][-MAX_ENTRIES:]
+    ]
+    size = sum(len(row.encode("utf-8")) + 1 for row in rows)
+    while size > MAX_FILE_BYTES and len(rows) > 1:
+        size -= len(rows.pop(0).encode("utf-8")) + 1
+    if size > MAX_FILE_BYTES:
+        return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, temp = tempfile.mkstemp(prefix=".prompt-history-", dir=path.parent)
         try:
             os.fchmod(fd, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                stream.write("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n")
+                stream.write("\n".join(rows) + "\n")
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temp, path)

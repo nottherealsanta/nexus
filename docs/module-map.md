@@ -424,7 +424,7 @@ here, so add a row when you add a file.
 | `model_choice.py` | Toolkit-free model picker sort, fuzzy rank, grouping and effort rules |
 | `native_images.py` | Bounded host-backed draft and submitted image previews for the desktop; no path or remote URL reads |
 | `native_schedule.py` | `UpdateCoalescer`: frame-rate coalescing of native bridge updates; user actions flush immediately |
-| `prompt_history.py` | Bounded durable prompt history for the native composer |
+| `prompt_history.py` | Durable prompt history for the native composer: 500 entries, prompts up to 1M characters, 16 MiB file budget (oldest dropped first) |
 | `prompts.py` | UI-neutral choices for operator prompts: approvals and agent questions |
 | `session_controller.py` | Shared host-client lifecycle, selection and canonical reducer seam |
 | `session_groups.py` | Shared project and local-date grouping for terminal session lists |
