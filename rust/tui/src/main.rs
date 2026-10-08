@@ -3,6 +3,7 @@ mod bridge;
 mod copy_button;
 mod disclosure;
 mod editor;
+mod graphics;
 mod input;
 mod local_ui;
 mod markdown;
@@ -41,6 +42,10 @@ fn resolve_operation(
         return Some(operation.clone());
     }
     let Some(column) = column else {
+        // User-card attachment rows name their own keyboard action.
+        if operation["default"].is_object() {
+            return Some(operation["default"].clone());
+        }
         return Some(json!({"kind":"context_menu"}));
     };
     operation["chips"].as_array()?.iter().find_map(|chip| {
@@ -313,6 +318,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     write!(io::stderr(), "\x1b[>4;2m")?;
     io::stderr().flush()?;
+    // Before any input is read: the probe's replies would otherwise reach the event loop.
+    graphics::detect();
     let mut terminal = Terminal::new(CrosstermBackend::new(io::BufWriter::with_capacity(
         64 * 1024,
         io::stderr(),
@@ -625,11 +632,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         completion.completions = if draft.text.starts_with('!') {
             Vec::new() // shell mode: the draft is a bash command, never a slash or @ query
         } else if token.starts_with('/') && !prefix.contains(' ') && !s.commands.is_empty() {
-                let needle = token.to_lowercase();
-                rank_commands(&s.commands, &needle)
-            } else {
-                completion_candidates(&completion_cache, prefix)
-            };
+            let needle = token.to_lowercase();
+            rank_commands(&s.commands, &needle)
+        } else {
+            completion_candidates(&completion_cache, prefix)
+        };
         let completion_visible = s.panel_title.is_empty()
             && s.prompt.is_none()
             && completion_hidden != completion.completion_query
@@ -1647,7 +1654,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 draft.take();
                                 if opens_sessions(&value) {
                                     details_focus = false;
-                                    sessions_surface(&mut s, &mut cache, &mut local_ui, false, terminal.size()?.width)?;
+                                    sessions_surface(
+                                        &mut s,
+                                        &mut cache,
+                                        &mut local_ui,
+                                        false,
+                                        terminal.size()?.width,
+                                    )?;
                                 }
                                 send(
                                     json!({"type":"submit","text":value,"mode":"steer","generation":s.generation}),
@@ -1838,7 +1851,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let text = draft.take();
                                 if opens_sessions(&text) {
                                     details_focus = false;
-                                    sessions_surface(&mut s, &mut cache, &mut local_ui, false, terminal.size()?.width)?;
+                                    sessions_surface(
+                                        &mut s,
+                                        &mut cache,
+                                        &mut local_ui,
+                                        false,
+                                        terminal.size()?.width,
+                                    )?;
                                 }
                                 send(
                                     json!({"type":"submit","text":text,"mode":mode,"generation":s.generation}),
@@ -1916,7 +1935,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         } else if s.prompt.as_ref().is_some_and(|p| p.kind == "question") {
                             answer.insert(&text);
                         } else if s.prompt.is_none() {
-                            draft.insert(&text);
+                            draft.paste(&text);
                         }
                         dirty = true;
                     }

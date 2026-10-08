@@ -58,3 +58,22 @@ async def test_submitted_message_opens_images_without_dumping_base64():
     await shell.workflows.operate(operation)
     assert shell.panel_title == "Submitted image"
     assert shell.preview_image_media == "image/png"
+
+
+def test_each_attachment_chip_opens_its_own_image():
+    from nexus.ui.ratatui.prototype import _block_operations, _chip_operations
+    from nexus.view.model import BlockView, MessageView
+
+    message = MessageView(id="m", role="user", blocks=[
+        BlockView(kind="text", text="see [image 1] and [document 2]"),
+        BlockView(kind="text", text="\n\nAttachment: image 1 · a.png · image/png · 5 bytes\n"),
+        BlockView(kind="image", image_url=url()),
+        BlockView(kind="text", text="\n\nAttachment: document 2 · b.md\n\nbody"),
+        BlockView(kind="text", text="\n\nAttachment: image 3 · c.png · image/png · 5 bytes\n"),
+        BlockView(kind="image", image_url=url()),
+    ])
+    page = {"kind": "message_page", "id": "m"}
+    operations = _chip_operations(message, 3)
+    assert operations == [{"kind": "submitted_image", "id": "m", "index": 2}, page,
+                          {"kind": "submitted_image", "id": "m", "index": 5}]
+    assert list(_block_operations([{"chip_operations": operations}])) == operations

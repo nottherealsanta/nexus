@@ -307,6 +307,8 @@ pub struct Content {
     pub collapsed: bool,
     pub chips: Vec<String>,
     pub chip_operation: Option<Value>,
+    /// One operation per chip (an image chip opens that image), in chip order.
+    pub chip_operations: Vec<Value>,
     pub detail: String,
     /// Full tool heading (`→ Read path`) shown on an expanded group member.
     pub heading: String,

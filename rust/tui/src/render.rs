@@ -348,7 +348,7 @@ fn context_hover(
     column: usize,
     background: Color,
 ) -> Line<'static> {
-    let Some(operation) = operation.and_then(Option::as_ref) else {
+    let Some(operation) = operation.and_then(crate::copy_button::inner) else {
         return line;
     };
     if operation["kind"] != "context_chips" {
@@ -1814,10 +1814,9 @@ pub fn draw(
                         reader.decode().ok()
                     })
                     .map(|image| {
-                        // The input reader already owns the terminal. Querying here
-                        // would race it for capability responses and stall rendering.
-                        let picker = ratatui_image::picker::Picker::from_fontsize((10, 20));
-                        picker.new_resize_protocol(image)
+                        // Detected once at startup (graphics.rs); never queried here,
+                        // where the input reader already owns the terminal.
+                        crate::graphics::picker().new_resize_protocol(image)
                     });
                 cache.image_source.clone_from(&s.preview_image);
             }

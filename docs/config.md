@@ -95,6 +95,8 @@ before switching storage if they must be kept.
 
 ## Other environment variables
 
+`NEXUS_IMAGE_PROTOCOL` (`kitty`, `sixel`, `iterm2`, `halfblocks`; default `auto`)
+forces the native client's image protocol and skips its startup terminal probe.
 `NEXUS_COMPLETION_SOUNDS=off` (also `0` or `false`) disables the native client's
 generated completion audio cue independently of `NEXUS_VOICE_SOUNDS` recording
 cues. Audio playback requires `sounddevice` and a working output device.
