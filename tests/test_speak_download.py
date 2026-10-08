@@ -17,7 +17,7 @@ from nexus.ui_support import speech_download as sd
 
 
 def _status(state, **values):
-    return p.SpeechStatusResult(state=state, bytes_total=345_000_000, **values)
+    return p.SpeechStatusResult(state=state, bytes_total=25_000_000, **values)
 
 
 # -- shared rules -------------------------------------------------------------
@@ -36,10 +36,10 @@ def test_next_step(state, download_only, step):
 
 
 def test_progress_text_shows_percent_and_sizes():
-    text = sd.progress_text(_status("downloading", progress=0.42, bytes_done=145_000_000))
-    assert text == "Downloading the local speech model… 42% · 145 / 345 MB"
+    text = sd.progress_text(_status("downloading", progress=0.42, bytes_done=10_000_000))
+    assert text == "Downloading the local speech model… 42% · 10 / 25 MB"
     assert sd.progress_text({"progress": 0.0}) == "Downloading the local speech model… 0%"
-    assert "345 MB" in sd.CONSENT_TITLE and "never sent to a speech service" in sd.CONSENT_PROMPT
+    assert "25 MB" in sd.CONSENT_TITLE and "never sent to a speech service" in sd.CONSENT_PROMPT
 
 
 # -- native client -------------------------------------------------------------
@@ -59,7 +59,7 @@ def _labels(shell):
 @pytest.mark.asyncio
 async def test_native_speak_with_a_ready_model_speaks_at_once(shell):
     shell.client.speech_status = AsyncMock(return_value=_status("ready"))
-    shell.client.speak = AsyncMock(return_value=p.SpeakResult(message="Finished speaking the latest answer", backend="kokoro-cpu"))
+    shell.client.speak = AsyncMock(return_value=p.SpeakResult(message="Finished speaking the latest answer", backend="paradee-cpu"))
     await shell.workflows.speak_command(download_only=False)
     assert shell.notice == ""  # speaking shows no notice
     await shell.workflows.speak_task
@@ -98,15 +98,15 @@ async def test_native_download_with_a_ready_model_only_says_so(shell):
 
 @pytest.mark.asyncio
 async def test_native_missing_model_asks_for_consent_then_downloads_and_speaks(shell):
-    shell.client.speech_status = AsyncMock(side_effect=[_status("absent"), _status("downloading", progress=0.5, bytes_done=172_000_000), _status("ready")])
+    shell.client.speech_status = AsyncMock(side_effect=[_status("absent"), _status("downloading", progress=0.5, bytes_done=12_000_000), _status("ready")])
     shell.client.speech_prepare = AsyncMock(return_value=_status("downloading", progress=0.0))
-    shell.client.speak = AsyncMock(return_value=p.SpeakResult(message="Finished speaking the latest answer", backend="kokoro-cpu"))
+    shell.client.speak = AsyncMock(return_value=p.SpeakResult(message="Finished speaking the latest answer", backend="paradee-cpu"))
     await shell.workflows.speak_command(download_only=False)
     assert shell.panel_title == "Local speech"
     assert _labels(shell) == ["Download speech model…", "Back"]
     assert "never sent to a speech service" in " ".join(shell.panel_lines)
     await shell.workflows.operate(shell.items[0]["operation"])  # the confirm page
-    assert "345 MB" in shell.panel_title
+    assert "25 MB" in shell.panel_title
     await shell.workflows.operate(shell.items[1]["operation"])  # Continue
     shell.client.speech_prepare.assert_awaited_once()
     assert _labels(shell) == ["Refresh status", "Back"]
@@ -120,7 +120,7 @@ async def test_native_missing_model_asks_for_consent_then_downloads_and_speaks(s
 
 @pytest.mark.asyncio
 async def test_native_missing_packages_explain_how_to_install(shell):
-    message = "Missing kokoro. Install the speak extra in the daemon's environment (uv sync --extra speak)."
+    message = "Missing onnxruntime. Install the speak extra in the daemon's environment (uv sync --extra speak)."
     shell.client.speech_status = AsyncMock(return_value=_status("unsupported", message=message))
     await shell.workflows.speak_command(download_only=False)
     assert _labels(shell) == ["Back"] and "uv sync --extra speak" in " ".join(shell.panel_lines)

@@ -443,7 +443,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.ModelTiersResult(order=["low", "medium", "high"], default="medium"),
         p.DefaultModelSettingsResult(refs=["openai/gpt-5-mini"]),
         p.SessionTitleSettingsResult(enabled=True, model="low", resolved="openai/gpt-5-mini"),
-        p.SpeechStatusResult(state="absent", bytes_total=345_000_000),
+        p.SpeechStatusResult(state="absent", bytes_total=25_000_000),
         p.AttachmentPreviewResult(attachment_id="att-1", media_type="image/png", data=b"png"),
         p.ModelSelectResult(session="s", provider="p", model="m", tier="high"),
         p.ReasoningEffortSelectResult(
@@ -483,7 +483,7 @@ def test_protocol_round_trips_every_command_and_result():
             included_parts=[{"name": "identity", "text": "standing prompt"}],
         ),
         p.DoctorResult(ok=True, report={"workspace": "/tmp/ws"}),
-        p.SpeakResult(message="Finished speaking", backend="kokoro-cpu"),
+        p.SpeakResult(message="Finished speaking", backend="paradee-cpu"),
         p.VoiceStatusResult(state="ready", enabled=True),
         p.VoiceTranscribeResult(request_id="req_1", text="hello", duration_s=1.0, elapsed_s=0.1),
         p.VoiceCancelResult(cancelled=True),

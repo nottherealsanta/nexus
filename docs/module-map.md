@@ -223,7 +223,7 @@ here, so add a row when you add a file.
 | `settings_inventory.py` | Bounded Settings console inventory, validation and safe file mutations |
 | `settings_scope.py` | Single path policy for Settings console reads and mutations |
 | `setup.py` | First-run setup behind the host boundary |
-| `speech.py` | Isolated Kokoro text-to-speech for the latest completed answer (`Speak`, `/speak`) |
+| `speech.py` | Isolated Paradee text-to-speech (onnxruntime, misaki) for the latest completed answer (`Speak`, `/speak`) |
 | `socket_dir.py` | Private fallback directory for daemon sockets whose default path is too long |
 | `update_check.py` | The "update available" notice (docs/release.md) |
 | `voice.py` | Redacted host projection and dispatch for local voice commands |
@@ -423,7 +423,7 @@ here, so add a row when you add a file.
 | `settings_page.py` | The typed one-page Settings model (blocks, controls, operations); control-safe and bounded |
 | `shortcuts.py` | Shared terminal shortcut and leader reference |
 | `speech_download.py` | Rules and wording for the `/speak` model download, shared by both clients |
-| `speech_settings.py` | Host-backed Kokoro `/speak` settings with safe `[speech]` TOML updates |
+| `speech_settings.py` | Host-backed `/speak` settings (single Paradee voice) with safe `[speech]` TOML updates |
 | `text.py` | Control-safe, credential-redacted text for terminal presentation |
 | `tier_settings.py` | Rows, labels and help text for Settings → Models, Session titles and an agent's Tiers row |
 | `timeline.py` | Pure formatting and filtering for reducer-backed conversation timelines |
@@ -493,7 +493,7 @@ loop over local state; splitting it further needs a state struct and is not done
 | `settings_pages/__init__.py` | Registry of the one-page Settings areas (`PAGE_AREAS`) and their lazy module lookup |
 | `settings_pages/models.py` | Settings → Models: default chain, session titles, tier tabs, subagent limit, catalogue |
 | `settings_pages/providers.py` | Settings → Providers: one section per provider with in-place sign-in, API key and sign-out |
-| `settings_pages/voice.py` | Settings → Voice & speech: local dictation and Kokoro speech with consent-gated downloads |
+| `settings_pages/voice.py` | Settings → Voice & speech: local dictation and Paradee speech with consent-gated downloads |
 | `settings_pages/appearance.py` | Settings → Appearance (theme) |
 | `settings_pages/layout.py` | Settings → Layout (sidebars and context header) |
 | `settings_pages/keys.py` | Settings → Keyboard: every shortcut, read-only, from the shared table |

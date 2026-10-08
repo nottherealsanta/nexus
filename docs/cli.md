@@ -92,7 +92,7 @@ names, usage, summaries, aliases). `parse` resolves aliases to the canonical nam
 | `/review`, `/commit` | | | ask the agent to review / commit changes |
 | `/archived` | | `/resume` | browse archived sessions |
 | `/voice` | `[status\|download\|on\|off]` | | dictation |
-| `/speak` | `[download]` | | speak the latest completed answer with local Kokoro; a missing model opens the consent and download dialog (`download` runs only that) |
+| `/speak` | `[download]` | | speak the latest completed answer with local Paradee (ONNX, CPU); a missing model opens the consent and download dialog (`download` runs only that) |
 | `/mock` | | | dev mode only (`DEV_SPECS`) |
 
 Multiline input: a trailing backslash or an unclosed triple quote continues the

@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import threading
 import types
 from dataclasses import dataclass, field
 from unittest.mock import Mock
 
+import numpy as np
 import pytest
 
 from nexus.host_support import speech
@@ -108,10 +110,10 @@ def test_dispatch_uses_worker_and_returns_backend(monkeypatch):
 
     monkeypatch.setattr(p, "Speak", Speak, raising=False)
     monkeypatch.setattr(p, "SpeakResult", SpeakResult, raising=False)
-    monkeypatch.setattr(speech, "_invoke_worker", lambda text, download: {"ok": True, "backend": "kokoro-cpu"})
+    monkeypatch.setattr(speech, "_invoke_worker", lambda text, download: {"ok": True, "backend": "paradee-cpu"})
     command = Speak("session-1")
     result = asyncio.run(speech.dispatch_speech(command, None, View([Turn(messages=[Message("assistant", "hi")])])))
-    assert result == SpeakResult("Finished speaking the latest answer", "kokoro-cpu")
+    assert result == SpeakResult("Finished speaking the latest answer", "paradee-cpu")
 
 
 def test_dispatch_does_not_leak_worker_exceptions(monkeypatch):
@@ -133,35 +135,114 @@ def test_dispatch_does_not_leak_worker_exceptions(monkeypatch):
 
 def test_worker_reports_missing_optional_dependencies(monkeypatch):
     # The worker must not import optional modules at module import time.
-    monkeypatch.setitem(sys.modules, "kokoro", None)
+    monkeypatch.setitem(sys.modules, "onnxruntime", None)
     monkeypatch.setitem(sys.modules, "sounddevice", None)
     assert speech._worker_synthesize("hello") == {"ok": False, "code": "speech_dependency_missing"}
 
 
-def test_worker_synthesizes_and_plays_on_cpu(monkeypatch):
-    played = []
+class FakeSpeechModules:
+    """Fake onnxruntime, misaki and huggingface_hub in sys.modules; numpy and the vocab are real."""
 
-    class Pipeline:
-        def __init__(self, **kwargs):
-            assert kwargs == {"lang_code": "a", "repo_id": "hexgrad/Kokoro-82M", "device": "cpu"}
+    def __init__(self, monkeypatch, tmp_path, *, samples=24_000):
+        self.calls: dict = {"downloads": [], "feeds": []}
+        self.played: list = []
+        self.samples = samples
+        config = tmp_path / "config.json"
+        config.write_text(json.dumps({"vocab": {c: i + 1 for i, c in enumerate("abcdefghijklmnopqrstuvwxyz ")}}))
+        self.config = config
+        outer = self
 
-        def __call__(self, text, voice):
-            assert text == "hello"
-            assert voice == "af_heart"
-            yield "hello", "hello", [0.0] * 24_000
+        class Session:
+            def __init__(self, path, options, providers):
+                outer.calls["session"] = (path, options.intra_op_num_threads, providers)
 
-    fake_kokoro = types.ModuleType("kokoro")
-    fake_kokoro.KPipeline = Pipeline
-    fake_numpy = types.ModuleType("numpy")
-    fake_numpy.asarray = lambda audio: audio
-    fake_sounddevice = types.ModuleType("sounddevice")
-    fake_sounddevice.play = lambda audio, samplerate, blocking: played.append((len(audio), samplerate, blocking))
-    monkeypatch.setitem(sys.modules, "kokoro", fake_kokoro)
-    monkeypatch.setitem(sys.modules, "numpy", fake_numpy)
-    monkeypatch.setitem(sys.modules, "sounddevice", fake_sounddevice)
-    monkeypatch.setenv("NEXUS_SPEAK_DEVICE", "cpu")
-    assert speech._worker_synthesize("hello") == {"ok": True, "backend": "kokoro-cpu"}
-    assert played == [(24_000, 24_000, True)]
+            def run(self, outputs, feed):
+                outer.calls["feeds"].append(feed)
+                return [np.zeros((1, outer.samples), dtype=np.float32)]
+
+        class G2P:
+            def __init__(self, **kwargs):
+                outer.calls["g2p"] = kwargs
+
+            def __call__(self, text):
+                return text.lower().replace(".", ""), None
+
+        def download(repo_id, filename, revision=None):
+            outer.calls["downloads"].append((repo_id, filename, revision))
+            return str(outer.config) if filename == "config.json" else str(tmp_path / "paradee_int8.onnx")
+
+        ort = types.ModuleType("onnxruntime")
+        ort.SessionOptions = lambda: types.SimpleNamespace(intra_op_num_threads=0, inter_op_num_threads=0)
+        ort.InferenceSession = Session
+        misaki = types.ModuleType("misaki")
+        misaki.en = types.SimpleNamespace(G2P=G2P)
+        hub = types.ModuleType("huggingface_hub")
+        hub.hf_hub_download = download
+        sounddevice = types.ModuleType("sounddevice")
+        sounddevice.play = lambda audio, samplerate, blocking: outer.played.append((audio, samplerate, blocking))
+        for name, module in {"onnxruntime": ort, "misaki": misaki, "huggingface_hub": hub, "sounddevice": sounddevice}.items():
+            monkeypatch.setitem(sys.modules, name, module)
+        monkeypatch.setattr(speech, "_ENGINE", None)
+
+
+def test_worker_synthesizes_and_plays_on_cpu(monkeypatch, tmp_path):
+    fake = FakeSpeechModules(monkeypatch, tmp_path)
+    assert speech._worker_synthesize("Hello") == {"ok": True, "backend": "paradee-cpu"}
+    assert fake.calls["downloads"] == [
+        ("sahilmahendrakar/Paradee-8M-v1.0", "onnx/paradee_int8.onnx", "v1.0"),
+        ("sahilmahendrakar/Paradee-8M-v1.0", "config.json", "v1.0"),
+    ]
+    assert fake.calls["session"][1:] == (0, ["CPUExecutionProvider"])  # ORT default threads
+    assert fake.calls["g2p"] == {"trf": False, "british": False, "fallback": None, "unk": ""}
+    feed = fake.calls["feeds"][0]
+    ids = feed["input_ids"][0].tolist()
+    assert feed["input_ids"].dtype == np.int64 and ids[0] == ids[-1] == 0 and len(ids) == len("hello") + 2
+    assert feed["speed"].tolist() == [1.0]
+    [(audio, rate, blocking)] = fake.played
+    assert rate == 24_000 and blocking is True and len(audio) == 24_000 and audio.dtype == np.float32
+
+
+def test_worker_keeps_the_model_warm_between_chunks_and_requests(monkeypatch, tmp_path):
+    fake = FakeSpeechModules(monkeypatch, tmp_path)
+    speech._worker_synthesize("one")
+    speech._worker_synthesize("two")
+    assert len(fake.calls["downloads"]) == 2  # loaded once: two files, not four
+
+
+def test_phoneme_chunks_split_on_sentences_and_stay_within_the_model_limit(monkeypatch):
+    class Engine:
+        def __init__(self):
+            self.g2p = lambda sentence: ("ab " * 300 if "long" in sentence else "xy", None)
+
+    chunks = list(speech._phoneme_chunks(Engine(), "Short one. A long sentence here. Last."))
+    assert chunks[0] == "xy" and chunks[-1] == "xy"
+    long_parts = chunks[1:-1]
+    assert len(long_parts) >= 2 and all(len(part) <= speech._MAX_PHONEMES for part in chunks)
+
+
+def test_worker_stop_before_playback_plays_nothing(monkeypatch, tmp_path):
+    fake = FakeSpeechModules(monkeypatch, tmp_path)
+    stop = threading.Event()
+    stop.set()
+    monkeypatch.setattr(speech, "_WORKER_STOP", stop)
+    assert speech._worker_synthesize("hello") == {"ok": True, "backend": "stopped"}
+    assert fake.played == []  # the stop flag is checked before each chunk is played
+
+
+def test_worker_refuses_audio_over_the_cap(monkeypatch, tmp_path):
+    fake = FakeSpeechModules(monkeypatch, tmp_path, samples=24_000 * 2)
+    monkeypatch.setattr(speech, "_MAX_AUDIO_SECONDS", 1)
+    assert speech._worker_synthesize("hello") == {"ok": False, "code": "speech_unavailable"}
+    assert fake.played == []
+
+
+def test_worker_offline_without_cached_spacy_model_is_refused(monkeypatch, tmp_path):
+    FakeSpeechModules(monkeypatch, tmp_path)
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    spacy = types.ModuleType("spacy")
+    spacy.util = types.SimpleNamespace(is_package=lambda name: False)
+    monkeypatch.setitem(sys.modules, "spacy", spacy)
+    assert speech._worker_synthesize("hello") == {"ok": False, "code": "speech_model_not_cached"}
 
 
 def test_worker_stdin_protocol_is_bounded_and_redacts_exceptions(monkeypatch):
@@ -180,17 +261,13 @@ def test_worker_stdin_protocol_is_bounded_and_redacts_exceptions(monkeypatch):
     output.write.assert_called_once_with('{"ok":false,"code":"speech_unavailable"}')
 
 
-def test_cached_mode_and_download_mode_env():
-    monkeypatch = pytest.MonkeyPatch()
-    try:
-        monkeypatch.setenv("NEXUS_SPEAK_DEVICE", "mps")
-        assert speech._worker_environment(False)["HF_HUB_OFFLINE"] == "1"
-        env = speech._worker_environment(True)
-        assert env["HF_HUB_OFFLINE"] == "0"
-        assert env["HF_HUB_DISABLE_TELEMETRY"] == "1"
-        assert env["PYTORCH_ENABLE_MPS_FALLBACK"] == "1"
-    finally:
-        monkeypatch.undo()
+def test_cached_mode_and_download_mode_env(monkeypatch):
+    monkeypatch.setenv("NEXUS_SPEAK_DEVICE", "mps")  # retired: no device choice any more
+    assert speech._worker_environment(False)["HF_HUB_OFFLINE"] == "1"
+    env = speech._worker_environment(True)
+    assert env["HF_HUB_OFFLINE"] == "0"
+    assert env["HF_HUB_DISABLE_TELEMETRY"] == "1"
+    assert "PYTORCH_ENABLE_MPS_FALLBACK" not in env
 
 
 async def test_host_routes_speak_to_the_latest_completed_answer(tmp_path, monkeypatch):
@@ -202,7 +279,7 @@ async def test_host_routes_speak_to_the_latest_completed_answer(tmp_path, monkey
     from nexus.runtime import Runtime
 
     spoken = []
-    monkeypatch.setattr(speech, "_invoke_worker", lambda text, download: spoken.append((text, download)) or {"ok": True, "backend": "kokoro-cpu"})
+    monkeypatch.setattr(speech, "_invoke_worker", lambda text, download: spoken.append((text, download)) or {"ok": True, "backend": "paradee-cpu"})
     config = Config(model="scripted/m", version=2, v2=ConfigV2(model=ModelSection(default="scripted/m")))
     runtime = Runtime(tmp_path, config=config, providers={"scripted": ScriptedProvider(text_response("the final answer"))})
     facade = HostFacade(runtime)
@@ -212,7 +289,7 @@ async def test_host_routes_speak_to_the_latest_completed_answer(tmp_path, monkey
     await facade.start_turn("s", "hello")
     await facade.wait_idle(timeout=5.0)
     result = await facade.handle(p.Speak(session_id="s", download=True))
-    assert result == p.SpeakResult(message="Finished speaking the latest answer", backend="kokoro-cpu")
+    assert result == p.SpeakResult(message="Finished speaking the latest answer", backend="paradee-cpu")
     assert spoken == [("the final answer", True)]
     await facade.shutdown()
     await runtime.aclose()
@@ -221,15 +298,15 @@ async def test_host_routes_speak_to_the_latest_completed_answer(tmp_path, monkey
 # -- model status and the one-time download -----------------------------------
 
 
-def _fake_cache(tmp_path, monkeypatch, *, weights=True, voice=True, phonemizer=True, blob_bytes=0):
-    repo = tmp_path / "hub" / "models--hexgrad--Kokoro-82M"
+def _fake_cache(tmp_path, monkeypatch, *, model=True, config=True, phonemizer=True, blob_bytes=0):
+    repo = tmp_path / "hub" / "models--sahilmahendrakar--Paradee-8M-v1.0"
     (repo / "blobs").mkdir(parents=True, exist_ok=True)
     snapshot = repo / "snapshots" / "abc"
-    (snapshot / "voices").mkdir(parents=True, exist_ok=True)
-    if weights:
-        (snapshot / "kokoro-v1_0.pth").write_bytes(b"w")
-    if voice:
-        (snapshot / "voices" / "af_heart.pt").write_bytes(b"v")
+    (snapshot / "onnx").mkdir(parents=True, exist_ok=True)
+    if model:
+        (snapshot / "onnx" / "paradee_int8.onnx").write_bytes(b"m")
+    if config:
+        (snapshot / "config.json").write_text("{}")
     if blob_bytes:
         (repo / "blobs" / "partial.incomplete").write_bytes(b"x" * blob_bytes)
     monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
@@ -243,17 +320,17 @@ def _fake_cache(tmp_path, monkeypatch, *, weights=True, voice=True, phonemizer=T
 
 
 def test_status_reports_missing_packages_with_the_install_hint(monkeypatch):
-    monkeypatch.setattr(speech, "_missing_packages", lambda: ["kokoro", "sounddevice"])
+    monkeypatch.setattr(speech, "_missing_packages", lambda: ["onnxruntime", "sounddevice"])
     status = speech.speech_status()
     assert status["state"] == "unsupported"
-    assert "kokoro, sounddevice" in status["message"] and "uv sync --extra speak" in status["message"]
+    assert "onnxruntime, sounddevice" in status["message"] and "uv sync --extra speak" in status["message"]
 
 
 def test_status_absent_downloading_ready_and_error(tmp_path, monkeypatch):
-    _fake_cache(tmp_path, monkeypatch, weights=False, voice=False, blob_bytes=34_500_000)
+    _fake_cache(tmp_path, monkeypatch, model=False, config=False, blob_bytes=2_500_000)
     status = speech.speech_status()
-    assert status["state"] == "absent" and status["bytes_total"] == speech.MODEL_BYTES
-    assert status["bytes_done"] == 34_500_000 and round(status["progress"], 2) == 0.1
+    assert status["state"] == "absent" and status["bytes_total"] == speech.MODEL_BYTES == 25_000_000
+    assert status["bytes_done"] == 2_500_000 and round(status["progress"], 2) == 0.1
 
     speech._PREPARE.update(state="downloading")
     status = speech.speech_status()
@@ -273,7 +350,7 @@ def test_status_needs_the_phonemizer_too(tmp_path, monkeypatch):
 
 
 def test_prepare_starts_one_background_download_and_never_twice(tmp_path, monkeypatch):
-    _fake_cache(tmp_path, monkeypatch, weights=False, voice=False)
+    _fake_cache(tmp_path, monkeypatch, model=False, config=False)
     started = []
 
     class Thread:
@@ -293,7 +370,7 @@ def test_prepare_does_nothing_when_ready_or_unsupported(tmp_path, monkeypatch):
     _fake_cache(tmp_path, monkeypatch)
     monkeypatch.setattr(speech.threading, "Thread", lambda *a, **k: pytest.fail("must not download"))
     assert speech.schedule_prepare()["state"] == "ready"
-    monkeypatch.setattr(speech, "_missing_packages", lambda: ["kokoro"])
+    monkeypatch.setattr(speech, "_missing_packages", lambda: ["onnxruntime"])
     assert speech.schedule_prepare()["state"] == "unsupported"
 
 
@@ -315,22 +392,11 @@ def test_prepare_worker_runs_online_and_records_the_outcome(monkeypatch):
     assert speech._PREPARE["state"] == "error" and "could not be downloaded" in speech._PREPARE["message"]
 
 
-def test_worker_prepare_loads_the_pipeline_and_voice(monkeypatch):
-    calls = []
-
-    class Pipeline:
-        def __init__(self, **kwargs):
-            calls.append(("init", kwargs))
-
-        def load_voice(self, voice):
-            calls.append(("voice", voice))
-
-    fake = types.ModuleType("kokoro")
-    fake.KPipeline = Pipeline
-    monkeypatch.setitem(sys.modules, "kokoro", fake)
+def test_worker_prepare_downloads_both_files_and_loads_the_model(monkeypatch, tmp_path):
+    fake = FakeSpeechModules(monkeypatch, tmp_path)
     assert speech._worker_prepare() == {"ok": True}
-    assert calls == [("init", {"lang_code": "a", "repo_id": "hexgrad/Kokoro-82M", "device": "cpu"}), ("voice", "af_heart")]
-    monkeypatch.setitem(sys.modules, "kokoro", None)
+    assert [name for _repo, name, _rev in fake.calls["downloads"]] == ["onnx/paradee_int8.onnx", "config.json"]
+    monkeypatch.setitem(sys.modules, "misaki", None)
     assert speech._worker_prepare() == {"ok": False, "code": "speech_dependency_missing"}
 
 
@@ -360,7 +426,7 @@ class _FakeWorker:
     def __init__(self, *args, **kwargs):
         self.args, self.returncode, self.lines = args, None, []
         self.stdin = types.SimpleNamespace(write=self.lines.append, flush=lambda: None)
-        self.stdout = types.SimpleNamespace(readline=lambda: '{"ok":true,"backend":"kokoro-cpu"}\n')
+        self.stdout = types.SimpleNamespace(readline=lambda: '{"ok":true,"backend":"paradee-cpu"}\n')
         _FakeWorker.instances.append(self)
 
     def poll(self):

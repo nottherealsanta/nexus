@@ -11,10 +11,10 @@ from typing import Any
 
 __all__ = ["CONSENT_PROMPT", "CONSENT_TITLE", "next_step", "progress_text", "ready_text"]
 
-CONSENT_TITLE = "Speech model · about 345 MB"
+CONSENT_TITLE = "Speech model · about 25 MB"
 CONSENT_PROMPT = (
-    "Download the local Kokoro speech model, the voice and the English phonemizer to enable "
-    "/speak? It runs on this device; your answers are never sent to a speech service."
+    "Download the local Paradee speech model and the English phonemizer to enable /speak? "
+    "It runs on this device's CPU; your answers are never sent to a speech service."
 )
 
 

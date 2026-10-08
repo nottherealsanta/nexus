@@ -1,4 +1,11 @@
-"""Bounded, isolated Kokoro speech for completed assistant turns."""
+"""Bounded, isolated Paradee speech for completed assistant turns.
+
+Paradee is an 8M-parameter int8 ONNX text-to-speech model distilled from Kokoro-82M
+(voice af_heart). It runs on CPU through onnxruntime; phonemes come from misaki, the
+same G2P Kokoro uses. No torch is involved. The worker downloads two files from the
+Hugging Face Hub (the model and its config.json vocabulary), reads the text one
+sentence at a time and plays each chunk as it is synthesized.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +14,7 @@ import contextlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -19,7 +27,8 @@ from ..host import protocol as p
 _MAX_TEXT_CHARS = 20_000
 _MAX_AUDIO_SECONDS = 180
 _WORKER_TIMEOUT_SECONDS = 300
-_DEFAULT_VOICE = "af_heart"
+_SAMPLE_RATE = 24_000
+_MAX_PHONEMES = 510  # the model has 512 positions: one pad token at each end
 _LOCK = threading.Lock()
 #: The warm synthesis worker: started by the first ``/speak``, kept loaded while the
 #: user keeps using it, and unloaded after this many idle seconds.
@@ -29,13 +38,17 @@ _WORKER_DOWNLOAD = False
 _IDLE_TIMER: threading.Timer | None = None
 _STOPPED = threading.Event()
 
-#: Kokoro-82M weights (~327 MB) plus the voice and the spaCy English package.
-MODEL_BYTES = 345_000_000
+_REPO_ID = "sahilmahendrakar/Paradee-8M-v1.0"
+_REVISION = "v1.0"
+_MODEL_FILE = "onnx/paradee_int8.onnx"  # 9 MB int8 graph: token ids in, 24 kHz waveform out
+_CONFIG_FILE = "config.json"  # Kokoro's phoneme vocabulary and the sample rate
+#: The model files (~9.5 MB) plus the spaCy English package misaki uses (en_core_web_sm, ~13 MB).
+MODEL_BYTES = 25_000_000
 _PREPARE_TIMEOUT_SECONDS = 1800
-_REPO_DIR = "models--hexgrad--Kokoro-82M"
+_REPO_DIR = "models--sahilmahendrakar--Paradee-8M-v1.0"
 _INSTALL_HINT = (
     "Install the speak extra in the daemon's environment (uv sync --extra speak), plus "
-    "espeak-ng and portaudio (brew install espeak-ng portaudio), then restart the daemon."
+    "portaudio (brew install portaudio), then restart the daemon."
 )
 
 
@@ -88,10 +101,6 @@ def _worker_environment(download: bool) -> dict[str, str]:
     env = os.environ.copy()
     env["HF_HUB_OFFLINE"] = "0" if download else "1"
     env["HF_HUB_DISABLE_TELEMETRY"] = "1"
-    # The worker repeats this before importing torch, but setting it here also
-    # ensures any imported startup code sees the intended opt-in fallback.
-    if env.get("NEXUS_SPEAK_DEVICE") == "mps":
-        env["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
     return env
 
 
@@ -202,7 +211,7 @@ def stop_speaking() -> bool:
 #
 # Mirrors the voice model flow (``/voice download``): the clients ask for the
 # status, show the size and ask for consent, call ``SpeechPrepare`` and poll.
-# Status never imports torch: it looks for the packages and the Hugging Face
+# Status never imports onnxruntime: it looks for the packages and the Hugging Face
 # cache files. Preparation is the only network step, and it runs in the same
 # isolated worker as synthesis.
 
@@ -219,7 +228,7 @@ def _hub_cache() -> Path:
 
 
 def _missing_packages() -> list[str]:
-    names = ("kokoro", "sounddevice", "numpy")
+    names = ("onnxruntime", "misaki", "sounddevice", "numpy", "huggingface_hub")
     try:
         return [name for name in names if importlib.util.find_spec(name) is None]
     except (ImportError, ValueError):
@@ -234,16 +243,16 @@ def _cache_progress() -> tuple[bool, int]:
         for blob in (repo / "blobs").iterdir():
             with contextlib.suppress(OSError):
                 done += blob.stat().st_size
-    weights = voice = False
+    model = config = False
     with contextlib.suppress(OSError):
         for snapshot in (repo / "snapshots").iterdir():
-            weights = weights or (snapshot / "kokoro-v1_0.pth").exists()
-            voice = voice or (snapshot / "voices" / f"{_DEFAULT_VOICE}.pt").exists()
+            model = model or (snapshot / _MODEL_FILE).exists()
+            config = config or (snapshot / _CONFIG_FILE).exists()
     try:
         phonemizer = importlib.util.find_spec("en_core_web_sm") is not None
     except (ImportError, ValueError):
         phonemizer = False
-    return weights and voice and phonemizer, done
+    return model and config and phonemizer, done
 
 
 def speech_status() -> dict[str, Any]:
@@ -329,7 +338,7 @@ async def dispatch_speech(command: Any, runtime: Any, view: Any) -> p.Result | N
             if code not in allowed:
                 code = "speech_unavailable"
             messages = {
-                "speech_dependency_missing": "Install Kokoro and sounddevice to use speech",
+                "speech_dependency_missing": "Install the speak extra (onnxruntime, misaki, sounddevice) to use speech",
                 "speech_model_not_cached": "Speech model is not cached; run /speak download first",
                 "speech_model_unavailable": "Speech model could not be loaded",
                 "speech_playback_failed": "Audio playback failed",
@@ -339,7 +348,7 @@ async def dispatch_speech(command: Any, runtime: Any, view: Any) -> p.Result | N
         backend = result.get("backend")
         if backend == "stopped":
             return p.SpeakResult(message="Stopped speaking", backend="")
-        if backend not in {"kokoro-cpu", "kokoro-mps"}:
+        if backend not in {"paradee-cpu"}:
             return p.ErrorResult(kind="speech_unavailable", message="Speech worker returned an invalid response")
         return p.SpeakResult(message="Finished speaking the latest answer", backend=backend)
     except _SpeechRequestError as exc:
@@ -349,73 +358,124 @@ async def dispatch_speech(command: Any, runtime: Any, view: Any) -> p.Result | N
         return p.ErrorResult(kind="speech_unavailable", message="Speech request failed")
 
 
+class _Engine:
+    """A loaded Paradee model: the onnxruntime session, misaki G2P and the phoneme vocabulary."""
+
+    def __init__(self, session: Any, g2p: Any, vocab: dict[str, int]) -> None:
+        self.session = session
+        self.g2p = g2p
+        self.vocab = vocab
+
+
+_ENGINE: _Engine | None = None  # warm: stays loaded between requests in the serve loop
+_WORKER_STOP = threading.Event()  # set by the serve loop's reader when the parent sends "stop"
+
+
+def _load_engine() -> _Engine:
+    """Fetch (respecting HF_HUB_OFFLINE) and load the model, the vocabulary and the phonemizer."""
+    import onnxruntime as ort
+    from huggingface_hub import hf_hub_download
+    from misaki import en
+
+    model_path = hf_hub_download(_REPO_ID, _MODEL_FILE, revision=_REVISION)
+    config_path = hf_hub_download(_REPO_ID, _CONFIG_FILE, revision=_REVISION)
+    with open(config_path, encoding="utf-8") as handle:
+        vocab = json.load(handle)["vocab"]
+    options = ort.SessionOptions()
+    # ORT's default intra-op threads: measured ~34x real time on an M4 vs ~18x with one thread.
+    options.inter_op_num_threads = 1
+    session = ort.InferenceSession(model_path, options, providers=["CPUExecutionProvider"])
+    # fallback=None: no espeak. Words misaki cannot place are dropped by the vocabulary filter.
+    g2p = en.G2P(trf=False, british=False, fallback=None, unk="")
+    return _Engine(session, g2p, vocab)
+
+
+def _phoneme_chunks(engine: _Engine, text: str):
+    """Yield phoneme strings, one sentence at a time, each at most ``_MAX_PHONEMES`` long."""
+    for sentence in re.split(r"(?<=[.!?…])\s+|\n+", text.strip()):
+        if not sentence.strip():
+            continue
+        phonemes, _ = engine.g2p(sentence)
+        while len(phonemes) > _MAX_PHONEMES:  # a very long sentence: cut at the last space that fits
+            cut = phonemes.rfind(" ", 0, _MAX_PHONEMES)
+            cut = cut if cut > 0 else _MAX_PHONEMES
+            yield phonemes[:cut]
+            phonemes = phonemes[cut:].lstrip()
+        if phonemes:
+            yield phonemes
+
+
+def _synthesize_chunk(engine: _Engine, phonemes: str, np: Any) -> Any:
+    ids = [0] + [engine.vocab[c] for c in phonemes if c in engine.vocab][:_MAX_PHONEMES] + [0]
+    feed = {"input_ids": np.array([ids], dtype=np.int64), "speed": np.array([1.0], dtype=np.float32)}
+    return engine.session.run(None, feed)[0][0]
+
+
 def _worker_synthesize(text: str) -> dict[str, Any]:
     """Synthesize and play in this child process; dependencies load on demand."""
-    device = "mps" if os.environ.get("NEXUS_SPEAK_DEVICE") == "mps" else "cpu"
-    if device == "mps":
-        os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
     try:
-        from kokoro import KPipeline
         import numpy as np
         import sounddevice
+        import onnxruntime  # noqa: F401  (checked here so a missing package reports as such)
+        import misaki  # noqa: F401
+        import huggingface_hub  # noqa: F401
     except ImportError:
         return {"ok": False, "code": "speech_dependency_missing"}
 
+    global _ENGINE
     try:
-        if device in _PIPELINES:  # warm: the model stays loaded between requests
-            return _worker_play(_PIPELINES[device], text, device, np, sounddevice)
-        # English default voice/pipeline; Kokoro assets resolve from the official
-        # Hugging Face repository and respect HF_HUB_OFFLINE in this process.
-        # Misaki downloads spaCy's English package outside Hugging Face. Prevent
-        # this separate network path unless download was explicitly requested.
-        if os.environ.get("HF_HUB_OFFLINE") == "1":
-            import spacy
+        if _ENGINE is None:
+            # Misaki downloads spaCy's English package outside Hugging Face. Prevent
+            # this separate network path unless download was explicitly requested.
+            if os.environ.get("HF_HUB_OFFLINE") == "1":
+                import spacy
 
-            if not spacy.util.is_package("en_core_web_sm"):
-                return {"ok": False, "code": "speech_model_not_cached"}
-        pipeline = _PIPELINES[device] = KPipeline(lang_code="a", repo_id="hexgrad/Kokoro-82M", device=device)
+                if not spacy.util.is_package("en_core_web_sm"):
+                    return {"ok": False, "code": "speech_model_not_cached"}
+            _ENGINE = _load_engine()
     except Exception:
         code = "speech_model_not_cached" if os.environ.get("HF_HUB_OFFLINE") == "1" else "speech_model_unavailable"
         return {"ok": False, "code": code}
 
-    return _worker_play(pipeline, text, device, np, sounddevice)
+    return _worker_play(_ENGINE, text, np, sounddevice)
 
 
-_PIPELINES: dict[str, Any] = {}
-_WORKER_STOP = threading.Event()  # set by the serve loop's reader when the parent sends "stop"
-
-
-def _worker_play(pipeline: Any, text: str, device: str, np: Any, sounddevice: Any) -> dict[str, Any]:
+def _worker_play(engine: _Engine, text: str, np: Any, sounddevice: Any) -> dict[str, Any]:
     total_seconds = 0.0
-    try:
-        for _graphemes, _phonemes, audio in pipeline(text, voice=_DEFAULT_VOICE):
-            try:
-                seconds = float(len(audio)) / 24_000
-            except Exception:
-                return {"ok": False, "code": "speech_unavailable"}
-            if _WORKER_STOP.is_set():
-                return {"ok": True, "backend": "stopped"}
-            total_seconds += seconds
-            if total_seconds > _MAX_AUDIO_SECONDS:
-                return {"ok": False, "code": "speech_unavailable"}
+    chunks = _phoneme_chunks(engine, text)
+    while True:
+        try:
+            phonemes = next(chunks, None)
+            if phonemes is None:
+                break
+            audio = _synthesize_chunk(engine, phonemes, np)
+        except Exception:
+            return {"ok": False, "code": "speech_unavailable"}
+        if _WORKER_STOP.is_set():
+            return {"ok": True, "backend": "stopped"}
+        total_seconds += float(len(audio)) / _SAMPLE_RATE
+        if total_seconds > _MAX_AUDIO_SECONDS:
+            return {"ok": False, "code": "speech_unavailable"}
+        try:
             with contextlib.redirect_stdout(sys.stderr):
-                sounddevice.play(np.asarray(audio.detach().cpu().numpy() if hasattr(audio, "detach") else audio), samplerate=24_000, blocking=True)
-            if _WORKER_STOP.is_set():
-                return {"ok": True, "backend": "stopped"}
-    except Exception:
-        return {"ok": False, "code": "speech_playback_failed"}
-    return {"ok": True, "backend": f"kokoro-{device}"}
+                sounddevice.play(np.asarray(audio, dtype=np.float32), samplerate=_SAMPLE_RATE, blocking=True)
+        except Exception:
+            return {"ok": False, "code": "speech_playback_failed"}
+        if _WORKER_STOP.is_set():
+            return {"ok": True, "backend": "stopped"}
+    return {"ok": True, "backend": "paradee-cpu"}
 
 
 def _worker_prepare() -> dict[str, Any]:
-    """Fetch the model, the default voice and the English phonemizer (network on)."""
+    """Fetch the model and config and load the phonemizer (network on; misaki may fetch spaCy's package)."""
     try:
-        from kokoro import KPipeline
+        import onnxruntime  # noqa: F401
+        import misaki  # noqa: F401
+        import huggingface_hub  # noqa: F401
     except ImportError:
         return {"ok": False, "code": "speech_dependency_missing"}
     try:
-        pipeline = KPipeline(lang_code="a", repo_id="hexgrad/Kokoro-82M", device="cpu")
-        pipeline.load_voice(_DEFAULT_VOICE)
+        _load_engine()
     except Exception:
         return {"ok": False, "code": "speech_model_unavailable"}
     return {"ok": True}

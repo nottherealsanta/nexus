@@ -437,3 +437,21 @@ imports it. Empty blocks are greyed, and the header has no total footer or overf
 text; the five-row inventory cap is therefore silent (a known tension with "clipping
 is announced"). Toggling from a tool page works in place (the list underneath is
 rebuilt); not verified on the desktop client.
+
+## `/speak` uses Paradee on ONNX, not Kokoro on torch (2026-10)
+
+Paradee-8M-v1.0 (Apache 2.0) is an 8M-parameter model distilled from Kokoro-82M
+that speaks Kokoro's af_heart voice. Its int8 ONNX file is 9 MB against about
+325 MB for Kokoro's weights, so the download is about 25 MB with the spaCy English
+package. It runs on onnxruntime's CPU provider with no torch, so the speak extra
+is lighter and there is no MPS or device setting. The model card reports UTMOS
+4.41 (Kokoro 4.52) and the same WER (5.7%); quality was not re-measured here.
+One benchmark on an Apple M4 measured a 2.0 s cold load (Kokoro 2.5 s), a
+paragraph at about 34x real time (Kokoro 9x) and 0.5 GB peak memory (Kokoro 2.6 GB).
+Trade-offs: one voice (the language and device choices are single-valued now);
+phonemes come from misaki with `fallback=None`, so words missing from its
+dictionary are dropped rather than spelled by espeak. The speak extra names
+`misaki` with `spacy` and `num2words` instead of `misaki[en]`, because the `en`
+extra pulls `spacy-curated-transformers` and with it torch. Code:
+`nexus/host_support/speech.py`, `nexus/ui_support/speech_settings.py`; the
+behavior is in [voice.md](voice.md#speak-the-latest-answer-terminal-clients).
