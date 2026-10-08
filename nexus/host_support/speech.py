@@ -211,12 +211,33 @@ def stop_speaking() -> bool:
 #
 # Mirrors the voice model flow (``/voice download``): the clients ask for the
 # status, show the size and ask for consent, call ``SpeechPrepare`` and poll.
-# Status never imports onnxruntime: it looks for the packages and the Hugging Face
-# cache files. Preparation is the only network step, and it runs in the same
-# isolated worker as synthesis.
+# Status never imports onnxruntime: it looks for the packages and the cache
+# files. Preparation is the only network step, and it runs in the same isolated
+# worker as synthesis.
+#
+# Everything downloaded must survive ``nexus update``, which replaces the tool's
+# virtual environment: the model lives in the Hugging Face cache and spaCy's
+# English package is unpacked under ``~/.nexus/models/speech/python`` (never
+# pip-installed into the venv). Consent is durable too: once the user agreed to
+# a download (recorded in ``~/.nexus/models/speech/consent``, or implied by an
+# earlier Kokoro or Paradee download), a missing or newer model is fetched
+# again without asking.
 
 _PREPARE: dict[str, Any] = {"state": "idle", "message": "", "started": 0.0}
 _PREPARE_LOCK = threading.Lock()
+_PHONEMIZER = "en_core_web_sm"
+_PHONEMIZER_MAX_BYTES = 200_000_000
+_LEGACY_REPO_DIR = "models--hexgrad--Kokoro-82M"  # the pre-Paradee model; its presence is earlier consent
+
+
+def _speech_home() -> Path:
+    from ..config.paths import nexus_home
+
+    return nexus_home() / "models" / "speech"
+
+
+def _phonemizer_dir() -> Path:
+    return _speech_home() / "python"
 
 
 def _hub_cache() -> Path:
@@ -235,28 +256,62 @@ def _missing_packages() -> list[str]:
         return list(names)
 
 
+def _phonemizer_present() -> bool:
+    if (_phonemizer_dir() / _PHONEMIZER).is_dir():
+        return True
+    try:  # an older install pip-installed it into the venv
+        return importlib.util.find_spec(_PHONEMIZER) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _tree_bytes(root: Path) -> int:
+    total = 0
+    with contextlib.suppress(OSError):
+        for path in root.rglob("*"):
+            with contextlib.suppress(OSError):
+                if path.is_file():
+                    total += path.stat().st_size
+    return total
+
+
 def _cache_progress() -> tuple[bool, int]:
     """``(everything cached, bytes on disk so far)`` without importing any model code."""
     repo = _hub_cache() / _REPO_DIR
-    done = 0
-    with contextlib.suppress(OSError):
-        for blob in (repo / "blobs").iterdir():
-            with contextlib.suppress(OSError):
-                done += blob.stat().st_size
+    done = _tree_bytes(repo / "blobs") + _tree_bytes(_phonemizer_dir())
     model = config = False
     with contextlib.suppress(OSError):
         for snapshot in (repo / "snapshots").iterdir():
             model = model or (snapshot / _MODEL_FILE).exists()
             config = config or (snapshot / _CONFIG_FILE).exists()
-    try:
-        phonemizer = importlib.util.find_spec("en_core_web_sm") is not None
-    except (ImportError, ValueError):
-        phonemizer = False
-    return model and config and phonemizer, done
+    return model and config and _phonemizer_present(), done
+
+
+def has_consent() -> bool:
+    """Whether the user already agreed to a speech download on this machine.
+
+    True after any ``SpeechPrepare``, or when an earlier Kokoro or Paradee model is
+    in the Hugging Face cache (those were only ever fetched with consent).
+    """
+    if (_speech_home() / "consent").exists():
+        return True
+    hub = _hub_cache()
+    return any((hub / name / "snapshots").is_dir() for name in (_REPO_DIR, _LEGACY_REPO_DIR))
+
+
+def _record_consent() -> None:
+    with contextlib.suppress(OSError):
+        home = _speech_home()
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "consent").write_text("speech model download accepted\n", encoding="utf-8")
 
 
 def speech_status() -> dict[str, Any]:
-    """Bounded model status: ``state`` is unsupported, absent, downloading, ready or error."""
+    """Bounded model status: ``state`` is unsupported, absent, downloading, ready or error.
+
+    A model that is missing after the user once consented (an upgrade, a new
+    model, a cleared cache) starts downloading here, with no second prompt.
+    """
     missing = _missing_packages()
     ready, done = _cache_progress()
     with _PREPARE_LOCK:
@@ -265,6 +320,9 @@ def speech_status() -> dict[str, Any]:
     if missing:
         return {**base, "state": "unsupported", "progress": 0.0,
                 "message": f"Missing {', '.join(missing)}. {_INSTALL_HINT}"}
+    if not ready and prepare["state"] == "idle" and has_consent():
+        _start_prepare()
+        prepare["state"] = "downloading"
     if prepare["state"] == "downloading":
         return {**base, "state": "downloading", "progress": min(0.99, done / MODEL_BYTES),
                 "message": "Downloading the local speech model…"}
@@ -299,14 +357,19 @@ def _prepare_worker() -> None:
         _PREPARE.update(state=state, message=message)
 
 
-def schedule_prepare() -> dict[str, Any]:
-    """Start the one-time download if it is needed and not already running."""
-    status = speech_status()
-    if status["state"] in {"unsupported", "ready", "downloading"}:
-        return status
+def _start_prepare() -> None:
     with _PREPARE_LOCK:
+        if _PREPARE["state"] == "downloading":
+            return
         _PREPARE.update(state="downloading", message="", started=time.time())
     threading.Thread(target=_prepare_worker, name="speech-prepare", daemon=True).start()
+
+
+def schedule_prepare() -> dict[str, Any]:
+    """Record consent and start the download if it is needed and not already running."""
+    _record_consent()
+    if not _missing_packages() and not _cache_progress()[0]:
+        _start_prepare()
     return speech_status()
 
 
@@ -375,6 +438,8 @@ def _load_engine() -> _Engine:
     """Fetch (respecting HF_HUB_OFFLINE) and load the model, the vocabulary and the phonemizer."""
     import onnxruntime as ort
     from huggingface_hub import hf_hub_download
+
+    _ensure_phonemizer()
     from misaki import en
 
     model_path = hf_hub_download(_REPO_ID, _MODEL_FILE, revision=_REVISION)
@@ -388,6 +453,68 @@ def _load_engine() -> _Engine:
     # fallback=None: no espeak. Words misaki cannot place are dropped by the vocabulary filter.
     g2p = en.G2P(trf=False, british=False, fallback=None, unk="")
     return _Engine(session, g2p, vocab)
+
+
+def _ensure_phonemizer() -> None:
+    """Make spaCy's English package importable, downloading it under ``~/.nexus`` when online.
+
+    It is unpacked from spaCy's official wheel into ``~/.nexus/models/speech/python``
+    rather than pip-installed: uv tool environments have no pip, and ``nexus update``
+    replaces the environment, which would drop the package and ask again.
+    """
+    target = _phonemizer_dir()
+    _add_to_path(target)
+    import spacy
+
+    if spacy.util.is_package(_PHONEMIZER):
+        return
+    if os.environ.get("HF_HUB_OFFLINE") == "1":
+        raise _SpeechRequestError("speech_model_not_cached", "The English phonemizer is not downloaded")
+    _download_phonemizer(target)
+    _add_to_path(target)
+
+
+def _add_to_path(target: Path) -> None:
+    if target.is_dir() and str(target) not in sys.path:
+        sys.path.insert(0, str(target))
+        importlib.invalidate_caches()
+
+
+def _download_phonemizer(target: Path) -> None:
+    """Fetch the spaCy-compatible ``en_core_web_sm`` wheel and unpack it into ``target`` (bounded)."""
+    import shutil
+    import urllib.request
+    import zipfile
+
+    from spacy import about
+    from spacy.cli.download import get_compatibility, get_model_filename, get_version
+
+    base = about.__download_url__.rstrip("/") + "/"
+    url = base + get_model_filename(_PHONEMIZER, get_version(_PHONEMIZER, get_compatibility()), False)
+    if not url.startswith(base) or ".." in url[len(base):]:
+        raise ValueError("unexpected phonemizer download URL")
+    staging = target.parent / "python.partial"
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True)
+    try:
+        wheel = staging / "phonemizer.whl"
+        with urllib.request.urlopen(url, timeout=60) as response, wheel.open("wb") as out:
+            written = 0
+            while chunk := response.read(1 << 20):
+                written += len(chunk)
+                if written > _PHONEMIZER_MAX_BYTES:
+                    raise ValueError("phonemizer download is too large")
+                out.write(chunk)
+        unpacked = staging / "python"
+        with zipfile.ZipFile(wheel) as archive:
+            for name in archive.namelist():
+                if name.startswith(("/", "\\")) or ".." in Path(name).parts:
+                    raise ValueError("unsafe path in the phonemizer wheel")
+            archive.extractall(unpacked)
+        shutil.rmtree(target, ignore_errors=True)
+        unpacked.rename(target)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def _phoneme_chunks(engine: _Engine, text: str):
@@ -425,13 +552,8 @@ def _worker_synthesize(text: str) -> dict[str, Any]:
     global _ENGINE
     try:
         if _ENGINE is None:
-            # Misaki downloads spaCy's English package outside Hugging Face. Prevent
-            # this separate network path unless download was explicitly requested.
-            if os.environ.get("HF_HUB_OFFLINE") == "1":
-                import spacy
-
-                if not spacy.util.is_package("en_core_web_sm"):
-                    return {"ok": False, "code": "speech_model_not_cached"}
+            # Offline (the default) never downloads: a missing phonemizer or model
+            # raises and is reported as not cached.
             _ENGINE = _load_engine()
     except Exception:
         code = "speech_model_not_cached" if os.environ.get("HF_HUB_OFFLINE") == "1" else "speech_model_unavailable"
@@ -467,7 +589,7 @@ def _worker_play(engine: _Engine, text: str, np: Any, sounddevice: Any) -> dict[
 
 
 def _worker_prepare() -> dict[str, Any]:
-    """Fetch the model and config and load the phonemizer (network on; misaki may fetch spaCy's package)."""
+    """Fetch the model, its config and the English phonemizer (network on)."""
     try:
         import onnxruntime  # noqa: F401
         import misaki  # noqa: F401

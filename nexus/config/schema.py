@@ -141,7 +141,7 @@ class AgentSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     memory_file: str = "MEMORY.md"
     agents_file: str = "AGENTS.md"
     max_iterations: int = 0  # 0 = unlimited
-    max_turn_seconds: float = 1800
+    max_turn_seconds: float = 0  # 0 = unlimited
     # Carried so a flat v1 layer can be bridged into v2 without losing it.
     sandbox: SandboxMode = "workspace-write"
 
@@ -724,7 +724,7 @@ class SessionsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
     ``auto_title`` names a new session with one small side call to ``title_model``
     (a tier name or a ``provider/model`` reference); off keeps the first line of
-    the first message as the title (plans/SESSION_TITLE_PLAN.md).
+    the first message as the title (plans/done/SESSION_TITLE_PLAN.md).
     """
 
     auto_archive_days: int = 2

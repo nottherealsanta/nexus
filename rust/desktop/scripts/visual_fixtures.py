@@ -2,7 +2,7 @@
 """Write labelled, read-only visual fixtures; never connect to a daemon.
 
 Use the real host's mock scenarios for integration. These snapshots cover
-approval and image layouts without executing commands or requesting credentials.
+conversation, error, approval and image layouts without executing commands or requesting credentials.
 """
 from __future__ import annotations
 
@@ -48,7 +48,56 @@ def main() -> None:
                 "lines": ["Which direction should we explore first?"],
                 "choices": [{"label": label, "value": label, "key": str(i + 1), "disabled": False}
                             for i, label in enumerate(("Architecture", "Interface", "Tests"))]}}
-    for name, snapshot in (("approval", approval), ("image", image), ("question", question)):
+    conversation = {**base, "title": "Desktop visual review", "sessions_sidebar": True,
+                    "details_sidebar": True,
+                    "sessions": [{"id": "fixture", "title": "Desktop visual review", "workspace": "/demo/nexus", "active": True}],
+                    "blocks": [{"id": "request", "kind": "user", "gap": 1,
+                                "text": "Review the desktop interface and keep every parameter and output inspectable."}]}
+    for i in range(12):
+        conversation["blocks"].extend([
+            {"id": f"reply-{i}", "kind": "markdown", "gap": 1,
+             "text": f"Step {i + 1}: inspect the workspace. The reading column keeps long explanations comfortable while tool parameters and complete results remain available through labelled disclosures."},
+            {"id": f"tool-{i}", "kind": "tool", "title": f"read · src/module_{i}.py",
+             "status": "running" if i == 10 else "failed" if i == 11 else "completed",
+             "collapsed": i != 11, "gap": 1,
+             "detail": "Path: src/module_11.py\nResult: file not found" if i == 11 else "",
+             "operation": {"kind": "tool_toggle", "id": f"tool-{i}"}},
+        ])
+    error = {**conversation, "restore": "A multiline draft remains editable.\nThe notice must stay above this frame.\nThird line of the draft.",
+             "toasts": [{"id": 1, "level": "error", "title": "Request failed",
+                         "body": "The selected mock scenario could not be found. Choose a supported scenario and retry. " * 5 +
+                                 "Diagnostic path: /demo/" + "long-path-segment/" * 16}]}
+    history = {**conversation, "title": "History scroll regression", "sessions": [],
+               "sessions_sidebar": False, "details_sidebar": False, "blocks": []}
+    for i in range(4):
+        history["blocks"].extend([
+            {"id": f"user-{i}", "kind": "user", "gap": 1,
+             "title": f"Request {i + 1}: Keep the complete conversation visible.",
+             "text": "User messages follow the same left edge as replies."},
+            {"id": f"earlier-reply-{i}", "kind": "markdown", "gap": 1,
+             "text": f"Reply {i + 1}: Earlier history remains available by scrolling upward."},
+        ])
+    history["blocks"].append({"id": "long-final", "kind": "markdown", "gap": 1,
+                              "text": "## A long final reply\n\n" + "\n".join(
+                                  f"Line {i + 1}: Scroll upward to reach the earlier requests and replies."
+                                  for i in range(90))})
+    tui_layout = {**conversation, "title": "Inspect the desktop", "status": "done",
+                  "breadcrumb": "/private/tmp/nexus-desktop-review/sandbox/workspace › main",
+                  "tabs": [{"id": "fixture", "title": "Inspect the desktop ⟦mock scenario=tool-marathon actor=main speed=12 seed=0⟧", "workspace": "/demo/nexus", "active": True},
+                           {"id": "second", "title": "A longer conversation title that remains available in full", "workspace": "/demo/nexus"}],
+                  "sessions": [{"id": "fixture", "title": "Inspect the desktop ⟦mock scenario=tool-marathon actor=main speed=12 seed=0⟧", "workspace": "/demo/nexus", "active": True, "sub": "4 · 2m"}],
+                  "blocks": [{"id": "context", "kind": "context_header", "members": [
+                      {"title": label, "counts": [count], "operation": {"kind": "context_header", "key": label}}
+                      for label, count in [("System prompt", 1), ("Environment", 1), ("AGENTS.md", 1), ("Tools", 8), ("MCP", 0)]]},
+                             {"id": "request", "kind": "user", "title": "Make the desktop feel like the TUI.", "text": "Keep context and complete tool output inspectable.", "number": 1, "gap": 1, "operation": {"kind": "turn_toggle", "id": "fixture-turn"}},
+                             {"id": "response", "kind": "markdown", "text": "The same session, context, conversation and details hierarchy works here. Tools stay compact beneath the reply.\n\n```python\ndef inspect_workspace():\n    return \"complete context\"\n```", "gap": 1},
+                             {"id": "read", "kind": "tool", "title": "Read docs/desktop.md", "status": "completed", "collapsed": True, "operation": {"kind": "tool_toggle", "id": "read"}},
+                             {"id": "search", "kind": "tool", "title": "Search desktop shortcuts", "status": "running", "collapsed": True, "operation": {"kind": "tool_toggle", "id": "search"}}]}
+    for name, snapshot in (("approval", approval), ("image", image), ("question", question),
+                           ("conversation", conversation), ("error", error), ("history", history), ("tui-layout", tui_layout)):
+        for theme in ("dark", "light"):
+            themed = {**snapshot, "theme": f"nexus-{theme}"}
+            (args.output / f"{name}-{theme}.json").write_text(json.dumps(themed), encoding="utf-8")
         (args.output / f"{name}.json").write_text(json.dumps(snapshot), encoding="utf-8")
 
 

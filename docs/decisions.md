@@ -16,8 +16,12 @@ this page and the code win.
 | **Skill, MCP and root-agent choices lock after a session's first turn.** | Changing the prompt prefix would invalidate the prompt cache and confuse the record. | `session/session.py:context_locked` |
 | **Native tool/task rows omit failure badges and result gutters.** | The loop handles tool failures; expanded details and the agent page retain errors without adding noisy duplicate status marks to the transcript. | [surfaces.md](surfaces.md), `rust/tui/src/transcript.rs` |
 
-The desktop's latest visual direction uses neutral greys, curved controls and
-compact activity trees, following the supplied native references. Its composer
+The desktop copies the Ratatui design language: `theme.rs` derives its palette
+from the TUI `Palette` (neutral greys, warm `#FAB283`/`#C8672F` brand accent,
+semantic blue/purple/cyan/success/warning/error) and resolves host colour tokens
+(`$nx-*`, agent hex) the way `transcript::color` does, so agent identity, thoughts,
+tasks and context sources carry the same colours on both native surfaces. Native
+type, curved controls and window chrome remain desktop-specific. Its composer
 retains Ratatui's editor/controls/context ordering. Image previews are bounded
 presentation data from the existing host; custom clients never read local image
 paths themselves. See [desktop.md](desktop.md).
@@ -217,6 +221,13 @@ field was removed because models filled the optional string with `""`, `" "` or
 because it would need a call exactly when the limit, budget or provider has already
 failed. The iteration cap now defaults to unlimited (`max_iterations = 0`); the
 wall-clock and token limits remain the automatic stops.
+
+The wall clock is now unlimited by default too (`max_turn_seconds = 0`,
+2026-10-08). The 30-minute default silently ended long turns right after a
+tool result, without sending that result to the model, and a parent's clock
+includes time spent waiting on subagents. Users saw the agent stop mid-task.
+No limit is applied automatically now; any positive limit is opt-in, and a limit
+stop is labelled in the turn footer.
 
 ## Native redesign: layout, context and incremental rendering (2026-10-02)
 
@@ -430,13 +441,33 @@ Skills, Tools and MCP each own their part, so rows sum without double counting a
 nothing the agent sees is hidden. Tools is a one-line-per-tool `list` panel with the
 detail on a second `detail` page (≤ 88 columns, as tall as its text), because a
 full-width grouped list buried the one number people look for (the token cost).
-Skills and MCP are cards (one selectable item with dim rows) that open a skill page
-or a server page, all through host commands. The dev MCP server lives in `devtools`
+Skills are cards (one selectable item with dim rows) that open a skill page; MCP is a
+thin `list` like Tools (one line per server, token column, Restart chip) that opens a
+server page, all through host commands. The dev MCP server lives in `devtools`
 and is wired only by the sandbox's generated `mcp.json`, so the product path never
 imports it. Empty blocks are greyed, and the header has no total footer or overflow
 text; the five-row inventory cap is therefore silent (a known tension with "clipping
 is announced"). Toggling from a tool page works in place (the list underneath is
 rebuilt); not verified on the desktop client.
+
+## File changes stand alone; MCP restart is a host command (2026-10)
+
+Activity groups fold reads, searches and commands into one summary line, which is
+right for exploration but hid the changes a reader most wants to check. Edits,
+writes, patches and questions are therefore never folded: each is its own `change`
+row with the path and `+added −removed`, open by default on a unified diff in
+add/delete colours (a group of one repeated its header as a member row and hid the
+diff behind a second click). MCP Restart is a host
+command (`McpServerRestart`) rather than a client-side reload because only the
+daemon owns connections; the connection is shared, so a restart is visible to every
+session. Refresh reuses `ExtensionsReload`, which already reconciles `mcp.json`, so
+there is one path for picking up new servers. Refresh then restarts not-connected
+servers, because reload alone leaves a failed server waiting out its backoff. A leading `/` runs a command only when
+the first word is a known command or a bare word; anything path-shaped is prose,
+trading silent sends of `/foo.bar` typos for never refusing a pasted path. The
+80-column centered conversation is a local terminal preference, like the sidebars.
+Rust rendering of the Restart chip and centered layout is covered by unit tests;
+not verified in a real terminal.
 
 ## `/speak` uses Paradee on ONNX, not Kokoro on torch (2026-10)
 
@@ -455,3 +486,31 @@ dictionary are dropped rather than spelled by espeak. The speak extra names
 extra pulls `spacy-curated-transformers` and with it torch. Code:
 `nexus/host_support/speech.py`, `nexus/ui_support/speech_settings.py`; the
 behavior is in [voice.md](voice.md#speak-the-latest-answer-terminal-clients).
+
+## Speech survives upgrades without asking again (2026-10)
+
+An upgrade must not make a user who already speaks answers reinstall, re-init or
+re-consent. Three things used to break that: `nexus update` could drop the
+`speak` extra, spaCy's English package was pip-installed into the tool venv (which
+`uv tool install --force` replaces, and which has no pip at all), and a release
+that changes the model showed the consent dialog again. So `update_extras` keeps
+`speak` the way it keeps `voice`; the phonemizer wheel is unpacked under
+`~/.nexus/models/speech/python`; and consent is a durable fact (a consent file,
+or an earlier Kokoro/Paradee cache), after which the daemon fetches a missing
+model by itself and `/speak` waits for it and speaks. The consent covered a local
+speech model of the same kind, a few tens of MB; a much larger model would need
+asking again. Re-running `install.sh` (rather than `nexus update`) does not read
+the old receipt, so it keeps `speak` only when passed in `--extras`; not changed here.
+
+## `nexus uninstall` removes all data, after asking (2026-10)
+
+`uv tool uninstall` leaves `~/.nexus` behind on purpose, so there was no way to remove
+Nexus completely without knowing every path it writes. `nexus uninstall` deletes the
+whole Nexus home rather than a list of known files, because the home gathers entries
+the docs do not list (handoffs, search server state, model preferences); a list would
+miss them. Deleting a whole directory is only safe when it really is the Nexus home,
+so `/`, the user's home and its parents, and a custom `NEXUS_HOME` without `nexus.db`
+are refused. It asks with a plain `[y/N]` after listing every path and size, and needs
+`--yes` without a terminal. The Hugging Face cache is shared with other tools, so only
+the two speech model folders are removed. Project files are not Nexus state and are kept.
+

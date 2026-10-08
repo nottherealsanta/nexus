@@ -70,32 +70,253 @@ pub enum SidebarHit {
     New,
     Archived,
     Session(usize),
+    /// A project · day heading; the index is its first session. Clicking it shows
+    /// only that session's project (again: all projects).
+    Heading(usize),
 }
-/// The sessions sidebar as styled rows, like the terminal's `SessionSidebar`: a New
-/// session button, `SESSIONS N`, day/project headings and two-line cards (glyph
-/// and title; status words and age) with a left bar on the current session.
-/// Indexes of the sessions the sidebar shows for `filter` (title, id, workspace or
-/// group, case-insensitive). Keyboard selection and drawing share this one list.
-pub fn visible_sessions(s: &Snapshot, filter: &str) -> Vec<usize> {
-    let needle = filter.to_lowercase();
-    (0..s.sessions.len())
-        .filter(|i| {
-            let row = &s.sessions[*i];
-            needle.is_empty()
-                || format!("{} {} {} {}", row.title, row.id, row.workspace, row.group)
-                    .to_lowercase()
-                    .contains(&needle)
+
+/// The project a session belongs to: a linked worktree's repository, else its
+/// workspace. Filtering, chips and colors all key on this path.
+pub fn project_key(row: &crate::bridge::Session) -> &str {
+    if row.repo.is_empty() {
+        &row.workspace
+    } else {
+        &row.repo
+    }
+}
+
+/// A project's display name: the host's label, else the project folder name.
+pub fn project_label(row: &crate::bridge::Session) -> String {
+    if !row.project.is_empty() {
+        return row.project.clone();
+    }
+    let key = project_key(row);
+    std::path::Path::new(key)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| key.to_string())
+}
+
+/// A stable color per project (by its path), so a project reads the same in its
+/// headings and its filter chip.
+pub fn project_color(p: &Palette, key: &str) -> Color {
+    let hues = [p.blue, p.purple, p.success, p.warning, p.accent, p.error];
+    let hash = key.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3)
+    });
+    hues[(hash % hues.len() as u64) as usize]
+}
+
+/// Day headings use one color, distinct from every project color.
+fn day_color(p: &Palette) -> Color {
+    p.cyan
+}
+
+/// The projects in the session list, most recently active first: (key, label,
+/// number of worktrees with sessions).
+pub fn session_projects(s: &Snapshot) -> Vec<(String, String, usize)> {
+    let mut out: Vec<(String, String, Vec<&str>)> = Vec::new();
+    for row in &s.sessions {
+        let key = project_key(row);
+        let at = match out.iter().position(|(k, _, _)| k == key) {
+            Some(at) => at,
+            None => {
+                out.push((key.to_string(), project_label(row), Vec::new()));
+                out.len() - 1
+            }
+        };
+        if !row.worktree.is_empty() && !out[at].2.contains(&row.worktree.as_str()) {
+            out[at].2.push(&row.worktree);
+        }
+    }
+    out.into_iter()
+        .map(|(key, label, trees)| (key, label, trees.len()))
+        .collect()
+}
+
+/// The project filter in effect: a picked project that left the list (archived,
+/// deleted) no longer filters.
+pub fn picked_project<'a>(s: &Snapshot, project: &'a str) -> &'a str {
+    if s.sessions.iter().any(|row| project_key(row) == project) {
+        project
+    } else {
+        ""
+    }
+}
+
+/// At most this many rows of project chips sit under the sidebar title.
+const CHIP_ROWS: usize = 3;
+const CHIP_LABEL: usize = 20;
+
+/// The project filter chips laid out in `width` columns: for each chip row, the
+/// chips as (start column, end column, project key — empty for "All", label). A
+/// project with worktrees reads `name +Nwt` (N worktrees, grouped under it). One
+/// layout serves drawing and clicks. Projects that do not fit end in a `+N more`
+/// chip with no target (`None`).
+pub fn project_chips(
+    s: &Snapshot,
+    width: usize,
+) -> Vec<Vec<(usize, usize, Option<String>, String)>> {
+    let projects = session_projects(s);
+    if projects.is_empty() || width < 8 {
+        return Vec::new();
+    }
+    let mut chips: Vec<(Option<String>, String)> = vec![(Some(String::new()), "All".into())];
+    chips.extend(projects.into_iter().map(|(key, label, trees)| {
+        let label = crate::transcript::truncate(&label, CHIP_LABEL);
+        (
+            Some(key),
+            if trees > 0 {
+                format!("{label} +{trees}wt")
+            } else {
+                label
+            },
+        )
+    }));
+    let total = chips.len();
+    let mut rows: Vec<Vec<(usize, usize, Option<String>, String)>> = vec![Vec::new()];
+    let mut x = 0;
+    for (index, (key, label)) in chips.into_iter().enumerate() {
+        let size = label.width() + 2;
+        if x > 0 && x + size > width {
+            if rows.len() == CHIP_ROWS {
+                // Out of room: replace chips from the end of the last row with `+N more`.
+                let last = rows.last_mut().unwrap();
+                let mut hidden = total - index;
+                loop {
+                    let more = format!("+{hidden} more");
+                    let end = last.last().map_or(0, |chip| chip.1 + 1);
+                    if end + more.width() + 2 <= width || last.is_empty() {
+                        last.push((end, end + more.width() + 2, None, more));
+                        break;
+                    }
+                    last.pop();
+                    hidden += 1;
+                }
+                return rows;
+            }
+            rows.push(Vec::new());
+            x = 0;
+        }
+        rows.last_mut().unwrap().push((x, x + size, key, label));
+        x += size + 1;
+    }
+    rows
+}
+
+/// Chip rows as styled lines; `project` is the selected project key (empty: All).
+pub fn project_chip_lines(
+    s: &Snapshot,
+    p: &Palette,
+    width: usize,
+    project: &str,
+) -> Vec<Line<'static>> {
+    let project = picked_project(s, project);
+    project_chips(s, width)
+        .into_iter()
+        .map(|row| {
+            let mut spans = Vec::new();
+            let mut x = 0;
+            for (start, end, key, label) in row {
+                spans.push(Span::raw(" ".repeat(start.saturating_sub(x))));
+                let style = match key.as_deref() {
+                    None => Style::default().fg(p.quiet),
+                    Some(key) => {
+                        let fg = if key.is_empty() {
+                            p.text
+                        } else {
+                            project_color(p, key)
+                        };
+                        if key == project {
+                            Style::default()
+                                .fg(fg)
+                                .bg(p.element_hi)
+                                .add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().fg(fg).bg(p.element)
+                        }
+                    }
+                };
+                spans.push(Span::styled(format!(" {label} "), style));
+                x = end;
+            }
+            Line::from(spans)
         })
         .collect()
 }
 
-/// `selected` is the keyboard-selected session id (drawn with a raised row and a bar).
+/// Rows above the session list: the title, then the project chips and a rule (when
+/// there are chips), else one blank row.
+pub fn sessions_list_top(s: &Snapshot, region: Rect) -> u16 {
+    let chips = project_chips(s, usize::from(region.width.saturating_sub(3))).len() as u16;
+    if chips == 0 {
+        2
+    } else {
+        chips + 2
+    }
+}
+
+/// Session list rows visible in a sidebar `region` (the filter box is the last row).
+pub fn sessions_list_height(s: &Snapshot, region: Rect) -> usize {
+    usize::from(
+        region
+            .height
+            .saturating_sub(sessions_list_top(s, region) + 1),
+    )
+    .max(1)
+}
+
+/// The index into `session_sidebar` rows under screen `row`, for list scroll `scroll`
+/// (row 0 is the fixed title, so the list starts at index 1).
+pub fn sessions_row_at(s: &Snapshot, region: Rect, scroll: usize, row: u16) -> Option<usize> {
+    let offset = usize::from(row.checked_sub(region.y + sessions_list_top(s, region))?);
+    (offset < sessions_list_height(s, region)).then_some(scroll + 1 + offset)
+}
+
+/// The project chip under a click in the sidebar `region`: `Some(key)` (empty for
+/// All), or `None` when the click is not on a chip.
+pub fn project_chip_at(s: &Snapshot, region: Rect, column: u16, row: u16) -> Option<String> {
+    let chips = project_chips(s, usize::from(region.width.saturating_sub(3)));
+    let line = chips.get(usize::from(row.checked_sub(region.y + 1)?))?;
+    let x = usize::from(column.checked_sub(region.x + 1)?);
+    line.iter()
+        .find(|chip| x >= chip.0 && x < chip.1)
+        .and_then(|chip| chip.2.clone())
+}
+
+/// Indexes of the sessions the sidebar shows for `filter` (title, id, workspace,
+/// project, worktree or group, case-insensitive) within `project` (a project key;
+/// empty: all). Keyboard selection and drawing share this one list.
+pub fn visible_sessions(s: &Snapshot, filter: &str, project: &str) -> Vec<usize> {
+    let needle = filter.to_lowercase();
+    let project = picked_project(s, project);
+    (0..s.sessions.len())
+        .filter(|i| {
+            let row = &s.sessions[*i];
+            (project.is_empty() || project_key(row) == project)
+                && (needle.is_empty()
+                    || format!(
+                        "{} {} {} {} {} {}",
+                        row.title, row.id, row.workspace, row.project, row.worktree, row.group
+                    )
+                    .to_lowercase()
+                    .contains(&needle))
+        })
+        .collect()
+}
+
+/// The sessions sidebar as styled rows: a New session button, `SESSIONS N`, colored
+/// `project › worktree · day` headings and one row per session (status glyph and
+/// title) with a left bar on the current session. `selected` is the
+/// keyboard-selected session id (drawn with a raised row and a bar).
+#[allow(clippy::too_many_arguments)]
 pub fn session_sidebar(
     s: &Snapshot,
     p: &Palette,
     width: usize,
     spin: usize,
     filter: &str,
+    project: &str,
     _editing: bool,
     selected: Option<&str>,
 ) -> Vec<(Line<'static>, Option<SidebarHit>)> {
@@ -107,33 +328,88 @@ pub fn session_sidebar(
         )
     };
     let mut rows = vec![(
-        Line::styled("☰ Sessions", Style::default().fg(p.text)),
+        Line::styled("▌ Sessions", Style::default().fg(p.text)),
         Some(SidebarHit::New),
     )];
-    let needle = filter.to_lowercase();
-    let shown = visible_sessions(s, filter);
-    rows.push((
-        Line::styled(
-            if needle.is_empty() {
-                format!("SESSIONS {}", s.sessions.len())
-            } else {
-                format!("SESSIONS {} of {}", shown.len(), s.sessions.len())
-            },
-            Style::default().fg(p.quiet).add_modifier(Modifier::BOLD),
-        ),
-        None,
-    ));
+    let project = picked_project(s, project);
+    let shown = visible_sessions(s, filter, project);
+    let mut count = vec![Span::styled(
+        if filter.is_empty() && project.is_empty() {
+            format!("SESSIONS {}", s.sessions.len())
+        } else {
+            format!("SESSIONS {} of {}", shown.len(), s.sessions.len())
+        },
+        Style::default().fg(p.quiet).add_modifier(Modifier::BOLD),
+    )];
+    if let Some(row) = s
+        .sessions
+        .iter()
+        .find(|row| !project.is_empty() && project_key(row) == project)
+    {
+        count.push(Span::styled(" · ", Style::default().fg(p.quiet)));
+        count.push(Span::styled(
+            crate::transcript::truncate(&project_label(row), width.saturating_sub(20)),
+            Style::default()
+                .fg(project_color(p, project))
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    rows.push((Line::from(count), None));
     let mut previous = "";
     for i in shown {
         let session = &s.sessions[i];
         if session.group != previous {
-            rows.push((
-                Line::styled(
-                    session.group.clone(),
-                    Style::default().fg(p.muted).add_modifier(Modifier::BOLD),
-                ),
-                None,
-            ));
+            // A blank row before each group keeps one-line rows easy to scan.
+            rows.push((Line::default(), None));
+            let bold = Style::default().add_modifier(Modifier::BOLD);
+            let heading = if session.day.is_empty() {
+                Line::styled(session.group.clone(), bold.fg(p.muted))
+            } else {
+                // `project › worktree · day`; with a project picked, its name is in
+                // the count row above, so headings drop it.
+                let mut spans = Vec::new();
+                let tree = if session.worktree.is_empty() {
+                    String::new()
+                } else {
+                    format!("› {}", session.worktree)
+                };
+                let room = width.saturating_sub(session.day.width() + 3);
+                if project.is_empty() {
+                    let name = crate::transcript::truncate(
+                        &project_label(session),
+                        room.saturating_sub(if tree.is_empty() { 0 } else { 6 })
+                            .max(4),
+                    );
+                    let used = name.width();
+                    spans.push(Span::styled(
+                        name,
+                        bold.fg(project_color(p, project_key(session))),
+                    ));
+                    if !tree.is_empty() {
+                        spans.push(Span::styled(
+                            format!(
+                                " {}",
+                                crate::transcript::truncate(&tree, room.saturating_sub(used + 1))
+                            ),
+                            Style::default().fg(p.muted),
+                        ));
+                    }
+                } else if !tree.is_empty() {
+                    spans.push(Span::styled(
+                        crate::transcript::truncate(&tree, room),
+                        Style::default().fg(p.muted),
+                    ));
+                }
+                if !spans.is_empty() {
+                    spans.push(Span::styled(" · ", Style::default().fg(p.quiet)));
+                }
+                spans.push(Span::styled(
+                    session.day.clone(),
+                    Style::default().fg(day_color(p)),
+                ));
+                Line::from(spans)
+            };
+            rows.push((heading, Some(SidebarHit::Heading(i))));
             previous = &session.group;
         }
         let tone = match session.status.as_str() {
@@ -175,29 +451,17 @@ pub fn session_sidebar(
         } else {
             Modifier::empty()
         };
-        let room = width.saturating_sub(3);
-        let title = crate::transcript::truncate(&session.title, room);
-        let sub = crate::transcript::truncate(
-            if session.sub.is_empty() {
-                &session.state
-            } else {
-                &session.sub
-            },
-            room,
-        );
-        rows.push((
-            Line::from(vec![
-                bar.clone(),
-                Span::styled(format!("{glyph} "), Style::default().fg(tone).bg(bg)),
-                pad(title, Style::default().fg(p.text).bg(bg).add_modifier(bold)).clone(),
-            ]),
-            Some(SidebarHit::Session(i)),
-        ));
+        let title = crate::transcript::truncate(&session.title, width.saturating_sub(3));
+        let fg = if session.active || picked {
+            p.text
+        } else {
+            p.muted
+        };
         rows.push((
             Line::from(vec![
                 bar,
-                Span::styled("  ", Style::default().bg(bg)),
-                pad(sub, Style::default().fg(tone).bg(bg)),
+                Span::styled(format!("{glyph} "), Style::default().fg(tone).bg(bg)),
+                pad(title, Style::default().fg(fg).bg(bg).add_modifier(bold)),
             ]),
             Some(SidebarHit::Session(i)),
         ));
@@ -344,7 +608,7 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
                     &mut tabs,
                     &mut at,
                     cell.start,
-                    " ☰ ".into(),
+                    " ▌ ".into(),
                     background.fg(if s.sessions_sidebar {
                         p.accent
                     } else {
@@ -659,8 +923,8 @@ fn breadcrumb_row(s: &Snapshot, area: Rect, p: &Palette, _spin: usize) -> Line<'
     let notice = crate::transcript::truncate(&s.update_notice, notice_width(s, area));
     let suffix = if width == 0 { "" } else { " " };
     let reserved = suffix.width() + notice.width();
-    // Match the composer inset (two cells) plus its three-cell rail padding.
-    let indent = 5.min(width.saturating_sub(reserved));
+    // Start at the composer card's `▎` rail (its two-cell inset), not its text column.
+    let indent = 2.min(width.saturating_sub(reserved));
     let available = width.saturating_sub(reserved + indent);
     let crumb = if available == 0 {
         String::new()
@@ -683,7 +947,7 @@ mod chrome_tests {
     use super::*;
 
     #[test]
-    fn breadcrumb_matches_editable_composer_column_and_keeps_suffix() {
+    fn breadcrumb_starts_at_the_composer_rail_and_keeps_suffix() {
         let s = Snapshot {
             breadcrumb: "~/repo › main".into(),
             ..Snapshot::default()
@@ -695,7 +959,7 @@ mod chrome_tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect();
-        assert!(text.starts_with("     ~/repo › main"));
+        assert!(text.starts_with("  ~/repo › main"));
         assert_eq!(text.width(), 48);
         for width in 0..8 {
             assert!(

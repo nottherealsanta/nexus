@@ -4,7 +4,8 @@ Contract: ``git_head(workspace)`` walks up from the workspace (at most 64
 levels) to the first ``.git`` entry, which is a directory (a normal checkout)
 or a ``gitdir: <path>`` file (a linked worktree), and reads ``HEAD`` with a
 bounded read. It returns ``{"root", "branch", "detached", "worktree",
-"worktree_name"}``, or ``{}`` when the workspace is not in a repository or
+"worktree_name", "main_root"}`` (``main_root`` is the main checkout of a linked
+worktree, else ``root``), or ``{}`` when the workspace is not in a repository or
 anything fails. It never raises and never runs a subprocess, so the Doctor
 report that UIs poll stays cheap. Every string is stripped of control
 characters and bounded to 200 characters.
@@ -43,6 +44,17 @@ def _find_dot_git(start: Path) -> tuple[Path, Path] | None:
             return None
         current = current.parent
     return None
+
+
+def _main_root(git_dir: Path) -> Path:
+    """The main checkout of a linked worktree: its ``commondir`` (else
+    ``<main>/.git``, two levels above ``.git/worktrees/<name>``) without ``.git``."""
+    common = git_dir.parent.parent
+    pointer = git_dir / "commondir"
+    if pointer.is_file():
+        target = Path(_read(pointer).strip())
+        common = (target if target.is_absolute() else git_dir / target).resolve()
+    return common.parent if common.name == ".git" else common
 
 
 def git_head(workspace: Path | str | None) -> dict[str, Any]:
@@ -84,6 +96,7 @@ def git_head(workspace: Path | str | None) -> dict[str, Any]:
             "detached": detached,
             "worktree": worktree,
             "worktree_name": _clean(git_dir.name) if worktree else "",
+            "main_root": _clean(str(_main_root(git_dir))) if worktree else _clean(str(root)),
         }
     except Exception:  # noqa: BLE001 - health must never raise
         return {}

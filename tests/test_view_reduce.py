@@ -723,6 +723,20 @@ def test_context_usage_prefers_the_provider_measurement_and_carries_it_forward()
     ]).context["context"]["measured_tokens"] == 3100
 
 
+def test_turn_footer_names_a_limit_stop():
+    from nexus.ui_support.timeline import turn_footer_text
+
+    def footer(data):
+        return turn_footer_text(apply_many(initial_state("s1"), [
+            _ev(1, "turn.started", turn="t1"),
+            _ev(2, "turn.completed", data, turn="t1"),
+        ]).turns[0])
+
+    assert footer({"stop_reason": "budget", "limit": "max_seconds"}).startswith("stopped by turn limit")
+    assert footer({"stop_reason": "max_iterations"}).startswith("stopped by iteration limit")
+    assert "stopped" not in footer({"stop_reason": "end_turn"})
+
+
 def test_context_usage_without_a_window_uses_the_input_budget():
     from nexus.ui_support.context import context_measure
 

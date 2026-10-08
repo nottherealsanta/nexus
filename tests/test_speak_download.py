@@ -150,3 +150,31 @@ async def test_native_speech_settings_show_the_model_and_a_download_row(shell):
     shell.client.speech_prepare.assert_not_awaited()
     await shell.workflows.operate(shell.items[1]["operation"])
     shell.client.speech_prepare.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_native_speak_waits_for_an_automatic_download_then_speaks(shell):
+    # After an upgrade the host re-fetches a consented model on its own: no consent page, no Refresh.
+    shell.client.speech_status = AsyncMock(side_effect=[
+        _status("downloading", progress=0.2), _status("downloading", progress=0.6), _status("ready")])
+    shell.client.speech_prepare = AsyncMock()
+    shell.client.speak = AsyncMock(return_value=p.SpeakResult(message="Finished speaking the latest answer", backend="paradee-cpu"))
+    shell.workflows.speak_poll_seconds = 0
+    await shell.workflows.speak_command(download_only=False)
+    assert shell.panel_title == "Local speech" and "20%" in " ".join(shell.panel_lines)
+    await shell.workflows.speak_wait_task
+    await shell.workflows.speak_task
+    shell.client.speech_prepare.assert_not_awaited()
+    shell.client.speak.assert_awaited_once_with("s")
+    assert shell.panel_title == ""
+
+
+@pytest.mark.asyncio
+async def test_native_speak_stops_waiting_when_the_page_is_left(shell):
+    shell.client.speech_status = AsyncMock(side_effect=[_status("downloading"), _status("ready")])
+    shell.client.speak = AsyncMock()
+    shell.workflows.speak_poll_seconds = 0
+    await shell.workflows.speak_command(download_only=False)
+    shell.panel_title = ""  # the user pressed Back
+    await shell.workflows.speak_wait_task
+    shell.client.speak.assert_not_awaited()

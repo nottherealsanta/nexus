@@ -124,7 +124,7 @@ class ShellActions:
         self.model_names: dict[tuple[str, str], str] = {}  # (provider, id) -> catalogue display name
         self.settings_nav: str | None = None  # selected Settings area while Settings is open
         self.model_sort = "updated"  # model picker order: updated|name (Ctrl+S)
-        self.update_notice = ""  # "<version> available: <command>" shown in the footer
+        self.update_notice = ""  # "<version> available: <command>" for /update; toasted once per release
         self.sessions_truncated = False  # the host list hit its cap
         self.sessions_request = 0  # bumped by /sessions: the client opens and focuses the sidebar
         self.archived_label = ""  # "Archived · N" under the sessions list, "" when none

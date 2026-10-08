@@ -168,7 +168,7 @@ def test_native_bridge_keyboard_and_terminal_restoration():
         time.sleep(.1)
         os.write(master, b"\r")
         assert read_action() == {"type": "submit", "text": "keep this draft", "mode": "steer", "generation": 0}
-        os.write(master, b"\x1b[<0;90;21M")  # controls row: above padding, workspace and meter rows
+        os.write(master, b"\x1b[<0;90;21M")  # controls row: above the half-row padding, workspace and meter rows
         assert read_action() == {"type": "context_popover", "text": ""}
         os.write(master, b"\x18c")
         assert read_action() == {"type": "context_popover", "text": ""}
@@ -276,6 +276,37 @@ def test_local_disclosure_without_python_reply():
         time.sleep(.1)
         assert not probe.read_actions()
         assert b"STREAMED RESULT" in probe.output
+        assert probe.process.poll() is None
+    finally:
+        probe.close()
+
+
+@pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
+def test_hover_copy_buttons_on_user_cards_and_code_fences():
+    from ratatui_latency_probe import NativeProbe
+    probe = NativeProbe(BINARY)
+    blocks = [{"id":"m:user", "kind":"user", "title":"COPY ME", "text":"second", "number":1,
+               "operation":{"kind":"turn_toggle","id":"t"}},
+              {"id":"r", "kind":"markdown", "gap":1, "text":"Intro\n\n```rust\nlet x = 1;\n```"}]
+    try:
+        probe.send({"schema":3,"reset":True,"revision":1,"generation":1,"blocks":blocks,"sessions_sidebar":False,"details_sidebar":False})
+        deadline=time.monotonic()+4
+        while b"COPY ME" not in probe.output and probe.process.poll() is None and time.monotonic()<deadline:
+            time.sleep(.02)
+        time.sleep(.1)
+        assert b"Copy" not in probe.output  # hidden until the pointer is over a block
+        mark = len(probe.output)
+        probe.keys(b"\x1b[<35;100;3M")  # pointer over the card body
+        time.sleep(.1)
+        assert b"Copy" in probe.output[mark:]
+        probe.keys(b"\x1b[<0;138;2M\x1b[<0;138;2m")  # the card's button, top-right
+        time.sleep(.1)
+        copied = [a for a in probe.read_actions() if a.get("type") == "copy_selection"]
+        assert [a["text"] for a in copied] == ["COPY ME\nsecond"]
+        probe.keys(b"\x1b[<0;136;9M\x1b[<0;136;9m")  # the fence header's button
+        time.sleep(.1)
+        copied = [a for a in probe.read_actions() if a.get("type") == "copy_selection"]
+        assert [a["text"] for a in copied] == ["let x = 1;"]
         assert probe.process.poll() is None
     finally:
         probe.close()

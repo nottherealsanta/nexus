@@ -547,28 +547,84 @@ async def test_skills_section_cards_and_skill_page(shell):
 
 
 @pytest.mark.asyncio
-async def test_mcp_section_cards_server_page_and_tool_page(shell):
+async def test_mcp_list_server_page_and_tool_page(shell):
     row = {"name": "tracker", "scope": "project", "enabled": True, "status": "connected", "transport": "stdio", "command_label": "python (3 args)",
-           "tool_loading": "all", "tool_count": 1, "schema_tokens": 410, "context_tokens": 410, "resource_count": 2}
+           "tool_loading": "search", "tool_count": 1, "schema_tokens": 410, "context_tokens": 30, "resource_count": 1}
     broken = {"name": "broken", "scope": "project", "enabled": True, "status": "failed", "transport": "stdio", "tool_count": 0, "error": "exited (code 3)"}
     tool = {"name": "mcp__tracker__create_issue", "group": "mcp:tracker", "description": "Create", "input_schema": {
         "type": "object", "properties": {"assignee": {"type": "object", "properties": {"name": {"type": "string"}}}}}}
-    shell.preview = p.ContextInspectResult(session="s", mcp_servers=[row, broken], tools=[tool], mcp_index="tracker: issues")
+    index = ("<mcp-index>\nConnected MCP servers follow.\n- server: tracker · health: ready · mode: search · 1 tools\n"
+             "  tools: create_issue; use McpSearch\n- server: tracker-two · health: ready · mode: all · 0 tools\n</mcp-index>")
+    shell.preview = p.ContextInspectResult(session="s", mcp_servers=[row, broken], tools=[tool], mcp_index=index)
     shell.client.inspect_context = AsyncMock(return_value=shell.preview)
     shell.client.mcp_server_show = AsyncMock(return_value=p.McpServerShowResult(
-        name="tracker", status="connected", scope="project", transport="stdio", tool_loading="all", tool_loading_source="default",
-        instructions="Be careful", tools=[{"name": "create_issue", "description": "Create", "input_schema": tool["input_schema"], "tokens": 340}]))
+        name="tracker", status="connected", scope="project", transport="stdio", tool_loading="search", tool_loading_source="default",
+        instructions="Be careful", resources=[{"name": "repo", "uri": "repo://x"}],
+        tools=[{"name": "create_issue", "description": "Create", "input_schema": tool["input_schema"], "tokens": 340}]))
     await shell.workflows.context_extensions("mcp")
-    assert shell.panel_title.startswith("MCP · 2 of 2 on")
-    assert shell.items[1]["lines"][0] == "python (3 args) · 1 tools · 2 resources"
-    assert shell.items[0]["lines"][-1] == "error: exited (code 3)"
-    await shell.workflows.operate(shell.items[1]["operation"])
-    assert shell.panel_layout == "list" and shell.items[0]["label"] == "create_issue" and shell.items[0]["trailing"] == "~340"
-    assert shell.items[0]["toggle_operation"]["name"] == "mcp__tracker__create_issue"
-    assert any("untrusted" in line for line in shell.panel_lines)
-    await shell.workflows.operate(shell.items[0]["operation"])
+    # Thin list like Tools: one line per server, indexed / full tokens, Restart and the toggle.
+    assert shell.panel_layout == "list" and shell.panel_title.startswith("MCP · 2 of 2 on · ~24 indexed / ~410 full")
+    assert shell.items[0]["operation"] == {"kind": "mcp_refresh"}
+    assert [i["label"] for i in shell.items[1:3]] == ["broken · failed", "tracker"]
+    assert all(not i.get("lines") for i in shell.items)
+    assert shell.items[2]["trailing"] == "~24 / ~410" and shell.items[2]["toggle_enabled"] is True
+    assert [i.get("action_operation") for i in shell.items[1:3]] == [
+        {"kind": "mcp_restart", "name": "broken"}, {"kind": "mcp_restart", "name": "tracker"}]
+    await shell.workflows.operate(shell.items[2]["operation"])
+    # Server page: the server row, the indexed entry on top, the full tools below, one line each.
+    assert shell.panel_layout == "list" and shell.panel_title == "MCP · tracker · ~24 indexed / ~410 full"
+    head, entry, issue, repo = shell.items
+    assert head["group"] == "Server" and head["action_operation"] == {"kind": "mcp_restart", "name": "tracker", "page": True}
+    assert head["toggle_operation"]["page"] is True
+    assert entry["group"].startswith("Indexed · ~24") and entry["label"].startswith("- server: tracker ·")
+    assert entry["lines"] == ["  tools: create_issue; use McpSearch"]
+    assert issue["group"].startswith("Full · ~410 tokens · 1 tools · deferred")
+    assert issue["label"] == "create_issue" and issue["trailing"] == "~340" and not issue.get("lines")
+    assert issue["toggle_operation"] == {"kind": "context_toggle", "category": "tools", "name": "mcp__tracker__create_issue",
+                                         "enabled": False, "server": "tracker"}
+    assert repo["group"] == "Resources"
+    await shell.workflows.operate(head["operation"])
+    assert shell.panel_layout == "detail" and "Be careful" in "\n".join(shell.panel_lines)
+    shell.workflows.back()
+    # Toggling a tool on the server page redraws the server page, not the Tools list.
+    shell.client.select_context_extension = AsyncMock(return_value=shell.preview)
+    await shell.workflows.operate(issue["toggle_operation"])
+    assert shell.panel_title.startswith("MCP · tracker")
+    await shell.workflows.operate(shell.items[2]["operation"])
     assert shell.panel_title.startswith("Tool · mcp__tracker__create_issue")
     assert "`assignee.name`" in "\n".join(shell.panel_lines)
+
+
+def test_server_index_splits_one_server_entry():
+    from nexus.ui.ratatui.context_sections import server_index
+    index = "- server: git · mode: all\n  tools: a\n- server: github · mode: all\n  tools: b\n</mcp-index>"
+    assert server_index(index, "git") == ["- server: git · mode: all", "  tools: a"]
+    assert server_index(index, "github") == ["- server: github · mode: all", "  tools: b"]
+    assert server_index(index, "gone") == []
+
+
+@pytest.mark.asyncio
+async def test_mcp_refresh_picks_up_new_servers_and_reconnects_failed(shell):
+    old = {"name": "tracker", "scope": "project", "enabled": True, "status": "connected", "tool_count": 1}
+    new = {"name": "added", "scope": "project", "enabled": True, "status": "disconnected", "tool_count": 0}
+    off = {"name": "off", "scope": "project", "enabled": False, "status": "failed", "tool_count": 0}
+    shell.client.inspect_context = AsyncMock(return_value=p.ContextInspectResult(session="s", mcp_servers=[old]))
+    await shell.workflows.context_extensions("mcp")
+    depth = len(shell.workflows.stack)
+    # mcp.json gained a server: Refresh reloads, reconnects enabled servers that are not connected, redraws in place.
+    shell.client.reload_extensions = AsyncMock(return_value=p.ExtensionsReloadResult(changed=True))
+    shell.client.inspect_context = AsyncMock(return_value=p.ContextInspectResult(session="s", mcp_servers=[old, new, off]))
+    shell.client.mcp_server_restart = AsyncMock(return_value=p.McpServerRestartResult(name="added", status="connected"))
+    await shell.workflows.operate(shell.items[0]["operation"])
+    shell.client.reload_extensions.assert_awaited_once()
+    shell.client.mcp_server_restart.assert_awaited_once_with("s", "added")
+    assert [i["label"].split()[0] for i in shell.items[1:4]] == ["added", "off", "tracker"]
+    assert len(shell.workflows.stack) == depth and shell.mcp_due == 0.0
+    assert "3 servers · 1 reconnected" in shell.notice
+    shell.client.mcp_server_restart = AsyncMock(return_value=p.McpServerRestartResult(name="added", status="failed", error="exited (code 1)"))
+    await shell.workflows.operate(shell.items[1]["action_operation"])
+    shell.client.mcp_server_restart.assert_awaited_once_with("s", "added")
+    assert "restart failed: exited (code 1)" in shell.notice and shell.panel_title.startswith("MCP · ")
 
 
 @pytest.mark.asyncio

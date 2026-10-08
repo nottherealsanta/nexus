@@ -27,6 +27,7 @@ pub struct Snapshot {
     pub logs_all: Vec<String>,
     pub logs_folded: Vec<String>,
     pub commands: Vec<(String, Vec<String>)>,
+    pub command_help: std::collections::HashMap<String, String>,
     pub history_append: Vec<String>,
     #[serde(skip)]
     pub transcript_changed_from: Option<usize>,
@@ -74,6 +75,8 @@ pub struct Snapshot {
     pub inline_images: Vec<InlineImage>,
     /// Queued, steering and interrupt messages waiting for the running turn.
     pub queue_lines: Vec<String>,
+    /// The same messages with their durable ids, for the boxed ↑ ↓ ✕ list.
+    pub queue_items: Vec<QueueItem>,
     pub update_notice: String,
     /// Dismissible notices from the host (plan §8). Always the newest bounded list;
     /// the client shows each id once and owns timers, dedup and dismissal.
@@ -104,12 +107,23 @@ pub struct Snapshot {
     #[serde(skip)]
     pub sessions_drawer: bool,
     pub context_preview: bool,
+    /// Settings → Layout: the conversation column is at most `render::CENTERED_WIDTH` wide, centered.
+    pub centered_layout: bool,
     pub voice_phase: String,
     pub voice_preview: String,
     pub voice_level: f64,
     pub completions: Vec<String>,
     pub completion_query: String,
     pub completion_prefix: String,
+}
+#[derive(Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct QueueItem {
+    pub id: String,
+    /// `S` steer, `Q` queue, `I` interrupt.
+    pub tag: String,
+    pub mode: String,
+    pub text: String,
 }
 #[derive(Clone, Default, Deserialize)]
 #[serde(default)]
@@ -153,6 +167,9 @@ pub struct Item {
     pub toggle_operation: Option<Value>,
     pub toggle_enabled: Option<bool>,
     pub toggle_locked: bool,
+    /// A row button left of the toggle (`[ Restart ]` on an MCP card): click it, or Ctrl+R on the row.
+    pub action_label: String,
+    pub action_operation: Option<Value>,
     /// Heading shown above the first item of each group (model picker); display only.
     #[serde(default)]
     pub group: String,
@@ -251,9 +268,18 @@ pub struct Session {
     #[serde(default)]
     pub status: String,
     #[serde(default)]
-    pub sub: String,
-    #[serde(default)]
     pub active: bool,
+    /// The project's display name and the local day label of the session's group.
+    #[serde(default)]
+    pub project: String,
+    #[serde(default)]
+    pub day: String,
+    /// The project key (a linked worktree's repository, else the workspace) and the
+    /// worktree's branch ("" outside a linked worktree).
+    #[serde(default)]
+    pub repo: String,
+    #[serde(default)]
+    pub worktree: String,
 }
 
 #[derive(Clone, Default, PartialEq, Deserialize)]
@@ -267,8 +293,12 @@ pub struct Content {
     pub path: String,
     pub added: u64,
     pub removed: u64,
+    /// Files a standalone file-change row touched (shown when more than one).
+    pub files: u64,
     /// Side-by-side rows: old line, old text, new line, new text, kind.
     pub diff_rows: Vec<(u32, String, u32, String, String)>,
+    /// A `change` block's unified rows: kind (`ctx`/`add`/`del`/`sep`/`clip`/`file`), line, text.
+    pub diff_lines: Vec<(String, u32, String)>,
     pub gap: u16,
     pub number: u32,
     pub collapsed: bool,
@@ -451,6 +481,9 @@ impl Snapshot {
         if !present.contains_key("queue_lines") {
             self.queue_lines = std::mem::take(&mut previous.queue_lines);
         }
+        if !present.contains_key("queue_items") {
+            self.queue_items = std::mem::take(&mut previous.queue_items);
+        }
         if !present.contains_key("update_notice") {
             self.update_notice = std::mem::take(&mut previous.update_notice);
         }
@@ -499,6 +532,9 @@ impl Snapshot {
         if !present.contains_key("context_preview") {
             self.context_preview = std::mem::take(&mut previous.context_preview);
         }
+        if !present.contains_key("centered_layout") {
+            self.centered_layout = previous.centered_layout;
+        }
         if !present.contains_key("voice_phase") {
             self.voice_phase = previous.voice_phase.clone();
         }
@@ -534,6 +570,9 @@ impl Snapshot {
         }
         if !present.contains_key("commands") {
             self.commands = std::mem::take(&mut previous.commands);
+        }
+        if !present.contains_key("command_help") {
+            self.command_help = std::mem::take(&mut previous.command_help);
         }
         self.history.append(&mut self.history_append);
     }

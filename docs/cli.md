@@ -2,7 +2,7 @@
 
 `nexus/cli.py` is the canonical terminal entry (`nexus = nexus.cli:main`). It is
 a **pure client**: every subcommand except a few local ones (`init`, `auth`,
-`claude`, `update`, `searchserver`, `daemon`) is a host command over the daemon's
+`claude`, `update`, `uninstall`, `searchserver`, `daemon`) is a host command over the daemon's
 Unix socket, and the daemon auto-starts. Global flags: `--workspace PATH`
 (default cwd), `--version` (reads the cached update notice, never the network),
 `--dev` ([devtools.md](devtools.md)), `--session ID` (reopen in chat).
@@ -29,7 +29,8 @@ With no subcommand, `nexus` opens `chat`. Bare `nexus voice` shows voice status.
 | `init` | create `nexus.toml`, `SOUL.md`, `MEMORY.md` without overwriting |
 | `auth codex login\|status\|logout` | local ChatGPT OAuth (no daemon RPC) |
 | `claude init` | set up the Claude Agent SDK provider |
-| `update [--channel stable\|git --ref --version --no-restart]` | upgrade Nexus and restart running daemons ([release.md](release.md)) |
+| `update [--channel stable\|git --ref --version --no-restart --no-voice --no-speak]` | upgrade Nexus and restart running daemons ([release.md](release.md)) |
+| `uninstall [--yes]` | remove Nexus and all its data after listing it and asking ([release.md](release.md#uninstall)) |
 | `searchserver start` | start the local SearXNG Docker service |
 | `mock list\|run\|all\|clean` | dev mode scenarios |
 

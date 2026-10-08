@@ -29,7 +29,7 @@ inward-only exceptions. Errors are
 
 | Group | Commands |
 | --- | --- |
-| Sessions | `SessionList` `ProjectSessionsList` `ProjectSessionOpen` `SessionOpen` `SessionStart` `SessionEnqueue` `SessionCancel` `SessionSubscribe` `SessionState` `SessionFork` `SessionDelete` `SessionRestore` `SessionExport` `SessionArchive` `SessionUnarchive` `SessionListArchived` `SessionSearch` `SessionPreview` |
+| Sessions | `SessionList` `ProjectSessionsList` `ProjectSessionOpen` `SessionOpen` `SessionStart` `SessionEnqueue` `SessionQueueMove` `SessionQueueRemove` `SessionCancel` `SessionSubscribe` `SessionState` `SessionFork` `SessionDelete` `SessionRestore` `SessionExport` `SessionArchive` `SessionUnarchive` `SessionListArchived` `SessionSearch` `SessionPreview` |
 | Approvals | `PermissionResolve` `QuestionAnswer` |
 | Models | `ModelsList` `ModelShow` `ModelTiers` `ModelTierSet` `ModelTierReset` `AgentMaxTierSet` `ModelsRefresh` `ModelSelect` `ReasoningEffortSelect` |
 | Session titles | `SessionTitleSettings` `SessionTitleSettingsSet` |
@@ -85,6 +85,16 @@ enables, invokes, activates, or recovers a session.
 `frontmatter_text` is the original declaration payload, redacted for display;
 it is not reconstructed metadata or a complete source file with delimiters.
 Both declaration and body come from refresh-time bytes, not current disk reads.
+
+### MCP restart
+
+`McpServerRestart(session, name)` returns `McpServerRestartResult(name, status,
+error)` (`client.mcp_server_restart`). The host closes that server's connection
+(`MCPManager.disconnect`, reason `restart`) and connects it again; a failed connect
+is recorded as server health and returned as `status="failed"` with a redacted
+`error`, never raised. The connection is daemon-wide, so every session sees it.
+An unknown name returns `error="Unknown MCP server"`. To pick up servers added to
+`mcp.json`, clients use `ExtensionsReload`, which reconciles the definition set.
 
 ### Read-only MCP detail
 
@@ -245,6 +255,13 @@ Tool names, error text, previews and message payloads stay private.
 to draft IDs. The host validates unique, kind-matching numbered labels and stores
 them in attachment metadata; omitted labels are numbered in attachment order.
 
+`SessionQueueMove(session, queued_id, offset=±1)` and
+`SessionQueueRemove(session, queued_id)` edit one pending message and return
+`SessionQueueEditResult(changed)`; `changed` is false when the message already
+ran, was dropped, or sits at the edge. A move also reorders the supervisor's parked
+turns (`Supervisor.reorder`), because each parked queued turn consumes the session's
+queue head and is skipped once its own id is gone.
+
 `SessionCancel(return_queue=True)` atomically captures pending queued text before
 removing it from scheduling and returns `returned_messages` in queue order.
 The TUI and web Stop actions prepend these messages to the current draft.
@@ -256,7 +273,12 @@ log. Other callers retain the existing cancellation contract by default.
 `ProjectSessionsList` reads the shared SQLite index, returning the workspace and
 project identity beside each session (up to 1,000; `truncated` is explicit). It
 excludes child, archived and trashed sessions. The active workspace retains live
-status; other workspaces expose saved activity. `ProjectSessionOpen` validates a
+status; other workspaces expose saved activity. When a workspace is a linked Git
+worktree, its rows also carry `repo` (the main checkout, from `git_head`'s
+`main_root`; one bounded `.git` read per distinct workspace, cached for five
+minutes so the sidebar's polls never touch the disk, no subprocess) and
+`worktree` (its branch), so clients can group worktrees under their repository.
+`ProjectSessionOpen` validates a
 recorded workspace/session pair before connecting to its owning daemon, returning
 a socket path for the terminal or a one-use browser launch URL. Each workspace
 keeps its own runtime, settings and permissions. This does not implement the

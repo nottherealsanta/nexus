@@ -97,7 +97,7 @@ MISC_EVENTS = ("provider.raw", "error", *REGISTRY_EVENTS)
 # describe actual queue lifecycle: enqueue, consume at a turn boundary, or drop.
 # Keeping the distinction explicit prevents direct starts appearing as pending
 # queue items in projections.
-INPUT_EVENTS = ("input.started", "input.queued", "input.consumed", "input.dropped")
+INPUT_EVENTS = ("input.started", "input.queued", "input.moved", "input.consumed", "input.dropped")
 
 # Presence is a subscriber count, not identity (single user, many views).
 # Section 14.10 adds only the join/leave transitions; the derived

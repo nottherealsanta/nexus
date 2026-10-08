@@ -3,6 +3,11 @@
 A mixin for ``Workflows``: check the host status, ask for consent with the size,
 start the download, show progress (Refresh updates it), then speak the latest
 answer. The wording and rules come from ``ui_support/speech_download.py``.
+
+When ``/speak`` finds a download already running (the host fetches a missing
+model on its own once the user has consented, e.g. after ``nexus update``), the
+progress page refreshes itself and speaks when the model is ready, so an
+upgrade never asks the user to do anything again.
 """
 from __future__ import annotations
 
@@ -15,8 +20,14 @@ def _get(value, key, default=None):
     return value.get(key, default) if isinstance(value, dict) else getattr(value, key, default)
 
 
+_TITLE = "Local speech"
+
+
 class SpeakPages:
     speak_task = None
+    speak_wait_task = None
+    speak_poll_seconds = 1.0
+    speak_wait_seconds = 600.0
 
     async def speak_command(self, *, download_only):
         """Entry point for ``/speak`` and ``/speak download``."""
@@ -28,6 +39,36 @@ class SpeakPages:
             self.shell.notice = "Speech model is ready"
         else:
             self.speak_page(status, speak_after=not download_only)
+            if step == "progress" and not download_only:
+                self._wait_then_speak()
+
+    def _wait_then_speak(self):
+        """Poll a running download (bounded) and speak when it is ready, while the page stays open."""
+        if self.speak_wait_task and not self.speak_wait_task.done():
+            return
+        self.speak_wait_task = asyncio.create_task(self._wait_run())
+
+    async def _wait_run(self):
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.speak_wait_seconds
+        try:
+            while loop.time() < deadline:
+                await asyncio.sleep(self.speak_poll_seconds)
+                if self.shell.panel_title != _TITLE:
+                    return  # the user left the page: they can /speak again later
+                status = await self.client.speech_status()
+                if _get(status, "state") == "ready":
+                    self.shell.panel_title = ""
+                    self.stack.clear()
+                    await self.speak_now()
+                    return
+                self.speak_page(status, speak_after=True)
+                if self.shell.on_update:
+                    await self.shell.on_update()
+                if _get(status, "state") != "downloading":
+                    return
+        except Exception as exc:  # noqa: BLE001 - a failure is a labelled notice
+            self.shell.flash(str(exc), "error")
 
     async def speak_now(self):
         """Start speaking in the background so Esc (``speak_stop``) is still read meanwhile."""
@@ -55,16 +96,16 @@ class SpeakPages:
         state = _get(status, "state", "")
         message = _get(status, "message", "")
         if state == "unsupported":
-            self.menu("Local speech", [("Back", {"kind": "back"})], [message])
+            self.menu(_TITLE, [("Back", {"kind": "back"})], [message])
         elif state == "downloading":
-            self.menu("Local speech", [("Refresh status", {"kind": "speak_refresh", "speak": speak_after}),
+            self.menu(_TITLE, [("Refresh status", {"kind": "speak_refresh", "speak": speak_after}),
                                        ("Back", {"kind": "back"})], [sd.progress_text(status)])
         elif state == "ready":
             rows = [("Speak latest answer", {"kind": "speak_now"})]
-            self.menu("Local speech", rows, [sd.ready_text()])
+            self.menu(_TITLE, rows, [sd.ready_text()])
         else:
             lines = [sd.CONSENT_PROMPT] + ([message] if state == "error" and message else [])
-            self.menu("Local speech", [
+            self.menu(_TITLE, [
                 ("Download speech model…", {"kind": "confirm", "label": f"{sd.CONSENT_TITLE}. Download it now?",
                                             "lines": [sd.CONSENT_PROMPT],
                                             "next": {"kind": "speak_prepare", "speak": speak_after}}),

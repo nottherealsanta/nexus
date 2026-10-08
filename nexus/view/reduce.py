@@ -953,6 +953,14 @@ def _user_blocks(content: object) -> list[BlockView]:
 
 def _on_input(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
     queue = list(state.input_queue)
+    if event.type == "input.moved":
+        order = data.get("order")
+        if not isinstance(order, list):
+            return state
+        ranked = {key: rank for rank, key in enumerate(order) if isinstance(key, str)}
+        # Unlisted ids (a late follower's newer submissions) keep their place after.
+        queue.sort(key=lambda item: ranked.get(item.queued_id, len(ranked)))
+        return replace(state, input_queue=queue)
     if event.type == "input.started":
         input_id = _as_str(data.get("input_id")) or event.id
         message_id = f"message:input:{input_id}"
@@ -1443,6 +1451,7 @@ _HANDLERS: dict[str, Any] = {
     "presence.left": _on_presence,
     "presence.changed": _on_presence,
     "input.queued": _on_input,
+    "input.moved": _on_input,
     "input.started": _on_input,
     "input.consumed": _on_input,
     "input.dropped": _on_input,

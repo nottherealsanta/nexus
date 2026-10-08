@@ -3,11 +3,11 @@ use gpui::KeyBinding;
 
 use crate::{
     Agents, Attach, Cancel, CompleteFirst, ContextPopover, CycleAgent, CycleEffort, DetailsNext,
-    DetailsPrevious, Dismiss, FavoriteModel, FocusNext, ForkSession, HistoryNext, HistoryPrevious,
-    InspectContext, InterruptSubmit, JumpLatest, Models, NewSession, Palette, PreviousFocus,
-    QueueSubmit, Quit, Reconnect, RefreshModels, SaveForm, Sessions, Settings, Shortcuts,
-    SortModels, ToggleDetails, ToggleLogs, ToggleSessions, TranscriptPageDown, TranscriptPageUp,
-    UpdateHelp, Usage, Voice,
+    DetailsPrevious, Dismiss, FavoriteModel, FocusComposer, FocusNext, ForkSession, HistoryNext,
+    HistoryPrevious, InspectContext, InterruptSubmit, JumpLatest, Models, NewSession, Palette,
+    PreviousFocus, QueueSubmit, Quit, Reconnect, RefreshModels, SaveForm, Sessions, Settings,
+    Shortcuts, SortModels, StopTurn, ThemeToggle, ToggleDetails, ToggleLogs, ToggleSessions,
+    TranscriptPageDown, TranscriptPageUp, UpdateHelp, Usage, Voice,
 };
 
 pub fn key_bindings() -> Vec<KeyBinding> {
@@ -27,9 +27,31 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-e", ToggleLogs, Some("Nexus")),
         KeyBinding::new("ctrl-u", Usage, Some("Nexus")),
         KeyBinding::new("ctrl-c", Cancel, Some("Nexus")),
+        KeyBinding::new("cmd-.", StopTurn, Some("Nexus")),
         KeyBinding::new("ctrl-r", Reconnect, Some("Nexus")),
         KeyBinding::new("ctrl-end", JumpLatest, Some("Nexus")),
         KeyBinding::new("ctrl-q", Quit, Some("Nexus")),
+        // Native macOS aliases supplement the canonical terminal routes.
+        KeyBinding::new("cmd-n", NewSession, Some("Nexus")),
+        KeyBinding::new("cmd-k", Palette, Some("Nexus")),
+        KeyBinding::new("cmd-o", Sessions, Some("Nexus")),
+        KeyBinding::new("cmd-b", ToggleSessions, Some("Nexus")),
+        KeyBinding::new("cmd-l", ToggleDetails, Some("Nexus")),
+        KeyBinding::new("cmd-,", Settings, Some("Nexus")),
+        KeyBinding::new("cmd-m", Models, Some("Nexus")),
+        KeyBinding::new("cmd-i", InspectContext, Some("Nexus")),
+        KeyBinding::new("cmd-u", Usage, Some("Nexus")),
+        KeyBinding::new("cmd-r", Reconnect, Some("Nexus")),
+        KeyBinding::new("cmd-q", Quit, Some("Nexus")),
+        KeyBinding::new("cmd-j", JumpLatest, Some("Nexus")),
+        KeyBinding::new("cmd-enter", FocusComposer, Some("Nexus")),
+        KeyBinding::new("cmd-shift-a", Attach, Some("Nexus")),
+        KeyBinding::new("cmd-shift-g", CycleAgent, Some("Nexus")),
+        KeyBinding::new("cmd-shift-e", CycleEffort, Some("Nexus")),
+        KeyBinding::new("cmd-shift-l", ToggleLogs, Some("Nexus")),
+        KeyBinding::new("cmd-shift-t", ThemeToggle, Some("Nexus")),
+        KeyBinding::new("alt-up", HistoryPrevious, Some("Editor")),
+        KeyBinding::new("alt-down", HistoryNext, Some("Editor")),
         KeyBinding::new("escape", Dismiss, Some("Nexus")),
         // Leader chord mirrors nexus.ui_support.shortcuts.LEADER_SHORTCUTS. The
         // shared table includes model, voice, session, picker, and panel routes.

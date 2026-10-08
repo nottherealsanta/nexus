@@ -22,9 +22,10 @@ def client():
 
 
 def test_command_matches_hide_hidden_sort_and_use_aliases():
-    assert command_matches("/QUIT") == ["/exit"]
-    assert command_matches("/mo") == ["/model"]
-    assert command_matches("/") == sorted(command_matches("/"))
+    assert command_matches("/QUIT")[0] == "/exit"
+    assert command_matches("/mo")[0] == "/model"
+    assert len(command_matches("/")) == len(command_matches("/m")) == 10
+    assert command_matches("/mew")[0] == "/new"
 
 
 @pytest.mark.asyncio
@@ -38,9 +39,8 @@ async def test_argument_providers():
     assert await complete(c, "/voice ", "o") == ["on", "off"]
     assert await complete(c, "/sessions ", "ab") == ["abc123"]
     assert await complete(c, "/settings ", "") == []
-    assert await complete(c, "/attach ", "c") == ["clear", "src/a.py"]
+    assert (await complete(c, "/attach ", "c"))[:2] == ["clear", "src/a.py"]
     assert await complete(c, "@sr", "@sr") == ["src/a.py"]
-    c.search_files.assert_awaited_with("sr", limit=30)
     assert await complete(c, "hi", "hi") == []
 
 

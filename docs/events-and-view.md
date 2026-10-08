@@ -38,7 +38,7 @@ names and `agent.selected`.
 | skill | `skill.invoked` `skill.completed` |
 | agent | `agent.spawned` `agent.completed` `agent.clamped` (and `agent.selected`) |
 | hook | `hook.fired` `hook.blocked` |
-| input | `input.started` `input.queued` `input.consumed` `input.dropped` |
+| input | `input.started` `input.queued` `input.moved` `input.consumed` `input.dropped` |
 | presence | `presence.joined` `presence.left` (count, not identity) |
 | daemon | `daemon.started` `daemon.stopping` `daemon.session_scheduled` `daemon.session_queued` |
 | misc | `provider.raw` `error` `registry.refreshed` `registry.stale` `registry.failed` `registry.mismatch` |

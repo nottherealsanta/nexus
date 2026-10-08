@@ -4,7 +4,7 @@ Session titles setting saves preserve the parent navigation history. Toggling
 automatic titles or choosing a model returns to the existing Session titles page;
 Escape still returns to its parent rather than losing the Settings stack. Both
 paths have Python workflow regression coverage; native PTY verification remains
-pending in `plans/SETTINGS_REVAMP_PLAN.md`.
+pending in `plans/done/SETTINGS_REVAMP_PLAN.md`.
 
 Untitled sessions display as **New Session** in the native tab bar and session
 picker, including immediately after creation and after session-list refreshes.
@@ -55,16 +55,33 @@ Clipped, incomplete or unclassified previews retain the full literal system text
 rather than silently dropping context, and separate prompt-row estimates become
 unavailable so that fallback text is not counted twice.
 
-Skills and MCP open card lists (`ui/ratatui/context_sections.py`): one selectable
-item per skill or server whose dim rows (`Item.lines`, wrapped at 100 columns) carry
-the frontmatter and token figures (skills) or the command label, counts, error and
-schema tokens (MCP). Enter opens the skill page (`SkillInspect`: frontmatter table
-and the full Markdown body, `detail` layout) or the MCP server page (a `list` of its
-tools with tokens and toggles, resources and prompts, instructions marked untrusted);
-a server tool opens the shared tool page. `Show literal index` shows the exact index
-text sent. Space or a click toggles; locked after the first turn.
+Skills open card lists (`ui/ratatui/context_sections.py`): one selectable item per
+skill whose dim rows (`Item.lines`, wrapped at 76 columns) carry the frontmatter and
+token figures. Enter opens the skill page (`SkillInspect`: frontmatter table and the
+full Markdown body, `detail` layout). Space or a click toggles; locked after the first turn.
 
-Tools opens a thin `list` panel (width `clamp(widest row + 6, 44, 72)`, centred; below
+The MCP dialog mirrors the Tools list: a thin `list` layout (≤ 72 columns), one line per
+server: name (plus ` · <status>` when not connected), a right-aligned `~indexed / ~full`
+token column, a `[ Restart ]` chip (click, or Ctrl+R on the row, sends `McpServerRestart`)
+and the on/off toggle (Space or click; session-scoped, locked after the first turn).
+Title: `MCP · N of M on · ~X indexed / ~Y full`. "Indexed" is the server's own entry in
+the frozen MCP index (split on `- server: <name> ·` lines, ~4 chars/token); "full" is
+`schema_tokens`, every tool schema the server offers. The top row `↻ Refresh all` runs
+`ExtensionsReload` (re-reads `mcp.json`: adds, removes, reconfigures servers), then
+restarts every enabled server that is not connected (reload alone skips a failed server
+until its backoff expires), then redraws in place and flashes `MCP refreshed · N servers ·
+K reconnected` or the problems.
+
+Enter on a server opens the server page (also `list`, ≤ 72 columns): a `Server` row
+(status · transport · scope · server name/version; Restart chip and toggle; Enter opens a
+detail page with every field, including untrusted instructions), then the
+`Indexed · ~N tokens in context now` group, showing that server's index entry (Enter
+opens the literal index), then `Full · ~N tokens · K tools · deferred to McpSearch|sent
+every request` with one line per tool (name, ~tokens, toggle); Enter opens the tool page.
+Resources and Prompts follow as their own groups. Toggling a tool there redraws the
+server page, not the Tools list.
+
+Tools opens a thin `list` panel (width `clamp(widest row + 6, 44, 72)`, where a row counts its detail, token column and action chip; height counts group headings; the token column leaves room for the chip; centred; below
 44 columns it uses the default modal): one line per tool in the order sent, with the
 name, a right-aligned token column (`Item.trailing`, aligned by Rust) and the toggle.
 Enter opens the tool page (`tool_show`, `detail` layout: at most 88 columns, as tall as its text, Markdown): facts, full
@@ -79,7 +96,18 @@ Covered by native workflow, Rust layout/hit-target and controlling-PTY tests.
 Live-provider and real-desktop visual verification are not claimed.
 
 Tools and reasoning share activity groups interleaved with visible agent replies.
-Each reply closes the preceding group; task/subagent cards remain separate.
+Each reply closes the preceding group; task/subagent cards remain separate, and so
+does every file change and question (Edit, MultiEdit, Write, apply_patch or its `patch`
+alias, Question: `STANDALONE_TOOLS` in `prototype.py`). Each such call is its own
+`change` block, never a group with a duplicated member row: the header is the action
+and path followed by `+added −removed` in diff green/red (zero counts are omitted; a
+multi-file patch shows muted `N files` first; a failure appends its error in red, a
+question its answer). It starts open and shows a unified diff, one column with line
+numbers, added rows green on the add tint and removed rows red on the delete tint
+(`diff_lines`, from `diff_unified_rows`). A Write without a diff artifact shows the
+content it wrote as added lines. Only the first 12 rows show until Enter; at most 400
+rows are sent, the rest announced. Calls without a diff (a question, a failed edit)
+show their labelled details instead. Clicking the header folds the block.
 Totals describe the work (`Ran 2 commands · Edited 2 files · Read 2 files ·
 Thought 3 times`) rather than listing tool names or a separate Explored row.
 Older/completed groups collapse by default. The trailing group in an active turn
@@ -87,6 +115,15 @@ previews only its latest item, announcing earlier hidden items. Click/Enter
 expands the full group; another toggle explicitly collapses it even while live.
 Member toggles retain all labelled parameters, results, reasoning and diffs;
 `/verbose` reveals everything. Group identity follows its first durable member.
+
+The transcript auto-scrolls only while the reader is at the bottom: scrolling up
+(wheel, PageUp) stops following, and any scroll that lands back on the last row
+(wheel, PageDown, Down) resumes it. Typing, sending and Ctrl+End also return to the live end.
+
+Settings → Layout → **Centered conversation** (`centered_layout`, off by default, saved
+in `tui.json`) caps the conversation column (top bar, transcript, composer) at
+`render::CENTERED_WIDTH` = 80 columns, centered between the sidebars; narrower
+columns are unchanged. Dialogs that live in the transcript center with it.
 Covered by Python projection and Rust disclosure tests; live-provider visual
 verification is not claimed.
 
@@ -133,9 +170,16 @@ previously matched the label only). Not verified visually in a
 real terminal; the `Free` price tag and the "Connect an integration" action from
 the reference are not ported.
 
-The composer card has a heavy `▎` rail in the agent colour with a sliver of
-background before the card, one padding row above the editor and one below the
-controls; the workspace line sits under the card on the plain background.
+The composer card (background `#1E1E1E` in the dark theme, its own `composer`
+palette colour; light keeps the panel tone) has a heavy box-drawing `┃` rail in the agent colour with a sliver of
+background before the card, one padding row above the editor and a half row below
+the controls (a `▀` row: card colour on top, background below, so the card ends
+halfway and leaves a half-row gap above the path; the `┃` rail ends with `╹`
+(heavy up: same stroke, top half) there, so it stops exactly at the card's edge); the workspace line sits under the card on the plain background. One
+blank row always separates the last editor row from the agent/model controls,
+however many rows the draft has (`composer_keeps_a_blank_row_above_the_controls`).
+A blank background row always sits directly above the card as a margin; queued
+messages and the attachment line get their own rows above that margin.
 
 `nexus chat` launches the most recently modified native executable among the one
 beside the interpreter, `rust/tui/target/{release,debug}` and `PATH`, so a fresh
@@ -151,12 +195,13 @@ the breadcrumb first shows the bare workspace path. Measured with a warm daemon 
 splash about 0.2 s, full UI about 0.3 s (was about 1.0 s); cold daemon start not measured.
 
 The workspace/branch/worktree/status bar uses the black conversation background,
-with its path aligned to the composer agent label. It sits below the composer controls and
+with its path starting at the composer card's `┃` rail. It sits below the composer controls and
 directly above the activity meter. Session tabs remain at the top when the
 sessions sidebar is hidden; the workspace bar's details and update click targets
 move with it.
 
-User message cards have one blank row of panel-colored padding above and below
+User message cards stop one cell short of the column's right edge (an unstyled
+margin cell; the hover Copy button stays inside the card) and have one blank row of panel-colored padding above and below
 their content, including collapsed turns and messages with attachments. Padding
 retains the card's left rail and turn-toggle click target.
 
@@ -303,8 +348,8 @@ pairs. There is no overflow footer, no `None included` text and no `Context tota
 an empty block (no MEMORY.md, no MCP servers, no skills) is greyed out. Skill rows label the estimated tokens of their actual included
 index entry, not the full skill body; missing entries say `tokens unknown`.
 
-The workspace breadcrumb starts at the editable composer text column (five cells
-from the conversation edge), reserving its right-hand update/status target when
+The workspace breadcrumb (`~/repo:branch`) starts at the composer card's left border, the `┃` rail
+(two cells from the conversation edge), reserving its right-hand update/status target when
 truncated. Only the true home directory or its descendants abbreviate to `~`;
 similarly prefixed sibling directories do not. This is display-only: workspace,
 session metadata and file paths retain their full values. Build uses `#5C9CF5` and
@@ -329,7 +374,7 @@ Streamed snapshots are sent compactly, identical ones are skipped, and Rust
 parses only the newest of a queued backlog unless an older one carries a
 one-shot composer effect.
 
-The composer grows with its wrapped content from the 9-row resting layout up to
+The composer grows with its wrapped content from the 8-row resting layout up to
 `max-height: 22` editor rows, reserving four transcript rows when space permits
 (`render::composer_height`; mouse hit-testing uses the same height).
 
@@ -358,15 +403,36 @@ sends that file's diff lines (`ui_support/details.diff_preview_lines`, headers
 removed, 60 lines then a clipping notice); Rust colours `+`/`-`/`@@` rows. The
 sidebar scrolls with the wheel. Keyboard expansion is not implemented yet.
 
-The sessions sidebar follows `SessionSidebar`: a `+ New session`
-button, `SESSIONS N`, day/project headings and two-line cards (status glyph and
-title; "working now", "needs input", "finished" or a message count, then age).
-The current session has a left bar; a background session that advanced since it
-was last viewed reads "finished". Status words come from
-`ui_support/session_status.py`, shared by native clients. An `Archived · N` row under the list (counted by the poll, `+` when more than 200)
-opens the archived sessions menu. A `Filter sessions` box (click it; type; Enter keeps, Escape clears) narrows the
-cards by title, id, project or heading and shows `SESSIONS n of m`. Per-card
-delete is not in the native sidebar (use the right-click session actions).
+The sessions sidebar (40 columns, `render::SESSIONS_WIDTH`) shows the title row
+(`▌ Sessions` … `+`), then **project chips** pinned under it: `All` and every project
+in the list, each in its color, wrapped onto at most three rows (the rest folds into
+a `+N more` chip), and a rule. Below scroll `SESSIONS N`, `project · day` headings and
+**one row per session**: a status glyph (spinner while working, `●` needs input, `·`
+otherwise) and the title. Each heading colors the project name with a stable
+per-project hue (`project_color`, hashed from the project path) and the day in cyan;
+session rows carry `project`, `day`, `repo` and `worktree` beside `group` for this.
+Message counts and ages are not shown per row (the heading's day dates the group).
+The current session has a left bar and bold text. An `Archived · N` row under the
+list (counted by the poll, `+` when more than 200) opens the archived sessions menu.
+
+**Worktrees** group with their repository. The host marks rows whose workspace is a
+linked Git worktree with `repo` (the main checkout) and `worktree` (its branch); the
+project key is `repo`, else the workspace. So a repository and its worktrees share
+one chip (`nexus +2wt` counts the worktrees with sessions), one color and one
+filter. Within each day the main checkout's sessions come first, then each worktree
+under its own heading `nexus › feat/x · Today` (the branch muted). Opening a session
+still targets its worktree workspace.
+
+Clicking a chip, or a group heading, shows only that project's sessions (`SESSIONS
+n of m · project`; headings then drop the project name, keeping `› branch` and the
+day); clicking the heading again, or `All`, shows every project. The `/ Filter
+sessions` box on the last row (click it; type; Enter keeps, Escape clears) matches
+title, id, workspace, project, branch or heading within the picked project. The
+picked project is client state and falls back to all projects when it leaves the
+list. The sidebar avoids symbol glyphs that terminals draw from fallback fonts
+(`☰`, `⌕`, `⎇`), which can spill into the next cell; it uses `▌` and plain text.
+Per-session delete is not in the native sidebar (use the right-click session
+actions).
 
 Assistant Markdown (`rust/tui/src/markdown.rs`) follows the `.timeline-assistant`
 rules: headings coloured by level (accent, purple, success, warning), inline code
@@ -463,7 +529,7 @@ switching mode removes the other mode's frontmatter fields (`set_run_mode` in
 Each change is saved at once through the host with the same hash check as the editor;
 `Edit prompt file…` opens the raw file. Not verified: native PTY screenshots of the
 revamp, real sign-in and real title generation. The typed-row header/groups design in
-`plans/SETTINGS_REVAMP_PLAN.md` §3.4 is only partly built (name/value/status/scope
+`plans/done/SETTINGS_REVAMP_PLAN.md` §3.4 is only partly built (name/value/status/scope
 fields render; groups and wrapped footers are not).
 
 Keyboard focus over the transcript: with an empty draft, Tab focuses the last
@@ -484,14 +550,33 @@ clipboard even over SSH) and through the daemon-side desktop clipboard
 that is released without dragging is still a click on the block. Any key clears the
 selection. Only the transcript can be selected; sidebars and dialogs cannot.
 
+Hover-revealed Copy buttons (`copy_button.rs`): while the pointer is over a user
+card or a fenced code block, ` Copy ` appears over the blank right end of the
+block's first row (the card's top padding row, the fence's `╭─ lang` header);
+over the button itself it takes the hover tint. Clicking it copies the whole user
+message, or that block's literal source, through the same OSC 52 and
+`copy_selection` path as a selection. A click elsewhere on the block keeps its
+own action (fold, attachment inspection). Rows carry only a small
+`{"kind":"copy","block","fence","operation"}` marker; the copied text is
+recovered from the snapshot at click time, and the marker doesn't create or split
+keyboard focus blocks. The button isn't drawn when that end of the row has content,
+and it is suppressed behind dialogs. A host-folded card copies only its visible
+first line.
+
 The transcript shows a thin scrollbar on its right edge when it overflows, and
 typing returns the view to the live end.
 
 The runtime row's usage meter carries extras (`price ↑ at N` for tiered
-models and the live `Thinking · …` summary). Queued, steering and interrupt
-messages show above the editor input-queue preview (three rows plus
-`+N more queued`); the composer grows to fit them. A release notice
-(`<version> available: <command>`) replaces the working directory in the footer.
+models and the live `Thinking · …` summary). Pending steering, queued and
+interrupt messages sit in a rounded `Sending next` box directly above the composer
+margin (on the rail's columns). Each row starts with an `S`, `Q` or `I` badge and
+ends with `↑ ↓ ✕` controls (move up, move down, remove, by durable `queued_id`
+through `SessionQueueMove`/`SessionQueueRemove`); four rows show, then `+N more`.
+The composer grows to fit the box; attachments sit above it. A newer release is announced
+once as an info toast that expires on its own (`UpdateStatus(announce=True)`;
+the host records the announced version in `~/.nexus/cache/update-announced.json`,
+so restarts do not repeat it); the footer never shows it, and `/update` still names
+the version and command.
 There is no separate connection-status row or activity progress bar: disconnects
 and errors appear as labelled notices in the transcript.
 
@@ -616,6 +701,12 @@ provider overload are not verified.
 
 ## Composer command choices (2026-10-02)
 
+The `/` and `@` menus always show 10 rows (fewer only when fewer exist) so the popup
+never changes height while typing. Rows rank prefix matches, then substring/fuzzy,
+then typo matches (adjacent swap or one substitution, so `/mew` finds `/new`), then
+padding. Python (`ui_support/completion.rank_menu`) serves desktop and `@` files; the
+TUI ranks slash commands locally with the same tiers (`rank_commands`).
+
 Native slash/file completion and command choice menus use the full transcript
 width directly above the composer, without borders. Agent, model, effort and
 follow-up operation menus remain in this dock; Settings retains its navigation
@@ -663,7 +754,8 @@ and running status. Single-item groups use the same summary (`Read 1 file` or
 the group heading. Only the latest active group auto-previews its latest member.
 Members reveal labelled parameters/results and independently folded output;
 `/verbose` reveals all details. User cards put their chevron in the left margin (column 0) and
-text in column 5, the common transcript column. Assistant footers have no preceding blank row.
+text in column 5, the common transcript column. The turn footer (turn, model, calls, tokens) has one blank row above it and one below
+(the next turn's card gap, or the composer margin after the last turn).
 
 The live bridge uses schema 2 suffix patches (`blocks_from`) and block revisions;
 schema 1 full snapshots remain readable. Patches are applied in order and cannot
@@ -786,7 +878,7 @@ only timings, never bodies. The Python report uses the native trace path plus
 `.python`.
 
 Verification and measurements: see
-[the responsiveness ledger](../plans/TUI_LOCAL_INTERACTION_PLAN.md). Independent
+[the responsiveness ledger](../plans/done/TUI_LOCAL_INTERACTION_PLAN.md). Independent
 controlling-PTY checks verify keyboard and mouse disclosure with Python silent and
 preserved expansion through patches. Native closed/group/detail screenshots are
 captured with a silent Python fixture. A 1 MB fully rendered output still incurs a
@@ -846,13 +938,19 @@ Covered by `render/context.rs` tests and `tests/test_ratatui_workflows.py`.
 left sessions sidebar, with keyboard focus in it. There is no separate Sessions
 dialog. `/sessions` (no argument) refreshes the list and bumps the snapshot field
 `sessions_request`; the client opens and focuses the sidebar when it sees a new value.
+The client does not wait for that: a submitted `/sessions` or `/session` (no
+argument) and the top-bar toggle open the sidebar locally at once, and the host's
+refresh lands later (the list is also polled every 3 s).
 `/sessions <id>` still switches directly. `Ctrl+B` opens and focuses it; with focus
 already inside it hides it again.
 
 With focus: `↑ ↓ Home End PgUp PgDn` move the selection (a raised row with a bar),
 `Enter` opens the session, typing or `/` filters (title, id, workspace, group;
-the first match is selected, and `Enter` while typing opens it), `Esc` clears the
-filter and then leaves, a click elsewhere leaves. Keys that do not apply (Ctrl
+the first match is selected, and `Enter` while typing opens it), `Esc` clears typed
+filter text and otherwise closes the sidebar, `Ctrl+C` closes it at once (drawer, or
+the docked sidebar's preference, as `Ctrl+B` does), a click elsewhere leaves. Without
+focus, `Esc` in the composer also closes a visible sessions sidebar before it counts
+toward the double-`Esc` cancel. Keys that do not apply (Ctrl
 combinations) still reach the normal handlers.
 
 Below 90 columns the sidebar is a **drawer** (up to 40 columns) over the

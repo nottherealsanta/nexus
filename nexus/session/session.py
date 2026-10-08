@@ -99,8 +99,10 @@ _UNATTENDED_FAIL_REASON = "unattended policy fails the turn"
 #: Input-queue event types. Replayed in append order on open so a crash between
 #: a submission and its consumption/drop never loses the pending FIFO.
 _QUEUED_EVENT = "input.queued"
+#: A user reorder of the pending FIFO; ``order`` lists every pending id.
+_MOVED_EVENT = "input.moved"
 _INPUT_EVENT_TYPES = frozenset(
-    {_QUEUED_EVENT, "input.consumed", "input.dropped"}
+    {_QUEUED_EVENT, _MOVED_EVENT, "input.consumed", "input.dropped"}
 )
 
 #: Tag for raw bytes in a queued-input payload. Makes the representation
@@ -1247,6 +1249,31 @@ class Session:
             consumed = True
         return consumed
 
+    def move_queued(self, queued_id: str, offset: int) -> bool:
+        """Swap a pending submission with its neighbour (``-1`` up, ``1`` down).
+
+        Emits ``input.moved`` with the whole new order so replay and every view
+        reproduce it exactly. ``False`` when the id is gone or already at the edge.
+        """
+        self._ensure_writable()
+        index = next((i for i, item in enumerate(self._queue) if item.queued_id == queued_id), None)
+        target = None if index is None else index + (1 if offset > 0 else -1)
+        if index is None or target is None or not 0 <= target < len(self._queue):
+            return False
+        self._queue[index], self._queue[target] = self._queue[target], self._queue[index]
+        self._emit(_MOVED_EVENT, {"queued_id": queued_id, "order": list(self.queued_ids)})
+        return True
+
+    def remove_queued(self, queued_id: str, reason: str = "removed by user") -> bool:
+        """Drop one pending submission (``input.dropped``); ``False`` when gone."""
+        self._ensure_writable()
+        item = next((item for item in self._queue if item.queued_id == queued_id), None)
+        if item is None:
+            return False
+        self._remove_queued(item)
+        self._emit("input.dropped", {"queued_id": queued_id, "reason": reason})
+        return True
+
     def _drop_queue(self, reason: str | None = None) -> None:
         while self._queue:
             item = self._queue.popleft()
@@ -1276,6 +1303,12 @@ class Session:
                 continue
             queued_id = data.get("queued_id")
             if not isinstance(queued_id, str) or not queued_id:
+                continue
+            if event.type == _MOVED_EVENT:
+                order = data.get("order")
+                if isinstance(order, list):
+                    ranked = {key: rank for rank, key in enumerate(order) if isinstance(key, str)}
+                    pending = dict(sorted(pending.items(), key=lambda pair: ranked.get(pair[0], len(ranked))))
                 continue
             if event.type == _QUEUED_EVENT:
                 content = _decode_queued_content(data.get("content"))

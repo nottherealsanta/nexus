@@ -202,10 +202,10 @@ def test_a_tier_tab_changes_the_tier_through_the_real_bridge(app):
 def test_a_toggle_saves_through_the_real_bridge_and_the_page_shows_it(app):
     open_settings(app, b"\x1b2", "Show context header")  # Alt+2: Layout
     first = app.redraw()
-    assert first.count("■ ON") == 3 and "OFF□" not in first
+    assert first.count("■ ON") == 3 and first.count("OFF□") == 1  # Centered conversation is off by default
     app.key(b" ", 1.0)  # Space on the first row: Sessions sidebar off
     after = app.redraw()
-    assert after.count("■ ON") == 2 and after.count("OFF□") == 1, "the host applied it and rebuilt the page"
+    assert after.count("■ ON") == 2 and after.count("OFF□") == 2, "the host applied it and rebuilt the page"
 
 
 def test_the_wheel_scrolls_the_keyboard_page_past_its_second_section(app):

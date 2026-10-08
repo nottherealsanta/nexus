@@ -1,6 +1,6 @@
 """Settings -> Models: editing tier lists, the subagent ceiling, title settings.
 
-Plan: plans/SESSION_TITLE_PLAN.md, Parts 1 and 2 (settings half). Writes go to
+Plan: plans/done/SESSION_TITLE_PLAN.md, Parts 1 and 2 (settings half). Writes go to
 the user-global config; reads come from the live tier table and router.
 """
 from __future__ import annotations

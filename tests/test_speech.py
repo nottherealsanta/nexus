@@ -298,7 +298,7 @@ async def test_host_routes_speak_to_the_latest_completed_answer(tmp_path, monkey
 # -- model status and the one-time download -----------------------------------
 
 
-def _fake_cache(tmp_path, monkeypatch, *, model=True, config=True, phonemizer=True, blob_bytes=0):
+def _fake_cache(tmp_path, monkeypatch, *, model=True, config=True, phonemizer=True, blob_bytes=0, consent=False):
     repo = tmp_path / "hub" / "models--sahilmahendrakar--Paradee-8M-v1.0"
     (repo / "blobs").mkdir(parents=True, exist_ok=True)
     snapshot = repo / "snapshots" / "abc"
@@ -317,6 +317,22 @@ def _fake_cache(tmp_path, monkeypatch, *, model=True, config=True, phonemizer=Tr
         lambda name, *a: (object() if phonemizer else None) if name == "en_core_web_sm" else real(name, *a),
     )
     monkeypatch.setattr(speech, "_PREPARE", {"state": "idle", "message": "", "started": 0.0})
+    if not consent:
+        monkeypatch.setattr(speech, "has_consent", lambda: False)
+
+
+def _no_threads(monkeypatch):
+    started = []
+
+    class Thread:
+        def __init__(self, target, **kwargs):
+            started.append(target)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(speech.threading, "Thread", Thread)
+    return started
 
 
 def test_status_reports_missing_packages_with_the_install_hint(monkeypatch):
@@ -454,3 +470,97 @@ def test_the_worker_stays_loaded_between_requests_and_unloads_when_idle(monkeypa
     speech._invoke_worker("three", False)
     assert len(_FakeWorker.instances) == 2  # reloaded on the next use
     speech._kill_worker()
+
+
+def test_earlier_consent_downloads_a_missing_model_without_asking(tmp_path, monkeypatch):
+    # An upgrade from Kokoro: the old model is cached, Paradee and the phonemizer are not.
+    _fake_cache(tmp_path, monkeypatch, model=False, config=False, phonemizer=False, consent=True)
+    (tmp_path / "hub" / "models--hexgrad--Kokoro-82M" / "snapshots" / "x").mkdir(parents=True)
+    started = _no_threads(monkeypatch)
+    assert speech.has_consent()
+    assert speech.speech_status()["state"] == "downloading"
+    assert speech.speech_status()["state"] == "downloading" and len(started) == 1
+
+
+def test_without_consent_status_only_reports_absent(tmp_path, monkeypatch):
+    _fake_cache(tmp_path, monkeypatch, model=False, config=False, consent=True)
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "empty-hub"))
+    started = _no_threads(monkeypatch)
+    assert not speech.has_consent()
+    assert speech.speech_status()["state"] == "absent" and started == []
+
+
+def test_a_failed_automatic_download_is_not_retried_in_a_loop(tmp_path, monkeypatch):
+    _fake_cache(tmp_path, monkeypatch, model=False, config=False, consent=True)
+    started = _no_threads(monkeypatch)
+    speech._PREPARE.update(state="error", message="The speech model could not be downloaded.")
+    assert speech.speech_status()["state"] == "error" and started == []
+
+
+def test_prepare_records_consent_under_nexus_home(tmp_path, monkeypatch):
+    _fake_cache(tmp_path, monkeypatch, model=False, config=False, consent=True)
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "empty-hub"))
+    _no_threads(monkeypatch)
+    assert not speech.has_consent()
+    speech.schedule_prepare()
+    assert (speech._speech_home() / "consent").exists() and speech.has_consent()
+
+
+def test_phonemizer_under_nexus_home_counts_as_cached(tmp_path, monkeypatch):
+    _fake_cache(tmp_path, monkeypatch, phonemizer=False)
+    assert speech.speech_status()["state"] == "absent"
+    (speech._phonemizer_dir() / "en_core_web_sm").mkdir(parents=True)
+    assert speech.speech_status()["state"] == "ready"
+
+
+def _fake_spacy(monkeypatch, installed):
+    spacy = types.ModuleType("spacy")
+    spacy.util = types.SimpleNamespace(is_package=lambda name: installed())
+    spacy.about = types.SimpleNamespace(__download_url__="https://github.com/explosion/spacy-models/releases/download")
+    download = types.ModuleType("spacy.cli.download")
+    download.get_compatibility = lambda: {}
+    download.get_version = lambda name, compat: "3.8.0"
+    download.get_model_filename = lambda name, version, sdist: f"{name}-{version}/{name}-{version}-py3-none-any.whl"
+    cli = types.ModuleType("spacy.cli")
+    cli.download = download
+    spacy.cli = cli
+    for name, module in {"spacy": spacy, "spacy.cli": cli, "spacy.cli.download": download}.items():
+        monkeypatch.setitem(sys.modules, name, module)
+
+
+def test_offline_worker_never_downloads_the_phonemizer(monkeypatch):
+    _fake_spacy(monkeypatch, lambda: False)
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setattr(speech, "_download_phonemizer", lambda target: pytest.fail("must not download"))
+    with pytest.raises(speech._SpeechRequestError):
+        speech._ensure_phonemizer()
+
+
+def test_phonemizer_wheel_is_unpacked_under_nexus_home(monkeypatch):
+    import io
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("en_core_web_sm/__init__.py", "")
+        archive.writestr("en_core_web_sm-3.8.0.dist-info/METADATA", "Name: en_core_web_sm\n")
+    payload = buffer.getvalue()
+    urls = []
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    _fake_spacy(monkeypatch, lambda: False)
+    monkeypatch.setenv("HF_HUB_OFFLINE", "0")
+    monkeypatch.setattr("urllib.request.urlopen", lambda url, timeout: urls.append(url) or Response(payload))
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    speech._ensure_phonemizer()
+    target = speech._phonemizer_dir()
+    assert urls == ["https://github.com/explosion/spacy-models/releases/download/"
+                    "en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"]
+    assert (target / "en_core_web_sm" / "__init__.py").exists() and str(target) in sys.path
+    assert not (target.parent / "python.partial").exists()

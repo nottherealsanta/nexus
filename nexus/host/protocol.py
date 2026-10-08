@@ -65,6 +65,11 @@ class ProjectSession(msgspec.Struct, frozen=True):
     workspace: str
     project_id: str
     session: SessionSummary
+    #: The repository's main checkout when ``workspace`` is a linked Git worktree
+    #: (sessions there belong with the repository), else "".
+    repo: str = ""
+    #: The worktree's branch (or its name when detached); "" outside a linked worktree.
+    worktree: str = ""
 
 
 class ProjectSessionsListResult(msgspec.Struct, tag=True, frozen=True):
@@ -251,6 +256,21 @@ class SessionCancel(msgspec.Struct, tag=True, frozen=True):
     reason: str = ""
     drop_queue: bool = True
     return_queue: bool = False  # recover removed queued text for the composer
+
+
+class SessionQueueMove(msgspec.Struct, tag=True, frozen=True):
+    """Swap one pending queued/steering message with its neighbour (durable ``input.moved``)."""
+
+    session: str
+    queued_id: str
+    offset: int = -1  # -1 earlier, 1 later
+
+
+class SessionQueueRemove(msgspec.Struct, tag=True, frozen=True):
+    """Drop one pending queued/steering message (durable ``input.dropped``)."""
+
+    session: str
+    queued_id: str
 
 
 class SessionSubscribe(msgspec.Struct, tag=True, frozen=True):
@@ -510,6 +530,17 @@ class McpServerShow(msgspec.Struct, tag=True, frozen=True):
     max_bytes: int = 262_144
 
 
+class McpServerRestart(msgspec.Struct, tag=True, frozen=True):
+    """Close one MCP server's connection and connect it again (the Restart button).
+
+    The session names who asked; the server is shared by the daemon, so every
+    session sees the new connection. A failed connect is reported, never raised.
+    """
+
+    session: str
+    name: str
+
+
 class SkillInspect(msgspec.Struct, tag=True, frozen=True):
     """Read a pinned skill snapshot without enabling or invoking it."""
 
@@ -652,6 +683,9 @@ class Doctor(msgspec.Struct, tag=True, frozen=True):
 class UpdateStatus(msgspec.Struct, tag=True, frozen=True):
     """Is a newer release available? Answered from the daemon's cached check."""
 
+    #: Claim the one-time announcement of the available release (a client toast).
+    announce: bool = False
+
 
 class Health(msgspec.Struct, tag=True, frozen=True):
     """Daemon-level liveness and scheduling counters."""
@@ -723,6 +757,8 @@ Command = (
     | SessionStart
     | SessionEnqueue
     | SessionCancel
+    | SessionQueueMove
+    | SessionQueueRemove
     | SessionSubscribe
     | SessionState
     | LogsRead
@@ -759,6 +795,7 @@ Command = (
     | ContextInspect
     | SkillInspect
     | McpServerShow
+    | McpServerRestart
     | ContextMcpLoadingSelect
     | ContextExtensionSelect
     | FileSearch
@@ -818,6 +855,8 @@ COMMANDS: tuple[type, ...] = (
     SessionStart,
     SessionEnqueue,
     SessionCancel,
+    SessionQueueMove,
+    SessionQueueRemove,
     SessionSubscribe,
     SessionState,
     LogsRead,
@@ -854,6 +893,7 @@ COMMANDS: tuple[type, ...] = (
     ContextInspect,
     SkillInspect,
     McpServerShow,
+    McpServerRestart,
     ContextMcpLoadingSelect,
     ContextExtensionSelect,
     FileSearch,
@@ -1013,6 +1053,12 @@ class SessionCancelResult(msgspec.Struct, tag=True, frozen=True):
     cancelled: bool = False
     dropped: int = 0
     returned_messages: list[str] = msgspec.field(default_factory=list)
+
+
+class SessionQueueEditResult(msgspec.Struct, tag=True, frozen=True):
+    session: str
+    #: False when the message already ran, was dropped, or sits at the edge.
+    changed: bool = False
 
 
 class SessionSubscribeResult(msgspec.Struct, tag=True, frozen=True):
@@ -1326,6 +1372,12 @@ class McpServerShowResult(msgspec.Struct, tag=True, frozen=True):
     redacted_for_display: bool = True
 
 
+class McpServerRestartResult(msgspec.Struct, tag=True, frozen=True):
+    name: str
+    status: str = "unavailable"
+    error: str = ""
+
+
 class SkillInspectResult(msgspec.Struct, tag=True, frozen=True):
     session: str
     name: str
@@ -1443,6 +1495,8 @@ class UpdateStatusResult(msgspec.Struct, tag=True, frozen=True):
     #: The newer release, when there is one.
     available: str | None = None
     command: str = "nexus update"
+    #: True only for the first ``announce`` request that sees this release.
+    announce: bool = False
 
 
 class HealthResult(msgspec.Struct, tag=True, frozen=True):
@@ -1527,6 +1581,7 @@ Result = (
     | SessionStartResult
     | SessionEnqueueResult
     | SessionCancelResult
+    | SessionQueueEditResult
     | SessionSubscribeResult
     | SessionStateResult
     | LogsReadResult
@@ -1557,6 +1612,7 @@ Result = (
     | ContextInspectResult
     | SkillInspectResult
     | McpServerShowResult
+    | McpServerRestartResult
     | FileSearchResult
     | GitDiffResult
     | WorktreeListResult
@@ -1609,6 +1665,7 @@ RESULTS: tuple[type, ...] = (
     SessionStartResult,
     SessionEnqueueResult,
     SessionCancelResult,
+    SessionQueueEditResult,
     SessionSubscribeResult,
     SessionStateResult,
     LogsReadResult,
@@ -1639,6 +1696,7 @@ RESULTS: tuple[type, ...] = (
     ContextInspectResult,
     SkillInspectResult,
     McpServerShowResult,
+    McpServerRestartResult,
     FileSearchResult,
     GitDiffResult,
     WorktreeListResult,
@@ -1781,6 +1839,9 @@ __all__ = [
     "SessionArchiveResult",
     "SessionCancel",
     "SessionCancelResult",
+    "SessionQueueEditResult",
+    "SessionQueueMove",
+    "SessionQueueRemove",
     "SessionDelete",
     "SessionDeleteResult",
     "SessionEnqueue",

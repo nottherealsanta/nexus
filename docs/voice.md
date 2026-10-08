@@ -41,7 +41,10 @@ and cache-only preparation check runtime availability first and report the
    with `--no-voice`; `sounddevice` is always installed. Any other install gets
    both pieces from `nexus voice init`: when `kestrel` is not importable it adds
    the runtime (a uv tool is reinstalled at the same version and source with
-   `voice` added to its extras, so `nexus update` keeps it; editable and pip
+   `voice` added to its extras, so `nexus update` keeps it; `nexus update` also
+   keeps `voice` whenever the runtime is importable or a model is downloaded, so a
+   receipt that lost the extra (installs from before 0.3.3, a plain reinstall) does
+   not drop dictation, and `--no-voice` opts out; editable and pip
    installs get the extra's requirements, read from package metadata, through
    `uv pip install --python <interpreter>` or `pip`), restarts the workspace
    daemon and downloads the model in a fresh interpreter, since a uv reinstall
@@ -207,15 +210,28 @@ Face cache files). When the model is missing both clients show a consent dialog
 with the size (about 25 MB: the 9 MB model, its config and the English phonemizer
 package) and say it runs on this device. Confirming sends `SpeechPrepare`, which starts one
 background download in the isolated worker; the dialog polls the status and shows
-`Downloading… 42% · 10 / 25 MB` (progress is the Hugging Face cache growing
-against the approximate total), then offers "Speak latest answer" (or "Done"
+`Downloading… 42% · 10 / 25 MB` (progress is the Hugging Face cache and the
+phonemizer folder growing against the approximate total), then offers "Speak latest answer" (or "Done"
 when opened from `/speak download` or Settings → Speech). A failed download shows
 the reason and a Retry; missing packages show the install steps below and only a
 Close button. `/speak download` with the model present just says it is ready.
 Settings → Speech shows the model state with a Download button.
 
+**Upgrades never ask again.** Consent is durable: `SpeechPrepare` writes
+`~/.nexus/models/speech/consent`, and a Paradee or Kokoro model already in the
+Hugging Face cache counts as earlier consent (both were only fetched after the
+dialog). When the model is missing after that (a release that switches models,
+an upgrade, a cleared cache), `SpeechStatus` starts the download itself and
+reports `downloading`; `/speak` then shows the progress, refreshes it every
+second (bounded to 10 minutes) and speaks when it is ready, with no dialog. Leaving
+the page stops the wait; the download continues. A failed automatic download
+shows the error and Retry and is not retried in a loop. spaCy's `en_core_web_sm`
+wheel is unpacked under `~/.nexus/models/speech/python` (never pip-installed into
+the tool venv: uv tool venvs have no pip, and `nexus update` replaces the venv),
+and `nexus update` keeps the `speak` extra (see [release.md](release.md)).
+
 Playing is cached-only: Hugging Face is offline and a missing spaCy English
-package is refused before its automatic download. `Speak.download` still exists
+package is reported as not cached, never downloaded. `Speak.download` still exists
 on the wire for scripts but the clients use `SpeechPrepare`. Installing dependencies and the initial
 download require network access; the answer is synthesized locally, not sent
 to a speech service. Hugging Face stores model files in its standard cache.

@@ -67,7 +67,11 @@ Pure presentation helpers, importable by all surfaces. Rich is used only by
   counts; their live status is available after opening them. Opening one
   connects to its owning workspace; delete/archive apply to the active project. The current session has
   a left accent bar. Glyphs: braille spinner while working, `●` needs input,
-  `✓` done, `·` idle, `◇` archived.
+  `✓` done, `·` idle, `◇` archived. The native Ratatui client differs (not ported
+  to the web): 40 columns, one row per session (glyph and title), colored
+  `project › worktree · day` headings, project chips under the title that show
+  one project (Git worktrees group with their repository), and `Esc`/`Ctrl+C`
+  close it ([ratatui-parity.md](ratatui-parity.md)).
 - **Conversation:** the **context header** opens every conversation (System
   prompt, Environment, AGENTS.md, MEMORY.md, Skills, Tools, MCP), then the timeline.
 - **Composer:** editor (no border, no key-hint row), then
@@ -275,8 +279,14 @@ and restore focus on the main conversation. On the main conversation, two Escape
 presses within 1.5 seconds cancel the active turn and return pending queued messages to the composer via
 `SessionCancel(return_queue=True)`. Messages keep queue order, separated by blank
 lines, followed by any existing unsent draft; they no longer run automatically.
-A single Escape shows a stop hint. Ctrl+C retains immediate
-turn cancellation on the main conversation.
+A single Escape shows a stop hint. On the main conversation Ctrl+C first clears
+a non-empty composer (Ctrl+Z brings the text back); with an empty composer it
+cancels the turn immediately. With a composer selection it copies.
+
+A message that opens with a path is sent as text, not run as a command:
+`commands.is_command` treats an unknown first word containing another `/` or a
+`.` (`/Users/me/app.py fails`) as prose. Known commands and aliases always run,
+and an unknown bare word (`/modle`) is still reported, to catch typos.
 
 Attachments insert editable `image 1`, `image 2`, or `document 1`,
 `document 2` references at the composer cursor (each kind is numbered separately
@@ -293,6 +303,16 @@ clicking the message body opens the complete attached text and image metadata.
 ## MCP tool loading
 
 Native context dialogs show per-server On/Off controls and Search/All mode.
+The MCP dialog mirrors the Tools list: one line per server with its name (and
+` · <status>` when not connected), a `~indexed / ~full` token column, a **[ Restart ]**
+chip (click, or Ctrl+R on the row; `McpServerRestart`) and the On/Off toggle. Its top
+row, **↻ Refresh all**, runs `ExtensionsReload` (re-reading `mcp.json`, so added,
+removed and reconfigured servers appear) and then restarts every enabled server that is
+not connected, because reload alone skips a failed server until its backoff expires.
+Enter on a server opens the server page: a Server row (Restart and toggle), the
+Indexed group (that server's entry in the frozen MCP index) and the Full group (every
+tool schema, with one toggle per tool). Context dialogs (tools, skills, MCP) are at most
+88 columns wide, centered.
 Enter opens details with Search, Load all (estimated tokens), and Follow
 configuration actions before the first turn. Settings → MCP shows structured
 server rows above the file editor; loading choices patch the defining scope

@@ -51,8 +51,10 @@ PyPI releases on its next plain `nexus update`. Nexus checks PyPI once a day and
 and `nexus --version`; it never updates by itself. Turn the check off with
 `NEXUS_NO_UPDATE_CHECK=1` or `[updates] check = false`. `nexus --version` prints the
 version, `nexus daemon stop --all` stops every workspace daemon, and `nexus doctor` warns about
-duplicate `nexus` binaries and daemons still running an older version. Uninstall with
-`uv tool uninstall nexus-harness` (sessions in `~/.nexus` are kept).
+duplicate `nexus` binaries and daemons still running an older version. `nexus uninstall`
+removes Nexus and everything it stored (sessions, credentials, settings, the dictation and
+speech models) after listing it and asking; `uv tool uninstall nexus-harness` removes only
+the program and keeps `~/.nexus`.
 
 Native wheels include the Ratatui chat executable. Source installs need a Rust toolchain to build it.
 `nexus chat` requires an interactive terminal; use `nexus run` for piped or

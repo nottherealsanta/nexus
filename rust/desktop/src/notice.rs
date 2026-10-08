@@ -19,6 +19,7 @@ pub enum NoticeAction {
     None,
     Reconnect,
     UpdateHelp,
+    Host(u64),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

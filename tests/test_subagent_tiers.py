@@ -1,6 +1,6 @@
 """Per-role allowed tiers: parsing, resolution, events, and the roster.
 
-Plan: plans/SESSION_TITLE_PLAN.md, Part 3. A role's ``tiers:`` lists the tiers
+Plan: plans/done/SESSION_TITLE_PLAN.md, Part 3. A role's ``tiers:`` lists the tiers
 it may run on, default first. The call may name a tier or a concrete model;
 anything outside the list moves to the nearest allowed tier (never an error),
 and the global ``max_tier`` is applied last.

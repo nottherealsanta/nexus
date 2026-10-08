@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -126,6 +126,21 @@ class Supervisor:
         )
         await self._pump()
         return turn_id
+
+    def reorder(self, session_id: str, order: Sequence[str]) -> None:
+        """Follow a user reorder of the session's durable FIFO.
+
+        Each parked queued pending consumes the session's queue head when it
+        starts and is skipped once its own id has gone, so the parked ids must
+        follow the durable order or a moved message would never run.
+        """
+        queue = self._queues.get(session_id)
+        if not queue:
+            return
+        ranked = {key: rank for rank, key in enumerate(order)}
+        slots = [pending for pending in queue if pending.queued_id in ranked]
+        for pending, queued_id in zip(slots, sorted((p.queued_id for p in slots), key=ranked.__getitem__)):
+            pending.queued_id = queued_id
 
     async def cancel(
         self, session_id: str, *, reason: str | None = None, drop_queue: bool = True

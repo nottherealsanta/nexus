@@ -165,7 +165,20 @@ fn indented(
     }
 }
 
-fn user(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
+fn user(out: &mut Rows, b: &Content, full: usize, p: &Palette) {
+    // One cell of right margin keeps the card off the column edge (added per row below,
+    // unstyled, so the Copy button stays inside the card).
+    let width = full.saturating_sub(1).max(1);
+    let first = out.len();
+    user_card(out, b, width, p);
+    if full > width {
+        for (row, _) in &mut out[first..] {
+            row.spans.push(Span::raw(" "));
+        }
+    }
+}
+
+fn user_card(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
     let base = Style::default().fg(p.text).bg(p.panel);
     let rail = color(&b.color, p.blue, p);
     let bar = |_: ()| {
@@ -176,7 +189,8 @@ fn user(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
         ]
     };
     let inner = width.saturating_sub(7).max(1);
-    let op = &b.operation;
+    // Every card row carries the Copy marker; the button sits on this first row.
+    let op = &crate::copy_button::mark(&b.id, None, &b.operation);
     out.push((line(bar(()), vec![], Some(width), base), op.clone()));
     let tag = if b.number > 0 {
         format!(" #{} ", b.number)
@@ -233,7 +247,11 @@ fn user(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
         }
     }
     if !b.chips.is_empty() {
-        let chip_op = b.chip_operation.clone().or_else(|| op.clone());
+        let chip_op = crate::copy_button::mark(
+            &b.id,
+            None,
+            &b.chip_operation.clone().or_else(|| b.operation.clone()),
+        );
         out.push((line(bar(()), vec![], Some(width), base), chip_op.clone()));
         let mut spans = Vec::new();
         for chip in &b.chips {
@@ -397,6 +415,159 @@ fn diff(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
             spans.extend(cells(&right, right_base).spans);
             out.push((Line::from(spans), op.clone()));
         }
+    }
+}
+
+/// One file change or question, never grouped: `› Edit a.py  +2 −1`, then (open) the
+/// unified diff with added lines green and removed lines red, or the call's details.
+fn change(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
+    let op = &b.operation;
+    let running = b.status == "running";
+    let failed = b.status == "failed";
+    let glyph = if running {
+        "\u{e000}"
+    } else if b.collapsed {
+        "›"
+    } else {
+        "⌄"
+    };
+    let mut counts = vec![];
+    if b.files > 1 {
+        counts.push(Span::raw("  "));
+        counts.push(Span::styled(
+            format!("{} files", b.files),
+            Style::default().fg(p.muted),
+        ));
+    }
+    for (n, sign, tone) in [(b.added, "+", p.success), (b.removed, "−", p.error)] {
+        if n > 0 {
+            counts.push(Span::raw(if counts.is_empty() { "  " } else { " " }));
+            counts.push(Span::styled(
+                format!("{sign}{n}"),
+                Style::default().fg(tone),
+            ));
+        }
+    }
+    let mut head = vec![
+        Span::raw("    "),
+        Span::styled(
+            glyph,
+            Style::default().fg(if running {
+                color(&b.color, p.blue, p)
+            } else {
+                p.muted
+            }),
+        ),
+        Span::raw(" "),
+        Span::styled(b.text.clone(), Style::default().fg(p.muted)),
+    ];
+    head.extend(counts);
+    if !b.heading.is_empty() {
+        head.push(Span::styled(
+            format!(" · {}", b.heading),
+            Style::default().fg(if failed { p.error } else { p.quiet }),
+        ));
+    }
+    for (i, cells) in wrap(&head[1..], width.saturating_sub(6))
+        .into_iter()
+        .enumerate()
+    {
+        let lead = if i == 0 { "    " } else { "      " };
+        out.push((
+            line(vec![Span::raw(lead)], cells, None, Style::default()),
+            op.clone(),
+        ));
+    }
+    if b.collapsed {
+        return;
+    }
+    let rows_op = b.output_operation.clone().or_else(|| op.clone());
+    let digits = b
+        .diff_lines
+        .iter()
+        .map(|row| row.1)
+        .max()
+        .unwrap_or(0)
+        .to_string()
+        .len()
+        .max(2);
+    let total = width.saturating_sub(2);
+    let room = total.saturating_sub(6 + digits + 3).max(4);
+    for (kind, number, text) in &b.diff_lines {
+        let (sign, fg, bg) = match kind.as_str() {
+            "add" => ("+", p.success, Some(p.diff_add)),
+            "del" => ("-", p.error, Some(p.diff_del)),
+            "ctx" => (" ", p.muted, None),
+            "sep" => {
+                out.push((
+                    Line::styled("      ⋯", Style::default().fg(p.quiet)),
+                    rows_op.clone(),
+                ));
+                continue;
+            }
+            "file" => {
+                indented(
+                    out,
+                    vec![Span::styled(
+                        text.clone(),
+                        Style::default().fg(p.muted).add_modifier(Modifier::BOLD),
+                    )],
+                    6,
+                    width,
+                    &rows_op,
+                );
+                continue;
+            }
+            _ => {
+                indented(
+                    out,
+                    vec![Span::styled(text.clone(), Style::default().fg(p.quiet))],
+                    6,
+                    width,
+                    &rows_op,
+                );
+                continue;
+            }
+        };
+        let base = bg.map(|bg| Style::default().bg(bg)).unwrap_or_default();
+        let shown = if *number == 0 {
+            " ".repeat(digits)
+        } else {
+            format!("{number:>digits$}")
+        };
+        for (i, cells) in wrap(&[Span::styled(text.clone(), Style::default().fg(fg))], room)
+            .into_iter()
+            .enumerate()
+        {
+            let prefix = vec![
+                Span::raw("      "),
+                Span::styled(
+                    if i == 0 {
+                        format!("{shown} {sign} ")
+                    } else {
+                        " ".repeat(digits + 3)
+                    },
+                    base.fg(if i == 0 { fg } else { p.quiet }),
+                ),
+            ];
+            out.push((line(prefix, cells, Some(total), base), rows_op.clone()));
+        }
+    }
+    for text in b.detail.lines() {
+        indented(
+            out,
+            vec![Span::styled(
+                text.to_string(),
+                Style::default().fg(if text.starts_with(' ') {
+                    p.text
+                } else {
+                    p.muted
+                }),
+            )],
+            6,
+            width,
+            op,
+        );
     }
 }
 
@@ -600,6 +771,10 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
                 let prefix_width: usize = row.prefix.iter().map(|span| span.content.width()).sum();
                 let room = total.saturating_sub(4 + prefix_width).max(1);
                 let base = row.bg.map(|bg| Style::default().bg(bg)).unwrap_or_default();
+                let row_op = match row.fence {
+                    Some(fence) => crate::copy_button::mark(&b.id, Some(fence), op),
+                    None => op.clone(),
+                };
                 for (i, cells) in wrap(&row.spans, room).into_iter().enumerate() {
                     let mut lead = vec![Span::raw("    ")];
                     if i == 0 {
@@ -608,7 +783,10 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
                         // Hanging indent: wrapped rows line up under the first row's text.
                         lead.push(Span::styled(" ".repeat(prefix_width), base));
                     }
-                    out.push((line(lead, cells, row.bg.map(|_| total), base), op.clone()));
+                    out.push((
+                        line(lead, cells, row.bg.map(|_| total), base),
+                        row_op.clone(),
+                    ));
                 }
             }
         }
@@ -628,25 +806,19 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
             } else {
                 p.muted
             };
-            out.push((
-                Line::from(vec![
-                    Span::raw("    "),
-                    Span::styled(glyph, Style::default().fg(tone)),
-                    Span::raw(" "),
-                    Span::styled(
-                        truncate(&b.text, width.saturating_sub(6)),
-                        Style::default().fg(p.muted),
-                    ),
-                ]),
-                op.clone(),
-            ));
+            let head = vec![
+                Span::raw("    "),
+                Span::styled(glyph, Style::default().fg(tone)),
+                Span::raw(" "),
+                Span::styled(
+                    truncate(&b.text, width.saturating_sub(6)),
+                    Style::default().fg(p.muted),
+                ),
+            ];
+            out.push((Line::from(head), op.clone()));
             for member in &b.members {
                 let text = if member.kind == "thought" {
-                    if member.detail.is_empty() {
-                        format!("{} · Enter for reasoning", member.title)
-                    } else {
-                        member.title.clone()
-                    }
+                    member.title.clone()
                 } else if member.heading.is_empty() {
                     format!("{:<8} {}", member.title, member.text)
                 } else {
@@ -873,6 +1045,7 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
             op,
         ),
         "diff" => diff(&mut out, b, width, p),
+        "change" => change(&mut out, b, width, p),
         _ => {
             if !b.title.is_empty() {
                 indented(
@@ -914,6 +1087,7 @@ mod tests {
             "tool_group",
             "tool",
             "diff",
+            "change",
             "summary",
             "collapsed",
             "error",
@@ -966,7 +1140,9 @@ mod tests {
             let rows = build(&block, width, &p);
             let lines: Vec<String> = rows.iter().map(|(l, _)| l.to_string()).collect();
             assert!(
-                lines.iter().all(|l| l.trim().is_empty() || l.trim_start().starts_with(['┌', '│', '├', '└'])),
+                lines.iter().all(
+                    |l| l.trim().is_empty() || l.trim_start().starts_with(['┌', '│', '├', '└'])
+                ),
                 "width {width}: {lines:#?}"
             );
         }
@@ -1003,8 +1179,13 @@ mod tests {
             chips: vec!["image 1".into()],
             ..Default::default()
         };
-        let rows = build(&block, 40, &p);
-        assert!(rows.iter().all(|(line, _)| line.width() == 40));
+        let rows = build(&block, 41, &p);
+        assert!(rows.iter().all(|(line, _)| line.width() == 41));
+        // One unstyled cell of right margin keeps the card off the column edge.
+        assert!(rows.iter().all(|(line, _)| {
+            let last = line.spans.last().unwrap();
+            last.content == " " && last.style == Style::default()
+        }));
         let header: String = rows[1].0.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(header.starts_with("▾ │ "));
         let number = rows[1]
@@ -1046,8 +1227,16 @@ mod tests {
                 assert_eq!(line.width(), 40);
                 let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
                 assert_eq!(text.trim(), "│");
-                assert_eq!(line.spans.last().unwrap().style.bg, Some(p.panel));
-                assert_eq!(operation, &block.operation);
+                let card = &line.spans[line.spans.len() - 2];
+                assert_eq!(
+                    card.style.bg,
+                    Some(p.panel),
+                    "the card fills up to its margin"
+                );
+                assert_eq!(
+                    crate::copy_button::inner(operation),
+                    block.operation.as_ref()
+                );
             }
         }
     }
@@ -1204,6 +1393,102 @@ mod tests {
         let rows = build(&context, 40, &p);
         assert_eq!(rows[0].0.spans[1].style.bg, Some(p.blue));
         assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn standalone_edit_header_shows_coloured_line_counts() {
+        let p = Palette::new(false);
+        let edit = Content {
+            kind: "change".into(),
+            status: "completed".into(),
+            text: "Edit src/main.rs".into(),
+            path: "src/main.rs".into(),
+            added: 12,
+            removed: 3,
+            files: 1,
+            collapsed: true,
+            ..Default::default()
+        };
+        let spans = &build(&edit, 60, &p)[0].0.spans;
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.ends_with("Edit src/main.rs  +12 −3"), "{text}");
+        assert!(spans
+            .iter()
+            .any(|s| s.content == "+12" && s.style.fg == Some(p.success)));
+        assert!(spans
+            .iter()
+            .any(|s| s.content == "−3" && s.style.fg == Some(p.error)));
+    }
+
+    #[test]
+    fn multi_file_change_header_shows_file_count_before_counts() {
+        let p = Palette::new(false);
+        let multi = Content {
+            kind: "change".into(),
+            status: "completed".into(),
+            text: "Patch".into(),
+            path: "a.rs, b.rs, c.rs".into(),
+            added: 5,
+            removed: 2,
+            files: 3,
+            collapsed: true,
+            ..Default::default()
+        };
+        let spans = &build(&multi, 60, &p)[0].0.spans;
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.ends_with("Patch  3 files +5 −2"), "{text}");
+        assert!(spans
+            .iter()
+            .any(|s| s.content == "3 files" && s.style.fg == Some(p.muted)));
+        let single = Content { files: 1, ..multi };
+        let text: String = build(&single, 60, &p)[0]
+            .0
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(!text.contains("files") && text.ends_with("+5 −2"), "{text}");
+    }
+
+    #[test]
+    fn open_change_draws_added_lines_green_and_removed_lines_red() {
+        let p = Palette::new(false);
+        let edit = Content {
+            kind: "change".into(),
+            status: "completed".into(),
+            text: "Edit a.md".into(),
+            added: 2,
+            removed: 1,
+            diff_lines: vec![
+                ("ctx".into(), 1, "keep".into()),
+                ("del".into(), 2, "old".into()),
+                ("add".into(), 2, "new".into()),
+                ("add".into(), 3, "more".into()),
+            ],
+            ..Default::default()
+        };
+        let rows = build(&edit, 40, &p);
+        assert_eq!(rows.len(), 5);
+        let find = |needle: &str| {
+            rows.iter()
+                .flat_map(|(line, _)| line.spans.iter())
+                .find(|s| s.content == needle)
+                .unwrap_or_else(|| panic!("{needle}"))
+                .style
+        };
+        assert_eq!(find("new").fg, Some(p.success));
+        assert_eq!(find("new").bg, Some(p.diff_add));
+        assert_eq!(find("old").fg, Some(p.error));
+        assert_eq!(find("old").bg, Some(p.diff_del));
+        assert_eq!(find("keep").fg, Some(p.muted));
+        for (line, _) in &rows {
+            assert!(line.width() <= 40);
+        }
+        let folded = Content {
+            collapsed: true,
+            ..edit
+        };
+        assert_eq!(build(&folded, 40, &p).len(), 1);
     }
 
     #[test]

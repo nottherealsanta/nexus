@@ -384,6 +384,31 @@ async def test_manual_queue_turn_combines_content_blocks(tmp_path, attached):
     assert session.queue_depth == 0
 
 
+async def test_queued_inputs_reorder_and_remove_durably(tmp_path):
+    from nexus.view import fold
+
+    release = asyncio.Event()
+    provider = ScriptedProvider(parked_script(release), text_response("reply"))
+    session, _ = make_session(tmp_path, provider)
+    await session.start_turn("one")
+    await wait_for(lambda: session.active)
+    first, second, third = session.enqueue("a"), session.enqueue("b", mode="steer"), session.enqueue("c")
+
+    assert session.move_queued(third, -1) and session.queued_ids == (first, third, second)
+    assert not session.move_queued(first, -1)  # already first
+    assert session.remove_queued(second) and not session.remove_queued(second)
+    assert session.queued_ids == (first, third)
+    view = fold(list(session.events))
+    assert [item.queued_id for item in view.input_queue] == [first, third]
+    moved = next(event for event in session.events if event.type == "input.moved")
+    assert moved.data == {"queued_id": third, "order": [first, third, second]}
+
+    session._rehydrate_queue()  # replay of the durable log keeps the edited order
+    assert session.queued_ids == (first, third)
+    release.set()
+    await session.wait_idle()
+
+
 async def test_cancel_drops_queued_inputs(tmp_path):
     release = asyncio.Event()
     provider = ScriptedProvider(parked_script(release), text_response("unused"))

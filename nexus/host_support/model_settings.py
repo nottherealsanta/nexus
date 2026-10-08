@@ -1,4 +1,4 @@
-"""Settings -> Models and Settings -> Session titles (plans/SESSION_TITLE_PLAN.md).
+"""Settings -> Models and Settings -> Session titles (plans/done/SESSION_TITLE_PLAN.md).
 
 Host-side reads and writes for the tier table, the subagent ceiling
 (``[agents] max_tier``) and the automatic title switch (``[sessions]``). Every

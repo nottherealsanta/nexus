@@ -264,7 +264,7 @@ Config lives in `release-please-config.json`:
 - **Installer** (`install.sh`, `install.ps1`): `NEXUS_SOURCE` defaults to `pypi`;
   `--version X` means `nexus-harness==X`. `--source git` keeps working with `--git-ref`
   (default `main`); with the git source `--version X` means tag `vX`.
-- **`nexus update [--channel {stable,git}] [--ref R] [--version V] [--no-restart]`.**
+- **`nexus update [--channel {stable,git}] [--ref R] [--version V] [--no-restart] [--no-voice] [--no-speak]`.**
   `install_source()` reads `direct_url.json` to tell `pypi`, `git`, `path` or `unknown`
   installs apart; `install_method()` says how (`uv-tool`, `editable`, `pip`).
 
@@ -277,13 +277,47 @@ Config lives in `release-please-config.json`:
   | path / unknown source | refused; re-run the installer or use `--channel git` |
 
   Extras are read back from `uv-receipt.toml` (bounded to 64 KiB) and the running
-  Python's `X.Y` is passed, so an update keeps both. The migration prints
+  Python's `X.Y` is passed, so an update keeps both. `voice` is also kept when the
+  receipt lost it but the user dictates: the runtime (`kestrel`) is importable, or a
+  model is downloaded under `~/.nexus/models/voice/` (`install.update_extras`; never
+  on musl). The update says `Keeping local dictation (voice)`; `--no-voice` drops it.
+  `speak` follows the same rule: kept when the receipt lists it, the speech runtime
+  (onnxruntime and misaki, or Kokoro from earlier releases) is importable, or
+  `~/.nexus/models/speech/` or a Paradee/Kokoro Hugging Face cache exists. It says
+  `Keeping local speech (speak)`; `--no-speak` drops it. Downloaded models live
+  outside the venv, so neither feature asks for a new download or `init` after an
+  update (a model that changed between releases is fetched on its own, see
+  [voice.md](voice.md#speak-the-latest-answer-terminal-clients)). The migration prints
   `Moving this install from git to PyPI releases (use --channel git to stay on git).`
   Editable and non-uv installs are refused as before. The daemon is restarted after the
   upgrade unless `--no-restart`. `--ref` needs `--channel git`; `--version` and
   `--channel git` cannot be combined. `update --version` stores into `dest="release"`
   because the top-level `--version` shares the name.
 - **Developers** who want unreleased code use `nexus update --channel git`.
+
+## Uninstall
+
+`nexus uninstall [--yes]` (`nexus/cli.py`, `nexus/host_support/uninstall.py`) removes
+Nexus and everything it stored on this machine. It first lists each path with its
+size, then asks `Remove all of this? [y/N]`; anything but `y`/`yes` removes nothing.
+Without a terminal it refuses unless `--yes` is passed. It removes, in order:
+
+1. every running daemon (stopped gracefully, so nothing writes the database meanwhile);
+2. the Nexus home (`$NEXUS_HOME`, default `~/.nexus`) as a whole: `nexus.db` with every
+   project's sessions, `credentials.json`, `config.toml`, user extensions, logs,
+   caches, locks, `models/voice/` (dictation) and `models/speech/` (phonemizer, consent);
+3. this home's private daemon socket directory under `/tmp`;
+4. `$XDG_CONFIG_HOME/nexus/tui.json` (and that folder when it is then empty);
+5. the speech models in the Hugging Face cache (`models--sahilmahendrakar--Paradee-8M-v1.0`,
+   and Kokoro's `models--hexgrad--Kokoro-82M` from earlier releases); nothing else there;
+6. last, the program: `uv tool uninstall nexus-harness` for uv tool installs. Editable and
+   pip installs keep the package and say how to remove it.
+
+Files inside projects (`.agents/`, `nexus.toml`, `AGENTS.md`) belong to those projects and
+are never touched, nor is uv. A home that is `/`, the user's home or one of its parents, or
+a custom `NEXUS_HOME` with no `nexus.db` is refused with nothing removed; a symlinked home
+loses the link, not its target. `uv tool uninstall nexus-harness` alone still removes only
+the program and keeps `~/.nexus`.
 
 ## Installer CI
 

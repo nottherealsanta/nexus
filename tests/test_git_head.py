@@ -24,6 +24,7 @@ def test_normal_repo_branch(tmp_path: Path) -> None:
         "detached": False,
         "worktree": False,
         "worktree_name": "",
+        "main_root": str(tmp_path.resolve()),
     }
 
 
@@ -56,6 +57,9 @@ def test_linked_worktree(tmp_path: Path) -> None:
     assert info["worktree"] is True
     assert info["worktree_name"] == "feat"
     assert info["root"] == str(wt.resolve())
+    assert info["main_root"] == str(main.resolve())
+    (gitdir / "commondir").write_text("../..\n")
+    assert git_head(wt)["main_root"] == str(main.resolve())
 
 
 def test_not_a_repo(tmp_path: Path) -> None:

@@ -1,6 +1,6 @@
 """Automatic session titles: one small side call to a cheap model.
 
-Contract (plans/SESSION_TITLE_PLAN.md, Part 2): after a root session's first
+Contract (plans/done/SESSION_TITLE_PLAN.md, Part 2): after a root session's first
 user message, a background task sends that message to the configured title model
 (``[sessions] title_model``, the ``low`` tier by default) and stores a short
 title. It is not a session: no loop, no tools, no ``AGENTS.md`` or memory, no

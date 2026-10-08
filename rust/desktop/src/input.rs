@@ -77,6 +77,14 @@ impl Focusable for Input {
 }
 
 impl Input {
+    #[cfg(test)]
+    pub(crate) fn painted_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.layout
+            .iter()
+            .map(|(_, _, bounds)| *bounds)
+            .reduce(|a, b| a.union(&b))
+    }
+
     pub fn new(placeholder: &str, cx: &mut Context<Self>) -> Self {
         Self {
             focus: cx.focus_handle(),
@@ -87,7 +95,7 @@ impl Input {
             menu: false,
             tab_enabled: true,
             atomic_markers: false,
-            font_size: 14.,
+            font_size: crate::theme::size::BODY,
             highlights: vec![],
             links: vec![],
             foreground: crate::theme::Theme::new(false).text,
@@ -112,6 +120,12 @@ impl Input {
     }
     pub fn insert(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.replace_text_in_range(None, text, window, cx);
+    }
+    /// An ordinary edit, so clearing a draft can be undone and observers see it.
+    pub fn clear(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.selected = 0..self.content.len();
+        self.marked = None;
+        self.replace_text_in_range(None, "", window, cx);
     }
     pub(crate) fn cursor(&self) -> usize {
         if self.reversed {
@@ -311,6 +325,15 @@ impl Input {
             ));
         }
     }
+    fn copy_or_cancel(&mut self, _: &crate::Cancel, w: &mut Window, cx: &mut Context<Self>) {
+        if self.selected.is_empty() {
+            cx.propagate();
+        } else {
+            // A secret selection consumes the shortcut without copying it or
+            // allowing the shell to cancel the background turn.
+            self.copy(&Copy, w, cx);
+        }
+    }
     fn cut(&mut self, _: &Cut, w: &mut Window, cx: &mut Context<Self>) {
         self.copy(&Copy, w, cx);
         self.replace_text_in_range(None, "", w, cx);
@@ -342,13 +365,16 @@ impl Input {
         let position = self.layout.iter().find_map(|(start, line, bounds)| {
             (cursor >= *start && cursor <= start + line.len())
                 .then(|| {
-                    line.position_for_index(cursor - start, px(24.))
+                    line.position_for_index(cursor - start, px(crate::theme::size::BODY_LINE))
                         .map(|p| bounds.origin + p)
                 })
                 .flatten()
         });
         if let Some(p) = position {
-            let offset = self.index_at(point(p.x, p.y + px(24. * direction)));
+            let offset = self.index_at(point(
+                p.x,
+                p.y + px(crate::theme::size::BODY_LINE * direction),
+            ));
             if selecting {
                 self.select_to(offset, cx);
             } else {
@@ -375,7 +401,7 @@ impl Input {
             if position.y < bounds.bottom() {
                 let local = position - bounds.origin;
                 let index = line
-                    .closest_index_for_position(local, px(24.))
+                    .closest_index_for_position(local, px(crate::theme::size::BODY_LINE))
                     .unwrap_or_else(|i| i);
                 return (*start + index).min(self.content.len());
             }
@@ -588,8 +614,11 @@ impl EntityInputHandler for Input {
             if r.start < *start || r.start > start + line.len() {
                 return None;
             }
-            let p = line.position_for_index(r.start - start, px(24.))?;
-            Some(Bounds::new(bounds.origin + p, size(px(2.), px(24.))))
+            let p = line.position_for_index(r.start - start, px(crate::theme::size::BODY_LINE))?;
+            Some(Bounds::new(
+                bounds.origin + p,
+                size(px(2.), px(crate::theme::size::BODY_LINE)),
+            ))
         })
     }
     fn character_index_for_point(
@@ -655,9 +684,9 @@ impl Element for InputElement {
                 .unwrap_or_default();
             let height = lines
                 .iter()
-                .map(|l| l.size(px(24.)).height)
+                .map(|l| l.size(px(crate::theme::size::BODY_LINE)).height)
                 .fold(px(0.), |a, b| a + b)
-                .max(px(24.));
+                .max(px(crate::theme::size::BODY_LINE));
             size(width, height)
         });
         (id, ())
@@ -700,11 +729,14 @@ impl Element for InputElement {
             for line in &lines {
                 if input.selected.is_empty() && input.focus.is_focused(w) && !input.readonly {
                     if input.cursor() >= start && input.cursor() <= start + line.len() {
-                        if let Some(p) = line.position_for_index(input.cursor() - start, px(24.)) {
+                        if let Some(p) = line.position_for_index(
+                            input.cursor() - start,
+                            px(crate::theme::size::BODY_LINE),
+                        ) {
                             quads.push(fill(
                                 Bounds::new(
                                     point(bounds.left() + p.x, y + p.y),
-                                    size(px(1.5), px(24.)),
+                                    size(px(1.5), px(crate::theme::size::BODY_LINE)),
                                 ),
                                 input.accent,
                             ));
@@ -717,8 +749,8 @@ impl Element for InputElement {
                     let from = input.selected.start.saturating_sub(start).min(line.len());
                     let to = input.selected.end.saturating_sub(start).min(line.len());
                     if let (Some(a), Some(b)) = (
-                        line.position_for_index(from, px(24.)),
-                        line.position_for_index(to, px(24.)),
+                        line.position_for_index(from, px(crate::theme::size::BODY_LINE)),
+                        line.position_for_index(to, px(crate::theme::size::BODY_LINE)),
                     ) {
                         let mut row_y = a.y;
                         while row_y <= b.y {
@@ -727,16 +759,16 @@ impl Element for InputElement {
                             quads.push(fill(
                                 Bounds::new(
                                     point(bounds.left() + x1, y + row_y),
-                                    size((x2 - x1).max(px(1.)), px(24.)),
+                                    size((x2 - x1).max(px(1.)), px(crate::theme::size::BODY_LINE)),
                                 ),
                                 input.accent.opacity(0.25),
                             ));
-                            row_y += px(24.);
+                            row_y += px(crate::theme::size::BODY_LINE);
                         }
                     }
                 }
                 start += line.len() + 1;
-                y += line.size(px(24.)).height;
+                y += line.size(px(crate::theme::size::BODY_LINE)).height;
             }
         }
         Painted { lines, quads }
@@ -764,10 +796,17 @@ impl Element for InputElement {
         let mut start = 0;
         let mut layout = vec![];
         for line in &painted.lines {
-            let height = line.size(px(24.)).height;
+            let height = line.size(px(crate::theme::size::BODY_LINE)).height;
             let origin = point(bounds.left(), y);
-            line.paint(origin, px(24.), TextAlign::Left, None, w, cx)
-                .ok();
+            line.paint(
+                origin,
+                px(crate::theme::size::BODY_LINE),
+                TextAlign::Left,
+                None,
+                w,
+                cx,
+            )
+            .ok();
             layout.push((
                 start,
                 line.clone(),
@@ -812,6 +851,7 @@ impl Render for Input {
             .on_action(cx.listener(Self::end))
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::copy))
+            .on_action(cx.listener(Self::copy_or_cancel))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::newline))
             .on_action(cx.listener(Self::submit))
@@ -824,7 +864,7 @@ impl Render for Input {
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_up))
             .on_mouse_move(cx.listener(Self::mouse_move))
             .text_size(px(self.font_size))
-            .line_height(px(if self.font_size <= 12. { 18. } else { 24. }))
+            .line_height(px(crate::theme::size::BODY_LINE))
             .child(InputElement {
                 entity: cx.entity(),
             })

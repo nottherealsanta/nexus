@@ -472,6 +472,7 @@ def test_update_migration_message_only_when_moving_from_git(monkeypatch, capsys)
 
     monkeypatch.setattr(install, "install_method", lambda: "uv-tool")
     monkeypatch.setattr(install, "installed_extras", lambda: ["documents"])
+    monkeypatch.setattr(install, "update_extras", lambda **kw: ["documents"])  # this machine's voice/speech use is irrelevant
     monkeypatch.setattr(install, "find_uv", lambda environ=None: "/u/uv")
     monkeypatch.setattr(install, "running_daemons", no_daemons)
     monkeypatch.setattr(install, "run_update", lambda command: ran.append(command) or 0)
@@ -501,3 +502,115 @@ def test_update_rejects_conflicting_flags(capsys):
     with pytest.raises(SystemExit):
         cli.main(["update", "--channel", "git", "--version", "0.1.0"])
     assert "cannot be combined" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("receipt,runtime,model,keep,expected", [
+    (["voice"], False, False, True, ["voice"]),               # recorded in the receipt
+    ([], True, False, True, ["voice"]),                       # runtime installed beside the receipt (pre-0.3.3 voice init)
+    (["documents"], False, True, True, ["documents", "voice"]),  # receipt lost it; the model cache remembers
+    ([], False, False, True, []),                             # never used dictation
+    (["voice", "documents"], True, True, False, ["documents"]),  # --no-voice
+])
+def test_update_extras_keep_voice_for_a_user_who_dictates(monkeypatch, tmp_path, receipt, runtime, model, keep, expected):
+    from nexus.host_support import install
+
+    monkeypatch.setattr(install, "installed_extras", lambda: list(receipt))
+    monkeypatch.setattr(install, "voice_runtime_installed", lambda: runtime)
+    monkeypatch.setattr(install, "speak_runtime_installed", lambda: False)
+    monkeypatch.setattr(install, "speech_model_downloaded", lambda home=None: False)
+    monkeypatch.setattr(install, "is_musl", lambda: False)
+    if model:
+        (tmp_path / ".nexus/models/voice/parakeet-redux/rev").mkdir(parents=True)
+    assert install.voice_model_downloaded(tmp_path) is model
+    assert install.update_extras(keep_voice=keep, home=tmp_path) == expected
+
+
+def test_update_extras_never_add_voice_on_musl(monkeypatch, tmp_path):
+    from nexus.host_support import install
+
+    monkeypatch.setattr(install, "installed_extras", lambda: [])
+    monkeypatch.setattr(install, "voice_runtime_installed", lambda: True)
+    monkeypatch.setattr(install, "speak_runtime_installed", lambda: True)
+    monkeypatch.setattr(install, "is_musl", lambda: True)
+    assert install.update_extras(home=tmp_path) == []
+
+
+@pytest.mark.parametrize("argv,voice", [(["update"], True), (["update", "--no-voice"], False)])
+def test_update_reinstalls_with_voice_unless_asked_not_to(monkeypatch, capsys, argv, voice):
+    from nexus import cli
+    from nexus.host_support import install
+
+    commands: list[list[str]] = []
+
+    async def none(home=None):
+        return []
+
+    monkeypatch.setattr(install, "install_method", lambda: "uv-tool")
+    monkeypatch.setattr(install, "install_source", lambda: "pypi")
+    monkeypatch.setattr(install, "installed_extras", lambda: [])
+    monkeypatch.setattr(install, "voice_runtime_installed", lambda: True)
+    monkeypatch.setattr(install, "speak_runtime_installed", lambda: False)
+    monkeypatch.setattr(install, "speech_model_downloaded", lambda home=None: False)
+    monkeypatch.setattr(install, "is_musl", lambda: False)
+    monkeypatch.setattr(install, "find_uv", lambda environ=None: "/u/uv")
+    monkeypatch.setattr(install, "package_version", lambda: "0.1.0")
+    monkeypatch.setattr(install, "running_daemons", none)
+    monkeypatch.setattr(install, "run_update", lambda command: commands.append(command) or 0)
+    monkeypatch.setattr(install, "installed_version_after_update", lambda b=None: "0.2.0")
+    assert cli.main(argv) == 0
+    assert commands[0][-1] == ("nexus-harness[voice]" if voice else "nexus-harness")
+    assert ("Keeping local dictation" in capsys.readouterr().out) is voice
+
+
+@pytest.mark.parametrize("receipt,runtime,model,keep,expected", [
+    (["speak"], False, False, True, ["speak"]),               # recorded in the receipt
+    ([], True, False, True, ["speak"]),                       # runtime installed beside the receipt
+    (["documents"], False, True, True, ["documents", "speak"]),  # receipt lost it; the model cache remembers
+    ([], False, False, True, []),                             # never used /speak
+    (["speak", "documents"], True, True, False, ["documents"]),  # --no-speak
+])
+def test_update_extras_keep_speak_for_a_user_who_speaks(monkeypatch, tmp_path, receipt, runtime, model, keep, expected):
+    from nexus.host_support import install
+
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
+    monkeypatch.setattr(install, "installed_extras", lambda: list(receipt))
+    monkeypatch.setattr(install, "voice_runtime_installed", lambda: False)
+    monkeypatch.setattr(install, "speak_runtime_installed", lambda: runtime)
+    monkeypatch.setattr(install, "is_musl", lambda: False)
+    if model:
+        (tmp_path / ".nexus/models/speech").mkdir(parents=True)
+    assert install.speech_model_downloaded(tmp_path) is model
+    assert install.update_extras(keep_speak=keep, home=tmp_path) == expected
+
+
+def test_a_cached_kokoro_model_keeps_speak_after_the_paradee_switch(monkeypatch, tmp_path):
+    from nexus.host_support import install
+
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
+    (tmp_path / "hub/models--hexgrad--Kokoro-82M/snapshots/x").mkdir(parents=True)
+    assert install.speech_model_downloaded(tmp_path)
+
+
+@pytest.mark.parametrize("argv,speak", [(["update"], True), (["update", "--no-speak"], False)])
+def test_update_reinstalls_with_speak_unless_asked_not_to(monkeypatch, capsys, argv, speak):
+    from nexus import cli
+    from nexus.host_support import install
+
+    commands: list[list[str]] = []
+
+    async def none(home=None):
+        return []
+
+    monkeypatch.setattr(install, "install_method", lambda: "uv-tool")
+    monkeypatch.setattr(install, "install_source", lambda: "pypi")
+    monkeypatch.setattr(install, "installed_extras", lambda: ["speak", "voice"])
+    monkeypatch.setattr(install, "is_musl", lambda: False)
+    monkeypatch.setattr(install, "find_uv", lambda environ=None: "/u/uv")
+    monkeypatch.setattr(install, "package_version", lambda: "0.1.0")
+    monkeypatch.setattr(install, "running_daemons", none)
+    monkeypatch.setattr(install, "run_update", lambda command: commands.append(command) or 0)
+    monkeypatch.setattr(install, "installed_version_after_update", lambda b=None: "0.2.0")
+    assert cli.main(argv) == 0
+    assert commands[0][-1] == ("nexus-harness[speak,voice]" if speak else "nexus-harness[voice]")
+    out = capsys.readouterr().out
+    assert ("Keeping local speech" in out) is speak and "Keeping local dictation" in out

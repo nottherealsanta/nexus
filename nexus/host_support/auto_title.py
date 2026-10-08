@@ -1,6 +1,6 @@
 """Start, bound and cancel the background title call for a new session.
 
-Contract (plans/SESSION_TITLE_PLAN.md, Part 2): when a *root* session receives
+Contract (plans/done/SESSION_TITLE_PLAN.md, Part 2): when a *root* session receives
 its first message and ``[sessions] auto_title`` is on, one background task asks
 the title model for a short title and stores it with
 ``SessionManager.set_auto_title``. The turn never waits for it. At most one task

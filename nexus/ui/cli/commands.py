@@ -112,9 +112,17 @@ class ParsedCommand:
 
 
 def is_command(text: str) -> bool:
-    """Whether a line should be interpreted as a slash command."""
+    """Whether a line should be interpreted as a slash command.
+
+    A message that opens with a path (``/Users/me/app.py fails``) is not one: an
+    unknown first word with another ``/`` or a ``.`` in it is sent as text.
+    Unknown bare words (``/modle``) stay commands so typos are reported.
+    """
     stripped = text.lstrip()
-    return stripped.startswith("/") and bool(stripped[1:].strip())
+    if not stripped.startswith("/") or not stripped[1:].strip():
+        return False
+    head = stripped.split(None, 1)[0]
+    return head in BY_NAME or not any(mark in head[1:] for mark in "/.")
 
 
 def parse(text: str) -> ParsedCommand | None:

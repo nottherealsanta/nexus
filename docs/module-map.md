@@ -11,7 +11,7 @@ here, so add a row when you add a file.
 | Path | Contents |
 | --- | --- |
 | `nexus/` | the package (below) |
-| `rust/desktop/` | GPUI desktop executable, native editor/transcript/panels, declarative `src/keymap.rs`, bounded toast stack in `src/notice.rs`, turn minimap derivation in `src/minimap.rs`, bounded opt-in CPU timing in `src/trace.rs`, and visual fixtures ([desktop.md](desktop.md)) |
+| `rust/desktop/` | GPUI desktop executable, native editor/transcript/panels, shared typed Settings renderer in `src/settings.rs`, declarative `src/keymap.rs`, bounded toast stack in `src/notice.rs`, turn minimap derivation in `src/minimap.rs`, bounded opt-in CPU timing in `src/trace.rs`, and visual fixtures ([desktop.md](desktop.md)) |
 | `skills/gpui-nexus/` | version-aware GPUI implementation/design guidance, reviewed upstream references and licenses |
 | `skills/native-app-review/` | reusable native screenshot/review skill and local macOS bundling helper |
 | `docs/` | this documentation |
@@ -211,9 +211,10 @@ here, so add a row when you add a file.
 | `browser_view.py` | Browser-safe reducer projection and compact structural JSON patches |
 | `context_preview.py` | Privacy projection for a read-only, next-turn context preview |
 | `doctor.py` | Bounded, redacted health projections for doctor |
-| `git_head.py` | Subprocess-free, bounded read of the workspace's Git branch / detached HEAD / linked worktree for the Doctor `git` field |
+| `git_head.py` | Subprocess-free, bounded read of the workspace's Git branch / detached HEAD / linked worktree (and its main checkout) for the Doctor `git` field and the sessions sidebar's worktree grouping |
 | `git_diff.py` | Bounded, read-only Git diff projection for the host |
 | `install.py` | Install, upgrade, and daemon-hygiene helpers |
+| `uninstall.py` | `nexus uninstall`: what Nexus stored on this machine, safety checks, removal |
 | `mock.py` | Host dispatch for the dev-mode `Mock*` commands |
 | `model_settings.py` | Settings → Models and Session titles: tier lists, the subagent ceiling, the auto-title switch |
 | `provider_auth.py` | Provider sign-in behind the host boundary: Settings → Providers |
@@ -393,6 +394,13 @@ here, so add a row when you add a file.
 | File | Purpose |
 | --- | --- |
 | `__init__.py` | Static browser client for the Nexus daemon |
+| `js/agent-settings.js` | Guided agent routing editor (session/model/tier, ordered fallbacks) that preserves prompt and unrelated frontmatter and checks SHA conflicts |
+| `js/composer-navigation.js` | Composer history (Up/Down, per-session, draft restore) and Ctrl+A/E/K/U/W line editing |
+| `js/context-preferences.js` | Browser-local visibility of context-header cards; hidden cards stay in the full request context |
+| `js/mcp-settings.js` | Settings pane for MCP servers: scope, loading mode, enabled state and errors via the host contract |
+| `js/model-settings.js` | Settings pane for default model, title model and tier routes |
+| `js/speech.js` | `/speak`, speech status and stop on the daemon host, with explicit model download confirmation |
+| `js/markdown.js` | Shared HTML-free transcript and context Markdown renderer; safe links, tables, lists, quotes and labelled code fences |
 | `js/fuzzy.js` | Fuzzy matcher for the palette and model picker (port of `ui_support/fuzzy.py`) |
 | `js/voice-strip.js` | Floating dictation waveform and bounded live transcript preview |
 
@@ -510,6 +518,7 @@ loop over local state; splitting it further needs a state struct and is not done
 
 | Native module | Contract |
 | --- | --- |
+| `rust/tui/src/copy_button.rs` | Hover-revealed Copy buttons on user cards and code fences: row markers, hit test, text recovery |
 | `rust/tui/src/disclosure.rs` | Rust-local transcript disclosure, session/page LRU choices and borrowed presentation |
 | `rust/tui/src/local_ui.rs` | Optimistic sidebar/tab/file/log toggles with ordered acknowledgements |
 | `rust/tui/src/trace.rs` | Bounded opt-in native timing samples, percentile summaries and exit report |

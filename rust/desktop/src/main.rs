@@ -10,6 +10,7 @@ mod markdown;
 mod minimap;
 mod notice;
 mod panels;
+mod settings;
 mod text;
 mod theme;
 mod trace;
@@ -41,6 +42,7 @@ actions!(
         ToggleDetails,
         Dismiss,
         Cancel,
+        StopTurn,
         Palette,
         InspectContext,
         Usage,
@@ -121,7 +123,10 @@ pub struct Desktop {
     preview: bool,
     notices: NoticeStack,
     seen_update_notice: String,
+    seen_host_toast: u64,
     panel_identity: String,
+    settings_inputs: std::cell::RefCell<HashMap<String, (Entity<Input>, Subscription)>>,
+    settings_open: Option<String>,
     form_identity: String,
     form_revision: u64,
     autosave_task: Option<Task<()>>,
@@ -142,6 +147,39 @@ pub struct Desktop {
     _subscriptions: Vec<Subscription>,
 }
 impl Desktop {
+    /// Small conversations can infer their height and sit at the top. Full
+    /// measurement is limited to 64 blocks; larger sessions stay virtualized.
+    fn make_transcript(cx: &mut Context<Self>, measure_all: bool) -> ListState {
+        let transcript = ListState::new(0, ListAlignment::Bottom, px(800.));
+        let transcript = if measure_all {
+            transcript.measure_all()
+        } else {
+            transcript
+        };
+        let weak = cx.entity().downgrade();
+        transcript.set_scroll_handler(move |event, _, cx| {
+            weak.update(cx, |this, _| {
+                this.transcript_visible
+                    .set((event.visible_range.start, event.visible_range.end));
+                // Read the block count from the snapshot, never the list: this
+                // handler runs inside the list's own layout borrow, so calling
+                // `transcript.item_count()` here would re-enter its RefCell.
+                let count = this.snapshot.blocks.len();
+                if count == 0 {
+                    // Nothing to follow yet; keep the initial follow state.
+                    return;
+                }
+                // Bottom alignment reports a real pixel departure from the end,
+                // even while a tall final block remains visible.
+                this.follow = !event.is_scrolled;
+                if this.follow {
+                    this.follow_pending = false;
+                }
+            })
+            .ok();
+        });
+        transcript
+    }
     fn new(window: &mut Window, cx: &mut Context<Self>, preview: bool) -> Self {
         let composer = cx.new(|cx| {
             let mut input = Input::new("Ask anything, or / for commands…", cx);
@@ -161,32 +199,13 @@ impl Desktop {
             i
         });
         let form = cx.new(|cx| Input::new("", cx));
-        let transcript = ListState::new(0, ListAlignment::Top, px(800.));
-        let weak = cx.entity().downgrade();
-        transcript.set_scroll_handler(move |event, _, cx| {
-            weak.update(cx, |this, _| {
-                this.transcript_visible
-                    .set((event.visible_range.start, event.visible_range.end));
-                // Read the block count from the snapshot, never the list: this
-                // handler runs inside the list's own layout borrow, so calling
-                // `transcript.item_count()` here would re-enter its RefCell.
-                let count = this.snapshot.blocks.len();
-                if count == 0 {
-                    // Nothing to follow yet; keep the initial follow state.
-                    return;
-                }
-                this.follow = crate::text::follow_from_visible(event.visible_range.end, count);
-                if this.follow {
-                    this.follow_pending = false;
-                }
-            })
-            .ok();
-        });
+        let transcript = Self::make_transcript(cx, true);
         let mut subscriptions = vec![];
         subscriptions.push(cx.observe_window_bounds(window, |this, window, cx| {
             this.sync_logs_visibility(window);
             cx.notify();
         }));
+
         let composer_focus = composer.read(cx).focus.clone();
         subscriptions.push(cx.on_blur(&composer_focus, window, |this, _, cx| this.flush_draft(cx)));
         subscriptions.push(
@@ -405,7 +424,10 @@ impl Desktop {
             preview,
             notices: NoticeStack::default(),
             seen_update_notice: String::new(),
+            seen_host_toast: 0,
             panel_identity: String::new(),
+            settings_inputs: std::cell::RefCell::new(HashMap::new()),
+            settings_open: None,
             form_identity: String::new(),
             form_revision: 0,
             autosave_task: None,
@@ -566,9 +588,14 @@ impl Desktop {
             .timer(std::time::Duration::from_millis(120));
         self.resize_task = Some(cx.spawn(async move |weak, cx| {
             timer.await;
-            weak.update(cx, |this, _| {
+            weak.update(cx, |this, cx| {
                 if this.resize_revision == revision {
+                    let position = this.transcript.logical_scroll_top();
                     this.transcript.reset(this.snapshot.blocks.len());
+                    if !this.follow {
+                        this.transcript.scroll_to(position);
+                    }
+                    cx.notify();
                     #[cfg(test)]
                     this.resize_reset_count
                         .set(this.resize_reset_count.get() + 1);
@@ -599,6 +626,7 @@ impl Desktop {
         if self.snapshot.disconnected
             || !self.snapshot.agent_page.is_empty()
             || self.snapshot.prompt.is_some()
+            || !self.snapshot.panel_title.is_empty()
         {
             return;
         }
@@ -801,13 +829,17 @@ impl Desktop {
             self.push_notice(NoticeKind::Error, error, NoticeAction::None, cx);
             return;
         }
-        let new_tail = self
-            .snapshot
+        let new_tail = next
             .blocks
             .last()
             .map(|block| (block.id.clone(), block.text.len()));
-        let transcript_changed = self.snapshot.blocks.len() != old_count || new_tail != old_tail;
+        let transcript_changed = next.blocks.len() != old_count || new_tail != old_tail;
         self.schedule_image_decode(&next, cx);
+        let measurement_changed = (old_count <= 64) != (next.blocks.len() <= 64);
+        let position = self.transcript.logical_scroll_top();
+        if measurement_changed {
+            self.transcript = Self::make_transcript(cx, next.blocks.len() <= 64);
+        }
         if changed_session {
             self.text_cache.borrow_mut().clear();
             if self.drafts.len() >= 128 {
@@ -831,11 +863,16 @@ impl Desktop {
                 .unwrap_or_default();
             self.composer.update(cx, |input, cx| input.set(draft, cx));
         }
-        if changed_session || changed_page {
+        if changed_session || changed_generation || changed_page {
             self.transcript.reset(next.blocks.len());
             self.history_index = None;
             self.history_draft.clear();
             self.follow = true;
+        } else if measurement_changed {
+            self.transcript.reset(next.blocks.len());
+            if !self.follow {
+                self.transcript.scroll_to(position);
+            }
         } else {
             let start = if next.schema == 2 { patch_start } else { 0 };
             self.transcript
@@ -873,7 +910,9 @@ impl Desktop {
             next.panel_title,
             next.nav.as_ref().map(|n| n.selected).unwrap_or(-1)
         );
-        if panel != self.panel_identity {
+        if panel != self.panel_identity || next.generation != self.snapshot.generation {
+            self.settings_inputs.borrow_mut().clear();
+            self.settings_open = None;
             self.panel_identity = panel;
             self.filter
                 .update(cx, |input, cx| input.set(String::new(), cx));
@@ -936,6 +975,35 @@ impl Desktop {
         }
         let auto_send = next.auto_send_insert;
         self.snapshot = next;
+        let host_toasts: Vec<_> = self
+            .snapshot
+            .toasts
+            .iter()
+            .filter(|toast| toast.id > self.seen_host_toast)
+            .cloned()
+            .collect();
+        for toast in host_toasts {
+            self.seen_host_toast = self.seen_host_toast.max(toast.id);
+            let text = if toast.body.is_empty() {
+                toast.title
+            } else {
+                format!("{}\n{}", toast.title, toast.body)
+            };
+            self.push_notice(
+                match toast.level.as_str() {
+                    "error" => NoticeKind::Error,
+                    "warning" | "warn" => NoticeKind::Warning,
+                    _ => NoticeKind::Info,
+                },
+                text,
+                if toast.action.as_ref().is_some_and(|a| a.operation.is_some()) {
+                    NoticeAction::Host(toast.id)
+                } else {
+                    NoticeAction::None
+                },
+                cx,
+            );
+        }
         self.minimap_ticks = minimap::ticks(&self.snapshot.blocks);
         if self.snapshot.update_notice != self.seen_update_notice {
             self.seen_update_notice = self.snapshot.update_notice.clone();
@@ -1062,6 +1130,8 @@ impl Desktop {
             self.sync_logs_visibility(w);
             window_focus(&self.composer, w, cx);
             cx.notify();
+        } else if self.settings_open.take().is_some() {
+            cx.notify();
         } else if !self.snapshot.panel_title.is_empty() || !self.snapshot.agent_page.is_empty() {
             if self
                 .snapshot
@@ -1124,7 +1194,12 @@ impl Desktop {
         self.cycle_details_tab(1, w, cx);
     }
     fn cycle_details_tab(&mut self, delta: i32, w: &mut Window, cx: &mut Context<Self>) {
-        if !self.snapshot.details_sidebar || w.viewport_size().width <= px(1150.) {
+        let visible = if w.viewport_size().width <= px(1150.) {
+            self.compact_pane.as_deref() == Some("details_sidebar")
+        } else {
+            self.snapshot.details_sidebar
+        };
+        if !visible {
             return;
         }
         let next = next_details_tab(&self.snapshot.details_panel.tab, delta);
@@ -1171,6 +1246,28 @@ impl Desktop {
         }
     }
     fn cancel(&mut self, _: &Cancel, w: &mut Window, cx: &mut Context<Self>) {
+        if self.snapshot.prompt.is_some()
+            || !self.snapshot.panel_title.is_empty()
+            || !self.snapshot.agent_page.is_empty()
+            || self.compact_pane.is_some()
+            || self.nav.is_some()
+        {
+            self.dismiss(&Dismiss, w, cx);
+            return;
+        }
+        if !self.composer.read(cx).content.is_empty() && !self.composer.read(cx).readonly {
+            self.composer.update(cx, |input, cx| input.clear(w, cx));
+            self.flush_draft(cx);
+            self.completion_hidden = Some(self.snapshot.completion_prefix.clone());
+            self.composer.update(cx, |input, _| input.menu = false);
+            self.last_escape = None;
+            window_focus(&self.composer, w, cx);
+            cx.notify();
+            return;
+        }
+        self.stop_turn(&StopTurn, w, cx);
+    }
+    fn stop_turn(&mut self, _: &StopTurn, w: &mut Window, cx: &mut Context<Self>) {
         self.dispatch(json!({"type":"cancel"}), w, cx);
     }
     fn palette(&mut self, _: &Palette, w: &mut Window, cx: &mut Context<Self>) {
@@ -1266,6 +1363,9 @@ impl Desktop {
         cx.notify();
     }
     fn focus_composer(&mut self, _: &FocusComposer, w: &mut Window, cx: &mut Context<Self>) {
+        if !self.snapshot.panel_title.is_empty() || self.snapshot.prompt.is_some() {
+            return;
+        }
         window_focus(&self.composer, w, cx);
     }
     fn history_previous(&mut self, _: &HistoryPrevious, w: &mut Window, cx: &mut Context<Self>) {
@@ -1573,6 +1673,43 @@ impl Render for Desktop {
             self.compact_pane = compact.map(str::to_owned);
             self.sync_logs_visibility(window);
         }
+        // GPUI's inferred list sizing measures at min-content width, which
+        // overestimates wrapped prose and leaves a gap above short transcripts.
+        // Measure only the bounded small list at its actual conversation width.
+        let short_height = if self.snapshot.blocks.len() <= 64 {
+            let rail = if width > px(900.) && !self.minimap_ticks.is_empty() {
+                12.
+            } else {
+                0.
+            };
+            let available_width = width
+                - px(if sidebar { 252. } else { 0. })
+                - px(if details { 260. } else { 0. })
+                - px(rail);
+            self.snapshot
+                .blocks
+                .iter()
+                .map(|block| {
+                    let mut element = div()
+                        .font_family(".AppleSystemUIFont")
+                        .text_size(px(theme::size::UI))
+                        .child(self.render_block(block, window, cx))
+                        .into_any_element();
+                    element
+                        .layout_as_root(
+                            size(
+                                AvailableSpace::Definite(available_width),
+                                AvailableSpace::MaxContent,
+                            ),
+                            window,
+                            cx,
+                        )
+                        .height
+                })
+                .fold(px(0.), |height, next| height + next)
+        } else {
+            px(0.)
+        };
         let view = cx.entity().downgrade();
         let content = if !self.snapshot.blocks.iter().any(|b| {
             matches!(
@@ -1594,7 +1731,7 @@ impl Render for Desktop {
                             div()
                                 .w_full()
                                 .when(selected, |d| {
-                                    d.rounded(px(8.))
+                                    d.rounded(px(crate::theme::radius::CONTROL))
                                         .border_1()
                                         .border_color(theme.accent)
                                         .bg(theme.accent_bg.opacity(0.6))
@@ -1606,7 +1743,10 @@ impl Render for Desktop {
                 })
                 .unwrap_or_else(|_| div().into_any_element())
             })
-            .size_full()
+            .when(self.snapshot.blocks.len() <= 64, |d| {
+                d.w_full().h(short_height).max_h(relative(1.))
+            })
+            .when(self.snapshot.blocks.len() > 64, |d| d.size_full())
             .into_any_element()
         };
         let mut root = div()
@@ -1622,7 +1762,7 @@ impl Render for Desktop {
             .relative()
             .overflow_hidden()
             .font_family(".AppleSystemUIFont")
-            .text_size(px(13.))
+            .text_size(px(crate::theme::size::UI))
             .text_color(t.text)
             .bg(t.background)
             .on_action(cx.listener(Self::history_previous))
@@ -1653,6 +1793,7 @@ impl Render for Desktop {
             .on_action(cx.listener(Self::toggle_details))
             .on_action(cx.listener(Self::dismiss))
             .on_action(cx.listener(Self::cancel))
+            .on_action(cx.listener(Self::stop_turn))
             .on_action(cx.listener(Self::palette))
             .on_action(cx.listener(Self::context))
             .on_action(cx.listener(Self::usage))
@@ -1703,15 +1844,26 @@ impl Render for Desktop {
                                     .flex()
                                     .flex_1()
                                     .min_h_0()
+                                    .relative()
+                                    .overflow_hidden()
                                     .when(width > px(900.) && !self.minimap_ticks.is_empty(), |d| {
                                         d.child(self.minimap(cx))
                                     })
-                                    .child(div().flex_1().min_w_0().min_h_0().child(content)),
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .min_h_0()
+                                            .child(content),
+                                    )
+                                    .child(self.toasts(cx)),
                             )
                             .child(
                                 div()
                                     .w_full()
-                                    .max_w(px(980.))
+                                    .max_w(px(theme::size::READING + theme::space::XL * 2.))
                                     .mx_auto()
                                     .child(self.composer_view(cx)),
                             ),
@@ -1762,7 +1914,6 @@ impl Render for Desktop {
             root = root.child(self.prompt_view(cx));
         }
         root = root.child(self.follow_pill(cx));
-        root = root.child(self.toasts(cx));
         if self.trace.borrow().enabled() {
             trace::TracedElement::new(root, self.trace.clone()).into_any_element()
         } else {
@@ -1788,7 +1939,7 @@ fn main() {
         let result = std::fs::metadata(path)
             .map_err(|e| e.to_string())
             .and_then(|m| {
-                if m.len() > 16 * 1024 * 1024 {
+                if m.len() > 64 * 1024 * 1024 {
                     Err("Preview exceeds the 16 MiB limit".into())
                 } else {
                     std::fs::read_to_string(path).map_err(|e| e.to_string())
@@ -1819,7 +1970,7 @@ fn main() {
                         .ok();
                         break;
                     }
-                    Ok(_) if line.len() <= 16 * 1024 * 1024 => {
+                    Ok(_) if line.len() <= 64 * 1024 * 1024 => {
                         if tx
                             .send_blocking(
                                 decoder
@@ -1846,6 +1997,7 @@ fn main() {
     Application::new()
         .with_assets(icons::Assets)
         .run(move |cx: &mut App| {
+            theme::init_code_font(&cx.text_system().all_font_names());
             bind_desktop_keys(cx);
             if std::env::var("NEXUS_DESKTOP_REVIEW").as_deref() == Ok("1") {
                 cx.bind_keys([
@@ -2482,6 +2634,149 @@ mod native_tests {
             .unwrap();
     }
     #[gpui::test]
+    fn control_c_copies_clears_with_undo_and_only_then_cancels(cx: &mut TestAppContext) {
+        cx.update(bind_desktop_keys);
+        let handle = cx.add_window(|w, cx| Desktop::new(w, cx, true));
+        handle
+            .update(cx, |this, w, cx| {
+                this.composer
+                    .update(cx, |input, cx| input.set("Hello 世界 🦀".into(), cx));
+                window_focus(&this.composer, w, cx);
+            })
+            .unwrap();
+        cx.update_window(handle.into(), |_, w, cx| {
+            let _ = w.draw(cx);
+        })
+        .unwrap();
+        cx.simulate_keystrokes(handle.into(), "cmd-a ctrl-c");
+        cx.run_until_parked();
+        handle
+            .update(cx, |this, _, cx| {
+                assert_eq!(
+                    cx.read_from_clipboard().unwrap().text().as_deref(),
+                    Some("Hello 世界 🦀")
+                );
+                assert_eq!(this.composer.read(cx).content, "Hello 世界 🦀");
+                assert!(this.notices.is_empty());
+            })
+            .unwrap();
+        cx.simulate_keystrokes(handle.into(), "right ctrl-c");
+        cx.run_until_parked();
+        handle
+            .update(cx, |this, _, cx| {
+                assert!(this.composer.read(cx).content.is_empty());
+                assert!(this.notices.is_empty(), "clearing must not cancel the turn");
+            })
+            .unwrap();
+        cx.simulate_keystrokes(handle.into(), "ctrl-z");
+        cx.run_until_parked();
+        handle
+            .update(cx, |this, _, cx| {
+                assert_eq!(this.composer.read(cx).content, "Hello 世界 🦀");
+            })
+            .unwrap();
+        cx.simulate_keystrokes(handle.into(), "ctrl-c ctrl-c");
+        cx.run_until_parked();
+        handle
+            .update(cx, |this, _, cx| {
+                assert!(this.composer.read(cx).content.is_empty());
+                assert!(this.notices.contains_text("Preview fixture"));
+            })
+            .unwrap();
+    }
+    #[gpui::test]
+    fn command_enter_restores_composer_focus_and_command_theme_changes_palette(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(bind_desktop_keys);
+        let handle = cx.add_window(|w, cx| Desktop::new(w, cx, true));
+        handle
+            .update(cx, |this, w, _| w.focus(&this.focus))
+            .unwrap();
+        cx.update_window(handle.into(), |_, w, cx| {
+            let _ = w.draw(cx);
+        })
+        .unwrap();
+        cx.simulate_keystrokes(handle.into(), "cmd-enter cmd-shift-t");
+        cx.run_until_parked();
+        handle
+            .update(cx, |this, w, cx| {
+                assert!(this.composer.read(cx).focus.is_focused(w));
+                assert_eq!(this.light_override, Some(true));
+                assert!(this.notices.is_empty());
+            })
+            .unwrap();
+    }
+    #[gpui::test]
+    fn command_period_stops_without_clearing_the_draft(cx: &mut TestAppContext) {
+        cx.update(bind_desktop_keys);
+        let handle = cx.add_window(|w, cx| Desktop::new(w, cx, true));
+        handle
+            .update(cx, |this, _, cx| {
+                this.composer
+                    .update(cx, |input, cx| input.set("Unsent draft".into(), cx));
+            })
+            .unwrap();
+        cx.update_window(handle.into(), |_, w, cx| {
+            let _ = w.draw(cx);
+        })
+        .unwrap();
+        cx.simulate_keystrokes(handle.into(), "cmd-.");
+        cx.run_until_parked();
+        handle
+            .update(cx, |this, _, cx| {
+                assert_eq!(this.composer.read(cx).content, "Unsent draft");
+                assert!(this.notices.contains_text("Preview fixture"));
+            })
+            .unwrap();
+    }
+    #[gpui::test]
+    fn control_c_dismisses_drawer_and_retains_draft(cx: &mut TestAppContext) {
+        let handle = cx.add_window(|w, cx| Desktop::new(w, cx, true));
+        handle
+            .update(cx, |this, w, cx| {
+                this.composer
+                    .update(cx, |input, cx| input.set("Keep draft".into(), cx));
+                this.compact_pane = Some("details_sidebar".into());
+                this.cancel(&Cancel, w, cx);
+                assert!(this.compact_pane.is_none());
+                assert_eq!(this.composer.read(cx).content, "Keep draft");
+                assert!(this.notices.is_empty());
+                assert!(this.composer.read(cx).focus.is_focused(w));
+            })
+            .unwrap();
+    }
+    #[gpui::test]
+    fn inspector_tab_shortcuts_work_in_narrow_drawer(cx: &mut TestAppContext) {
+        let handle = cx.update(|cx| {
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        Point::default(),
+                        size(px(780.), px(720.)),
+                    ))),
+                    ..Default::default()
+                },
+                |w, cx| cx.new(|cx| Desktop::new(w, cx, true)),
+            )
+            .unwrap()
+        });
+        handle
+            .update(cx, |this, w, cx| {
+                assert!(w.viewport_size().width <= px(1150.));
+                this.snapshot.details_sidebar = false;
+                this.cycle_details_tab(1, w, cx);
+                assert!(
+                    this.notices.is_empty(),
+                    "closed inspector must ignore tab keys"
+                );
+                this.compact_pane = Some("details_sidebar".into());
+                this.cycle_details_tab(1, w, cx);
+                assert!(this.notices.contains_text("Preview fixture"));
+            })
+            .unwrap();
+    }
+    #[gpui::test]
     fn double_escape_stops_the_turn_but_a_single_escape_does_not(cx: &mut TestAppContext) {
         let window = cx.add_window(|w, cx| Desktop::new(w, cx, true));
         window
@@ -2494,6 +2789,45 @@ mod native_tests {
                 // Preview dispatch surfaces host actions locally instead of
                 // sending them, so the cancel is observable here.
                 assert!(this.notices.contains_text("Preview fixture"));
+            })
+            .unwrap();
+    }
+    #[gpui::test]
+    fn host_errors_render_once_with_complete_body_and_offered_action(cx: &mut TestAppContext) {
+        let handle = cx.add_window(|w, cx| Desktop::new(w, cx, true));
+        handle
+            .update(cx, |this, w, cx| {
+                let snapshot = || Snapshot {
+                    toasts: vec![bridge::ToastWire {
+                        id: 42,
+                        level: "error".into(),
+                        title: "Request failed".into(),
+                        body: "The daemon rejected this request".into(),
+                        action: Some(bridge::ToastAction {
+                            label: "Retry".into(),
+                            operation: Some(json!({"kind":"retry"})),
+                        }),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                };
+                this.apply(snapshot(), w, cx);
+                assert_eq!(this.notices.len(), 1);
+                let notice = this.notices.iter().next().unwrap();
+                assert_eq!(notice.kind, NoticeKind::Error);
+                assert_eq!(
+                    notice.text,
+                    "Request failed\nThe daemon rejected this request"
+                );
+                assert_eq!(notice.action, NoticeAction::Host(42));
+                this.apply(snapshot(), w, cx);
+                assert_eq!(this.notices.len(), 1);
+                this.notices.clear();
+                this.apply(snapshot(), w, cx);
+                assert!(
+                    this.notices.is_empty(),
+                    "polls must not resurrect a dismissed host notice"
+                );
             })
             .unwrap();
     }
@@ -2537,6 +2871,296 @@ mod native_tests {
         assert_eq!(search_matches(&sessions, ""), vec![0, 1]);
         assert!(search_matches(&sessions, "missing").is_empty());
     }
+    #[gpui::test]
+    fn scrolling_within_a_long_final_reply_survives_updates_and_resize(cx: &mut TestAppContext) {
+        let handle = cx.add_window(|w, cx| Desktop::new(w, cx, true));
+        handle
+            .update(cx, |this, w, cx| {
+                w.resize(size(px(1000.), px(700.)));
+                this.apply(
+                    Snapshot {
+                        schema: 2,
+                        generation: 1,
+                        composer_key: "history".into(),
+                        blocks: vec![
+                            Content {
+                                id: "user".into(),
+                                kind: "user".into(),
+                                text: "First request".into(),
+                                ..Default::default()
+                            },
+                            Content {
+                                id: "early".into(),
+                                kind: "markdown".into(),
+                                text: "Earlier reply".into(),
+                                ..Default::default()
+                            },
+                            Content {
+                                id: "last".into(),
+                                kind: "markdown".into(),
+                                text: "A long final reply line\n".repeat(80),
+                                ..Default::default()
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                    w,
+                    cx,
+                );
+            })
+            .unwrap();
+        cx.update_window(handle.into(), |_, w, cx| {
+            let _ = w.draw(cx);
+        })
+        .unwrap();
+        let mut visual = VisualTestContext::from_window(handle.into(), cx);
+        visual.simulate_event(ScrollWheelEvent {
+            position: point(px(500.), px(300.)),
+            delta: ScrollDelta::Pixels(point(px(0.), px(120.))),
+            ..Default::default()
+        });
+        handle
+            .update(cx, |this, w, cx| {
+                assert!(
+                    !this.follow,
+                    "scrolling upward within the last reply must stop following"
+                );
+                let position = this.transcript.logical_scroll_top();
+                this.apply(
+                    Snapshot {
+                        schema: 2,
+                        generation: 1,
+                        composer_key: "history".into(),
+                        blocks_from: 3,
+                        status: "Ready".into(),
+                        ..Default::default()
+                    },
+                    w,
+                    cx,
+                );
+                assert_eq!(this.snapshot.blocks.len(), 3);
+                let after = this.transcript.logical_scroll_top();
+                assert_eq!(after.item_ix, position.item_ix);
+                assert_eq!(after.offset_in_item, position.offset_in_item);
+                assert!(
+                    !this.follow_pending,
+                    "metadata updates are not new transcript content"
+                );
+                this.schedule_transcript_reset(cx);
+            })
+            .unwrap();
+        let position = handle
+            .update(cx, |this, _, _| this.transcript.logical_scroll_top())
+            .unwrap();
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(130));
+        cx.run_until_parked();
+        handle
+            .update(cx, |this, _, _| {
+                let after = this.transcript.logical_scroll_top();
+                assert_eq!(after.item_ix, position.item_ix);
+                assert_eq!(after.offset_in_item, position.offset_in_item);
+            })
+            .unwrap();
+        cx.update_window(handle.into(), |_, w, cx| {
+            let _ = w.draw(cx);
+        })
+        .unwrap();
+        visual.simulate_event(ScrollWheelEvent {
+            position: point(px(500.), px(300.)),
+            delta: ScrollDelta::Pixels(point(px(0.), px(10000.))),
+            ..Default::default()
+        });
+        // A virtual list measures earlier rows on the next frame before a
+        // subsequent wheel event can reach their newly known pixel offsets.
+        cx.update_window(handle.into(), |_, w, cx| {
+            let _ = w.draw(cx);
+        })
+        .unwrap();
+        visual.simulate_event(ScrollWheelEvent {
+            position: point(px(500.), px(300.)),
+            delta: ScrollDelta::Pixels(point(px(0.), px(10000.))),
+            ..Default::default()
+        });
+        handle
+            .update(cx, |this, _, _| {
+                assert_eq!(
+                    this.transcript.logical_scroll_top().item_ix,
+                    0,
+                    "earliest message remains reachable"
+                );
+                assert_eq!(this.transcript.item_count(), 3);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn mock_metadata_chip_reveals_every_field_without_changing_the_title(cx: &mut TestAppContext) {
+        let handle = cx.add_window(|w, cx| Desktop::new(w, cx, true));
+        let title = "Inspect the workspace ⟦mock scenario=hello actor=main speed=12 seed=0⟧";
+        handle
+            .update(cx, |this, w, cx| {
+                w.resize(size(px(640.), px(700.)));
+                this.apply(
+                    Snapshot {
+                        schema: 2,
+                        generation: 1,
+                        tabs: vec![bridge::Session {
+                            id: "fixture".into(),
+                            title: title.into(),
+                            active: true,
+                            ..Default::default()
+                        }],
+                        breadcrumb: "/private/tmp/review/sandbox/workspace › main".into(),
+                        ..Default::default()
+                    },
+                    w,
+                    cx,
+                );
+            })
+            .unwrap();
+        cx.update_window(handle.into(), |_, w, cx| {
+            let _ = w.draw(cx);
+        })
+        .unwrap();
+        let mut visual = VisualTestContext::from_window(handle.into(), cx);
+        let chip = visual.debug_bounds("mock-directive").unwrap();
+        assert!(chip.right() <= px(640.));
+        visual.simulate_click(chip.center(), Modifiers::default());
+        handle
+            .update(cx, |this, _, _| {
+                assert_eq!(this.snapshot.tabs[0].title, title);
+                let notice = this.notices.iter().next().unwrap();
+                for field in ["scenario: hello", "actor: main", "speed: 12", "seed: 0"] {
+                    assert!(notice.text.contains(field));
+                }
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn short_conversation_starts_below_the_header_instead_of_above_composer(
+        cx: &mut TestAppContext,
+    ) {
+        let handle = cx.add_window(|w, cx| Desktop::new(w, cx, true));
+        handle
+            .update(cx, |this, w, cx| {
+                w.resize(size(px(1200.), px(1000.)));
+                this.apply(
+                    Snapshot {
+                        schema: 2,
+                        generation: 1,
+                        blocks: vec![
+                            Content {
+                                id: "user".into(),
+                                kind: "user".into(),
+                                text: "A short request".into(),
+                                number: 1,
+                                ..Default::default()
+                            },
+                            Content {
+                                id: "reply".into(),
+                                kind: "markdown".into(),
+                                text: "The session, context, conversation and details hierarchy works here. Tools stay compact beneath the reply.\n\n```python\ndef inspect_workspace():\n    return \"complete context\"\n```".into(),
+                                ..Default::default()
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                    w,
+                    cx,
+                );
+            })
+            .unwrap();
+        cx.update_window(handle.into(), |_, w, cx| {
+            let _ = w.draw(cx);
+        })
+        .unwrap();
+        let mut visual = VisualTestContext::from_window(handle.into(), cx);
+        assert!(visual.debug_bounds("user-card").unwrap().top() < px(250.));
+        handle
+            .update(cx, |this, w, cx| {
+                this.apply(
+                    Snapshot {
+                        schema: 2,
+                        generation: 1,
+                        blocks: (0..70)
+                            .map(|i| Content {
+                                id: format!("reply-{i}"),
+                                kind: "markdown".into(),
+                                text: format!("Reply {i}"),
+                                ..Default::default()
+                            })
+                            .collect(),
+                        ..Default::default()
+                    },
+                    w,
+                    cx,
+                );
+                assert_eq!(this.transcript.item_count(), 70);
+                this.apply(
+                    Snapshot {
+                        schema: 2,
+                        generation: 1,
+                        blocks: vec![Content {
+                            id: "user".into(),
+                            kind: "user".into(),
+                            text: "Short again".into(),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    },
+                    w,
+                    cx,
+                );
+                assert_eq!(this.transcript.item_count(), 1);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn user_and_reply_cards_share_the_left_edge_and_width(cx: &mut TestAppContext) {
+        let handle = cx.add_window(|w, cx| Desktop::new(w, cx, true));
+        handle
+            .update(cx, |this, w, cx| {
+                w.resize(size(px(1200.), px(800.)));
+                this.apply(
+                    Snapshot {
+                        schema: 2,
+                        generation: 1,
+                        blocks: vec![
+                            Content {
+                                id: "user".into(),
+                                kind: "user".into(),
+                                text: "Left aligned request".into(),
+                                ..Default::default()
+                            },
+                            Content {
+                                id: "reply".into(),
+                                kind: "markdown".into(),
+                                text: "Left aligned reply".into(),
+                                ..Default::default()
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                    w,
+                    cx,
+                );
+            })
+            .unwrap();
+        cx.update_window(handle.into(), |_, w, cx| {
+            let _ = w.draw(cx);
+        })
+        .unwrap();
+        let mut visual = VisualTestContext::from_window(handle.into(), cx);
+        let user = visual.debug_bounds("user-card").unwrap();
+        let reply = visual.debug_bounds("reply-card").unwrap();
+        assert_eq!(user.left(), reply.left());
+        assert_eq!(user.size.width, reply.size.width);
+        assert_eq!(user.size.width, px(theme::size::READING));
+    }
+
     #[gpui::test]
     fn follow_pending_tracks_content_while_scrolled_up(cx: &mut TestAppContext) {
         let window = cx.add_window(|w, cx| Desktop::new(w, cx, true));
@@ -2642,6 +3266,174 @@ mod native_tests {
         })
         .unwrap();
     }
+    #[gpui::test]
+    fn notice_dismiss_does_not_activate_the_tool_behind_it(cx: &mut TestAppContext) {
+        let handle = cx.add_window(|w, cx| Desktop::new(w, cx, true));
+        handle
+            .update(cx, |this, w, cx| {
+                this.apply(
+                    Snapshot {
+                        schema: 2,
+                        generation: 1,
+                        blocks: (0..20)
+                            .map(|i| Content {
+                                id: format!("tool-{i}"),
+                                kind: "tool".into(),
+                                title: "read file".into(),
+                                operation: Some(json!({"kind":"toggle"})),
+                                ..Default::default()
+                            })
+                            .collect(),
+                        toasts: vec![bridge::ToastWire {
+                            id: 1,
+                            level: "error".into(),
+                            title: "Request failed".into(),
+                            body: "This notice sits over tool rows".into(),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    },
+                    w,
+                    cx,
+                );
+            })
+            .unwrap();
+        cx.update_window(handle.into(), |_, w, cx| {
+            let _ = w.draw(cx);
+        })
+        .unwrap();
+        let mut visual = VisualTestContext::from_window(handle.into(), cx);
+        let dismiss = visual.debug_bounds("notice-dismiss").unwrap();
+        visual.simulate_click(dismiss.center(), Modifiers::default());
+        handle
+            .update(cx, |this, _, _| {
+                assert!(
+                    this.notices.is_empty(),
+                    "dismiss must not dispatch the underlying host operation"
+                )
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn reply_copy_remains_keyboard_reachable(cx: &mut TestAppContext) {
+        cx.update(bind_desktop_keys);
+        let handle = cx.add_window(|w, cx| Desktop::new(w, cx, true));
+        handle
+            .update(cx, |this, w, cx| {
+                this.apply(
+                    Snapshot {
+                        schema: 2,
+                        generation: 1,
+                        blocks: vec![Content {
+                            id: "reply".into(),
+                            kind: "markdown".into(),
+                            text: "Complete reply 🦀".into(),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    },
+                    w,
+                    cx,
+                );
+                window_focus(&this.composer, w, cx);
+            })
+            .unwrap();
+        cx.update_window(handle.into(), |_, w, cx| {
+            let _ = w.draw(cx);
+        })
+        .unwrap();
+        // Cycle through visible controls; a focused copy action must work even
+        // when the pointer never enters its reply group.
+        for _ in 0..30 {
+            cx.simulate_keystrokes(handle.into(), "ctrl-tab");
+            cx.update_window(handle.into(), |_, w, cx| {
+                let _ = w.draw(cx);
+            })
+            .unwrap();
+            let mut visual = VisualTestContext::from_window(handle.into(), cx);
+            visual.simulate_event(KeyUpEvent {
+                keystroke: Keystroke::parse("enter").unwrap(),
+            });
+            if cx
+                .update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
+                .as_deref()
+                == Some("Complete reply 🦀")
+            {
+                return;
+            }
+        }
+        panic!("keyboard focus did not reach the copy action");
+    }
+
+    #[gpui::test]
+    fn long_notice_wraps_above_multiline_composer_at_both_widths(cx: &mut TestAppContext) {
+        for width in [640., 1440.] {
+            let handle = cx.add_window(|w, cx| Desktop::new(w, cx, true));
+            handle
+                .update(cx, |this, w, cx| {
+                    w.resize(size(px(width), px(940.)));
+                    this.apply(
+                        Snapshot {
+                            schema: 2,
+                            generation: 1,
+                            composer_key: "notice-layout".into(),
+                            restore: "first draft line\nsecond draft line\nthird draft line".into(),
+                            blocks: vec![Content {
+                                id: "reply".into(),
+                                kind: "markdown".into(),
+                                text: "An inspectable reply".into(),
+                                ..Default::default()
+                            }],
+                            toasts: vec![bridge::ToastWire {
+                                id: 1,
+                                level: "error".into(),
+                                title: "Request failed".into(),
+                                body:
+                                    "A long error message that must wrap within its notice card. "
+                                        .repeat(8),
+                                ..Default::default()
+                            }],
+                            ..Default::default()
+                        },
+                        w,
+                        cx,
+                    );
+                })
+                .unwrap();
+            cx.update_window(handle.into(), |_, w, cx| {
+                let _ = w.draw(cx);
+            })
+            .unwrap();
+            handle
+                .update(cx, |this, _, cx| {
+                    let notice_id = this.notices.iter().next().unwrap().id;
+                    let text = this.text_cache.borrow();
+                    let notice = text
+                        .get(&format!("notice-text-{notice_id}"))
+                        .unwrap()
+                        .read(cx)
+                        .painted_bounds()
+                        .unwrap();
+                    let composer = this.composer.read(cx).painted_bounds().unwrap();
+                    assert!(
+                        notice.size.width < px(460.),
+                        "notice text fits inside the padded card"
+                    );
+                    assert!(
+                        notice.bottom() < composer.top(),
+                        "notice cannot spill onto a multiline draft"
+                    );
+                    assert!(
+                        notice.size.height > px(theme::size::BODY_LINE * 2.),
+                        "long error wraps"
+                    );
+                    assert_eq!(this.composer.read(cx).content.lines().count(), 3);
+                })
+                .unwrap();
+        }
+    }
+
     #[gpui::test]
     fn disconnected_state_disables_the_composer_and_keeps_the_draft(cx: &mut TestAppContext) {
         let window = cx.add_window(|w, cx| Desktop::new(w, cx, true));

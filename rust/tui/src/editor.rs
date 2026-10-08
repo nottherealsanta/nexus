@@ -373,6 +373,13 @@ impl Editor {
             self.anchor = None;
         }
     }
+    /// Ctrl+C on a non-empty draft: empty it, keeping one undo step to bring it back.
+    pub fn clear(&mut self) {
+        self.checkpoint();
+        self.text.clear();
+        self.cursor = 0;
+        self.anchor = None;
+    }
     pub fn take(&mut self) -> String {
         let text = std::mem::take(&mut self.text);
         self.cursor = 0;
@@ -404,6 +411,15 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn clear_empties_the_draft_and_undo_restores_it() {
+        let mut e = Editor::default();
+        e.insert("half a thought");
+        e.clear();
+        assert!(e.text.is_empty() && e.cursor == 0);
+        e.undo();
+        assert_eq!(e.text, "half a thought");
+    }
     #[test]
     fn visual_wrap_keeps_words_and_source_whitespace() {
         let mut e = Editor::default();

@@ -49,3 +49,10 @@ def test_close_is_a_distinct_discoverable_command():
     assert "/close" in commands.help_text()
     assert parsed.spec in commands.SPECS
     assert not parsed.spec.hidden
+
+
+def test_messages_that_open_with_a_path_are_not_commands():
+    for text in ("/Users/me/app.py is failing", "/tmp/out.log", "/etc/hosts?", "/README.md says"):
+        assert not commands.is_command(text) and commands.parse(text) is None
+    assert commands.parse("/model gpt").name == "/model"
+    assert commands.parse("/modle").name == "/modle"  # typos still surface as unknown commands

@@ -22,6 +22,46 @@ are specified once in [surfaces.md](surfaces.md). The web implementation of each
 is named in the `app.js` map below; the shared logic has JS ports
 (`tool-details.js`, `context-view.js`, `settings-files.js`, `providers.js`).
 
+### Transcript and keyboard parity
+
+Transcript and context previews share a Markdown renderer: headings, ordered,
+unordered and task lists, scrollable tables, quotes, strikethrough, safe links
+and language-labelled code fences. Raw HTML stays literal, unsafe link protocols
+are never clickable, and images are not fetched. Incomplete fences stay readable
+while streaming. This is not full CommonMark: nested lists and nested inline
+emphasis are not interpreted.
+
+PageUp/PageDown in the composer or transcript scroll output without moving the
+draft cursor. Ctrl+End resumes following new output (and moves the draft cursor
+to its end). Dialogs, slash completion, dictation and IME keep their own keys.
+Model-picker navigation and effort adjustment use the same fuzzy-ranked rows as
+the display. Shortcut help matches existing send behavior: Enter steers,
+Ctrl+Enter queues, Alt+Enter interrupts.
+
+Native-parity additions (second pass):
+
+- **Composer history** (`js/composer-navigation.js`): Up/Down on a single-line
+  draft recalls earlier user messages of the session (rebuilt from
+  `ConversationView.turns`), restoring the draft at the end. Ctrl+A and Ctrl+W
+  edit the line. Ctrl+E (Logs), Ctrl+U (usage) and Ctrl+K (commands) stay app
+  shortcuts and are deliberately not composer editing keys.
+- **Settings**: Models (defaults, title model, tier routes) and MCP (scope,
+  loading mode, per-server enablement) panes, and a guided agent-routing editor
+  under Agents, all through host commands (`js/model-settings.js`,
+  `js/mcp-settings.js`, `js/agent-settings.js`).
+- **Context cards**: Appearance can hide any of the five header cards in this
+  browser only. Hidden cards stay in the full request context and a notice
+  restores them (`js/context-preferences.js`).
+- **Speech**: `/speak [download|stop]` and `/voice status` talk to the daemon
+  host; audio plays on the daemon machine, not in the browser (`js/speech.js`).
+- **Tabs**: Ctrl+X `[` / `]` cycle open tabs and Ctrl+X `w` closes the tab
+  (the session keeps running).
+- `/tasks` opens an agent picker, `/cost` shows session usage and `/verbose`
+  toggles full inline tool details (memory only).
+
+Known gaps: the Playwright archived-row step times out in this environment,
+with or without these changes; not full CommonMark.
+
 ## Visual system
 
 Browser-native while keeping the TUI's regions and button placement. One design

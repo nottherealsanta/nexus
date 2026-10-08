@@ -57,8 +57,9 @@ from ..host_support.context_preview import (
 from ..host_support import model_settings
 from ..host_support.auto_title import AutoTitler
 from ..host_support.doctor import doctor_report
-from ..host_support.update_check import update_status
+from ..host_support.update_check import claim_announcement, update_status
 from ..host_support.git_diff import git_diff
+from ..host_support.git_head import git_head
 from ..host_support.mock import dispatch_mock
 from ..host_support.provider_auth import dispatch_providers
 from ..host_support.session_archive import (
@@ -649,6 +650,19 @@ class HostFacade:
         )
         return queued_id, turn_id
 
+    def move_queued(self, session_id: str, queued_id: str, offset: int) -> bool:
+        """Reorder one pending message; the supervisor follows the durable order."""
+        handle = self._session(session_id, create=False, recover=False)
+        if not handle.move_queued(queued_id, offset):
+            return False
+        self.supervisor.reorder(session_id, handle.queued_ids)
+        return True
+
+    def remove_queued(self, session_id: str, queued_id: str) -> bool:
+        """Drop one pending message; its parked turn is skipped once the id is gone."""
+        handle = self._session(session_id, create=False, recover=False)
+        return handle.remove_queued(queued_id)
+
     async def cancel(
         self, session_id: str, *, reason: str | None = None, drop_queue: bool = True
     ) -> tuple[bool, int]:
@@ -927,10 +941,16 @@ class HostFacade:
         report["voice"] = doctor_voice(self.runtime)
         return report
 
-    def update_status(self) -> dict[str, Any]:
-        """The cached "newer release available" answer; never raises."""
+    def update_status(self, *, announce: bool = False) -> dict[str, Any]:
+        """The cached "newer release available" answer; never raises.
+
+        ``announce`` claims the once-per-release toast (``claim_announcement``).
+        """
         try:
-            return update_status(config_enabled=self.runtime.update_check_enabled())
+            status = update_status(config_enabled=self.runtime.update_check_enabled())
+            if announce:
+                status["announce"] = claim_announcement(status.get("available"))
+            return status
         except Exception:  # noqa: BLE001 - an advisory notice must not break a surface
             return {"enabled": False}
 
@@ -1397,8 +1417,11 @@ class HostFacade:
         if isinstance(command, p.ProjectSessionsList):
             rows = self.runtime.sessions.store.db.project_sessions(limit=1001)
             local = {row.id: row for row in self.list_sessions()}
+            # Bounded: one .git read per distinct workspace (rows are capped at 1,001).
+            trees = {workspace: _worktree_of(workspace) for workspace in {row["workspace"] for row in rows[:1000]}}
             return p.ProjectSessionsListResult(workspace=str(self.runtime.workspace), sessions=[p.ProjectSession(
                 workspace=row["workspace"], project_id=row["project_id"],
+                repo=trees[row["workspace"]][0], worktree=trees[row["workspace"]][1],
                 session=local[row["id"]] if row["workspace"] == str(self.runtime.workspace) and row["id"] in local else SessionSummary(
                     id=row["id"], title=row["title"], last_activity=row["last_activity"],
                     last_seq=row["last_seq"], completion_seq=row["completion_seq"],
@@ -1548,6 +1571,14 @@ class HostFacade:
                 session=command.session, cancelled=cancelled, dropped=dropped,
                 returned_messages=returned_messages,
             )
+        if isinstance(command, p.SessionQueueMove):
+            if command.offset not in {-1, 1}:
+                raise ValueError("offset must be -1 or 1")
+            changed = self.move_queued(command.session, command.queued_id, command.offset)
+            return p.SessionQueueEditResult(session=command.session, changed=changed)
+        if isinstance(command, p.SessionQueueRemove):
+            changed = self.remove_queued(command.session, command.queued_id)
+            return p.SessionQueueEditResult(session=command.session, changed=changed)
         if isinstance(command, p.SessionSubscribe):
             return p.SessionSubscribeResult(
                 session=command.session, from_seq=command.from_seq
@@ -1795,6 +1826,21 @@ class HostFacade:
         if isinstance(command, p.ContextInspect):
             result = await self.inspect_context(command.session)
             return p.ContextInspectResult(session=command.session, **result)
+        if isinstance(command, p.McpServerRestart):
+            from ..util import redact_secrets
+
+            manager = getattr(self.runtime, "_mcp", None)
+            if manager is None or command.name not in manager.server_names:
+                return p.McpServerRestartResult(name=redact_secrets(command.name), error="Unknown MCP server")
+            # Close then reconnect; connect never raises for a dead server, it records health.
+            await manager.disconnect(command.name, reason="restart")
+            await manager.connect(command.name)
+            detail = manager.server_detail(command.name) or {}
+            return p.McpServerRestartResult(
+                name=redact_secrets(manager.redact_display(command.name)),
+                status=str(detail.get("status") or "unknown"),
+                error=redact_secrets(manager.redact_display(str(detail.get("error") or ""))),
+            )
         if isinstance(command, p.McpServerShow):
             from ..util import redact_secrets
 
@@ -1878,7 +1924,9 @@ class HostFacade:
         if isinstance(command, p.UpdateStatus):
             # One bounded HTTP request at most once a day (cached on disk), so
             # it runs off the event loop like ``Doctor``.
-            return p.UpdateStatusResult(**await asyncio.to_thread(self.update_status))
+            return p.UpdateStatusResult(
+                **await asyncio.to_thread(self.update_status, announce=command.announce)
+            )
         if isinstance(command, p.Health):
             return p.HealthResult(**self.health())
         if isinstance(command, p.Shutdown):
@@ -1900,6 +1948,32 @@ class HostFacade:
                 bind(auto_start_queued=False)
             self._managed.add(session_id)
         return handle
+
+
+#: Worktree facts per workspace, reused for this long so the sidebar's frequent
+#: ``ProjectSessionsList`` polls never touch the disk; bounded by ``_WORKTREE_CACHE_MAX``.
+_WORKTREE_TTL = 300.0
+_WORKTREE_CACHE_MAX = 4096
+_worktree_cache: dict[str, tuple[float, tuple[str, str]]] = {}
+
+
+def _worktree_of(workspace: str) -> tuple[str, str]:
+    """``(main checkout, branch)`` when ``workspace`` is a linked Git worktree, else ``("", "")``.
+
+    Cached for ``_WORKTREE_TTL`` seconds per workspace (a branch switch shows up then).
+    """
+    now = time.monotonic()
+    cached = _worktree_cache.get(workspace)
+    if cached and now - cached[0] < _WORKTREE_TTL:
+        return cached[1]
+    head = git_head(workspace)
+    value = ("", "")
+    if head.get("worktree") and head.get("main_root"):
+        value = (head["main_root"], head.get("branch") or head.get("worktree_name") or "")
+    if len(_worktree_cache) >= _WORKTREE_CACHE_MAX:
+        _worktree_cache.clear()
+    _worktree_cache[workspace] = (now, value)
+    return value
 
 
 def _content(content: str, blocks: list[dict[str, Any]]) -> Any:
