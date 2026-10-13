@@ -386,3 +386,15 @@ releases always run it, and a skipped matrix does not fail `ci-ok`. The wheel te
 from source (no matching wheel) needs a Rust toolchain of at least 1.88
 (`rust-version` in `rust/tui/Cargo.toml`; install with rustup.rs). Without Rust,
 setuptools-rust says so; with an older compiler Cargo names the minimum. Packaging follows the [setuptools-rust wheel guidance](https://setuptools-rust.readthedocs.io/en/latest/building_wheels.html).
+
+### Second native binary: `nexus-live`
+
+`rust/live` (the GPT Live audio/WebRTC helper, see `rust/live/README.md`) is a
+second `[[tool.setuptools-rust.bins]]` entry, `optional = true`, built with
+`--locked` from its own `Cargo.lock` and installed beside `nexus-ratatui`. It
+needs Rust >= 1.88 like the terminal client and no CMake: Opus is
+`unsafe-libopus` (pure Rust). Its default `audio` feature uses `cpal`, which
+needs ALSA headers and `pkg-config` on Linux; a platform without them builds
+with `--no-default-features` and the host reports Live as `unsupported`. CI
+workflows are not changed by this entry. Not verified: a hosted-CI wheel build
+that includes `nexus-live`, and a `nexus-live --version` wheel smoke test.
