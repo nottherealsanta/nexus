@@ -40,6 +40,10 @@ from .model import (
     TurnView,
     UsageTotals,
     jsonable,
+    LiveAppendView,
+    LiveCallView,
+    LiveDelegationView,
+    LiveTurnView,
 )
 
 __all__ = ["apply", "apply_many", "initial_state"]
@@ -955,6 +959,19 @@ def _user_blocks(content: object) -> list[BlockView]:
             blocks.append(BlockView(kind="text", text=block["text"], finalized=True))
     return blocks
 
+def _origin(value: object) -> dict[str, Any] | None:
+    """A bounded ``{"kind", "delegation_id"}`` label for a non-typed user message."""
+    if not isinstance(value, Mapping):
+        return None
+    kind = _as_str(value.get("kind"))
+    if not kind:
+        return None
+    origin: dict[str, Any] = {"kind": kind[:40]}
+    delegation = _as_str(value.get("delegation_id"))
+    if delegation:
+        origin["delegation_id"] = delegation[:200]
+    return origin
+
 def _on_input(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
     queue = list(state.input_queue)
     if event.type == "input.moved":
@@ -1017,17 +1034,21 @@ def _on_input(state: ConversationView, event: Event, data: Mapping[str, Any]) ->
                         replace(
                             turn,
                             messages=_replace_at(
-                                turn.messages, position, replace(message, blocks=_user_blocks(content))
+                                turn.messages, position,
+                                replace(message, blocks=_user_blocks(content),
+                                        origin=message.origin or _origin(data.get("origin"))),
                             ),
                             updated_ts=event.ts,
                         ),
                     )
                 return state
+        origin = _origin(data.get("origin"))
         item = QueuedInputView(
             queued_id=queued_id,
             content=content,
             depth=_as_int(data.get("queue_depth"), len(queue) + 1),
             mode=_as_str(data.get("mode")) or "queue",
+            origin=origin,
         )
         if item.mode == "interrupt":
             queue.insert(0, item)
@@ -1037,6 +1058,9 @@ def _on_input(state: ConversationView, event: Event, data: Mapping[str, Any]) ->
     # consumed / dropped: remove the entry, remembering its content first.
     pending_content = next(
         (item.content for item in queue if item.queued_id == queued_id), None
+    )
+    pending_origin = next(
+        (item.origin for item in queue if item.queued_id == queued_id), None
     )
     state = replace(state, input_queue=[item for item in queue if item.queued_id != queued_id])
     if event.type == "input.consumed":
@@ -1058,6 +1082,7 @@ def _on_input(state: ConversationView, event: Event, data: Mapping[str, Any]) ->
                 blocks=_user_blocks(data.get("content", pending_content)),
                 iteration=turn.iteration,
                 done=True,
+                origin=_origin(data.get("origin")) or pending_origin,
             )
             state = _put(
                 state,
@@ -1148,6 +1173,82 @@ def _on_shell(state: ConversationView, event: Event, data: Mapping[str, Any]) ->
     ]
     phase = {"cancelled": "cancelled", "failed": "failed", "interrupted": "failed"}.get(status, "completed")
     return _put(state, index, replace(turn, tools=tools, phase=phase, updated_ts=event.ts))
+
+_LIVE_MAX_CALLS = 20
+_LIVE_MAX_ROWS = 500
+_LIVE_MAX_ERRORS = 20
+
+def _live_index(state: ConversationView, data: Mapping[str, Any]) -> int:
+    call_id = _as_str(data.get("call_id"))
+    if call_id:
+        for index in range(len(state.live_calls) - 1, -1, -1):
+            if state.live_calls[index].call_id == call_id:
+                return index
+    return len(state.live_calls) - 1
+
+def _bounded(rows: list[Any], row: Any, limit: int = _LIVE_MAX_ROWS) -> list[Any]:
+    return [*rows, row][-limit:]
+
+def _on_live(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
+    """Fold the ``live.*`` group into ``ConversationView.live_calls`` (docs/live.md).
+
+    Pure and deterministic, so replaying the durable ``live.*`` events rebuilds the
+    exact state a live follower holds.
+    """
+    kind = event.type
+    if kind == "live.started":
+        call = LiveCallView(
+            call_id=_as_str(data.get("call_id")) or event.id,
+            model=_as_str(data.get("model")) or "",
+            voice=_as_str(data.get("voice")) or "",
+            instructions_source=_as_str(data.get("instructions_source")) or "",
+            instructions=_as_str(data.get("instructions")) or "",
+            carried_turns=_as_int(data.get("carried_turns")),
+            new_conversation=bool(data.get("new_conversation")),
+            started_ts=_opt_float(event.ts),
+        )
+        return replace(state, live_calls=[*state.live_calls, call][-_LIVE_MAX_CALLS:])
+    index = _live_index(state, data)
+    if index < 0:
+        return state
+    call = state.live_calls[index]
+    ts = _opt_float(event.ts)
+    if kind == "live.transcript":
+        row = LiveTurnView(
+            role=_as_str(data.get("role")) or "user", text=_as_str(data.get("text")) or "",
+            turn=_as_int(data.get("turn")), ts=ts, truncated=bool(data.get("truncated")),
+        )
+        caption = call.caption if call.caption and call.caption.get("role") != row.role else None
+        call = replace(call, transcript=_bounded(call.transcript, row), caption=caption)
+    elif kind == "live.transcript.delta":
+        call = replace(call, caption={
+            "role": _as_str(data.get("role")) or "user", "text": _as_str(data.get("text")) or ""})
+    elif kind == "live.delegated":
+        row = LiveDelegationView(
+            delegation_id=_as_str(data.get("delegation_id")) or "", text=_as_str(data.get("text")) or "",
+            mode=_as_str(data.get("mode")) or "queue", queued_id=_as_str(data.get("queued_id")) or "", ts=ts,
+        )
+        call = replace(call, delegations=_bounded(call.delegations, row))
+    elif kind == "live.appended":
+        row = LiveAppendView(
+            delegation_id=_as_str(data.get("delegation_id")),
+            channel=_as_str(data.get("channel")) or "commentary", text=_as_str(data.get("text")) or "",
+            chunks=_as_int(data.get("chunks"), 1), ts=ts,
+        )
+        call = replace(call, appends=_bounded(call.appends, row))
+    elif kind == "live.phase":
+        call = replace(call, phase=_as_str(data.get("phase")) or call.phase)
+    elif kind == "live.error":
+        call = replace(call, errors=_bounded(call.errors, _as_str(data.get("message")) or "", _LIVE_MAX_ERRORS))
+    elif kind == "live.ended":
+        call = replace(
+            call, status="ended", ended_ts=ts, end_reason=_as_str(data.get("reason")) or "ended",
+            error=_as_str(data.get("error")), duration_s=_opt_float(data.get("duration_s")),
+            phase="ended", caption=None,
+        )
+    else:  # live.levels and future live.* events: cosmetic, nothing to fold
+        return state
+    return replace(state, live_calls=_replace_at(state.live_calls, index, call))
 
 def _content_text(content: Sequence[Any]) -> str:
     parts: list[str] = []
@@ -1528,6 +1629,15 @@ _HANDLERS: dict[str, Any] = {
     "input.dropped": _on_input,
     "shell.started": _on_shell,
     "shell.completed": _on_shell,
+    "live.started": _on_live,
+    "live.transcript": _on_live,
+    "live.transcript.delta": _on_live,
+    "live.delegated": _on_live,
+    "live.appended": _on_live,
+    "live.phase": _on_live,
+    "live.levels": _on_live,
+    "live.error": _on_live,
+    "live.ended": _on_live,
     "ext.loaded": _on_ext,
     "ext.unloaded": _on_ext,
     "ext.failed": _on_ext,

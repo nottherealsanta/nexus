@@ -78,6 +78,7 @@ def test_catalogue_group_names_and_order():
         "hook",
         "input",
         "shell",
+        "live",
         "presence",
         "daemon",
         "misc",

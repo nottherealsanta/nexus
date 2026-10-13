@@ -458,6 +458,8 @@ here, so add a row when you add a file.
 | --- | --- |
 | `__init__.py` | GPT Live voice calls: a daemon-side manager (docs/live.md) |
 | `protocol.py` | Wire shapes of a call: signaling body, inbound event union with `Unknown` fallback, outbound appends, 500-byte UTF-8 chunking |
+| `bridge.py` | Delegation bridge: voice requests become queued or steering user messages; session events become progress, final and notice appends |
+| `manager.py` | One call per daemon: state machine, deadline, detach watchdog, exactly one `live.ended`, durable `live.*` events |
 | `transport.py` | `LiveTransport` seam and `CodexLiveTransport`: signaling POST, sideband WebSocket with bounded reconnect, redacted errors |
 
 ### `nexus/voice/`

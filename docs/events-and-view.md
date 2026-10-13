@@ -40,6 +40,7 @@ names and `agent.selected`.
 | hook | `hook.fired` `hook.blocked` |
 | input | `input.started` `input.queued` `input.moved` `input.consumed` `input.dropped` |
 | shell | `shell.started` `shell.completed`: a composer `!` run, turn-less; reduced to a `TurnView(kind="shell")` with one `bash` row ([tools.md](tools.md#shell-mode--in-the-composer)) |
+| live | `live.started` `live.transcript` `live.transcript.delta` `live.delegated` `live.appended` `live.phase` `live.levels` `live.error` `live.ended`: a GPT Live voice call, turn-less and durable; reduced into `ConversationView.live_calls` ([live.md](live.md#events-and-view)) |
 | presence | `presence.joined` `presence.left` (count, not identity) |
 | daemon | `daemon.started` `daemon.stopping` `daemon.session_scheduled` `daemon.session_queued` |
 | misc | `provider.raw` `error` `registry.refreshed` `registry.stale` `registry.failed` `registry.mismatch` |
@@ -72,8 +73,13 @@ and delta accumulation. It imports only `nexus.events`.
 (`TurnView` → `MessageView`/`BlockView`, `ToolCallView`, approvals, `ContextView`,
 `RetryView`, usage), `permissions`, `presence`, `input_queue`, `agents`,
 `extensions`, `mcp`, `context`, `model`, `registry`, `errors`, `hooks`,
-`diagnostics`; derived `messages`, `tools`, `usage`, `pending_permissions`,
+`diagnostics`, `live_calls` (`LiveCallView`s, oldest first, omitted from the wire when empty); derived `live` (newest call), `messages`, `tools`, `usage`, `pending_permissions`,
 `active_turn`, `root_agents`.
+
+A user `MessageView` and a `QueuedInputView` carry an optional `origin`
+(`{"kind": "live", "delegation_id": ...}`) when the message was not typed; it is
+recorded on `input.queued` only, so the prompt text and the turn are unchanged
+(omitted from the wire when absent).
 
 `ToolCallView.diff` (bounded, durable) is the only source for an Edit/Patch diff
 in any UI; a surface never reads files to render one.
