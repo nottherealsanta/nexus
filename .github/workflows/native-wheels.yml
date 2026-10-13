@@ -42,7 +42,11 @@ jobs:
             else yum install -y alsa-lib-devel pkgconfig; fi) &&
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
             sh -s -- -y --profile minimal --default-toolchain 1.88.0
-          CIBW_ENVIRONMENT_LINUX: 'PATH=$HOME/.cargo/bin:$PATH'
+          # Rust's musl targets default to `crt-static`, which makes rustc ask ld for a static
+          # libasound. Alpine ships no static alsa-lib (`alsa-lib-dev` has only libasound.so,
+          # and there is no `alsa-lib-static` package), so link the musl CRT dynamically.
+          # This is already the default on glibc, so it is a no-op on manylinux.
+          CIBW_ENVIRONMENT_LINUX: 'PATH=$HOME/.cargo/bin:$PATH RUSTFLAGS="-C target-feature=-crt-static"'
           # The installed wheel must launch both native binaries (nexus-live is an
           # `optional` setuptools-rust bin, so only this step notices a skipped build) and
           # import the native surface without loading an obsolete terminal toolkit.

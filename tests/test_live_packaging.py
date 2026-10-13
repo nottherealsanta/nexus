@@ -59,6 +59,10 @@ def test_wheel_ci_installs_alsa_and_pkgconfig_for_both_linux_libcs():
     workflow = _workflow()
     for needle in ("alsa-lib-dev", "alsa-lib-devel", "apk add", "pkg"):
         assert needle in workflow
+    # Regression: musl defaults to crt-static, so ld looked for a static libasound, which
+    # Alpine does not ship (no alsa-lib-static). The CRT must stay dynamic on Linux.
+    assert "-C target-feature=-crt-static" in workflow
+    assert "alsa-lib-static" not in workflow.replace("no `alsa-lib-static`", "")
     # Opus is pure Rust (unsafe-libopus); CMake or a system libopus is not expected.
     manifest = (ROOT / "rust/live/Cargo.toml").read_text(encoding="utf-8")
     assert "unsafe-libopus" in manifest

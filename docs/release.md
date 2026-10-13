@@ -408,6 +408,15 @@ helper fails that platform job and blocks publication. `tests/test_live_packagin
 checks this contract offline. The `websockets` client is a base dependency; the `live`
 extra is an alias.
 
+Root cause of the v0.5.2 musllinux failure: Rust's musl targets default to
+`crt-static`, so rustc passed a static `-lasound` to `ld`, which failed with
+`cannot find -lasound` because Alpine's `alsa-lib-dev` ships only `libasound.so` and
+there is no `alsa-lib-static` package. `native-wheels.yml` sets
+`RUSTFLAGS="-C target-feature=-crt-static"` for Linux builds (already the glibc
+default) so `-lasound` resolves to the shared library. Re-running the existing
+`v0.5.2` tag via `workflow_dispatch` uses the workflow from `main`, so this fix
+applies without retagging.
+
 The Linux wheels link `libasound` dynamically; `auditwheel repair` may bundle it.
 Not verified: a hosted-CI wheel build that includes `nexus-live` on any platform, and
 the cause of the 0.5.1 macOS build failure (the helper builds with stable Rust 1.97 on
