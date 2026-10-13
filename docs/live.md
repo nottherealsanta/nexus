@@ -83,8 +83,10 @@ the session on screen. Code: `ui/ratatui/live.py` (bridge state) over
 3. First use only: a consent dialog says that microphone audio and summaries of the
    agent's work go to OpenAI through the user's ChatGPT account. Agreeing calls
    `LiveConsent(accept=True)`, a record in `<nexus home>/live-consent.json`
-   (once per machine, every client; `/live revoke` removes it). The daemon does not yet
-   refuse a `LiveStart` without it: the clients gate (not verified).
+   (once per machine, every client; `/live revoke` removes it). The **daemon refuses** a
+   `LiveStart` until that record exists (`live_consent_required`, no signaling and no
+   sideband opened), so no client can skip the notice. Tested offline
+   (`tests/test_live_consent.py`); not verified against a real call.
 4. The helper is spawned; `offer` -> `LiveStart(offer_sdp)` -> `answer` -> `ready`. Any
    failure stops the helper and, if the daemon had accepted, sends `LiveStop`, and shows
    the host's redacted message plus the fix (macOS Privacy > Microphone for the terminal
@@ -148,7 +150,7 @@ the unattended approval policy. Sub-agent events are ignored.
 `LiveStatus`, `LiveStart`, `LiveMute`, `LiveStop`, `LiveHelperEvent` (see
 [host.md](host.md)); results `LiveStatusResult` (also returned by mute and stop),
 `LiveStartResult`, `LiveHelperEventResult`. Errors are `ErrorResult(kind, message)`
-with a stable `kind`: `live_disabled`, `live_busy`, `live_no_session`,
+with a stable `kind`: `live_disabled`, `live_consent_required`, `live_busy`, `live_no_session`,
 `live_bad_offer`, `live_bad_voice`, `live_instructions`, `live_auth` (401),
 `live_forbidden` (403), `live_rate_limited` (429), `live_signaling`,
 `live_no_call_id`, `live_timeout`, `live_not_active`, `live_unavailable`.
@@ -220,6 +222,5 @@ the view, the raw dev log or caplog). Fakes live in
 - Real microphone and speaker use, a real call from the terminal client (helper
   spawn, mic permission prompts, echo behavior), the call bar on a real terminal,
   and the consent record across a real daemon restart: only fake-helper tests exist.
-- The daemon does not refuse `LiveStart` without recorded consent (clients gate).
 - The desktop call bar and card (M5), `nexus live`, spoken "stop", AEC (plan M5-M6).
 - A live smoke test (`-m live`) is not written.

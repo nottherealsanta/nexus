@@ -106,6 +106,7 @@ _FIXES: dict[str, str] = {
     "live_unavailable": "Install the WebSocket client: pip install 'nexus-harness[live]', then restart the daemon.",
     "unsupported": "Install the WebSocket client: pip install 'nexus-harness[live]', then restart the daemon.",
     "live_timeout": "Check the network connection and try again.",
+    "live_consent_required": "Accept the GPT Live notice first: `/live` in the chat, or `nexus live`.",
 }
 _FIXES["live_disabled"] = _FIXES["disabled"]
 

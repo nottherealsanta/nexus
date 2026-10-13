@@ -1572,10 +1572,13 @@ async def test_project_sessions_list_and_open_validate_recorded_workspace(tmp_pa
 # ---------------------------------------------------------------------------
 
 
-def _live_runtime(tmp_path, *, transport=None, availability=None, **config):
+def _live_runtime(tmp_path, *, transport=None, availability=None, consent=True, **config):
     from nexus.live.manager import LiveManager
+    from nexus.host_support.live_consent import write_consent
     from tests.live_fakes import FakeLiveTransport, live_config
 
+    if consent:  # the daemon refuses LiveStart until the notice is recorded (docs/live.md)
+        write_consent(True)  # NEXUS_HOME is a private temp dir per test (tests/conftest.py)
     runtime = _runtime(tmp_path, ScriptedProvider(text_response("unused")))
     runtime.live = LiveManager(
         live_config(**config), transport_factory=lambda **kw: transport or FakeLiveTransport(),

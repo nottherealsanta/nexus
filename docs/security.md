@@ -40,8 +40,9 @@ treated as an untrusted prompt. Live never auto-approves anything and an
 unattended session keeps its `on_unattended` policy. The first use is
 confirmed in a client dialog and recorded once per machine by the daemon
 (`LiveConsent`, `<nexus home>/live-consent.json`, `0600`, timestamp and notice version
-only; `/live revoke` deletes it). The daemon does not yet refuse `LiveStart` without
-that record: the clients gate it (not verified against a real call). `NEXUS_LIVE=off` and
+only; `/live revoke` deletes it). The **daemon refuses `LiveStart` without that record**
+(`live_consent_required`, before any transport is opened), so every client is gated by
+the same check; this is tested offline, not verified against a real call. `NEXUS_LIVE=off` and
 `[live] enabled = false` disable it. The endpoints are undocumented, may change
 or stop working, and nothing was exercised against the real service.
 

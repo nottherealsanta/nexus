@@ -146,16 +146,19 @@ class Live:
             self.fail("GPT Live is not available", exc)
             return
         if not (status.consent or consented):
-            # The notice is the first row's body (list dialogs show item lines, not panel lines);
-            # Enter on it closes, so agreeing is always a deliberate second step.
-            self.shell.workflows.menu(
-                "Use GPT Live voice?",
-                [("Before you start: what is sent", {"kind": "back", "_presentation": {"lines": list(CONSENT_LINES)}}),
-                 ("Agree and start the call", {"kind": "live_consent", "new": new_conversation}),
-                 ("Cancel", {"kind": "back"})],
-                CONSENT_LINES, layout="context")
+            self._consent_dialog(new_conversation)
             return
         await self._connect(session, new_conversation)
+
+    def _consent_dialog(self, new_conversation: bool) -> None:
+        # The notice is the first row's body (list dialogs show item lines, not panel lines);
+        # Enter on it closes, so agreeing is always a deliberate second step.
+        self.shell.workflows.menu(
+            "Use GPT Live voice?",
+            [("Before you start: what is sent", {"kind": "back", "_presentation": {"lines": list(CONSENT_LINES)}}),
+             ("Agree and start the call", {"kind": "live_consent", "new": new_conversation}),
+             ("Cancel", {"kind": "back"})],
+            CONSENT_LINES, layout="context")
 
     async def _connect(self, session: str, new_conversation: bool) -> None:
         self.state, self.session, self.muted, self.started_at = "starting", session, False, 0.0
@@ -168,6 +171,10 @@ class Live:
             raise
         except Exception as exc:  # noqa: BLE001 - every failure is shown with its fix
             await self._release()
+            if getattr(exc, "kind", "") == "live_consent_required":  # the daemon's refusal is the consent dialog
+                self.shell.notice = "GPT Live needs your consent first"
+                self._consent_dialog(new_conversation)
+                return
             self.fail("GPT Live could not start", exc)
             return
         self.state, self.started_at = "active", self.call.started_at

@@ -188,7 +188,10 @@ def _config() -> Config:
 
 
 async def make_call(tmp_path, provider, **config):
+    from nexus.host_support.live_consent import write_consent
+
     runtime = Runtime(tmp_path, config=_config(), providers={"scripted": provider})
+    write_consent(True)  # the daemon refuses LiveStart until the notice is recorded
     transport = FakeLiveTransport()
     runtime.live = LiveManager(live_config(**config), transport_factory=lambda **kw: transport,
                                environ={}, flush_interval=0.0)
