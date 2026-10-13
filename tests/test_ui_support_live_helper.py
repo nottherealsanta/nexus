@@ -165,11 +165,10 @@ async def test_overlong_lines_are_dropped_and_counted(fake_binary, monkeypatch):
     await helper.stop()
 
 
-async def test_oversized_offer_is_refused_locally(fake_binary):
+async def test_oversized_offer_is_refused_locally(fake_binary, monkeypatch):
+    # Prevent the fake helper's valid offer racing the injected oversized one.
+    monkeypatch.setenv("FAKE_LIVE_MODE", "silent")
     helper = LiveHelper()
-
-    class Huge:
-        pass
 
     # simulate a helper whose offer exceeds the host limit
     async def offer_event():
