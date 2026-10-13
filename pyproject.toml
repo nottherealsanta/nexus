@@ -92,3 +92,11 @@ cargo-manifest-args = ["--locked"]
 # CLI/browser installs remain available without Rust; chat requires the executable.
 # The wheel CI test (`nexus-ratatui --version`) fails if a supported platform loses the binary.
 optional = true
+
+# The audio/WebRTC helper for `/live` ships the same way (rust/live/README.md).
+[[tool.setuptools-rust.bins]]
+target = "nexus-live"
+path = "rust/live/Cargo.toml"
+cargo-manifest-args = ["--locked"]
+# Voice calls report `unsupported` when the executable is absent.
+optional = true
