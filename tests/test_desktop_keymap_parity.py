@@ -27,6 +27,7 @@ ACTIONS = {
     "quit_shell": "Quit",
     "open_model_picker": "Models",
     "start_voice": "Voice",
+    "toggle_live": "Live",
     "toggle_logs": "ToggleLogs",
     "cycle_reasoning_effort": "CycleEffort",
     "show_shortcuts": "Shortcuts",
@@ -46,12 +47,6 @@ UNNAMED = {
 KNOWN_GAPS = {
     "enter", "ctrl+enter", "alt+enter", "shift+enter",  # editor-level (ctrl/alt+enter bound in "Editor")
 }
-
-
-#: Leader rows whose desktop route lands with GPT Live milestone M5 (call bar and card in GPUI,
-#: not buildable offline). `/live` already works typed in the desktop composer through the
-#: shared Python bridge. Shrink this set, never grow it.
-PENDING_M5 = {"toggle_live"}
 
 
 def _rows():
@@ -87,7 +82,7 @@ def test_escape_twice_stops_the_turn_in_the_desktop_shell():
 
 def test_leader_shortcuts_have_matching_desktop_routes():
     for letter, action_id, _ in LEADER_SHORTCUTS:
-        if action_id in KNOWN_GAPS or action_id in PENDING_M5:
+        if action_id in KNOWN_GAPS:
             continue
         assert ACTIONS[action_id] in _global(f"ctrl-x {letter}"), f"ctrl+x {letter} -> {action_id}"
 

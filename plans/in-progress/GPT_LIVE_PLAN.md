@@ -314,7 +314,7 @@ Each milestone ends with tests green, docs updated, and a Conventional Commit.
   `tests/test_ratatui_live.py`; native PTY check of the call bar with a fake
   helper and fake transport (dev-mode mock scenario `live-call`).
 
-**M5 — Desktop + CLI**
+**M5 — Desktop + CLI** (desktop half implemented on `feat/gpt-live-desktop`: wire topic `live`, `live` block, call bar/card in `rust/desktop/src/live.rs`, `Ctrl+X D`, mic usage text; screenshot review and real-call checks not run; CLI half is separate)
 - Wire projection fields, call bar, timeline card, mic entitlement;
   `nexus live` headless. Screenshot check via the native-app-review skill.
 

@@ -226,6 +226,7 @@ impl Desktop {
         let copy = block.text.clone();
         let content = match block.kind.as_str() {
             "context_header" => self.context_header(block, cx),
+            "live" => self.live_card(block, cx),
             "user" => {
                 let op = block.operation.clone();
                 let user_text = if block.title.is_empty() {
@@ -314,13 +315,21 @@ impl Desktop {
                                             ))
                                         }),
                                 )
-                                .when(block.number > 0, |d| {
+                                .when(block.number > 0 || block.status == "live", |d| {
+                                    // A turn started by a GPT Live delegation says so.
+                                    let mut tags = Vec::new();
+                                    if block.status == "live" {
+                                        tags.push("via voice".to_owned());
+                                    }
+                                    if block.number > 0 {
+                                        tags.push(format!("#{}", block.number));
+                                    }
                                     d.child(
                                         div()
                                             .flex_shrink_0()
                                             .text_size(px(theme::size::CAPTION))
                                             .text_color(t.text_tertiary)
-                                            .child(format!("#{}", block.number)),
+                                            .child(tags.join(" · ")),
                                     )
                                 }),
                         )

@@ -1279,6 +1279,7 @@ impl Desktop {
                         .children(self.snapshot.queue_lines.iter().cloned()),
                 )
             })
+            .when(self.snapshot.live.active, |d| d.child(self.live_bar(cx)))
             .when(
                 self.snapshot.voice_phase != "idle" && !self.snapshot.voice_phase.is_empty(),
                 |d| {
