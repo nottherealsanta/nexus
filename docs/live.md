@@ -3,8 +3,7 @@
 Status: **M1 (daemon core), M2 (delegation bridge), M3 (the `nexus-live` helper) and
 M4 (the native Ratatui client) are implemented and tested offline. Nothing has been
 exercised against the real service, a real microphone or a real call: not
-verified.** The desktop client (M5) draws no call bar or card yet (typing `/live`
-there starts the same call), and the `nexus live` CLI does not exist yet. Plan:
+verified.** The desktop client (M5, GPUI) draws the same call bar and card and routes `Ctrl+X D` (see [desktop.md](desktop.md#gpt-live-voice-calls); cargo build/test and a native-harness render check passed, no real call or screenshot review), and the `nexus live` CLI does not exist yet. Plan:
 `plans/in-progress/GPT_LIVE_PLAN.md`; protocol observations and citations:
 `plans/in-progress/GPT_LIVE_PROTOCOL_NOTES.md`.
 
@@ -221,5 +220,5 @@ the view, the raw dev log or caplog). Fakes live in
   spawn, mic permission prompts, echo behavior), the call bar on a real terminal,
   and the consent record across a real daemon restart: only fake-helper tests exist.
 - The daemon does not refuse `LiveStart` without recorded consent (clients gate).
-- The desktop call bar and card (M5), `nexus live`, spoken "stop", AEC (plan M5-M6).
+- `nexus live` (plan M5, CLI half), spoken "stop", AEC (plan M5-M6).
 - A live smoke test (`-m live`) is not written.

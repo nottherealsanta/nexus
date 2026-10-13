@@ -11,7 +11,7 @@ here, so add a row when you add a file.
 | Path | Contents |
 | --- | --- |
 | `nexus/` | the package (below) |
-| `rust/desktop/` | GPUI desktop executable, native editor/transcript/panels, shared typed Settings renderer in `src/settings.rs`, declarative `src/keymap.rs`, bounded toast stack in `src/notice.rs`, turn minimap derivation in `src/minimap.rs`, bounded opt-in CPU timing in `src/trace.rs`, and visual fixtures ([desktop.md](desktop.md)) |
+| `rust/desktop/` | GPUI desktop executable, native editor/transcript/panels, shared typed Settings renderer in `src/settings.rs`, declarative `src/keymap.rs`, GPT Live call bar and card in `src/live.rs`, bounded toast stack in `src/notice.rs`, turn minimap derivation in `src/minimap.rs`, bounded opt-in CPU timing in `src/trace.rs`, and visual fixtures ([desktop.md](desktop.md)) |
 | `rust/live/` | `nexus-live` helper for GPT Live calls: stdio JSONL (`src/protocol.rs`), call state machine (`src/app.rs`), webrtc-rs peer (`src/peer.rs`), Opus (`src/codec.rs`), rings/resampler/echo gate (`src/dsp.rs`), cpal or fake audio (`src/audio.rs`); protocol in `rust/live/README.md` |
 | `skills/gpui-nexus/` | version-aware GPUI implementation/design guidance, reviewed upstream references and licenses |
 | `skills/native-app-review/` | reusable native screenshot/review skill and local macOS bundling helper |

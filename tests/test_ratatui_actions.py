@@ -328,8 +328,6 @@ def test_shared_shortcuts_have_native_keymap_coverage():
             else:
                 assert baseline[key] in bindings, f"{key} is missing from native keymap"
     for letter, action_id, _ in shortcuts.LEADER_SHORTCUTS:
-        if action_id == "toggle_live":
-            continue  # desktop route lands with GPT Live M5 (tests/test_desktop_keymap_parity.py)
         assert f"ctrl-x {letter}" in bindings, f"Ctrl+X {letter} is missing from native keymap"
 
 
