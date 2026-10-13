@@ -1107,6 +1107,7 @@ dependencies = [
     { name = "msgspec" },
     { name = "rich" },
     { name = "sounddevice" },
+    { name = "websockets" },
 ]
 
 [package.optional-dependencies]
@@ -1167,6 +1168,7 @@ requires-dist = [
     { name = "sounddevice", marker = "extra == 'speak'", specifier = ">=0.5,<1" },
     { name = "sounddevice", marker = "extra == 'voice'", specifier = ">=0.5,<1" },
     { name = "spacy", marker = "extra == 'speak'", specifier = ">=3.7" },
+    { name = "websockets", specifier = ">=14,<16" },
     { name = "websockets", marker = "extra == 'live'", specifier = ">=14,<16" },
     { name = "wsproto", marker = "extra == 'dev'", specifier = ">=1.2,<2" },
 ]

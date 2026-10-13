@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 
 import httpx
 import pytest
@@ -11,6 +12,7 @@ from nexus.live import protocol as lp
 from nexus.live.transport import (
     CALLS_URL,
     CodexLiveTransport,
+    _default_connector,
     error_for_status,
     parse_call_id,
     safe_detail,
@@ -312,6 +314,16 @@ async def test_binary_frame_is_a_protocol_error():
     await settle(lambda: sink.closed)
     assert sink.closed[0][0] == "protocol_error"
     await transport.close()
+
+
+async def test_missing_websocket_client_hint_says_reinstall_not_extra_or_cargo(monkeypatch):
+    monkeypatch.setitem(sys.modules, "websockets", None)  # a None entry makes the lazy import raise ImportError
+    with pytest.raises(lp.LiveError) as err:
+        await _default_connector("wss://api.openai.com/v1/live/rtc_x", {})
+    assert err.value.code == "live_unsupported"
+    hint = err.value.message
+    assert "uv tool install --upgrade --force nexus-harness" in hint and "restart the daemon" in hint
+    assert "[live]" not in hint and "cargo" not in hint.lower()
 
 
 def test_safe_detail_redacts_and_bounds():
