@@ -353,3 +353,25 @@ async def test_command_uses_the_most_recent_session_or_creates_one(helper, monke
 def test_live_is_listed_in_the_cli_help():
     help_text = cli.build_parser().format_help()
     assert "live" in help_text and "GPT Live" in help_text
+
+
+async def test_event_pump_backpressures_and_closes_stream_on_cancellation():
+    closed = asyncio.Event()
+
+    class Client:
+        async def stream(self, *args, **kwargs):
+            try:
+                for _ in range(10):
+                    yield live_event("live.transcript", speaker="user", text="hello")
+            finally:
+                closed.set()
+
+    queue = asyncio.Queue(maxsize=1)
+    task = asyncio.create_task(cli_live._pump_events(Client(), "s1", 0, "c1", queue))
+    await asyncio.sleep(0)
+    assert queue.qsize() == 1
+    assert not task.done()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.wait_for(closed.wait(), 1)

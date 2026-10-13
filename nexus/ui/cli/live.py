@@ -96,17 +96,17 @@ async def _pump_events(client: Any, session: str, from_seq: int, call_id: str, q
         async for event in client.stream(session, from_seq, follow=True):
             if str(event.type).startswith("live.") and isinstance(event.data, dict) \
                     and event.data.get("call_id") == call_id:
-                queue.put_nowait(("event", event))
-        queue.put_nowait(("stream", "the session event stream closed"))
+                await queue.put(("event", event))
+        await queue.put(("stream", "the session event stream closed"))
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001 - reported as one labelled row, then hung up
-        queue.put_nowait(("stream", f"lost the connection to the daemon ({type(exc).__name__})"))
+        await queue.put(("stream", f"lost the connection to the daemon ({type(exc).__name__})"))
 
 
 async def _pump_end(end_of_input: Callable[[], Awaitable[None]], queue: asyncio.Queue) -> None:
     await end_of_input()
-    queue.put_nowait(("input", None))
+    await queue.put(("input", None))
 
 
 async def run_live(
@@ -159,11 +159,14 @@ async def run_live(
 
     summary = await client.open_session(session)
     from_seq = int(getattr(summary, "last_seq", 0) or 0)
-    queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+    queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue(maxsize=256)
+    pumps: list[asyncio.Task] = []
 
     def on_helper_event(event: dict[str, Any]) -> None:
         if event.get("type") == "closed" and event.get("reason") != "stop":
-            queue.put_nowait(("helper", str(event.get("reason") or "closed")))
+            pumps.append(asyncio.create_task(queue.put(
+                ("helper", str(event.get("reason") or "closed")),
+            )))
 
     call = live_helper.LiveCall(client, session, on_event=on_helper_event)
     try:
@@ -212,6 +215,7 @@ async def run_live(
     finally:
         for task in pumps:
             task.cancel()
+        await asyncio.gather(*pumps, return_exceptions=True)
         with contextlib.suppress(Exception):  # LiveStop is idempotent; the helper is released regardless
             await call.stop(stop_reason)
     return exit_code

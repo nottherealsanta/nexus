@@ -165,7 +165,10 @@ without the TUI. Code: `ui/cli/live.py` (`run_live`, `format_event`) over
    other calls in the same session are skipped.
 5. Ctrl+C or Ctrl+D (end of input) hangs up: `LiveStop` with reason `user`, then the helper
    is released. A helper that stops ends the call with its microphone fix (exit 1), so
-   does a lost daemon connection.
+   does a lost daemon connection. Cancellation during the helper handshake also
+   releases a call already accepted by the daemon. The event queue is bounded to
+   256 rows with backpressure rather than silently dropping transcripts.
+   Shutdown awaits the event stream task before disconnecting.
 
 Typed input during a call is read and ignored (the agent is not steered from this
 terminal). Not verified: a real call and microphone from this command.

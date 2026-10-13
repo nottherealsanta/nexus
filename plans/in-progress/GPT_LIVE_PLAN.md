@@ -1,6 +1,8 @@
 # GPT Live voice calls (`/live`)
 
-Status: **plan, nothing implemented.** Written 2026-10-13 from two reference
+Status: **M1–M5 implemented and integrated on `feat/gpt-live`; offline verification
+passes. M6 (optional) is not implemented. Real-service/microphone testing and GPUI
+screenshot review remain unverified.** Originally written 2026-10-13 from two reference
 integrations: the OpenCode plugin `malhashemi/opencode-gpt-live` (commit
 `c23101cf`) and oh-my-pi's Live (`can1357/oh-my-pi`, commit `818dd42b`). Neither
 was run; their behavior is taken from their source and docs.
@@ -51,7 +53,7 @@ Existing pieces to reuse:
 - setuptools-rust `[[tool.setuptools-rust.bins]]` already ships `nexus-ratatui`;
   `nexus-live` ships the same way.
 - Key/command slots: `/voice` and `Ctrl+X V` are dictation. Live takes
-  **`/live`** and **`Ctrl+X L`** (free today; verify against `ui_support/shortcuts.py`).
+  **`/live`** and **`Ctrl+X D`** (`Ctrl+X L` already opens details).
 
 ## 3. Design decision: delegation model
 
@@ -353,3 +355,21 @@ Record results with date; everything unrun stays "not verified".
    observed protocol and cite commits, copying no code, as with `auth/codex.py`.
 7. Where the helper runs for a remote/SSH session (client machine vs daemon
    machine): v1 assumes they are the same machine (loopback-only daemon).
+
+
+## Integration verification (M5 complete)
+
+- Desktop and CLI branches merged into `feat/gpt-live`; daemon checks the shared
+  machine-local `live-consent.json` before starting a call. `nexus live` provides
+  the headless client with interactive consent, labelled event rows and cleanup.
+- CLI event delivery now has bounded backpressure and awaits cancelled pump tasks
+  on shutdown. Regression tests cover stream cleanup and cancellation during an
+  accepted call's helper handshake.
+- Full offline Python suite: **5,588 passed, 313 skipped, 4 deselected**.
+- `cargo test` passed for `rust/tui`, `rust/desktop` (95 tests), and `rust/live`
+  (17 unit, 3 binary and 1 WebRTC loopback tests). Existing Rust warnings remain.
+- Real Ratatui client + fake helper: `tests/test_ratatui_pty_live.py` **1 passed**.
+- `ruff check nexus tests` and `git diff --check` passed.
+- Not verified: GPUI screenshots, real OpenAI calls/audio, optional M6. The web
+  archived-sidebar timeout was previously reproduced before M4; not rerun here.
+- No merge into `main`: its worktree contains unrelated in-progress changes.

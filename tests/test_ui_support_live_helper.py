@@ -217,3 +217,22 @@ async def test_failed_start_releases_the_helper_and_the_daemon_call(fake_binary)
 
 async def _boom(*args, **kwargs):
     raise LiveHelperError("timeout", "no ready")
+
+
+async def test_cancelled_start_releases_helper_and_accepted_call(fake_binary):
+    client = FakeClient()
+    call = LiveCall(client, "s1")
+    answering = asyncio.Event()
+
+    async def wait_for_answer(*args, **kwargs):
+        answering.set()
+        await asyncio.Event().wait()
+
+    call.helper.answer = wait_for_answer
+    task = asyncio.create_task(call.start())
+    await asyncio.wait_for(answering.wait(), 3)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert ("stop", "s1", "helper_failed") in client.calls
+    assert not call.helper.running
