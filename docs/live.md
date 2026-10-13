@@ -78,9 +78,10 @@ the session on screen. Code: `ui/ratatui/live.py` (bridge state) over
 
 1. `LiveStatus`. Not available (`disabled`, `unsupported`, `no_credential`, `busy`)
    shows a panel with the host's message and the fix (`nexus auth codex login`,
-   `pip install 'nexus-harness[live]'`, the session that owns a busy call).
+   `uv tool install --upgrade --force nexus-harness` then restart the daemon, the session
+   that owns a busy call).
 2. The `nexus-live` binary must exist (`NEXUS_LIVE_BINARY`, the venv's bin, `rust/live/target`,
-   `PATH`); otherwise an `unsupported` panel says to build or install it. Asked before consent.
+   `PATH`); otherwise an `unsupported` panel says to upgrade or reinstall the normal Nexus default package, then restart the daemon; source builds are only in developer notes. Asked before consent.
 3. First use only: a consent dialog says that microphone audio and summaries of the
    agent's work go to OpenAI through the user's ChatGPT account. Agreeing calls
    `LiveConsent(accept=True)`, a record in `<nexus home>/live-consent.json`
@@ -186,16 +187,30 @@ with a stable `kind`: `live_disabled`, `live_consent_required`, `live_busy`, `li
 `detail` is bounded to 2 KiB. Client methods: `live_status`, `live_start`,
 `live_mute`, `live_stop`, `live_helper_event` in `client/protocol.py`.
 
-`LiveStatusResult.reason` is `disabled`, `unsupported` (the optional `websockets`
-client is missing), `no_credential` (no ChatGPT sign-in; `nexus auth codex login`)
+`LiveStatusResult.reason` is `disabled`, `unsupported` (the `websockets`
+client is missing from a broken install), `no_credential` (no ChatGPT sign-in; `nexus auth codex login`)
 or `busy`.
 
 ## Config
 
 See [config.md](config.md): `[live]` `enabled voice max_minutes carry_turns progress
-instructions log_raw`, and `NEXUS_LIVE=off`. Install the WebSocket client with the
-`live` extra (`pip install 'nexus-harness[live]'`); it is imported lazily and is not
-a base dependency. The model id is a pinned constant, not config.
+instructions log_raw`, and `NEXUS_LIVE=off`. The WebSocket client (`websockets>=14,<16`) is a
+base dependency, imported lazily; the `live` extra (`nexus-harness[live]`) remains only
+as a compatibility alias. The audio helper `nexus-live` ships inside published platform
+wheels (see [release.md](release.md#second-native-binary-nexus-live)); a source install
+without Rust, or without ALSA headers on Linux, has no helper and reports `unsupported`.
+The model id is a pinned constant, not config.
+
+**Packaging root cause (0.5.1).** The helper is an `optional` setuptools-rust bin, so
+when its Cargo build fails the wheel is built without it and no error is raised. The
+locked `uuid 1.28` needs Rust 1.89, while the wheel CI toolchain and the crate's
+`rust-version` are 1.88, so the build was skipped on that toolchain. The fix is to hold
+`uuid` at `1.18.1` in `rust/live/Cargo.lock` (`cargo +1.88 update uuid --precise 1.18.1`;
+a release build then succeeds). A published wheel must contain `nexus-live`: the wheel CI
+smoke test (`nexus-live --version`) now treats a missing helper as a hard failure.
+Raising the toolchain and `rust-version` together is the alternative, and any locked
+dependency must stay within the declared `rust-version`. `tests/test_live_packaging.py`
+pins the lock and the toolchain. Not verified: a hosted-CI wheel build with the helper.
 
 ## Instructions and continuity
 

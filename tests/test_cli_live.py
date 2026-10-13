@@ -276,7 +276,9 @@ async def test_missing_helper_binary_says_how_to_install_it(tmp_path, monkeypatc
     coro, out, err = run(client)
     assert await coro == 1
     text = err.getvalue()
-    assert "nexus-live audio helper is not installed" in text and "cargo build" in text
+    assert "nexus-live audio helper is not installed" in text
+    assert "uv tool install --upgrade --force nexus-harness" in text and "restart the daemon" in text
+    assert "cargo build" not in text
     assert client.consent_calls == [] and client.starts == []  # no prompt, no call
 
 

@@ -631,7 +631,9 @@ async def test_keep_alive_serves_several_requests_and_is_bounded():
                 assert headers["connection"] == "keep-alive"
                 assert isinstance(p.decode_result(body), p.HealthResult)
             # The third request exceeds the per-connection bound; the server
-            # stops reading and closes, so the socket reaches EOF.
+            # stops reading and closes. The unread third request may make the
+            # kernel answer with a RST instead of a FIN (macOS does), so the
+            # client sees either a clean EOF or a connection reset.
             writer.write(
                 _request_bytes(
                     "POST",
@@ -643,7 +645,10 @@ async def test_keep_alive_serves_several_requests_and_is_bounded():
             )
             with contextlib.suppress(Exception):
                 await writer.drain()
-            assert await asyncio.wait_for(reader.read(), 3.0) == b""
+            try:
+                assert await asyncio.wait_for(reader.read(), 3.0) == b""
+            except (ConnectionResetError, BrokenPipeError):
+                pass
         finally:
             await _close(reader, writer)
 

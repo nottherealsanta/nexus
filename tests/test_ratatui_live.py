@@ -159,7 +159,7 @@ async def test_daemon_busy_names_the_owning_session(shell):
 @pytest.mark.parametrize("reason,fix", [
     ("no_credential", "nexus auth codex login"),
     ("disabled", "enabled = true"),
-    ("unsupported", "nexus-harness[live]"),
+    ("unsupported", "uv tool install --upgrade --force nexus-harness"),
 ])
 async def test_unavailable_reasons_show_the_fix(shell, reason, fix):
     shell.client.live_status.return_value = status(available=False, reason=reason)
@@ -175,7 +175,8 @@ async def test_missing_helper_binary_is_a_clear_unsupported_message(shell, monke
     monkeypatch.setattr(live_helper, "binary_path", missing)
     await shell.command("/live", ())
     text = "\n".join(shell.panel_lines)
-    assert "nexus-live" in text and "cargo build" in text and FakeCall.instances == []
+    assert "nexus-live" in text and "uv tool install --upgrade --force nexus-harness" in text
+    assert "restart the daemon" in text and "cargo" not in text and FakeCall.instances == []
     assert any(t["level"] == "error" for t in shell.toasts)
 
 

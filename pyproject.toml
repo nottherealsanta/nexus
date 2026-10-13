@@ -16,6 +16,9 @@ dependencies = [
     "firecrawl-anydoc==0.2.4",
     "claude-agent-sdk==0.2.162",
     "sounddevice>=0.5,<1",
+    # GPT Live sideband WebSocket client (docs/live.md), imported lazily by
+    # nexus/live/transport.py. Default so `uv tool install nexus-harness` can start a call.
+    "websockets>=14,<16",
 ]
 
 [project.optional-dependencies]
@@ -45,8 +48,8 @@ voice = [
     "moondream==2.4.0",
     "sounddevice>=0.5,<1",
 ]
-# GPT Live calls (docs/live.md): the sideband WebSocket client, imported lazily
-# by nexus/live/transport.py. Not a base dependency.
+# Compatibility alias: websockets is a base dependency now, so `nexus-harness[live]`
+# (still named by older hints and receipts) installs nothing extra. Keep the pins equal.
 live = [
     "websockets>=14,<16",
 ]
@@ -104,5 +107,7 @@ optional = true
 target = "nexus-live"
 path = "rust/live/Cargo.toml"
 cargo-manifest-args = ["--locked"]
-# Voice calls report `unsupported` when the executable is absent.
+# Kept optional so a source install without Rust/ALSA still gives a working CLI; Voice
+# calls then report `unsupported`. Published wheels must never lose it silently: the
+# wheel CI test (`nexus-live --version`, native-wheels.yml) fails if the build skipped it.
 optional = true

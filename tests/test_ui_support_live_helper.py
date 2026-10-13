@@ -63,7 +63,32 @@ def test_missing_binary_is_a_clear_unsupported_error(monkeypatch, tmp_path):
     assert lh.available() is False
     with pytest.raises(LiveHelperError) as info:
         lh.binary_path()
-    assert info.value.code == "unsupported" and "nexus-live" in str(info.value) and "cargo build" in info.value.hint
+    assert info.value.code == "unsupported" and "nexus-live" in str(info.value)
+    assert "uv tool install --upgrade --force nexus-harness" in info.value.hint
+    assert "restart the daemon" in info.value.hint and "cargo" not in info.value.hint
+
+
+@pytest.mark.parametrize("kind", ["live_unavailable", "unsupported"])
+def test_unavailable_hints_have_no_live_extra(kind):
+    fix = lh.fix_for(kind)
+    assert fix == lh.INSTALL_HINT and "[live]" not in fix and "cargo" not in fix
+
+
+def test_symlinked_venv_python_finds_neighbour_binary(monkeypatch, tmp_path):
+    """uv-style venv: bin/python is a symlink elsewhere, nexus-live sits beside the symlink."""
+    real = tmp_path / "real" / "python3"
+    real.parent.mkdir()
+    real.write_text("")
+    bindir = tmp_path / "venv" / "bin"
+    bindir.mkdir(parents=True)
+    (bindir / "python").symlink_to(real)
+    helper = bindir / "nexus-live"
+    helper.write_text("#!/bin/sh\n")
+    helper.chmod(0o755)
+    monkeypatch.delenv("NEXUS_LIVE_BINARY", raising=False)
+    monkeypatch.setattr(lh.sys, "executable", str(bindir / "python"))
+    monkeypatch.setattr(lh.shutil, "which", lambda name: None)
+    assert lh.binary_path() == helper.resolve()
 
 
 def test_binary_override_and_missing_exec_bit(monkeypatch, tmp_path):

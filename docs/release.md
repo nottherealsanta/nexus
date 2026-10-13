@@ -392,9 +392,23 @@ setuptools-rust says so; with an older compiler Cargo names the minimum. Packagi
 `rust/live` (the GPT Live audio/WebRTC helper, see `rust/live/README.md`) is a
 second `[[tool.setuptools-rust.bins]]` entry, `optional = true`, built with
 `--locked` from its own `Cargo.lock` and installed beside `nexus-ratatui`. It
-needs Rust >= 1.88 like the terminal client and no CMake: Opus is
+needs Rust >= 1.88 like the terminal client and no CMake or libopus: Opus is
 `unsafe-libopus` (pure Rust). Its default `audio` feature uses `cpal`, which
-needs ALSA headers and `pkg-config` on Linux; a platform without them builds
-with `--no-default-features` and the host reports Live as `unsupported`. CI
-workflows are not changed by this entry. Not verified: a hosted-CI wheel build
-that includes `nexus-live`, and a `nexus-live --version` wheel smoke test.
+needs ALSA headers and `pkg-config` on Linux, and bindgen/libclang plus the macOS
+SDK for `coreaudio-sys` on macOS. A source install without them builds nothing for
+this entry (it is `optional`) and the host reports Live as `unsupported`.
+
+`optional = true` makes a failed Cargo build silent, which is how 0.5.1 shipped a
+macOS arm64 wheel with `nexus-ratatui` but no `nexus-live`. It is kept optional so
+source installs without Rust still work; published wheels are guarded instead.
+`native-wheels.yml` installs `alsa-lib-dev`/`pkgconf` (musllinux, apk) or
+`alsa-lib-devel`/pkg-config (manylinux, dnf/yum) before building, and its wheel test
+runs `nexus-live --version` and `live_helper.binary_path()`, so a wheel without the
+helper fails that platform job and blocks publication. `tests/test_live_packaging.py`
+checks this contract offline. The `websockets` client is a base dependency; the `live`
+extra is an alias.
+
+The Linux wheels link `libasound` dynamically; `auditwheel repair` may bundle it.
+Not verified: a hosted-CI wheel build that includes `nexus-live` on any platform, and
+the cause of the 0.5.1 macOS build failure (the helper builds with stable Rust 1.97 on
+macOS arm64; a Rust 1.88 build has not been reproduced).

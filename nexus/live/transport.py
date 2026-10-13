@@ -142,20 +142,22 @@ def parse_call_id(location: str | None, url: str, fallback: str | None = None) -
 
 
 def websocket_available() -> bool:
-    """Whether the optional ``websockets`` client (the ``live`` extra) can be imported."""
+    """Whether the ``websockets`` client (a base dependency) can be imported."""
     import importlib.util
 
     return importlib.util.find_spec("websockets") is not None
 
 
 async def _default_connector(url: str, headers: Mapping[str, str]) -> WebSocketLike:
-    """Connect with ``websockets`` (optional ``live`` extra), imported lazily."""
+    """Connect with ``websockets`` (a base dependency), imported lazily."""
     try:
         from websockets.asyncio.client import connect
         from websockets.exceptions import InvalidStatus
     except ImportError as exc:  # pragma: no cover - depends on the environment
         raise LiveError(
-            "live_unsupported", "GPT Live needs the WebSocket client: install it with `pip install 'nexus-harness[live]'`"
+            "live_unsupported",
+            "GPT Live's WebSocket client is missing from this install. Reinstall with "
+            "`uv tool install --upgrade --force nexus-harness`, then restart the daemon.",
         ) from exc
     try:
         return await connect(

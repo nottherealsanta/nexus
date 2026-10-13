@@ -39,8 +39,8 @@ STOP_TIMEOUT = 3.0
 DROPPED_INTERVAL = 1.0
 
 INSTALL_HINT = (
-    "Build the helper with `cargo build --release --manifest-path rust/live/Cargo.toml` "
-    "or reinstall the Nexus wheel (set NEXUS_LIVE_BINARY to its path)."
+    "Upgrade or reinstall Nexus with `uv tool install --upgrade --force nexus-harness`, "
+    "then restart the daemon."
 )
 MIC_HINT = "Allow the microphone for your terminal (macOS: System Settings > Privacy & Security > Microphone)."
 
@@ -59,7 +59,13 @@ def binary_path() -> Path:
 
     ``NEXUS_LIVE_BINARY`` overrides; otherwise the interpreter's bin directory, then
     ``rust/live/target/{release,debug}``, then ``PATH``. In a source checkout the
-    most recently built one wins. Raises :class:`LiveHelperError` (``unsupported``).
+    most recently built one wins. The interpreter's bin directory is not resolved, so a
+    venv ``python`` symlink (``uv tool``) still finds its neighbouring binary.
+    Raises :class:`LiveHelperError` (``unsupported``).
+
+    Source developers can build the helper with
+    ``cargo build --release --manifest-path rust/live/Cargo.toml`` or point
+    ``NEXUS_LIVE_BINARY`` at it; installed users just upgrade the package.
     """
     override = os.environ.get("NEXUS_LIVE_BINARY")
     if override:
@@ -120,8 +126,8 @@ _FIXES: dict[str, str] = {
     "live_rate_limited": "Wait a moment and try again.",
     "no_credential": LOGIN_HINT,
     "disabled": "Enable it with `[live] enabled = true` in nexus.toml and unset NEXUS_LIVE=off.",
-    "live_unavailable": "Install the WebSocket client: pip install 'nexus-harness[live]', then restart the daemon.",
-    "unsupported": "Install the WebSocket client: pip install 'nexus-harness[live]', then restart the daemon.",
+    "live_unavailable": INSTALL_HINT,
+    "unsupported": INSTALL_HINT,
     "live_timeout": "Check the network connection and try again.",
     "live_consent_required": "Accept the GPT Live notice first: `/live` in the chat, or `nexus live`.",
 }
