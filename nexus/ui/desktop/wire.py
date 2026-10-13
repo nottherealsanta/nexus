@@ -52,6 +52,9 @@ _TOPIC_FIELDS = {
         "panel_layout",
     },
     "details": {"details_panel", "details_sidebar"},
+    # GPT Live call bar: refreshed ~4x/s while a call is open, so it must not
+    # invalidate the (much larger) header topic. Additive; schema stays 3.
+    "live": {"live"},
     "logs": {"logs"},
     "panel": {
         "panel_format",

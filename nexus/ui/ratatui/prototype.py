@@ -263,6 +263,8 @@ def _project_turn(turn, shell, agents=None, literal=True):
                      "number": turn.index + 1, "collapsed": collapsed,
                      "chips": [] if collapsed else chips,
                      "operation": {"kind": "turn_toggle", "id": turn.id}}
+            if (message.origin or {}).get("kind") == "live":
+                block["status"] = "live"  # drawn as "via voice" beside the turn number
             if chips and not collapsed:
                 block["chip_operation"] = {"kind": "message_page", "id": message.id}
                 block["chip_operations"] = _chip_operations(message, len(chips))
@@ -741,7 +743,17 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
     dependencies = {}
     for agent in view.agents.values():
         dependencies.setdefault(agent.parent_call_id, []).append(id(agent))
+    live_cards = [] if on_agent_page or not getattr(shell, "live", None) else _guarded(
+        failures, "Live calls", lambda: sorted(shell.live.card_blocks(view), key=lambda card: card[0]), [])
+    live_cards = [(ts, _safe_blocks([block])[0]) for ts, block in live_cards]
+
+    def cards_before(moment):
+        """Live cards that began before ``moment``, in start order."""
+        while live_cards and live_cards[0][0] <= moment:
+            blocks.append({**live_cards.pop(0)[1], "gap": 1})
+
     for turn in () if on_agent_page else view.turns:
+        cards_before(turn.started_ts if turn.started_ts is not None else float("inf"))
         turn_flags = (*flags, tuple((tool.call_id, tuple(dependencies.get(tool.call_id, ())),
                                     tuple(id(view.agents.get(child)) for child in tool.child_agent_ids))
                                    for tool in turn.tools if tool.child_agent_ids or tool.call_id in dependencies))
@@ -772,6 +784,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             first["rev"] = _revision(first)
             turn_blocks = [first, *turn_blocks[1:]]
         blocks.extend(turn_blocks)
+    cards_before(float("inf"))
     linked = {agent_id for turn in view.turns for tool in turn.tools for agent_id in tool.child_agent_ids}
     for agent in () if on_agent_page else view.agents.values():
         if agent.id in linked:  # shown by its Task card
@@ -870,6 +883,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "voice_phase": shell.voice.phase if shell else "idle",
             "voice_preview": escape_controls(shell.voice.preview) if shell else "",
             "voice_level": shell.voice.level if shell else 0,
+            "live": (getattr(shell, "live", None) and shell.live.bar()) or {} if shell else {},
             "completion_query": getattr(shell, "completion_query", "") if shell else "",
             "completion_prefix": getattr(shell, "completion_prefix", "") if shell else "",
             "completions": getattr(shell, "completions", []) if shell else [],
@@ -1080,6 +1094,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
     background = BackgroundActions(shell, update)
     shell.on_update = update
     poll_task = None
+    live_task = None
     startup_task = None
     async def poll():
         preview_cursor = -1
@@ -1200,6 +1215,19 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
 
         startup_task = asyncio.create_task(finish_startup())
         poll_task = asyncio.create_task(poll())
+
+        async def live_tick():
+            """Keep the call bar's clock and level meters moving while a call is open."""
+            while True:
+                await asyncio.sleep(.25)
+                if shell.live.state != "idle":
+                    try:
+                        await update(immediate=False)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001 - cosmetic refresh
+                        shell.notice = f"Display update failed: {type(exc).__name__}: {exc}"
+        live_task = asyncio.create_task(live_tick())
         while line := await process.stdout.readline():
             action = json.loads(line)
             if action["type"] == "quit":
@@ -1402,12 +1430,18 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
             startup_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await startup_task
+        if live_task:
+            live_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await live_task
         if poll_task:
             poll_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await poll_task
         with contextlib.suppress(Exception):
             await shell.voice.discard()
+        with contextlib.suppress(Exception):
+            await shell.live.shutdown()
         if update_coalescer is not None:
             with contextlib.suppress(Exception):
                 await update_coalescer.flush()

@@ -57,6 +57,7 @@ errors redact them and any URL userinfo (`util.redact_secrets`).
 | `[settings]` | `confirm_edits` false |
 | `[telemetry]` | `log_level`, `log_file`, `redact` patterns |
 | `[voice]` | `enabled`, `autoload` false, `model`, pinned `revision`, `device`, `max_seconds` 120, `auto_send` false, `unload_after_minutes` 0 |
+| `[live]` | `enabled` true, `voice` default (`sol`; also arbor breeze cove ember juniper maple spruce vale), `max_minutes` 30 (1-240), `carry_turns` 12 (0 disables, <= 100), `progress` true, `instructions` (path; empty = `<workspace>/.agents/live/instructions.md` or bundled), `log_raw` false (dev only: bounded redacted sideband log in `~/.nexus/logs/live/`). Experimental, see [live.md](live.md) |
 | `[updates]` | `check` true |
 
 `[permissions] mode` defaults to `allow` in the schema while `PermissionEngine`'s
@@ -129,7 +130,7 @@ cues. Audio playback requires `sounddevice` and a working output device.
 
 `NEXUS_HOME` (state root), `NEXUS_DEV` (dev mode), `NEXUS_HTTP`, `NEXUS_HTTP_HOST`,
 `NEXUS_HTTP_PORT`, `NEXUS_HTTP_TOKEN`, `NEXUS_HTTP_ORIGINS` (opt-in HTTP/SSE
-surface, [host.md](host.md)), `NEXUS_NO_UPDATE_CHECK`, `NEXUS_VOICE=off`.
+surface, [host.md](host.md)), `NEXUS_NO_UPDATE_CHECK`, `NEXUS_VOICE=off`, `NEXUS_LIVE=off` (disables GPT Live calls).
 Command hooks receive `NEXUS_HOOK_EVENT`, `NEXUS_TOOL_NAME`, `NEXUS_TOOL_KEY`,
 `NEXUS_TOOL_PATH`, `NEXUS_TOOL_BUNDLE`, `NEXUS_SESSION_ID`, `NEXUS_TURN_ID`
 ([extensions.md](extensions.md#hooks-hooks)). Live tests use their own gate variables

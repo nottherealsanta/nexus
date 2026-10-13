@@ -1125,3 +1125,25 @@ Tests: `tests/test_ratatui_external.py` (projection, replay equality, attention,
 `/tasks` cancel), `tests/test_ratatui_pty_external.py` (the real binary in a PTY drawing
 the projected page), Rust `external_worker_card_is_labelled_and_attention_is_distinct`.
 Not verified: a live Claude Code run; the web client intentionally has none of this.
+
+## GPT Live call bar and commands (M4)
+
+`/live [stop|mute|new|status|revoke]` and `Ctrl+X D` (Rust `main.rs` leader `d`, Python
+`LEADER_SHORTCUTS` row `toggle_live`; `Ctrl+X L` is the details sidebar) drive
+`nexus/ui/ratatui/live.py`. The snapshot carries `live` (empty object when no call is open):
+`active state phase model muted started in out elsewhere`. `rust/tui/src/live_bar.rs` draws
+`● Live · model · phase · mm:ss` plus `mic`/`spk` meters and a `MUTED` badge in the blank row above
+the composer controls (the shell-mode hint yields to it); the clock is computed in Rust from the
+call's wall-clock start, and a call keeps the redraw clock running. The Python bridge refreshes the
+snapshot every 250 ms while a call is open so the meters move. Covered by Python tests
+(`tests/test_ratatui_live.py`, fake helper and fake transport) and Rust unit tests; real terminal,
+microphone and call behavior are not verified. The desktop route for `Ctrl+X D` lands with M5
+(`tests/test_desktop_keymap_parity.py` lists it as pending).
+
+The Live timeline card is a `live` block (`detail` = `tone TAB label TAB text` per line; click or Enter
+sends `live_toggle`, which flips `Live.opened`): chip, title (`model · voice`), status, a rail and
+labelled rows with hanging indent (`rust/tui/src/transcript.rs::live_card`). Delegation user cards
+carry `status = "live"` and show `via voice · #N`. Covered by `tests/test_ratatui_live.py`, Rust unit
+tests and `tests/test_ratatui_pty_live.py` (real bridge, real binary, fake transport and helper:
+consent dialog, call bar, mute, card, hang up). No `live-call` mock scenario was added: mock scenarios
+script model responses, not `live.*` events. Real microphone and OpenAI behavior: not verified.

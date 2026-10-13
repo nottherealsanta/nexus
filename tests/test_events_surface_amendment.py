@@ -79,6 +79,7 @@ def test_catalogue_group_names_and_order():
         "external",
         "input",
         "shell",
+        "live",
         "presence",
         "daemon",
         "misc",

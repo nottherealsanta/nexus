@@ -403,6 +403,7 @@ const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 pub fn animating(s: &Snapshot) -> bool {
     s.panel_loading
         || matches!(s.voice_phase.as_str(), "recording" | "transcribing")
+        || s.live.active
         || matches!(s.status.as_str(), "running" | "active" | "working")
         || s.blocks.iter().any(|block| {
             block.text.contains(SPINNER_SLOT)
@@ -1451,7 +1452,25 @@ pub fn draw(
             ),
         );
         draw_queue_box(frame, r.composer, s, &cp);
-        if shell {
+        if s.live.active {
+            // A live call outranks the mode hint: the mic is open, so say so.
+            frame.render_widget(
+                Paragraph::new(Line::from(crate::live_bar::spans(
+                    &s.live,
+                    &cp,
+                    cache.spin,
+                    crate::live_bar::now_epoch(),
+                    usize::from(box_area.width.saturating_sub(5)),
+                )))
+                .style(Style::default().bg(cp.panel)),
+                Rect {
+                    x: box_area.x + 3,
+                    y: rows[2].y.saturating_sub(1),
+                    width: box_area.width.saturating_sub(5),
+                    height: 1,
+                },
+            );
+        } else if shell {
             // The blank row between the text and the controls names the mode.
             frame.render_widget(
                 Paragraph::new(Line::from(vec![

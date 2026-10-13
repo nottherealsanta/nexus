@@ -41,7 +41,7 @@ from typing import TYPE_CHECKING, Any, Self
 
 import msgspec
 
-from ..core.bus import DROP_OLDEST, Bus
+from ..core.bus import DROP_OLDEST, Bus, Subscription
 from ..core.cancel import CancelToken
 from ..core.loop import run_turn
 from ..core.turn import TurnLimits, TurnState
@@ -1163,6 +1163,18 @@ class Session:
             if isinstance(record, EventRecord) and record.event.seq > from_seq
         ]
 
+    def observe(self) -> Subscription:
+        """A live, bounded tap on persisted events that is **not** a viewer.
+
+        Unlike :meth:`subscribe` it neither counts toward presence nor emits
+        ``presence.*``, so a daemon-side observer (the GPT Live bridge) cannot make
+        an unattended session look attended. The caller must ``unobserve`` it.
+        """
+        return self._bus.subscribe()
+
+    def unobserve(self, subscription: Subscription) -> None:
+        self._bus.unsubscribe(subscription)
+
     async def subscribe(
         self,
         from_seq: int = 0,
@@ -1242,7 +1254,13 @@ class Session:
 
     # -- input queue -------------------------------------------------------
 
-    def enqueue(self, user_input: str | list[ContentBlock], *, mode: str = "queue") -> str:
+    def enqueue(
+        self,
+        user_input: str | list[ContentBlock],
+        *,
+        mode: str = "queue",
+        origin: Mapping[str, Any] | None = None,
+    ) -> str:
         """Persist a submission to run at the next turn boundary; return its id.
 
         The input is appended as an ``input.queued`` event (durable, drawable)
@@ -1250,6 +1268,10 @@ class Session:
         :meth:`start_turn` with no content or automatically when the running turn
         completes, emitting ``input.consumed``; if it can never run it emits
         ``input.dropped``.
+
+        ``origin`` labels a submission that was not typed (``{"kind": "live",
+        "delegation_id": ...}`` for a GPT Live delegation). It is recorded on
+        ``input.queued`` only; the prompt the model sees is unchanged.
         """
         self._ensure_writable()
         content = _coerce_user_input(user_input)
@@ -1259,15 +1281,15 @@ class Session:
             self._queue.appendleft(item)
         else:
             self._queue.append(item)
-        self._emit(
-            "input.queued",
-            {
-                "queued_id": queued_id,
-                "content": _encode_queued_content(content),
-                "queue_depth": len(self._queue),
-                "mode": mode,
-            },
-        )
+        payload: dict[str, Any] = {
+            "queued_id": queued_id,
+            "content": _encode_queued_content(content),
+            "queue_depth": len(self._queue),
+            "mode": mode,
+        }
+        if origin:
+            payload["origin"] = {str(key)[:40]: str(value)[:200] for key, value in origin.items()}
+        self._emit("input.queued", payload)
         return queued_id
 
     def add_context(self, user_input: str | list[ContentBlock]) -> bool:

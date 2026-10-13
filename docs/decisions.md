@@ -538,3 +538,55 @@ the turn. Each run is drawn as a `shell` turn reusing the `bash` tool row, so
 the user sees exactly what the agent will see. Shell output (tool and `!`)
 is capped at 2,000 lines or 50 KiB; the full text goes to a private temp file
 named in the result instead of being silently cut.
+
+## GPT Live: delegation, not a second voice agent (2026-10)
+
+The voice model only talks; it hands work to the session the user already has
+open through `delegation.created`, and the bridge enqueues it as an ordinary user
+message (idle: queue, running: steer; `input.queued` carries an `origin` label).
+OpenCode's alternative is a hidden second LLM session with control tools. We took
+oh-my-pi's shape: it costs no extra model, adds no reasoning hop, and keeps
+everything the voice model "did" visible as a plain user message in the
+transcript. Status, steer and stop reuse Nexus mechanics (progress appends, steer
+mode, Esc). A spoken "stop" and OpenCode-style control tools are deferred.
+
+## GPT Live: the audio helper runs on the client side
+
+Microphone permission attaches to the terminal or app that captures (dictation
+already works that way); a detached daemon may have no TCC attribution. So the
+helper process is spawned by the client and exchanges only SDP and small JSON
+events with the daemon. The daemon owns signaling and the sideband WebSocket, so
+credentials never leave it. Not verified on macOS yet (helper is milestone M3).
+
+## GPT Live: approvals are UI-only
+
+Voice never answers a permission or a question. The bridge announces "the user
+must approve this on screen" and nothing else; the mis-heard "yes" that runs
+`bash` is the failure we refuse to allow. The bridge observes the session through
+`Session.observe()`, a tap that is not a viewer, so a call cannot make an
+unattended session look attended or change the unattended policy.
+
+## GPT Live: the protocol is undocumented
+
+Endpoints, headers and event names are re-implemented from two MIT-licensed
+reference integrations at pinned commits (`nexus/live/NOTICE`), without copying
+code, and none of it has been run against the real service. Choices recorded:
+the `originator`/`User-Agent` are the `CodexOAuthManager` identity (`nexus`),
+because the notes show no evidence the server requires another (one reference
+claims the Codex desktop app, the other its own name; whether `nexus` is
+rejected is not verified); attestation is omitted; a sideband 401/403/429 is not
+retried; a non-fatal `error` event is forwarded and the call continues, a fatal
+one (401 or an auth code) ends it; the sideband is the only event source (not the
+data channel); newline-joined delegation parts; the three per-call UUID headers
+are random, not the Nexus session id. Fail closed, label experimental.
+
+## GPT Live: streaming captions are persisted, coalesced
+
+The session event sink persists first and fans out second; it has no
+non-durable fan-out, and the subscribe watermark drops any event without a fresh
+`seq`. A bus-only path would mean touching `Session.subscribe` and every follower,
+so instead `live.transcript.delta` (the current partial caption) and `live.phase`
+are persisted at most 4 times a second, only on change, and replay folds them
+harmlessly. `live.levels` is in the catalogue but never emitted by the daemon:
+clients draw their meter from the helper's own output. Revisit if a bus-only
+path appears.

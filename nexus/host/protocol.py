@@ -704,6 +704,59 @@ class VoiceRemove(msgspec.Struct, tag=True, frozen=True):
     """Remove the cached local voice model."""
 
 
+class LiveStatus(msgspec.Struct, tag=True, frozen=True):
+    """Read the GPT Live availability and the active call (no secrets)."""
+
+
+class LiveStart(msgspec.Struct, tag=True, frozen=True, repr_omit_defaults=True):
+    """Start a GPT Live call in ``session``.
+
+    ``offer_sdp`` (at most 64 KiB) comes from the client's audio helper; the
+    daemon signals with OpenAI and returns only the SDP answer.
+    ``new_conversation`` skips the carried-over transcript.
+    """
+
+    session: str
+    offer_sdp: str
+    voice: str = ""
+    new_conversation: bool = False
+
+    def __repr__(self) -> str:
+        return f"LiveStart(session={self.session!r}, offer_sdp=<{len(self.offer_sdp)} chars>)"
+
+
+class LiveMute(msgspec.Struct, tag=True, frozen=True):
+    """Set (``True``/``False``) or toggle (``None``) the call's mute state."""
+
+    session: str
+    muted: bool | None = None
+
+
+class LiveStop(msgspec.Struct, tag=True, frozen=True):
+    """End the call. Idempotent; never cancels the agent's running turn."""
+
+    session: str
+    reason: str = "user"
+
+
+class LiveHelperEvent(msgspec.Struct, tag=True, frozen=True):
+    """An audio-helper event forwarded by its client: ready, levels, phase, dc_error, dropped, closed."""
+
+    session: str
+    kind: str
+    detail: str = ""
+
+
+class LiveConsent(msgspec.Struct, tag=True, frozen=True):
+    """Read (``None``), record (``True``) or revoke (``False``) the once-per-machine GPT Live consent.
+
+    The consent covers sending microphone audio and summaries of the agent's work
+    to OpenAI through the user's ChatGPT account (docs/security.md).
+    """
+
+    accept: bool | None = None
+
+
 class Doctor(msgspec.Struct, tag=True, frozen=True):
     """A redacted health report: config, providers, registry, extensions, MCP.
 
@@ -852,6 +905,12 @@ Command = (
     | VoiceTranscribe
     | VoiceCancel
     | VoiceRemove
+    | LiveStatus
+    | LiveStart
+    | LiveMute
+    | LiveStop
+    | LiveHelperEvent
+    | LiveConsent
     | Doctor
     | UpdateStatus
     | Health
@@ -954,6 +1013,12 @@ COMMANDS: tuple[type, ...] = (
     VoiceTranscribe,
     VoiceCancel,
     VoiceRemove,
+    LiveStatus,
+    LiveStart,
+    LiveMute,
+    LiveStop,
+    LiveHelperEvent,
+    LiveConsent,
     Doctor,
     UpdateStatus,
     Health,
@@ -1550,6 +1615,45 @@ class VoiceCancelResult(msgspec.Struct, tag=True, frozen=True):
     cancelled: bool = False
 
 
+class LiveStatusResult(msgspec.Struct, tag=True, frozen=True):
+    """Redacted Live state. ``reason``: disabled|unsupported|no_credential|busy (empty when available)."""
+
+    available: bool = True
+    reason: str = ""
+    state: str = "idle"  # idle|connecting|active|muted|closing
+    phase: str = ""
+    active_session: str = ""
+    call_id: str = ""
+    voice: str = ""
+    muted: bool = False
+    elapsed_s: float = 0.0
+    max_minutes: int = 30
+    levels_in: float = 0.0
+    levels_out: float = 0.0
+    dropped_frames: int = 0
+    last_error: str = ""
+    #: Whether the user has accepted the GPT Live data-sharing notice on this machine.
+    consent: bool = False
+
+
+class LiveConsentResult(msgspec.Struct, tag=True, frozen=True):
+    accepted: bool = False
+    accepted_at: str = ""
+
+
+class LiveStartResult(msgspec.Struct, tag=True, frozen=True):
+    """The SDP answer for the client's peer; never a credential."""
+
+    call_id: str
+    answer_sdp: str
+    voice: str = ""
+
+
+class LiveHelperEventResult(msgspec.Struct, tag=True, frozen=True):
+    ok: bool = True
+    state: str = "idle"
+
+
 class UpdateStatusResult(msgspec.Struct, tag=True, frozen=True):
     enabled: bool = False
     current: str = ""
@@ -1691,6 +1795,10 @@ Result = (
     | VoiceStatusResult
     | VoiceTranscribeResult
     | VoiceCancelResult
+    | LiveStatusResult
+    | LiveStartResult
+    | LiveHelperEventResult
+    | LiveConsentResult
     | UpdateStatusResult
     | HealthResult
     | MockListResult
@@ -1778,6 +1886,10 @@ RESULTS: tuple[type, ...] = (
     VoiceStatusResult,
     VoiceTranscribeResult,
     VoiceCancelResult,
+    LiveStatusResult,
+    LiveStartResult,
+    LiveHelperEventResult,
+    LiveConsentResult,
     UpdateStatusResult,
     HealthResult,
     MockListResult,
@@ -1970,6 +2082,16 @@ __all__ = [
     "ToolsListResult",
     "WebLaunch",
     "WebLaunchResult",
+    "LiveConsent",
+    "LiveConsentResult",
+    "LiveHelperEvent",
+    "LiveHelperEventResult",
+    "LiveMute",
+    "LiveStart",
+    "LiveStartResult",
+    "LiveStatus",
+    "LiveStatusResult",
+    "LiveStop",
     "VoiceCancel",
     "VoiceCancelResult",
     "VoicePrepare",

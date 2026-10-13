@@ -95,6 +95,11 @@ at 1440, 1024 and 400px (`artifacts/project-sessions/`).
 
 ### Native terminal checks
 
+`tests/test_ratatui_pty_live.py` drives GPT Live end to end under a controlling PTY (real bridge,
+real binary, `FakeLiveTransport`, and `tests/fixtures/live/fake_nexus_live.py` standing in for the
+`nexus-live` helper): consent dialog, call bar, mute, timeline card and hang-up. It needs the debug
+executable too. No real microphone or OpenAI call is involved.
+
 Build the debug executable before running `tests/test_ratatui_pty.py`; the test
 needs local controlling-terminal permissions and checks keyboard input,
 approval decisions, Settings edits and canonical/echo/signal restoration. Native

@@ -614,6 +614,8 @@ class Workflows(TierPages, SpeakPages):
                                       proceed={**operation, "token": result.confirmation_token})
             else:
                 await self.worktree_outcome(result)
+        elif kind.startswith("live_"):
+            await self.shell.live.operate(operation)
         elif kind == "voice":
             await self.shell.voice.open()
         elif kind == "voice_enable":

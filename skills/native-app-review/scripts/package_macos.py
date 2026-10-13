@@ -31,7 +31,7 @@ def package(binary: Path, output: Path, name: str, bundle_id: str) -> Path:
                       "CFBundlePackageType": "APPL", "CFBundleVersion": "1",
                       "CFBundleShortVersionString": "0.1.0", "NSHighResolutionCapable": True,
                       "NSSupportsAutomaticGraphicsSwitching": True,
-                      "NSMicrophoneUsageDescription": "Dictate messages into the Nexus composer."}, stream)
+                      "NSMicrophoneUsageDescription": "Nexus uses the microphone for dictation into the composer and for GPT Live voice calls (audio is sent to OpenAI only during a call you start)."}, stream)
     return executable
 
 

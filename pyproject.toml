@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nexus-harness"
-version = "0.4.0"
+version = "0.5.0"
 description = "A small, provider-agnostic Python agent harness"
 requires-python = ">=3.13"
 dependencies = [
@@ -45,6 +45,11 @@ voice = [
     "moondream==2.4.0",
     "sounddevice>=0.5,<1",
 ]
+# GPT Live calls (docs/live.md): the sideband WebSocket client, imported lazily
+# by nexus/live/transport.py. Not a base dependency.
+live = [
+    "websockets>=14,<16",
+]
 
 [project.scripts]
 nexus = "nexus.cli:main"
@@ -62,6 +67,7 @@ include = ["nexus*"]
 "nexus.model" = ["data/models.min.json", "data/NOTICE"]
 "nexus.auth" = ["NOTICE"]
 "nexus.voice" = ["NOTICE"]
+"nexus.live" = ["NOTICE", "prompts/*.md"]
 "nexus.agents" = ["data/*.md"]
 "nexus.ui.web" = ["index.html", "styles/*.css", "js/*.js", "assets/*"]
 
@@ -91,4 +97,12 @@ path = "rust/tui/Cargo.toml"
 cargo-manifest-args = ["--locked"]
 # CLI/browser installs remain available without Rust; chat requires the executable.
 # The wheel CI test (`nexus-ratatui --version`) fails if a supported platform loses the binary.
+optional = true
+
+# The audio/WebRTC helper for `/live` ships the same way (rust/live/README.md).
+[[tool.setuptools-rust.bins]]
+target = "nexus-live"
+path = "rust/live/Cargo.toml"
+cargo-manifest-args = ["--locked"]
+# Voice calls report `unsupported` when the executable is absent.
 optional = true

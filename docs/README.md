@@ -32,6 +32,7 @@ agent can see is hidden from the user. Keep this in mind for every change.
 | Build or run the GPUI desktop client | [desktop.md](desktop.md) | `nexus/ui/desktop/`, `rust/desktop/` |
 | Work on `nexus web` | [web.md](web.md) | `nexus/ui/web/`, `nexus/host/web.py` |
 | Local dictation | [voice.md](voice.md) | `nexus/voice/` |
+| GPT Live voice calls (experimental) | [live.md](live.md) | `nexus/live/` |
 | Network, credentials, sandboxing, trust boundaries | [security.md](security.md) | |
 | Write or run tests; fakes; browser checks | [testing.md](testing.md) | `tests/` |
 | Dev mode, mock scenarios, benchmark, examples | [devtools.md](devtools.md) | `nexus/devtools/`, `benchmark/` |

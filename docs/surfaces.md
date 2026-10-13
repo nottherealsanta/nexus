@@ -182,7 +182,7 @@ The source is `ui_support/shortcuts.py`:
 dictation. `Ctrl+U` (also `Ctrl+X U` and `/usage`) opens the provider usage modal:
 one section per connected provider with a bar per limit window, its reset,
 notes and source, plus who is not connected; `r`/Refresh re-reads it. In the
-TUI it takes precedence over the composer's delete-to-line-start. **`Ctrl+X` is a leader**: then `M` (model picker), `V` (dictation), or
+TUI it takes precedence over the composer's delete-to-line-start. **`Ctrl+X` is a leader**: then `M` (model picker), `V` (dictation), `D` (start or end a GPT Live call; `L` is the details sidebar), or
 an alias from `LEADER_SHORTCUTS` (`?` lists them). The model picker is one
 searchable modal with provider groups, favorites (`Ctrl+F`), recents, sort
 (`Ctrl+S`), a `↻`/`Ctrl+R` catalogue refresh (`ModelsRefresh`) and optional effort
@@ -270,6 +270,18 @@ to "transcribing" (the waveform settles into a ripple and a glow sweeps the
 words) until the final text lands. Any key stops and transcribes (the key is
 swallowed); `Esc` discards. The final transcript is inserted as editable composer
 text. Details: [voice.md](voice.md).
+
+## Live (GPT Live voice calls)
+
+`/live`, `Ctrl+X D`: a spoken conversation with OpenAI's voice model while the open
+session does the work ([live.md](live.md)). The native client shows a **call bar** in
+the composer chrome (`● Live · model · phase · mm:ss`, input and output level meters, a
+Muted badge); the editor stays usable and typing is ordinary steering. First use shows a
+consent dialog (audio and summaries of the agent's work go to OpenAI through the ChatGPT
+account); errors show the host's redacted message with the fix. The timeline shows a
+labelled **Live** card per call (captions, `Sent to agent`, `Told voice`, commentary collapsed
+with a count, start and end rows) and marks delegated user messages `via voice`. The web client has no
+Live support. Real microphone behavior: not verified.
 
 ## Dev mode
 

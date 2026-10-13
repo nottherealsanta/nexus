@@ -44,6 +44,7 @@ LEADER_SHORTCUTS: tuple[tuple[str, str, str], ...] = (
     ("i", "open_context", "Inspect context preview and usage"),
     ("e", "toggle_logs", "Toggle the Logs drawer"),
     ("t", "cycle_reasoning_effort", "Cycle root reasoning effort"),
+    ("d", "toggle_live", "Start or end a GPT Live voice call"),
     ("u", "show_usage", "Provider usage and limits"),
     ("r", "reconnect", "Reconnect"),
     ("c", "context_popover", "Context popover"),
