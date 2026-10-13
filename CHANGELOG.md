@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/nottherealsanta/nexus/compare/v0.4.2...v0.5.0) (2026-10-13)
+
+
+### Features
+
+* add GPT Live voice calls ([34c2ccc](https://github.com/nottherealsanta/nexus/commit/34c2ccc1e8f7dbf8f95f3535a52879cf117b3c4d))
+
 ## [0.4.2](https://github.com/nottherealsanta/nexus/compare/v0.4.0...v0.4.2) (2026-10-08)
 
 
