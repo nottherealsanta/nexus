@@ -19,6 +19,10 @@ from ..live.protocol import LiveError
 from ..util import redact_secrets
 from .live_consent import read_consent, write_consent
 
+CONSENT_REQUIRED_MESSAGE = (
+    "GPT Live needs your consent first: microphone audio and summaries of the agent's work go to OpenAI. "
+    "Accept the notice with /live in a Nexus chat, or run `nexus live`."
+)
 _COMMANDS = (p.LiveStatus, p.LiveStart, p.LiveMute, p.LiveStop, p.LiveHelperEvent, p.LiveConsent)
 _MAX_SESSION_ID = 200
 
@@ -125,6 +129,8 @@ async def dispatch_live(command: Any, facade: Any) -> p.Result | None:
             return live_status_result(await manager.status(), consent=bool(read_consent(home)))
         if isinstance(command, p.LiveStart):
             _refresh(facade, manager)
+            if not read_consent(home):  # the daemon, not only the clients, enforces the notice
+                return p.ErrorResult(kind="live_consent_required", message=CONSENT_REQUIRED_MESSAGE)
             result = await manager.start(
                 command.session, command.offer_sdp, host=FacadeLiveHost(facade),
                 voice=command.voice, new_conversation=command.new_conversation,

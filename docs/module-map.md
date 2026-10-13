@@ -392,6 +392,7 @@ here, so add a row when you add a file.
 | `details.py` | Pure, deterministic details of a reduced conversation view |
 | `render.py` | Plain one-shot/JSONL human rendering of the event stream |
 | `run.py` | One-shot runs (`nexus run "..."` over the daemon) |
+| `live.py` | `nexus live`: a headless GPT Live call (consent prompt, `LiveCall` helper, labelled captions, delegations and appends; hang-up on Ctrl+C or end of input) ([live.md](live.md#headless-cli-nexus-live)) |
 | `stream.py` | Turn streaming helpers shared by the one-shot and interactive surfaces |
 | `uds.py` | Unix-socket transport for the CLI, over the canonical host wire |
 

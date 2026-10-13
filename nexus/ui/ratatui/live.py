@@ -18,25 +18,9 @@ import time
 from ...ui_support import live_helper
 from ...ui_support.live_card import card_rows, card_status, card_title
 from ...ui_support.live_card import encode as card_encode
-from ...ui_support.live_helper import LiveCall, describe_failure
+from ...ui_support.live_helper import CONSENT_LINES, LiveCall, describe_failure
 from ...ui_support.voice_capture import play_cue
 
-CONSENT_LINES = (  # short lines: list dialogs clip instead of wrapping
-    "GPT Live is a spoken conversation with OpenAI's",
-    "voice model, working through this session.",
-    "",
-    "Sent to OpenAI through your ChatGPT account:",
-    "  - audio from your microphone during the call",
-    "  - summaries of the agent's work and results,",
-    "    which can include file contents and output",
-    "",
-    "The session's model, tools and permissions do the",
-    "work. The voice can ask the agent to act but can",
-    "never approve anything: permissions stay on screen.",
-    "",
-    "Experimental, undocumented service. Asked once per",
-    "machine; withdraw any time with /live revoke.",
-)
 USAGE = "Use /live [stop|mute|new|status|revoke]"
 _STATE_LABEL = {"connecting": "connecting", "listening": "listening", "speaking": "speaking",
                 "working": "working", "muted": "muted", "ended": "ended"}
@@ -146,16 +130,19 @@ class Live:
             self.fail("GPT Live is not available", exc)
             return
         if not (status.consent or consented):
-            # The notice is the first row's body (list dialogs show item lines, not panel lines);
-            # Enter on it closes, so agreeing is always a deliberate second step.
-            self.shell.workflows.menu(
-                "Use GPT Live voice?",
-                [("Before you start: what is sent", {"kind": "back", "_presentation": {"lines": list(CONSENT_LINES)}}),
-                 ("Agree and start the call", {"kind": "live_consent", "new": new_conversation}),
-                 ("Cancel", {"kind": "back"})],
-                CONSENT_LINES, layout="context")
+            self._consent_dialog(new_conversation)
             return
         await self._connect(session, new_conversation)
+
+    def _consent_dialog(self, new_conversation: bool) -> None:
+        # The notice is the first row's body (list dialogs show item lines, not panel lines);
+        # Enter on it closes, so agreeing is always a deliberate second step.
+        self.shell.workflows.menu(
+            "Use GPT Live voice?",
+            [("Before you start: what is sent", {"kind": "back", "_presentation": {"lines": list(CONSENT_LINES)}}),
+             ("Agree and start the call", {"kind": "live_consent", "new": new_conversation}),
+             ("Cancel", {"kind": "back"})],
+            CONSENT_LINES, layout="context")
 
     async def _connect(self, session: str, new_conversation: bool) -> None:
         self.state, self.session, self.muted, self.started_at = "starting", session, False, 0.0
@@ -168,6 +155,10 @@ class Live:
             raise
         except Exception as exc:  # noqa: BLE001 - every failure is shown with its fix
             await self._release()
+            if getattr(exc, "kind", "") == "live_consent_required":  # the daemon's refusal is the consent dialog
+                self.shell.notice = "GPT Live needs your consent first"
+                self._consent_dialog(new_conversation)
+                return
             self.fail("GPT Live could not start", exc)
             return
         self.state, self.started_at = "active", self.call.started_at
@@ -322,13 +313,7 @@ class Live:
                 await update(immediate=False)
 
     def _unavailable(self, status) -> None:
-        reasons = {
-            "busy": f"A Live call is already running in session {status.active_session or 'another session'}.",
-            "no_credential": "GPT Live needs a ChatGPT sign-in.",
-            "disabled": "GPT Live is turned off.",
-            "unsupported": "GPT Live is not available in this install.",
-        }
-        message = reasons.get(status.reason, f"GPT Live is unavailable ({status.reason or 'unknown reason'}).")
+        message = live_helper.unavailable_message(status.reason, status.active_session)
         fix = live_helper.fix_for(status.reason)
         self.fail("GPT Live is not available", None, message=message, fix=fix)
 

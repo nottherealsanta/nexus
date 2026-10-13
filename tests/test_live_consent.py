@@ -8,6 +8,7 @@ from nexus.host import protocol as p
 from nexus.host.facade import HostFacade
 from nexus.host_support import live_consent as lc
 from tests.test_host_facade import _live_runtime
+from tests.live_fakes import FakeLiveTransport
 
 
 def test_consent_round_trips_survives_a_new_reader_and_can_be_revoked(tmp_path):
@@ -32,7 +33,7 @@ def test_stale_corrupt_or_oversized_consent_counts_as_not_given(tmp_path):
 
 async def test_consent_command_and_status_flag(tmp_path, monkeypatch):
     monkeypatch.setenv("NEXUS_HOME", str(tmp_path / "elsewhere"))
-    runtime = _live_runtime(tmp_path)
+    runtime = _live_runtime(tmp_path, consent=False)
     runtime._home = tmp_path
     facade = HostFacade(runtime)
     try:
@@ -44,5 +45,41 @@ async def test_consent_command_and_status_flag(tmp_path, monkeypatch):
         assert (await facade.handle(p.LiveConsent())).accepted
         assert (await facade.handle(p.LiveConsent(accept=False))).accepted is False
         assert (await facade.handle(p.LiveStatus())).consent is False
+    finally:
+        await runtime.aclose()
+
+
+async def test_live_start_without_recorded_consent_is_refused_and_starts_no_transport(tmp_path):
+    # Task 1 of GPT_LIVE_PLAN: the daemon, not only a client, refuses the call before any transport
+    transport = FakeLiveTransport()
+    runtime = _live_runtime(tmp_path, transport=transport, consent=False)
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+    try:
+        refused = await facade.handle(p.LiveStart(session="s", offer_sdp="v=0\r\noffer"))
+        assert isinstance(refused, p.ErrorResult) and refused.kind == "live_consent_required"
+        assert "consent" in refused.message and "/live" in refused.message and "nexus live" in refused.message
+        assert transport.offer is None and transport.session is None  # no signaling, no sideband
+        assert (await facade.handle(p.LiveStatus())).state == "idle"
+        assert [e for e in runtime.session("s").events if e.type.startswith("live.")] == []
+
+        assert (await facade.handle(p.LiveConsent(accept=True))).accepted
+        started = await facade.handle(p.LiveStart(session="s", offer_sdp="v=0\r\noffer"))
+        assert isinstance(started, p.LiveStartResult) and transport.offer == "v=0\r\noffer"
+        await facade.handle(p.LiveStop(session="s"))
+    finally:
+        await runtime.aclose()
+
+
+async def test_revoked_consent_refuses_the_next_start(tmp_path):
+    transport = FakeLiveTransport()
+    runtime = _live_runtime(tmp_path, transport=transport, consent=True)
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+    try:
+        await facade.handle(p.LiveConsent(accept=False))
+        refused = await facade.handle(p.LiveStart(session="s", offer_sdp="v=0"))
+        assert isinstance(refused, p.ErrorResult) and refused.kind == "live_consent_required"
+        assert transport.offer is None
     finally:
         await runtime.aclose()

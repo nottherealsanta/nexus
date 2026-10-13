@@ -232,6 +232,20 @@ async def test_start_failures_show_the_host_message_and_the_fix(shell, error, fi
     FakeCall.instances[0].helper.stop.assert_awaited()  # the helper never leaks
 
 
+async def test_daemon_consent_refusal_reopens_the_consent_dialog(shell):
+    # consent looked given, but the daemon refused the start (revoked elsewhere, or a stale client)
+    FakeCall.fail = FacadeError("live_consent_required", "GPT Live needs your consent first")
+    await shell.command("/live", ())
+    assert FakeCall.instances[0].helper.stop.await_count == 1  # the helper is released
+    assert shell.panel_title == "Use GPT Live voice?" and shell.live.state == "idle"
+    assert [item["label"] for item in shell.items][1] == "Agree and start the call"
+    assert "GPT Live could not start" not in "\n".join(shell.panel_lines)
+
+
+def test_consent_refusal_has_a_one_line_fix():
+    assert "/live" in live_helper.fix_for("live_consent_required") and "nexus live" in live_helper.fix_for("live_consent_required")
+
+
 async def test_unexpected_helper_exit_ends_the_call_with_the_microphone_fix(shell):
     await shell.command("/live", ())
     call = FakeCall.instances[0]

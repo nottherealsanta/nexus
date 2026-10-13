@@ -75,6 +75,9 @@ async def test_no_credential_reaches_events_results_or_logs(tmp_path, caplog, mo
             Auth(), client=client, connector=connector, sleep=sleep, raw_log=raw_log),
         home=tmp_path / "home", environ={}, flush_interval=0.0,
     )
+    from nexus.host_support.live_consent import write_consent
+
+    write_consent(True)  # the daemon refuses LiveStart until the notice is recorded
     facade = HostFacade(runtime)
     facade.open_session("s")
     results = []

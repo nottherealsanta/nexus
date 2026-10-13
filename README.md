@@ -134,6 +134,10 @@ nexus run "Summarize the repository" --json > events.jsonl   # headless JSONL
 cat prompt.txt | nexus run -
 ```
 
+`nexus live` is a headless GPT Live voice call (experimental, not verified against the
+real service): it asks once for consent on the terminal, then prints what you and the voice
+say and what the agent is told. See [docs/live.md](docs/live.md).
+
 The daemon exits on its own after an idle window (300 seconds by default) with
 no viewers and no running or queued turns. It never exits with a turn in
 flight.
