@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import re
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Protocol
@@ -103,6 +104,9 @@ class LiveTransport(Protocol):
 
     async def close(self, reason: str = "done") -> None:
         """Send ``session.close`` (bounded), close the socket. Idempotent."""
+
+
+_BEARER = re.compile(r"(?i)\bbearer\b(?:\s+(?:\*{3}|[A-Za-z0-9._~+/=-]+))?")
 
 
 def safe_detail(text: object, limit: int = MAX_DETAIL_CHARS) -> str:
@@ -186,6 +190,9 @@ class CodexLiveTransport:
         self._raw_log = raw_log
         self._ids = (str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4()))
         self._headers_cache: dict[str, str] | None = None
+        #: Literal credential values seen in the auth headers, scrubbed from every
+        #: error text on top of ``redact_secrets`` (which cannot know an account id).
+        self._secret_values: set[str] = set()
         self._call_id = ""
         self._ws: WebSocketLike | None = None
         self._send_lock = asyncio.Lock()
@@ -198,12 +205,24 @@ class CodexLiveTransport:
 
     # -- headers -----------------------------------------------------------
 
+    def _clean(self, text: object, limit: int = MAX_DETAIL_CHARS) -> str:
+        """``safe_detail`` plus removal of this call's literal credential values."""
+        raw = " ".join(str(text).split())
+        for value in self._secret_values:
+            raw = raw.replace(value, "***")
+        raw = _BEARER.sub("***", raw)  # never leave the scheme word behind a scrubbed token
+        return safe_detail(raw, limit)
+
     async def _headers(self) -> dict[str, str]:
         try:
             base = dict(await self._auth.headers())
         except Exception as exc:  # noqa: BLE001 - auth text may echo secrets
             raise LiveError("live_auth", safe_detail(exc) or "ChatGPT sign-in required; run `nexus auth codex login`") from None
         merged = {key.lower(): value for key, value in base.items()}
+        for key, value in merged.items():
+            if isinstance(value, str) and any(word in key for word in ("authorization", "account", "token", "residency")):
+                self._secret_values.add(value.removeprefix("Bearer ").strip())
+        self._secret_values.discard("")
         session_id, thread_id, realtime_id = self._ids
         # notes §1.1: random UUIDs per call; the Nexus session id is not sent.
         merged.update({"openai-alpha": ALPHA_HEADER, "session-id": session_id,
@@ -232,14 +251,14 @@ class CodexLiveTransport:
             except httpx.TimeoutException:
                 raise LiveError("live_signaling", "Timed out creating the call") from None
             except httpx.HTTPError as exc:
-                raise LiveError("live_signaling", f"Could not reach GPT Live: {safe_detail(type(exc).__name__)}") from None
+                raise LiveError("live_signaling", f"Could not reach GPT Live: {type(exc).__name__}") from None
             if response.status_code >= 500 and attempt < SIGNALING_5XX_RETRIES:
                 await self._sleep(CONNECT_BASE_DELAY_S)
                 continue
             break
         assert response is not None
         if not 200 <= response.status_code < 300:
-            raise error_for_status(response.status_code, response.text[:2048])
+            raise error_for_status(response.status_code, self._clean(response.text[:2048]))
         answer = response.text
         if not answer.strip():
             raise LiveError("live_signaling", "The call was created but the SDP answer was empty")
@@ -271,7 +290,7 @@ class CodexLiveTransport:
                 last = exc
             if attempt + 1 < attempts:
                 await self._sleep(CONNECT_BASE_DELAY_S * (2 ** attempt))
-        raise LiveError("live_sideband", f"Could not open the sideband connection: {safe_detail(last or '')}")
+        raise LiveError("live_sideband", f"Could not open the sideband connection: {self._clean(last or '')}")
 
     async def _emit(self, event: LiveEvent) -> None:
         if self._on_event is not None:
@@ -305,7 +324,7 @@ class CodexLiveTransport:
                         await self._notify_closed("remote_closed", None)
                         return
                     if reconnects >= MAX_RECONNECTS:
-                        await self._notify_closed("sideband_lost", safe_detail(exc) or "connection lost")
+                        await self._notify_closed("sideband_lost", self._clean(exc) or "connection lost")
                         return
                     reconnects += 1
                     try:
@@ -318,14 +337,14 @@ class CodexLiveTransport:
                     await self._notify_closed("protocol_error", "Unexpected binary sideband frame")
                     return
                 if self._raw_log is not None:
-                    self._raw_log("in", frame)
+                    self._raw_log("in", self._clean(frame, 8192))
                 await self._emit(parse_event(frame))
         except asyncio.CancelledError:
             raise
         except LiveError as exc:
             await self._notify_closed("startup_failed" if not self._first_open.is_set() else "sideband_lost", exc.message)
         except Exception as exc:  # noqa: BLE001 - never leak a traceback or token
-            await self._notify_closed("transport_error", safe_detail(exc))
+            await self._notify_closed("transport_error", self._clean(exc))
 
     async def send(self, message: Mapping[str, Any]) -> None:
         ws = self._ws
@@ -333,12 +352,12 @@ class CodexLiveTransport:
             raise LiveError("live_not_connected", "The GPT Live sideband is not connected")
         text = json.dumps(message, ensure_ascii=False)
         if self._raw_log is not None:
-            self._raw_log("out", text)
+            self._raw_log("out", self._clean(text, 8192))
         try:
             async with self._send_lock:
                 await asyncio.wait_for(ws.send(text), SEND_TIMEOUT_S)
         except Exception as exc:  # noqa: BLE001
-            raise LiveError("live_send_failed", f"Could not send to GPT Live: {safe_detail(exc)}") from None
+            raise LiveError("live_send_failed", f"Could not send to GPT Live: {self._clean(exc)}") from None
 
     async def close(self, reason: str = "done") -> None:
         if self._closed:
