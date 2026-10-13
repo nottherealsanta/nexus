@@ -6,7 +6,7 @@ import dataclasses
 import msgspec
 
 from nexus.model.providers.scripted import ScriptedProvider, text_response, tool_response
-from tests.test_phase6_integration import drain, make_config, make_runtime, tool_result_for
+from test_phase6_integration import drain, make_config, make_runtime, tool_result_for
 
 
 async def test_denied_child_tool_is_reported_to_the_root_as_needing_attention(tmp_path):
