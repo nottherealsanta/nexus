@@ -1,0 +1,19 @@
+[package]
+name = "nexus-live"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+description = "Audio/WebRTC helper for Nexus GPT Live calls (stdio JSONL)"
+
+[features]
+default = ["audio"]
+audio = ["dep:cpal"]
+
+[dependencies]
+webrtc = "0.13"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "io-std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+unsafe-libopus = "0.2"
+bytes = "1"
+cpal = { version = "0.15", optional = true }

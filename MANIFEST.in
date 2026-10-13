@@ -2,3 +2,6 @@
 include rust/tui/Cargo.toml rust/tui/Cargo.lock
 recursive-include rust/tui/src *.rs
 prune rust/tui/target
+include rust/live/Cargo.toml rust/live/Cargo.lock
+recursive-include rust/live/src *.rs
+prune rust/live/target

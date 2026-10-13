@@ -1,0 +1,14 @@
+nexus-live: protocol provenance
+
+The WebRTC session shape used here (an Opus audio track plus the "oai-events"
+data channel, a non-trickle SDP offer, half-duplex echo gating) was observed
+from how Codex's realtime voice feature behaves, as documented and implemented
+in two reference integrations that were read, not run:
+
+  - malhashemi/opencode-gpt-live, commit c23101cf
+  - can1357/oh-my-pi, commit 818dd42b
+
+No code was copied from either repository; this crate is an independent
+implementation. The OpenAI realtime/Codex voice protocol is undocumented and
+may change without notice. nexus-live holds no credentials and talks only to
+the WebRTC peer described by the SDP it is given.
