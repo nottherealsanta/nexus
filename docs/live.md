@@ -59,7 +59,9 @@ enqueued.
    or daemon shutdown. Every path converges on one guarded `_finish` that sends
    `session.close` (<= 1 s), closes the socket and records **exactly one
    `live.ended`** per `live.started`. Ending a call never cancels the agent's
-   running turn.
+   running turn. When the session itself was deleted there is nothing left to
+record into, so that one `live.ended` is logged instead of persisted. The facade
+ends the call before it closes sessions on shutdown, so the event is durable.
 
 States: `idle -> connecting -> active <-> muted -> closing -> idle`. A second
 `LiveStart` fails with `live_busy` naming the owning session. Mute is local to the
@@ -146,8 +148,10 @@ log reproduces the live state (`tests/test_live_view.py`).
 
 `tests/test_live_protocol.py`, `test_live_transport.py` (httpx `MockTransport`,
 fake socket), `test_live_manager.py`, `test_live_view.py`, `test_live_bridge.py`
-(a real `Runtime` with `ScriptedProvider`), the Live cases in
-`test_host_facade.py`, and `test_live_security.py`. Fakes live in
+(a real `Runtime` with `ScriptedProvider`), `test_live_config.py`,
+`test_live_layering.py`, the Live cases in `test_host_facade.py`, and
+`test_live_security.py` (no bearer token or account id reaches events, results,
+the view, the raw dev log or caplog). Fakes live in
 `tests/live_fakes.py`. No test touches the network.
 
 ## Not verified / deferred
