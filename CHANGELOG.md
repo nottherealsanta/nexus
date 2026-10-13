@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/nottherealsanta/nexus/compare/v0.5.0...v0.5.1) (2026-10-13)
+
+
+### Bug fixes
+
+* harden Claude Code workers and polish client rendering ([#78](https://github.com/nottherealsanta/nexus/issues/78)) ([502242f](https://github.com/nottherealsanta/nexus/commit/502242fad5947c2726c8c01971de9d4df93deec0))
+
 ## [0.5.0](https://github.com/nottherealsanta/nexus/compare/v0.4.2...v0.5.0) (2026-10-13)
 
 
