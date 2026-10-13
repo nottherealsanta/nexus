@@ -134,10 +134,12 @@ class ShellActions:
         from .preferences import Preferences
         from .workflows import Workflows
         from .voice import Voice
+        from .live import Live
         from .logs import Logs
         self.preferences = Preferences()
         self.workflows = Workflows(self)
         self.voice = Voice(self)
+        self.live = Live(self)
         self.logs = Logs(self)
         self.logs.open = self.preferences.values["details_sidebar"] and self.preferences.values["details_tab"] == "Logs"
 
@@ -666,6 +668,8 @@ class ShellActions:
                 await self.voice.open(download=argument == "download")
             else:
                 raise ValueError("Use /voice [status|download|on|off]")
+        elif name == "/live":
+            await self.live.command(args)
         elif name == "/theme":
             requested = args[0].casefold() if args else "light" if self.preferences.values["theme"] == "nexus-dark" else "dark"
             if requested not in {"dark", "light"}:

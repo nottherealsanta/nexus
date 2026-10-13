@@ -5,6 +5,7 @@ mod disclosure;
 mod editor;
 mod graphics;
 mod input;
+mod live_bar;
 mod local_ui;
 mod markdown;
 mod render;
@@ -1215,6 +1216,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let command = match key.code {
                             KeyCode::Char('m') => "/model",
                             KeyCode::Char('v') => "/voice",
+                            KeyCode::Char('d') => "/live",
                             KeyCode::Char('n') => "/new",
                             KeyCode::Char('o') => "/sessions",
                             KeyCode::Char('f') => "/fork",

@@ -231,6 +231,7 @@ here, so add a row when you add a file.
 | `socket_dir.py` | Private fallback directory for daemon sockets whose default path is too long |
 | `update_check.py` | The "update available" notice (docs/release.md) |
 | `live.py` | Host dispatch for GPT Live commands and the facade-backed `LiveHost` the call manager uses |
+| `live_consent.py` | Once-per-machine GPT Live consent record (`<nexus home>/live-consent.json`), read and written by the `LiveConsent` command |
 | `voice.py` | Redacted host projection and dispatch for local voice commands |
 | `workspace.py` | Bounded workspace path search respecting host read-deny boundaries |
 | `worktree_projection.py` | Allowlisted, bounded projection of owned-worktree records and diffs |
@@ -528,6 +529,7 @@ loop over local state; splitting it further needs a state struct and is not done
 | `settings_pages/mcp.py` | Settings → MCP servers: per-server switch and tool loading, plus mcp.json files |
 | `logs.py` | Bounded paged native diagnostics with routine-entry folding |
 | `voice.py` | Bounded native dictation using shared capture and host transcription |
+| `live.py` | Native GPT Live call bridge: `/live` commands, consent dialog, helper lifecycle through `ui_support/live_helper.py`, call-bar state, error panels |
 | `desktop.py` | Explicit clipboard operations with byte/time bounds |
 | `run.py` | Native launch seam and binary discovery |
 
@@ -537,6 +539,7 @@ loop over local state; splitting it further needs a state struct and is not done
 | `rust/tui/src/copy_button.rs` | Hover-revealed Copy buttons on user cards and code fences: row markers, hit test, text recovery |
 | `rust/tui/src/disclosure.rs` | Rust-local transcript disclosure, session/page LRU choices and borrowed presentation |
 | `rust/tui/src/graphics.rs` | One-shot `/dev/tty` probe choosing the `ratatui-image` protocol (Kitty, Sixel, iTerm2, half blocks) and cell size; `NEXUS_IMAGE_PROTOCOL` override |
+| `rust/tui/src/live_bar.rs` | GPT Live call bar in the composer chrome: `● Live · model · phase · mm:ss`, mic/speaker meters, Muted badge |
 | `rust/tui/src/local_ui.rs` | Optimistic sidebar/tab/file/log toggles with ordered acknowledgements |
 | `rust/tui/src/trace.rs` | Bounded opt-in native timing samples, percentile summaries and exit report |
 

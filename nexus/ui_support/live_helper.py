@@ -96,6 +96,38 @@ def classify_failure(reason: str, detail: str = "") -> str:
     return ""
 
 
+LOGIN_HINT = "Sign in again with `nexus auth codex login`."
+_FIXES: dict[str, str] = {
+    "live_auth": LOGIN_HINT,
+    "live_forbidden": "Voice may not be available on this ChatGPT plan, or the allowance is used up. " + LOGIN_HINT,
+    "live_rate_limited": "Wait a moment and try again.",
+    "no_credential": LOGIN_HINT,
+    "disabled": "Enable it with `[live] enabled = true` in nexus.toml and unset NEXUS_LIVE=off.",
+    "live_unavailable": "Install the WebSocket client: pip install 'nexus-harness[live]', then restart the daemon.",
+    "unsupported": "Install the WebSocket client: pip install 'nexus-harness[live]', then restart the daemon.",
+    "live_timeout": "Check the network connection and try again.",
+}
+_FIXES["live_disabled"] = _FIXES["disabled"]
+
+
+def fix_for(kind: str) -> str:
+    """The one-line fix for a host error ``kind`` or Live status ``reason`` (empty if none)."""
+    return _FIXES.get(kind, "")
+
+
+def describe_failure(exc: BaseException) -> tuple[str, str]:
+    """``(message, fix)`` for a failed start or a host error; ``fix`` may be empty.
+
+    Host errors carry a redacted ``message`` and a stable ``kind`` (``FacadeError``);
+    helper errors carry a ``hint``. Anything else is shown by type only.
+    """
+    if isinstance(exc, LiveHelperError):
+        return str(exc), exc.hint
+    kind = getattr(exc, "kind", "")
+    message = getattr(exc, "message", "") or str(exc) or type(exc).__name__
+    return str(message)[:400], fix_for(str(kind))
+
+
 class LiveHelper:
     """One ``nexus-live`` process.
 
@@ -431,5 +463,5 @@ class LiveCall:
 
 __all__ = [
     "INSTALL_HINT", "MIC_HINT", "LiveCall", "LiveHelper", "LiveHelperError",
-    "available", "binary_path", "classify_failure",
+    "LOGIN_HINT", "fix_for", "available", "binary_path", "classify_failure", "describe_failure",
 ]

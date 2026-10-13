@@ -112,6 +112,8 @@ pub struct Snapshot {
     pub voice_phase: String,
     pub voice_preview: String,
     pub voice_level: f64,
+    /// GPT Live call bar (empty object when no call is open).
+    pub live: LiveBar,
     pub completions: Vec<String>,
     pub completion_query: String,
     pub completion_prefix: String,
@@ -285,6 +287,26 @@ pub struct Session {
     pub worktree: String,
 }
 
+/// The GPT Live call bar: state of the call this client holds open.
+#[derive(Clone, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct LiveBar {
+    pub active: bool,
+    /// `starting`, `active` or `stopping` (the client's own state).
+    pub state: String,
+    /// `connecting`, `listening`, `speaking`, `working`, `muted` or `ended`.
+    pub phase: String,
+    pub model: String,
+    pub muted: bool,
+    /// Wall-clock start of the call (seconds since the epoch); 0 while connecting.
+    pub started: f64,
+    #[serde(rename = "in")]
+    pub level_in: f64,
+    #[serde(rename = "out")]
+    pub level_out: f64,
+    /// The call's session id when it is not the session on screen.
+    pub elsewhere: String,
+}
 #[derive(Clone, Default, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct Content {
@@ -545,6 +567,9 @@ impl Snapshot {
         }
         if !present.contains_key("voice_preview") {
             self.voice_preview = std::mem::take(&mut previous.voice_preview);
+        }
+        if !present.contains_key("live") {
+            self.live = std::mem::take(&mut previous.live);
         }
         if !present.contains_key("voice_level") {
             self.voice_level = std::mem::take(&mut previous.voice_level);

@@ -43,7 +43,7 @@ inward-only exceptions. Errors are
 | Worktrees | `WorktreeList` `WorktreeInspect` `WorktreeReview` `WorktreeAcknowledge` `WorktreeIntegrate` `WorktreeDiscard` |
 | Workspace | `FileSearch` `GitDiff` `LogsRead` |
 | Voice | `VoiceStatus` `VoicePrepare` `VoiceTranscribe` `VoiceCancel` `VoiceRemove` |
-| Live (GPT Live voice calls) | `LiveStatus` `LiveStart` `LiveMute` `LiveStop` `LiveHelperEvent` ([live.md](live.md#host-commands)) |
+| Live (GPT Live voice calls) | `LiveStatus` `LiveStart` `LiveMute` `LiveStop` `LiveHelperEvent` `LiveConsent` ([live.md](live.md#host-commands)) |
 | Daemon | `Doctor` `Health` `UpdateStatus` `Shutdown` `WebLaunch` |
 | Dev mode | `MockList` `MockStart` `MockClean` (error outside dev mode) |
 

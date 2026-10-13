@@ -1,9 +1,10 @@
 # GPT Live voice calls (`nexus/live/`)
 
-Status: **M1 (daemon core, no audio) and M2 (delegation bridge) are implemented
-and tested offline. Nothing has been exercised against the real service: not
-verified.** The audio helper (`nexus-live`, M3), the Ratatui/desktop clients
-(M4/M5) and the `nexus live` CLI do not exist yet. Plan:
+Status: **M1 (daemon core), M2 (delegation bridge), M3 (the `nexus-live` helper) and
+M4 (the native Ratatui client) are implemented and tested offline. Nothing has been
+exercised against the real service, a real microphone or a real call: not
+verified.** The desktop client (M5) draws no call bar or card yet (typing `/live`
+there starts the same call), and the `nexus live` CLI does not exist yet. Plan:
 `plans/in-progress/GPT_LIVE_PLAN.md`; protocol observations and citations:
 `plans/in-progress/GPT_LIVE_PROTOCOL_NOTES.md`.
 
@@ -67,6 +68,48 @@ States: `idle -> connecting -> active <-> muted -> closing -> idle`. A second
 `LiveStart` fails with `live_busy` naming the owning session. Mute is local to the
 client's helper; the daemon records it so every view agrees (no sideband message
 exists for it).
+
+## Client flow (Ratatui, M4)
+
+`/live` (or `Ctrl+X D`; `Ctrl+X L` was already the details sidebar) toggles a call on
+the session on screen. Code: `ui/ratatui/live.py` (bridge state) over
+`ui_support/live_helper.py` (stdlib only; the desktop client and a CLI reuse it).
+
+1. `LiveStatus`. Not available (`disabled`, `unsupported`, `no_credential`, `busy`)
+   shows a panel with the host's message and the fix (`nexus auth codex login`,
+   `pip install 'nexus-harness[live]'`, the session that owns a busy call).
+2. The `nexus-live` binary must exist (`NEXUS_LIVE_BINARY`, the venv's bin, `rust/live/target`,
+   `PATH`); otherwise an `unsupported` panel says to build or install it. Asked before consent.
+3. First use only: a consent dialog says that microphone audio and summaries of the
+   agent's work go to OpenAI through the user's ChatGPT account. Agreeing calls
+   `LiveConsent(accept=True)`, a record in `<nexus home>/live-consent.json`
+   (once per machine, every client; `/live revoke` removes it). The daemon does not yet
+   refuse a `LiveStart` without it: the clients gate (not verified).
+4. The helper is spawned; `offer` -> `LiveStart(offer_sdp)` -> `answer` -> `ready`. Any
+   failure stops the helper and, if the daemon had accepted, sends `LiveStop`, and shows
+   the host's redacted message plus the fix (macOS Privacy > Microphone for the terminal
+   when the helper cannot open the mic). Start and stop play the dictation cues.
+5. The helper's `closed`, `dc_error`, `dropped` and `phase` are forwarded with
+   `LiveHelperEvent` (dropped counts at most once per second); `levels` stay local
+   for the call bar. Our own stop is not reported back as `closed`.
+6. A watch task ends the client side when the helper exits (it tells the daemon,
+   shows the reason and the microphone fix), when the call's `live.ended` arrives
+   (deadline, another client, session deleted) or when `LiveStatus` shows the daemon
+   has no call (checked every 5 s). Closing the shell stops the call.
+
+| Command | Effect |
+| --- | --- |
+| `/live` | start, or hang up when a call is open |
+| `/live stop` | hang up (idempotent) |
+| `/live mute` | toggle the microphone (`LiveMute`; the helper mutes, the daemon records it) |
+| `/live new` | start a call without the carried-over turns (`new_conversation`) |
+| `/live status` | availability, state, consent, helper installed, last error |
+| `/live revoke` | withdraw the data-sharing consent |
+
+**Call bar.** While a call is open the blank row above the composer controls reads
+`● Live · <model> · <phase> · mm:ss   mic ▰▰▱▱▱▱ spk ▱▱▱▱▱▱   /live stop`, plus a
+`MUTED` badge, and `· in <session>` when another session is on screen (the microphone stays
+visible everywhere). The editor is untouched: typing during a call is ordinary steering.
 
 ## Delegation bridge (M2)
 
@@ -161,5 +204,9 @@ the view, the raw dev log or caplog). Fakes live in
   required, the default channel of an append without one, transcript event
   semantics (cumulative vs delta; both are handled), ICE/trickle behaviour,
   voice-name validation.
-- The audio helper, client UX, `nexus live`, spoken "stop", AEC (plan M3-M6).
+- Real microphone and speaker use, a real call from the terminal client (helper
+  spawn, mic permission prompts, echo behavior), the call bar on a real terminal,
+  and the consent record across a real daemon restart: only fake-helper tests exist.
+- The daemon does not refuse `LiveStart` without recorded consent (clients gate).
+- The desktop call bar and card (M5), `nexus live`, spoken "stop", AEC (plan M5-M6).
 - A live smoke test (`-m live`) is not written.

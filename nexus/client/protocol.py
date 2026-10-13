@@ -300,6 +300,9 @@ class Client:
             p.LiveHelperEvent(session=session, kind=kind, detail=detail)
         )  # type: ignore[return-value]
 
+    async def live_consent(self, accept: bool | None = None) -> p.LiveConsentResult:
+        return await self._request(p.LiveConsent(accept=accept))  # type: ignore[return-value]
+
     async def agent_transcript(self, session: str, agent_id: str) -> dict[str, Any]:
         result = await self._request(
             p.AgentTranscript(session=session, agent_id=agent_id)

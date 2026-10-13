@@ -37,9 +37,11 @@ agent name and, unless `new_conversation`, the last `carry_turns` spoken turns,
 all shown in `live.started`), and **the agent's progress and final answers**,
 which can contain file contents or command output. The voice model's text is
 treated as an untrusted prompt. Live never auto-approves anything and an
-unattended session keeps its `on_unattended` policy. The first use must be
-confirmed by the client (a consent dialog arrives with the client milestone;
-the daemon-side gate is not implemented yet: not verified). `NEXUS_LIVE=off` and
+unattended session keeps its `on_unattended` policy. The first use is
+confirmed in a client dialog and recorded once per machine by the daemon
+(`LiveConsent`, `<nexus home>/live-consent.json`, `0600`, timestamp and notice version
+only; `/live revoke` deletes it). The daemon does not yet refuse `LiveStart` without
+that record: the clients gate it (not verified against a real call). `NEXUS_LIVE=off` and
 `[live] enabled = false` disable it. The endpoints are undocumented, may change
 or stop working, and nothing was exercised against the real service.
 

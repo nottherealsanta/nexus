@@ -17,15 +17,16 @@ from ..host import protocol as p
 from ..live.manager import LiveInfo, LiveManager
 from ..live.protocol import LiveError
 from ..util import redact_secrets
+from .live_consent import read_consent, write_consent
 
-_COMMANDS = (p.LiveStatus, p.LiveStart, p.LiveMute, p.LiveStop, p.LiveHelperEvent)
+_COMMANDS = (p.LiveStatus, p.LiveStart, p.LiveMute, p.LiveStop, p.LiveHelperEvent, p.LiveConsent)
 _MAX_SESSION_ID = 200
 
 
-def live_status_result(info: LiveInfo) -> p.LiveStatusResult:
+def live_status_result(info: LiveInfo, *, consent: bool = False) -> p.LiveStatusResult:
     values = dataclasses.asdict(info)
     values["last_error"] = redact_secrets(str(values["last_error"]))[:300]
-    return p.LiveStatusResult(**values)
+    return p.LiveStatusResult(**values, consent=consent)
 
 
 class _Tap:
@@ -102,6 +103,16 @@ async def dispatch_live(command: Any, facade: Any) -> p.Result | None:
     """Handle Live commands; ``None`` when ``command`` is not one of them."""
     if not isinstance(command, _COMMANDS):
         return None
+    home = getattr(facade.runtime, "_home", None)
+    if isinstance(command, p.LiveConsent):  # a file, not the call: it needs no manager
+        try:
+            if command.accept is not None:
+                stamp = write_consent(command.accept, home)
+            else:
+                stamp = read_consent(home)
+        except OSError:
+            return p.ErrorResult(kind="live_consent", message="Could not save the GPT Live consent")
+        return p.LiveConsentResult(accepted=bool(stamp), accepted_at=stamp)
     manager: LiveManager | None = getattr(facade.runtime, "live", None)
     if manager is None:
         return p.ErrorResult(kind="live_unavailable", message="GPT Live is unavailable")
@@ -111,7 +122,7 @@ async def dispatch_live(command: Any, facade: Any) -> p.Result | None:
     try:
         if isinstance(command, p.LiveStatus):
             _refresh(facade, manager)
-            return live_status_result(await manager.status())
+            return live_status_result(await manager.status(), consent=bool(read_consent(home)))
         if isinstance(command, p.LiveStart):
             _refresh(facade, manager)
             result = await manager.start(
@@ -122,9 +133,10 @@ async def dispatch_live(command: Any, facade: Any) -> p.Result | None:
                 call_id=result.call_id, answer_sdp=result.answer_sdp, voice=manager.snapshot().voice
             )
         if isinstance(command, p.LiveMute):
-            return live_status_result(manager.mute(command.session, command.muted))
+            return live_status_result(manager.mute(command.session, command.muted), consent=bool(read_consent(home)))
         if isinstance(command, p.LiveStop):
-            return live_status_result(await manager.stop(command.session, command.reason))
+            return live_status_result(
+                await manager.stop(command.session, command.reason), consent=bool(read_consent(home)))
         info = manager.helper_event(command.session, command.kind, command.detail)
         return p.LiveHelperEventResult(ok=True, state=info.state)
     except Exception as exc:  # noqa: BLE001 - the wire never raises a traceback

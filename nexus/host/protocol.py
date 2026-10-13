@@ -725,6 +725,16 @@ class LiveHelperEvent(msgspec.Struct, tag=True, frozen=True):
     detail: str = ""
 
 
+class LiveConsent(msgspec.Struct, tag=True, frozen=True):
+    """Read (``None``), record (``True``) or revoke (``False``) the once-per-machine GPT Live consent.
+
+    The consent covers sending microphone audio and summaries of the agent's work
+    to OpenAI through the user's ChatGPT account (docs/security.md).
+    """
+
+    accept: bool | None = None
+
+
 class Doctor(msgspec.Struct, tag=True, frozen=True):
     """A redacted health report: config, providers, registry, extensions, MCP.
 
@@ -875,6 +885,7 @@ Command = (
     | LiveMute
     | LiveStop
     | LiveHelperEvent
+    | LiveConsent
     | Doctor
     | UpdateStatus
     | Health
@@ -979,6 +990,7 @@ COMMANDS: tuple[type, ...] = (
     LiveMute,
     LiveStop,
     LiveHelperEvent,
+    LiveConsent,
     Doctor,
     UpdateStatus,
     Health,
@@ -1576,6 +1588,13 @@ class LiveStatusResult(msgspec.Struct, tag=True, frozen=True):
     levels_out: float = 0.0
     dropped_frames: int = 0
     last_error: str = ""
+    #: Whether the user has accepted the GPT Live data-sharing notice on this machine.
+    consent: bool = False
+
+
+class LiveConsentResult(msgspec.Struct, tag=True, frozen=True):
+    accepted: bool = False
+    accepted_at: str = ""
 
 
 class LiveStartResult(msgspec.Struct, tag=True, frozen=True):
@@ -1733,6 +1752,7 @@ Result = (
     | LiveStatusResult
     | LiveStartResult
     | LiveHelperEventResult
+    | LiveConsentResult
     | UpdateStatusResult
     | HealthResult
     | MockListResult
@@ -1821,6 +1841,7 @@ RESULTS: tuple[type, ...] = (
     LiveStatusResult,
     LiveStartResult,
     LiveHelperEventResult,
+    LiveConsentResult,
     UpdateStatusResult,
     HealthResult,
     MockListResult,
@@ -2008,6 +2029,8 @@ __all__ = [
     "ToolsListResult",
     "WebLaunch",
     "WebLaunchResult",
+    "LiveConsent",
+    "LiveConsentResult",
     "LiveHelperEvent",
     "LiveHelperEventResult",
     "LiveMute",

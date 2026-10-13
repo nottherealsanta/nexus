@@ -851,6 +851,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "voice_phase": shell.voice.phase if shell else "idle",
             "voice_preview": escape_controls(shell.voice.preview) if shell else "",
             "voice_level": shell.voice.level if shell else 0,
+            "live": (getattr(shell, "live", None) and shell.live.bar()) or {} if shell else {},
             "completion_query": getattr(shell, "completion_query", "") if shell else "",
             "completion_prefix": getattr(shell, "completion_prefix", "") if shell else "",
             "completions": getattr(shell, "completions", []) if shell else [],
@@ -1057,6 +1058,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
     background = BackgroundActions(shell, update)
     shell.on_update = update
     poll_task = None
+    live_task = None
     startup_task = None
     async def poll():
         preview_cursor = -1
@@ -1177,6 +1179,19 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
 
         startup_task = asyncio.create_task(finish_startup())
         poll_task = asyncio.create_task(poll())
+
+        async def live_tick():
+            """Keep the call bar's clock and level meters moving while a call is open."""
+            while True:
+                await asyncio.sleep(.25)
+                if shell.live.state != "idle":
+                    try:
+                        await update(immediate=False)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001 - cosmetic refresh
+                        shell.notice = f"Display update failed: {type(exc).__name__}: {exc}"
+        live_task = asyncio.create_task(live_tick())
         while line := await process.stdout.readline():
             action = json.loads(line)
             if action["type"] == "quit":
@@ -1379,12 +1394,18 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
             startup_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await startup_task
+        if live_task:
+            live_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await live_task
         if poll_task:
             poll_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await poll_task
         with contextlib.suppress(Exception):
             await shell.voice.discard()
+        with contextlib.suppress(Exception):
+            await shell.live.shutdown()
         if update_coalescer is not None:
             with contextlib.suppress(Exception):
                 await update_coalescer.flush()
