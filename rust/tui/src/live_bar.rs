@@ -44,38 +44,57 @@ pub fn now_epoch() -> f64 {
         .unwrap_or(0.0)
 }
 
-/// The bar's spans, trimmed to `width` columns (the Muted badge is kept last).
+/// The bar's spans, trimmed to `width` columns. Pieces drop in this order until it fits:
+/// the `/live stop` hint, then the model name, then the meters, then the model alone is
+/// shortened; the clock, phase and Muted badge stay.
 pub fn spans(live: &LiveBar, p: &Palette, spin: usize, now: f64, width: usize) -> Vec<Span<'static>> {
     let dot = if live.state == "starting" || live.state == "stopping" || spin % 8 < 4 {
         p.error
     } else {
         p.quiet
     };
-    let mut head = String::from("Live");
-    if !live.model.is_empty() {
-        head.push_str(&format!(" · {}", live.model));
-    }
-    if !live.phase.is_empty() {
-        head.push_str(&format!(" · {}", live.phase));
-    }
-    head.push_str(&format!(" · {}", clock(elapsed(live, now))));
-    if !live.elsewhere.is_empty() {
-        head.push_str(&format!(" · in {}", live.elsewhere));
-    }
+    let head = |with_model: bool| {
+        let mut head = String::from("Live");
+        if with_model && !live.model.is_empty() {
+            head.push_str(&format!(" · {}", live.model));
+        }
+        if !live.phase.is_empty() {
+            head.push_str(&format!(" · {}", live.phase));
+        }
+        head.push_str(&format!(" · {}", clock(elapsed(live, now))));
+        if !live.elsewhere.is_empty() {
+            head.push_str(&format!(" · in {}", live.elsewhere));
+        }
+        head
+    };
     let meters = format!("   mic {} spk {}", meter(live.level_in), meter(live.level_out));
     let hint = "   /live stop";
     let badge = if live.muted { " MUTED " } else { "" };
-    // Drop the optional pieces from the right until everything fits.
     let fixed = 2 + badge.width() + usize::from(live.muted);
-    let mut optional = vec![meters.clone(), hint.to_string()];
-    while !optional.is_empty() && fixed + head.width() + optional.iter().map(|s| s.width()).sum::<usize>() > width {
-        optional.pop();
-    }
-    let room = width.saturating_sub(fixed + optional.iter().map(|s| s.width()).sum::<usize>());
+    // (with model, with meters, with hint), most informative first.
+    let variants = [
+        (true, true, true),
+        (true, true, false),
+        (false, true, false),
+        (true, false, false),
+        (false, false, false),
+    ];
+    let (with_model, with_meters, with_hint) = variants
+        .into_iter()
+        .find(|&(m, l, h)| {
+            fixed
+                + head(m).width()
+                + if l { meters.width() } else { 0 }
+                + if h { hint.width() } else { 0 }
+                <= width
+        })
+        .unwrap_or((false, false, false));
+    let mut head = head(with_model);
+    let room = width.saturating_sub(fixed);
     if head.width() > room {
         let mut cut = String::new();
         for ch in head.chars() {
-            if cut.width() + 1 >= room {
+            if cut.width() + 2 > room {
                 break;
             }
             cut.push(ch);
@@ -86,8 +105,11 @@ pub fn spans(live: &LiveBar, p: &Palette, spin: usize, now: f64, width: usize) -
         Span::styled("● ", Style::default().fg(dot)),
         Span::styled(head, Style::default().fg(p.text).add_modifier(Modifier::BOLD)),
     ];
-    for (i, text) in optional.into_iter().enumerate() {
-        out.push(Span::styled(text, Style::default().fg(if i == 0 { p.muted } else { p.quiet })));
+    if with_meters {
+        out.push(Span::styled(meters, Style::default().fg(p.muted)));
+    }
+    if with_hint {
+        out.push(Span::styled(hint.to_string(), Style::default().fg(p.quiet)));
     }
     if live.muted {
         out.push(Span::raw(" "));
@@ -160,6 +182,15 @@ mod tests {
             assert!(line.width() <= width, "{width}: {line:?} is {}", line.width());
             assert!(line.ends_with(" MUTED "), "{width}: {line:?}");
         }
+    }
+    #[test]
+    fn narrow_bars_keep_the_meters_before_the_model_name() {
+        let p = Palette::new(false);
+        let line = text(&spans(&bar(), &p, 0, 1161.0, 52));
+        assert!(line.width() <= 52 && line.contains("mic ▰") && line.contains("02:41"), "{line}");
+        assert!(!line.contains("gpt-live-1-codex"), "{line}");
+        let line = text(&spans(&bar(), &p, 0, 1161.0, 100));
+        assert!(line.contains("gpt-live-1-codex") && line.contains("mic"), "{line}");
     }
     #[test]
     fn other_session_is_named() {

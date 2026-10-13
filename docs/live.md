@@ -111,6 +111,19 @@ the session on screen. Code: `ui/ratatui/live.py` (bridge state) over
 `MUTED` badge, and `· in <session>` when another session is on screen (the microphone stays
 visible everywhere). The editor is untouched: typing during a call is ordinary steering.
 
+**Timeline card.** Each call renders as one labelled `Live` card (native block kind `live`,
+rows from `ui_support/live_card.py`), placed before the first turn that started after the
+call began, so a delegation's turn follows the call that caused it. Rows: `Started` (the
+instructions source, carried-over turns; the full instructions text when opened),
+`You` / `Voice` (final captions, plus the streaming partial while active), `Sent to agent
+(queue|steer)` with `-> turn #N` linking the user message it created, `Told voice [final|notice|commentary]`
+(text exactly as sent), non-fatal `Error` rows and an `Ended` row (reason, duration, redacted
+error). Collapsed by default: commentary becomes one counted row, long text is clipped with
+"+N more characters", and the instructions are summarised; click the card (or Enter on it) to
+open everything. Nothing is dropped. A user message created by a delegation shows
+`via voice` beside its turn number. The card is rebuilt from the durable events, so a
+reconnect or replay shows the same thing (`tests/test_ratatui_live.py`).
+
 ## Delegation bridge (M2)
 
 A delegation is **untrusted input**, exactly like a typed prompt.

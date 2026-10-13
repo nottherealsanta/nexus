@@ -187,7 +187,8 @@ async def test_first_use_asks_for_consent_and_remembers_it(shell):
     assert "OpenAI" in text and "ChatGPT account" in text and "audio" in text and "summaries" in text
     shell.client.live_consent.assert_not_awaited()  # nothing is recorded by merely asking
     labels = [item["label"] for item in shell.items]
-    assert labels == ["Cancel", "Agree and start the call"]
+    assert labels == ["Before you start: what is sent", "Agree and start the call", "Cancel"]
+    assert "OpenAI" in "\n".join(shell.items[0]["lines"])  # the notice is visible in the list dialog itself
     agree = shell.items[1]["operation"]
     await shell.workflows.operate(agree)
     shell.client.live_consent.assert_awaited_once_with(True)
@@ -198,7 +199,7 @@ async def test_first_use_asks_for_consent_and_remembers_it(shell):
 async def test_cancelling_the_consent_dialog_starts_nothing(shell):
     shell.client.live_status.return_value = status(consent=False)
     await shell.command("/live", ())
-    await shell.workflows.operate(shell.items[0]["operation"])
+    await shell.workflows.operate(shell.items[2]["operation"])
     assert FakeCall.instances == [] and shell.live.state == "idle"
     shell.client.live_consent.assert_not_awaited()
 
@@ -312,3 +313,145 @@ async def test_real_helper_process_through_the_command_flow(shell, tmp_path, mon
     await shell.command("/live", ())
     assert shell.live.state == "idle" and not shell.live.call
     client.live_stop.assert_awaited_with("s", "user")
+
+
+# ---------------------------------------------------------------------------
+# Timeline: the Live card and "via voice" (projection, replay)
+# ---------------------------------------------------------------------------
+
+from nexus.events import Event  # noqa: E402
+from nexus.ui_support import live_card  # noqa: E402
+from nexus.view import apply, fold  # noqa: E402
+
+
+def ev(seq, kind, ts=None, turn=None, **data):
+    if kind == "input.consumed":
+        data["turn"] = turn
+    return Event(type=kind, data=data, seq=seq, session="s", ts=ts if ts is not None else 100.0 + seq,
+                 turn=turn, id=f"e{seq}")
+
+
+def call_events(*, ended=True, commentary=2):
+    events = [
+        ev(1, "live.started", call_id="c1", model="gpt-live-1-codex", voice="sol", instructions_source="bundled",
+           instructions="You are the voice of build.\nBe brief.", carried_turns=2),
+        ev(2, "live.transcript", call_id="c1", role="user", text="read the README", turn=1),
+        ev(3, "live.delegated", call_id="c1", delegation_id="d1", text="read the README", mode="queue", queued_id="q1"),
+        ev(4, "input.queued", queued_id="q1", content=[{"type": "text", "text": "read the README"}], queue_depth=1,
+           mode="queue", origin={"kind": "live", "delegation_id": "d1"}),
+        ev(5, "turn.started", turn="t1"),
+        ev(6, "input.consumed", turn="t1", queued_id="q1", mode="queue"),
+    ]
+    for n in range(commentary):
+        events.append(ev(10 + n, "live.appended", call_id="c1", delegation_id="d1", channel="commentary",
+                         text=f"Agent progress {n}", chunks=1))
+    events += [
+        ev(20, "live.appended", call_id="c1", delegation_id="d1", channel="final",
+           text='"Agent Final Message":\n\nIt is a harness.', chunks=1),
+        ev(21, "live.transcript", call_id="c1", role="assistant", text="It is a harness.", turn=2),
+        ev(22, "live.transcript.delta", call_id="c1", role="user", text="and the lic"),
+    ]
+    if ended:
+        events.append(ev(30, "live.ended", call_id="c1", reason="deadline", duration_s=161.0, error="sideband dropped"))
+    return events
+
+
+def rows_of(call, **kwargs):
+    return live_card.card_rows(call, **kwargs)
+
+
+def labels(rows):
+    return [(r.tone, r.label) for r in rows]
+
+
+def test_card_rows_are_labelled_and_commentary_is_collapsed_with_a_count():
+    call = fold(call_events()).live
+    rows = rows_of(call, turns={"d1": 1})
+    text = "\n".join(f"{r.label}|{r.text}" for r in rows)
+    assert ("dim", "Started") in labels(rows)
+    assert "instructions: bundled · 2 earlier turns carried over" in text
+    assert "voice instructions hidden" in text and "Be brief." not in text
+    assert ("you", "You") in labels(rows) and ("voice", "Voice") in labels(rows)
+    assert ("sent", "Sent to agent (queue)") in labels(rows) and "read the README  → turn #1" in text
+    assert "2 progress notes (commentary) hidden" in text and "Agent progress 0" not in text
+    assert ("told", "Told voice [final]") in labels(rows) and "It is a harness." in text
+    assert rows[-1] == live_card.CardRow("bad", "Ended", "deadline · 02:41 · error: sideband dropped")
+    assert not [r for r in rows if r.tone == "caption"]  # an ended call has no streaming caption
+
+
+def test_opened_card_shows_everything_nothing_dropped():
+    call = fold(call_events()).live
+    rows = rows_of(call, expanded=True)
+    text = "\n".join(f"{r.label}|{r.text}" for r in rows)
+    assert "Be brief." in text and "You are the voice of build." in text
+    assert "Told voice [commentary]|Agent progress 0" in text and "Agent progress 1" in text
+    assert "hidden" not in text
+
+
+def test_streaming_caption_shows_only_while_the_call_is_active():
+    call = fold(call_events(ended=False)).live
+    assert call.status == "active"
+    assert ("caption", "You…") in labels(rows_of(call))
+    assert [r.text for r in rows_of(call) if r.tone == "caption"] == ["and the lic"]
+
+
+def test_long_text_is_clipped_only_while_collapsed_and_the_clip_is_announced():
+    events = call_events()[:1] + [ev(2, "live.appended", call_id="c1", channel="final", text="x" * 5000, chunks=11)]
+    call = fold(events).live
+    collapsed = "\n".join(r.text for r in rows_of(call))
+    assert "+4400 more characters" in collapsed and len(collapsed) < 1500
+    assert "x" * 5000 in "\n".join(r.text for r in rows_of(call, expanded=True))
+
+
+def test_card_encoding_is_tab_separated_and_control_safe():
+    call = fold(call_events()).live
+    encoded = live_card.encode(rows_of(call))
+    assert all(line.count("\t") == 2 for line in encoded.splitlines())
+
+
+def test_timeline_has_the_card_in_order_the_via_voice_label_and_a_toggle(shell):
+    view = fold(call_events())
+    shell.controller.view = view
+    snapshot = project(shell.controller, 1, shell=shell, literal=False)
+    kinds = [(b["kind"], b.get("status", "")) for b in snapshot["blocks"]]
+    card = next(b for b in snapshot["blocks"] if b["kind"] == "live")
+    user = next(b for b in snapshot["blocks"] if b["kind"] == "user")
+    assert kinds.index(("live", "ended")) < kinds.index(("user", "live"))  # the call began before the turn it caused
+    assert user["status"] == "live" and user["title"] == "read the README"
+    assert card["collapsed"] is True and card["title"] == "gpt-live-1-codex · sol"
+    assert "Sent to agent (queue)" in card["detail"] and "→ turn #1" in card["detail"]
+    assert "Agent progress 0" not in card["detail"]
+    toggle = card["operation"]
+    assert toggle == {"kind": "live_toggle", "id": "c1"}
+    # the bridge offers exactly this operation, and running it opens the card
+    from nexus.ui.ratatui.prototype import _block_operations
+    assert toggle in list(_block_operations(snapshot["blocks"]))
+
+
+async def test_toggle_opens_and_closes_the_card_and_replay_matches(shell):
+    events = call_events()
+    live = None
+    from nexus.view import initial_state
+    live = initial_state("s")
+    for event in events:
+        live = apply(live, event)
+    assert live.to_dict() == fold(events).to_dict()  # replay equals live state
+    shell.controller.view = live
+    first = project(shell.controller, 1, shell=shell, literal=False)
+    card = next(b for b in first["blocks"] if b["kind"] == "live")
+    await shell.workflows.operate(card["operation"])
+    opened = project(shell.controller, 2, shell=shell, literal=False)
+    card2 = next(b for b in opened["blocks"] if b["kind"] == "live")
+    assert card2["collapsed"] is False and "Agent progress 0" in card2["detail"] and card2["rev"] != card["rev"]
+    await shell.workflows.operate(card["operation"])
+    closed = project(shell.controller, 3, shell=shell, literal=False)
+    assert next(b for b in closed["blocks"] if b["kind"] == "live")["rev"] == card["rev"]
+    # a reconnect rebuilds the same card from the log alone
+    shell.controller.view = fold(events)
+    again = project(shell.controller, 4, shell=shell, literal=False)
+    assert next(b for b in again["blocks"] if b["kind"] == "live")["detail"] == card["detail"]
+
+
+def test_projection_without_a_live_call_is_unchanged(shell):
+    snapshot = project(shell.controller, 1, shell=shell, literal=False)
+    assert not [b for b in snapshot["blocks"] if b["kind"] == "live"] and snapshot["live"] == {}

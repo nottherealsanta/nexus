@@ -16,21 +16,26 @@ import contextlib
 import time
 
 from ...ui_support import live_helper
+from ...ui_support.live_card import card_rows, card_status, card_title
+from ...ui_support.live_card import encode as card_encode
 from ...ui_support.live_helper import LiveCall, describe_failure
 from ...ui_support.voice_capture import play_cue
 
-CONSENT_LINES = (
-    "GPT Live is a spoken conversation with OpenAI's voice model, working through this session.",
+CONSENT_LINES = (  # short lines: list dialogs clip instead of wrapping
+    "GPT Live is a spoken conversation with OpenAI's",
+    "voice model, working through this session.",
     "",
-    "What is sent to OpenAI, through your ChatGPT account:",
-    "  - audio from your microphone while the call is open",
-    "  - summaries and results of the agent's work, which can include file contents,",
-    "    command output and what you asked for",
+    "Sent to OpenAI through your ChatGPT account:",
+    "  - audio from your microphone during the call",
+    "  - summaries of the agent's work and results,",
+    "    which can include file contents and output",
     "",
-    "The session's own model, tools and permissions do the work. The voice model can ask",
-    "the agent to do things but cannot approve anything: permissions are answered on screen only.",
+    "The session's model, tools and permissions do the",
+    "work. The voice can ask the agent to act but can",
+    "never approve anything: permissions stay on screen.",
     "",
-    "Experimental, undocumented service. Asked once per machine; withdraw with /live revoke.",
+    "Experimental, undocumented service. Asked once per",
+    "machine; withdraw any time with /live revoke.",
 )
 USAGE = "Use /live [stop|mute|new|status|revoke]"
 _STATE_LABEL = {"connecting": "connecting", "listening": "listening", "speaking": "speaking",
@@ -141,11 +146,14 @@ class Live:
             self.fail("GPT Live is not available", exc)
             return
         if not (status.consent or consented):
+            # The notice is the first row's body (list dialogs show item lines, not panel lines);
+            # Enter on it closes, so agreeing is always a deliberate second step.
             self.shell.workflows.menu(
                 "Use GPT Live voice?",
-                [("Cancel", {"kind": "back"}),
-                 ("Agree and start the call", {"kind": "live_consent", "new": new_conversation})],
-                CONSENT_LINES, layout="modal")
+                [("Before you start: what is sent", {"kind": "back", "_presentation": {"lines": list(CONSENT_LINES)}}),
+                 ("Agree and start the call", {"kind": "live_consent", "new": new_conversation}),
+                 ("Cancel", {"kind": "back"})],
+                CONSENT_LINES, layout="context")
             return
         await self._connect(session, new_conversation)
 
@@ -274,6 +282,31 @@ class Live:
     def _ended_text(view) -> str:
         reason = view.end_reason or "ended"
         return "Live call ended" if reason in {"user", "stop"} else f"Live call ended ({reason})"
+
+    # -- timeline ------------------------------------------------------------
+
+    def card_blocks(self, view) -> list[tuple[float, dict]]:
+        """``(start time, block)`` for each call in ``view``: the labelled Live card.
+
+        Cards are collapsed by default (voice instructions, commentary and long text);
+        clicking one sends ``live_toggle``. The block ``status`` field carries the call
+        phase; the native client draws kind ``live`` (``rust/tui/src/transcript.rs``).
+        """
+        turns: dict[str, int] = {}
+        for turn in view.turns:
+            for message in turn.messages:
+                origin = message.origin or {}
+                if message.role == "user" and origin.get("kind") == "live" and origin.get("delegation_id"):
+                    turns[str(origin["delegation_id"])] = turn.index + 1
+        cards = []
+        for call in view.live_calls:
+            expanded = call.call_id in self.opened
+            rows = card_rows(call, expanded=expanded, turns=turns)
+            cards.append((call.started_ts or 0.0, {
+                "id": f"live:{call.call_id}", "kind": "live", "title": card_title(call),
+                "status": card_status(call), "collapsed": not expanded, "gap": 1,
+                "detail": card_encode(rows), "operation": {"kind": "live_toggle", "id": call.call_id}}))
+        return cards
 
     # -- display -------------------------------------------------------------
 

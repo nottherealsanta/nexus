@@ -252,6 +252,8 @@ def _project_turn(turn, shell, agents=None, literal=True):
                      "number": turn.index + 1, "collapsed": collapsed,
                      "chips": [] if collapsed else chips,
                      "operation": {"kind": "turn_toggle", "id": turn.id}}
+            if (message.origin or {}).get("kind") == "live":
+                block["status"] = "live"  # drawn as "via voice" beside the turn number
             if chips and not collapsed:
                 block["chip_operation"] = {"kind": "message_page", "id": message.id}
                 block["chip_operations"] = _chip_operations(message, len(chips))
@@ -722,7 +724,17 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
     dependencies = {}
     for agent in view.agents.values():
         dependencies.setdefault(agent.parent_call_id, []).append(id(agent))
+    live_cards = [] if on_agent_page or not getattr(shell, "live", None) else _guarded(
+        failures, "Live calls", lambda: sorted(shell.live.card_blocks(view), key=lambda card: card[0]), [])
+    live_cards = [(ts, _safe_blocks([block])[0]) for ts, block in live_cards]
+
+    def cards_before(moment):
+        """Live cards that began before ``moment``, in start order."""
+        while live_cards and live_cards[0][0] <= moment:
+            blocks.append({**live_cards.pop(0)[1], "gap": 1})
+
     for turn in () if on_agent_page else view.turns:
+        cards_before(turn.started_ts if turn.started_ts is not None else float("inf"))
         turn_flags = (*flags, tuple((tool.call_id, tuple(dependencies.get(tool.call_id, ())),
                                     tuple(id(view.agents.get(child)) for child in tool.child_agent_ids))
                                    for tool in turn.tools if tool.child_agent_ids or tool.call_id in dependencies))
@@ -753,6 +765,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             first["rev"] = _revision(first)
             turn_blocks = [first, *turn_blocks[1:]]
         blocks.extend(turn_blocks)
+    cards_before(float("inf"))
     linked = {agent_id for turn in view.turns for tool in turn.tools for agent_id in tool.child_agent_ids}
     for agent in () if on_agent_page else view.agents.values():
         if agent.id in linked:  # shown by its Task card
