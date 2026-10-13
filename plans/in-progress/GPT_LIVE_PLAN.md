@@ -308,7 +308,7 @@ Each milestone ends with tests green, docs updated, and a Conventional Commit.
   fake audio device. Wheel packaging + `binary_path` lookup + `LiveStatus`
   `unsupported` when missing. CI builds it in the existing wheel matrix.
 
-**M4 — Ratatui client**
+**M4 — Ratatui client** (implemented on `feat/gpt-live`; see `docs/live.md`; the `live-call` mock scenario was replaced by a fake transport and fake helper; `Ctrl+X L` was taken, so the key is `Ctrl+X D`)
 - `/live` commands, `Ctrl+X L`, call bar, Live timeline card, consent dialog,
   error states. `ui_support/live_helper.py` with a fake helper for tests;
   `tests/test_ratatui_live.py`; native PTY check of the call bar with a fake
