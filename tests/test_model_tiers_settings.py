@@ -213,6 +213,39 @@ def test_title_model_is_validated(tmp_path, monkeypatch, model):
     assert not (home / ".nexus" / "config.toml").exists()
 
 
+# -- Claude Code main-model toggle ------------------------------------------
+
+
+def test_claude_code_main_toggle_defaults_off_writes_the_key_and_explains_scope(tmp_path, monkeypatch):
+    runtime, home = _runtime(tmp_path, monkeypatch)
+    state = model_settings.claude_code_settings(runtime)
+    assert state["main_enabled"] is False
+    assert "Agent SDK" in state["message"] and "per role" in state["message"]
+
+    result = asyncio.run(model_settings.claude_code_settings_set(runtime, main_enabled=True, reload=True))
+    assert result["restart_required"] is True  # idle declared, but this runtime has no router to reload
+    assert _config(home)["models"]["claude_code_main_enabled"] is True
+    asyncio.run(model_settings.claude_code_settings_set(runtime, main_enabled=False, reload=True))
+    assert _config(home)["models"]["claude_code_main_enabled"] is False
+
+
+def test_claude_code_main_toggle_refused_unless_idle_and_writes_nothing(tmp_path, monkeypatch):
+    runtime, home = _runtime(tmp_path, monkeypatch)
+    with pytest.raises(ConfigError, match="turn is running"):
+        asyncio.run(model_settings.claude_code_settings_set(runtime, main_enabled=True))
+    with pytest.raises(ConfigError, match="turn is running"):
+        asyncio.run(model_settings.claude_code_settings_set(runtime, main_enabled=True, reload=False))
+    assert not (home / ".nexus" / "config.toml").exists()
+
+
+@pytest.mark.parametrize("value", ["yes", 1, None])
+def test_claude_code_main_toggle_requires_a_real_bool(tmp_path, monkeypatch, value):
+    runtime, home = _runtime(tmp_path, monkeypatch)
+    with pytest.raises(ConfigError):
+        asyncio.run(model_settings.claude_code_settings_set(runtime, main_enabled=value, reload=True))  # type: ignore[arg-type]
+    assert not (home / ".nexus" / "config.toml").exists()
+
+
 def test_sessions_section_validates_title_keys():
     from nexus.config.schema import SessionsSection
 

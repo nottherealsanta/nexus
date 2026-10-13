@@ -15,12 +15,15 @@ import re
 from typing import Any
 
 from ..errors import ConfigError
+from ..model.registry import ADAPTER_CLAUDE_CODE, normalize_adapter_kind
 from ..model.request import ModelRequest
 from . import provider_auth
 
 __all__ = [
     "MAX_TIER_REFS",
     "agent_max_tier_set",
+    "claude_code_settings",
+    "claude_code_settings_set",
     "session_title_settings",
     "session_title_settings_set",
     "tier_reset",
@@ -117,13 +120,33 @@ def tier_rows(runtime: object) -> dict[str, Any]:
     }
 
 
+def _claude_code_providers(runtime: object) -> frozenset[str]:
+    """Names of configured ``kind = "claude-code"`` sections (run by the external worker)."""
+    loader = getattr(runtime, "_load_config", None)
+    try:
+        config = loader() if callable(loader) else None
+    except (ConfigError, OSError):
+        return frozenset()
+    sections = getattr(getattr(config, "v2", None), "providers", None) or {}
+    return frozenset(name for name, section in sections.items()
+                     if normalize_adapter_kind(getattr(section, "kind", None)) == ADAPTER_CLAUDE_CODE)
+
+
 def candidate_rows(runtime: object, refs: list[str], resolved: str = "") -> list[dict[str, Any]]:
+    """Per-model status. A ``claude-code`` route is not a Nexus provider: only subagents
+    run it (``scope = "subagents"``); session titles and other background jobs skip it."""
     router = getattr(runtime, "router", None)
     providers = getattr(router, "providers", {})
-    return [{"ref": ref, "connected": ref.split("/", 1)[0] in providers,
-             "selected": ref == resolved,
-             "reason": "" if ref.split("/", 1)[0] in providers else "provider not connected"}
-            for ref in refs[:MAX_TIER_REFS]]
+    worker = _claude_code_providers(runtime)
+    rows: list[dict[str, Any]] = []
+    for ref in refs[:MAX_TIER_REFS]:
+        head = ref.split("/", 1)[0]
+        subagents = head in worker
+        connected = head in providers
+        rows.append({"ref": ref, "connected": connected or subagents, "selected": ref == resolved,
+                     "scope": "subagents" if subagents else "",
+                     "reason": "" if connected or subagents else "provider not connected"})
+    return rows
 
 
 def default_settings(runtime: object) -> dict[str, Any]:
@@ -294,3 +317,41 @@ async def session_title_settings_set(
     if updates:
         _write(runtime, tuple(updates))
     return session_title_settings(runtime)
+
+
+#: Shown beside the toggle: what it does and what it does not.
+CLAUDE_CODE_NOTE = (
+    "Main selection uses the Claude Agent SDK. External Claude Code subagents are "
+    "configured per role (model: claude-code/<model>) and run Claude's own tools."
+)
+
+
+def claude_code_settings(runtime: object) -> dict[str, Any]:
+    """``{main_enabled, message}`` for the Claude Code toggle in Settings -> Models."""
+    config = None
+    loader = getattr(runtime, "_load_config", None)
+    if callable(loader):
+        try:
+            config = loader()
+        except (ConfigError, OSError):
+            config = None
+    section = getattr(getattr(config, "v2", None), "models", None)
+    return {"main_enabled": bool(getattr(section, "claude_code_main_enabled", False)),
+            "message": CLAUDE_CODE_NOTE}
+
+
+async def claude_code_settings_set(
+    runtime: object, *, main_enabled: bool, reload: bool = False
+) -> dict[str, Any]:
+    """Write ``[models] claude_code_main_enabled`` and rebuild routes; refused unless idle.
+
+    ``reload`` is the caller's statement that no turn runs. Without it nothing is
+    written, so the config file and the live router never disagree.
+    """
+    if type(main_enabled) is not bool:
+        raise ConfigError("claude_code_main_enabled must be true or false")
+    if not reload:
+        raise ConfigError("Claude Code settings cannot change while a turn is running")
+    _write(runtime, (("models", "claude_code_main_enabled", main_enabled),))
+    reloaded = await _reload(runtime, reload)
+    return {**claude_code_settings(runtime), "restart_required": not reloaded}

@@ -60,6 +60,7 @@ here, so add a row when you add a file.
 | `manager.py` | AgentManager: deterministic subagent discovery, seeding, and tool selection |
 | `model.py` | Subagent definitions: restricted `*.md` parsing and the immutable model |
 | `runner.py` | SubagentRunner: bounded, nested execution of subagent definitions |
+| `claude_code_worker.py` | External Claude Code worker: one interactive PTY session per assignment running Claude's own tools under an explicit policy; hook + JSONL transcript readback, attention states, file-change verification |
 | `handoff.py` | Failure handoff: bounded markdown report of a failed child's context, saved for the root to read |
 | `worktree_integrate.py` | Apply an acknowledged, frozen worktree review to a clean parent checkout |
 | `worktree_review.py` | Immutable, read-only review snapshots for finalized agent worktrees |
@@ -361,6 +362,7 @@ here, so add a row when you add a file.
 | `meta.py` | The meta builtins: reload, inspect, and author extensions |
 | `multiedit.py` | Built-in `MultiEdit`: validate every edit, then commit once atomically |
 | `question.py` | `question`: ask the operator one question and wait for the answer |
+| `escalate.py` | `escalate` (subagents only): report a block to the parent, which resolves it or asks the user |
 | `read.py` | Built-in `Read` and the private helpers shared by the fs tools |
 | `skill.py` | `Skill`: progressive disclosure of a skill body or bundled resource |
 | `task.py` | `subagent` (legacy name `Task`): spawn a bounded subagent (bundle `task`) |
@@ -402,7 +404,8 @@ here, so add a row when you add a file.
 | `js/mcp-settings.js` | Settings pane for MCP servers: scope, loading mode, enabled state and errors via the host contract |
 | `js/model-settings.js` | Settings pane for default model, title model and tier routes |
 | `js/speech.js` | `/speak`, speech status and stop on the daemon host, with explicit model download confirmation |
-| `js/markdown.js` | Shared HTML-free transcript and context Markdown renderer; safe links, tables, lists, quotes and labelled code fences |
+| `js/markdown.js` | Shared HTML-free transcript and context Markdown renderer; safe links, aligned tables, nested and task lists, quotes, and code fences with a language label and Copy button |
+| `js/highlight.js` | Bounded, presentation-only syntax colouring for fenced code (comments, strings, numbers, keywords, calls; diff lines) |
 | `js/fuzzy.js` | Fuzzy matcher for the palette and model picker (port of `ui_support/fuzzy.py`) |
 | `js/voice-strip.js` | Floating dictation waveform and bounded live transcript preview |
 
@@ -417,6 +420,7 @@ here, so add a row when you add a file.
 | `context.py` | Pure display projections for context preview and session usage |
 | `context_header.py` | Toolkit-free context header blocks, complete inventories and bounded fallback previews; skill tokens estimate the included index rather than the available catalogue |
 | `details.py` | Toolkit-free details sidebar data (session rows, modified files, MCP rows) shared by both shells |
+| `external_worker.py` | Labelled authority/outcome blocks for an external Claude Code worker (`ConversationView.external`): launch authority, attention state with the manual instruction, transcript path, usage unknown |
 | `fuzzy.py` | Shared fuzzy matcher (score and match positions) for the command palette and model picker |
 | `hints.py` | Randomized tips shown in the middle of an empty session (mirrored in `js/hints.js`) |
 | `mock_args.py` | Shared `/mock` argument handling for the chat surfaces |

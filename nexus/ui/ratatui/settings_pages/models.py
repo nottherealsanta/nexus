@@ -24,7 +24,9 @@ def _items(refs, resolved, candidates):
     items = []
     for ref in refs:
         candidate = by_ref.get(ref)
-        if ref == resolved:
+        if candidate is not None and candidate.get("scope") == "subagents":
+            items.append((ref, "subagents", "Claude Code worker; titles and other jobs skip it"))
+        elif ref == resolved:
             items.append((ref, "in use", ""))
         elif candidate is not None and not candidate.get("connected", True):
             items.append((ref, "skipped", candidate.get("reason") or "provider not connected"))
@@ -73,6 +75,15 @@ async def build(workflows) -> dict:
     blocks.append(sp.row("title-model", "Title model", sp.select(shown, choices, sp.op(AREA, "title_model")),
                          description=(f"Runs on {resolved}" if resolved else (_get(titles, "message") or "No model can run: connect a provider or pick another."))))
     blocks.append(sp.gap())
+
+    # -- claude code ---------------------------------------------------------
+    claude = await client.claude_code_settings() if hasattr(client, "claude_code_settings") else None
+    if claude is not None:
+        blocks.append(sp.heading("CLAUDE CODE"))
+        blocks.append(sp.row("claude-main", "Allow Claude Code as a main model",
+                             sp.toggle(_get(claude, "main_enabled", False), sp.op(AREA, "claude_main")),
+                             description=_get(claude, "message", "") or "Main selection uses the Agent SDK."))
+        blocks.append(sp.gap())
 
     # -- tiers (tabs) --------------------------------------------------------
     blocks.append(sp.heading("TIERS"))
@@ -177,6 +188,10 @@ async def handle(workflows, operation) -> None:
         workflows.return_to_page()  # a picker may be stacked on the page
     elif key == "titles":
         await client.session_title_settings_set(enabled=bool(operation["value"]))
+    elif key == "claude_main":
+        result = await client.claude_code_settings_set(main_enabled=bool(operation["value"]))
+        if _get(result, "restart_required"):
+            workflows.shell.flash("Saved · restart the daemon to apply", "success")
     elif key == "title_model":
         value = operation["value"]
         if value == PICK:

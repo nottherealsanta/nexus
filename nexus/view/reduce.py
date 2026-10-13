@@ -806,6 +806,52 @@ def _on_tool_failed(state: ConversationView, event: Event, data: Mapping[str, An
     return _put(state, index, replace(turn, updated_ts=event.ts))
 
 # ---------------------------------------------------------------------------
+# External workers (Claude Code running its own tools)
+# ---------------------------------------------------------------------------
+
+def _on_external_tool(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
+    """A tool call/result read from an external worker's transcript.
+
+    Idempotent by ``call_id`` and tolerant of result-before-request order. The
+    row carries ``provenance`` and is never marked as executed by Nexus.
+    """
+    state, index = _turn_for(state, event)
+    turn = state.turns[index]
+    call_id = _as_str(data.get("call_id")) or ""
+    name = _as_str(data.get("tool")) or ""
+    turn = _ensure_tool(turn, call_id, name=name, ts=event.ts, seq=event.seq)
+    provenance = _as_str(data.get("provenance")) or "external worker"
+    current = next((t for t in turn.tools if t.call_id == call_id), None)
+    if data.get("phase") == "completed":
+        content = data.get("content")
+        is_error = bool(data.get("is_error"))
+        notes = [_as_str(data.get("clip_note"))] if data.get("clip_note") else []
+        turn = _update_tool(
+            turn, call_id, name=name or (current.name if current else ""),
+            status="failed" if is_error else "completed", is_error=is_error,
+            executed=False, finished_ts=event.ts, provenance=provenance,
+            result=jsonable(content) if isinstance(content, list) else [],
+            display="; ".join(note for note in notes if note) or None,
+        )
+    else:
+        tool_input = _key_map(data, "input") or {}
+        done = current is not None and current.status in ("completed", "failed")
+        turn = _update_tool(
+            turn, call_id, name=name or (current.name if current else ""), input=tool_input or (current.input if current else {}),
+            provenance=provenance, started_ts=event.ts,
+            **({} if done else {"status": "running"}),
+        )
+    return _put(state, index, replace(turn, updated_ts=event.ts))
+
+def _on_external(state: ConversationView, event: Event, data: Mapping[str, Any]) -> ConversationView:
+    """Launch authority (``external.started``) and terminal status (``external.finished``)."""
+    base = dict(state.external or {})
+    if event.type == "external.finished":
+        base["finished"] = True
+    base.update({key: value for key, value in jsonable(dict(data)).items() if key != "agent"})
+    return replace(state, external=base)
+
+# ---------------------------------------------------------------------------
 # Permissions
 # ---------------------------------------------------------------------------
 
@@ -1318,6 +1364,7 @@ def _on_agent_completed(state: ConversationView, event: Event, data: Mapping[str
         usage=UsageTotals.from_dict(data.get("usage")) if isinstance(data.get("usage"), Mapping) else agent.usage,
         dropped_tools=_str_list(data.get("dropped_tools")) or agent.dropped_tools,
         clamped=bool(data.get("clamped")) if "clamped" in data else agent.clamped,
+        usage_unknown=bool(data.get("usage_unknown")) or agent.usage_unknown,
         body=body,
         completed_ts=event.ts,
     )
@@ -1507,6 +1554,9 @@ _HANDLERS: dict[str, Any] = {
     "tool.failed": _on_tool_failed,
     "tool.result": _on_tool_result,
     "tool.input": _on_tool_input,
+    "external.started": _on_external,
+    "external.finished": _on_external,
+    "external.tool": _on_external_tool,
     "permission.requested": _on_permission_requested,
     "permission.resolved": _on_permission_resolved,
     "context.mcp_loading_selected": lambda s, e, d: s,

@@ -637,6 +637,101 @@ def test_a_turn_left_open_by_a_stopped_process_is_closed_on_reopen(tmp_path):
     assert len([e for e in again.events if e.type == "turn.failed"]) == 1
 
 
+@pytest.mark.parametrize("agent_id", [None, "worker-1"])
+@pytest.mark.parametrize("turn_started", [False, True])
+def test_recovery_closes_external_worker_and_replays(tmp_path, agent_id, turn_started):
+    from nexus.view import fold
+
+    session = SessionManager(tmp_path).open("main")
+    session.append_message(_msg("run worker"))
+    meta = {"id": agent_id, "parent": session.id, "depth": 1, "type": "claude",
+            "task": "task-1", "session": agent_id}
+    if turn_started:
+        session.append_event(Event(type="turn.started", session="main", turn="t", data={}))
+    if agent_id:
+        session.append_event(Event(type="agent.spawned", session="main", turn="t", data={"agent": meta, **meta}))
+    session.append_event(Event(type="external.started", session="main", turn="t", data={
+        "session": "claude-session", "provider": "claude-code", "model": "claude-test",
+        "workspace": str(tmp_path), "provenance": "claude-code-owned-tools",
+        **({"agent": meta} if agent_id else {}),
+    }))
+
+    reopened = SessionManager(tmp_path).open("main")
+    finished = [e for e in reopened.events if e.type == "external.finished"]
+    assert len(finished) == 1
+    assert finished[0].data.get("agent") == (meta if agent_id else None)
+    assert finished[0].turn == "t"
+    assert finished[0].data["status"] == "interrupted"
+    assert finished[0].data["usage"] == "unknown"
+    assert "may still be running" in finished[0].data["attention"]
+    view = fold(reopened.events)
+    external = view.agents[agent_id].body.external if agent_id else view.external
+    assert external["status"] == "interrupted"
+    assert external["workspace"] == str(tmp_path)
+    if agent_id:
+        assert view.agents[agent_id].status == "interrupted"
+        assert view.agents[agent_id].usage_unknown
+    again = SessionManager(tmp_path).open("main")
+    assert len(again.events) == len(reopened.events)
+
+
+def test_external_recovery_preserves_finished_sibling_and_completed_agent(tmp_path):
+    session = SessionManager(tmp_path).open("main")
+    session.append_message(_msg("run workers"))
+    for agent_id in ("finished", "lost"):
+        session.append_event(Event(type="external.started", session="main", data={
+            "session": agent_id, "provider": "claude-code", "agent": {"id": agent_id}}))
+    session.append_event(Event(type="external.finished", session="main", data={
+        "session": "finished", "status": "completed", "agent": {"id": "finished"}}))
+    session.append_event(Event(type="agent.completed", session="main", data={
+        "agent": {"id": "lost"}, "status": "cancelled"}))
+    reopened = SessionManager(tmp_path).open("main")
+    finishes = [e for e in reopened.events if e.type == "external.finished"]
+    assert [(e.data["agent"]["id"], e.data["status"]) for e in finishes] == [
+        ("finished", "completed"), ("lost", "interrupted"),
+    ]
+    assert len([e for e in reopened.events if e.type == "agent.completed"]) == 1
+
+
+def test_external_recovery_skips_worker_with_live_turn_lease(tmp_path):
+    session = SessionManager(tmp_path).open("main")
+    session.append_message(_msg("run worker"))
+    lease = session.begin_turn()
+    session.append_event(Event(type="external.started", session="main", turn=lease.turn_id,
+                               data={"session": "live", "provider": "claude-code"}))
+    try:
+        other = SessionManager(tmp_path).open("main")
+        assert not any(e.type == "external.finished" for e in other.events)
+    finally:
+        lease.release()
+
+
+def test_external_worker_recovers_after_owner_process_exit(tmp_path):
+    import subprocess
+    import sys
+
+    script = r'''
+import os, sys
+from pathlib import Path
+from nexus.events import Event
+from nexus.model.message import Message, Text
+from nexus.session import SessionManager
+session = SessionManager(Path(sys.argv[1])).open("main")
+lease = session.begin_turn()
+session.append_message(Message(role="user", content=[Text("run worker")]))
+session.append_event(Event(type="turn.started", session=session.id, turn=lease.turn_id, data={}))
+session.append_event(Event(type="external.started", session=session.id, turn=lease.turn_id,
+                           data={"session": "lost-claude", "provider": "claude-code"}))
+os._exit(0)
+'''
+    subprocess.run([sys.executable, "-c", script, str(tmp_path)], check=True, timeout=10)
+    reopened = SessionManager(tmp_path).open("main")
+    assert [e.data["status"] for e in reopened.events if e.type == "external.finished"] == [
+        "interrupted",
+    ]
+    assert [e.data["reason"] for e in reopened.events if e.type == "turn.failed"] == ["interrupted"]
+
+
 def test_a_completed_turn_is_not_touched_by_recovery(tmp_path):
     session = SessionManager(tmp_path).open("main")
     session.append_message(_msg("go"))

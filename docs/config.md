@@ -44,7 +44,7 @@ errors redact them and any URL userinfo (`util.redact_secrets`).
 | --- | --- |
 | `[agent]` | `name` build, `profile` coding, `instructions_file` SOUL.md, `memory_file` MEMORY.md, `agents_file` AGENTS.md, `max_iterations` 0 (unlimited), `max_turn_seconds` 0 (unlimited), `sandbox` workspace-write |
 | `[model]` | `default`, `fast`, `plan`, `fallback` list, `params` (`temperature`, `max_output_tokens`, `thinking_budget`) |
-| `[models]` | `default`/`fast`/`plan`, `refresh_ttl_days` 7, `catalogue_url` (models.dev), `offline` false, `tiers`, `reasoning_efforts`, `fallback` |
+| `[models]` | `claude_code_main_enabled` false, `default`/`fast`/`plan`, `refresh_ttl_days` 7, `catalogue_url` (models.dev), `offline` false, `tiers`, `reasoning_efforts`, `fallback` |
 | `[providers.<name>]` | see [models.md](models.md#providers) |
 | `[context]` | `max_tokens` (unset = model window, 180000 if unknown), `safety_margin_tokens` 4000, `compaction` hybrid, `compact_at_fraction` 0.85, `[context.limits]` memory 8000, agents_md 8000, skills_index 4000, environment 2000, attachments 20000 |
 | `[permissions]` | `mode` allow, `allow`/`ask`/`deny` lists, `write_roots` (`./`), `read_denyroots`, `on_unattended` deny |
@@ -67,6 +67,32 @@ Web-tool hosts (`[tools.web]`) must be public: localhost, private and
 `.local/.internal/.lan/.home/.test` names are rejected at config load, and the
 outbound transport repeats the address check at connect time
 ([security.md](security.md)).
+
+## Claude Code worker keys
+
+For `[providers.<name>]` with `kind = "claude-code"` (spellings `claude_code` and
+`claudecode` also resolve). They configure the external worker
+([agents.md](agents.md#external-claude-code-workers)); on any other kind they
+are a `ConfigError`. Unknown values fail at load, not at launch.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `executable` | `claude` | Claude Code binary (>= 2.1.296) |
+| `timeout_seconds` | 600 (max 3600) | Wall clock; shortened by a nonzero `[agent] max_turn_seconds` |
+| `worker_permission_mode` | `dontAsk` | `default`/`manual` (= manual), `acceptEdits`, `plan`, `dontAsk`, `auto` (Claude's own classifier answers approvals; explicit opt-in); `bypassPermissions` is rejected |
+| `worker_tools` | unset | `--tools` built-ins; an empty list is rejected |
+| `worker_allowed_tools` / `worker_disallowed_tools` | unset | `--allowedTools` / `--disallowedTools` rules (<= 256 entries) |
+| `worker_setting_sources` | `""` | `--setting-sources` (`user`, `project`, `local`); empty loads none and adds `--disable-slash-commands` |
+| `worker_mcp_config` | unset | Explicit MCP JSON object string (<= 64 KiB); unset means `--strict-mcp-config` with no servers |
+| `worker_restricted` | true | `--restricted` (no Bash/WebFetch unless named in `worker_tools`; file tools confined to the workspace) |
+
+`api_key`, `base_url`, `api`, `auth`, `command`, `args`, `env`, `inherit_env`,
+`permission_policy` and `profile` are not accepted on these sections. The
+worker's child environment is the fixed safe allowlist plus `CLAUDE_CONFIG_DIR`.
+`[models] claude_code_main_enabled` (default false) only controls main-model
+selection; it does not enable or disable explicit worker roles. Settings -> Models
+has an `Allow Claude Code as a main model` toggle for it (`ClaudeCodeSettingsSet`)
+that says main selection uses the Agent SDK and external subagents are configured per role.
 
 ## On-disk layout
 

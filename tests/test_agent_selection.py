@@ -16,6 +16,9 @@ from nexus.host import protocol as p
 from nexus.model.providers.scripted import ScriptedProvider, text_response
 from nexus.runtime import Runtime
 
+#: Tools only a subagent has; they grant nothing, so authority comparisons ignore them.
+CHILD_ONLY = frozenset({"escalate"})
+
 
 def _config(name: str = "general", *, web: WebSection | None = None) -> Config:
     return Config(
@@ -120,7 +123,7 @@ async def test_selected_agent_applies_next_turn_and_plan_is_read_only(tmp_path):
     assert started.data["agent"]["name"] == "plan"
     assert started.data["agent"]["source"] == "session"
     assert started.data["agent"]["read_only"] is True
-    assert {tool.name for tool in provider.requests[0].tools} == {
+    assert ({tool.name for tool in provider.requests[0].tools} - CHILD_ONLY) == {
         "read", "glob", "grep", "subagent", "todowrite", "question", "skill"
     }
     assert not ({"write", "edit", "multiedit", "bash", "websearch"} & set(started.data["agent"]["tools"]))
@@ -133,7 +136,7 @@ async def test_default_root_catalog_advertises_canonical_tools(tmp_path):
     runtime = Runtime(tmp_path, config=_config(), providers={"scripted": provider})
     [event async for event in runtime.session("catalog").send("inspect")]
 
-    assert {tool.name for tool in provider.requests[0].tools} == {
+    assert ({tool.name for tool in provider.requests[0].tools} - CHILD_ONLY) == {
         "read", "glob", "grep", "edit", "write", "bash", "apply_patch",
         "subagent", "todowrite", "question", "webfetch", "websearch", "skill",
     }
@@ -153,7 +156,7 @@ async def test_disabled_fetch_is_not_advertised_and_has_host_reason(tmp_path):
         providers={"scripted": provider},
     )
     [event async for event in runtime.session("fetch-disabled").send("inspect")]
-    assert "webfetch" not in {tool.name for tool in provider.requests[0].tools}
+    assert "webfetch" not in ({tool.name for tool in provider.requests[0].tools} - CHILD_ONLY)
     row = next(row for row in await runtime.list_tools() if row["name"] == "webfetch")
     assert row["availability"] == "unavailable"
     assert "fetch_enabled" in row["reason"]
@@ -165,8 +168,8 @@ async def test_missing_outbound_service_is_reported_as_unavailable(tmp_path):
     runtime = Runtime(tmp_path, config=_config(), providers={"scripted": provider})
     runtime._outbound_http_service = None
     [event async for event in runtime.session("http-unavailable").send("inspect")]
-    assert "webfetch" not in {tool.name for tool in provider.requests[0].tools}
-    assert "websearch" in {tool.name for tool in provider.requests[0].tools}
+    assert "webfetch" not in ({tool.name for tool in provider.requests[0].tools} - CHILD_ONLY)
+    assert "websearch" in ({tool.name for tool in provider.requests[0].tools} - CHILD_ONLY)
     rows = await runtime.list_tools()
     fetch = next(row for row in rows if row["name"] == "webfetch")
     assert fetch["availability"] == "unavailable"
@@ -197,7 +200,7 @@ async def test_configured_web_bundle_is_selectable_but_children_keep_parent_ceil
         "read", "glob", "grep", "edit", "write", "bash", "apply_patch",
         "subagent", "todowrite", "question", "webfetch", "websearch", "skill",
     }
-    assert [{tool.name for tool in request.tools} for request in provider.requests] == [expected] * 5
+    assert [({tool.name for tool in request.tools} - CHILD_ONLY) for request in provider.requests] == [expected] * 5
     assert all(name == name.lower() for request in provider.requests for name in (tool.name for tool in request.tools))
     await runtime.aclose()
 
@@ -233,7 +236,7 @@ async def test_research_profile_keeps_web_read_only_through_grandchildren(tmp_pa
     [event async for event in runtime.session("research-tree").send("delegate")]
 
     expected = {"read", "glob", "grep", "subagent", "todowrite", "question", "webfetch", "websearch", "skill"}
-    catalogs = [{tool.name for tool in request.tools} for request in provider.requests]
+    catalogs = [({tool.name for tool in request.tools} - CHILD_ONLY) for request in provider.requests]
     assert catalogs == [expected] * 5
     assert all(not ({"write", "edit", "bash", "apply_patch"} & names) for names in catalogs)
     await runtime.aclose()
@@ -259,7 +262,7 @@ async def test_read_only_explore_cannot_widen_declared_tools(tmp_path):
     spawned = next(event for event in runtime.session("explore-ceiling").events if event.type == "agent.spawned")
     assert set(spawned.data["tools"]) == {"read", "glob", "grep", "subagent", "todowrite", "webfetch", "websearch"}
     assert {"bash", "write"} <= set(spawned.data["dropped_tools"])
-    assert "websearch" in {tool.name for tool in provider.requests[1].tools}
+    assert "websearch" in ({tool.name for tool in provider.requests[1].tools} - CHILD_ONLY)
     await runtime.aclose()
 
 
@@ -285,7 +288,7 @@ async def test_child_and_grandchild_catalogs_inherit_parent_authority(tmp_path):
 
     expected = {"read", "glob", "grep", "subagent", "todowrite", "question", "skill"}
     catalogs = [
-        {tool.name for tool in request.tools}
+        ({tool.name for tool in request.tools} - CHILD_ONLY)
         for request in provider.requests
     ]
     # Each delegated agent needs a tool call and a final response; the model is
@@ -331,7 +334,7 @@ async def test_read_only_declaration_cannot_widen_parent_tool_authority(tmp_path
     assert not ({"bash", "write", "edit", "multiedit"} & set(spawned.data["tools"]))
     # A skill activation's declared tools are intersected with this iteration's
     # catalog; declarations by a role never create a catalog entry.
-    assert {tool.name for tool in provider.requests[0].tools} == {
+    assert ({tool.name for tool in provider.requests[0].tools} - CHILD_ONLY) == {
         "read", "glob", "grep", "edit", "write", "bash", "apply_patch",
         "subagent", "todowrite", "question", "webfetch", "websearch", "skill",
     }
@@ -369,9 +372,9 @@ async def test_skill_activation_cannot_widen_child_catalog(tmp_path):
 
     expected = {"read", "glob", "grep", "subagent", "todowrite", "question", "webfetch", "websearch", "skill"}
     assert len(provider.requests) == 4
-    assert {tool.name for tool in provider.requests[1].tools} == expected
-    assert {tool.name for tool in provider.requests[2].tools} == expected
-    assert {tool.name for tool in provider.requests[3].tools} == {
+    assert ({tool.name for tool in provider.requests[1].tools} - CHILD_ONLY) == expected
+    assert ({tool.name for tool in provider.requests[2].tools} - CHILD_ONLY) == expected
+    assert ({tool.name for tool in provider.requests[3].tools} - CHILD_ONLY) == {
         "read", "glob", "grep", "edit", "write", "bash", "apply_patch",
         "subagent", "todowrite", "question", "webfetch", "websearch", "skill",
     }
@@ -424,7 +427,7 @@ async def test_child_task_model_overrides_role_default_and_keeps_role_body(tmp_p
     [event async for event in runtime.session("child-default").send("delegate")]
     assert provider.requests[1].model == "task-model"
     assert "Child-specific instructions." in provider.requests[1].system
-    assert {tool.name for tool in provider.requests[1].tools} == {"read"}
+    assert ({tool.name for tool in provider.requests[1].tools} - CHILD_ONLY) == {"read"}
     await runtime.aclose()
 
 

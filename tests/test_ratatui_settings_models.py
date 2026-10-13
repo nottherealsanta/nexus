@@ -20,7 +20,9 @@ def shell(tmp_path, monkeypatch):
     c.default_model_settings = AsyncMock(return_value=_default())
     c.session_title_settings = AsyncMock(return_value=p.SessionTitleSettingsResult(enabled=True, model="low", resolved="openai/gpt-5-mini"))
     c.list_models = AsyncMock(return_value=[{"provider": "openai", "id": "gpt-5-nano", "name": "GPT-5 nano", "tier": "low"}])
-    for name in ("model_tier_set", "model_tier_reset", "default_model_set", "session_title_settings_set", "agent_max_tier_set", "refresh_models"):
+    c.claude_code_settings = AsyncMock(return_value=p.ClaudeCodeSettingsResult(
+        main_enabled=False, message="Main selection uses the Agent SDK. External subagents are configured per role."))
+    for name in ("claude_code_settings_set", "model_tier_set", "model_tier_reset", "default_model_set", "session_title_settings_set", "agent_max_tier_set", "refresh_models"):
         setattr(c, name, AsyncMock(return_value=SimpleNamespace(restart_required=False)))
     return shell
 
@@ -63,7 +65,7 @@ async def test_models_is_one_page_with_defaults_above_the_tier_tabs(shell):
     page = shell.workflows.settings_page
     assert shell.panel_title == "Settings · Models" and shell.settings_nav == "models"
     assert not shell.items, "no menu rows: the page replaces them"
-    assert _headings(page) == ["DEFAULT MODEL", "SESSION TITLES", "TIERS", "LIMITS", "CATALOGUE"]
+    assert _headings(page) == ["DEFAULT MODEL", "SESSION TITLES", "CLAUDE CODE", "TIERS", "LIMITS", "CATALOGUE"]
     tabs = _find(page, "tabs")
     assert [label for label, _ in tabs["items"]] == ["Low", "Medium", "High"]
     assert [badge for _, badge in tabs["items"]] == ["", "", "!"], "a tier nothing can run is flagged"
@@ -212,3 +214,24 @@ async def test_the_bridge_gate_runs_the_tier_tab_operation_and_only_while_the_pa
     assert not operation_allowed(shell, set(), {**tabs["operation"], "value": 7}), "no such tab"
     shell.workflows.back()  # Settings closed: a stale page must not be drivable
     assert not operation_allowed(shell, set(), medium)
+
+
+@pytest.mark.asyncio
+async def test_claude_code_toggle_is_discoverable_explained_and_saved(shell):
+    await shell.workflows.settings_area("models")
+    row = _find(shell.workflows.settings_page, "row", id="claude-main")
+    assert row["label"] == "Allow Claude Code as a main model"
+    assert "Agent SDK" in row["description"] and "per role" in row["description"]
+    assert row["control"]["on"] is False
+    await shell.workflows.operate(sp.op("models", "claude_main", value=True))
+    shell.client.claude_code_settings_set.assert_awaited_with(main_enabled=True)
+
+
+def test_claude_code_route_is_labelled_for_subagents_not_skipped():
+    from nexus.ui.ratatui.settings_pages.models import _items
+
+    candidates = [{"ref": "claude-code/claude-haiku-5-5", "connected": True, "scope": "subagents"},
+                  {"ref": "codex/m", "connected": True}]
+    items = _items(["claude-code/claude-haiku-5-5", "codex/m"], "codex/m", candidates)
+    assert items[0][1] == "subagents" and "worker" in items[0][2]
+    assert items[1][1] == "in use"

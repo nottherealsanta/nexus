@@ -1091,6 +1091,46 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
             width,
             op,
         ),
+        "external" => {
+            // External Claude Code worker: a labelled authority/outcome card. Attention
+            // (warning) and failure (error) are distinct from the neutral running/done card.
+            let tone = match b.status.as_str() {
+                "attention" => p.warning,
+                "failed" => p.error,
+                "done" => p.success,
+                _ => p.accent,
+            };
+            let marker = if b.status == "attention" { "\u{25B2} " } else { "\u{25C6} " };
+            indented(
+                &mut out,
+                vec![Span::styled(
+                    format!("{marker}{}", b.title),
+                    Style::default().fg(tone).add_modifier(Modifier::BOLD),
+                )],
+                2,
+                width,
+                op,
+            );
+            for text in b.text.lines() {
+                let (label, value) = text.split_once(": ").unwrap_or(("", text));
+                let mut spans = Vec::new();
+                if !label.is_empty() {
+                    spans.push(Span::styled(
+                        format!("{label}: "),
+                        Style::default().fg(p.muted),
+                    ));
+                }
+                spans.push(Span::styled(
+                    value.to_string(),
+                    Style::default().fg(if b.status == "attention" && label.starts_with("Needs") {
+                        p.warning
+                    } else {
+                        p.text
+                    }),
+                ));
+                indented(&mut out, spans, 4, width, op);
+            }
+        }
         "error" => indented(
             &mut out,
             vec![Span::styled(b.text.clone(), Style::default().fg(p.error))],
@@ -1179,6 +1219,29 @@ mod tests {
         rows.iter()
             .map(|row| row.iter().map(|c| c.g.as_str()).collect())
             .collect()
+    }
+
+    #[test]
+    fn external_worker_card_is_labelled_and_attention_is_distinct() {
+        let p = Palette::new(false);
+        let card = |status: &str| Content {
+            kind: "external".into(),
+            status: status.into(),
+            title: "Claude Code needs attention".into(),
+            text: "Needs attention: trust this folder yourself with `cd /w && claude`\nUsage: unknown (this is not zero)".into(),
+            ..Default::default()
+        };
+        let render = |status: &str| build(&card(status), 60, &p);
+        let attention = render("attention");
+        let lines: Vec<String> = attention.iter().map(|(l, _)| l.to_string()).collect();
+        assert!(lines[0].contains("Claude Code needs attention"), "{lines:#?}");
+        let joined = lines.join(" ");
+        assert!(joined.contains("Needs attention:") && joined.contains("claude"), "{joined}");
+        assert!(joined.contains("Usage: unknown"), "{joined}");
+        let color = |rows: &Rows| rows[0].0.spans.iter().find_map(|s| s.style.fg);
+        assert_eq!(color(&attention), Some(p.warning));
+        assert_eq!(color(&render("failed")), Some(p.error));
+        assert_ne!(color(&attention), color(&render("running")));
     }
 
     #[test]

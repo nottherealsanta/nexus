@@ -49,13 +49,16 @@ with a `base_url`.
 | `ollama.py` | `ollama` | native `/api/chat` or OpenAI-compatible mode; keyless, loopback default `http://localhost:11434`; conservative capabilities (`tools = false` unless the registry says otherwise) |
 | `opencode.py` | `opencode` (`kind` `acp`) | OpenCode over its Agent Client Protocol subprocess only; ACP tool calls stay inside that agent; child env is an explicit allowlist |
 | `claude_agent.py` (+ `_claude_agent_worker.py`, `claude_agent_auth.py`) | `claude-agent` | included in every install; text-only, buffers replies; SDK built-ins, hooks, settings and persistence disabled; Nexus schemas registered through an in-process MCP intention bridge |
+| `claude_code` kind (no adapter file) | `claude-code` | Two roles. Main-agent selection reuses `ClaudeAgentProvider` (as `claude-agent`) and is hidden from pickers and rejected unless `[models] claude_code_main_enabled = true`. An explicit `claude-code/<model>` subagent role is run by the external worker `agents/claude_code_worker.py` with Claude's own tools, never through a provider `stream()` ([agents.md](agents.md#external-claude-code-workers)). Registry projection reuses the Claude subscription catalogue with text-only capabilities; model IDs are not verified live |
 | `scripted.py` | tests | deterministic offline provider ([testing.md](testing.md)) |
 | `discovery.py` | `.agents/providers/*.py`, `~/.nexus/providers/*.py` | quarantined file providers (`PROVIDER`, `PROVIDERS` or `build(context)`); a configured section always wins a same-named file; legacy `.nexus/providers/` is a lower-precedence fallback |
 | `devtools/mock/provider.py` | dev mode | `mock/<scenario>` models ([devtools.md](devtools.md)) |
 
 `ProviderSection` keys: `kind`, `api_key`, `base_url`, `api`, `auth`
 (`chatgpt_oauth` \| `github_copilot` \| `keychain`), `profile`, `executable`,
-`timeout_seconds`, `command`, `args`, `permission_policy`, `inherit_env`, `env`.
+`timeout_seconds`, `command`, `args`, `permission_policy`, `inherit_env`, `env`,
+and, for `kind = "claude-code"` only, the `worker_*` keys
+([config.md](config.md#claude-code-worker-keys)); `worker_*` on any other kind is a `ConfigError`.
 A `base_url` must be http(s); plain `http` only for loopback; any `user:pass@`
 userinfo is always redacted. An OpenAI-compatible vendor **must** have a
 `base_url`, otherwise its model id and key could go to `api.openai.com`

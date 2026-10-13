@@ -75,7 +75,7 @@ from .errors import ConfigError, OperationCancelled
 from .events import Event
 from .hooks import HookEvent, HookInvocation, HookManager, HookOutcome
 from .model.http import DEFAULT_TIMEOUT
-from .model.message import Document, Image, Text, Thinking, ToolResult, ToolUse
+from .model.message import Document, Image, Message, MessageMeta, Text, Thinking, ToolResult, ToolUse
 from .model.provider import Provider
 from .model.providers.anthropic import AnthropicProvider
 from .model.providers.gemini import GeminiProvider
@@ -85,6 +85,7 @@ from .model.providers.opencode import OpenCodeProvider
 from .model.registry import (
     ADAPTER_ANTHROPIC,
     ADAPTER_CLAUDE_AGENT,
+    ADAPTER_CLAUDE_CODE,
     ADAPTER_GEMINI,
     ADAPTER_OLLAMA,
     ADAPTER_OPENAI,
@@ -140,6 +141,7 @@ _CORE_ADAPTERS: dict[str, str] = {
     "ollama": ADAPTER_OLLAMA,
     "opencode": ADAPTER_OPENCODE,
     "claude-agent": ADAPTER_CLAUDE_AGENT,
+    "claude-code": ADAPTER_CLAUDE_CODE,
 }
 
 #: ``kind`` spellings that mean "any OpenAI-compatible endpoint".
@@ -1880,8 +1882,22 @@ class _ChildEventSink:
     def __init__(self, session: Any, relay: Any) -> None:
         self._session = session
         self._relay = relay
+        #: Tool calls the permission engine denied because no approver was
+        #: attached (``unattended`` codes): the root must resolve or escalate.
+        self.blocked: list[str] = []
+
+    def attention(self) -> str | None:
+        if not self.blocked:
+            return None
+        return ("the child needed approval it could not get and was denied: "
+                + "; ".join(dict.fromkeys(self.blocked)))
 
     async def emit(self, event: Event) -> Event:
+        if event.type == "permission.resolved" and len(self.blocked) < 20:
+            data = event.data
+            if str(data.get("code", "")).startswith("unattended") and "deny" in str(data.get("decision", "")):
+                tool = data.get("tool") or data.get("tool_name") or "tool"
+                self.blocked.append(f"{tool}: {str(data.get('reason') or data.get('code'))[:160]}")
         if event.type == "todo.updated":
             self._session.append_event(event)
         else:
@@ -1894,6 +1910,32 @@ class _ChildEventSink:
             if inspect.isawaitable(outcome):
                 await outcome
         return event
+
+
+#: ``[providers.<name>]`` fields that configure the external Claude Code worker.
+_CLAUDE_WORKER_FIELDS = (
+    "worker_permission_mode", "worker_tools", "worker_allowed_tools", "worker_disallowed_tools",
+    "worker_setting_sources", "worker_mcp_config", "worker_restricted",
+)
+
+#: Model of an explicit ``claude-code`` child that names none (an exact ID, never an alias).
+DEFAULT_CLAUDE_CODE_MODEL = "claude-sonnet-4-6"
+
+#: Child ``stop_reason`` per external worker status.
+_EXTERNAL_STOP_REASON = {
+    "completed": "end_turn", "failed": "error", "interrupted": "timeout",
+    "cancelled": "cancelled", "needs_attention": "needs_attention",
+}
+
+
+@dataclass(frozen=True)
+class _ExternalAssignment:
+    """An explicit ``claude-code`` child's resolved worker, authority and model."""
+
+    worker: Any
+    policy: Any
+    provider: str
+    model: str
 
 
 class _ChildRuntime:
@@ -1909,8 +1951,104 @@ class _ChildRuntime:
         self._runtime = runtime
         self._spec = spec
         self._runner = runner
+        self._router = runtime._router
+        #: Set for an explicit ``claude-code`` child: that assignment is executed
+        #: by the external Claude Code worker, never by a Nexus ``run_turn`` loop.
+        self._external: _ExternalAssignment | None = None
+        sections = getattr(getattr(getattr(spec, "config", None), "v2", None), "providers", {}) or {}
+        reference = str(getattr(spec, "model", None) or "")
+        if reference in getattr(getattr(runtime, "_tiers", None), "order", ()):
+            reference = runtime._claude_code_tier_route(reference) or reference
+        head, sep, tail = reference.partition("/")
+        provider_name = head if sep else getattr(spec, "provider", None)
+        if not sep and provider_name is None:
+            agents = getattr(runtime, "_agents", None)
+            role = agents.get(getattr(spec, "agent_id", None)) if agents is not None else None
+            provider_name = getattr(role, "provider", None)
+        section = sections.get(provider_name)
+        # Claude Code is never available to ordinary Nexus children: only an
+        # explicitly configured role reaches the external worker below.
+        providers = {
+            name: provider for name, provider in getattr(runtime, "_providers", {}).items()
+            if Runtime._adapter_kind(name, sections.get(name)) != ADAPTER_CLAUDE_CODE
+        }
+        if len(providers) != len(getattr(runtime, "_providers", {})):
+            self._router = ModelRouter(
+                providers,
+                aliases=runtime._router.aliases, default=runtime._router.default,
+                fallback=runtime._router.fallback, registry=runtime._registry, tiers=runtime._tiers,
+            )
+        if Runtime._adapter_kind(provider_name, section) == ADAPTER_CLAUDE_CODE:
+            self._refuse_inherited_external(runtime, spec)
+            self._external = self._plan_external(runtime, spec, provider_name, section, tail if sep else "")
+
+    @staticmethod
+    def _refuse_inherited_external(runtime: Any, spec: Any) -> None:
+        """A child never reaches Claude Code's own tools merely by inheriting the parent's model.
+
+        Running a ``claude-code`` assignment widens authority (Claude's tools are
+        not mediated by Nexus), so the route must be named by the ``Task`` call,
+        the role (``model``/``provider``) or a configured tier.
+        """
+        model = str(getattr(spec, "model", None) or "")
+        parent = str(getattr(spec, "parent_model", None) or "")
+        order = getattr(getattr(runtime, "_tiers", None), "order", ())
+        if not model or model != parent or model in order:
+            return
+        requested = getattr(spec, "requested_model", None)
+        if requested and requested != "inherit":
+            return
+        try:
+            role = runtime._agents.resolve(getattr(spec, "agent", None), context="subagent")
+        except Exception:  # noqa: BLE001 - no role registry (or unknown role): nothing pins the route
+            role = None
+        if role is not None and ((role.model and role.model != "inherit") or role.provider):
+            return
+        raise ConfigError(
+            f"refusing to run {getattr(spec, 'agent', 'this child')!r} on Claude Code by inheriting the "
+            f"parent's model {model!r}: Claude Code's own tools are not mediated by Nexus. Name "
+            "claude-code/<model> on the role (model/provider) or on the Task call")
+
+    @staticmethod
+    def _plan_external(
+        runtime: Any, spec: Any, provider_name: str, section: Any, model: str
+    ) -> _ExternalAssignment:
+        """Validate and resolve the external authority before anything starts.
+
+        Refusals (token/cost budgets, a configuration wider than a read-only
+        role, a bad worker section) raise :class:`ConfigError`, which the runner
+        reports as a child that failed to start.
+        """
+        from .agents.claude_code_worker import (
+            ClaudeCodeWorker,
+            WorkerConfig,
+            nexus_child_is_read_only,
+            resolve_policy,
+        )
+
+        if getattr(spec, "worktree_scope", False) or getattr(spec, "worktree", None):
+            # A worktree child is limited to the reviewed no-shell tool profile; Claude
+            # Code's own tools (including any shell the worker policy grants) are not.
+            raise ConfigError(
+                "claude-code children cannot run in a worktree: Claude Code's own tools are not "
+                "limited to the no-shell worktree tool profile")
+        budget = getattr(spec, "budget", None)
+        if (getattr(budget, "token_budget", None) is not None
+                or getattr(budget, "cost_budget", None) is not None):
+            raise ConfigError("claude-code children cannot enforce token or cost budgets")
+        runtime._validate_claude_section(provider_name, section)
+        selection = (getattr(spec, "metadata", None) or {}).get("selection")
+        flagged = bool(selection.get("read_only")) if isinstance(selection, Mapping) else False
+        read_only = nexus_child_is_read_only(tuple(getattr(spec, "tools", ()) or ()), flagged=flagged)
+        policy = resolve_policy(WorkerConfig.from_section(section), read_only=read_only)
+        worker = ClaudeCodeWorker(WorkerConfig.from_section(section), environ=runtime._environ)
+        return _ExternalAssignment(
+            worker=worker, policy=policy, provider=provider_name, model=model or DEFAULT_CLAUDE_CODE_MODEL
+        )
 
     async def run(self) -> SubagentOutcome:
+        if self._external is not None:
+            return await self._run_external()
         runtime = self._runtime
         spec = self._spec
         workspace = Path(getattr(spec, "workspace", runtime.workspace)).resolve()
@@ -1989,7 +2127,7 @@ class _ChildRuntime:
                     session=session,
                     user_input=spec.prompt,
                     assemble=assembler,
-                    provider_for=runtime._router,
+                    provider_for=self._router,
                     emit=sink,
                     tools=dispatcher,
                     gate=gate,
@@ -2007,9 +2145,192 @@ class _ChildRuntime:
                 return self._failed(spec, session, f"{type(crash).__name__}: {crash}")
             cost = runtime._child_cost(session, outcome)
             result = runtime._child_outcome(spec, session, outcome, cost=cost)
+            attention = sink.attention()
+            escalated = getattr(runtime, "_child_escalations", {}).pop(spec.session_id, [])
+            if escalated:
+                said = "the child escalated: " + "; ".join(escalated)
+                attention = f"{attention}; {said}" if attention else said
+            if attention:
+                result = replace(result, metrics={**result.metrics, "attention": attention})
             if getattr(result, "status", None) == "failed":
                 result = self._with_handoff(result, spec, session)
             return result
+        finally:
+            self._drop_escalations()
+            store = runtime._effective_todo_store()
+            clear_session = getattr(store, "clear_session", None)
+            if callable(clear_session):
+                clear_session(real_id)
+
+    def _drop_escalations(self) -> None:
+        """Forget this child's recorded escalations (failure and cancel paths never read them)."""
+        escalations = getattr(self._runtime, "_child_escalations", None)
+        if isinstance(escalations, dict):
+            escalations.pop(getattr(self._spec, "session_id", None), None)
+
+    def _external_report(
+        self, workspace: Path, before: Any, after: Any, result: Any
+    ) -> tuple[list[str], dict[str, Any]]:
+        """Verified file changes plus the authority/usage disclosure of an external run.
+
+        ``result`` is ``None`` when the worker never returned (cancel or crash);
+        the authority, unknown usage and file report still apply.
+        """
+        from .agents.claude_code_worker import changed_paths
+        from .agents.runner import MAX_REPORTED_FILES
+
+        external = self._external
+        assert external is not None
+        if before is not None and after is not None:
+            changed = changed_paths(before, after)
+            note = ("computed from the workspace's git status/mtimes before and after the run, "
+                    "independently of Claude's claims; it is workspace-wide and may include "
+                    "concurrent changes by other writers")
+        else:
+            changed = []
+            note = "file changes could not be verified (workspace snapshot failed); none are reported"
+        if len(changed) > MAX_REPORTED_FILES:
+            note += f"; {len(changed)} paths changed, only the first {MAX_REPORTED_FILES} are listed"
+        metrics: dict[str, Any] = {
+            "provider": external.provider, "model": external.model, "usage": "unknown",
+            "authority": external.policy.authority(workspace),
+            "files_changed_note": note, "files_changed_total": len(changed),
+        }
+        if result is not None:
+            metrics.update(
+                claude_session=result.claude_session, transcript_path=result.transcript_path,
+                tool_calls=result.tool_calls, elapsed_seconds=round(result.elapsed_seconds, 3))
+            if result.attention:
+                metrics["attention"] = result.attention
+            if result.clip_notes:
+                metrics["clip_notes"] = list(result.clip_notes)
+        return changed, metrics
+
+    def _context_snapshot(self, instructions: str, workspace: Path) -> dict[str, Any]:
+        """What the external worker was actually given, in the ``context.assembled`` request shape."""
+        from .core.loop import MAX_SNAPSHOT_SYSTEM_CHARS
+
+        external = self._external
+        assert external is not None
+        policy = external.policy
+        if instructions:
+            head = ("Claude Code has no Nexus system prompt. The role instructions below were "
+                    "prepended to the task prompt it received:\n\n" + instructions)
+        else:
+            head = "No role instructions were sent; Claude Code received only the task prompt."
+        system = f"{head}\n\n[authority] {policy.authority(workspace)}"
+        tools = [{"name": name, "description": "Claude Code's own tool (not mediated by Nexus)",
+                  "input_schema": {}} for name in (policy.tools or ())]
+        return {
+            "iteration": 0, "messages": 1, "provider": external.provider, "model": external.model,
+            "tools": len(tools),
+            "request": {"system": redact_secrets(system[:MAX_SNAPSHOT_SYSTEM_CHARS]), "tools": tools},
+        }
+
+    async def _run_external(self) -> SubagentOutcome:
+        """Run an explicit ``claude-code`` child through the external worker.
+
+        Claude Code executes its own tools; Nexus records the user prompt, the
+        assistant text and ``external.*`` activity read back from Claude's
+        transcript in the child's own log (relayed upward like any child's), and
+        verifies file changes itself. No Nexus tool dispatcher is involved.
+        """
+        from .agents.claude_code_worker import snapshot_workspace
+        from .agents.runner import MAX_REPORTED_FILES
+
+        runtime, spec, external = self._runtime, self._spec, self._external
+        assert external is not None
+        workspace = Path(getattr(spec, "workspace", runtime.workspace)).resolve()
+        facade = runtime._ensure_child_sessions()
+        real_id = _child_session_id(spec.session_id)
+        session = facade.manager.open(real_id, create=True, recover=False)
+        try:
+            agent_section = getattr(getattr(getattr(spec, "config", None), "v2", None), "agent", None)
+            # Only the wall clock maps to Claude; Nexus iteration caps do not.
+            max_seconds = float(getattr(agent_section, "max_turn_seconds", 0) or 0)
+            limits = TurnLimits(max_iterations=0, max_seconds=max_seconds)
+            lease = session.begin_turn(limits=limits)
+            sink = _ChildEventSink(session, spec.emit)
+
+            async def emit(kind: str, data: dict[str, Any]) -> None:
+                await sink.emit(Event(type=kind, data=dict(data), session=real_id, turn=lease.turn_id))
+
+            terminal = False
+            result = None
+            crash: Exception | None = None
+            before = after = None
+            try:
+                await emit("turn.started", {"limits": {"max_iterations": 0, "max_seconds": max_seconds}})
+                # Claude Code has no system-prompt channel here, so the role's
+                # instructions travel as a labelled prefix of the one prompt it gets.
+                instructions = str(getattr(spec, "system_prompt", "") or "").strip()
+                prompt = (f"Role instructions (Nexus agent role {spec.agent!r}):\n{instructions}\n\n"
+                          f"Task:\n{spec.prompt}") if instructions else spec.prompt
+                await emit("context.assembled", self._context_snapshot(instructions, workspace))
+                session.append_message(Message(
+                    role="user", content=[Text(spec.prompt)], meta=MessageMeta(turn_id=lease.turn_id)))
+                with contextlib.suppress(Exception):
+                    before = await asyncio.to_thread(snapshot_workspace, workspace)
+                try:
+                    result = await external.worker.run(
+                        prompt=prompt, model=external.model, workspace=workspace,
+                        policy=external.policy, max_seconds=max_seconds,
+                        cancel=getattr(spec, "cancel", None), emit=emit)
+                except Exception as exc:  # noqa: BLE001 - refusal/preflight failure is reported, not raised
+                    crash = exc
+                with contextlib.suppress(Exception):
+                    after = await asyncio.to_thread(snapshot_workspace, workspace)
+                if result is not None and result.text:
+                    session.append_message(Message(
+                        role="assistant", content=[Text(result.text)],
+                        meta=MessageMeta(provider=external.provider, model=external.model,
+                                         turn_id=lease.turn_id)))
+                if crash is None and result is not None:
+                    if result.status == "completed":
+                        await emit("turn.completed", {"stop_reason": "end_turn", "iterations": 0,
+                                                      "usage": {}, "usage_unknown": True})
+                    elif result.status == "cancelled":
+                        await emit("turn.cancelled", {"reason": result.error, "iterations": 0})
+                    else:
+                        await emit("turn.failed", {
+                            "error": redact_secrets(result.error or result.status)[:500], "iterations": 0})
+                    terminal = True
+            except asyncio.CancelledError:
+                with contextlib.suppress(Exception):
+                    await emit("turn.cancelled", {"reason": "cancelled", "iterations": 0})
+                terminal = True
+                # The runner builds the cancelled outcome; hand it the disclosure it
+                # would otherwise lose (authority, unknown usage, verified file changes).
+                with contextlib.suppress(Exception):
+                    after = await asyncio.to_thread(snapshot_workspace, workspace)
+                with contextlib.suppress(Exception):
+                    changed, metrics = self._external_report(workspace, before, after, None)
+                    spec.metadata["external_partial"] = {
+                        "metrics": metrics, "files_changed": tuple(changed[:MAX_REPORTED_FILES])}
+                raise
+            finally:
+                if not terminal:
+                    with contextlib.suppress(Exception):
+                        await emit("turn.failed", {
+                            "error": redact_secrets(str(crash))[:500] if crash else "interrupted", "iterations": 0})
+                with contextlib.suppress(Exception):
+                    lease.release()
+            changed, metrics = self._external_report(workspace, before, after, result)
+            if crash is not None or result is None:
+                return self._failed(
+                    spec, session, f"{type(crash).__name__}: {crash}" if crash else "no result",
+                    metrics=metrics, files_changed=tuple(changed[:MAX_REPORTED_FILES]))
+            outcome = SubagentOutcome(
+                agent=spec.agent, session_id=spec.session_id, status=result.status,
+                text=result.text, is_error=result.is_error, usage=SubagentUsage(),
+                stop_reason=_EXTERNAL_STOP_REASON.get(result.status, "error"),
+                dropped_tools=tuple(spec.dropped_tools), clamped=bool(spec.clamped), tier=spec.tier,
+                requested_tier=spec.requested_tier, error=result.error, metrics=metrics,
+                files_changed=tuple(changed[:MAX_REPORTED_FILES]),
+            )
+            if outcome.status in ("failed", "interrupted"):
+                outcome = self._with_handoff(outcome, spec, session)
+            return outcome
         finally:
             store = runtime._effective_todo_store()
             clear_session = getattr(store, "clear_session", None)
@@ -2040,25 +2361,38 @@ class _ChildRuntime:
             handoff_path=str(saved) if saved is not None else None,
         )
 
-    def _failed(self, spec: Any, session: Any, message: str) -> SubagentOutcome:
+    def _failed(
+        self,
+        spec: Any,
+        session: Any,
+        message: str,
+        *,
+        metrics: Mapping[str, Any] | None = None,
+        files_changed: tuple[str, ...] = (),
+    ) -> SubagentOutcome:
         """A failed outcome for a run that raised or could not start."""
+        message = redact_secrets(message)  # raw exception text may carry credentials
         base = SubagentOutcome(
             agent=spec.agent,
             session_id=spec.session_id,
             status="failed",
             is_error=True,
             text=message,
-            error=redact_secrets(message)[:500],
+            error=message[:500],
             stop_reason="error",
             dropped_tools=tuple(spec.dropped_tools),
             clamped=bool(spec.clamped),
             tier=spec.tier,
             requested_tier=spec.requested_tier,
+            metrics=dict(metrics or {}),
+            files_changed=files_changed,
         )
         return self._with_handoff(base, spec, session)
 
     async def aclose(self) -> None:
-        return None
+        self._drop_escalations()
+        if self._external is not None:
+            await self._external.worker.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -2144,6 +2478,8 @@ class Runtime:
         self._permissions = permissions
         self._tool_factory = tool_factory
         self._job_registry = job_registry
+        #: ``escalate`` reports of running children, keyed by logical child session id.
+        self._child_escalations: dict[str, list[str]] = {}
         self._todo_store = todo_store
         #: One broker for every root session's operator questions. Answers are
         #: routed by (root session, question id), never by turn or agent alone.
@@ -4056,7 +4392,7 @@ class Runtime:
         providers_cfg = {name: section for name, section in sections.items()}
         provider_aliases = {"codex": "openai"} if (codex := sections.get("codex")) and not self._is_legacy_codex_section(codex) else {}
         provider_aliases.update({name: "anthropic" for name, section in sections.items()
-                                 if self._adapter_kind(name, section) == ADAPTER_CLAUDE_AGENT})
+                                 if self._adapter_kind(name, section) in (ADAPTER_CLAUDE_AGENT, ADAPTER_CLAUDE_CODE)})
         # Not project-specific: one shared catalogue cache under the home root
         # (STATE_PLAN §5.4).
         cache_path = nexus_home(self._home) / "cache" / "models.dev.json"
@@ -4166,12 +4502,10 @@ class Runtime:
                 "(Nexus will not default an OpenAI-compatible vendor to the "
                 "official OpenAI endpoint)"
             )
-        if kind == ADAPTER_CLAUDE_AGENT:
+        if kind in (ADAPTER_CLAUDE_AGENT, ADAPTER_CLAUDE_CODE):
             from .model.providers.claude_agent import ClaudeAgentProvider
 
-            if any(getattr(section, field, None) is not None for field in
-                   ("api_key", "base_url", "api", "auth", "command", "args", "env", "inherit_env", "permission_policy", "profile")):
-                raise ConfigError("claude-agent uses Claude Code subscription login; only executable and timeout_seconds are supported")
+            self._validate_claude_section(name, section)
             provider = ClaudeAgentProvider(workspace=self.workspace, model=self._model_for(name, model_ref),
                                            executable=getattr(section, "executable", None),
                                            timeout_seconds=getattr(section, "timeout_seconds", None), environ=self._environ)
@@ -4324,6 +4658,32 @@ class Runtime:
             return ("codex",)
         return (name,)
 
+    def claude_code_main_enabled(self) -> bool:
+        # Read the effective config (a daemon holds no pinned ``_config``), so the
+        # Settings toggle takes effect without a restart.
+        try:
+            config = self._load_config()
+        except Exception:  # noqa: BLE001 - an unreadable config means "off"
+            return False
+        models = getattr(getattr(config, "v2", None), "models", None)
+        return bool(getattr(models, "claude_code_main_enabled", False))
+
+    @staticmethod
+    def _validate_claude_section(name: str, section: Any) -> None:
+        """Whitelist of fields a Claude subscription provider accepts.
+
+        Only ``kind``, ``executable`` and ``timeout_seconds`` are common; the
+        ``worker_*`` external-execution policy applies to ``claude-code`` only.
+        """
+        if any(getattr(section, field, None) is not None for field in
+               ("api_key", "base_url", "api", "auth", "command", "args", "env", "inherit_env", "permission_policy", "profile")):
+            raise ConfigError(
+                f"{name} uses Claude Code subscription login; only executable, timeout_seconds "
+                "and (claude-code only) worker_* fields are supported")
+        if Runtime._adapter_kind(name, section) != ADAPTER_CLAUDE_CODE and any(
+                getattr(section, field, None) is not None for field in _CLAUDE_WORKER_FIELDS):
+            raise ConfigError(f"{name}: worker_* fields apply only to kind = claude-code")
+
     def _build_providers(self, config: Config) -> dict[str, Provider]:
         """Construct every adapter the configuration asks the runtime to own.
 
@@ -4354,6 +4714,10 @@ class Runtime:
             kind = self._adapter_kind(name, section)
             if kind is None:
                 continue
+            if kind == ADAPTER_CLAUDE_CODE:
+                self._validate_claude_section(name, section)
+                if not bool(getattr(getattr(v2, "models", None), "claude_code_main_enabled", False)):
+                    continue
             provider = self._construct_provider(name, kind, section, model_ref)
             if provider is None:
                 continue
@@ -4368,6 +4732,8 @@ class Runtime:
             if head not in _CORE_ADAPTERS or head in providers:
                 continue
             kind = _CORE_ADAPTERS[head]
+            if kind == ADAPTER_CLAUDE_CODE and not bool(getattr(getattr(v2, "models", None), "claude_code_main_enabled", False)):
+                continue
             provider = self._construct_provider(head, kind, None, model_ref)
             if provider is None:
                 continue
@@ -4381,6 +4747,8 @@ class Runtime:
         for name, provider in file_result.providers.items():
             if name not in providers:
                 providers[name] = provider
+        if not bool(getattr(getattr(v2, "models", None), "claude_code_main_enabled", False)):
+            providers.pop("claude-code", None)
         self._provider_file_diagnostics = tuple(
             diagnostic.to_dict() for diagnostic in file_result.diagnostics
         )
@@ -5094,7 +5462,28 @@ class Runtime:
 
     def _tier_runnable(self, tier: str) -> bool:
         """Whether ``tier`` currently resolves to a model a provider can run."""
-        return self._router.tier_runnable(tier)
+        if self._router.tier_runnable(tier):
+            return True
+        return self._claude_code_tier_route(tier) is not None
+
+    def _claude_code_tier_route(self, tier: str) -> str | None:
+        """The ``claude-code/<model>`` entry a tier would run on, else ``None``.
+
+        Children only: a tier's candidates are walked in order, and the first one
+        that is either a configured ``claude-code`` section (run by the external
+        worker) or runnable by a Nexus provider decides. A tier whose first usable
+        entry is a Nexus provider never reaches the worker. The root's router is
+        untouched: it cannot stream ``claude-code``.
+        """
+        sections = getattr(getattr(self._config, "v2", None), "providers", None) or {}
+        for reference in self._router.tier_candidates(tier):
+            head = reference.split("/", 1)[0]
+            if Runtime._adapter_kind(head, sections.get(head)) == ADAPTER_CLAUDE_CODE:
+                return reference if "/" in reference else None
+            info = self._router._registry_lookup(reference)
+            if info is not None and getattr(info, "provider", None) in self._router._providers:
+                return None
+        return None
 
     def _build_child_runtime(self, spec: Any) -> _ChildRuntime:
         """The ``RuntimeFactory``: build a nested, restricted child run."""
@@ -5358,6 +5747,19 @@ class Runtime:
                 if name in WORKTREE_CHILD_TOOLS and tool.origin == "builtin"
             }
         catalog = [catalog_map[name] for name in spec.tools if name in catalog_map]
+        # Subagents only: the parent's tool set never contains `escalate`, so it
+        # is added after the parent ∩ role ∩ requested intersection (it grants nothing).
+        from .tools.builtin.escalate import MAX_ESCALATIONS, build_escalate_tool
+
+        escalations = getattr(self, "_child_escalations", {}).setdefault(logical_id, [])
+
+        def record_escalation(text: str) -> bool:
+            if len(escalations) >= MAX_ESCALATIONS:
+                return False
+            escalations.append(text)
+            return True
+
+        catalog.append(build_escalate_tool(record_escalation))
         authority = (
             spec.permissions if isinstance(spec.permissions, _ChildAuthority) else None
         )
@@ -5369,7 +5771,7 @@ class Runtime:
             config,
             workspace=workspace,
             tools=catalog,
-            restrict=spec.tools,
+            restrict=(*spec.tools, "escalate"),
             path_guard=path_guard,
             job_registry=self._job_registry,
             todo_store=self._effective_todo_store(),

@@ -114,10 +114,10 @@ def _api_key(runtime: object, provider: str) -> Any:
     return _factory(runtime, "_api_key_auth_factory", StoredKeyAuth)(provider, profile="default")
 
 
-def _claude(runtime: object) -> Any:
+def _claude(runtime: object, provider: str = "claude-agent") -> Any:
     from .setup import _load_config
 
-    section = getattr(getattr(_load_config(runtime), "v2", None), "providers", {}).get("claude-agent")
+    section = getattr(getattr(_load_config(runtime), "v2", None), "providers", {}).get(provider)
     environ = getattr(runtime, "_environ", None)
     return _factory(runtime, "_claude_auth_factory", ClaudeCliAuth)(
         executable=getattr(section, "executable", None), environ=environ if isinstance(environ, Mapping) else None)
@@ -130,8 +130,8 @@ def _manager(runtime: object, provider: str) -> Any:
         return _copilot(runtime)
     if provider == "opencode-go":
         return _api_key(runtime, provider)
-    if provider == "claude-agent":
-        return _claude(runtime)
+    if provider in {"claude-agent", "claude-code"}:
+        return _claude(runtime, provider)
     raise ConfigError("unknown provider")
 
 

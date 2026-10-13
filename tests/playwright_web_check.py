@@ -151,7 +151,7 @@ async def verify_context_main_pane() -> None:
         page = await browser.new_page(viewport={"width": 1280, "height": 800})
         async def route_fixture(route) -> None:
             request = route.request
-            if request.url.endswith(("/js/context-view.js", "/js/markdown.js")):
+            if request.url.endswith(("/js/context-view.js", "/js/markdown.js", "/js/highlight.js")):
                 await route.fulfill(
                     status=200,
                     content_type="text/javascript",

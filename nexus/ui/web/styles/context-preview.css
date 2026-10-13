@@ -24,7 +24,7 @@
   min-width: 0;
   padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 0;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--canvas) 60%, transparent);
 }
 
@@ -50,7 +50,7 @@
   place-items: center;
   padding: 0 6px;
   border: 1px solid var(--border);
-  border-radius: 0;
+  border-radius: var(--radius-xs);
   color: var(--muted);
   font-size: 11px;
   font-weight: 550;
@@ -66,7 +66,7 @@
   min-width: 0;
   padding: 9px 10px;
   border: 1px solid var(--border);
-  border-radius: 0;
+  border-radius: var(--radius-sm);
   background: var(--elevated);
 }
 
@@ -102,7 +102,7 @@
   margin: 0;
   padding: 10px 11px;
   border: 1px dashed var(--border-strong, #73766f);
-  border-radius: 0;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--canvas) 72%, transparent);
   color: var(--quiet, #8a8d85);
   font-size: 12px;
@@ -112,7 +112,7 @@
   margin: 0;
   padding: 9px 10px;
   border: 1px solid var(--border);
-  border-radius: 0;
+  border-radius: var(--radius-sm);
   background: var(--elevated);
 }
 
@@ -147,7 +147,7 @@
   max-height: calc(12px * 1.55 * 10);
   overflow: hidden;
   overscroll-behavior: auto;
-  font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font: 12px/1.55 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
   cursor: pointer;
 }
 
@@ -162,16 +162,16 @@
 }
 .context-markdown ul, .context-markdown ol { margin: 0; padding-left: 1.6em; }
 .context-markdown code, .context-markdown pre {
-  font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font: 12px/1.55 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
 }
-.context-markdown :not(pre) > code { padding: 1px 4px; border-radius: 0; background: var(--code); }
+.context-markdown :not(pre) > code { padding: 1px 4px; border-radius: var(--radius-xs); background: var(--code); }
 .context-markdown .context-code {
   max-width: 100%;
   margin: 0 0 .65em;
   padding: 8px 10px;
   overflow: auto;
   border: 1px solid var(--border);
-  border-radius: 0;
+  border-radius: var(--radius-sm);
   background: var(--code);
   white-space: pre;
 }

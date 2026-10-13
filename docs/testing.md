@@ -58,7 +58,7 @@ fails, say so; do not change it.
 | Tools | `test_tool*.py`, `test_builtin_*.py`, `test_patch_*.py` |
 | Extensions | `test_ext_*.py`, `test_hot_*.py`, `test_skills*.py`, `test_hooks_manager.py`, `test_mcp_*.py` (fixtures in `tests/fixtures/{extensions,hooks,mcp}`) |
 | Agents | `test_agents_manager.py`, `test_subagent_*.py`, `test_worktree_*.py`, `test_host_worktrees.py` |
-| Host | `test_host_*.py`, `test_uds_*.py`, `test_http_*.py`, `test_web_transport.py` |
+| Host | `test_host_*.py` (`test_host_agent_cancel.py`, `test_host_claude_code_settings.py`), `test_uds_*.py`, `test_http_*.py`, `test_web_transport.py` |
 | Security | `test_security_regressions.py`, `test_extension_security.py`, `test_outbound_*.py`, `test_config_secrets.py` |
 | TUI | `test_ratatui_*.py`, `test_prompt_history.py` |
 | Dev mode | `test_mock_*.py`, `test_benchmark.py` |

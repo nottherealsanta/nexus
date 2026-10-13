@@ -304,6 +304,18 @@ class LogsRead(msgspec.Struct, tag=True, frozen=True):
     limit: int = 50
 
 
+class AgentCancel(msgspec.Struct, tag=True, frozen=True):
+    """Cancel one running child agent (not its parent turn or siblings).
+
+    An external Claude Code worker's process group is killed by its own
+    cancellation path; the parent turn continues with a ``cancelled`` result.
+    """
+
+    session: str
+    agent_id: str
+    reason: str = ""
+
+
 class AgentTranscript(msgspec.Struct, tag=True, frozen=True):
     """Request the reducer-backed transcript for one child agent."""
 
@@ -465,6 +477,16 @@ class SessionTitleSettingsSet(msgspec.Struct, tag=True, frozen=True):
 
     enabled: bool | None = None
     model: str | None = None
+
+
+class ClaudeCodeSettings(msgspec.Struct, tag=True, frozen=True):
+    """Read ``[models] claude_code_main_enabled`` (Settings -> Models)."""
+
+
+class ClaudeCodeSettingsSet(msgspec.Struct, tag=True, frozen=True):
+    """Allow or hide Claude Code as a selectable main model (default hidden)."""
+
+    main_enabled: bool
 
 
 class ModelSelect(msgspec.Struct, tag=True, frozen=True):
@@ -775,6 +797,7 @@ Command = (
     | SessionState
     | LogsRead
     | AgentTranscript
+    | AgentCancel
     | SessionFork
     | SessionDelete
     | SessionRestore
@@ -796,6 +819,8 @@ Command = (
     | AgentMaxTierSet
     | SessionTitleSettings
     | SessionTitleSettingsSet
+    | ClaudeCodeSettings
+    | ClaudeCodeSettingsSet
     | ModelSelect
     | ReasoningEffortSelect
     | AgentsList
@@ -874,6 +899,7 @@ COMMANDS: tuple[type, ...] = (
     SessionState,
     LogsRead,
     AgentTranscript,
+    AgentCancel,
     SessionFork,
     SessionDelete,
     SessionRestore,
@@ -895,6 +921,8 @@ COMMANDS: tuple[type, ...] = (
     AgentMaxTierSet,
     SessionTitleSettings,
     SessionTitleSettingsSet,
+    ClaudeCodeSettings,
+    ClaudeCodeSettingsSet,
     ModelSelect,
     ReasoningEffortSelect,
     AgentsList,
@@ -1123,6 +1151,14 @@ class LogsReadResult(msgspec.Struct, tag=True, frozen=True):
     session: SessionLogPage
 
 
+class AgentCancelResult(msgspec.Struct, tag=True, frozen=True):
+    session: str
+    agent_id: str
+    #: True when a running child was signalled; False when it was not running.
+    cancelled: bool = False
+    message: str = ""
+
+
 class AgentTranscriptResult(msgspec.Struct, tag=True, frozen=True):
     session: str
     agent_id: str
@@ -1248,6 +1284,14 @@ class SessionTitleSettingsResult(msgspec.Struct, tag=True, frozen=True):
     model: str = "low"
     resolved: str = ""
     message: str = ""
+
+
+class ClaudeCodeSettingsResult(msgspec.Struct, tag=True, frozen=True):
+    """``message`` explains scope: main selection is SDK-only; subagents are per role."""
+
+    main_enabled: bool = False
+    message: str = ""
+    restart_required: bool = False
 
 
 class DefaultModelSettingsResult(msgspec.Struct, tag=True, frozen=True):
@@ -1605,6 +1649,7 @@ Result = (
     | SessionStateResult
     | LogsReadResult
     | AgentTranscriptResult
+    | AgentCancelResult
     | SessionForkResult
     | SessionDeleteResult
     | SessionRestoreResult
@@ -1621,6 +1666,7 @@ Result = (
     | ModelTiersResult
     | DefaultModelSettingsResult
     | SessionTitleSettingsResult
+    | ClaudeCodeSettingsResult
     | ModelSelectResult
     | ReasoningEffortSelectResult
     | AgentsListResult
@@ -1690,6 +1736,7 @@ RESULTS: tuple[type, ...] = (
     SessionStateResult,
     LogsReadResult,
     AgentTranscriptResult,
+    AgentCancelResult,
     SessionForkResult,
     SessionDeleteResult,
     SessionRestoreResult,
@@ -1706,6 +1753,7 @@ RESULTS: tuple[type, ...] = (
     ModelTiersResult,
     DefaultModelSettingsResult,
     SessionTitleSettingsResult,
+    ClaudeCodeSettingsResult,
     ModelSelectResult,
     ReasoningEffortSelectResult,
     AgentsListResult,
@@ -1777,6 +1825,8 @@ __all__ = [
     "AgentReset",
     "AgentSelect",
     "AgentSelectResult",
+    "AgentCancel",
+    "AgentCancelResult",
     "AgentTranscript",
     "AgentTranscriptResult",
     "AgentsList",
@@ -1829,6 +1879,9 @@ __all__ = [
     "DefaultModelSet",
     "DefaultModelSettingsResult",
     "AgentMaxTierSet",
+    "ClaudeCodeSettings",
+    "ClaudeCodeSettingsResult",
+    "ClaudeCodeSettingsSet",
     "SessionTitleSettings",
     "SessionTitleSettingsSet",
     "SessionTitleSettingsResult",

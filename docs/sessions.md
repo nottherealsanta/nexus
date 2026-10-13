@@ -98,6 +98,14 @@ Legacy JSONL session directories are not imported. JSONL is an export format onl
   runs it and its recorded `pid` is gone. Every turn holds the lock and
   `turn.started` is written after the lease, so holding it proves the turn is
   dead. A reused `pid` can keep a dead `!` run open (not handled).
+  Unfinished `external.started` workers get `external.finished` with status/reason
+  `interrupted` and usage `unknown`, preserving worker session, agent and turn
+  IDs. Unclosed child-task rows also get `agent.completed` with status
+  `interrupted`. This covers crashes before the child writes `turn.started` too.
+  Replay shows the recovered status; no tools are retried. The warning says the
+  orphan Claude process may still be running: recovery does not kill it or claim
+  it was stopped. The exclusive lease protects live workers; already-finished
+  workers and child tasks are not closed twice.
 - **Presence.** `attended` is derived from the live subscriber count; dropping
   to zero applies the unattended policy to pending approvals
   (`DEFAULT_UNATTENDED_DECISION = "deny_once"`, overridden by `on_unattended`).
