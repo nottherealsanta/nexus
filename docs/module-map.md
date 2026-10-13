@@ -442,6 +442,7 @@ here, so add a row when you add a file.
 | `timeline.py` | Pure formatting and filtering for reducer-backed conversation timelines |
 | `tool_details.py` | Presentable tool call details: every parameter and output, none of the JSON |
 | `usage.py` | Provider usage formatting shared by surfaces (`ProvidersUsageResult`) |
+| `live_helper.py` | `nexus-live` process wrapper (binary lookup, bounded JSONL, offer/answer/mute/stop, helper-event forwarding) and `LiveCall`, the client half of a GPT Live call; stdlib only, shared by the terminal, desktop and CLI clients |
 | `voice_capture.py` | Bounded 16 kHz microphone capture for TUI dictation |
 | `voice_settings.py` | Host-backed voice configuration shared by terminal surfaces |
 
