@@ -45,6 +45,11 @@ voice = [
     "moondream==2.4.0",
     "sounddevice>=0.5,<1",
 ]
+# GPT Live calls (docs/live.md): the sideband WebSocket client, imported lazily
+# by nexus/live/transport.py. Not a base dependency.
+live = [
+    "websockets>=14,<16",
+]
 
 [project.scripts]
 nexus = "nexus.cli:main"
@@ -62,6 +67,7 @@ include = ["nexus*"]
 "nexus.model" = ["data/models.min.json", "data/NOTICE"]
 "nexus.auth" = ["NOTICE"]
 "nexus.voice" = ["NOTICE"]
+"nexus.live" = ["NOTICE", "prompts/*.md"]
 "nexus.agents" = ["data/*.md"]
 "nexus.ui.web" = ["index.html", "styles/*.css", "js/*.js", "assets/*"]
 

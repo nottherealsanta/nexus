@@ -33,7 +33,8 @@ here, so add a row when you add a file.
 | --- | --- |
 | `nexus/agents/data/*.md` | packaged agent roles: `build`, `orchestrator` (roots); `advisor`, `task`, `quick` (subagents) |
 | `nexus/model/data/models.min.json`, `NOTICE` | vendored models.dev snapshot and MIT attribution |
-| `nexus/auth/NOTICE`, `nexus/voice/NOTICE` | third-party attributions |
+| `nexus/auth/NOTICE`, `nexus/voice/NOTICE`, `nexus/live/NOTICE` | third-party attributions |
+| `nexus/live/prompts/instructions.md` | bundled GPT Live voice instructions (override: `<workspace>/.agents/live/instructions.md`) |
 | `nexus/host_support/searchserver/` | packaged SearXNG `compose.yaml` and `searxng/settings.yml` |
 | `nexus/ui/web/index.html`, `js/*.js`, `styles/*.css`, `assets/*` | the browser app ([web.md](web.md#file-map)) |
 
@@ -450,6 +451,14 @@ here, so add a row when you add a file.
 | `fold.py` | Delta accumulation, dedup, and log folding for the pure view reducer |
 | `model.py` | Renderable view-model types for the pure event reducer |
 | `reduce.py` | The pure, synchronous event reducer |
+
+### `nexus/live/`
+
+| File | Purpose |
+| --- | --- |
+| `__init__.py` | GPT Live voice calls: a daemon-side manager (docs/live.md) |
+| `protocol.py` | Wire shapes of a call: signaling body, inbound event union with `Unknown` fallback, outbound appends, 500-byte UTF-8 chunking |
+| `transport.py` | `LiveTransport` seam and `CodexLiveTransport`: signaling POST, sideband WebSocket with bounded reconnect, redacted errors |
 
 ### `nexus/voice/`
 
