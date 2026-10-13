@@ -75,6 +75,9 @@ def write_skill(
         encoding="utf-8",
     )
 
+#: Tools only a subagent has; they grant nothing, so authority comparisons ignore them.
+CHILD_ONLY = frozenset({"escalate"})
+
 
 async def drain(session):
     return [event async for event in session.send("go")]
@@ -283,9 +286,9 @@ async def test_bundle_declaration_cannot_widen_read_only_child_catalog(tmp_path)
         "read", "glob", "grep", "subagent", "todowrite", "question", "webfetch", "websearch", "skill"
     }
     assert len(provider.requests) == 4
-    assert {tool.name for tool in provider.requests[1].tools} == child_catalog
-    assert {tool.name for tool in provider.requests[2].tools} == child_catalog
-    assert "bash" not in {tool.name for tool in provider.requests[2].tools}
+    assert ({tool.name for tool in provider.requests[1].tools} - CHILD_ONLY) == child_catalog
+    assert ({tool.name for tool in provider.requests[2].tools} - CHILD_ONLY) == child_catalog
+    assert "bash" not in ({tool.name for tool in provider.requests[2].tools} - CHILD_ONLY)
     await runtime.aclose()
 
 

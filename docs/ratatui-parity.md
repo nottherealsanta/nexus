@@ -1,5 +1,12 @@
 # Ratatui implementation and parity ledger
 
+Expanded user-message previews render up to 16,000 display characters and 200
+logical lines, rather than using the generic 1,600-character literal preview.
+If either limit is exceeded, a final `... (N characters total)` line announces
+the omitted content and counts the original prompt's Unicode characters.
+Stored messages are unchanged. Projection regression tests cover both limits;
+native PTY verification of long user messages is not verified.
+
 Session titles setting saves preserve the parent navigation history. Toggling
 automatic titles or choosing a model returns to the existing Session titles page;
 Escape still returns to its parent rather than losing the Settings stack. Both
@@ -1071,6 +1078,53 @@ its fix:
 real host (scripted model) under a pseudo-terminal, driven only by keystrokes and read through a
 small screen emulator: Models opens from the host, a tier tab changes the tier, a toggle saves and
 the page shows it, and the Keyboard page scrolls past its second section by wheel and by keys.
+
+## External Claude Code workers
+
+Settings → Models tags a tier entry served by a `kind = "claude-code"` section as
+**subagents** (note: "Claude Code worker; titles and other jobs skip it"), never
+"skipped · provider not connected": only subagents run it, so it is not a Nexus
+provider (`candidate_rows` sets `scope = "subagents"`; `settings_pages/models.py`).
+Titles and other background jobs still use the first Nexus-runnable entry.
+
+An explicit `claude-code/<model>` subagent ([agents.md](agents.md#external-claude-code-workers))
+runs Claude's own tools, so the native client states that and never presents those
+rows as Nexus-run. Everything is read from the reduced view (`ConversationView.external`,
+`ToolCallView.provenance`, `AgentView.usage_unknown`), so a live session and a replay
+render identically. `ui_support/external_worker.py` builds the rows; `rust/tui`
+draws the new block kind `external`.
+
+- **Parent Task card:** the title gains `Claude Code (external, own tools)`; a
+  `needs_attention` worker adds a `Needs attention: <instruction>` line to the card.
+- **Agent page, opening card** (kind `external`, titled `Claude Code worker · <model> ·
+  independent tools`): Provider, Model, effective Workspace, Permission mode, Tools,
+  Allowed/Disallowed tools, Restricted, Settings sources, MCP, Timeout, Claude session,
+  the worker's Authority sentence (Nexus permissions/PathGuard did not mediate the
+  tools) and the provenance used on tool rows.
+- **Tool rows:** each Claude tool call is an ordinary labelled tool row with the
+  provenance appended (`$ ls · completed · Claude Code (own tools)`); the details page
+  has a `Provenance` row instead of `Executed`. Activity groups say `Claude Code ran N
+  tools`, never `Ran N commands`.
+- **Closing card** (when `external.finished` arrives): Status, Stop event, Claude tool
+  calls, `Usage: unknown (Claude Code reports none to Nexus; this is not zero)`,
+  Elapsed, Transcript path, and every clip note. The details sidebar shows
+  `Tokens: unknown` rather than hiding or zeroing it.
+- **States by colour and text:** running/done card accent or green; `failed`,
+  `interrupted` and `cancelled` red (`interrupted` is labelled partial, not a success);
+  `needs_attention` is its own amber card marked `NEEDS ATTENTION - Nexus stopped it
+  and approved nothing`, with `Needs attention:` (the exact manual instruction, shown
+  whole, not truncated). Every value is flattened to one line (newlines become spaces)
+  so a multi-line error or instruction cannot start an unlabelled row. No `claude --resume` hint is shown: a startup block
+  never created a session, and resuming outside Nexus would drop the worker's policy. Fields are clipped at 4000 characters with an announced count.
+- **Cancel:** the `/tasks` menu adds `Cancel <agent>` under each running agent
+  (host `AgentCancel`). No handoff into the live Claude terminal.
+- **Settings:** Settings -> Models has a CLAUDE CODE section with the
+  `Allow Claude Code as a main model` toggle and the scope note.
+
+Tests: `tests/test_ratatui_external.py` (projection, replay equality, attention,
+`/tasks` cancel), `tests/test_ratatui_pty_external.py` (the real binary in a PTY drawing
+the projected page), Rust `external_worker_card_is_labelled_and_attention_is_distinct`.
+Not verified: a live Claude Code run; the web client intentionally has none of this.
 
 ## GPT Live call bar and commands (M4)
 

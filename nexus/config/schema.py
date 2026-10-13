@@ -6,6 +6,7 @@ rather than a silently ignored setting. Field defaults are the built-in layer.
 from __future__ import annotations
 
 import ipaddress
+import json
 import math
 import re
 from typing import Literal
@@ -186,6 +187,7 @@ class ModelsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     default: str | None = None
     fast: str | None = None
     plan: str | None = None
+    claude_code_main_enabled: bool = False
     refresh_ttl_days: float = DEFAULT_REFRESH_TTL_DAYS
     catalogue_url: str = DEFAULT_CATALOGUE_URL
     offline: bool = False
@@ -343,6 +345,11 @@ class HooksSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 PROVIDER_AUTH_MODES = ("chatgpt_oauth", "github_copilot", "keychain")
 
 
+#: Claude Code worker permission modes; ``default`` is the older spelling of
+#: ``manual``. ``bypassPermissions`` and ``auto`` are deliberately absent.
+WORKER_PERMISSION_MODES = frozenset({"default", "manual", "acceptEdits", "plan", "dontAsk", "auto"})
+
+
 class ProviderSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     kind: str | None = None
     api_key: str | None = None
@@ -364,8 +371,29 @@ class ProviderSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     inherit_env: list[str] | None = None
     #: Literal environment values set on the agent process (may carry secrets).
     env: dict[str, str] | None = None
+    # -- Claude Code external worker (``kind = "claude-code"``) --------------
+    #: Claude permission mode for delegated workers: ``default``/``manual``,
+    #: ``acceptEdits``, ``plan``, ``auto`` or ``dontAsk`` (default).
+    #: ``auto`` hands approvals to Claude's own classifier (explicit opt-in).
+    #: ``bypassPermissions`` is rejected here, never merely discouraged.
+    worker_permission_mode: str | None = None
+    #: ``--tools``: the built-in Claude tools the worker may have (default: all
+    #: that ``--restricted`` leaves in place).
+    worker_tools: list[str] | None = None
+    #: ``--allowedTools`` / ``--disallowedTools`` permission rules.
+    worker_allowed_tools: list[str] | None = None
+    worker_disallowed_tools: list[str] | None = None
+    #: ``--setting-sources`` value (comma list of user/project/local); the
+    #: default empty string loads none of them, nor their plugins and hooks.
+    worker_setting_sources: str | None = None
+    #: Explicit ``--mcp-config`` JSON; absent means no MCP servers at all.
+    worker_mcp_config: str | None = None
+    #: ``--restricted`` (default true): no Bash/WebFetch unless named in
+    #: ``worker_tools`` and file tools confined to the workspace.
+    worker_restricted: bool | None = None
 
     def __post_init__(self) -> None:
+        self._validate_worker_fields()
         if self.auth is not None and self.auth not in PROVIDER_AUTH_MODES:
             raise ValueError("providers.*.auth must be 'chatgpt_oauth', 'github_copilot' or 'keychain'")
         if self.profile is not None and (
@@ -427,6 +455,44 @@ class ProviderSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
         if self.base_url is not None:
             _validate_base_url(self.base_url)
 
+    def _validate_worker_fields(self) -> None:
+        mode = self.worker_permission_mode
+        if mode is not None and mode not in WORKER_PERMISSION_MODES:
+            raise ValueError(
+                "providers.*.worker_permission_mode must be one of "
+                + ", ".join(sorted(WORKER_PERMISSION_MODES))
+                + " (bypassPermissions is never accepted)"
+            )
+        for name in ("worker_tools", "worker_allowed_tools", "worker_disallowed_tools"):
+            value = getattr(self, name)
+            if value is None:
+                continue
+            if (
+                not isinstance(value, list)
+                or len(value) > 256
+                or any(
+                    not isinstance(item, str) or not item.strip() or len(item) > 256
+                    or any(ch in item for ch in "\x00\r\n")
+                    for item in value
+                )
+            ):
+                raise ValueError(f"providers.*.{name} must be a bounded list of tool names or rules")
+        sources = self.worker_setting_sources
+        if sources is not None:
+            parts = [part.strip() for part in sources.split(",")] if isinstance(sources, str) else None
+            if parts is None or (sources != "" and any(part not in ("user", "project", "local") for part in parts)):
+                raise ValueError("providers.*.worker_setting_sources must be empty or a comma list of user, project, local")
+        config = self.worker_mcp_config
+        if config is not None:
+            try:
+                parsed = json.loads(config) if isinstance(config, str) and len(config) <= 65536 else None
+            except ValueError:
+                parsed = None
+            if not isinstance(parsed, dict):
+                raise ValueError("providers.*.worker_mcp_config must be a JSON object string of at most 64 KiB")
+        if self.worker_restricted is not None and not isinstance(self.worker_restricted, bool):
+            raise ValueError("providers.*.worker_restricted must be a boolean")
+
     @staticmethod
     def _redact_list(values: list[str] | None) -> list[str] | None:
         if not values:
@@ -456,7 +522,13 @@ class ProviderSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
             f"timeout_seconds={self.timeout_seconds!r}, "
             f"command={command!r}, args={args!r}, "
             f"permission_policy={self.permission_policy!r}, "
-            f"inherit_env={self.inherit_env!r}, env={env!r})"
+            f"inherit_env={self.inherit_env!r}, env={env!r}, "
+            f"worker_permission_mode={self.worker_permission_mode!r}, worker_tools={self.worker_tools!r}, "
+            f"worker_allowed_tools={self.worker_allowed_tools!r}, "
+            f"worker_disallowed_tools={self.worker_disallowed_tools!r}, "
+            f"worker_setting_sources={self.worker_setting_sources!r}, "
+            f"worker_mcp_config={'***' if self.worker_mcp_config else None!r}, "
+            f"worker_restricted={self.worker_restricted!r})"
         )
 
 

@@ -1170,6 +1170,10 @@ class PreparedCall:
 
 #: Builtins whose only effect is talking to the operator; they never ask first.
 _NEVER_ASK_TOOLS = frozenset({"question"})
+#: A subagent's report that it is blocked grants nothing, so it is allowed in
+#: every mode (a blocked child must always be able to say so). An explicit
+#: ``deny`` rule is evaluated earlier and still wins.
+_ALWAYS_ALLOWED_TOOLS = frozenset({"escalate"})
 
 
 class PermissionEngine:
@@ -1350,6 +1354,12 @@ class PermissionEngine:
             return self._verdict(
                 call, spec, key, Outcome.ALLOW, allowed, "allow",
                 f"Allowed by rule {allowed.raw!r}", suggestions,
+            )
+
+        if public_name in _ALWAYS_ALLOWED_TOOLS:
+            return self._verdict(
+                call, spec, key, Outcome.ALLOW, None, "report_only",
+                "Reporting a block grants nothing", suggestions,
             )
 
         # Asking the operator a question is itself the approval surface, so it

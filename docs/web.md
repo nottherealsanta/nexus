@@ -25,11 +25,32 @@ is named in the `app.js` map below; the shared logic has JS ports
 ### Transcript and keyboard parity
 
 Transcript and context previews share a Markdown renderer: headings, ordered,
-unordered and task lists, scrollable tables, quotes, strikethrough, safe links
-and language-labelled code fences. Raw HTML stays literal, unsafe link protocols
-are never clickable, and images are not fetched. Incomplete fences stay readable
-while streaming. This is not full CommonMark: nested lists and nested inline
-emphasis are not interpreted.
+unordered and task lists (nested by indentation, hollow bullets below the first
+level, as the terminal's `◦`), tables that size to their content and honour
+`:---:`/`---:` alignment, quotes, strikethrough, safe links, and code fences.
+Emphasis, strikethrough and link text format their contents (so `` **`x`** `` is
+bold code), three levels deep at most; `*`/`_` emphasis follows CommonMark
+flanking, so `a * b` and `snake_case` stay literal. Soft line breaks stay line
+breaks, as in both native clients. Alignment and state are classes, never
+`style` attributes (the CSP blocks them). Raw HTML stays literal, unsafe link
+protocols are never clickable, and images are not fetched. Incomplete fences
+stay readable while streaming. Not full CommonMark: no reference links, setext
+headings or indented code blocks.
+
+Code fences have a head with the language and a Copy button (one delegated
+handler in `app.js`; the head sits outside `<code>`, so selections never include
+it), scroll sideways instead of re-wrapping, and get presentation-only colouring
+from `js/highlight.js`: comments, strings, numbers, keywords, literals and call
+names for Python, shell, C-family (JS/TS, Rust, Go, Java, C/C++, Swift, …), SQL,
+YAML/TOML, JSON and CSS, plus `+`/`-`/`@@` rows in `diff` fences. Unknown
+languages and blocks over 40,000 characters stay plain; `textContent` always
+equals the source. The terminal does not colour code; this is a browser-only
+finish.
+
+While the timeline is scrolled more than 96px from the end, a **Latest** pill
+(`#jump-latest`) floats above the composer; it is the click twin of Ctrl+End and
+adds "new output" once the session's event sequence advances. It hides behind
+approvals, the slash menu and the dictation strip.
 
 PageUp/PageDown in the composer or transcript scroll output without moving the
 draft cursor. Ctrl+End resumes following new output (and moves the draft cursor
@@ -92,6 +113,9 @@ system applies everywhere (`tokens.css`, `app.css`).
 - **Layout:** on wide screens the conversation, composer, slash menu and approvals
   share one centered column (`--column`, 860px) and the timeline stays pinned to
   the newest message while the layout reflows.
+- **Pickers:** palette and picker rows are a name and a detail; the detail keeps
+  its natural width up to 60% (ids never break) and long descriptions wrap
+  left-aligned under it, never clipped.
 - Verify any visual change with Playwright screenshots (dark and light at 1440,
   1024 and 400px) before calling it done ([testing.md](testing.md)).
 
@@ -144,6 +168,7 @@ Packaged files are listed in `pyproject.toml` (`"nexus.ui.web" = ["index.html",
 | `js/mock.js` | dev-mode `/mock` and the `DEV` badge |
 | `js/hints.js` | empty-session tips (copy of `ui_support/hints.py`), seeded per session |
 | `js/fuzzy.js` | fuzzy matcher shared in scoring with `ui_support/fuzzy.py` (palette, model picker) |
+| `js/markdown.js`, `js/highlight.js` | Markdown → escaped HTML (`markdownHTML`, `renderMarkdown`); fenced-code colouring (`highlightHTML`) |
 | `styles/tokens.css` | font-face, color tokens, radii, shadows, `--cell`/`--row` |
 | `styles/app.css` | all layout and component CSS, sectioned by region, responsive rules last |
 | `styles/context-preview.css` | context preview cards (line clamps are asserted by tests) |

@@ -469,6 +469,10 @@ class Workflows(TierPages, SpeakPages):
             self.shell.show(f"{operation['title']} · {value.get('name') or value.get('uri')}", "\n".join(labelled(value)), layout="detail")
         elif kind == "context_extensions":
             await self.context_extensions(operation["category"])
+        elif kind == "agent_cancel":
+            result = await self.client.agent_cancel(self.shell.controller.session, operation["id"])
+            self.shell.flash(result.message or ("Cancellation requested" if result.cancelled else "Agent is not running"),
+                             "success" if result.cancelled else "warning")
         elif kind == "agent_page":
             session, generation = self.shell.controller.session, self.shell.generation
             result = await self.client.agent_transcript(session, operation["id"])

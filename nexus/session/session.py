@@ -1532,12 +1532,14 @@ class Session:
         return self._recover_locked()
 
     def _recover_interrupted_locked(self) -> None:
-        """Close turns and ``!`` runs a stopped process left open (under the lock).
+        """Close turns, external workers and abandoned ``!`` runs under the lock.
 
         Holding the exclusive lock proves no turn runs anywhere (every turn
         holds it, and ``turn.started`` is written after the lease), so a last
         ``turn.started`` with no terminal event was abandoned: it gets a
-        ``turn.failed`` with reason ``interrupted``. ``!`` runs do not hold the
+        ``turn.failed`` with reason ``interrupted``. Unfinished external workers
+        and their child-task rows are closed without rerunning tools or claiming
+        their orphan processes were stopped. ``!`` runs do not hold the
         lock; one is closed only when no task in this process runs it and the
         process that started it (``pid``) is gone. Idempotent: closed items
         are not found again.
@@ -1547,6 +1549,8 @@ class Session:
         open_turn: str | None = None
         turn_open = False
         shells: dict[str, Mapping[str, Any]] = {}
+        workers: dict[tuple[str | None, str], Event] = {}
+        completed_agents: set[str] = set()
         for event in self.read().events():
             if event.type == "turn.started":
                 turn_open, open_turn = True, event.turn
@@ -1558,6 +1562,54 @@ class Session:
                     shells[shell_id] = event.data
             elif event.type == "shell.completed" and isinstance(event.data, dict):
                 shells.pop(event.data.get("shell_id"), None)  # type: ignore[arg-type]
+            elif event.type in ("external.started", "external.finished") and isinstance(event.data, dict):
+                worker_session = event.data.get("session")
+                if isinstance(worker_session, str) and worker_session:
+                    meta = event.data.get("agent")
+                    agent_id = meta.get("id") if isinstance(meta, dict) else None
+                    key = (agent_id if isinstance(agent_id, str) else None, worker_session)
+                    if event.type == "external.started":
+                        workers[key] = event
+                    else:
+                        workers.pop(key, None)
+            elif event.type == "agent.spawned" and isinstance(event.data, dict):
+                meta = event.data.get("agent")
+                agent_id = meta.get("id") if isinstance(meta, dict) else event.data.get("id")
+                if isinstance(agent_id, str):
+                    completed_agents.discard(agent_id)
+            elif event.type == "agent.completed" and isinstance(event.data, dict):
+                meta = event.data.get("agent")
+                agent_id = meta.get("id") if isinstance(meta, dict) else event.data.get("id")
+                if isinstance(agent_id, str):
+                    completed_agents.add(agent_id)
+        for (agent_id, worker_session), started in workers.items():
+            # The lease covers a worker's whole lifetime, including the window
+            # after external.started but before turn.started in a child session.
+            record = self.append_event(Event(
+                type="external.finished",
+                data={"status": "interrupted", "reason": "interrupted",
+                      "provider": started.data.get("provider"),
+                      "model": started.data.get("model"), "session": worker_session,
+                      "usage": "unknown", "error": INTERRUPTED_ERROR,
+                      "attention": "Nexus lost this worker. Its Claude process may still be running; "
+                                   "check it before re-running the assignment.",
+                      "provenance": started.data.get("provenance"),
+                      **({"agent": started.data["agent"]} if agent_id else {})},
+                session=started.session, turn=started.turn,
+            ))
+            self._observe_event(record.event)
+            self._publish(record.event)
+            if agent_id and agent_id not in completed_agents:
+                record = self.append_event(Event(
+                    type="agent.completed",
+                    data={"agent": started.data["agent"], "status": "interrupted",
+                          "error": INTERRUPTED_ERROR, "reason": "interrupted",
+                          "usage": {}, "usage_unknown": True, "ok": False, "is_error": True},
+                    session=self._id, turn=started.turn,
+                ))
+                self._observe_event(record.event)
+                self._publish(record.event)
+                completed_agents.add(agent_id)
         if turn_open:
             event = Event(
                 type="turn.failed",

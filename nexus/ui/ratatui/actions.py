@@ -604,7 +604,12 @@ class ShellActions:
             if not self.controller.view.agents:
                 self.notice = "No background tasks"
                 return True
-            self.workflows.menu("Background tasks", [(f"{agent.id} · {agent.status} · {agent.task or agent.description}", {"kind": "agent_page", "id": agent.id}) for agent in self.controller.view.agents.values()])
+            rows = []
+            for agent in self.controller.view.agents.values():
+                rows.append((f"{agent.id} · {agent.status} · {agent.task or agent.description}", {"kind": "agent_page", "id": agent.id}))
+                if agent.status == "spawned":  # running: stop this one agent only, not the turn
+                    rows.append((f"  ✕ Cancel {agent.id}", {"kind": "agent_cancel", "id": agent.id}))
+            self.workflows.menu("Background tasks", rows)
         elif name in {"/mcp", "/skills"}:
             await self.workflows.context_extensions(name[1:])
         elif name == "/cost":

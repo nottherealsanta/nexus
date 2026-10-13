@@ -738,7 +738,9 @@ def tool_row_text(tool: ToolCallView, spinner_index: int = 0, gutter: str = "") 
     suffix = f" · {summary}" if summary else (f" · {marker}" if marker not in {"completed", "failed"} else "")
     rows = todo_preview(tool)
     heading = "☐ Todo " + rows[0] if rows else tool_heading(tool)
-    text = f"{gutter}{indicator}{heading}{suffix}"
+    # An external worker's tool (Claude Code ran it, Nexus did not) says so on the row.
+    origin = f" · {_text(tool.provenance, 60)}" if tool.provenance else ""
+    text = f"{gutter}{indicator}{heading}{suffix}{origin}"
     if rows:
         text += "".join(f"\n{gutter}  {row}" for row in rows[1:])
     live = running_output_tail(tool) if marker == "running" else None

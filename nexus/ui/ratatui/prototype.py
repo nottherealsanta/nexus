@@ -32,6 +32,17 @@ EDIT_TOOLS = frozenset({"edit", "multiedit", "write", "apply_patch", "patch"})
 #: Calls drawn one per row (`change` blocks), never folded into an activity run.
 STANDALONE_TOOLS = EDIT_TOOLS | {"question"}
 _CHANGE_ROW_LIMIT = 400  # diff rows sent per call; the rest is announced by a clip row
+_USER_CHARACTER_LIMIT = 16_000
+_USER_LINE_LIMIT = 200
+
+
+def _user_prompt(prompt: str) -> str:
+    """Bound literal user previews and announce omitted content with its total size."""
+    text = escape_controls(prompt)
+    preview = "\n".join(text[:_USER_CHARACTER_LIMIT].split("\n")[:_USER_LINE_LIMIT])
+    if preview != text:
+        preview += f"\n... ({len(prompt):,} characters total)"
+    return preview
 
 
 def _display_breadcrumb(breadcrumb: str, home: Path | None = None) -> str:
@@ -242,7 +253,7 @@ def _project_turn(turn, shell, agents=None, literal=True):
             if not _has_message_content(message):
                 continue
             prompt, chips = submitted_attachment_summary(message)
-            text = _literal(prompt)
+            text = _user_prompt(prompt)
             first, _, rest = text.partition("\n")
             emit(f"user · text\n{message.text}")
             if collapsed and rest:
@@ -319,6 +330,10 @@ def _project_turn(turn, shell, agents=None, literal=True):
             operation = {"kind": "agent_page", "id": child.id} if child is not None else None
             # Never the tool details: a click opens the subagent page, so only a failure shows inline.
             detail = f"Error: {child.error}" if child is not None and child.error else ""
+            if child is not None and child.body.external:
+                from ...ui_support.external_worker import task_note
+                title += " · Claude Code (external, own tools)"
+                detail = "\n".join(part for part in (task_note(child.body.external), detail) if part)
             block = {"id": tool.call_id, "kind": "task", "title": title,
                      "status": "running" if running else "done",
                      "text": (_task_child_activity(child) if child else "Starting…") if running else "",
@@ -392,12 +407,16 @@ def _project_turn(turn, shell, agents=None, literal=True):
                     "grep": ("Searched", "time", "times"),
                     "glob": ("Searched", "time", "times"),
                 }.get(name, (tool.name.title(), "call", "calls"))
+                if tool.provenance:  # Claude Code ran it; never counted as a Nexus-run command or read
+                    category = ("Claude Code ran", "tool", "tools")
                 _, _, heading_full, summary = tool_presentation(tool, shell)
                 heading = heading_full.split(" ", 1)[-1]
                 if tool.diff:
                     from ...ui_support.timeline import diff_sections
                     diffs = diff_sections(tool.diff)
                     summary = f"+{sum(d.added for d in diffs)} −{sum(d.removed for d in diffs)}"
+                if tool.provenance and heading_full:
+                    heading_full += f" · {tool.provenance}"
                 if name not in {"task", "subagent"}:
                     member = {**block, "heading": heading_full + (f" · {summary}" if summary else ""),
                         "title": tool.name.title(), "text": heading.removeprefix(tool.name.title()).strip() + (f" · {summary}" if summary else "")}
@@ -907,8 +926,12 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             if not context and agent.status == "spawned":
                 child_blocks.append({"id": agent.id + ":wait", "kind": "literal", "text": "Waiting for the first request…", "gap": 1})
             child_blocks = _safe_blocks(child_blocks)
+            from ...ui_support.external_worker import external_blocks
+            external_head, external_foot = external_blocks(agent.id, agent.body.external)
+            child_blocks.extend(_safe_blocks(external_head))
             for turn in agent.body.turns:
                 child_blocks.extend(_child_turn_blocks(shell, agent, turn, flags))
+            child_blocks.extend(_safe_blocks(external_foot))
             from dataclasses import replace
             agent_status = "failed" if agent.is_error or agent.ok is False else agent.status
             snapshot.update(blocks=child_blocks, agent_page=agent.id,

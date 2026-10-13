@@ -356,7 +356,6 @@ Record results with date; everything unrun stays "not verified".
 7. Where the helper runs for a remote/SSH session (client machine vs daemon
    machine): v1 assumes they are the same machine (loopback-only daemon).
 
-
 ## Integration verification (M5 complete)
 
 - Desktop and CLI branches merged into `feat/gpt-live`; daemon checks the shared

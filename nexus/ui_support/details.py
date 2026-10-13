@@ -102,6 +102,8 @@ def session_rows(view: Any, *, phase: str, agent: str, model: str, effort: str |
     ]
     if usage.input_tokens or usage.output_tokens:
         rows.append(("Tokens", f"{usage.input_tokens:,} in · {usage.output_tokens:,} out"))
+    elif getattr(view, "external", None):
+        rows.append(("Tokens", "unknown (not reported by Claude Code)"))
     thinking = thinking_status(view)
     if thinking:
         rows.append(("Activity", thinking))

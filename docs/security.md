@@ -23,10 +23,49 @@ Do not weaken any boundary below to make a feature easier.
 | Model catalogue | only descriptive fields read; cannot set endpoints or credentials | `model/registry.py` |
 | Provider URLs | http(s) only; plain http only for loopback; userinfo always redacted | `config/schema.py` |
 | Extension code | quarantine validates (syntax, import in isolated subprocess with timeout, hash re-check); **does not sandbox** | `ext/quarantine.py` |
+| External Claude Code worker | Nexus does **not** mediate Claude's tools; it bounds launch authority only ([below](#external-claude-code-worker)) | `agents/claude_code_worker.py` |
 | Worktrees | authenticated records, service-root lock, no shell for children, integration applies frozen bytes only to a clean parent | `agents/worktrees*.py` |
 | Settings agent | blocked from `credentials.json`, sessions, cache, daemon files, trash, `nexus.db` | `tools/permissions.py`, `host_support/settings_scope.py` |
 | GPT Live (experimental) | the ChatGPT OAuth bearer and account id exist only in `live/transport.py` (headers per request, scrubbed with `redact_secrets` plus the literal values from every error, raw dev log and result); `Live*` results carry the SDP answer and state only; the audio helper sees SDP, never a credential; the voice model's delegations are untrusted input that go through the normal permission engine; **approvals are resolved only on screen, never by audio**; the signaling and sideband hosts are fixed OpenAI hosts, not user URLs, and (like provider calls) bypass `net/outbound.py`; no raw audio is stored | `live/`, `host_support/live.py` |
 | State at rest | `nexus.db` `0600` in a `0700` dir; Settings redacts secret-looking fields | `session/db.py`, `settings_inventory.py` |
+
+## External Claude Code worker
+
+An explicit `claude-code/<model>` subagent runs Claude Code's own agent loop and
+tools in a PTY. This is an authority boundary, not a sandbox, and every result
+says so (`Nexus permissions/PathGuard did not mediate them`).
+
+Not enforced by Nexus: Nexus tool grants, `[permissions]` rules, `PathGuard`
+write roots and read-deny roots, tool budgets, and the `Task` tool profile do
+not apply to Claude's tools. Inside the workspace and permission mode you
+configure, Claude decides what it does; there is no OS-level sandbox, and
+`dontAsk` with explicit `worker_allowed_tools` really lets it edit or run
+commands. Token and cost budgets are refused, and Nexus iteration caps are not
+mapped.
+
+Enforced at launch: the policy is explicit and resolved before start;
+`bypassPermissions` and `--dangerously-skip-permissions` are never passed, and
+`auto` is passed only when `worker_permission_mode = "auto"` is explicitly
+configured (a read-only role is narrowed to `dontAsk`); the default is `dontAsk` with `--restricted`, no setting sources
+(user/project/local settings, plugins and their hooks stay unloaded), and no MCP
+servers (`--strict-mcp-config`); Nexus writes nothing to the PTY except cursor
+position replies, so it never answers a trust, login or permission prompt and
+ends such runs as `needs_attention`; a role Nexus treats as read-only receives
+only `Read,Grep,Glob` in `dontAsk`/`plan`, and any wider `worker_tools`,
+`worker_allowed_tools`, `worker_mcp_config` or `worker_setting_sources` is
+refused; the child environment is an allowlist (plus `CLAUDE_CONFIG_DIR`), so
+provider API keys are not inherited; hook scripts and settings live in a private
+`~/.nexus/claude-code/` directory (owner-only, symlinks and loose permissions
+refused); terminal text is stripped and redacted before it reaches the log,
+every string in `external.tool` input and result content (nested lists and
+dicts included, keys too) passes `redact_secrets` before clipping, the preflight
+probes are time-bounded (15s) and the process group is only signalled while the
+leader is unreaped, and
+file changes are measured by Nexus rather than taken from Claude's report.
+Residual risks: the file-change snapshot is workspace-wide, and an approved
+Claude tool can touch anything its own policy allows. Prompt and permission
+wording matched by the attention detection is not verified against every Claude
+release. The trust prompt and a read-only `Haiku` run were verified live once (2026-10-13); permission prompts were not.
 
 ## GPT Live: data sent to OpenAI and consent
 

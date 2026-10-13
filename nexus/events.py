@@ -79,6 +79,10 @@ MCP_EVENTS = ("mcp.connected", "mcp.disconnected", "mcp.failed", "mcp.tools_chan
 SKILL_EVENTS = ("skill.invoked", "skill.completed")
 AGENT_EVENTS = ("agent.spawned", "agent.completed", "agent.clamped")
 HOOK_EVENTS = ("hook.fired", "hook.blocked")
+# An external worker (Claude Code with its OWN tools, outside the Nexus
+# dispatcher): launch authority, each tool call/result read from its transcript,
+# and its terminal status. Never relabelled as ``tool.*`` events.
+EXTERNAL_EVENTS = ("external.started", "external.tool", "external.finished")
 
 # Plan section 15.10: the model-registry lifecycle. ``registry.refreshed``/
 # ``registry.stale``/``registry.failed`` describe acquisition; ``registry.mismatch``
@@ -172,6 +176,7 @@ EVENT_GROUPS: dict[str, tuple[str, ...]] = {
     "skill": SKILL_EVENTS,
     "agent": AGENT_EVENTS,
     "hook": HOOK_EVENTS,
+    "external": EXTERNAL_EVENTS,
     "input": INPUT_EVENTS,
     "shell": SHELL_EVENTS,
     "live": LIVE_EVENTS,
@@ -191,6 +196,7 @@ __all__ = [
     "DAEMON_EVENTS",
     "EVENT_GROUPS",
     "EVENT_TYPES",
+    "EXTERNAL_EVENTS",
     "EXT_EVENTS",
     "HOOK_EVENTS",
     "INPUT_EVENTS",

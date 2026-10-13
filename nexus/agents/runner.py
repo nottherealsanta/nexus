@@ -379,6 +379,32 @@ class SubagentOutcome:
             "worktree": dict(self.worktree) if self.worktree is not None else None,
             "files_changed": list(self.files_changed),
             "handoff_path": self.handoff_path,
+            "attention": self.attention,
+            **self._external_dict(),
+        }
+
+    @property
+    def attention(self) -> str | None:
+        """What blocked the child, for the root to resolve or escalate (else ``None``)."""
+        value = self.metrics.get("attention")
+        if isinstance(value, str) and value:
+            return value
+        return self.error if self.status == "needs_attention" and self.error else None
+
+    @property
+    def usage_unknown(self) -> bool:
+        """True when ``usage`` is zero only because nothing was measured."""
+        return self.metrics.get("usage") == "unknown"
+
+    def _external_dict(self) -> dict[str, Any]:
+        """Extra fields for a run executed by an external worker (else empty)."""
+        if not self.usage_unknown and "authority" not in self.metrics:
+            return {}
+        keys = ("authority", "provider", "model", "transcript_path", "claude_session",
+                "tool_calls", "files_changed_note", "files_changed_total")
+        return {
+            "usage_unknown": self.usage_unknown,
+            "external": {key: self.metrics[key] for key in keys if key in self.metrics},
         }
 
     def render(self) -> str:
@@ -404,6 +430,19 @@ class SubagentOutcome:
                 "subagents and their descendants because they are outside the "
                 "reviewed worktree tool profile]"
             )
+        if self.metrics.get("authority"):
+            lines.append(f"[authority: {self.metrics['authority']}]")
+        if self.usage_unknown:
+            lines.append("[usage: unknown — external Claude Code worker]")
+        attention = self.attention
+        if attention:
+            lines.append(
+                f"[needs attention: {attention}. You are the escalation point for this subagent: "
+                "first try to resolve it yourself (re-delegate a narrower task, a different role or "
+                "workspace, or work you can do within your own permissions). You cannot grant "
+                "yourself or a child more authority than you hold; if the work needs it, ask the "
+                "user in your reply, state exactly what is needed and why, and wait for their answer.]"
+            )
         body = self.text.strip()
         if body:
             lines.append(body)
@@ -419,6 +458,8 @@ class SubagentOutcome:
             lines.extend(f"- {path}" for path in shown)
             if more > 0:
                 lines.append(f"- … and {more} more")
+        if self.metrics.get("files_changed_note"):
+            lines.append(f"[note: {self.metrics['files_changed_note']}]")
         if self.handoff:
             where = f"saved at {self.handoff_path}" if self.handoff_path else "not saved to disk"
             lines.append(
@@ -1457,6 +1498,10 @@ class SubagentRunner:
         # Session ids are stable identities inside a parent log and globally
         # unique within the persistent session facade's allocation scope.
         agent_id = session_id
+        # Per-child cancellation (host ``AgentCancel``): the child sees the
+        # parent's token OR its own, so one child can be stopped alone.
+        parent_cancel = cancel
+        cancel = _ChildCancel(parent_cancel)
         meta = {
             "id": agent_id,
             "parent": self._parent_agent_id or self._parent_session,
@@ -1489,11 +1534,13 @@ class SubagentRunner:
             await self._emit_completed(sink, meta, outcome)
             return outcome
 
+        _LIVE_CHILDREN[agent_id] = cancel
         acquired = False
         reservation_done = False
         release_reservation_on_exit = False
         outcome: SubagentOutcome | None = None
         worktree: Mapping[str, Any] | None = None
+        spec: ChildSpec | None = None
         child_workspace = self._workspace
         cancellation: OperationCancelled | None = None
         task_cancelled = False
@@ -1639,6 +1686,7 @@ class SubagentRunner:
                 clamped=clamped,
                 tier=tier,
                 requested_tier=resolution.reference,
+                **_external_partial(spec),
             )
         except asyncio.CancelledError:
             release_reservation_on_exit = True
@@ -1654,6 +1702,7 @@ class SubagentRunner:
                 clamped=clamped,
                 tier=tier,
                 requested_tier=resolution.reference,
+                **_external_partial(spec),
             )
         except Exception as exc:  # noqa: BLE001 - a factory/tool failure is visible
             outcome = SubagentOutcome(
@@ -1675,6 +1724,7 @@ class SubagentRunner:
                 requested_tier=resolution.reference,
             )
         finally:
+            _LIVE_CHILDREN.pop(agent_id, None)
             if worktree is not None:
                 try:
                     mark_finished = mark_finished or self._worktree_service.mark_finished
@@ -1776,7 +1826,9 @@ class SubagentRunner:
         await self._emit_completed(sink, meta, outcome)
         if task_cancelled:
             raise asyncio.CancelledError
-        if cancellation is not None:
+        if cancellation is not None and (
+            _is_cancelled(parent_cancel) or not cancel.own_cancelled
+        ):
             raise cancellation
         return outcome
 
@@ -1834,6 +1886,7 @@ class SubagentRunner:
                 "ok": outcome.ok,
                 "is_error": outcome.is_error,
                 "usage": outcome.usage.to_dict(),
+                **({"usage_unknown": True} if outcome.usage_unknown else {}),
                 "iterations": outcome.iterations,
                 "stop_reason": outcome.stop_reason,
                 "dropped_tools": list(outcome.dropped_tools),
@@ -1953,6 +2006,68 @@ def _budget_label(budget: SubagentBudget) -> str:
     return ", ".join(parts) or "limit reached"
 
 
+class _ChildCancel:
+    """A child's cancel view: the parent's token or a child-only request."""
+
+    __slots__ = ("_parent", "_event", "_reason")
+
+    def __init__(self, parent: object | None) -> None:
+        self._parent = parent
+        self._event = asyncio.Event()
+        self._reason: str | None = None
+
+    @property
+    def own_cancelled(self) -> bool:
+        return self._event.is_set()
+
+    @property
+    def cancelled(self) -> bool:
+        return self._event.is_set() or _is_cancelled(self._parent)
+
+    @property
+    def reason(self) -> str | None:
+        if self._event.is_set():
+            return self._reason
+        return _cancel_reason(self._parent)
+
+    def cancel(self, reason: str | None = None) -> None:
+        if not self._event.is_set():
+            self._reason = reason
+            self._event.set()
+
+    async def wait(self) -> None:
+        waiters = {asyncio.ensure_future(self._event.wait())}
+        parent_wait = getattr(self._parent, "wait", None)
+        if callable(parent_wait):
+            waiters.add(asyncio.ensure_future(parent_wait()))
+        try:
+            await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for task in waiters:
+                task.cancel()
+            await asyncio.gather(*waiters, return_exceptions=True)
+
+    def raise_if_cancelled(self) -> None:
+        if self.cancelled:
+            raise OperationCancelled(self.reason or "cancelled")
+
+    def __await__(self):
+        return self.wait().__await__()
+
+
+#: Live children by agent id (the child session id), for host ``AgentCancel``.
+_LIVE_CHILDREN: dict[str, _ChildCancel] = {}
+
+
+def cancel_child(agent_id: str, reason: str | None = None) -> bool:
+    """Cancel one running child only; ``False`` when it is not running."""
+    token = _LIVE_CHILDREN.get(agent_id)
+    if token is None or token.cancelled:
+        return False
+    token.cancel(reason or "cancelled by user")
+    return True
+
+
 def _is_cancelled(cancel: object | None) -> bool:
     if cancel is None:
         return False
@@ -1967,8 +2082,21 @@ def _cancel_reason(cancel: object | None) -> str | None:
 
 
 def _safe(value: object, *, limit: int = 300) -> str:
-    text = str(value).replace("\x00", "") if value is not None else ""
+    text = redact_secrets(str(value).replace("\x00", "")) if value is not None else ""
     return text if len(text) <= limit else text[:limit] + "…"
+
+
+def _external_partial(spec: ChildSpec | None) -> dict[str, Any]:
+    """Outcome fields an external child left behind when it was cancelled.
+
+    A cancelled external worker may already have changed files, so the
+    cancelled outcome keeps its authority, unknown usage and verified changes.
+    """
+    partial = (spec.metadata or {}).get("external_partial") if spec is not None else None
+    if not isinstance(partial, Mapping):
+        return {}
+    return {"metrics": dict(partial.get("metrics") or {}),
+            "files_changed": tuple(partial.get("files_changed") or ())}
 
 
 def _worktree_record(record: object) -> dict[str, Any]:

@@ -38,6 +38,7 @@ names and `agent.selected`.
 | skill | `skill.invoked` `skill.completed` |
 | agent | `agent.spawned` `agent.completed` `agent.clamped` (and `agent.selected`) |
 | hook | `hook.fired` `hook.blocked` |
+| external | `external.started` `external.tool` `external.finished` ([below](#external-worker-events)) |
 | input | `input.started` `input.queued` `input.moved` `input.consumed` `input.dropped` |
 | shell | `shell.started` `shell.completed`: a composer `!` run, turn-less; reduced to a `TurnView(kind="shell")` with one `bash` row ([tools.md](tools.md#shell-mode--in-the-composer)) |
 | live | `live.started` `live.transcript` `live.transcript.delta` `live.delegated` `live.appended` `live.phase` `live.levels` `live.error` `live.ended`: a GPT Live voice call, turn-less and durable; reduced into `ConversationView.live_calls` ([live.md](live.md#events-and-view)) |
@@ -51,6 +52,34 @@ pending queue item. `text` and `thinking` are the finalized aggregates after the
 `*.delta` stream; the reducer dedupes them (`BlockView.streamed`). Tool events
 carry only bounded, presentation-safe views: raw inputs are not duplicated into
 the log beyond `tool.input`, which passes through `_safe_tool_input`.
+
+### External worker events
+
+Emitted by `ClaudeCodeWorker` for an explicit `claude-code/<model>` child
+([agents.md](agents.md#external-claude-code-workers)); they go in the child's own
+log and are relayed upward like other child events.
+
+| Event | Payload |
+| --- | --- |
+| `external.started` | `provider`, `model`, `session`, `workspace`, `permission_mode`, `tools`, `allowed_tools`, `disallowed_tools`, `restricted`, `setting_sources`, `mcp` (`explicit`/`none`), `read_only`, `timeout_seconds`, `provenance`, `authority` |
+| `external.tool` | `phase` `requested` (bounded `input`) or `completed` (`content`, `is_error`), `call_id`, `tool`, optional `clip_note`, `provenance` (`Claude Code (own tools)`), `provider`, `session` |
+| `external.finished` | `status` (`completed`/`failed`/`interrupted`/`cancelled`/`needs_attention`), `stop_event`, `transcript_path`, `tool_calls`, `usage` (`"unknown"`), `error`, `attention`, `clip_notes`, `elapsed_seconds`, `provenance`, `session`, `model` |
+
+Claude's assistant text arrives as ordinary `text` and `model.stopped` events
+(provider `claude-code`, `source` `claude-code-transcript` or `claude-code-hook`).
+Claude's tool calls are never `tool.*` events: Nexus did not dispatch them.
+The child's `turn.completed` carries `usage_unknown: true`, and `agent.completed`
+carries it too.
+
+View fields: the reducer turns `external.tool` into a `ToolCallView` with
+`provenance` set and `executed = false` (idempotent by `call_id`, tolerant of a
+result arriving before its request); the tool-details panel shows a
+`Provenance` row in place of `Executed`. `external.started`/`external.finished`
+merge into `ConversationView.external` (a dict, `finished: true` after the end).
+`AgentView.usage_unknown` marks usage that is unknown rather than zero. All three
+fields are omitted from the wire shape when unset, so ordinary sessions are
+unchanged. The native Ratatui client renders them ([ratatui-parity.md](ratatui-parity.md#external-claude-code-workers));
+a web port is not planned (the web client is being deprecated).
 
 ## The reducer (`view/`)
 

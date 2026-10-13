@@ -40,6 +40,7 @@ from typing import Any
 
 import msgspec
 
+from ..agents.runner import cancel_child
 from ..devtools import dev_enabled
 from ..errors import ExtensionTrashError, SessionBusy
 from ..events import Event
@@ -980,7 +981,7 @@ class HostFacade:
         registry = self.runtime.registry
         if registry is None:
             return []
-        return list(
+        rows = list(
             registry.list(
                 provider=provider,
                 tier=tier,
@@ -988,6 +989,14 @@ class HostFacade:
                 search=search,
             )
         )
+        enabled = getattr(self.runtime, "claude_code_main_enabled", lambda: False)()
+        if selectable_only and not enabled:
+            rows = [
+                row for row in rows
+                if row.provider != "claude-code"
+                and getattr(registry.provider_status(row.provider), "kind", None) != "claude-code"
+            ]
+        return rows
 
     def _model_row(self, model: Any, *, selectable_only: bool) -> dict[str, Any]:
         """Project one catalogue row and attach runtime-route effort choices."""
@@ -1638,6 +1647,22 @@ class HostFacade:
                 view=result["view"],
                 context=result.get("context", {}),
             )
+        if isinstance(command, p.AgentCancel):
+            found = self.agent_transcript(command.session, command.agent_id)
+            if not found["found"]:
+                return p.AgentCancelResult(
+                    session=command.session, agent_id=command.agent_id,
+                    message="No such agent in this session.",
+                )
+            reason = (command.reason or "cancelled by user")[:200]
+            cancelled = cancel_child(command.agent_id, reason)
+            return p.AgentCancelResult(
+                session=command.session, agent_id=command.agent_id, cancelled=cancelled,
+                message=(
+                    "Cancellation requested for this agent only; its parent turn continues."
+                    if cancelled else f"Agent is not running (status: {found['status']})."
+                ),
+            )
         if isinstance(command, p.SessionFork):
             return p.SessionForkResult(
                 session=self.fork(
@@ -1768,6 +1793,18 @@ class HostFacade:
             return p.SessionTitleSettingsResult(
                 **await model_settings.session_title_settings_set(
                     self.runtime, enabled=command.enabled, model=command.model
+                )
+            )
+        if isinstance(command, p.ClaudeCodeSettings):
+            return p.ClaudeCodeSettingsResult(**model_settings.claude_code_settings(self.runtime))
+        if isinstance(command, p.ClaudeCodeSettingsSet):
+            if self.supervisor.running:
+                # The toggle gates which routes exist; writing it while a turn runs would
+                # leave the config and the live router disagreeing until a restart.
+                raise SessionBusy("Claude Code settings cannot change while a turn is running; try again when idle")
+            return p.ClaudeCodeSettingsResult(
+                **await model_settings.claude_code_settings_set(
+                    self.runtime, main_enabled=command.main_enabled, reload=True
                 )
             )
         if isinstance(command, p.ModelSelect):

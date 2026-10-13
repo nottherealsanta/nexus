@@ -176,7 +176,8 @@ def open_settings(app, area_key: bytes, expect: str):
 
 
 def ordered_rows(screen: str):
-    return [" ".join(line.split()) for line in screen.splitlines() if "⋮⋮" in line]
+    # A trailing ┃/│ is the scrollbar thumb, which moves with the page height.
+    return [" ".join(line.split()).rstrip("┃│ ") for line in screen.splitlines() if "⋮⋮" in line]
 
 
 def test_opening_models_shows_the_page_from_the_real_host(app):

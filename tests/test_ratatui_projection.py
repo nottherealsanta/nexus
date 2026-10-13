@@ -43,6 +43,32 @@ def test_user_border_matches_agent_color(tmp_path, monkeypatch, color):
     assert user["color"] == (color or snapshot["agent_color"])
 
 
+@pytest.mark.parametrize("prompt", ["界" * 4000, "\n".join(["line"] * 100)])
+def test_user_prompt_renders_beyond_old_limit(tmp_path, monkeypatch, prompt):
+    turn = _turn()
+    turn.messages[0].blocks = [BlockView(text=prompt)]
+    snapshot = _snapshot(tmp_path, monkeypatch, [turn], literal=False)
+    user = next(block for block in snapshot["blocks"] if block["kind"] == "user")
+    assert user["title"] + ("\n" + user["text"] if user["text"] else "") == prompt
+
+
+@pytest.mark.parametrize("prompt, preview", [
+    ("界" * 16_001, "界" * 16_000),
+    ("\n".join(["line"] * 201), "\n".join(["line"] * 200)),
+    ("x" * 16_000, "x" * 16_000),
+])
+def test_user_prompt_announces_display_limits(tmp_path, monkeypatch, prompt, preview):
+    turn = _turn()
+    turn.messages[0].blocks = [BlockView(text=prompt)]
+    snapshot = _snapshot(tmp_path, monkeypatch, [turn], literal=False)
+    user = next(block for block in snapshot["blocks"] if block["kind"] == "user")
+    expected = preview
+    if preview != prompt:
+        expected += f"\n... ({len(prompt):,} characters total)"
+    assert user["title"] + ("\n" + user["text"] if user["text"] else "") == expected
+    assert turn.messages[0].text == prompt
+
+
 def test_live_activity_preview_closes_at_reply_and_completion(tmp_path, monkeypatch):
     tools = [ToolCallView(call_id=f"read-{i}", name="read", event_seq=i + 2,
                          status="completed", input={"path": f"{i}.py"}) for i in range(8)]

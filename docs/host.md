@@ -33,9 +33,10 @@ inward-only exceptions. Errors are
 | Approvals | `PermissionResolve` `QuestionAnswer` |
 | Models | `ModelsList` `ModelShow` `ModelTiers` `ModelTierSet` `ModelTierReset` `AgentMaxTierSet` `ModelsRefresh` `ModelSelect` `ReasoningEffortSelect` |
 | Session titles | `SessionTitleSettings` `SessionTitleSettingsSet` |
+| Claude Code | `ClaudeCodeSettings` `ClaudeCodeSettingsSet` |
 | Attachments | `AttachmentPrepare` `AttachmentPreview` |
 | Speech | `Speak` `SpeakStop` `SpeechStatus` `SpeechPrepare` |
-| Agents | `AgentsList` `AgentCurrent` `AgentSelect` `AgentReset` `AgentDefaultSet` `AgentTranscript` |
+| Agents | `AgentsList` `AgentCurrent` `AgentSelect` `AgentReset` `AgentDefaultSet` `AgentTranscript` `AgentCancel` |
 | Context and tools | `ContextInspect` `ContextMcpLoadingSelect` `ContextExtensionSelect` `ToolsList` |
 | Extensions | `ExtensionsReload` `ExtensionsList` `ExtensionsValidate` `ExtensionsTrash` |
 | Settings and setup | `SettingsInventory` `SettingsRead` `SettingsMcpLoadingSet` `SettingsWrite` `SettingsReset` `SettingsDelete` `SetupStatus` `SetupSave` |
@@ -304,3 +305,31 @@ server's loading key in the defining `mcp.json` through the Settings path policy
 It preserves JSONC comments and surrounding formatting, refuses ambiguous
 objects, checks the supplied hash and returns `SettingsWriteResult`. Successful
 writes reload extensions. Existing sessions keep frozen modes.
+
+### Cancelling one child agent
+
+`AgentCancel(session, agent_id, reason="")` stops one running child (including an
+external Claude Code worker, whose process group is killed by its own cancellation
+path) and nothing else: the parent turn and sibling children continue, and the
+parent's `Task` call returns a `cancelled` result (for an external worker it still
+carries the authority line, unknown usage and the verified `files_changed`, because
+Claude may already have changed files). Each child sees a token that is
+cancelled by its parent's token or by its own (`agents/runner.py`, a process-wide
+registry keyed by child session id, removed when the child ends).
+`AgentCancelResult.cancelled` is `false` with a message when the agent is unknown
+to that session (`No such agent in this session.`) or is no longer running; the
+reason is clipped to 200 characters. The native client reaches it from the `/tasks`
+menu (a `Cancel <agent>` row under each running agent). Human handoff into the live
+Claude PTY is not implemented.
+
+### Claude Code main-model toggle
+
+`ClaudeCodeSettings` / `ClaudeCodeSettingsSet(main_enabled)` read and write
+`[models] claude_code_main_enabled` in the global config (same writer, hash check
+and read-back as session titles) and rebuild model routes. The set is **rejected**
+(`SessionBusy`, nothing written) while any turn runs, so the config file and the live
+router never disagree; `claude_code_settings_set` itself refuses without an idle
+`reload`. The result's `message` says that main selection
+uses the Agent SDK and that external subagents are configured per role.
+`Runtime.claude_code_main_enabled()` reads the effective config on every call, so
+the model picker follows the toggle without a restart.

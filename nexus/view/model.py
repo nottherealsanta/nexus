@@ -92,6 +92,14 @@ def _dump(value: object) -> Any:
                 continue
             if item.name == "ts" and isinstance(value, MessageView):
                 continue
+            # External-worker fields stay absent for ordinary Nexus sessions so
+            # the established wire shape is unchanged.
+            if (
+                (item.name == "provenance" and isinstance(value, ToolCallView) and field_value is None)
+                or (item.name == "usage_unknown" and isinstance(value, AgentView) and not field_value)
+                or (item.name == "external" and isinstance(value, ConversationView) and field_value is None)
+            ):
+                continue
             # Additive Live fields stay absent unless a call or a Live
             # delegation exists, so older wire snapshots are unchanged.
             if item.name == "origin" and field_value is None:
@@ -254,6 +262,9 @@ class ToolCallView(_View):
     diff: dict[str, Any] | None = None
     #: Direct Task children, linked from each agent's durable parent_call_id.
     child_agent_ids: list[str] = field(default_factory=list)
+    #: Who actually ran the tool when it was not the Nexus dispatcher (for
+    #: example ``"Claude Code (own tools)"``); ``None`` for a Nexus tool call.
+    provenance: str | None = None
 
 @dataclass
 class PermissionTargetView(_View):
@@ -532,6 +543,9 @@ class AgentView(_View):
     parent_agent_id: str | None = None
     parent_call_id: str | None = None
     root_turn_id: str | None = None
+    #: True when the child's token/cost usage is unknown rather than zero
+    #: (an external worker reports no accounting).
+    usage_unknown: bool = False
 
 @dataclass
 class ConversationView(_View):
@@ -556,6 +570,9 @@ class ConversationView(_View):
     errors: list[ErrorView] = field(default_factory=list)
     hooks: list[HookView] = field(default_factory=list)
     diagnostics: list[DiagnosticView] = field(default_factory=list)
+    #: Launch authority and terminal status of an external worker session
+    #: (``external.started``/``external.finished``); ``None`` for Nexus sessions.
+    external: dict[str, Any] | None = None
     #: GPT Live calls in this session, oldest first (bounded by the reducer).
     live_calls: list[LiveCallView] = field(default_factory=list)
 

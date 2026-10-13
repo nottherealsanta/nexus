@@ -5,6 +5,141 @@ through the `subagent` tool, and manages isolated Git worktrees for children.
 The concrete child runtime is built by `Runtime` (`_ChildRuntime`); the runner
 never imports it.
 
+## External Claude Code workers
+
+An explicit `claude-code/<model>` role (a `provider`/`model` naming a
+`[providers.<name>]` section with `kind = "claude-code"`) is **not** run by a
+Nexus `run_turn` loop. `_ChildRuntime._plan_external` resolves the policy before
+anything starts and `_run_external` hands the assignment to
+`agents/claude_code_worker.py:ClaudeCodeWorker`: one fresh interactive Claude
+Code session per assignment, in a Nexus-owned PTY, `cwd` = the assigned
+workspace or worktree, using **Claude's own tools**. Nexus tool grants,
+`PathGuard` and the permission engine do not mediate them (see
+[security.md](security.md#external-claude-code-worker)). Every other child is
+unchanged; ordinary children never see the `claude-code` provider. A model-less
+role uses `claude-sonnet-4-6`; an explicit model must be an exact
+`claude-(sonnet|opus|haiku)-N...` ID, never an alias. Main-agent selection of
+Claude Code still uses the Agent SDK provider and is hidden unless
+`[models] claude_code_main_enabled = true`.
+
+**Tiers.** A `[models.tiers]` entry may name a `claude-code/<model>` route
+(`low = ["claude-code/claude-haiku-5-5", ...]`). For **children only**,
+`Runtime._claude_code_tier_route` walks the tier's candidates in order: the first
+that is a configured `claude-code` section runs on the worker, but a Nexus
+provider that is runnable and listed first wins. The runner's runnable probe
+counts such an entry, so a tier of only `claude-code` routes does not silently
+fall back to the parent's model. The root's router never receives `claude-code`
+(it cannot stream it), so a root agent that resolves the same tier skips it.
+Verified live 2026-10-13: a `low` subagent ran as `external.started`
+(`claude-haiku-5-5`, `auto`, restricted) and its own `Read`; the daemon of the
+workspace must be restarted after config changes (`nexus daemon restart`).
+
+One worker can be stopped alone with host `AgentCancel` ([host.md](host.md#cancelling-one-child-agent));
+the native client shows the worker's authority, tool rows, status and unknown usage
+([ratatui-parity.md](ratatui-parity.md#external-claude-code-workers)).
+
+**Routing guards.** The route must be explicit: named by the `Task` call, by the role
+(`model`/`provider`) or by a tier. A child that would only *inherit* the parent's
+`claude-code/...` model is refused at start (`ConfigError`, reported as a failed start),
+because Claude's own tools are not mediated by Nexus. A worktree child (`worktree: true`,
+or a descendant of one) is refused too: the worktree profile is the reviewed no-shell
+tool set, and Claude's tools (and any shell `worker_tools` grants) are not bound by it.
+Use a non-worktree child for Claude Code.
+
+**Role instructions and context.** Claude Code has no Nexus system-prompt channel, so
+the role body is sent as a labelled prefix of the single prompt
+(`Role instructions (Nexus agent role '<name>'):` ... `Task:` ...). The 64 KiB prompt
+limit applies to the combined text (refused, never truncated). The child's log records
+a `context.assembled` request snapshot (redacted, bounded) that states exactly this:
+the instructions delivered (or that none were), the worker's authority sentence, and
+Claude's tool names from the policy; `Runtime.agent_request` returns it with the task
+prompt as the user message.
+
+**Failure and cancellation.** Raw failure text (worker exceptions, start refusals, the
+child's `turn.failed`, handoffs) is secret-redacted. A cancelled external child keeps its
+disclosure: the runner's cancelled outcome carries the authority line, `usage: unknown`
+and the file changes Nexus verified after the stop (the child leaves it in
+`ChildSpec.metadata["external_partial"]` for the runner). Per-child escalation state is dropped when the child ends,
+whatever the outcome.
+
+Requires POSIX and Claude Code >= 2.1.296; the preflight probes `--version` and
+`--help` and refuses to start if a required flag is missing.
+
+**Policy** (`[providers.<name>]` `worker_*` keys, [config.md](config.md#claude-code-worker-keys)):
+`resolve_policy` produces the argv: `--permission-mode`, `--setting-sources`
+(default empty, plus `--disable-slash-commands`), `--strict-mcp-config` with
+`--mcp-config` (explicit JSON or an empty server list), `--no-chrome`,
+`--restricted` (default), `--tools`, `--allowedTools`, `--disallowedTools`, and
+`--session-id`. `bypassPermissions` and `--dangerously-skip-permissions`
+are never passed (and rejected at config load). `auto` is accepted as an explicit
+opt-in: Claude's own classifier then answers approvals (verified live on Haiku
+5.5: writes proceeded without a prompt; a risky action is denied with a "denied by
+the Claude Code auto mode classifier" tool error and the model stops to explain),
+so Nexus no longer decides those approvals. A read-only role is still narrowed to
+`dontAsk`. With the default policy
+(`dontAsk`, no allow rules, restricted) anything not pre-approved is denied, so
+edits or shell need explicit `worker_allowed_tools` (and `worker_tools` naming
+`Bash`).
+
+**Read-only roles.** A child is read-only when its role is flagged read-only or
+every granted tool is a read-only tool (MCP selectors count as read-only here
+because the worker never forwards them). Claude then gets only
+`--tools Read,Grep,Glob` and the mode is narrowed to `dontAsk` (`plan` is kept).
+A configuration that would widen that (`worker_tools` or `worker_allowed_tools`
+beyond those three, or any `worker_mcp_config` / `worker_setting_sources`, since
+MCP servers, plugins and hooks can act beyond built-ins) is refused with
+`ConfigError` rather than silently applied. Token and cost budgets are also
+refused; Nexus iteration caps are not mapped. Only the wall clock maps:
+`min(timeout_seconds, [agent] max_turn_seconds)` when the latter is nonzero.
+
+**Readback.** An isolated `python -I` hook script (SessionStart, Stop,
+StopFailure) writes atomic result files and checks the session id; its
+`transcript_path` is used, else a best-effort path under the Claude config dir.
+The JSONL transcript is read incrementally (1 MiB per read, 8 MiB per line, 32
+MiB total), other session ids and sidechains are ignored, entries are
+deduplicated by `uuid`, and reading continues 2 s after Stop to catch late
+flushes. A quiet PTY, or a process that exits without Stop, is never success.
+The terminal tail is kept only as an ANSI-stripped, redacted diagnostic of at
+most 1500 characters.
+
+**Statuses** (`SubagentOutcome.status`, with `stop_reason`): `completed`
+(`end_turn`; Stop), `failed` (`error`; StopFailure, or exit without Stop),
+`interrupted` (`timeout`; deadline, partial answer kept), `cancelled`
+(`cancelled`), `needs_attention` (trust, authentication or onboarding blocked,
+model rejected, or a permission prompt while the mode is not `dontAsk`). The
+attention result names the exact command for the user to run (for example
+`cd <workspace> && claude` for trust, `claude auth login`). The only bytes Nexus
+ever writes to the PTY are cursor-position replies: it answers no approval,
+trust or login prompt.
+
+**Outcome.** Usage is `unknown`, not zero (`metrics.usage = "unknown"`,
+`AgentView.usage_unknown`, render line `[usage: unknown — external Claude Code
+worker]`). The render also carries an `[authority: ...]` line. `files_changed`
+is computed by Nexus from a before/after git-status plus mtime snapshot of the
+workspace, never from Claude's claims; it is workspace-wide (concurrent writers
+can appear), capped at 100 paths, and carries an announced note. The transcript
+path, Claude session id, tool-call count and clip notes are in `metrics`
+(`SubagentOutcome.to_dict()["external"]`). `failed` and `interrupted` outcomes
+get the usual handoff. Prompt (64 KiB), tool inputs (4000 chars per string), tool
+results (8000), the answer (64000) and transcripts are bounded, and clipping is
+announced.
+
+**Events** ([events-and-view.md](events-and-view.md#external-worker-events)):
+`external.started`, `external.tool`, `external.finished`, plus ordinary `text`
+events (provider `claude-code`). Claude's tool calls are never `tool.*` events.
+
+Not implemented: host inspect/cancel/attention/handoff commands, native Ratatui
+rendering of `external.*` rows, a web port, and recovery that marks in-flight
+external runs interrupted after a daemon crash. Verified live (2026-10-13, Claude Code 2.1.296, one account, read-only policy):
+the workspace-trust prompt wording, the transcript path
+(`~/.claude/projects/<cwd with / and . as ->/<session>.jsonl`), the hook-driven
+`Stop`, and a Claude-owned `Read` call on `claude-haiku-5-5`. Not verified live:
+permission-prompt wording, `StopFailure`, and Sonnet/Opus 5.5 IDs (only Haiku was
+tried; other coverage is offline fakes in `tests/claude_code_fakes.py`). Trust is
+inherited from a trusted parent folder. Worktree children are refused (see
+Routing guards), so that case is not exercised. Subscription
+efficiency and product-use terms are not established by a PTY.
+
 ## Files
 
 | File | Owns |
@@ -12,6 +147,7 @@ never imports it.
 | `model.py` | restricted frontmatter grammar, immutable `AgentDef`, limits, read-only role rules |
 | `manager.py` | `AgentManager`: deterministic discovery, precedence, seeding, tool selection, legacy aliases |
 | `runner.py` | `SubagentRunner`, `ChildSpec`, `SubagentBudget`: bounding rules and event relay |
+| `claude_code_worker.py` | `ClaudeCodeWorker`, `WorkerPolicy`, `resolve_policy`: external Claude Code sessions |
 | `worktrees.py` | `WorktreeService`: create, finalize, record, discard |
 | `worktree_review.py` | immutable, read-only review snapshots |
 | `worktree_integrate.py` | apply an acknowledged review to a clean parent, with a rollback journal |
@@ -151,6 +287,36 @@ child `turn.completed` would look like the parent ending, and a relayed
 `context.assembled` records the request it actually sent; the subagent page
 reads it back through `AgentTranscript`. Events: `agent.spawned`,
 `agent.completed`, `agent.clamped`.
+
+## Attention goes to the root, then the human
+
+A child never asks the human directly. When it is blocked on an approval it
+cannot get, the block travels up as **attention** on its `SubagentOutcome`
+(`attention` in `to_dict()`, and a `[needs attention: ...]` line in `render()`):
+
+- a Nexus child whose tool call was denied because no approver was attached
+  (`permission.resolved` with an `unattended*` code; collected by
+  `_ChildEventSink`, `runtime.py`);
+- a Claude Code worker stopped at a trust, authentication or permission prompt
+  (`needs_attention` status), or whose `auto` classifier denied an action (the
+  child may still finish; its status stays `completed` and the denial is listed).
+
+A Nexus child can also report a block itself with the **`escalate`** tool
+(`tools/builtin/escalate.py`; `needed` and `why`, at most 5 per child). It exists
+only in a child's catalog (added after the parent ∩ role ∩ requested
+intersection), never the root's; it grants nothing, never waits, and is allowed in
+every permission mode (`_ALWAYS_ALLOWED_TOOLS`; an explicit `deny` rule still
+wins). The call is a normal relayed tool row, and the runtime folds it into the
+same `attention`. Claude Code workers have no such tool; their blocks are detected.
+
+The rendered report tells the root agent it is the escalation point: resolve it
+first (re-delegate a narrower task, another role or workspace), and otherwise
+ask the user in its reply, saying exactly what is needed and why. The root can
+never grant itself or a child more authority than it holds, so a human answer is
+the only way authority grows. There is no pause/resume: a blocked child ends and
+the root re-delegates after the answer. Not implemented: a live handoff into the Claude PTY (the root escalates by ending its
+reply). Offline tests: `tests/test_agent_attention.py`,
+`tests/test_claude_code_worker.py`.
 
 ## Failed subagents keep their context
 

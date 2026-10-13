@@ -200,10 +200,12 @@ body { font-size: 13px; line-height: var(--row); }
 .message-body > :first-child, .message-full > :first-child { margin-top: 0; }
 .message-body > :last-child, .message-full > :last-child { margin-bottom: 0; }
 .message-body p, .message-full p { margin: 0 0 16px; }
-.message-body :is(h2, h3, h4), .message-full :is(h2, h3, h4) { margin: 24px 0 8px; color: var(--text); font-weight: 650; line-height: 1.4; }
+.message-body :is(h1, h2, h3, h4, h5, h6), .message-full :is(h1, h2, h3, h4, h5, h6) { margin: 24px 0 8px; color: var(--text); font-weight: 650; line-height: 1.4; text-wrap: balance; }
+.message-body h1, .message-full h1 { font-size: 18px; }
 .message-body h2, .message-full h2 { font-size: 16px; }
 .message-body h3, .message-full h3 { font-size: 15px; }
-.message-body h4, .message-full h4 { color: var(--muted); font-size: 13px; }
+.message-body :is(h4, h5, h6), .message-full :is(h4, h5, h6) { color: var(--muted); font-size: 13px; }
+:is(.message-body, .message-full) hr { height: 1px; margin: 20px 0; border: 0; background: var(--border); }
 .message-body ul, .message-full ul { margin: 0 0 16px; padding: 0; list-style: none; }
 .message-body li, .message-full li { position: relative; padding-left: 18px; }
 .message-body li::before, .message-full li::before { content: ""; position: absolute; top: .72em; left: 5px; width: 4px; height: 4px; border-radius: 50%; background: var(--quiet); }
@@ -211,17 +213,53 @@ body { font-size: 13px; line-height: var(--row); }
 .message-body strong code { font-weight: 700; }
 .message-body pre, .message-full pre, .tool-detail pre { max-width: 100%; margin: 0 0 16px; padding: 12px 16px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--code); font: 12px/18px var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .message-body pre code, .message-full pre code { padding: 0; background: none; font-size: inherit; }
+/* Fenced code (markdown.js codeBlock): a head with the language and Copy, then code that
+   scrolls sideways instead of re-wrapping, so indentation stays readable on phones. */
+:is(.message-body, .message-full, .context-markdown) pre.code-block { padding: 0; white-space: pre; overflow-wrap: normal; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+pre.code-block > code { display: block; width: max-content; min-width: 100%; padding: 2px 16px 12px; font: 12px/18px var(--font-mono); white-space: pre; tab-size: 4; }
+.code-head { position: sticky; left: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 30px; padding: 0 6px 0 16px; user-select: none; -webkit-user-select: none; }
+.code-head .code-language { margin: 0; }
+.code-copy { height: 22px; padding: 0 8px; border: 0; border-radius: var(--radius-xs); background: transparent; color: var(--quiet); font: 500 11.5px/22px var(--font-sans); transition: opacity var(--fast) var(--ease), background var(--fast) var(--ease), color var(--fast) var(--ease); }
+.code-copy:hover, .code-copy:focus-visible { background: var(--active); color: var(--text); }
+.code-copy.copied { color: var(--success); }
+@media (hover: hover) { pre.code-block:not(:hover):not(:focus-within) .code-copy:not(.copied) { opacity: 0; } }
+.tok-com { color: var(--quiet); font-style: italic; }
+.tok-str { color: var(--success); }
+.tok-key { color: var(--info); }
+.tok-num, .tok-lit { color: var(--warning); }
+.tok-kw { color: var(--purple); }
+.tok-fn { color: var(--info); }
+.tok-add { display: inline-block; min-width: 100%; background: var(--diff-add); color: var(--success); }
+.tok-del { display: inline-block; min-width: 100%; background: var(--diff-remove); color: var(--danger); }
+.tok-hunk { color: var(--info); }
+.tok-meta { color: var(--muted); font-weight: 600; }
 .message-body ol, .message-full ol { margin: 0 0 16px; padding-left: 28px; }
 .message-body ol > li, .message-full ol > li { padding-left: 2px; }
 .message-body ol > li::before, .message-full ol > li::before { content: none; }
 :is(.message-body, .message-full, .context-markdown) blockquote { margin: 0 0 16px; padding: 8px 16px; border-left: 3px solid var(--accent); color: var(--muted); }
 :is(.message-body, .message-full, .context-markdown) a { color: var(--accent-ink); text-decoration: underline; }
-.markdown-table { max-width: 100%; margin-bottom: 16px; overflow-x: auto; }
-.markdown-table table { width: 100%; border-collapse: collapse; font-size: inherit; }
-.markdown-table :is(th, td) { padding: 8px 12px; border: 1px solid var(--border); vertical-align: top; }
-.markdown-table th { background: var(--raised); font-weight: 650; }
+/* Tables size to their content inside one rounded frame, with row rules only. */
+.markdown-table { width: fit-content; max-width: 100%; margin-bottom: 16px; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); scrollbar-width: thin; }
+.markdown-table table { border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.markdown-table :is(th, td) { padding: 6px 14px; text-align: left; vertical-align: top; }
+.markdown-table tr + tr td, .markdown-table tbody tr:first-child td { border-top: 1px solid var(--border); }
+.markdown-table th { background: var(--elevated); color: var(--muted); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.markdown-table .align-center { text-align: center; }
+.markdown-table .align-right { text-align: right; }
+.markdown-table tbody tr:hover { background: color-mix(in srgb, var(--raised) 60%, transparent); }
 .code-language { display: block; margin-bottom: 8px; color: var(--muted); font: 11px var(--font-mono); }
+/* Nested lists (markdown.js listHTML): hollow bullets below the first level, as the terminal's ◦. */
+:is(.message-body, .message-full) li > :is(ul, ol) { margin: 2px 0 4px; }
+:is(.message-body, .message-full) li li::before { background: transparent; box-shadow: inset 0 0 0 1px var(--quiet); }
+:is(.message-body, .message-full) li + li { margin-top: 2px; }
+/* Task items: a drawn box replaces the bullet; the glyph stays in the text for copying. */
+:is(.message-body, .message-full) li.task { padding-left: 24px; }
+:is(.message-body, .message-full) li.task::before { content: none; }
 .task-marker { color: var(--accent); }
+:is(.message-body, .message-full) .task-marker { position: absolute; top: calc(.5lh - 7px); left: 2px; width: 14px; height: 14px; overflow: hidden; border: 1.5px solid var(--border-strong); border-radius: 4px; color: transparent; line-height: inherit; white-space: nowrap; }
+:is(.message-body, .message-full) li.task.done .task-marker { border-color: var(--accent); background: var(--accent); }
+:is(.message-body, .message-full) li.task.done .task-marker::after { content: ""; position: absolute; top: 1px; left: 4px; width: 3px; height: 7px; border: solid var(--on-accent); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
+:is(.message-body, .message-full) li.task.done { color: var(--muted); }
 
 .message-footer { color: var(--quiet); }
 .message > .message-footer { margin-top: 16px; }
@@ -512,6 +550,14 @@ body { font-size: 13px; line-height: var(--row); }
 .composer-wrap[data-phase=input] .activity-bar i { background: linear-gradient(90deg, transparent, var(--warning) 40%, var(--warning) 60%, transparent); }
 /* 24% wide: 316.67% of its own width carries it to the far end. */
 @keyframes sweep { from { transform: translateX(0); } to { transform: translateX(316.67%); } }
+/* Jump to latest: floats above the composer while the timeline is scrolled away from the end. */
+.jump-latest { position: absolute; z-index: 3; bottom: calc(100% + 12px); left: 50%; display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px 0 10px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--dialog); box-shadow: var(--shadow-sm); color: var(--muted); font: 500 12px/1 var(--font-sans); transform: translateX(-50%); animation: fade var(--fast) var(--ease); }
+.jump-latest[hidden] { display: none; }
+.jump-latest:hover, .jump-latest:focus-visible { color: var(--text); border-color: var(--quiet); }
+.jump-latest svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.jump-latest.fresh { color: var(--accent-ink); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.jump-latest.fresh span::after { content: " · new output"; }
+.composer-wrap:has(.approval-strip:not([hidden]), .slash-menu:not([hidden]), .voice-strip:not([hidden])) .jump-latest { display: none; }
 /* Live dictation (js/voice-strip.js): floats above the composer, never shifts layout. */
 .voice-strip { position: absolute; z-index: 5; bottom: calc(100% + 8px); left: max(16px, calc((100% - var(--column)) / 2)); right: max(16px, calc((100% - var(--column)) / 2)); padding: 10px 14px 12px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); border-radius: var(--radius); background: color-mix(in srgb, var(--elevated) 92%, transparent); backdrop-filter: blur(10px); box-shadow: 0 10px 30px -12px var(--drop), 0 0 0 4px color-mix(in srgb, var(--accent) 8%, transparent); animation: voice-in 220ms var(--ease); }
 .voice-strip[hidden] { display: none; }
@@ -699,7 +745,7 @@ body { font-size: 13px; line-height: var(--row); }
 .palette-results .palette-item { margin: 0; width: 100%; }
 .palette-input-row { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border); color: var(--quiet); }
 .palette-input-row input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--text); font: 13px/var(--row) var(--font-sans); }
-.palette-refresh { display: inline-grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 1px solid var(--border); border-radius: 0; background: transparent; color: var(--quiet); cursor: pointer; }
+.palette-refresh { display: inline-grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-xs); background: transparent; color: var(--quiet); cursor: pointer; }
 .palette-refresh[hidden] { display: none; }
 .palette-refresh svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .palette-refresh:hover:not(:disabled), .palette-refresh:focus-visible { color: var(--text); }
@@ -707,9 +753,11 @@ body { font-size: 13px; line-height: var(--row); }
 @keyframes palette-spin { to { transform: rotate(360deg); } }
 .palette-input-row input::placeholder { color: var(--quiet); }
 .palette-results { flex: 1; max-height: min(56dvh, 520px); overflow: auto; padding: 8px; background: transparent; overscroll-behavior: contain; }
-.palette-item { display: grid; grid-template-columns: minmax(6ch, max-content) minmax(12ch, 1fr); align-items: center; gap: 0 16px; width: 100%; min-height: 32px; padding: 0 12px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--muted); text-align: left; font: 13px/var(--row) var(--font-sans); }
-.palette-item > span:first-child { min-width: 0; overflow-wrap: anywhere; }
-.palette-item > small { min-width: 0; color: var(--quiet); font: 13px/var(--row) var(--font-sans); text-align: right; overflow-wrap: anywhere; }
+.palette-item { display: flex; flex-wrap: wrap; align-items: center; gap: 0 16px; width: 100%; min-height: 32px; padding: 0 12px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--muted); text-align: left; font: 13px/var(--row) var(--font-sans); }
+.palette-item > span:first-child { flex: 1 1 0; min-width: 8ch; padding: 6px 0; overflow-wrap: anywhere; }
+.palette-item > small { flex: 0 1 auto; max-width: 60%; margin-left: auto; padding: 6px 0; color: var(--quiet); font: 12.5px/18px var(--font-sans); text-align: left; overflow-wrap: break-word; }
+.palette-item > small:empty { display: none; }
+.palette-item > .model-effort-preview { flex-basis: 100%; }
 .palette-item:hover { background: var(--raised); }
 .palette-item.selected { background: var(--active); color: var(--text); font-weight: 600; }
 .palette-item.selected > small { font-weight: 400; }
@@ -987,7 +1035,9 @@ body { font-size: 13px; line-height: var(--row); }
 
 /* Browser-local visibility preferences never change request context. */
 .context-preferences { min-width: 0; margin: 24px 0 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
-.context-preferences legend { padding: 0 6px; color: var(--text); font-size: 13px; font-weight: 600; }
+.context-preferences { padding: 16px; }
+.context-preferences legend { float: left; width: 100%; margin: 0 0 6px; padding: 0; color: var(--text); font-size: 13px; font-weight: 600; }
+.context-preferences legend + * { clear: both; }
 .context-preferences p { margin: 0 0 12px; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
 .context-preference { display: flex; align-items: center; gap: 8px; min-height: 32px; font-size: 13px; }
 .context-preference input { width: 16px; height: 16px; accent-color: var(--accent); }

@@ -314,6 +314,12 @@ class Client:
             "context": dict(getattr(result, "context", None) or {}),
         }
 
+    async def agent_cancel(self, session: str, agent_id: str, *, reason: str = "") -> p.AgentCancelResult:
+        """Cancel one running child agent without stopping its parent turn."""
+        return await self._request(
+            p.AgentCancel(session=session, agent_id=agent_id, reason=reason)
+        )  # type: ignore[return-value]
+
     async def resolve_permission(self, session: str, request_id: str, decision: str) -> bool:
         command = p.PermissionResolve(session=session, request_id=request_id, decision=decision, client_id=self.client_id)
         result = await self._request(command)
@@ -362,6 +368,11 @@ class Client:
 
     async def session_title_settings_set(self, *, enabled: bool | None = None, model: str | None = None) -> Any:
         return await self._request(p.SessionTitleSettingsSet(enabled=enabled, model=model))
+
+    async def claude_code_settings(self) -> Any: return await self._request(p.ClaudeCodeSettings())
+
+    async def claude_code_settings_set(self, *, main_enabled: bool) -> Any:
+        return await self._request(p.ClaudeCodeSettingsSet(main_enabled=main_enabled))
 
     async def select_model(self, session: str, ref: str) -> Any: return await self._request(p.ModelSelect(session=session, ref=ref))
 

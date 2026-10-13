@@ -178,7 +178,8 @@ def tool_detail_sections(tool: ToolCallView) -> list[DetailSection]:
         ("Finished", _stamp(tool.finished_ts)),
         ("Call ID", tool.call_id or None),
         ("Model iteration", tool.iteration or None),
-        ("Executed", _scalar(tool.executed) if tool.status != "requested" else None),
+        ("Provenance", tool.provenance),
+        ("Executed", _scalar(tool.executed) if tool.status != "requested" and not tool.provenance else None),
         ("Error result", "yes" if tool.is_error else None),
     ):
         if value is not None:
