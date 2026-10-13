@@ -25,7 +25,26 @@ Do not weaken any boundary below to make a feature easier.
 | Extension code | quarantine validates (syntax, import in isolated subprocess with timeout, hash re-check); **does not sandbox** | `ext/quarantine.py` |
 | Worktrees | authenticated records, service-root lock, no shell for children, integration applies frozen bytes only to a clean parent | `agents/worktrees*.py` |
 | Settings agent | blocked from `credentials.json`, sessions, cache, daemon files, trash, `nexus.db` | `tools/permissions.py`, `host_support/settings_scope.py` |
+| GPT Live (experimental) | the ChatGPT OAuth bearer and account id exist only in `live/transport.py` (headers per request, scrubbed with `redact_secrets` plus the literal values from every error, raw dev log and result); `Live*` results carry the SDP answer and state only; the audio helper sees SDP, never a credential; the voice model's delegations are untrusted input that go through the normal permission engine; **approvals are resolved only on screen, never by audio**; the signaling and sideband hosts are fixed OpenAI hosts, not user URLs, and (like provider calls) bypass `net/outbound.py`; no raw audio is stored | `live/`, `host_support/live.py` |
 | State at rest | `nexus.db` `0600` in a `0700` dir; Settings redacts secret-looking fields | `session/db.py`, `settings_inventory.py` |
+
+## GPT Live: data sent to OpenAI and consent
+
+A GPT Live call ([live.md](live.md)) sends to OpenAI, through the user's own
+ChatGPT account: the microphone audio (from the client's helper, directly to
+OpenAI's media servers), the rendered voice instructions (workspace folder name,
+agent name and, unless `new_conversation`, the last `carry_turns` spoken turns,
+all shown in `live.started`), and **the agent's progress and final answers**,
+which can contain file contents or command output. The voice model's text is
+treated as an untrusted prompt. Live never auto-approves anything and an
+unattended session keeps its `on_unattended` policy. The first use is
+confirmed in a client dialog and recorded once per machine by the daemon
+(`LiveConsent`, `<nexus home>/live-consent.json`, `0600`, timestamp and notice version
+only; `/live revoke` deletes it). The **daemon refuses `LiveStart` without that record**
+(`live_consent_required`, before any transport is opened), so every client is gated by
+the same check; this is tested offline, not verified against a real call. `NEXUS_LIVE=off` and
+`[live] enabled = false` disable it. The endpoints are undocumented, may change
+or stop working, and nothing was exercised against the real service.
 
 ## Outbound HTTP (`net/`)
 

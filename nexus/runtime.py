@@ -2206,6 +2206,8 @@ class Runtime:
             store=voice_store if voice_store is not None else ModelStore(nexus_home(self._home), revision=voice_config.revision),
         )
 
+        self.live = self._build_live(initial, voice_environ)
+
         self._outbound_http_service = (
             outbound_http_service
             if outbound_http_service is not None
@@ -5667,6 +5669,50 @@ class Runtime:
 
     # -- lifecycle ---------------------------------------------------------
 
+    def _live_section(self, config: Config, environ: Mapping[str, str]) -> Any:
+        from .config.schema import LiveSection
+
+        section = config.v2.live if config.v2 else LiveSection()
+        if environ.get("NEXUS_LIVE", "").strip().lower() == "off":
+            section = msgspec.structs.replace(section, enabled=False)
+        return section
+
+    def _build_live(self, config: Config, environ: Mapping[str, str]) -> Any:
+        """The daemon's GPT Live manager (docs/live.md); nothing connects until a call starts."""
+        from .live.manager import LiveManager
+
+        def profile() -> str:
+            v2 = self._load_config().v2
+            return getattr(((v2.providers if v2 else {}) or {}).get("codex"), "profile", None) or "default"
+
+        def auth() -> Any:
+            from .auth.codex import CodexOAuthManager
+
+            return (self._codex_auth_factory or CodexOAuthManager)(profile=profile())
+
+        def transport_factory(raw_log: Any = None) -> Any:
+            from .live.transport import CodexLiveTransport
+
+            return CodexLiveTransport(auth(), raw_log=raw_log)
+
+        async def availability() -> str | None:
+            from .live.transport import websocket_available
+
+            if not websocket_available():
+                return "unsupported"
+            return None if await auth().status() else "no_credential"
+
+        return LiveManager(
+            self._live_section(config, environ),
+            transport_factory=transport_factory, availability=availability,
+            home=nexus_home(self._home), workspace=self.workspace, environ=environ,
+        )
+
+    def refresh_live_config(self) -> None:
+        """Apply persisted ``[live]`` settings to the next call."""
+        environ = os.environ if self._environ is None else self._environ
+        self.live.configure(self._live_section(Config.load(self.workspace, home=self._home, environ=self._environ), environ))
+
     def refresh_voice_config(self) -> None:
         """Apply persisted voice settings without rebuilding provider routes."""
         from .config.schema import VoiceSection
@@ -5683,6 +5729,8 @@ class Runtime:
             return
         self._closed = True
         await self.voice.shutdown()
+        if (live := getattr(self, "live", None)) is not None:
+            await live.shutdown()
         for provider in self._owned_providers:
             aclose = getattr(provider, "aclose", None)
             if aclose is not None:

@@ -16,6 +16,7 @@ With no subcommand, `nexus` opens `chat`. Bare `nexus voice` shows voice status.
 | `desktop [--session ID]` | native Rust GPUI window; no TTY required, separate source build ([desktop.md](desktop.md)) |
 | `web [--no-browser]` | `WebLaunch` → one-use browser URL ([web.md](web.md)) |
 | `run MESSAGE [--session ID] [--json]` | one turn (session defaults to `default`) over the daemon; `-` reads stdin; human rendering with terminal approvals, or `--json` JSONL event envelopes (unattended) |
+| `live [--session ID] [--voice V] [--new] [--workspace PATH]` | headless GPT Live voice call (experimental): asks for consent on the terminal the first time, prints captions, delegations and appends labelled, Ctrl+C or Ctrl+D hangs up ([live.md](live.md#headless-cli-nexus-live)) |
 | `replay SESSION [--json]` / `sessions replay` | re-render a session from its log through the reducer |
 | `sessions list\|fork\|replay\|export\|delete\|restore` | session management (`fork --at-seq`, `export --format json\|markdown\|jsonl`, `delete --force`) |
 | `models list\|show\|refresh\|tiers\|select` | registry inspection (`list --provider --tier --selectable --search`); `select --session` |
@@ -42,6 +43,7 @@ With no subcommand, `nexus` opens `chat`. Bare `nexus voice` shows voice status.
 | `client/turn_stream.py` | `turn_events`: attach to a turn's stream before starting it, so no event is missed |
 | `ui/cli/uds.py` | UDS transport for the CLI |
 | `ui/cli/run.py` | one-shot `nexus run` |
+| `ui/cli/live.py` | `nexus live`: consent, the call, labelled output, hang-up ([live.md](live.md)) |
 | `ui/cli/render.py` | `TerminalRenderer`: events → terminal text, per-session replay dedup |
 | `ui/cli/approve.py` | terminal approval prompt (`y`/`a`/`n`/`never`); input exhaustion falls back to deny-once, never allow |
 | `ui/cli/details.py` | `detail_lines(session, view)`: pure function of the reduced view; used by `/details` and the status line so they cannot disagree |
@@ -93,6 +95,7 @@ names, usage, summaries, aliases). `parse` resolves aliases to the canonical nam
 | `/review`, `/commit` | | | ask the agent to review / commit changes |
 | `/archived` | | `/resume` | browse archived sessions |
 | `/voice` | `[status\|download\|on\|off]` | | dictation |
+| `/live` | `[stop\|mute\|new\|status\|revoke]` | | spoken GPT Live call on this session, again to hang up (`Ctrl+X D`); first use asks for consent ([live.md](live.md#client-flow-ratatui-m4)) |
 | `/speak` | `[download]` | | speak the latest completed answer with local Paradee (ONNX, CPU); a missing model opens the consent and download dialog (`download` runs only that) |
 | `/mock` | | | dev mode only (`DEV_SPECS`) |
 

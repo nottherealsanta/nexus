@@ -11,7 +11,8 @@ here, so add a row when you add a file.
 | Path | Contents |
 | --- | --- |
 | `nexus/` | the package (below) |
-| `rust/desktop/` | GPUI desktop executable, native editor/transcript/panels, shared typed Settings renderer in `src/settings.rs`, declarative `src/keymap.rs`, bounded toast stack in `src/notice.rs`, turn minimap derivation in `src/minimap.rs`, bounded opt-in CPU timing in `src/trace.rs`, and visual fixtures ([desktop.md](desktop.md)) |
+| `rust/desktop/` | GPUI desktop executable, native editor/transcript/panels, shared typed Settings renderer in `src/settings.rs`, declarative `src/keymap.rs`, GPT Live call bar and card in `src/live.rs`, bounded toast stack in `src/notice.rs`, turn minimap derivation in `src/minimap.rs`, bounded opt-in CPU timing in `src/trace.rs`, and visual fixtures ([desktop.md](desktop.md)) |
+| `rust/live/` | `nexus-live` helper for GPT Live calls: stdio JSONL (`src/protocol.rs`), call state machine (`src/app.rs`), webrtc-rs peer (`src/peer.rs`), Opus (`src/codec.rs`), rings/resampler/echo gate (`src/dsp.rs`), cpal or fake audio (`src/audio.rs`); protocol in `rust/live/README.md` |
 | `skills/gpui-nexus/` | version-aware GPUI implementation/design guidance, reviewed upstream references and licenses |
 | `skills/native-app-review/` | reusable native screenshot/review skill and local macOS bundling helper |
 | `docs/` | this documentation |
@@ -33,7 +34,8 @@ here, so add a row when you add a file.
 | --- | --- |
 | `nexus/agents/data/*.md` | packaged agent roles: `build`, `orchestrator` (roots); `advisor`, `task`, `quick` (subagents) |
 | `nexus/model/data/models.min.json`, `NOTICE` | vendored models.dev snapshot and MIT attribution |
-| `nexus/auth/NOTICE`, `nexus/voice/NOTICE` | third-party attributions |
+| `nexus/auth/NOTICE`, `nexus/voice/NOTICE`, `nexus/live/NOTICE` | third-party attributions |
+| `nexus/live/prompts/instructions.md` | bundled GPT Live voice instructions (override: `<workspace>/.agents/live/instructions.md`) |
 | `nexus/host_support/searchserver/` | packaged SearXNG `compose.yaml` and `searxng/settings.yml` |
 | `nexus/ui/web/index.html`, `js/*.js`, `styles/*.css`, `assets/*` | the browser app ([web.md](web.md#file-map)) |
 
@@ -228,6 +230,8 @@ here, so add a row when you add a file.
 | `speech.py` | Isolated Paradee text-to-speech (onnxruntime, misaki) for the latest completed answer (`Speak`, `/speak`) |
 | `socket_dir.py` | Private fallback directory for daemon sockets whose default path is too long |
 | `update_check.py` | The "update available" notice (docs/release.md) |
+| `live.py` | Host dispatch for GPT Live commands and the facade-backed `LiveHost` the call manager uses |
+| `live_consent.py` | Once-per-machine GPT Live consent record (`<nexus home>/live-consent.json`), read and written by the `LiveConsent` command |
 | `voice.py` | Redacted host projection and dispatch for local voice commands |
 | `workspace.py` | Bounded workspace path search respecting host read-deny boundaries |
 | `worktree_projection.py` | Allowlisted, bounded projection of owned-worktree records and diffs |
@@ -388,6 +392,7 @@ here, so add a row when you add a file.
 | `details.py` | Pure, deterministic details of a reduced conversation view |
 | `render.py` | Plain one-shot/JSONL human rendering of the event stream |
 | `run.py` | One-shot runs (`nexus run "..."` over the daemon) |
+| `live.py` | `nexus live`: a headless GPT Live call (consent prompt, `LiveCall` helper, labelled captions, delegations and appends; hang-up on Ctrl+C or end of input) ([live.md](live.md#headless-cli-nexus-live)) |
 | `stream.py` | Turn streaming helpers shared by the one-shot and interactive surfaces |
 | `uds.py` | Unix-socket transport for the CLI, over the canonical host wire |
 
@@ -439,6 +444,8 @@ here, so add a row when you add a file.
 | `timeline.py` | Pure formatting and filtering for reducer-backed conversation timelines |
 | `tool_details.py` | Presentable tool call details: every parameter and output, none of the JSON |
 | `usage.py` | Provider usage formatting shared by surfaces (`ProvidersUsageResult`) |
+| `live_card.py` | Rows of the GPT Live timeline card from a `LiveCallView`: captions, "Sent to agent", "Told voice", started/ended rows, commentary collapsed with a count, clips announced; shared by native clients |
+| `live_helper.py` | `nexus-live` process wrapper (binary lookup, bounded JSONL, offer/answer/mute/stop, helper-event forwarding) and `LiveCall`, the client half of a GPT Live call; stdlib only, shared by the terminal, desktop and CLI clients |
 | `voice_capture.py` | Bounded 16 kHz microphone capture for TUI dictation |
 | `voice_settings.py` | Host-backed voice configuration shared by terminal surfaces |
 
@@ -450,6 +457,16 @@ here, so add a row when you add a file.
 | `fold.py` | Delta accumulation, dedup, and log folding for the pure view reducer |
 | `model.py` | Renderable view-model types for the pure event reducer |
 | `reduce.py` | The pure, synchronous event reducer |
+
+### `nexus/live/`
+
+| File | Purpose |
+| --- | --- |
+| `__init__.py` | GPT Live voice calls: a daemon-side manager (docs/live.md) |
+| `protocol.py` | Wire shapes of a call: signaling body, inbound event union with `Unknown` fallback, outbound appends, 500-byte UTF-8 chunking |
+| `bridge.py` | Delegation bridge: voice requests become queued or steering user messages; session events become progress, final and notice appends |
+| `manager.py` | One call per daemon: state machine, deadline, detach watchdog, exactly one `live.ended`, durable `live.*` events |
+| `transport.py` | `LiveTransport` seam and `CodexLiveTransport`: signaling POST, sideband WebSocket with bounded reconnect, redacted errors |
 
 ### `nexus/voice/`
 
@@ -514,6 +531,7 @@ loop over local state; splitting it further needs a state struct and is not done
 | `settings_pages/mcp.py` | Settings → MCP servers: per-server switch and tool loading, plus mcp.json files |
 | `logs.py` | Bounded paged native diagnostics with routine-entry folding |
 | `voice.py` | Bounded native dictation using shared capture and host transcription |
+| `live.py` | Native GPT Live call bridge: `/live` commands, consent dialog, helper lifecycle through `ui_support/live_helper.py`, call-bar state, error panels |
 | `desktop.py` | Explicit clipboard operations with byte/time bounds |
 | `run.py` | Native launch seam and binary discovery |
 
@@ -523,6 +541,7 @@ loop over local state; splitting it further needs a state struct and is not done
 | `rust/tui/src/copy_button.rs` | Hover-revealed Copy buttons on user cards and code fences: row markers, hit test, text recovery |
 | `rust/tui/src/disclosure.rs` | Rust-local transcript disclosure, session/page LRU choices and borrowed presentation |
 | `rust/tui/src/graphics.rs` | One-shot `/dev/tty` probe choosing the `ratatui-image` protocol (Kitty, Sixel, iTerm2, half blocks) and cell size; `NEXUS_IMAGE_PROTOCOL` override |
+| `rust/tui/src/live_bar.rs` | GPT Live call bar in the composer chrome: `● Live · model · phase · mm:ss`, mic/speaker meters, Muted badge |
 | `rust/tui/src/local_ui.rs` | Optimistic sidebar/tab/file/log toggles with ordered acknowledgements |
 | `rust/tui/src/trace.rs` | Bounded opt-in native timing samples, percentile summaries and exit report |
 

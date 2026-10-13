@@ -60,6 +60,7 @@ V2_SECTION_KEYS = frozenset(
         "settings",
         "telemetry",
         "voice",
+        "live",
         "updates",
     }
 )
@@ -120,6 +121,8 @@ _V2_NUMERIC = {
     "session.snapshot_every": int,
     "voice.max_seconds": int,
     "voice.unload_after_minutes": int,
+    "live.max_minutes": int,
+    "live.carry_turns": int,
 }
 _V2_BOOL = frozenset(
     {
@@ -135,6 +138,9 @@ _V2_BOOL = frozenset(
         "voice.autoload",
         "voice.auto_send",
         "voice.timestamps",
+        "live.enabled",
+        "live.progress",
+        "live.log_raw",
     }
 )
 
@@ -331,6 +337,8 @@ def env_overlay_v2(environ: Mapping[str, str]) -> dict[str, Any]:
         cursor[keys[-1]] = _coerce_v2(keys, raw)
     if environ.get("NEXUS_VOICE", "").strip().lower() == "off":
         overlay.setdefault("voice", {})["enabled"] = False
+    if environ.get("NEXUS_LIVE", "").strip().lower() == "off":
+        overlay.setdefault("live", {})["enabled"] = False
     return overlay
 
 

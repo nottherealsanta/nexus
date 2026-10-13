@@ -57,7 +57,7 @@ Strict one-way imports: a lower layer never imports a higher one.
 L5   ui/ ui_support/ client/     surfaces (Ratatui, GPUI, CLI, JSONL, browser)
 L4½  host/ host_support/ observability/   facade, protocol, daemon, transports
 L4   runtime.py                  composition root: managers, providers, router, reload
-L3   session/ context/ tools/ skills/ mcp/ agents/ hooks/ ext/ voice/ auth/ net/   managers
+L3   session/ context/ tools/ skills/ mcp/ agents/ hooks/ ext/ voice/ live/ auth/ net/   managers
 L2   core/                       loop, turn, bus, cancel, registry, watch
 L1   model/                      message IR, Provider protocol, adapters, registry, tiers
 L0½  view/                       pure event reducer (imports only events.py)
@@ -106,6 +106,7 @@ Details: [models.md](models.md), [tools.md](tools.md), [events-and-view.md](even
 | `agents/` | subagent definitions, runner, git worktrees | [agents.md](agents.md) |
 | `skills/`, `hooks/`, `mcp/`, `ext/` | skills, lifecycle hooks, MCP, hot-reload manifest | [extensions.md](extensions.md) |
 | `voice/` | local dictation | [voice.md](voice.md) |
+| `live/` | GPT Live voice calls (experimental; delegates to the open session) | [live.md](live.md) |
 | `net/` | pinned public-address-only HTTP | [security.md](security.md) |
 | `runtime.py` | composition root | below |
 | `host/`, `host_support/`, `observability/` | facade, protocol, daemon, transports, projections | [host.md](host.md) |

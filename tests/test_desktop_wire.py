@@ -74,6 +74,7 @@ def test_identity_change_forces_full_reset():
         "composer",
         "sessions",
         "details",
+        "live",
         "logs",
         "panel",
         "form",
@@ -243,6 +244,7 @@ def test_all_topic_fields_are_preserved_in_their_topics():
         "form": {},
         "prompt": {},
         "history": [],
+        "live": {},
     }
     wire = DesktopWire()
     encoded = wire.encode(snapshot(**fields))
@@ -255,6 +257,7 @@ def test_all_topic_fields_are_preserved_in_their_topics():
         "composer",
         "sessions",
         "details",
+        "live",
         "logs",
         "panel",
         "form",
@@ -367,3 +370,29 @@ def test_image_cache_is_bounded_to_preview_plus_eight_inline_images():
     encoded = wire.encode(snapshot(inline_images=inline))
     assert len(encoded["images"]["put"]) == 9
     assert sum(bool(item["data_ref"]) for item in encoded["topics"]["header"]["inline_images"]) == 9
+
+
+def test_live_call_bar_has_its_own_topic_so_the_clock_does_not_resend_the_header():
+    wire = DesktopWire()
+    bar = {"active": True, "state": "active", "phase": "listening", "model": "m",
+           "muted": False, "started": 10.0, "in": 0.1, "out": 0.0, "elsewhere": ""}
+    first = wire.encode(snapshot(live=bar))
+    assert first["schema"] == 3 and first["topics"]["live"] == {"live": bar}
+    assert "live" not in first["topics"]["header"]
+    louder = wire.encode(snapshot(live={**bar, "in": 0.4}))
+    assert louder["topics"] == {"live": {"live": {**bar, "in": 0.4}}}
+    assert wire.encode(snapshot(live={**bar, "in": 0.4})) is None
+    ended = wire.encode(snapshot(live={}))
+    assert ended["topics"] == {"live": {"live": {}}}
+
+
+def test_live_block_kind_and_via_voice_status_pass_through_block_updates():
+    wire = DesktopWire()
+    card = {"id": "live:c1", "kind": "live", "title": "m · sol", "status": "active", "rev": 1,
+            "collapsed": True, "operation": {"kind": "live_toggle", "id": "c1"},
+            "detail": "you\tYou\tcheck the readme"}
+    user = {"id": "u:user", "kind": "user", "title": "check the readme", "number": 3, "status": "live", "rev": 1}
+    encoded = wire.encode(snapshot(blocks=[card, user]))
+    assert encoded["blocks"]["splice"]["blocks"] == [card, user]
+    grown = wire.encode(snapshot(blocks=[{**card, "detail": card["detail"] + "\nvoice\tVoice\tok", "rev": 2}, user]))
+    assert grown["blocks"]["splice"]["from"] == 0

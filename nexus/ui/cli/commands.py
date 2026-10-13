@@ -80,6 +80,7 @@ SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("/commit", "Ask the agent to commit changes"),
     CommandSpec("/archived", "Browse archived sessions", aliases=("/resume",)),
     CommandSpec("/voice", "Dictate into the composer", "[status|download|on|off]"),
+    CommandSpec("/live", "Talk to the agent in a spoken GPT Live call (again to hang up)", "[stop|mute|new|status|revoke]"),
     CommandSpec("/speak", "Speak the latest answer aloud (local Paradee)", "[download]"),
 )
 
