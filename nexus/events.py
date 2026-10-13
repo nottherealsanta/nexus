@@ -103,6 +103,23 @@ INPUT_EVENTS = ("input.started", "input.queued", "input.moved", "input.consumed"
 # output is added to model context without starting a turn.
 SHELL_EVENTS = ("shell.started", "shell.completed")
 
+# GPT Live voice calls (docs/live.md). Durable, session-scoped and turn-less like
+# ``shell.*``. ``live.levels`` is reserved for an ephemeral meter and is never
+# persisted by the daemon (clients draw their own from the audio helper);
+# ``live.transcript.delta`` and ``live.phase`` are persisted coalesced to at most
+# 4 Hz because the session sink has no non-durable fan-out (docs/decisions.md).
+LIVE_EVENTS = (
+    "live.started",
+    "live.transcript",
+    "live.transcript.delta",
+    "live.delegated",
+    "live.appended",
+    "live.phase",
+    "live.levels",
+    "live.error",
+    "live.ended",
+)
+
 # Presence is a subscriber count, not identity (single user, many views).
 # Section 14.10 adds only the join/leave transitions; the derived
 # ``presence.changed`` event is retained as a compatibility alias below so
@@ -157,6 +174,7 @@ EVENT_GROUPS: dict[str, tuple[str, ...]] = {
     "hook": HOOK_EVENTS,
     "input": INPUT_EVENTS,
     "shell": SHELL_EVENTS,
+    "live": LIVE_EVENTS,
     "presence": PRESENCE_EVENTS,
     "daemon": DAEMON_EVENTS,
     "misc": MISC_EVENTS,
@@ -177,6 +195,7 @@ __all__ = [
     "HOOK_EVENTS",
     "INPUT_EVENTS",
     "LEGACY_EVENTS",
+    "LIVE_EVENTS",
     "MCP_EVENTS",
     "MISC_EVENTS",
     "MODEL_EVENTS",

@@ -213,10 +213,18 @@ fn user_card(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
     // Every card row carries the Copy marker; the button sits on this first row.
     let op = &crate::copy_button::mark(&b.id, None, &b.operation);
     out.push((line(bar(()), vec![], Some(width), base), op.clone()));
-    let tag = if b.number > 0 {
-        format!(" #{} ", b.number)
-    } else {
+    // A turn started by a GPT Live delegation says so beside its number.
+    let mut tags = Vec::new();
+    if b.status == "live" {
+        tags.push("via voice".to_string());
+    }
+    if b.number > 0 {
+        tags.push(format!("#{}", b.number));
+    }
+    let tag = if tags.is_empty() {
         String::new()
+    } else {
+        format!(" {} ", tags.join(" · "))
     };
     let room = if tag.is_empty() {
         inner
@@ -625,6 +633,76 @@ fn change(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
     }
 }
 
+/// The GPT Live timeline card. `b.detail` holds one `tone TAB label TAB text` row per line
+/// (`nexus/ui_support/live_card.py`); the card opens and closes by sending `b.operation`.
+fn live_card(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
+    let op = &b.operation;
+    let rail = color(&b.color, p.purple, p);
+    let glyph = if b.collapsed { "›" } else { "⌄" };
+    let mut head = vec![
+        Span::styled(glyph.to_string(), Style::default().fg(p.muted)),
+        Span::raw(" "),
+        Span::styled(
+            " Live ",
+            Style::default()
+                .fg(p.background)
+                .bg(rail)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(b.title.clone(), Style::default().fg(p.text)),
+    ];
+    if !b.status.is_empty() {
+        head.push(Span::styled(
+            format!(" · {}", b.status),
+            Style::default().fg(if b.status == "ended" { p.quiet } else { p.success }),
+        ));
+    }
+    indented(out, head, 2, width, op);
+    for row in b.detail.lines() {
+        let mut parts = row.splitn(3, '\t');
+        let tone = parts.next().unwrap_or("");
+        let label = parts.next().unwrap_or("");
+        let text = parts.next().unwrap_or("");
+        let (label_style, text_style) = match tone {
+            "you" => (Style::default().fg(p.muted), Style::default().fg(p.text)),
+            "voice" => (Style::default().fg(p.blue), Style::default().fg(p.text)),
+            "caption" => (
+                Style::default().fg(p.quiet),
+                Style::default().fg(p.quiet).add_modifier(Modifier::ITALIC),
+            ),
+            "sent" => (Style::default().fg(p.accent), Style::default().fg(p.text)),
+            "told" => (Style::default().fg(p.cyan), Style::default().fg(p.muted)),
+            "bad" => (Style::default().fg(p.error), Style::default().fg(p.error)),
+            "note" => (Style::default().fg(p.quiet), Style::default().fg(p.quiet)),
+            _ => (Style::default().fg(p.quiet), Style::default().fg(p.muted)),
+        };
+        // Hanging indent: wrapped text lines up under the first row's text, not under the label.
+        let label_width = if label.is_empty() { 2 } else { label.width() + 2 };
+        let room = width.saturating_sub(4 + 2 + label_width).max(8);
+        let mut wrapped = wrap(&[Span::styled(text.to_string(), text_style)], room);
+        if wrapped.is_empty() {
+            wrapped.push(Vec::new()); // a blank line keeps its row
+        }
+        for (i, cells) in wrapped.into_iter().enumerate() {
+            let mut prefix = vec![
+                Span::raw("    "),
+                Span::styled("│ ", Style::default().fg(rail)),
+            ];
+            if i == 0 && !label.is_empty() {
+                prefix.push(Span::styled(
+                    label.to_string(),
+                    label_style.add_modifier(Modifier::BOLD),
+                ));
+                prefix.push(Span::raw("  "));
+            } else {
+                prefix.push(Span::raw(" ".repeat(label_width)));
+            }
+            out.push((line(prefix, cells, None, Style::default()), op.clone()));
+        }
+    }
+}
+
 pub fn build(b: &Content, width: u16, p: &Palette) -> Rows {
     let padded = !matches!(
         b.kind.as_str(),
@@ -708,6 +786,7 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
                 ));
             }
         }
+        "live" => live_card(&mut out, b, width, p),
         "context" => {
             let chip = color(&b.color, Color::Rgb(138, 138, 138), p);
             let mut head = vec![Span::styled(
@@ -1145,6 +1224,7 @@ mod tests {
             "summary",
             "collapsed",
             "error",
+            "live",
         ] {
             let block = Content {
                 kind: kind.into(),
@@ -1641,4 +1721,50 @@ mod tests {
         let project = rows[2].0.spans.iter().find(|s| s.content == "1").unwrap();
         assert_eq!(project.style.fg, Some(p.quiet), "project count is greyed");
     }
+
+    fn plain(rows: &Rows) -> Vec<String> {
+        rows.iter().map(|(line, _)| line.to_string()).collect()
+    }
+
+    #[test]
+    fn live_card_draws_labelled_rows_and_wraps_long_text() {
+        let p = Palette::new(false);
+        let op = serde_json::json!({"kind":"live_toggle","id":"c1"});
+        let block = Content {
+            kind: "live".into(),
+            title: "gpt-live-1-codex · sol".into(),
+            status: "active".into(),
+            collapsed: true,
+            operation: Some(op.clone()),
+            detail: "dim\tStarted\tinstructions: bundled\nyou\tYou\tcheck the readme\nsent\tSent to agent (queue)\tcheck the readme  → turn #3\ntold\tTold voice [final]\t".to_owned()
+                + &"word ".repeat(40)
+                + "\nbad\tEnded\tuser · 02:41",
+            ..Default::default()
+        };
+        let rows = build(&block, 60, &p);
+        let text = plain(&rows).join("\n");
+        assert!(text.contains("› ") && text.contains(" Live ") && text.contains("gpt-live-1-codex · sol · active"), "{text}");
+        for label in ["Started", "You", "Sent to agent (queue)", "→ turn #3", "Told voice [final]", "Ended"] {
+            assert!(text.contains(label), "{label} missing in\n{text}");
+        }
+        assert!(plain(&rows).iter().all(|line| unicode_width::UnicodeWidthStr::width(line.as_str()) <= 60));
+        assert!(rows.iter().all(|(_, row_op)| row_op.as_ref() == Some(&op)), "every row toggles the card");
+        assert!(plain(&rows).iter().filter(|l| l.contains("word")).count() > 1, "long text wraps");
+    }
+
+    #[test]
+    fn user_card_says_via_voice_beside_its_number() {
+        let p = Palette::new(false);
+        let mut block = Content {
+            kind: "user".into(),
+            title: "check the readme".into(),
+            number: 3,
+            ..Default::default()
+        };
+        assert!(!plain(&build(&block, 60, &p)).join("\n").contains("via voice"));
+        block.status = "live".into();
+        let text = plain(&build(&block, 60, &p)).join("\n");
+        assert!(text.contains("via voice · #3"), "{text}");
+    }
+
 }

@@ -1,0 +1,19 @@
+Nexus GPT Live (nexus/live) re-implements an undocumented realtime voice-call
+protocol from observed behaviour recorded in
+plans/in-progress/GPT_LIVE_PROTOCOL_NOTES.md. The endpoints, headers, event
+names and message shapes are pinned to two MIT-licensed reference
+integrations:
+
+  malhashemi/opencode-gpt-live, commit c23101cfdeb3feaf03f09aa678135ca01d72ed4e
+  Copyright (c) 2026 M. Adel Alhashemi
+
+  can1357/oh-my-pi, commit 818dd42b73ab1caad17fa06d4edcc3a97086dc57
+  Copyright (c) 2025 Mario Zechner; (c) 2025-2026 Can Bölük; (c) 2026 Stencil Labs, Inc.
+
+No code or prompt text was copied from either project; the bundled voice
+instructions are written independently. Neither project was run while writing
+this module, and nothing here has been exercised against the real service.
+
+This is an experimental client for a private endpoint and may stop working
+without notice. ChatGPT and GPT-Live are OpenAI trademarks; Nexus is not
+affiliated with OpenAI.

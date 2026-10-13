@@ -27,6 +27,7 @@ ACTIONS = {
     "quit_shell": "Quit",
     "open_model_picker": "Models",
     "start_voice": "Voice",
+    "toggle_live": "Live",
     "toggle_logs": "ToggleLogs",
     "cycle_reasoning_effort": "CycleEffort",
     "show_shortcuts": "Shortcuts",

@@ -786,6 +786,31 @@ class VoiceSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
             raise ValueError("voice.device must be auto, cpu, mps or cuda")
 
 
+class LiveSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """GPT Live voice calls (docs/live.md, plans GPT_LIVE_PLAN section 4.6)."""
+
+    enabled: bool = True
+    #: A voice name or ``default``; validated against the known voices when a call starts.
+    voice: str = "default"
+    max_minutes: int = 30
+    carry_turns: int = 12
+    progress: bool = True
+    #: Workspace-relative or absolute path to a replacement instructions file.
+    instructions: str = ""
+    #: Dev only: bounded, redacted raw sideband log under ``~/.nexus/logs/live/``.
+    log_raw: bool = False
+
+    def __post_init__(self) -> None:
+        if type(self.max_minutes) is not int or not 1 <= self.max_minutes <= 240:
+            raise ValueError("live.max_minutes must be an integer from 1 to 240")
+        if type(self.carry_turns) is not int or not 0 <= self.carry_turns <= 100:
+            raise ValueError("live.carry_turns must be an integer from 0 to 100")
+        if not isinstance(self.voice, str) or len(self.voice) > 40:
+            raise ValueError("live.voice must be a voice name or 'default'")
+        if not isinstance(self.instructions, str) or len(self.instructions) > 4096 or "\x00" in self.instructions:
+            raise ValueError("live.instructions must be a path of at most 4096 characters")
+
+
 class UpdatesSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: Ask PyPI once a day whether a newer release exists (never installs one).
     check: bool = True
@@ -809,6 +834,7 @@ class ConfigV2(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     settings: SettingsSection = msgspec.field(default_factory=SettingsSection)
     telemetry: TelemetrySection = msgspec.field(default_factory=TelemetrySection)
     voice: VoiceSection = msgspec.field(default_factory=VoiceSection)
+    live: LiveSection = msgspec.field(default_factory=LiveSection)
     updates: UpdatesSection = msgspec.field(default_factory=UpdatesSection)
 
     def __post_init__(self) -> None:
@@ -881,4 +907,5 @@ __all__ = [
     "UpdatesSection",
     "WebSection",
     "VoiceSection",
+    "LiveSection",
 ]

@@ -92,6 +92,12 @@ def _dump(value: object) -> Any:
                 continue
             if item.name == "ts" and isinstance(value, MessageView):
                 continue
+            # Additive Live fields stay absent unless a call or a Live
+            # delegation exists, so older wire snapshots are unchanged.
+            if item.name == "origin" and field_value is None:
+                continue
+            if item.name == "live_calls" and not field_value:
+                continue
             if (
                 item.name in {"assistant_ts", "elapsed_ms"}
                 and isinstance(value, TurnView)
@@ -200,6 +206,9 @@ class MessageView(_View):
     done: bool = False
     #: Event timestamp used as the completed assistant message's durable bound.
     ts: float | None = None
+    #: Where a user message came from when not typed, e.g. ``{"kind": "live",
+    #: "delegation_id": ...}`` for a GPT Live delegation (docs/live.md).
+    origin: dict[str, Any] | None = None
 
     @property
     def text(self) -> str:
@@ -368,6 +377,66 @@ class QueuedInputView(_View):
     mode: str = "queue"
     content: list[Any] = field(default_factory=list)
     depth: int = 0
+    origin: dict[str, Any] | None = None
+
+@dataclass
+class LiveTurnView(_View):
+    """One final spoken turn of a GPT Live call (``live.transcript``)."""
+
+    role: str = "user"  # user|assistant
+    text: str = ""
+    turn: int = 0
+    ts: float | None = None
+    truncated: bool = False
+
+
+@dataclass
+class LiveDelegationView(_View):
+    """Work the voice model handed to the session (``live.delegated``)."""
+
+    delegation_id: str = ""
+    text: str = ""
+    mode: str = "queue"  # queue|steer
+    queued_id: str = ""
+    ts: float | None = None
+
+
+@dataclass
+class LiveAppendView(_View):
+    """Text sent back to the voice model, exactly as sent (``live.appended``)."""
+
+    delegation_id: str | None = None
+    channel: str = "commentary"  # commentary|final|notice
+    text: str = ""
+    chunks: int = 1
+    ts: float | None = None
+
+
+@dataclass
+class LiveCallView(_View):
+    """One GPT Live call folded from the ``live.*`` events (docs/live.md)."""
+
+    call_id: str = ""
+    status: str = "active"  # active|ended
+    model: str = ""
+    voice: str = ""
+    instructions_source: str = ""
+    instructions: str = ""
+    carried_turns: int = 0
+    new_conversation: bool = False
+    started_ts: float | None = None
+    ended_ts: float | None = None
+    end_reason: str | None = None
+    error: str | None = None
+    duration_s: float | None = None
+    phase: str = "connecting"
+    #: Latest partial (not yet final) caption: ``{"role", "text"}`` or ``None``.
+    caption: dict[str, str] | None = None
+    transcript: list[LiveTurnView] = field(default_factory=list)
+    delegations: list[LiveDelegationView] = field(default_factory=list)
+    appends: list[LiveAppendView] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
 
 @dataclass
 class ExtensionView(_View):
@@ -487,6 +556,13 @@ class ConversationView(_View):
     errors: list[ErrorView] = field(default_factory=list)
     hooks: list[HookView] = field(default_factory=list)
     diagnostics: list[DiagnosticView] = field(default_factory=list)
+    #: GPT Live calls in this session, oldest first (bounded by the reducer).
+    live_calls: list[LiveCallView] = field(default_factory=list)
+
+    @property
+    def live(self) -> LiveCallView | None:
+        """The newest call, active or ended."""
+        return self.live_calls[-1] if self.live_calls else None
 
     @property
     def messages(self) -> list[MessageView]:

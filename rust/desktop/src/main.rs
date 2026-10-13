@@ -6,6 +6,7 @@ mod bridge;
 mod icons;
 mod input;
 mod keymap;
+mod live;
 mod markdown;
 mod minimap;
 mod notice;
@@ -48,6 +49,7 @@ actions!(
         Usage,
         Attach,
         Voice,
+        Live,
         Speak,
         ThemeToggle,
         Reconnect,
@@ -1322,6 +1324,10 @@ impl Desktop {
             self.command("/voice", w, cx);
         }
     }
+    fn live(&mut self, _: &Live, w: &mut Window, cx: &mut Context<Self>) {
+        // `/live` toggles: it starts a call, or hangs up the one that is open.
+        self.command("/live", w, cx);
+    }
     fn speak(&mut self, _: &Speak, w: &mut Window, cx: &mut Context<Self>) {
         self.command("/speak", w, cx);
     }
@@ -1808,6 +1814,7 @@ impl Render for Desktop {
             .on_action(cx.listener(Self::usage))
             .on_action(cx.listener(Self::attach))
             .on_action(cx.listener(Self::voice))
+            .on_action(cx.listener(Self::live))
             .on_action(cx.listener(Self::speak))
             .on_action(cx.listener(Self::theme_toggle))
             .on_action(cx.listener(Self::cycle_agent))
@@ -3177,6 +3184,60 @@ mod native_tests {
         assert_eq!(user.left(), reply.left());
         assert_eq!(user.size.width, reply.size.width);
         assert_eq!(user.size.width, px(theme::size::READING));
+    }
+
+    #[gpui::test]
+    fn live_call_draws_the_bar_the_card_and_the_via_voice_label(cx: &mut TestAppContext) {
+        let handle = cx.add_window(|w, cx| Desktop::new(w, cx, true));
+        handle
+            .update(cx, |this, w, cx| {
+                w.resize(size(px(1200.), px(800.)));
+                this.apply(
+                    Snapshot {
+                        schema: 2,
+                        generation: 1,
+                        live: bridge::LiveBar {
+                            active: true,
+                            state: "active".into(),
+                            phase: "listening".into(),
+                            model: "gpt-live-1-codex".into(),
+                            muted: true,
+                            started: 1.0,
+                            ..Default::default()
+                        },
+                        blocks: vec![
+                            Content {
+                                id: "call".into(),
+                                kind: "live".into(),
+                                title: "gpt-live-1-codex".into(),
+                                status: "active".into(),
+                                detail: "you\tYou\tcheck the readme".into(),
+                                ..Default::default()
+                            },
+                            Content {
+                                id: "user".into(),
+                                kind: "user".into(),
+                                text: "check the readme".into(),
+                                number: 3,
+                                status: "live".into(),
+                                ..Default::default()
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                    w,
+                    cx,
+                );
+            })
+            .unwrap();
+        cx.update_window(handle.into(), |_, w, cx| {
+            let _ = w.draw(cx);
+        })
+        .unwrap();
+        let mut visual = VisualTestContext::from_window(handle.into(), cx);
+        assert!(visual.debug_bounds("live-bar").is_some(), "call bar");
+        assert!(visual.debug_bounds("live-card").is_some(), "Live card");
+        assert!(visual.debug_bounds("user-card").is_some(), "delegated turn");
     }
 
     #[gpui::test]

@@ -63,6 +63,42 @@ at 16 MiB per snapshot and a 32-message channel. Reconnect and session changes u
 the existing generation checks and durable replay. Each session keeps a local
 unsent draft; durable queued messages stay in the daemon.
 
+## GPT Live (voice calls)
+
+Status: implemented and unit/native-harness tested offline; **not exercised against the
+real service, a real microphone, the real `.app` bundle or macOS permission prompts: not
+verified.** Daemon, helper and call flow: [live.md](live.md).
+
+- `Ctrl+X D` (the `Live` action) and typing `/live` run the same `toggle_live` flow as the
+  terminal client through the shared Python bridge (`nexus/ui/ratatui/live.py`): consent
+  dialog on first use, helper spawn, `LiveStart`, `/live stop|mute|new|status|revoke`.
+  There is no Cmd alias: the leader chords carry no Cmd convention in `keymap.rs`.
+- Wire: the call bar is the snapshot field `live` (`active`, `state`, `phase`, `model`,
+  `muted`, `started`, `in`, `out`, `elsewhere`; empty object when no call is open). It has
+  its own topic `live` in `nexus/ui/desktop/wire.py` because Python refreshes it about
+  four times a second while a call is open; this is additive and the schema stays 3 (an
+  older Rust build would fall through the unknown field into the header metadata and
+  ignore it). The timeline card is an ordinary block of kind `live`
+  (`title`, `status`, `collapsed`, `operation`, and `detail` rows `tone TAB label TAB text`
+  from `ui_support/live_card.py`); a delegated user message carries `status: "live"`.
+  The bridge types are shared with the terminal client (`rust/tui/src/bridge.rs`).
+- Call bar (`src/live.rs`, drawn above the composer controls): `● Live · model · phase ·
+  mm:ss`, `mic` / `spk` meters, a `MUTED` badge, `· in <session>` when another session is on
+  screen, and a `/live stop` button. The composer stays editable (typing is steering).
+- Live card: same rows and disclosure as the terminal (`Started`, `You`, `Voice`, `Sent to
+  agent (queue|steer)` with `-> turn #N`, `Told voice [...]`, `Error`, `Ended`); clicking
+  the card opens or closes it (commentary and the instructions text show when open).
+  Delegated user messages read `via voice · #N`.
+- Microphone permission (macOS). The audio helper `nexus-live` is spawned by the Python
+  bridge (`nexus/ui_support/live_helper.py`), which `nexus desktop` launches, and the
+  bridge launches the GPUI app. macOS normally attributes microphone access to the
+  "responsible process" at the top of that chain: when started from a terminal, the
+  terminal app (grant Privacy > Microphone to it); when the bundle itself is the
+  responsible process, `NSMicrophoneUsageDescription` in its `Info.plist` supplies the
+  prompt text. `skills/native-app-review/scripts/package_macos.py` now writes that key
+  (it also covers dictation). **Which process macOS actually charges for the helper's
+  capture, and whether the prompt appears for the bundle, is not verified.**
+
 ## Interface
 
 - When the daemon is unreachable the projection sets `disconnected`: a top banner
@@ -153,7 +189,7 @@ so a terminal keymap update cannot silently remove the desktop shortcuts.
 | Transcript navigation | j/k or Up/Down or Shift+Tab move, Enter/Space opens, Escape or any other key leaves |
 | Focus traversal | Ctrl+Tab / Ctrl+Shift+Tab |
 | Composer focus / theme | Cmd+Enter / Cmd+Shift+T |
-| Ctrl+X leader | m v n o f g b l s i e t u r c z ? (model, dictate, new, sessions, fork, agent, sidebars, settings, context, logs, effort, usage, reconnect, context popover, update help, shortcuts) |
+| Ctrl+X leader | m v d n o f g b l s i e t u r c z ? (model, dictate, GPT Live call, new, sessions, fork, agent, sidebars, settings, context, logs, effort, usage, reconnect, context popover, update help, shortcuts) |
 
 ## Visual verification
 

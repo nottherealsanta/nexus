@@ -372,6 +372,12 @@ def test_protocol_round_trips_every_command_and_result():
         p.VoiceTranscribe(audio=b"wav", request_id="req_1"),
         p.VoiceCancel(request_id="req_1"),
         p.VoiceRemove(),
+        p.LiveStatus(),
+        p.LiveStart(session="s", offer_sdp="v=0", voice="cove", new_conversation=True),
+        p.LiveMute(session="s", muted=True),
+        p.LiveStop(session="s", reason="user"),
+        p.LiveHelperEvent(session="s", kind="closed", detail="mic denied"),
+        p.LiveConsent(accept=True),
         p.AgentsList(),
         p.AgentCurrent(session="s"),
         p.AgentSelect(session="s", name="general"),
@@ -495,6 +501,10 @@ def test_protocol_round_trips_every_command_and_result():
         p.VoiceStatusResult(state="ready", enabled=True),
         p.VoiceTranscribeResult(request_id="req_1", text="hello", duration_s=1.0, elapsed_s=0.1),
         p.VoiceCancelResult(cancelled=True),
+        p.LiveStatusResult(available=False, reason="busy", state="active", active_session="s"),
+        p.LiveStartResult(call_id="c", answer_sdp="v=0", voice="sol"),
+        p.LiveHelperEventResult(ok=True, state="active"),
+        p.LiveConsentResult(accepted=True, accepted_at="2026-10-13T10:00:00+0000"),
         p.UpdateStatusResult(enabled=True, current="0.1.1", latest="0.1.2", available="0.1.2"),
         p.HealthResult(ok=True, version=PROTOCOL_VERSION),
         p.MockListResult(scenarios=[p.MockScenarioInfo(name="hello", summary="s")]),
@@ -1555,3 +1565,145 @@ async def test_project_sessions_list_and_open_validate_recorded_workspace(tmp_pa
     assert isinstance(rejected, p.ErrorResult)
     assert not calls
     await runtime.aclose()
+
+
+# ---------------------------------------------------------------------------
+# GPT Live commands (docs/live.md)
+# ---------------------------------------------------------------------------
+
+
+def _live_runtime(tmp_path, *, transport=None, availability=None, consent=True, **config):
+    from nexus.live.manager import LiveManager
+    from nexus.host_support.live_consent import write_consent
+    from tests.live_fakes import FakeLiveTransport, live_config
+
+    if consent:  # the daemon refuses LiveStart until the notice is recorded (docs/live.md)
+        write_consent(True)  # NEXUS_HOME is a private temp dir per test (tests/conftest.py)
+    runtime = _runtime(tmp_path, ScriptedProvider(text_response("unused")))
+    runtime.live = LiveManager(
+        live_config(**config), transport_factory=lambda **kw: transport or FakeLiveTransport(),
+        availability=availability, environ={}, flush_interval=0.0,
+    )
+    return runtime
+
+
+def test_live_commands_round_trip_on_the_wire():
+    commands = [
+        p.LiveStatus(), p.LiveStart(session="s", offer_sdp="v=0", voice="cove", new_conversation=True),
+        p.LiveMute(session="s", muted=None), p.LiveStop(session="s"),
+        p.LiveHelperEvent(session="s", kind="levels", detail="{}"),
+    ]
+    for command in commands:
+        assert msgspec.json.decode(msgspec.json.encode(command), type=p.Command) == command
+    results = [p.LiveStatusResult(), p.LiveStartResult(call_id="c", answer_sdp="a"), p.LiveHelperEventResult()]
+    for result in results:
+        assert msgspec.json.decode(msgspec.json.encode(result), type=p.Result) == result
+    assert "v=0" not in repr(commands[1])  # the SDP never prints
+
+
+async def test_live_commands_without_a_live_manager_are_a_clean_error():
+    facade = HostFacade(_FakeRuntime())
+    for command in (p.LiveStatus(), p.LiveStart(session="s", offer_sdp="v=0"), p.LiveStop(session="s")):
+        result = await facade.handle(command)
+        assert isinstance(result, p.ErrorResult) and result.kind == "live_unavailable"
+
+
+async def test_live_status_reports_why_it_is_unavailable(tmp_path):
+    async def missing():
+        return "no_credential"
+
+    runtime = _live_runtime(tmp_path, availability=missing)
+    facade = HostFacade(runtime)
+    try:
+        status = await facade.handle(p.LiveStatus())
+        assert isinstance(status, p.LiveStatusResult)
+        assert (status.available, status.reason, status.state) == (False, "no_credential", "idle")
+        runtime._environ["NEXUS_LIVE"] = "off"  # the env switch is read on every idle status/start
+        assert (await facade.handle(p.LiveStatus())).reason == "disabled"
+    finally:
+        await runtime.aclose()
+
+
+async def test_live_call_lifecycle_through_the_facade_is_durable_and_secret_free(tmp_path):
+    from tests.live_fakes import FakeLiveTransport
+
+    transport = FakeLiveTransport()
+    runtime = _live_runtime(tmp_path, transport=transport)
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+    try:
+        started = await facade.handle(p.LiveStart(session="s", offer_sdp="v=0\r\noffer", voice="cove"))
+        assert isinstance(started, p.LiveStartResult)
+        assert started.answer_sdp == "v=0 answer" and started.voice == "cove" and started.call_id
+        # the only thing the client gets back is the SDP answer
+        assert set(msgspec.structs.asdict(started)) == {"call_id", "answer_sdp", "voice"}
+        assert transport.offer == "v=0\r\noffer"
+
+        status = await facade.handle(p.LiveStatus())
+        assert (status.state, status.reason, status.active_session) == ("active", "busy", "s")
+        busy = await facade.handle(p.LiveStart(session="s", offer_sdp="v=0"))
+        assert isinstance(busy, p.ErrorResult) and busy.kind == "live_busy"
+
+        muted = await facade.handle(p.LiveMute(session="s", muted=None))
+        assert isinstance(muted, p.LiveStatusResult) and muted.muted is True and muted.state == "muted"
+        ack = await facade.handle(p.LiveHelperEvent(session="s", kind="dropped", detail="3"))
+        assert isinstance(ack, p.LiveHelperEventResult) and ack.ok
+        bad = await facade.handle(p.LiveHelperEvent(session="s", kind="explode"))
+        assert isinstance(bad, p.ErrorResult) and bad.kind == "live_bad_event"
+
+        stopped = await facade.handle(p.LiveStop(session="s"))
+        assert isinstance(stopped, p.LiveStatusResult) and stopped.state == "idle"
+        again = await facade.handle(p.LiveStop(session="s"))
+        assert isinstance(again, p.LiveStatusResult) and again.state == "idle"
+
+        events = [e async for e in facade.subscribe("s", 0, follow=False)]
+        live = [e for e in events if e.type.startswith("live.")]
+        assert [e.type for e in live].count("live.started") == 1 and [e.type for e in live].count("live.ended") == 1
+        assert all(e.turn is None for e in live)
+        view, _seq = facade.state("s")
+        assert view.live.status == "ended" and view.live.voice == "cove"
+        assert view.to_dict() == fold(runtime.session("s").events).to_dict()  # replay equals the live view
+    finally:
+        await runtime.aclose()
+
+
+async def test_live_start_validation_errors_are_bounded_and_typed(tmp_path):
+    runtime = _live_runtime(tmp_path)
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+    try:
+        for command, kind in [
+            (p.LiveStart(session="s", offer_sdp=""), "live_bad_offer"),
+            (p.LiveStart(session="s", offer_sdp="x" * 70_000), "live_bad_offer"),
+            (p.LiveStart(session="nope", offer_sdp="v=0"), "live_no_session"),
+            (p.LiveStart(session="s", offer_sdp="v=0", voice="robot"), "live_bad_voice"),
+            (p.LiveStart(session="x" * 300, offer_sdp="v=0"), "live_no_session"),
+            (p.LiveMute(session="s"), "live_not_active"),
+        ]:
+            result = await facade.handle(command)
+            assert isinstance(result, p.ErrorResult) and result.kind == kind, (command, result)
+        assert [e async for e in facade.subscribe("s", 0, follow=False) if e.type.startswith("live.")] == []
+    finally:
+        await runtime.aclose()
+
+
+async def test_runtime_close_ends_an_active_call_once(tmp_path):
+    runtime = _live_runtime(tmp_path)
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+    await facade.handle(p.LiveStart(session="s", offer_sdp="v=0"))
+    handle = runtime.session("s")
+    await runtime.aclose()
+    ended = [e for e in handle.events if e.type == "live.ended"]
+    assert len(ended) == 1 and ended[0].data["reason"] == "daemon_shutdown"
+
+
+async def test_facade_shutdown_persists_live_ended_before_sessions_close(tmp_path):
+    runtime = _live_runtime(tmp_path)
+    facade = HostFacade(runtime, owns_runtime=True)
+    facade.open_session("s")
+    await facade.handle(p.LiveStart(session="s", offer_sdp="v=0"))
+    handle = runtime.session("s")
+    assert await facade.shutdown("bye") is True
+    ended = [e for e in handle.events if e.type == "live.ended"]
+    assert len(ended) == 1 and ended[0].data["reason"] == "daemon_shutdown"

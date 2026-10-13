@@ -43,6 +43,7 @@ inward-only exceptions. Errors are
 | Worktrees | `WorktreeList` `WorktreeInspect` `WorktreeReview` `WorktreeAcknowledge` `WorktreeIntegrate` `WorktreeDiscard` |
 | Workspace | `FileSearch` `GitDiff` `LogsRead` |
 | Voice | `VoiceStatus` `VoicePrepare` `VoiceTranscribe` `VoiceCancel` `VoiceRemove` |
+| Live (GPT Live voice calls) | `LiveStatus` `LiveStart` `LiveMute` `LiveStop` `LiveHelperEvent` `LiveConsent` ([live.md](live.md#host-commands)) |
 | Daemon | `Doctor` `Health` `UpdateStatus` `Shutdown` `WebLaunch` |
 | Dev mode | `MockList` `MockStart` `MockClean` (error outside dev mode) |
 
@@ -230,6 +231,7 @@ Read-only projections and helpers kept out of `host/`:
 | `setup.py`, `provider_auth.py` | first-run setup and provider sign-in ([models.md](models.md#authentication)) |
 | `doctor.py` | bounded redacted health; aggregates durable `registry.mismatch` events from a bounded tail of a bounded set of logs, never opening a session |
 | `voice.py` | voice dispatch and Doctor projection ([voice.md](voice.md)) |
+| `live.py` | `Live*` dispatch and `FacadeLiveHost`, the manager's per-call seam ([live.md](live.md)) |
 | `mock.py` | `Mock*` dispatch (dev mode) |
 | `update_check.py` | "X.Y.Z available" notice, cached daily in `~/.nexus/cache/update-check.json`; off with `NEXUS_NO_UPDATE_CHECK=1`, `[updates] check = false`, `CI` or an editable install ([release.md](release.md)) |
 | `install.py` | install method detection, `uv` lookup, daemon hygiene for `nexus update` |
