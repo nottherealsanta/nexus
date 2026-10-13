@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.2](https://github.com/nottherealsanta/nexus/compare/v0.5.1...v0.5.2) (2026-10-13)
+
+
+### Bug fixes
+
+* bundle live audio helper and dependencies by default ([#80](https://github.com/nottherealsanta/nexus/issues/80)) ([44faceb](https://github.com/nottherealsanta/nexus/commit/44faceb517fc48d27ca0e769b1058b20d0155102))
+
 ## [0.5.1](https://github.com/nottherealsanta/nexus/compare/v0.5.0...v0.5.1) (2026-10-13)
 
 
