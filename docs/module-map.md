@@ -229,6 +229,7 @@ here, so add a row when you add a file.
 | `speech.py` | Isolated Paradee text-to-speech (onnxruntime, misaki) for the latest completed answer (`Speak`, `/speak`) |
 | `socket_dir.py` | Private fallback directory for daemon sockets whose default path is too long |
 | `update_check.py` | The "update available" notice (docs/release.md) |
+| `live.py` | Host dispatch for GPT Live commands and the facade-backed `LiveHost` the call manager uses |
 | `voice.py` | Redacted host projection and dispatch for local voice commands |
 | `workspace.py` | Bounded workspace path search respecting host read-deny boundaries |
 | `worktree_projection.py` | Allowlisted, bounded projection of owned-worktree records and diffs |

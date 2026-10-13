@@ -70,6 +70,7 @@ from ..host_support.session_archive import (
 from ..host_support.settings_inventory import dispatch_settings
 from ..host_support.setup import setup_save, setup_status
 from ..host_support.workspace import search_files as _search_files
+from ..host_support.live import dispatch_live
 from ..host_support.voice import dispatch_voice, doctor_voice
 from ..host_support.worktree_projection import review_hex
 from ..host_support.worktree_projection import (
@@ -634,7 +635,14 @@ class HostFacade:
         handle = self._session(session_id)
         return await self.supervisor.submit(session_id, handle, content)
 
-    async def enqueue(self, session_id: str, content: Any, *, mode: str = "steer") -> tuple[str, str]:
+    async def enqueue(
+        self,
+        session_id: str,
+        content: Any,
+        *,
+        mode: str = "steer",
+        origin: dict[str, Any] | None = None,
+    ) -> tuple[str, str]:
         """Persist a submission and schedule its consumption at the boundary.
 
         Returns ``(queued_id, turn_id)``. The submission is durable through the
@@ -646,7 +654,8 @@ class HostFacade:
             raise ValueError("mode must be queue, steer, or interrupt")
         if mode == "interrupt":
             await self.cancel(session_id, reason="Interrupted by user message", drop_queue=False)
-        queued_id = handle.enqueue(content, mode=mode)
+        extra = {"origin": origin} if origin else {}
+        queued_id = handle.enqueue(content, mode=mode, **extra)
         turn_id = await self.supervisor.submit(
             session_id, handle, None, queued_id=queued_id, priority=mode == "interrupt"
         )
@@ -1367,6 +1376,11 @@ class HostFacade:
         if self._closed:
             return False
         self._closed = True
+        # End a GPT Live call first: its ``live.ended`` must be persisted while
+        # the session handles are still writable.
+        live = getattr(self.runtime, "live", None)
+        if live is not None:
+            await live.shutdown()
         await self.titles.aclose()
         await self.shells.aclose()
         await self.supervisor.aclose()
@@ -1390,6 +1404,8 @@ class HostFacade:
 
     async def _dispatch(self, command: p.Command) -> p.Result:
         if result := await dispatch_voice(command, self.runtime):
+            return result
+        if result := await dispatch_live(command, self):
             return result
         if isinstance(command, (p.SpeechStatus, p.SpeechPrepare)):
             from ..host_support.speech import dispatch_speech  # lazy: it imports host.protocol

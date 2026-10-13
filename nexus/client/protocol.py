@@ -279,6 +279,27 @@ class Client:
     async def voice_remove(self) -> p.VoiceStatusResult:
         return await self._request(p.VoiceRemove())  # type: ignore[return-value]
 
+    async def live_status(self) -> p.LiveStatusResult:
+        return await self._request(p.LiveStatus())  # type: ignore[return-value]
+
+    async def live_start(
+        self, session: str, offer_sdp: str, *, voice: str = "", new_conversation: bool = False
+    ) -> p.LiveStartResult:
+        return await self._request(
+            p.LiveStart(session=session, offer_sdp=offer_sdp, voice=voice, new_conversation=new_conversation)
+        )  # type: ignore[return-value]
+
+    async def live_mute(self, session: str, muted: bool | None = None) -> p.LiveStatusResult:
+        return await self._request(p.LiveMute(session=session, muted=muted))  # type: ignore[return-value]
+
+    async def live_stop(self, session: str, reason: str = "user") -> p.LiveStatusResult:
+        return await self._request(p.LiveStop(session=session, reason=reason))  # type: ignore[return-value]
+
+    async def live_helper_event(self, session: str, kind: str, detail: str = "") -> p.LiveHelperEventResult:
+        return await self._request(
+            p.LiveHelperEvent(session=session, kind=kind, detail=detail)
+        )  # type: ignore[return-value]
+
     async def agent_transcript(self, session: str, agent_id: str) -> dict[str, Any]:
         result = await self._request(
             p.AgentTranscript(session=session, agent_id=agent_id)
