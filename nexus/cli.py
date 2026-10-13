@@ -782,6 +782,34 @@ async def _claude_command(
         await client.aclose()
 
 
+async def _live_command(
+    workspace: Path, args: argparse.Namespace, stdout: TextIO, stderr: TextIO
+) -> int:
+    """Headless GPT Live call (docs/live.md): the most recent session unless one is named."""
+    from .ui.cli import open_client
+    from .ui.cli.live import read_line, run_live, stdin_end
+
+    client = await open_client(workspace)
+    try:
+        session = args.session
+        if not session:
+            sessions = await client.list_sessions()
+            session = max(sessions, key=lambda item: item.last_activity).id if sessions else _new_session_id()
+        return await run_live(
+            client,
+            session=session,
+            voice=args.voice,
+            new_conversation=args.new,
+            stdout=stdout,
+            stderr=stderr,
+            interactive=sys.stdin.isatty(),
+            ask=read_line,
+            end_of_input=stdin_end,
+        )
+    finally:
+        await client.aclose()
+
+
 async def _voice_command(
     workspace: Path, args: argparse.Namespace, stdout: TextIO, stderr: TextIO
 ) -> int:
@@ -1558,6 +1586,15 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--session", default="default")
     run.add_argument("--json", action="store_true", help="Stream JSONL event envelopes")
 
+    live = sub.add_parser(
+        "live", help="Talk to the session by voice (experimental GPT Live; docs/live.md)"
+    )
+    live.add_argument("--session", default=None, help="Session id (default: the most recent, or a new one)")
+    live.add_argument("--voice", default="", help="Voice name (default: [live] voice in nexus.toml)")
+    live.add_argument("--new", action="store_true", help="Start without the carried-over earlier turns")
+    # SUPPRESS: `nexus live --workspace PATH` works, and the top-level `nexus --workspace PATH live` is kept.
+    live.add_argument("--workspace", type=Path, default=argparse.SUPPRESS, help="Workspace (default: current directory)")
+
     chat = sub.add_parser("chat", help="Open the interactive native terminal chat")
     chat.add_argument("--renderer", choices=("ratatui", "auto"), default="ratatui", help="Native terminal renderer (ratatui; auto is an alias)")
     chat.add_argument(
@@ -1862,6 +1899,8 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(_agents_command(workspace, args, stdout))
         if args.command == "tools":
             return asyncio.run(_tools_command(workspace, args, stdout))
+        if args.command == "live":
+            return asyncio.run(_live_command(workspace, args, stdout, stderr))
         if args.command == "voice" and args.voice_action == "init":
             return asyncio.run(_voice_init(workspace, stdout, stderr))
         if args.command == "voice":
@@ -1884,6 +1923,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     except KeyboardInterrupt:
         if args.command == "chat":
+            return 130
+        if args.command == "live":
+            stderr.write("Live call hung up.\n")
             return 130
         if args.command == "voice" and args.voice_action in ("download", "init"):
             stderr.write("Voice download interrupted; preparation may continue in the daemon.\n")

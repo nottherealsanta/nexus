@@ -114,6 +114,7 @@ def test_parser_exposes_the_canonical_command_set():
         "uninstall",
         "mock",
         "voice",
+        "live",
     } == choices
 
     for action, expected in (

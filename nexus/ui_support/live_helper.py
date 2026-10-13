@@ -96,6 +96,23 @@ def classify_failure(reason: str, detail: str = "") -> str:
     return ""
 
 
+CONSENT_LINES = (  # short lines: list dialogs clip instead of wrapping
+    "GPT Live is a spoken conversation with OpenAI's",
+    "voice model, working through this session.",
+    "",
+    "Sent to OpenAI through your ChatGPT account:",
+    "  - audio from your microphone during the call",
+    "  - summaries of the agent's work and results,",
+    "    which can include file contents and output",
+    "",
+    "The session's model, tools and permissions do the",
+    "work. The voice can ask the agent to act but can",
+    "never approve anything: permissions stay on screen.",
+    "",
+    "Experimental, undocumented service. Asked once per",
+    "machine; withdraw any time with /live revoke.",
+)
+
 LOGIN_HINT = "Sign in again with `nexus auth codex login`."
 _FIXES: dict[str, str] = {
     "live_auth": LOGIN_HINT,
@@ -114,6 +131,17 @@ _FIXES["live_disabled"] = _FIXES["disabled"]
 def fix_for(kind: str) -> str:
     """The one-line fix for a host error ``kind`` or Live status ``reason`` (empty if none)."""
     return _FIXES.get(kind, "")
+
+
+def unavailable_message(reason: str, active_session: str = "") -> str:
+    """Why a Live status is not available (``LiveStatusResult.reason``), shown by every client."""
+    reasons = {
+        "busy": f"A Live call is already running in session {active_session or 'another session'}.",
+        "no_credential": "GPT Live needs a ChatGPT sign-in.",
+        "disabled": "GPT Live is turned off.",
+        "unsupported": "GPT Live is not available in this install.",
+    }
+    return reasons.get(reason, f"GPT Live is unavailable ({reason or 'unknown reason'}).")
 
 
 def describe_failure(exc: BaseException) -> tuple[str, str]:
@@ -463,6 +491,7 @@ class LiveCall:
 
 
 __all__ = [
-    "INSTALL_HINT", "MIC_HINT", "LiveCall", "LiveHelper", "LiveHelperError",
+    "CONSENT_LINES", "INSTALL_HINT", "MIC_HINT", "LiveCall", "LiveHelper", "LiveHelperError",
     "LOGIN_HINT", "fix_for", "available", "binary_path", "classify_failure", "describe_failure",
+    "unavailable_message",
 ]

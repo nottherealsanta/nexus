@@ -18,25 +18,9 @@ import time
 from ...ui_support import live_helper
 from ...ui_support.live_card import card_rows, card_status, card_title
 from ...ui_support.live_card import encode as card_encode
-from ...ui_support.live_helper import LiveCall, describe_failure
+from ...ui_support.live_helper import CONSENT_LINES, LiveCall, describe_failure
 from ...ui_support.voice_capture import play_cue
 
-CONSENT_LINES = (  # short lines: list dialogs clip instead of wrapping
-    "GPT Live is a spoken conversation with OpenAI's",
-    "voice model, working through this session.",
-    "",
-    "Sent to OpenAI through your ChatGPT account:",
-    "  - audio from your microphone during the call",
-    "  - summaries of the agent's work and results,",
-    "    which can include file contents and output",
-    "",
-    "The session's model, tools and permissions do the",
-    "work. The voice can ask the agent to act but can",
-    "never approve anything: permissions stay on screen.",
-    "",
-    "Experimental, undocumented service. Asked once per",
-    "machine; withdraw any time with /live revoke.",
-)
 USAGE = "Use /live [stop|mute|new|status|revoke]"
 _STATE_LABEL = {"connecting": "connecting", "listening": "listening", "speaking": "speaking",
                 "working": "working", "muted": "muted", "ended": "ended"}
@@ -329,13 +313,7 @@ class Live:
                 await update(immediate=False)
 
     def _unavailable(self, status) -> None:
-        reasons = {
-            "busy": f"A Live call is already running in session {status.active_session or 'another session'}.",
-            "no_credential": "GPT Live needs a ChatGPT sign-in.",
-            "disabled": "GPT Live is turned off.",
-            "unsupported": "GPT Live is not available in this install.",
-        }
-        message = reasons.get(status.reason, f"GPT Live is unavailable ({status.reason or 'unknown reason'}).")
+        message = live_helper.unavailable_message(status.reason, status.active_session)
         fix = live_helper.fix_for(status.reason)
         self.fail("GPT Live is not available", None, message=message, fix=fix)
 

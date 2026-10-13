@@ -1,10 +1,10 @@
 # GPT Live voice calls (`nexus/live/`)
 
-Status: **M1 (daemon core), M2 (delegation bridge), M3 (the `nexus-live` helper) and
-M4 (the native Ratatui client) are implemented and tested offline. Nothing has been
-exercised against the real service, a real microphone or a real call: not
-verified.** The desktop client (M5) draws no call bar or card yet (typing `/live`
-there starts the same call), and the `nexus live` CLI does not exist yet. Plan:
+Status: **M1 (daemon core), M2 (delegation bridge), M3 (the `nexus-live` helper), M4
+(the native Ratatui client) and the headless `nexus live` command are implemented and
+tested offline. Nothing has been exercised against the real service, a real microphone
+or a real call: not verified.** The desktop client (M5) draws no call bar or card yet
+(typing `/live` there starts the same call). Plan:
 `plans/in-progress/GPT_LIVE_PLAN.md`; protocol observations and citations:
 `plans/in-progress/GPT_LIVE_PROTOCOL_NOTES.md`.
 
@@ -145,6 +145,30 @@ The bridge watches the session through `Session.observe()`, a tap that is **not*
 a viewer, so it can neither make an unattended session look attended nor change
 the unattended approval policy. Sub-agent events are ignored.
 
+## Headless CLI (`nexus live`)
+
+`nexus live [--session ID] [--voice V] [--new] [--workspace PATH]` is the same call
+without the TUI. Code: `ui/cli/live.py` (`run_live`, `format_event`) over
+`ui_support/live_helper.py`; it talks to the daemon only through the host client.
+
+1. Without `--session` it uses the most recent session (by last activity), or creates one.
+2. `LiveStatus`: an unavailable status prints the host's message and fix and exits 1.
+   The `nexus-live` binary must exist (same lookup as above), else the install hint.
+3. Consent: if not recorded, the notice is printed and `Agree and start the call? [y/N]`
+   is asked on the terminal. Only `y` calls `LiveConsent(accept=True)`; anything else
+   records nothing. If stdin is not a terminal and consent is not recorded, the command
+   refuses (exit 1) and never accepts for you.
+4. The call starts as in `/live`. Output, one labelled line each: `you: …` and `voice: …`
+   (final captions only), `→ agent (queue|steer): …` (delegations), `← voice [commentary|final|notice]: …`
+   (appends, text as sent), `error: …`, then `Call ended (<reason>[, N s])`. Events of
+   other calls in the same session are skipped.
+5. Ctrl+C or Ctrl+D (end of input) hangs up: `LiveStop` with reason `user`, then the helper
+   is released. A helper that stops ends the call with its microphone fix (exit 1), so
+   does a lost daemon connection.
+
+Typed input during a call is read and ignored (the agent is not steered from this
+terminal). Not verified: a real call and microphone from this command.
+
 ## Host commands
 
 `LiveStatus`, `LiveStart`, `LiveMute`, `LiveStop`, `LiveHelperEvent` (see
@@ -222,5 +246,5 @@ the view, the raw dev log or caplog). Fakes live in
 - Real microphone and speaker use, a real call from the terminal client (helper
   spawn, mic permission prompts, echo behavior), the call bar on a real terminal,
   and the consent record across a real daemon restart: only fake-helper tests exist.
-- The desktop call bar and card (M5), `nexus live`, spoken "stop", AEC (plan M5-M6).
+- The desktop call bar and card (M5), spoken "stop", AEC (plan M5-M6).
 - A live smoke test (`-m live`) is not written.
