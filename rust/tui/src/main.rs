@@ -2210,6 +2210,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     {
                                         // D1: a tool row selects on one click and toggles its
                                         // inline view on two; `i` is the full inspector.
+                                        // A context-header line opens its inspector modal.
+                                        if operation["kind"] == "context_toggle" {
+                                            if let Some(inspect) = operation
+                                                .get("inspect_operation")
+                                                .filter(|inspect| inspect.is_object())
+                                            {
+                                                clicks.reset();
+                                                send(
+                                                    json!({"type":"operation","operation":inspect,"generation":s.generation}),
+                                                )?;
+                                                continue;
+                                            }
+                                        }
                                         let tool = input::tool_click_key(&operation);
                                         let double = tool.as_deref().is_some_and(|key| {
                                             clicks.click(

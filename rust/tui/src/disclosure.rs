@@ -160,8 +160,12 @@ impl Disclosure {
             let mut shown = source.clone();
             for member in &mut shown.members {
                 member.collapsed = !self.is_open(&member.id);
-                member.operation =
-                    Some(serde_json::json!({"kind":"context_toggle", "id": member.id}));
+                // Keyboard Enter/Space toggles inline; a mouse click opens the inspector.
+                let mut toggle = serde_json::json!({"kind":"context_toggle", "id": member.id});
+                if let Some(key) = member.id.strip_prefix("context:") {
+                    toggle["inspect_operation"] = serde_json::json!({"kind":"context_show","key":key});
+                }
+                member.operation = Some(toggle);
                 shown
                     .rev
                     .push_str(if member.collapsed { ":closed" } else { ":open" });
@@ -358,6 +362,10 @@ mod tests {
             &blocks
         ));
         let shown = disclosure.project(&blocks);
+        assert_eq!(
+            shown[0].members[1].operation.as_ref().unwrap()["inspect_operation"],
+            json!({"kind":"context_show","key":"tools"})
+        );
         assert!(!shown[0].members[0].collapsed);
         assert!(shown[0].members[1].collapsed);
         let revision = shown[0].rev.clone();

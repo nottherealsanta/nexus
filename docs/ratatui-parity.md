@@ -57,7 +57,7 @@ redraws and historical replay stay silent. Cancellation and subagent activity do
 not notify. The native client does not also write a terminal bell (`\x07`):
 doing both made one completion sound twice.
 
-Context-header inspection uses an inset modal (System prompt, Environment, AGENTS.md, MEMORY.md and tool pages use the compact `detail` layout; Skills/MCP lists keep the full-width one) spanning the available
+Clicking a context-header line opens that section's inspector modal (the `context_show` operation, same as the context picker); Enter/Space on a selected header line still toggles the inline preview. Context-header inspection uses an inset modal (System prompt, Environment, AGENTS.md, MEMORY.md and tool pages use the compact `detail` layout; Skills/MCP lists keep the full-width one) spanning the available
 conversation area, rather than the compact picker dialog. The header and context
 picker show System prompt, Environment (neutral rail), AGENTS.md,
 MEMORY.md, Skills, Tools and MCP in that order. Each header line's title uses the
