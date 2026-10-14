@@ -1,4 +1,4 @@
-"""The sessions sidebar is keyboard-operable in a real controlling PTY (docked and drawer).
+"""The top bar replaces the removed sessions sidebar: dashboard button and session arrows in a real PTY.
 
 Build rust/tui first. This developer integration test needs controlling-TTY access.
 """
@@ -37,7 +37,8 @@ class Terminal:
         self.stop = threading.Event()
         self.reader = threading.Thread(target=self._drain, daemon=True)
         self.reader.start()
-        self.process = subprocess.Popen([sys.executable, "-c", SETUP], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.slave)
+        self.process = subprocess.Popen([sys.executable, "-c", SETUP], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.slave,
+                                        env={**os.environ, "NEXUS_IMAGE_PROTOCOL": "halfblocks"})  # no terminal to answer the graphics probe
         self.pending = bytearray()
         self.revision = 0
 
@@ -90,84 +91,28 @@ class Terminal:
         os.close(self.slave)
 
 
+def click(t, column, row):
+    """A left click at 1-based terminal coordinates (SGR mouse)."""
+    t.key(f"\x1b[<0;{column};{row}M\x1b[<0;{column};{row}m".encode())
+
+
 @pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
-def test_docked_sidebar_keyboard_navigation_opens_a_session():
+def test_there_is_no_sessions_sidebar_and_the_top_bar_opens_the_dashboard():
     t = Terminal(30, 120)
     try:
-        t.send(sessions_sidebar=True, sessions=SESSIONS, composer_key="w/s1", generation=1)
+        t.send(sessions_sidebar=True, sessions=SESSIONS, tabs=SESSIONS[:2], title="Fix token refresh",
+               breadcrumb="~/w \u203a main", composer_key="w/s1", generation=1)
         time.sleep(.4)
         t.redraw()
-        assert "Fix token refresh" in t.text() and "Filter sessions" in t.text()
-        t.key(b"\x02")  # Ctrl+B: the sidebar is open, so this moves focus into it
-        t.redraw()
-        assert "type to filter" in t.text(), "focus is visible in the sidebar"
-        t.key(b"\x1b[B")  # Down: s1 is current and selected first
-        t.key(b"\r")
+        text = t.text()
+        assert "SESSIONS" not in text and "Filter sessions" not in text and "Refresh docs" not in text
+        assert "Fix token refresh" in text and "[Dashboard]" in text and "1/2" in text, "top bar"
+        click(t, 113, 1)  # inside [Dashboard]
+        assert t.action() == {"type": "command", "text": "/sessions"}
+        click(t, 105, 1)  # the \u203a arrow: next open session
         assert t.action() == {"type": "session_open", "workspace": "/w", "text": "s2", "generation": 1}
-        # Typing filters; the first match is selected; Escape clears and then leaves.
-        t.key(b"\x02")
-        t.key(b"lic")
-        t.key(b"\r")
-        assert t.action() == {"type": "session_open", "workspace": "/w2", "text": "s3", "generation": 1}
-        t.key(b"\x11")
-        assert t.action()["type"] == "quit"
-    finally:
-        t.close()
-
-
-@pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
-def test_narrow_terminal_opens_a_drawer_only_on_request():
-    t = Terminal(24, 70)
-    try:
-        t.send(sessions_sidebar=True, sessions=SESSIONS, composer_key="w/s1", generation=1)
-        time.sleep(.4)
-        t.redraw()
-        assert "Fix token refresh" not in t.text(), "the saved preference alone never opens a drawer"
-        t.key(b"\x02")
-        t.redraw()
-        assert "Fix token refresh" in t.text() and "Refresh docs" in t.text(), "Ctrl+B opens the drawer"
-        t.key(b"\x1b[B")
-        t.key(b"\x1b[B")
-        t.key(b"\r")
-        assert t.action() == {"type": "session_open", "workspace": "/w2", "text": "s3", "generation": 1}
-        t.redraw()
-        assert "Audit licences" not in t.text(), "choosing a session closes the drawer"
-        # /sessions from Python (a bumped request) opens it again, without touching the preference.
-        t.send(sessions_sidebar=True, sessions=SESSIONS, sessions_request=1, composer_key="w/s1", generation=1)
-        time.sleep(.4)
-        t.redraw()
-        assert "Fix token refresh" in t.text()
-        t.key(b"\x1b")
-        t.redraw()
-        assert "Fix token refresh" not in t.text(), "Escape closes the drawer"
-        t.key(b"\x11")
-        assert t.action()["type"] == "quit"
-    finally:
-        t.close()
-
-
-@pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
-def test_escape_and_ctrl_c_close_the_docked_sidebar():
-    """Closing the docked sidebar asks the host to save the preference (a toggle)."""
-    t = Terminal(30, 120)
-    toggle = {"type": "toggle", "key": "sessions_sidebar"}
-    try:
-        t.send(sessions_sidebar=True, sessions=SESSIONS, composer_key="w/s1", generation=1)
-        time.sleep(.4)
-        t.redraw()
-        assert "Fix token refresh" in t.text()
-        # Without keyboard focus (as at startup), Escape still closes it.
-        t.key(b"\x1b")
-        assert t.action() == toggle, "Escape closes an unfocused sidebar"
-        t.key(b"\x02")  # Ctrl+B: still open (the host did not answer), so it takes focus
-        t.redraw()
-        assert "type to filter" in t.text()
-        t.key(b"/")  # the filter box is active but empty: one Escape closes
-        t.key(b"\x1b")
-        assert t.action() == toggle, "Escape on an empty filter closes"
-        t.key(b"\x02")
-        t.key(b"\x03")  # Ctrl+C
-        assert t.action() == toggle, "Ctrl+C closes the focused sidebar"
+        t.key(b"\x02")  # Ctrl+B is the dashboard too
+        assert t.action() == {"type": "command", "text": "/sessions"}
         t.key(b"\x11")
         assert t.action()["type"] == "quit"
     finally:

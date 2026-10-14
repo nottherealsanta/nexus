@@ -108,12 +108,57 @@ pub(super) fn build(block: &Content, width: u16, palette: &Palette) -> Rows {
     if block.kind == "context_header" {
         let mut rows = Vec::new();
         for (index, member) in block.members.iter().enumerate() {
-            if index > 0 {
-                rows.push((Line::default(), None));
+            if member.collapsed {
+                let active =
+                    !member.text.is_empty() || member.count > 0 || member.local_preview != "~0";
+                let tone = if active { palette.muted } else { palette.quiet };
+                let tokens = if member.status.starts_with("~") {
+                    member
+                        .status
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("~?")
+                        .to_owned()
+                } else if member.local_preview.starts_with('~') {
+                    member.local_preview.clone()
+                } else if member.text.starts_with('~') {
+                    member.text.clone()
+                } else {
+                    "~?".into()
+                };
+                let mut title = Style::default().fg(tone);
+                if active {
+                    title = title.add_modifier(ratatui::style::Modifier::BOLD);
+                }
+                let line = Line::from(vec![
+                    Span::styled("  │ ", Style::default().fg(tone)),
+                    Span::styled(member.title.clone(), title),
+                    Span::styled(
+                        format!("  {tokens}"),
+                        Style::default().fg(if active {
+                            palette.quiet
+                        } else {
+                            palette.border_strong
+                        }),
+                    ),
+                ]);
+                for line in crate::transcript::wrap(&line.spans, width as usize) {
+                    let drawn = crate::transcript::line(Vec::new(), line, None, Style::default());
+                    let operation = member.operation.as_ref().map(|op| {
+                        serde_json::json!({
+                            "kind":"context_chips", "default":op,
+                            "chips":[{"start":2, "end":drawn.width(), "operation":op}]
+                        })
+                    });
+                    rows.push((drawn, operation));
+                }
+                continue;
             }
             let mut heading = block.clone();
             let mut chip = member.clone();
             chip.text.clear();
+            chip.color.clear();
+            heading.color.clear();
             heading.members = vec![chip];
             heading.gap = if index == 0 { block.gap } else { 0 };
             rows.extend(crate::transcript::build(&heading, width, palette));
@@ -146,6 +191,36 @@ pub(super) fn build(block: &Content, width: u16, palette: &Palette) -> Rows {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn closed_headers_wrap_and_keep_clicks_on_every_row() {
+        let palette = Palette::new(false);
+        let block = Content {
+            kind: "context_header".into(),
+            members: vec![Content {
+                title: "A long System prompt header".into(),
+                collapsed: true,
+                status: "~348 tokens".into(),
+                color: "#ff0000".into(),
+                operation: Some(
+                    serde_json::json!({"kind":"context_toggle", "id":"context:system"}),
+                ),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let rows = build(&block, 16, &palette);
+        assert!(rows.len() > 1);
+        assert!(rows
+            .iter()
+            .all(|(line, op)| line.width() <= 16 && op.is_some()));
+        let text: String = rows.iter().map(|(line, _)| line.to_string()).collect();
+        assert!(text.contains("~348"));
+        assert!(!text.contains("tokens"));
+        assert!(rows
+            .iter()
+            .flat_map(|(line, _)| &line.spans)
+            .all(|span| span.style.fg != Some(ratatui::style::Color::Rgb(255, 0, 0))));
+    }
     #[test]
     fn responsive_bounds_and_operations() {
         let palette = Palette::new(false);
@@ -232,7 +307,7 @@ mod tests {
         assert!(line(0).starts_with("  │  System prompt"), "{}", line(0));
         assert!(line(1).starts_with("     You are Nexus"), "{}", line(1));
         assert!(rows[1].1.is_some(), "the preview opens the same dialog");
-        assert!(line(2).is_empty() && line(3).starts_with("  │  AGENTS.md"));
+        assert!(line(2).starts_with("  │  AGENTS.md"));
         let narrow = build(&block, 30, &palette);
         assert!(
             narrow.iter().all(|(l, _)| l.width() <= 30),

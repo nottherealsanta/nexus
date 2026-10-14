@@ -173,18 +173,18 @@ async def _usage_probe(cli: "AntigravityCli") -> str:
 
 
 def parse_models(text: str) -> list[tuple[str, str]]:
-    """``(id, label)`` for each line that is exactly one model id; other lines are ignored.
-
-    ``agy models`` was observed (1.3.4) printing one id per line; the id is its
-    own label because no separate display name is known.
-    """
+    """Accept both bare IDs and tab-separated ID/display-name rows from ``agy models``."""
     models: list[tuple[str, str]] = []
     seen: set[str] = set()
     for line in text.splitlines()[:512]:
-        token = _CONTROL.sub("", _ANSI.sub("", line)).strip()
+        columns = _ANSI.sub("", line).split("\t")
+        if len(columns) > 2:
+            continue
+        token = _CONTROL.sub("", columns[0]).strip()
+        label = clean_text(columns[1], 200).strip() if len(columns) == 2 else token
         if _MODEL_ID.fullmatch(token) and token not in seen:
             seen.add(token)
-            models.append((token, token))
+            models.append((token, label or token))
             if len(models) >= _MAX_MODELS:
                 break
     return models

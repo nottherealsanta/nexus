@@ -128,6 +128,9 @@ _TASK_DESCRIPTION = (
     "goal, relevant paths, constraints, and what to report. Subagents that edit "
     "files list them in their report. A subagent inherits only the parent's "
     "authority and cannot exceed it."
+    " Tiers are for subagents only. If a provider or model fails as a subagent, "
+    "call the next model in line for that tier. Do not repeat a failed route; "
+    "include the failure and any partial work in the next subagent's prompt."
 )
 
 #: Added when the agent roster is shown: how to choose a model tier. Each agent

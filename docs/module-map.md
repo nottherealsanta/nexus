@@ -242,6 +242,7 @@ here, so add a row when you add a file.
 | `provider_usage.py` | Plan usage and limits for every connected provider (`ProvidersUsage`) |
 | `searchserver.py` | Start the loopback-only search service using packaged Compose assets |
 | `session_archive.py` | Bounded host projections for durable session archive metadata |
+| `session_preview.py` | Bounded, redacted session projection for the sessions dashboard (distinct from the archive `SessionPreview`) |
 | `settings_inventory.py` | Bounded Settings console inventory, validation and safe file mutations |
 | `settings_scope.py` | Single path policy for Settings console reads and mutations |
 | `setup.py` | First-run setup behind the host boundary |
@@ -466,6 +467,7 @@ here, so add a row when you add a file.
 | `tier_settings.py` | Rows, labels and help text for Settings → Models, Session titles and an agent's Tiers row |
 | `timeline.py` | Pure formatting and filtering for reducer-backed conversation timelines |
 | `tool_details.py` | Presentable tool call details: every parameter and output, none of the JSON |
+| `tool_signal.py` | The relevant-only view of a tool call: what it did and what it produced |
 | `usage.py` | Provider usage formatting shared by surfaces (`ProvidersUsageResult`) |
 | `live_card.py` | Rows of the GPT Live timeline card from a `LiveCallView`: captions, "Sent to agent", "Told voice", started/ended rows, commentary collapsed with a count, clips announced; shared by native clients |
 | `live_helper.py` | `nexus-live` process wrapper (binary lookup, bounded JSONL, offer/answer/mute/stop, helper-event forwarding) and `LiveCall`, the client half of a GPT Live call; stdlib only, shared by the terminal, desktop and CLI clients |
@@ -517,9 +519,12 @@ here, so add a row when you add a file.
 | --- | --- |
 | `__init__.py` | Experimental native surface package |
 | `prototype.py` | Host adapter and labelled snapshot projection |
+| `bridge.py` | Sessions dashboard projection and visibility-scoped preview polling |
+| `verb_groups.py` | Verb groups: the quiet one-line summary of a run of tool calls and thoughts |
 | `context_sections.py` | Skills and MCP context sections: multi-line cards, the skill page and the MCP server page |
 | `wire.py` | Terminal schema-3 section deltas and ordered transcript suffixes |
 | `stream_projection.py` | Changed-tail projection for ordinary root text/thought deltas |
+| `turn_status.py` | Running-turn status line fields (activity, since, tokens) for the native client |
 | `transcript_data.py` | Bounded immutable-tool presentation cache |
 | `background.py` | Bounded independent completion/model/clipboard tasks with stale guards |
 | `trace.py` | Bounded, body-free Python bridge timings and exit report |
@@ -532,7 +537,7 @@ handling), `input.rs` (action writers, editor keys, picking, OSC 52 base64),
 composer controls are the first adopters), `render/chrome.rs` (top bar,
 tabs, sessions and details sidebars), `render/context.rs` (reusable width-aware inventory sections: tools 1–5 columns, skills 1–2 columns, MCP one column, all capped at five rows with total/omitted indicators; unchanged host detail operations), `render/dialogs.rs` (dialog frames, toned
 panel text, Settings area list, prompt and logs regions, completion popup),
-`settings_page/` (one-page Settings: `model.rs` parses the host's typed page, `input.rs` focus/keys/mouse, `draw.rs` renders it with the widget kit), `transcript.rs` (blocks to rows, diffs) and `markdown.rs`. `rust/widgets` is the shared component kit (see its crate docs). `main()` is still one long
+`settings_page/` (one-page Settings: `model.rs` parses the host's typed page, `input.rs` focus/keys/mouse, `draw.rs` lays the blocks out and `grok.rs` draws them in the Grok row grammar, `root.rs` is the Grok-style root list with search and drill rows), `transcript.rs` (blocks to rows, diffs) and `markdown.rs`. `rust/widgets` is the shared component kit (see its crate docs). `main()` is still one long
 loop over local state; splitting it further needs a state struct and is not done.
 | `actions.py` | Native shell slash dispatch, attachments and host-backed panels |
 | `controller.py` | Continuous native subscription using canonical bootstrap and reduction |
@@ -567,6 +572,17 @@ loop over local state; splitting it further needs a state struct and is not done
 | `rust/tui/src/live_bar.rs` | GPT Live call bar in the composer chrome: `● Live · model · phase · mm:ss`, mic/speaker meters, Muted badge |
 | `rust/tui/src/local_ui.rs` | Optimistic sidebar/tab/file/log toggles with ordered acknowledgements |
 | `rust/tui/src/trace.rs` | Bounded opt-in native timing samples, percentile summaries and exit report |
+| `rust/tui/src/config.rs` | Optional local UI appearance preferences (`tui.json`), including `animate_activity` |
+| `rust/tui/src/mermaid.rs` | Self-contained Mermaid renderer (flowchart, sequence, state) as Unicode art; unsupported or oversized diagrams return `None` for the code-block fallback. Registered and called from `markdown.rs`; behaviour is unverified end to end |
+| `rust/tui/src/picker.rs` | Sessions dashboard state, filtering and keys; effects returned as operations |
+| `rust/tui/src/session.rs` | Stable prompt anchoring and permanent transcript tail space |
+| `rust/tui/src/render/sessions.rs` | Full-width Sessions dashboard: status groups, hover tails, header actions. The composer below is unchanged |
+| `rust/tui/src/transcript/groups.rs` | Verb-group header, live tail and expanded member boxes |
+| `rust/tui/src/transcript/header.rs` | Context header rows, grey tones, open form and chip |
+| `rust/tui/src/transcript/look.rs` | Shared look of activity rows: glyphs, time format, live-run marker and animation recolouring |
+| `rust/tui/src/transcript/signal.rs` | Typed rows of a tool's relevant-only view (`[kind, text]` pairs) |
+| `rust/tui/src/transcript/thought.rs` | Reasoning rows: running `Thinking…` tail and finished `Thought for N` |
+| `rust/tui/src/transcript/tools.rs` | Standalone tool rows and the shared expanded body |
 
 The manual `tests/ratatui_performance_check.py` script measures controlling-PTY
 streaming, input and CPU cost.

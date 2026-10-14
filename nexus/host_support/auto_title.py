@@ -20,7 +20,50 @@ from typing import Any
 from ..errors import ConfigError, SessionError
 from ..session.title import generate_title
 
-__all__ = ["AutoTitler", "MAX_CONCURRENT_TITLES"]
+__all__ = ["AutoTitler", "MAX_CONCURRENT_TITLES", "USER_TITLE_MAX_CHARS", "clean_user_title", "set_user_title"]
+
+#: Longest title a user may set (longer than a model-written one, which is 50).
+USER_TITLE_MAX_CHARS = 100
+
+
+def clean_user_title(title: Any) -> str:
+    """One line, control characters dropped, at most ``USER_TITLE_MAX_CHARS``; ``""`` if empty."""
+    if not isinstance(title, str):
+        raise ValueError("title must be a string")
+    kept = "".join(" " if char in "\r\n\t" else char for char in title if char in "\r\n\t" or char.isprintable())
+    return " ".join(kept.split())[:USER_TITLE_MAX_CHARS].rstrip()
+
+
+def set_user_title(sessions: Any, session_id: str, title: str) -> str:
+    """Store a user-chosen title durably and return it.
+
+    The title lives in the same ``sessions`` row column the auto title uses, but
+    with ``title_source='user'``: ``SessionStore.set_auto_title`` only replaces
+    ``first_message`` titles and the first-message derivation only fills an empty
+    title, so neither ever overwrites it. Unlike the auto title it may replace
+    an ``auto`` or earlier ``user`` title. A session that is not yet created, or
+    is trashed, raises :class:`SessionError`.
+
+    SessionManager exposes only the first-message-only auto-title setter, not
+    a user-title setter. Like session_archive's metadata copy, this uses the
+    existing store.db.transaction convention for a scoped metadata update.
+    """
+    cleaned = clean_user_title(title)
+    if not cleaned:
+        raise ValueError("title must not be empty")
+    store = getattr(sessions, "store", None)
+    if store is None:
+        raise SessionError("this session store cannot rename sessions")
+    session_id = sessions.summary(session_id).id  # validates the id; trashed or unknown raises
+    with store.db.transaction() as conn:
+        changed = conn.execute(
+            "UPDATE sessions SET title=?, title_source='user' "
+            "WHERE project_id=? AND namespace=? AND id=? AND trash_id IS NULL",
+            (cleaned, store.project_id, store.namespace, session_id),
+        ).rowcount
+    if not changed:
+        raise SessionError(f"Session {session_id!r} does not exist")
+    return cleaned
 
 #: Title calls running at once across every session.
 MAX_CONCURRENT_TITLES = 2
@@ -46,7 +89,7 @@ class AutoTitler:
             except (ConfigError, OSError):
                 config = None
         section = getattr(getattr(config, "v2", None), "sessions", None)
-        return bool(getattr(section, "auto_title", True)), str(getattr(section, "title_model", "low") or "low")
+        return bool(getattr(section, "auto_title", True)), str(getattr(section, "title_model", "openai/gpt-5-mini") or "openai/gpt-5-mini")
 
     def candidate(self, session: str, text: str, labels: list[str] | None = None) -> str | None:
         """The text to title if ``session`` is a fresh root session, else ``None``.
@@ -65,8 +108,7 @@ class AutoTitler:
         # not be sent to a provider as a model id: titles stay the first message,
         # which Settings -> Session titles says in the same words.
         order = getattr(getattr(self._runtime, "tiers", None), "order", ("low", "medium", "high"))
-        runnable = getattr(router, "tier_runnable", None)
-        if model in order and callable(runnable) and not runnable(model):
+        if model in order:
             return None
         try:
             summary = sessions.summary(session)

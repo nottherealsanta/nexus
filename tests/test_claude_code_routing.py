@@ -38,18 +38,17 @@ def test_kind_aliases():
 def test_main_gate(tmp_path, enabled):
     config = Config(model="claude-code/claude-opus-5.5", v2=ConfigV2(
         providers={"claude-code": ProviderSection(kind="claude-code")},
-        models=ModelsSection(claude_code_main_enabled=enabled),
+        models=ModelsSection(claude_code_subagent_backend="sdk", claude_code_main_enabled=enabled),
     ))
+    if not enabled:
+        with pytest.raises(ConfigError, match="requires claude_code_main_enabled"):
+            Runtime(config=config, workspace=tmp_path)
+        return
     runtime = Runtime(config=config, workspace=tmp_path)
     assert runtime.claude_code_main_enabled() is enabled
-    if enabled:
-        resolved = runtime._router.resolve(ModelRequest(messages=[], model=config.model))
-        assert isinstance(resolved.provider, ClaudeAgentProvider)
-        assert resolved.provider.name == "claude-code"
-    else:
-        with pytest.raises(ConfigError):
-            runtime._router.resolve(ModelRequest(messages=[], model=config.model))
-        assert runtime._router.fallbacks(ModelRequest(messages=[], model=config.model)) == []
+    resolved = runtime._router.resolve(ModelRequest(messages=[], model=config.model))
+    assert isinstance(resolved.provider, ClaudeAgentProvider)
+    assert resolved.provider.name == "claude-code"
 
 
 def fake_runtime(parent=None):

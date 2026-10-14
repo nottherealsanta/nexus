@@ -31,6 +31,12 @@ pub struct Glyphs {
     pub ok: &'static str,
     pub warn: &'static str,
     pub err: &'static str,
+    pub rail: &'static str,
+    pub rail_heavy: &'static str,
+    pub tree_mid: &'static str,
+    pub tree_end: &'static str,
+    pub pending: &'static str,
+    pub failed: &'static str,
     pub ascii: bool,
 }
 impl Glyphs {
@@ -66,6 +72,12 @@ impl Glyphs {
             ok: "✓",
             warn: "!",
             err: "✕",
+            rail: "│",
+            rail_heavy: "┃",
+            tree_mid: "├─",
+            tree_end: "╰─",
+            pending: "◆",
+            failed: "✗",
             ascii: false,
         }
     }
@@ -101,6 +113,12 @@ impl Glyphs {
             ok: "+",
             warn: "!",
             err: "x",
+            rail: "|",
+            rail_heavy: "|",
+            tree_mid: "|-",
+            tree_end: "`-",
+            pending: "*",
+            failed: "x",
             ascii: true,
         }
     }
@@ -114,14 +132,42 @@ impl Glyphs {
             Self::unicode()
         }
     }
-    /// Every single-glyph field, for width tests.
+    /// Every single-glyph field, for width tests. Includes the two-cell tree glyphs.
     pub fn singles(&self) -> Vec<&'static str> {
         vec![
             self.focus_bar, self.caret, self.up, self.down, self.close, self.dot_ok,
             self.dot_work, self.dot_idle, self.dot_err, self.open, self.closed, self.search,
             self.bar_full, self.bar_empty, self.rule, self.tab_rule, self.info, self.ok,
             self.warn, self.err, self.check_on, self.check_off, self.check_mixed,
-            self.radio_on, self.radio_off,
+            self.radio_on, self.radio_off, self.rail, self.rail_heavy, self.tree_mid,
+            self.tree_end, self.pending, self.failed,
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use unicode_width::UnicodeWidthStr;
+
+    #[test]
+    fn new_glyphs_have_expected_widths_in_both_sets() {
+        for g in [Glyphs::unicode(), Glyphs::ascii()] {
+            for s in [g.rail, g.rail_heavy, g.pending, g.failed] {
+                assert_eq!(UnicodeWidthStr::width(s), 1, "{s:?}");
+            }
+            for s in [g.tree_mid, g.tree_end] {
+                assert_eq!(UnicodeWidthStr::width(s), 2, "{s:?}");
+            }
+            assert!(g.singles().contains(&g.tree_end));
+        }
+    }
+
+    #[test]
+    fn ascii_fallbacks_are_ascii() {
+        let g = Glyphs::ascii();
+        for s in [g.rail, g.rail_heavy, g.tree_mid, g.tree_end, g.pending, g.failed] {
+            assert!(s.is_ascii(), "{s:?}");
+        }
     }
 }

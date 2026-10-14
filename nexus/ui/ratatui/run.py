@@ -20,14 +20,16 @@ def binary_path() -> Path:
     else:
         root = Path(__file__).resolve().parents[3]
         installed = shutil.which("nexus-ratatui")
-        candidates = [Path(sys.executable).parent / "nexus-ratatui",
-                      *(root / f"rust/tui/target/{profile}/nexus-ratatui" for profile in ("release", "debug"))]
+        profiles = [Path(sys.executable).parent / "nexus-ratatui",
+                    root / "rust/tui/target/release/nexus-ratatui"]
         if installed:
-            candidates.append(Path(installed))
-        # Development: the most recently built executable wins, so a fresh `cargo build`
-        # is picked up on the next launch without copying it anywhere. A stable sort keeps
-        # the listed order for equal timestamps.
-        candidates.sort(key=lambda path: path.stat().st_mtime if path.is_file() else 0, reverse=True)
+            profiles.append(Path(installed))
+        # Development: among installed/venv/release builds the most recently built wins, so
+        # a fresh `cargo build --release` is picked up on the next launch. The debug build
+        # is unoptimized (it redraws at a high idle CPU cost), so it is only a last resort.
+        # A stable sort keeps the listed order for equal timestamps.
+        profiles.sort(key=lambda path: path.stat().st_mtime if path.is_file() else 0, reverse=True)
+        candidates = [*profiles, root / "rust/tui/target/debug/nexus-ratatui"]
     for path in candidates:
         if path.is_file() and os.access(path, os.X_OK):
             return path.resolve()

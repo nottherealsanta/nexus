@@ -121,6 +121,7 @@ pub struct OItem {
 pub struct Ordered {
     pub id: String,
     pub items: Vec<OItem>,
+    pub controls: Vec<Row>,
     pub add_label: String,
     pub editable: bool,
     pub op: Value,
@@ -258,6 +259,10 @@ fn block(v: &Value) -> Block {
         }),
         "ordered" => Block::Ordered(Ordered {
             id: s(v, "id"),
+            controls: arr(v, "controls").iter().filter_map(|v| match block(v) {
+                Block::Row(row) => Some(row),
+                _ => None,
+            }).collect(),
             items: arr(v, "items")
                 .iter()
                 .map(|i| OItem {
@@ -402,6 +407,11 @@ fn find_in<'a>(blocks: &'a [Block], id: &str) -> Option<Target<'a>> {
             Block::Row(r) if row_id(&r.id) == id => return Some(Target::Row(r)),
             Block::Tabs(t) if tabs_id(&t.id) == id => return Some(Target::Tabs(t)),
             Block::Ordered(o) => {
+                for row in &o.controls {
+                    if row_id(&row.id) == id {
+                        return Some(Target::Row(row));
+                    }
+                }
                 let base = ord_id(&o.id);
                 if id == format!("{base}:add") {
                     return Some(Target::OrderedAdd(o));

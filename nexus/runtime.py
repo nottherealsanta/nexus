@@ -95,6 +95,7 @@ from .model.registry import (
     ADAPTER_XAI,
     OPENAI_COMPATIBLE,
     ModelRegistry,
+    RegistryCache,
 )
 from .model.request import REASONING_EFFORT_ORDER, ModelRequest, ToolSchema
 from .model.router import ModelRouter
@@ -2039,13 +2040,18 @@ class _ChildRuntime:
                 providers,
                 aliases=runtime._router.aliases, default=runtime._router.default,
                 fallback=runtime._router.fallback, registry=runtime._registry, tiers=runtime._tiers,
+                tier_efforts=getattr(getattr(getattr(getattr(spec, "config", None), "v2", None), "models", None), "tier_efforts", {}),
             )
         if Runtime._adapter_kind(provider_name, section) == ADAPTER_ANTIGRAVITY:
             self._refuse_inherited_external(
                 runtime, spec, label=_ANTIGRAVITY_LABEL, route=f"{provider_name}")
             # An exact agy model ID only: no tier, alias or inherited name stands in for it.
             model = tail if sep else ("" if in_tiers or reference in ("", "inherit") else reference)
-            self._external = self._plan_antigravity(runtime, spec, provider_name, section, model)
+            try:
+                self._external = self._plan_antigravity(runtime, spec, provider_name, section, model)
+            except ConfigError as exc:
+                exc.selected_model = f"{provider_name}/{model}"
+                raise
         elif not sdk_backend and Runtime._adapter_kind(provider_name, section) == ADAPTER_CLAUDE_CODE:
             self._refuse_inherited_external(runtime, spec)
             model = tail if sep else (reference if _CLAUDE_MODEL_ID.fullmatch(reference) else "")
@@ -2188,7 +2194,8 @@ class _ChildRuntime:
         if nexus_child_is_read_only(tuple(getattr(spec, "tools", ()) or ()), flagged=flagged):
             raise ConfigError(
                 f"antigravity children cannot be read-only ({agent!r} is): agy's own tools cannot "
-                "be restricted to read-only, so use a Nexus provider for read-only work")
+                "be restricted to read-only, so use a Nexus provider for read-only work. "
+                "Auto mode does not enforce a read-only tool restriction.")
         config = WorkerConfig.from_section(section)
         policy = resolve_policy(config, read_only=False)
         worker = AntigravityWorker(config, environ=runtime._environ)
@@ -2748,6 +2755,8 @@ class Runtime:
         self._tiers: TierTable = (
             tiers if tiers is not None else self._build_tiers(initial)
         )
+        #: Probe/catalogue results shared by every registry this runtime builds.
+        self._registry_cache = RegistryCache()
         self._registry: ModelRegistry | None = (
             registry if registry is not None else self._build_registry(initial)
         )
@@ -3132,6 +3141,19 @@ class Runtime:
             return None
         await self._ensure_registry(force=True)
         return self._registry.status()
+
+    def provider_models_info(self, provider: str) -> dict[str, Any]:
+        """``{count, refreshed_at, error}`` of the cached ``agy models`` list (zeros when never probed)."""
+        info = self._registry.external_info() if self._registry is not None else {}
+        return dict(info.get(provider) or next(iter(info.values()), {"count": 0, "refreshed_at": 0.0, "error": ""}))
+
+    async def refresh_provider_models(self, provider: str) -> dict[str, Any]:
+        """Re-run ``agy models`` now (the Antigravity Refresh button); the catalogue is not refetched."""
+        if self._registry is None:
+            raise ConfigError("no model registry is configured")
+        await self._ensure_registry()
+        await self._registry.refresh_external()
+        return self.provider_models_info(provider)
 
     async def list_tools(self) -> list[dict[str, Any]]:
         """The model-facing tool catalog for the current config and manifest.
@@ -3882,11 +3904,8 @@ class Runtime:
         head = ref.partition("/")[0]
         if self._adapter_kind(head, sections.get(head)) == ADAPTER_ANTIGRAVITY:
             raise ConfigError("Antigravity is Subagents only; choose it in a subagent tier or Task, not as the main model")
-        if ref in self._tiers.order and self._registry is None:
-            raise ConfigError(
-                f"tier {ref!r} cannot be selected without a model registry; "
-                "configure [models] with a catalogue or use a provider/model id"
-            )
+        if ref in self._tiers.order:
+            raise ConfigError("tiers are for subagents only; choose a provider/model id")
         info = (
             self._registry.get(ref) if self._registry is not None else None
         )
@@ -4597,6 +4616,7 @@ class Runtime:
             tier_table=self._tiers,
             provider_aliases=provider_aliases,
             reasoning_effort_overrides=models.reasoning_efforts or None,
+            shared_cache=self._registry_cache,
         )
 
     def _provider_transport_kwargs(self) -> dict[str, Any]:
@@ -4942,17 +4962,39 @@ class Runtime:
 
     @staticmethod
     def _refuse_subagent_only_selection(config: Config, sections: Mapping[str, Any]) -> None:
-        """Antigravity is subagent-only: it can be neither the main, plan, fast nor a fallback model."""
+        """External worker adapters are subagent-only model selections."""
         v2 = getattr(config, "v2", None)
         models = getattr(v2, "models", None)
-        refs = [getattr(config, "model", None), getattr(models, "fast", None), getattr(models, "plan", None),
-                getattr(models, "default", None), *(getattr(models, "fallback", None) or ())]
+        legacy_model = getattr(v2, "model", None)
+        refs = [
+            getattr(config, "model", None),
+            getattr(legacy_model, "default", None), getattr(legacy_model, "fast", None),
+            getattr(legacy_model, "plan", None), *(getattr(legacy_model, "fallback", None) or ()),
+            getattr(models, "default", None), getattr(models, "fast", None), getattr(models, "plan", None),
+            *(getattr(models, "fallback", None) or ()),
+        ]
         for ref in refs:
             head = ref.partition("/")[0] if isinstance(ref, str) and "/" in ref else ""
-            if head and Runtime._adapter_kind(head, sections.get(head)) == ADAPTER_ANTIGRAVITY:
+            kind = Runtime._adapter_kind(head, sections.get(head)) if head else None
+            kind = kind or _CORE_ADAPTERS.get(head)
+            if kind == ADAPTER_ANTIGRAVITY:
                 raise ConfigError(
                     f"{ref!r}: Antigravity (agy) runs only as an explicit subagent route; it cannot be "
                     "the main, plan, fast or fallback model")
+            if kind == ADAPTER_CLAUDE_CODE and not getattr(
+                getattr(getattr(config, "v2", None), "models", None),
+                "claude_code_main_enabled", False,
+            ):
+                raise ConfigError(
+                    f"{ref!r}: Claude Code main-model selection requires "
+                    "claude_code_main_enabled = true")
+            if kind == ADAPTER_CLAUDE_CODE and getattr(
+                getattr(getattr(config, "v2", None), "models", None),
+                "claude_code_subagent_backend", "worker",
+            ) == "worker":
+                raise ConfigError(
+                    f"{ref!r}: Claude Code worker routes are subagent-only; use "
+                    "claude_code_subagent_backend = 'sdk' for main-agent selection")
 
     def _build_providers(self, config: Config) -> dict[str, Provider]:
         """Construct every adapter the configuration asks the runtime to own.
@@ -5103,6 +5145,7 @@ class Runtime:
             fallback=fallback,
             registry=self._registry,
             tiers=self._tiers,
+            tier_efforts=getattr(getattr(v2, "models", None), "tier_efforts", {}),
         )
 
     # -- agents / hooks ----------------------------------------------------
@@ -5486,9 +5529,11 @@ class Runtime:
             parent_model = f"{parent_provider}/{parent_model}"
             parent_provider = None
 
-        max_tier = str(getattr(section, "max_tier", "high"))
-        if self._tiers.rank(max_tier) is None:
-            max_tier = self._tiers.default
+        # Tiers choose subagent routes; the root model's price is not a ceiling.
+        # Nested children still inherit their parent's tier and role restrictions.
+        max_tier = self._tiers.order[-1]
+        if parent_depth == 0:
+            parent_tier = max_tier
         try:
             return SubagentRunner(
                 agents=self._agents,
@@ -5521,6 +5566,7 @@ class Runtime:
                 hooks=hooks,
                 worktree_service=self._worktree_service,
                 tier_probe=self._tier_runnable,
+                tier_candidates=self._router.tier_candidates,
                 worktree_root=expected_worktree_root,
                 worktree_root_for=self._owned_worktree_root_for,
                 runtime_supports_workspace=runtime_supports_workspace,
@@ -5757,7 +5803,11 @@ class Runtime:
         for reference in self._router.tier_candidates(tier):
             head = reference.split("/", 1)[0]
             kind = Runtime._adapter_kind(head, sections.get(head))
-            if kind == ADAPTER_ANTIGRAVITY or (claude and kind == ADAPTER_CLAUDE_CODE):
+            if kind == ADAPTER_ANTIGRAVITY or (
+                claude and kind == ADAPTER_CLAUDE_CODE
+                and getattr(getattr(getattr(self._config, "v2", None), "models", None),
+                            "claude_code_subagent_backend", "worker") == "worker"
+            ):
                 return reference if "/" in reference else None
             if kind == ADAPTER_CLAUDE_CODE:
                 return None  # the SDK backend serves this tier through a Nexus provider
@@ -6308,6 +6358,26 @@ class Runtime:
             aclose = getattr(self._mcp, "aclose", None)
             if aclose is not None:
                 await aclose()
+
+    async def reload_tier_config(self) -> bool:
+        """Apply a ``[models.tiers]`` / ``tier_efforts`` edit without rebuilding providers.
+
+        Rebuilds only the tier table, re-indexes the loaded registry from its
+        held catalogue (no probe, no parse), and updates the router and the
+        context coordinator in place. Returns ``False`` (restart needed) when
+        routes were injected.
+        """
+        if not self._owns_routes or self._closed:
+            return False
+        config = self._load_config()
+        tiers = self._build_tiers(config)
+        efforts = getattr(getattr(getattr(config, "v2", None), "models", None), "tier_efforts", {})
+        self._tiers = tiers
+        if self._registry is not None:
+            self._registry.retier(tiers)
+        self._router.set_tiers(tiers, tier_efforts=efforts)
+        self._assembler._tiers = tiers
+        return True
 
     async def reload_model_routes(self) -> bool:
         """Rebuild providers, tiers, registry and router from the current config.

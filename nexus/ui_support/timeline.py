@@ -567,6 +567,8 @@ def agent_model_label(agent: AgentView | None) -> str:
     actual = agent_actual_model(agent)
     if actual:
         return f"tier {tier} · {_literal(actual, 120)}"
+    if agent.selected_model:
+        return f"tier {tier} · selected {_literal(agent.selected_model, 120)} (not started)"
     requested = agent.model if isinstance(agent.model, str) and "/" in agent.model else None
     state = "model pending" if agent.status in {"spawned", "running"} else "model unavailable"
     if requested:

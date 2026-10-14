@@ -1,4 +1,4 @@
-"""Settings → Models is one page: default chain and titles above Low/Medium/High tier tabs."""
+"""Settings → Models is one page: default chain and titles above all subagent tiers."""
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -18,7 +18,7 @@ def shell(tmp_path, monkeypatch):
     c = shell.client
     c.model_tiers = AsyncMock(return_value=_tiers())
     c.default_model_settings = AsyncMock(return_value=_default())
-    c.session_title_settings = AsyncMock(return_value=p.SessionTitleSettingsResult(enabled=True, model="low", resolved="openai/gpt-5-mini"))
+    c.session_title_settings = AsyncMock(return_value=p.SessionTitleSettingsResult(enabled=True, model="openai/gpt-5-mini", resolved="openai/gpt-5-mini"))
     c.list_models = AsyncMock(return_value=[{"provider": "openai", "id": "gpt-5-nano", "name": "GPT-5 nano", "tier": "low"}])
     c.claude_code_settings = AsyncMock(return_value=p.ClaudeCodeSettingsResult(
         main_enabled=False, message="Main selection uses the Agent SDK. External subagents are configured per role."))
@@ -60,31 +60,31 @@ def _headings(page):
 
 
 @pytest.mark.asyncio
-async def test_models_is_one_page_with_defaults_above_the_tier_tabs(shell):
+async def test_models_is_one_page_with_all_subagent_tiers(shell):
     await shell.workflows.settings_area("models")
     page = shell.workflows.settings_page
     assert shell.panel_title == "Settings · Models" and shell.settings_nav == "models"
     assert not shell.items, "no menu rows: the page replaces them"
-    assert _headings(page) == ["DEFAULT MODEL", "SESSION TITLES", "CLAUDE CODE", "TIERS", "LIMITS", "CATALOGUE"]
-    tabs = _find(page, "tabs")
-    assert [label for label, _ in tabs["items"]] == ["Low", "Medium", "High"]
-    assert [badge for _, badge in tabs["items"]] == ["", "", "!"], "a tier nothing can run is flagged"
+    assert _headings(page) == ["Default Model", "Session Titles", "Claude Code", "Subagent Tiers", "Low", "Medium", "High", "Catalogue"]
+    assert not any(b.get("t") == "tabs" for b in page["blocks"])
+    assert not any(b.get("id") == "ceiling" for b in page["blocks"])
     chain = _find(page, "ordered", id="chain")
     assert [(label, tag) for label, tag, _ in chain["items"]] == [("openai/gpt-5-mini", "in use"), ("anthropic/claude-haiku-4-5", "fallback")]
     low = _find(page, "ordered", id="tier:low")
-    assert low["items"][1] == ["anthropic/claude-haiku-4-5", "skipped", "provider not connected"]
+    assert low["items"][1] == ["anthropic/claude-haiku-4-5", "skipped", "provider not connected · effort: provider default"]
+    assert len(low["controls"]) == len(low["items"])
+    assert low["controls"][0]["control"]["operation"]["key"] == "effort"
+    assert not any(block.get("id", "").startswith("effort:") for block in page["blocks"])
 
 
 @pytest.mark.asyncio
-async def test_tab_switch_shows_that_tier_and_is_kept_across_rebuilds(shell):
+async def test_all_tiers_remain_visible_across_rebuilds(shell):
     await shell.workflows.settings_area("models")
-    await shell.workflows.operate(sp.op("models", "tab", value=2))
     page = shell.workflows.settings_page
-    assert _find(page, "tabs")["active"] == 2
     assert _find(page, "ordered", id="tier:high")["items"][0][0] == "anthropic/claude-opus-5"
     assert any("No model in this tier can run" in b.get("text", "") for b in page["blocks"] if b.get("t") == "note")
     await shell.workflows.operate(sp.op("models", "titles", value=False))
-    assert _find(shell.workflows.settings_page, "tabs")["active"] == 2
+    assert all(_find(shell.workflows.settings_page, "ordered", id=f"tier:{name}") for name in ("low", "medium", "high"))
 
 
 @pytest.mark.asyncio
@@ -126,6 +126,56 @@ async def test_adding_a_model_goes_through_one_picker_and_returns_to_the_page(sh
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("tier", ["low", "medium", "high"])
+async def test_tier_picker_uses_subagent_models_and_preserves_model_metadata(shell, tier):
+    agy = {"provider": "antigravity", "id": "gemini-3-pro", "name": "Gemini 3 Pro — Subagents only",
+           "selectable": True, "scope": "subagents",
+           "route_metadata": {"worker": "agy"}}
+    claude = {"provider": "anthropic", "id": "claude-sonnet-4", "name": "Claude Sonnet 4 — Subagents only",
+              "selectable": True, "scope": "subagents",
+              "route_metadata": {"worker": "external"}}
+    main_only = {"provider": "github-copilot", "id": "gpt-6-luna", "name": "GPT-6 Luna",
+                 "selectable": True, "scope": "main"}
+    shell.client.list_models = AsyncMock(side_effect=lambda **kwargs: [
+        agy, claude] if kwargs["scope"] == "subagents" else [main_only])
+
+    await shell.workflows.settings_area("models")
+    await shell.workflows.operate(sp.op("models", "tier", tier=tier, action="add", index=0))
+    assert shell.panel_title == f"Add model · {tier}"
+    assert shell.client.list_models.await_args_list[-1].kwargs == {
+        "selectable_only": True, "scope": "subagents"}
+    assert [item["label"] for item in shell.items] == [
+        "Claude Sonnet 4 — Subagents only · anthropic/claude-sonnet-4",
+        "Gemini 3 Pro — Subagents only · antigravity/gemini-3-pro",
+    ]
+    agy_item = next(item for item in shell.items if "antigravity/gemini-3-pro" in item["label"])
+    assert agy_item["operation"] == sp.op(
+        "models", "add", target=f"tier:{tier}", ref="antigravity/gemini-3-pro")
+    await shell.workflows.operate(agy_item["operation"])
+    assert shell.client.model_tier_set.await_args.args[0] == tier
+    assert shell.client.model_tier_set.await_args.args[1][-1] == "antigravity/gemini-3-pro"
+    assert shell.client.model_tier_set.await_args.args[1][:-1] == {
+        "low": ["openai/gpt-5-mini", "anthropic/claude-haiku-4-5"],
+        "medium": [],
+        "high": ["anthropic/claude-opus-5"],
+    }[tier]
+    assert shell.panel_title == "Settings · Models"
+
+
+@pytest.mark.asyncio
+async def test_default_chain_picker_keeps_main_model_scope(shell):
+    shell.client.list_models = AsyncMock(return_value=[
+        {"provider": "github-copilot", "id": "gpt-6-luna", "name": "GPT-6 Luna",
+         "selectable": True, "scope": "main"}])
+    await shell.workflows.settings_area("models")
+    await shell.workflows.operate(sp.op("models", "chain", action="add", index=0))
+    assert shell.client.list_models.await_args_list[-1].kwargs == {
+        "selectable_only": True, "scope": "main"}
+    assert shell.items[0]["operation"] == sp.op(
+        "models", "add", target="chain", ref="github-copilot/gpt-6-luna")
+
+
+@pytest.mark.asyncio
 async def test_a_busy_daemon_says_a_restart_is_needed(shell):
     shell.client.model_tier_set = AsyncMock(return_value=SimpleNamespace(restart_required=True))
     await shell.workflows.operate(sp.op("models", "add", target="tier:low", ref="openai/gpt-5-nano"))
@@ -143,14 +193,12 @@ async def test_reset_asks_first_then_uses_the_host_command(shell):
 
 
 @pytest.mark.asyncio
-async def test_ceiling_titles_and_refresh_use_their_host_commands(shell):
+async def test_titles_and_refresh_use_their_host_commands(shell):
     await shell.workflows.settings_area("models")
-    await shell.workflows.operate(sp.op("models", "ceiling", value="medium"))
-    shell.client.agent_max_tier_set.assert_awaited_once_with("medium")
     await shell.workflows.operate(sp.op("models", "titles", value=False))
     shell.client.session_title_settings_set.assert_awaited_with(enabled=False)
-    await shell.workflows.operate(sp.op("models", "title_model", value="medium"))
-    shell.client.session_title_settings_set.assert_awaited_with(model="medium")
+    await shell.workflows.operate(sp.op("models", "title_model", value="openai/gpt-5-mini"))
+    shell.client.session_title_settings_set.assert_awaited_with(model="openai/gpt-5-mini")
     await shell.workflows.operate(sp.op("models", "refresh"))
     shell.client.refresh_models.assert_awaited_once()
 
@@ -197,23 +245,21 @@ async def test_every_operation_the_client_can_send_is_accepted_by_the_bridge(she
     from settings_page_ops import assert_every_client_op_is_accepted
     await shell.workflows.settings_area("models")
     assert assert_every_client_op_is_accepted(shell) > 15
-    await shell.workflows.operate(sp.op("models", "tab", value=1))
     assert_every_client_op_is_accepted(shell)
 
 
 @pytest.mark.asyncio
-async def test_the_bridge_gate_runs_the_tier_tab_operation_and_only_while_the_page_is_open(shell):
-    """The user-visible bug: clicking or pressing a tier tab did nothing because the bridge refused the operation."""
+async def test_the_bridge_gate_runs_effort_operations_only_while_page_is_open(shell):
     from nexus.ui.ratatui.prototype import operation_allowed
+    shell.client.list_models = AsyncMock(return_value=[{"provider": "openai", "id": "gpt-5-mini", "supported_efforts": ["low", "high"]}])
     await shell.workflows.settings_area("models")
-    tabs = next(b for b in shell.workflows.settings_page["blocks"] if b.get("t") == "tabs")
-    medium = {**tabs["operation"], "value": 1}  # exactly what the client sends for the Medium tab
-    assert operation_allowed(shell, set(), medium)
-    await shell.workflows.operate(medium)
-    assert next(b for b in shell.workflows.settings_page["blocks"] if b.get("t") == "tabs")["active"] == 1
-    assert not operation_allowed(shell, set(), {**tabs["operation"], "value": 7}), "no such tab"
-    shell.workflows.back()  # Settings closed: a stale page must not be drivable
-    assert not operation_allowed(shell, set(), medium)
+    effort = sp.op("models", "effort", tier="low", model="openai/gpt-5-mini", value="high")
+    assert operation_allowed(shell, set(), effort)
+    assert not operation_allowed(shell, set(), {**effort, "value": "invalid"})
+    await shell.workflows.operate(effort)
+    shell.client.model_tier_set.assert_awaited_with("low", ["openai/gpt-5-mini", "anthropic/claude-haiku-4-5"], efforts={"openai/gpt-5-mini": "high"})
+    shell.workflows.back()
+    assert not operation_allowed(shell, set(), effort)
 
 
 @pytest.mark.asyncio

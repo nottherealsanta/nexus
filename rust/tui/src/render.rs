@@ -11,10 +11,15 @@ use ratatui::{
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 /// Nexus dark/light tokens, defined by the native palette.
+pub mod appearance;
 mod chrome;
 pub mod components;
 mod context;
 mod dialogs;
+// Reused by later modals (Settings): see `dialogs::dim_backdrop`.
+#[allow(unused_imports)]
+pub use dialogs::{dim_area, dim_backdrop, BACKDROP_BLEND};
+mod sessions;
 pub mod toasts;
 pub use chrome::*;
 pub use dialogs::*;
@@ -26,7 +31,7 @@ pub struct Palette {
     pub quiet: Color,
     pub accent: Color,
     pub panel: Color,
-    /// The composer card's background (`#1E1E1E` in the dark theme).
+    /// The composer card's background (`#1C1C1C` in the dark theme).
     pub composer: Color,
     pub element: Color,
     pub element_hi: Color,
@@ -46,50 +51,52 @@ impl Palette {
     pub fn new(light: bool) -> Self {
         let rgb = |r, g, b| Color::Rgb(r, g, b);
         if light {
+            // Grok Day (reference `theme/grokday.rs`), Nexus accent kept.
             Self {
-                background: rgb(255, 255, 255),
-                text: rgb(27, 27, 27),
-                muted: rgb(85, 85, 85),
-                quiet: rgb(138, 138, 138),
+                background: rgb(245, 245, 245),
+                text: rgb(38, 38, 38),
+                muted: rgb(118, 118, 118),
+                quiet: rgb(142, 142, 142),
                 accent: rgb(200, 103, 47),
-                panel: rgb(245, 245, 244),
-                composer: rgb(245, 245, 244),
-                element: rgb(236, 236, 234),
-                element_hi: rgb(226, 226, 223),
-                dialog: rgb(255, 255, 255),
-                border: rgb(220, 220, 216),
-                border_strong: rgb(185, 185, 180),
-                diff_del: rgb(253, 226, 228),
-                diff_add: rgb(220, 245, 226),
-                blue: rgb(47, 111, 214),
-                purple: rgb(122, 82, 199),
-                success: rgb(38, 128, 68),
-                warning: rgb(168, 98, 0),
-                error: rgb(194, 58, 74),
-                cyan: rgb(14, 116, 144),
+                panel: rgb(245, 245, 245),
+                composer: rgb(238, 238, 238),
+                element: rgb(228, 228, 228),
+                element_hi: rgb(218, 218, 218),
+                dialog: rgb(245, 245, 245),
+                border: rgb(200, 200, 205),
+                border_strong: rgb(165, 165, 175),
+                diff_del: rgb(245, 218, 222),
+                diff_add: rgb(218, 242, 220),
+                blue: rgb(47, 100, 210),
+                purple: rgb(108, 62, 178),
+                success: rgb(55, 142, 35),
+                warning: rgb(162, 118, 18),
+                error: rgb(205, 48, 72),
+                cyan: rgb(0, 130, 170),
             }
         } else {
+            // Grok Night (reference `theme/groknight.rs`), Nexus accent kept.
             Self {
-                background: rgb(11, 11, 11),
-                text: rgb(238, 238, 238),
-                muted: rgb(163, 163, 163),
-                quiet: rgb(111, 111, 111),
+                background: rgb(20, 20, 20),
+                text: rgb(225, 225, 225),
+                muted: rgb(120, 120, 120),
+                quiet: rgb(88, 88, 88),
                 accent: rgb(250, 178, 131),
                 panel: rgb(20, 20, 20),
-                composer: rgb(30, 30, 30),
-                element: rgb(30, 30, 30),
-                element_hi: rgb(40, 40, 40),
+                composer: rgb(28, 28, 28),
+                element: rgb(36, 36, 36),
+                element_hi: rgb(44, 44, 44),
                 dialog: rgb(20, 20, 20),
-                border: rgb(44, 44, 44),
-                border_strong: rgb(72, 72, 72),
-                diff_del: rgb(62, 27, 33),
-                diff_add: rgb(24, 56, 36),
-                blue: rgb(92, 156, 245),
-                purple: rgb(157, 124, 216),
-                success: rgb(127, 216, 143),
-                warning: rgb(245, 167, 66),
-                error: rgb(224, 108, 117),
-                cyan: rgb(86, 212, 221),
+                border: rgb(50, 50, 55),
+                border_strong: rgb(80, 80, 88),
+                diff_del: rgb(66, 14, 20),
+                diff_add: rgb(6, 56, 6),
+                blue: rgb(122, 162, 247),
+                purple: rgb(187, 154, 247),
+                success: rgb(158, 206, 106),
+                warning: rgb(224, 175, 104),
+                error: rgb(247, 118, 142),
+                cyan: rgb(125, 207, 255),
             }
         }
     }
@@ -217,6 +224,21 @@ pub struct Cache {
     pub page: String,
     /// Largest useful scroll offset from the last draw; key and wheel handlers clamp to it.
     pub max_scroll: usize,
+    pub live_scroll: usize,
+    /// Offset actually drawn in the last frame (pinned prompt, live bottom or frozen scroll).
+    pub current_offset: usize,
+    pub prompt_pin: crate::session::PromptPin,
+    pub animate: bool,
+    /// Monochrome preference: the drawn frame loses all colour.
+    pub mono: bool,
+    /// Persisted Appearance checkboxes (`~/.config/nexus/tui.json`).
+    pub appearance: crate::config::Appearance,
+    /// Checkbox rows drawn by the last frame (empty when the overlay is hidden); click region.
+    pub appearance_rows: Rect,
+    /// Settings root list state (search, cursor, scroll, root vs drilled page).
+    pub settings_root: crate::settings_page::root::RootState,
+    /// Focused Appearance checkbox row (Up/Down, Space/Enter).
+    pub appearance_cursor: usize,
     /// Animation frame for the running-tool slot (`SPINNER_SLOT`).
     pub spin: usize,
     /// Independent 30 Hz clock for smooth activity motion.
@@ -226,14 +248,6 @@ pub struct Cache {
     pub content_elapsed: std::time::Duration,
     pub content_blocks: usize,
     pub content_reset: bool,
-    session_chrome: Option<(
-        u64,
-        u16,
-        String,
-        bool,
-        usize,
-        Vec<(Line<'static>, Option<SidebarHit>)>,
-    )>,
     details_chrome: Option<(u64, u16, (Vec<Line<'static>>, Vec<Option<usize>>))>,
     built_typing: bool,
     /// Line range of the transcript block focused with the keyboard (highlighted).
@@ -244,15 +258,8 @@ pub struct Cache {
     /// The parsed one-page Settings area and its client-side state (focus, scroll, popups).
     pub settings_page: Option<(u64, std::sync::Arc<crate::settings_page::Page>)>,
     pub page_state: crate::settings_page::PageState,
-    /// Sessions sidebar filter text and whether it is being edited.
-    pub filter: String,
-    pub filtering: bool,
-    /// The project chip picked in the sessions sidebar (a workspace; empty: all).
-    pub project: String,
-    /// Keyboard focus is in the sessions sidebar; `sessions_sel` is the selected session id.
-    pub sessions_focus: bool,
-    pub sessions_sel: Option<String>,
-    pub sessions_request_seen: u64,
+    /// Sessions dashboard state (query, selection, scroll); reset whenever the host hides it.
+    pub dashboard: crate::picker::Dashboard,
     /// Recent microphone levels (0..1) and seconds since recording began, for the voice strip.
     pub voice_levels: Vec<f32>,
     pub voice_elapsed: u64,
@@ -493,6 +500,21 @@ fn same_block(a: &crate::bridge::Content, b: &crate::bridge::Content) -> bool {
     }
 }
 impl Cache {
+    /// Rows laid out for the block at `index` (its whole card), `None` if it has no rows.
+    pub fn block_rows(&self, index: usize) -> Option<usize> {
+        self.active_parts
+            .get(index)?
+            .as_ref()
+            .map(|part| part.lines.len())
+    }
+
+    pub fn prompt_top(&self, turn: &str) -> Option<usize> {
+        self.operations.iter().position(|op| {
+            op.as_ref()
+                .is_some_and(|op| op["prompt_turn"].as_str() == Some(turn))
+        })
+    }
+
     /// The page for this snapshot, parsed once per revision.
     pub fn page_for(
         &mut self,
@@ -507,53 +529,6 @@ impl Cache {
         let page = std::sync::Arc::new(crate::settings_page::Page::from_value(raw));
         self.settings_page = Some((revision, page.clone()));
         page
-    }
-    pub fn session_rows(
-        &mut self,
-        s: &Snapshot,
-        p: &Palette,
-        width: u16,
-    ) -> &[(Line<'static>, Option<SidebarHit>)] {
-        // The selection is part of the cache key, folded into the filter text.
-        let key = (
-            s.revision,
-            width,
-            format!(
-                "{}\u{1}{}\u{1}{}",
-                self.filter,
-                self.project,
-                self.sessions_focus
-                    .then(|| self.sessions_sel.clone().unwrap_or_default())
-                    .unwrap_or_default()
-            ),
-            self.filtering,
-            self.spin,
-        );
-        let same = self.session_chrome.as_ref().is_some_and(|old| {
-            (old.0, old.1, &old.2, old.3, old.4) == (key.0, key.1, &key.2, key.3, key.4)
-        });
-        if !same {
-            self.session_chrome = Some((
-                key.0,
-                key.1,
-                key.2,
-                key.3,
-                key.4,
-                session_sidebar(
-                    s,
-                    p,
-                    width as usize,
-                    self.spin,
-                    &self.filter,
-                    &self.project,
-                    self.filtering,
-                    self.sessions_focus
-                        .then_some(())
-                        .and(self.sessions_sel.as_deref()),
-                ),
-            ));
-        }
-        &self.session_chrome.as_ref().unwrap().5
     }
     pub fn detail_rows(
         &mut self,
@@ -784,7 +759,14 @@ impl Cache {
                 } else {
                     block
                 };
-                let rows = context::build(&block, width, palette);
+                let mut rows = context::build(&block, width, palette);
+                if source.kind == "user" && !source.turn_id.is_empty() {
+                    if let Some((_, op)) = rows.iter_mut().find(|(_, op)| op.is_some()) {
+                        if let Some(op) = op.as_mut().and_then(|op| op.as_object_mut()) {
+                            op.insert("prompt_turn".into(), source.turn_id.clone().into());
+                        }
+                    }
+                }
                 let part = std::sync::Arc::new(Part {
                     block: if block.rev.is_empty() {
                         block.into_owned()
@@ -842,7 +824,6 @@ impl Cache {
         self.width = 0;
         self.dirty_from = Some(0);
         self.parts.clear();
-        self.session_chrome = None;
         self.details_chrome = None;
     }
 }
@@ -850,7 +831,6 @@ impl Cache {
 pub struct Regions {
     pub transcript: Rect,
     pub composer: Rect,
-    pub sessions: Rect,
     pub details: Rect,
     pub tabs: Rect,
     pub workspace: Rect,
@@ -859,41 +839,85 @@ pub struct Regions {
 /// Composer height: the editor grows with its wrapped content up to the terminal's
 /// `max-height: 22` (9-row resting layout), leaving the
 /// transcript at least four rows.
-/// Rows above the editor for queued messages (the terminal's input-queue preview).
-/// Most pending messages listed in the box before a `+N more` row.
+/// Most pending messages listed in the Queued section before a `+N more` row.
 const QUEUE_VISIBLE: usize = 4;
-/// Rows of the boxed pending-message list above the composer (borders included).
+/// Whether the running turn's status line is drawn above the composer.
+pub fn status_visible(s: &Snapshot) -> bool {
+    s.agent_page.is_empty() && s.turn_status.as_ref().is_some_and(|t| !t.activity.is_empty())
+}
+/// Rows of the unboxed Queued section (blank separator under the status line, header,
+/// listed messages, `+N more`).
 pub fn queue_rows(s: &Snapshot) -> u16 {
     let n = s.queue_items.len();
     if n == 0 {
+        return 0;
+    }
+    let listed = if s.queue_collapsed {
         0
     } else {
-        (n.min(QUEUE_VISIBLE) + usize::from(n > QUEUE_VISIBLE) + 2) as u16
-    }
+        n.min(QUEUE_VISIBLE) + usize::from(n > QUEUE_VISIBLE)
+    };
+    (usize::from(status_visible(s)) + 1 + listed) as u16
 }
-/// The queue box: on the composer rail's columns, directly above the margin row.
-fn queue_box(composer: Rect, s: &Snapshot) -> Rect {
+/// Where each row above the card sits (top to bottom: status line, blank, `▾ Queued N`,
+/// `#n text` rows, `+N more`, attachments, then the card's blank margin).
+#[derive(Default)]
+pub struct AboveLayout {
+    pub status: Option<Rect>,
+    pub header: Option<Rect>,
+    /// `(queue index, row)` of each listed message.
+    pub items: Vec<(usize, Rect)>,
+    pub more: Option<Rect>,
+    pub attach: Option<Rect>,
+}
+pub fn above_layout(composer: Rect, s: &Snapshot) -> AboveLayout {
     let rows = composer_rows(composer, s);
-    let height = queue_rows(s);
-    Rect {
-        x: rows[1].x + 2,
-        width: rows[1].width.saturating_sub(4),
-        y: rows[0].bottom().saturating_sub(1 + height),
-        height,
+    let x = rows[1].x + 2;
+    let width = rows[1].width.saturating_sub(4);
+    let mut y = rows[0].y;
+    let end = rows[0].bottom().saturating_sub(1);
+    let mut take = |y: &mut u16| {
+        let row = Rect::new(x, *y, width, 1);
+        let fits = *y < end;
+        *y += 1;
+        fits.then_some(row)
+    };
+    let mut out = AboveLayout::default();
+    if status_visible(s) {
+        out.status = take(&mut y);
     }
+    let n = s.queue_items.len();
+    if n > 0 {
+        if status_visible(s) {
+            y += 1;
+        }
+        out.header = take(&mut y);
+        if !s.queue_collapsed {
+            for index in 0..n.min(QUEUE_VISIBLE) {
+                if let Some(row) = take(&mut y) {
+                    out.items.push((index, row));
+                }
+            }
+            if n > QUEUE_VISIBLE {
+                out.more = take(&mut y);
+            }
+        }
+    }
+    if !s.attachment_lines.is_empty() {
+        out.attach = take(&mut y);
+    }
+    out
 }
 /// The ↑ ↓ ✕ cells of each listed message: `(row, [(x, op)])`.
 fn queue_controls(composer: Rect, s: &Snapshot) -> Vec<(u16, [(u16, &'static str); 3])> {
-    let area = queue_box(composer, s);
-    if area.height < 3 || area.width < 12 {
-        return Vec::new();
-    }
-    let right = area.right().saturating_sub(3);
-    (0..s.queue_items.len().min(QUEUE_VISIBLE))
-        .map(|index| {
-            let y = area.y + 1 + index as u16;
+    above_layout(composer, s)
+        .items
+        .into_iter()
+        .filter(|(_, row)| row.width >= 12)
+        .map(|(_, row)| {
+            let right = row.right().saturating_sub(2);
             (
-                y,
+                row.y,
                 [(right - 4, "up"), (right - 2, "down"), (right, "remove")],
             )
         })
@@ -909,75 +933,170 @@ pub fn queue_control_at(
     if !s.agent_page.is_empty() {
         return None;
     }
+    let layout = above_layout(composer, s);
     queue_controls(composer, s)
         .into_iter()
-        .enumerate()
-        .find(|(_, (row, _))| *row == y)
-        .and_then(|(index, (_, cells))| {
+        .zip(layout.items.iter())
+        .find(|((row, _), _)| *row == y)
+        .and_then(|((_, cells), (index, _))| {
             cells
                 .iter()
                 .find(|(cell, _)| *cell == x)
-                .map(|(_, op)| (s.queue_items[index].id.clone(), *op))
+                .map(|(_, op)| (s.queue_items[*index].id.clone(), *op))
         })
 }
-fn draw_queue_box(frame: &mut Frame, composer: Rect, s: &Snapshot, p: &Palette) {
-    let area = queue_box(composer, s);
-    if area.height < 3 {
+/// True when a click on `(x, y)` hits the Queued header (caret or label): collapse/expand.
+pub fn queue_header_at(composer: Rect, s: &Snapshot, x: u16, y: u16) -> bool {
+    s.agent_page.is_empty()
+        && above_layout(composer, s).header.is_some_and(|row| {
+            y == row.y && x >= row.x && x < row.x + 12.min(row.width)
+        })
+}
+/// `2.0s` under a minute, then `4m40s`, `1h02m`.
+pub fn fmt_activity(secs: f64) -> String {
+    let secs = secs.max(0.0);
+    if secs < 60.0 {
+        format!("{secs:.1}s")
+    } else {
+        fmt_turn(secs)
+    }
+}
+pub fn fmt_turn(secs: f64) -> String {
+    let total = secs.max(0.0) as u64;
+    match total {
+        0..=59 => format!("{total}s"),
+        60..=3599 => format!("{}m{:02}s", total / 60, total % 60),
+        _ => format!("{}h{:02}m", total / 3600, total % 3600 / 60),
+    }
+}
+/// `842`, `1.2k`, `121k`, `1.4M`.
+pub fn fmt_tokens(n: u64) -> String {
+    match n {
+        0..=999 => n.to_string(),
+        1000..=9999 => format!("{:.1}k", n as f64 / 1000.0),
+        10_000..=999_999 => format!("{}k", n / 1000),
+        _ => format!("{:.1}M", n as f64 / 1_000_000.0),
+    }
+}
+/// The right-aligned `4m40s ↓121k [stop]` text and the `[stop]` cell range.
+fn status_right(s: &Snapshot, now: f64) -> Option<(String, usize)> {
+    let t = s.turn_status.as_ref()?;
+    let mut text = fmt_turn(now - t.turn_since);
+    if t.output_tokens > 0 {
+        text += &format!(
+            " ↓{}{}",
+            if t.output_estimated { "~" } else { "" },
+            fmt_tokens(t.output_tokens)
+        );
+    }
+    text.push(' ');
+    let stop_at = text.width();
+    text += "[stop]";
+    Some((text, stop_at))
+}
+/// The `[stop]` button's cells; a click cancels the turn like Esc Esc / Ctrl+C.
+pub fn stop_at(composer: Rect, s: &Snapshot, x: u16, y: u16) -> bool {
+    let Some(row) = above_layout(composer, s).status else {
+        return false;
+    };
+    let Some((text, at)) = status_right(s, crate::live_bar::now_epoch()) else {
+        return false;
+    };
+    let start = row.right().saturating_sub(text.width() as u16) + at as u16;
+    y == row.y && x >= start && x < row.right()
+}
+fn draw_status_line(frame: &mut Frame, row: Rect, s: &Snapshot, p: &Palette, spin: usize, hover_stop: bool) {
+    let Some(t) = s.turn_status.as_ref() else {
         return;
-    }
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(ratatui::widgets::BorderType::Rounded)
-        .border_style(Style::default().fg(p.border_strong))
-        .title(Span::styled(" Sending next ", Style::default().fg(p.muted)));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    let count = s.queue_items.len();
-    let width = usize::from(inner.width);
-    let mut lines: Vec<Line<'static>> = s
-        .queue_items
-        .iter()
-        .take(QUEUE_VISIBLE)
-        .enumerate()
-        .map(|(index, item)| {
-            let tone = if item.tag == "S" { p.accent } else { p.blue };
-            let control = |on: bool| Style::default().fg(if on { p.text } else { p.quiet });
-            // " S " badge, a space, the text, then " ↑ ↓ ✕ " right-aligned.
-            let room = width.saturating_sub(4 + 7);
-            let text = crate::transcript::truncate(&item.text, room);
-            let gap = room.saturating_sub(text.width());
-            Line::from(vec![
-                Span::styled(
-                    format!(" {} ", item.tag),
-                    Style::default()
-                        .fg(p.background)
-                        .bg(tone)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(" "),
-                Span::styled(text, Style::default().fg(p.text)),
-                Span::raw(" ".repeat(gap + 1)),
-                Span::styled("↑", control(index > 0)),
-                Span::raw(" "),
-                Span::styled("↓", control(index + 1 < count)),
-                Span::raw(" "),
-                Span::styled("✕", Style::default().fg(p.error)),
-                Span::raw(" "),
-            ])
-        })
-        .collect();
-    if count > QUEUE_VISIBLE {
-        lines.push(Line::styled(
-            format!(" +{} more", count - QUEUE_VISIBLE),
+    };
+    let now = crate::live_bar::now_epoch();
+    let agent = crate::transcript::color(&s.agent_color, p.blue, p);
+    let (right, stop) = status_right(s, now).unwrap_or_default();
+    let label = format!("{}…", t.activity);
+    let left_room = usize::from(row.width).saturating_sub(right.width() + 2);
+    let label = crate::transcript::truncate(&label, left_room.saturating_sub(10));
+    let mut spans = vec![
+        Span::styled(SPINNER[spin % SPINNER.len()], Style::default().fg(agent)),
+        Span::raw(" "),
+        Span::styled(label.clone(), Style::default().fg(p.text)),
+        Span::styled(
+            format!(" {}", fmt_activity(now - t.activity_since)),
             Style::default().fg(p.quiet),
-        ));
-    }
-    frame.render_widget(Paragraph::new(lines), inner);
+        ),
+    ];
+    let used = 2 + label.width() + 1 + fmt_activity(now - t.activity_since).width();
+    let gap = usize::from(row.width).saturating_sub(used + right.width());
+    spans.push(Span::raw(" ".repeat(gap)));
+    let (info, button) = right.split_at(stop);
+    spans.push(Span::styled(info.to_string(), Style::default().fg(p.quiet)));
+    spans.push(Span::styled(
+        button.to_string(),
+        Style::default().fg(if hover_stop { p.text } else { p.quiet }),
+    ));
+    frame.render_widget(Paragraph::new(Line::from(spans)), row);
 }
-/// Rows above the composer card beyond its one-row background margin: queued messages
-/// and the attachment line, so neither ever touches the card.
+/// Grok's unboxed Queued section plus the status line, on the composer rail.
+fn draw_above_card(frame: &mut Frame, composer: Rect, s: &Snapshot, p: &Palette, spin: usize, pointer: Option<(u16, u16)>) {
+    let layout = above_layout(composer, s);
+    let over = |row: Rect| pointer.is_some_and(|(x, y)| y == row.y && x >= row.x && x < row.right());
+    if let Some(row) = layout.status {
+        let hover_stop = pointer.is_some_and(|(x, y)| stop_at(composer, s, x, y));
+        draw_status_line(frame, row, s, p, spin, hover_stop);
+    }
+    let count = s.queue_items.len();
+    if let Some(row) = layout.header {
+        let caret = if s.queue_collapsed { "▸" } else { "▾" };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(
+                    format!("{caret} Queued"),
+                    Style::default().fg(p.muted).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(format!(" {count}"), Style::default().fg(p.quiet)),
+            ])),
+            row,
+        );
+    }
+    for (index, row) in &layout.items {
+        let item = &s.queue_items[*index];
+        let hot = over(*row);
+        let tone = if item.tag == "S" { p.accent } else { p.quiet };
+        let prefix = format!("  #{} ", index + 1);
+        let controls = if hot { 7 } else { 0 };
+        let room = usize::from(row.width).saturating_sub(prefix.width() + controls + 1);
+        let text = crate::transcript::truncate(&item.text, room);
+        let mut spans = vec![
+            Span::styled(prefix.clone(), Style::default().fg(tone)),
+            Span::styled(text.clone(), Style::default().fg(p.text)),
+        ];
+        if hot {
+            let used = prefix.width() + text.width();
+            let gap = usize::from(row.width).saturating_sub(used + 6);
+            let on = |yes: bool| Style::default().fg(if yes { p.text } else { p.quiet });
+            spans.push(Span::raw(" ".repeat(gap)));
+            spans.push(Span::styled("↑", on(*index > 0)));
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled("↓", on(index + 1 < count)));
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled("✕", Style::default().fg(p.error)));
+        }
+        let style = if hot { Style::default().bg(p.element) } else { Style::default() };
+        frame.render_widget(Paragraph::new(Line::from(spans)).style(style), *row);
+    }
+    if let Some(row) = layout.more {
+        frame.render_widget(
+            Paragraph::new(Line::styled(
+                format!("  +{} more", count - QUEUE_VISIBLE),
+                Style::default().fg(p.quiet),
+            )),
+            row,
+        );
+    }
+}
+/// Rows above the composer card beyond its one-row background margin: the status line,
+/// queued messages and the attachment line, so none ever touches the card.
 fn above_card_rows(s: &Snapshot) -> u16 {
-    queue_rows(s) + u16::from(!s.attachment_lines.is_empty())
+    u16::from(status_visible(s)) + queue_rows(s) + u16::from(!s.attachment_lines.is_empty())
 }
 pub fn composer_height(area: Rect, draft: &Editor, s: &Snapshot) -> u16 {
     if !s.agent_page.is_empty() {
@@ -1001,54 +1120,27 @@ pub fn composer_height(area: Rect, draft: &Editor, s: &Snapshot) -> u16 {
 }
 /// Settings → Layout → Centered conversation: the widest the conversation column gets.
 pub const CENTERED_WIDTH: u16 = 80;
-/// Columns of the docked sessions sidebar (and the most its narrow drawer takes).
-pub const SESSIONS_WIDTH: u16 = 40;
 pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool) -> Regions {
-    let both = area.width >= 130;
-    let details_wins = s.last_opened != "sessions";
-    let left = if s.sessions_sidebar
-        && area.width >= 90
-        && (!s.details_sidebar || both || !details_wins)
-    {
-        SESSIONS_WIDTH
-    } else {
-        0
-    };
-    let right = if s.details_sidebar
-        && area.width >= 100
-        && (!s.sessions_sidebar || both || details_wins)
-    {
+    // The Sessions dashboard is full-width and draws its own header on row 0.
+    let dash = s.dashboard.is_some();
+    let right = if s.details_sidebar && area.width >= 100 && !dash {
         40
     } else {
         0
     };
-    let columns = Layout::horizontal([
-        Constraint::Length(left),
-        Constraint::Min(1),
-        Constraint::Length(right),
-    ])
-    .split(area);
-    let mut middle = columns[1];
-    if s.centered_layout && middle.width > CENTERED_WIDTH {
+    let columns = Layout::horizontal([Constraint::Min(1), Constraint::Length(right)]).split(area);
+    let mut middle = columns[0];
+    if s.centered_layout && middle.width > CENTERED_WIDTH && !dash {
         middle.x += (middle.width - CENTERED_WIDTH) / 2;
         middle.width = CENTERED_WIDTH;
     }
-    let top = if !s.agent_page.is_empty() {
-        1
-    } else if left > 0 {
-        0
-    } else {
-        1
-    };
     let center = Layout::vertical([
-        Constraint::Length(top),
+        Constraint::Length(u16::from(!dash)),
         Constraint::Min(1),
         Constraint::Length(composer_height),
     ])
     .split(middle);
-    let drawer = s.details_sidebar && area.width < 100;
-    // Below 90 columns the sessions sidebar is a drawer over the conversation, not a column.
-    let sessions_drawer = s.sessions_drawer && area.width < 90;
+    let drawer = s.details_sidebar && area.width < 100 && !dash;
     Regions {
         tabs: center[0],
         workspace: Rect::new(
@@ -1057,11 +1149,6 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
             center[2].width,
             1,
         ),
-        sessions: if sessions_drawer {
-            Rect::new(area.x, area.y, area.width.min(SESSIONS_WIDTH), area.height)
-        } else {
-            columns[0]
-        },
         details: if drawer {
             Rect::new(
                 area.right().saturating_sub(area.width.min(40)),
@@ -1070,7 +1157,7 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
                 area.height,
             )
         } else {
-            columns[2]
+            columns[1]
         },
         context: Rect::default(),
         transcript: center[1],
@@ -1163,7 +1250,6 @@ pub fn draw(
     logs_open: bool,
     _leader: bool,
     panel_detail: bool,
-    sessions_scroll: usize,
     logs_scroll: usize,
     details_scroll: usize,
 ) -> Regions {
@@ -1178,7 +1264,9 @@ pub fn draw(
         composer_height(frame.area(), draft, s),
         logs_open,
     );
-    draw_top_bar(frame, s, r.tabs, &p, cache.spin);
+    if s.dashboard.is_none() {
+        draw_top_bar(frame, s, r.tabs, &p, cache.spin);
+    }
     cache.content_elapsed = std::time::Duration::ZERO;
     cache.typing = !draft.text.is_empty();
     cache.page = s.agent_page.clone();
@@ -1188,19 +1276,30 @@ pub fn draw(
         cache.update_content(&[], &s.blocks, r.transcript.width, &p);
     }
     let height = r.transcript.height as usize;
-    // Sub-agent pages are read-only: leave 30% of the viewport below the last row.
-    cache.pad = if s.agent_page.is_empty() {
-        0
-    } else {
-        height * 3 / 10
-    };
+    cache.pad = crate::session::tail_padding(cache.lines.len(), height);
     let total = cache.lines.len() + cache.pad;
     cache.max_scroll = total.saturating_sub(height);
+    cache.live_scroll = cache.lines.len().saturating_sub(height);
+    let pin = if follow {
+        let scope = crate::session::Scope {
+            session: s.composer_key.clone(),
+            page: s.agent_page.clone(),
+            generation: s.generation,
+        };
+        let mut pin = std::mem::take(&mut cache.prompt_pin);
+        let target = pin.target(&scope, &s.blocks, cache, height);
+        cache.prompt_pin = pin;
+        target
+    } else {
+        cache.prompt_pin.release();
+        None
+    };
     let offset = if follow {
-        cache.max_scroll
+        pin.unwrap_or(cache.live_scroll)
     } else {
         scroll.min(cache.max_scroll)
     };
+    cache.current_offset = offset;
     // The Copy button of the block under the pointer, and whether the pointer is on it.
     let copy_hover = cache
         .pointer
@@ -1222,7 +1321,37 @@ pub fn draw(
                 .range(offset, r.transcript.height as usize)
                 .enumerate()
                 .map(|(row, line)| {
-                    let mut line = with_spinner(line, cache.spin);
+                    let mut drawn = with_spinner(line, cache.spin);
+                    if cache.animate
+                        && line
+                            .spans
+                            .iter()
+                            .any(|span| span.content.contains(SPINNER_SLOT))
+                    {
+                        let amount = nexus_widgets::anim::wave(
+                            cache.spin as u64,
+                            row as u16,
+                            nexus_widgets::anim::WAVE_ROWS,
+                            nexus_widgets::anim::WAVE_SPEED,
+                        );
+                        let tone = nexus_widgets::theme::mix(p.muted, p.text, amount);
+                        for span in &mut drawn.spans {
+                            if span.content.contains(SPINNER[cache.spin % SPINNER.len()]) {
+                                span.style.fg = Some(tone);
+                            }
+                        }
+                    }
+                    // Only the visible rows are animated; colour-free modes skip it.
+                    if cache.animate && !cache.mono {
+                        drawn = crate::transcript::look::animate_row(
+                            &drawn,
+                            cache.activity_frame as u64,
+                            row as u16,
+                            p.muted,
+                            p.text,
+                        );
+                    }
+                    let mut line = drawn;
                     if let Some((_, on)) = copy_hover.filter(|(first, _)| *first == offset + row) {
                         if let Some((start, _)) = crate::copy_button::columns(&line) {
                             let style = if on {
@@ -1287,6 +1416,47 @@ pub fn draw(
             &mut state,
         );
     }
+    // The Sessions dashboard replaces the transcript region while the host shows it.
+    if let Some(dashboard) = &s.dashboard {
+        sessions::draw(
+            frame,
+            r.transcript,
+            dashboard,
+            &mut cache.dashboard,
+            &sessions::Colors {
+                text: p.text,
+                muted: p.muted,
+                quiet: p.quiet,
+                accent: p.accent,
+                selected: p.element,
+                hover: p.element_hi,
+                border: p.border,
+                border_strong: p.border_strong,
+                purple: p.purple,
+                warning: p.warning,
+                success: p.success,
+                markdown: Some(Box::new({
+                    let p = p.clone();
+                    move |text, width| {
+                        crate::markdown::lines(text, &p, width)
+                            .into_iter()
+                            .flat_map(|r| {
+                                let mut spans = r.prefix;
+                                spans.extend(r.spans);
+                                crate::transcript::wrap(&spans, width)
+                                    .into_iter()
+                                    .map(|cells| {
+                                        crate::transcript::line(vec![], cells, None, Style::default())
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .collect()
+                    }
+                })),
+            },
+            cache.spin,
+        );
+    }
     let rows = composer_rows(r.composer, s);
     let inset = |a: Rect, left: u16, right: u16| Rect {
         x: a.x + left,
@@ -1294,17 +1464,12 @@ pub fn draw(
         ..a
     };
     let shell = is_shell_draft(draft);
-    let agent_color = if shell {
-        p.warning
-    } else {
-        crate::transcript::color(&s.agent_color, p.blue, &p)
-    };
     // The composer draws on its own background; `panel` stays for other surfaces.
     let cp = Palette {
         panel: p.composer,
         ..p.clone()
     };
-    // The chat input box: agent-colored left bar spanning editor and runtime rows.
+    // The chat input card keeps its existing padding, without a colour rail.
     let box_area = Rect {
         x: rows[1].x + 2,
         width: rows[1].width.saturating_sub(4),
@@ -1319,43 +1484,18 @@ pub fn draw(
             r.composer,
         );
     } else {
-        // A heavy agent-coloured rail, then a sliver of background, then the card.
         frame.render_widget(
             Block::default().style(Style::default().bg(cp.panel)),
-            Rect {
-                x: box_area.x + 1,
-                width: box_area.width.saturating_sub(1),
-                ..box_area
-            },
+            box_area,
         );
-        // The last card row is half padding, half gap: `▀` paints its top half in the
-        // card colour and its bottom half in the background. The rail is the heavy
-        // box-drawing line `┃`, which ends on that row with `╹` (heavy up: the same
-        // stroke, top half only), exactly at the card's edge.
         let half = box_area.bottom().saturating_sub(1);
-        for y in box_area.y..box_area.bottom() {
-            let glyph = if y == half && box_area.height > 2 {
-                "╹"
-            } else {
-                "┃"
-            };
-            frame.render_widget(
-                Paragraph::new(glyph).style(Style::default().fg(agent_color).bg(p.background)),
-                Rect {
-                    x: box_area.x,
-                    y,
-                    width: 1,
-                    height: 1,
-                },
-            );
-        }
         if box_area.height > 2 {
-            let width = box_area.width.saturating_sub(1);
+            let width = box_area.width;
             frame.render_widget(
                 Paragraph::new("▀".repeat(usize::from(width)))
                     .style(Style::default().fg(cp.panel).bg(p.background)),
                 Rect {
-                    x: box_area.x + 1,
+                    x: box_area.x,
                     y: half,
                     width,
                     height: 1,
@@ -1408,7 +1548,10 @@ pub fn draw(
         if displayed.text == "!" && draft.cursor == 1 {
             frame.render_widget(
                 Paragraph::new(Line::from(vec![
-                    Span::styled("!", Style::default().fg(p.warning).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "!",
+                        Style::default().fg(p.warning).add_modifier(Modifier::BOLD),
+                    ),
                     Span::styled("type a bash command", Style::default().fg(p.quiet)),
                 ]))
                 .style(Style::default().bg(cp.panel)),
@@ -1436,22 +1579,17 @@ pub fn draw(
                 editor_area,
             );
         }
-        // Top to bottom above the card: attachments, the pending-message box, a blank margin.
-        frame.render_widget(
-            Paragraph::new(Line::styled(
-                s.attachment_lines.join(" · "),
-                Style::default().fg(p.accent),
-            )),
-            inset(
-                Rect {
-                    height: rows[0].height.min(1),
-                    ..rows[0]
-                },
-                2,
-                2,
-            ),
-        );
-        draw_queue_box(frame, r.composer, s, &cp);
+        // Top to bottom above the card: status line, Queued section, attachments, a blank margin.
+        if let Some(row) = above_layout(r.composer, s).attach {
+            frame.render_widget(
+                Paragraph::new(Line::styled(
+                    s.attachment_lines.join(" · "),
+                    Style::default().fg(p.accent),
+                )),
+                row,
+            );
+        }
+        draw_above_card(frame, r.composer, s, &cp, cache.spin, cache.pointer);
         if s.live.active {
             // A live call outranks the mode hint: the mic is open, so say so.
             frame.render_widget(
@@ -1481,10 +1619,7 @@ pub fn draw(
                             .bg(p.warning)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(
-                        SHELL_HINT,
-                        Style::default().fg(p.warning),
-                    ),
+                    Span::styled(SHELL_HINT, Style::default().fg(p.warning)),
                 ]))
                 .style(Style::default().bg(cp.panel)),
                 Rect {
@@ -1522,102 +1657,6 @@ pub fn draw(
                 cache.activity_frame,
             ))),
             meter_area,
-        );
-    }
-    if r.sessions.width > 0 {
-        // Drawn after the transcript so a narrow drawer covers it.
-        frame.render_widget(Clear, r.sessions);
-        let inner = usize::from(r.sessions.width.saturating_sub(3));
-        let height = sessions_list_height(s, r.sessions);
-        let mut lines: Vec<Line<'static>> = cache
-            .session_rows(s, &p, inner as u16)
-            .iter()
-            .skip(1 + sessions_scroll)
-            .take(height)
-            .map(|(line, _)| line.clone())
-            .collect();
-        lines.resize(height, Line::default());
-        frame.render_widget(
-            Paragraph::new(lines)
-                .block(
-                    Block::default()
-                        .borders(Borders::RIGHT)
-                        .border_style(Style::default().fg(p.border_strong))
-                        .padding(ratatui::widgets::Padding::new(
-                            1,
-                            1,
-                            sessions_list_top(s, r.sessions),
-                            0,
-                        )),
-                )
-                .style(Style::default().bg(p.panel)),
-            r.sessions,
-        );
-    }
-    if r.sessions.width > 0 {
-        let title = format!(
-            "▌ Sessions{}+",
-            " ".repeat(r.sessions.width.saturating_sub(13) as usize)
-        );
-        frame.render_widget(
-            Paragraph::new(title).style(Style::default().fg(p.text).bg(p.panel)),
-            Rect::new(
-                r.sessions.x + 1,
-                r.sessions.y,
-                r.sessions.width.saturating_sub(2),
-                1,
-            ),
-        );
-        let inner = usize::from(r.sessions.width.saturating_sub(3));
-        let chips = project_chip_lines(s, &p, inner, &cache.project);
-        if !chips.is_empty() {
-            // Project chips pinned under the title, then a rule above the list.
-            let rule = r.sessions.y + 1 + chips.len() as u16;
-            frame.render_widget(
-                Paragraph::new(chips).style(Style::default().bg(p.panel)),
-                Rect::new(
-                    r.sessions.x + 1,
-                    r.sessions.y + 1,
-                    r.sessions.width.saturating_sub(2),
-                    rule - r.sessions.y - 1,
-                )
-                .intersection(r.sessions),
-            );
-            frame.render_widget(
-                Paragraph::new("─".repeat(usize::from(r.sessions.width.saturating_sub(1))))
-                    .style(Style::default().fg(p.border).bg(p.panel)),
-                Rect::new(r.sessions.x, rule, r.sessions.width.saturating_sub(1), 1)
-                    .intersection(r.sessions),
-            );
-        }
-        let typed = !cache.filter.is_empty() || cache.filtering;
-        let field = Line::from(vec![
-            Span::styled(
-                "/ ",
-                Style::default().fg(if cache.filtering { p.accent } else { p.quiet }),
-            ),
-            if typed {
-                Span::styled(
-                    format!("{}{}", cache.filter, if cache.filtering { "█" } else { "" }),
-                    Style::default().fg(p.text),
-                )
-            } else if cache.sessions_focus {
-                Span::styled(
-                    "↑↓ Enter · type to filter · Esc",
-                    Style::default().fg(p.quiet),
-                )
-            } else {
-                Span::styled("Filter sessions", Style::default().fg(p.quiet))
-            },
-        ]);
-        frame.render_widget(
-            Paragraph::new(field).style(Style::default().bg(p.panel)),
-            Rect::new(
-                r.sessions.x + 1,
-                r.sessions.bottom().saturating_sub(1),
-                r.sessions.width.saturating_sub(2),
-                1,
-            ),
         );
     }
     if r.details.width > 0 {
@@ -1728,6 +1767,10 @@ pub fn draw(
             strip,
         );
     }
+    if !s.panel_title.is_empty() || s.prompt.is_some() {
+        // One dimmed backdrop under every modal kind (panels, Settings, pickers, prompts).
+        dim_backdrop(frame, &p);
+    }
     if !s.panel_title.is_empty() {
         let area = panel_area(panel_host(&r, s), s);
         let title = if s.panel_loading {
@@ -1739,78 +1782,32 @@ pub fn draw(
         } else {
             s.panel_title.clone()
         };
-        let mut inner = dialog_frame(frame, area, &title, &p, s.panel_layout == "drawer");
-        if let Some(nav) = &s.nav {
-            let list = nav_rect(area);
-            let lines: Vec<Line<'static>> = nav
-                .items
-                .iter()
-                .enumerate()
-                .take(list.height as usize)
-                .map(|(i, (label, _, heading))| {
-                    if *heading {
-                        Line::styled(
-                            label.clone(),
-                            Style::default()
-                                .fg(p.quiet)
-                                .bg(p.dialog)
-                                .add_modifier(Modifier::BOLD),
-                        )
-                    } else if i as i64 == nav.selected {
-                        Line::styled(
-                            format!(
-                                "{:<w$}",
-                                format!(
-                                    "{} {label}",
-                                    if cache.settings_nav_focus {
-                                        "▶"
-                                    } else {
-                                        "▸"
-                                    }
-                                ),
-                                w = usize::from(list.width)
-                            ),
-                            components::selectable(
-                                &p,
-                                components::State {
-                                    selected: true,
-                                    focused: cache.settings_nav_focus,
-                                    hover: cache.component_hover.amount_id(
-                                        components::HoverId::SettingsNav(i),
-                                        std::time::Instant::now(),
-                                    ),
-                                    ..Default::default()
-                                },
-                            ),
-                        )
-                    } else {
-                        Line::styled(
-                            format!("  {label}"),
-                            components::selectable(
-                                &p,
-                                components::State {
-                                    hover: cache.component_hover.amount_id(
-                                        components::HoverId::SettingsNav(i),
-                                        std::time::Instant::now(),
-                                    ),
-                                    ..Default::default()
-                                },
-                            ),
-                        )
-                    }
-                })
-                .collect();
-            frame.render_widget(
-                Paragraph::new(lines).style(Style::default().bg(p.dialog)),
-                list,
+        // Settings: one root list; drilled pages say `Settings › Area` in the frame title.
+        cache.settings_root.track(s.nav.is_some());
+        let settings_root = s.nav.is_some() && cache.settings_root.active;
+        let title = match &s.nav {
+            Some(nav) if !settings_root => {
+                let area_label = usize::try_from(nav.selected)
+                    .ok()
+                    .and_then(|at| nav.items.get(at))
+                    .map(|item| item.0.as_str())
+                    .unwrap_or("");
+                format!("Settings › {area_label}")
+            }
+            Some(_) => "Settings".to_string(),
+            None => title,
+        };
+        let inner = dialog_frame(frame, area, &title, &p, s.panel_layout == "drawer");
+        cache.appearance_rows = Rect::default();
+        if let (true, Some(nav)) = (settings_root, &s.nav) {
+            let rows = crate::settings_page::root::build(
+                nav,
+                &crate::config::checkboxes(&cache.appearance),
+                &cache.settings_root.query,
+                s,
             );
-            let taken = list.width + 2;
-            inner = Rect {
-                x: inner.x + taken,
-                width: inner.width.saturating_sub(taken),
-                ..inner
-            };
-        }
+            crate::settings_page::root::draw(frame, inner, &mut cache.settings_root, &rows, &p);
+        } else
         if s.panel_format == "image" && !s.preview_image.is_empty() {
             let areas = Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).split(inner);
             frame.render_widget(
@@ -2050,7 +2047,24 @@ pub fn draw(
     }
     // Toasts float above everything, including dialogs; they never take layout.
     cache.toasts.draw(frame, s, &p, r.transcript);
+    if cache.mono {
+        // Monochrome preference: drop every foreground/background colour, keep modifiers.
+        for cell in frame.buffer_mut().content.iter_mut() {
+            cell.set_fg(ratatui::style::Color::Reset);
+            cell.set_bg(ratatui::style::Color::Reset);
+        }
+    }
     r
+}
+
+/// The Settings list has the Appearance area selected (it gets the local checkbox overlay).
+pub fn appearance_selected(s: &Snapshot) -> bool {
+    s.nav.as_ref().is_some_and(|nav| {
+        usize::try_from(nav.selected)
+            .ok()
+            .and_then(|at| nav.items.get(at))
+            .is_some_and(|item| !item.2 && item.1 == "appearance")
+    })
 }
 
 fn truncate_width(text: &str, width: usize) -> String {
@@ -2077,29 +2091,46 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unread_completed_tab_has_a_solid_blue_dot() {
-        let mut s = Snapshot::default();
-        s.tabs = vec![crate::bridge::Session {
-            id: "finished".into(),
-            title: "Finished agent".into(),
-            status: "done".into(),
-            ..Default::default()
-        }];
+    fn open_modals_dim_the_whole_frame_behind_them() {
         let p = Palette::new(false);
-        let backend = ratatui::backend::TestBackend::new(80, 2);
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        terminal
-            .draw(|frame| {
-                draw_top_bar(frame, &s, frame.area(), &p, 0);
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer();
-        let dot = buffer
-            .content
-            .iter()
-            .find(|cell| cell.symbol() == "●")
-            .unwrap();
-        assert_eq!(dot.fg, p.blue);
+        let mut cache = Cache::default();
+        let paint = |s: &Snapshot, cache: &mut Cache| {
+            let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+            terminal
+                .draw(|frame| {
+                    draw(
+                        frame,
+                        s,
+                        &Editor::default(),
+                        &Editor::default(),
+                        &Editor::default(),
+                        "",
+                        0,
+                        0,
+                        0,
+                        cache,
+                        true,
+                        false,
+                        false,
+                        false,
+                        0,
+                        0,
+                    );
+                })
+                .unwrap();
+            terminal.backend().buffer().clone()
+        };
+        let mut s = Snapshot::default();
+        // Top-left cell of the top bar: page background, never covered by a modal.
+        let open = paint(&s, &mut cache);
+        assert_eq!(open[(0, 0)].bg, p.background);
+        s.panel_title = "Model".into();
+        s.panel_lines = vec!["x".into()];
+        let dimmed = paint(&s, &mut cache);
+        assert_eq!(dimmed[(0, 0)].bg, p.background, "blending the background with itself");
+        // Text on the backdrop recedes toward the background.
+        let fg = |b: &ratatui::buffer::Buffer| b[(2, 0)].fg;
+        assert_ne!(fg(&open), fg(&dimmed));
     }
     use ratatui::{backend::TestBackend, Terminal};
     #[test]
@@ -2169,7 +2200,6 @@ mod tests {
                         false,
                         false,
                         false,
-                        0,
                         0,
                         0,
                     );
@@ -2298,101 +2328,6 @@ mod tests {
         assert!(second.starts_with("▸ A "));
     }
     #[test]
-    fn session_cards_show_status_words_and_map_clicks() {
-        use crate::bridge::Session;
-        let mut s = Snapshot::default();
-        s.sessions = vec![
-            Session {
-                group: "Today".into(),
-                id: "a".into(),
-                title: "Fix bug".into(),
-                status: "working".into(),
-                active: true,
-                ..Default::default()
-            },
-            Session {
-                group: "Today".into(),
-                id: "b".into(),
-                title: "Docs".into(),
-                status: "done".into(),
-                ..Default::default()
-            },
-        ];
-        assert!(animating(&s));
-        let rows = session_sidebar(&s, &Palette::new(false), 27, 1, "", "", false, None);
-        let text = |i: usize| {
-            rows[i]
-                .0
-                .spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect::<String>()
-        };
-        assert_eq!(text(0), "▌ Sessions");
-        assert_eq!(rows[0].1, Some(SidebarHit::New));
-        assert_eq!(text(1), "SESSIONS 2");
-        let first = rows
-            .iter()
-            .position(|(_, hit)| *hit == Some(SidebarHit::Session(0)))
-            .unwrap();
-        assert!(text(first).starts_with("▌⠙ Fix bug"), "{}", text(first));
-        assert!(
-            text(first + 1).starts_with(" · Docs"),
-            "one row per session: {}",
-            text(first + 1)
-        );
-        assert!(!rows
-            .iter()
-            .any(|(l, _)| l.spans.iter().any(|x| x.content.contains("just now"))));
-        let filtered = session_sidebar(&s, &Palette::new(false), 27, 1, "docs", "", true, None);
-        let titles: Vec<String> = filtered
-            .iter()
-            .filter(|(_, hit)| matches!(hit, Some(SidebarHit::Session(_))))
-            .map(|(l, _)| {
-                l.spans
-                    .iter()
-                    .map(|x| x.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect();
-        assert_eq!(titles.len(), 1, "one session row matches");
-        assert!(titles[0].contains("Docs"));
-        s.archived_label = "Archived · 3".into();
-        let rows = session_sidebar(&s, &Palette::new(false), 27, 1, "", "", false, None);
-        assert_eq!(rows.last().unwrap().1, Some(SidebarHit::Archived));
-    }
-    #[test]
-    fn tabs_scroll_to_keep_the_current_one_and_map_to_cells() {
-        use crate::bridge::Session;
-        let tab = |id: &str, active: bool| Session {
-            id: id.into(),
-            title: format!("session {id} title"),
-            active,
-            ..Default::default()
-        };
-        let mut s = Snapshot::default();
-        s.tabs = (0..6).map(|i| tab(&i.to_string(), i == 5)).collect();
-        let cells = tab_cells(&s, 60);
-        assert_eq!(cells.first().unwrap().kind, TabHit::Sessions);
-        assert!(
-            cells.iter().any(|c| c.kind == TabHit::Tab(5)),
-            "the current tab stays visible"
-        );
-        assert!(
-            !cells.iter().any(|c| c.kind == TabHit::Tab(0)),
-            "older tabs scroll out"
-        );
-        assert_eq!(cells[cells.len() - 2].kind, TabHit::New);
-        assert!(cells.iter().all(|c| c.end <= 60));
-        s.tabs.truncate(1);
-        s.tabs[0].active = true;
-        let cells = tab_cells(&s, 120);
-        assert_eq!(
-            (cells[1].start, cells[1].end),
-            (4, 4 + 6 + "session 0 title".len())
-        );
-    }
-    #[test]
     fn inline_diff_has_counts_numbers_tints_and_hunk_gaps() {
         let p = Palette::new(false);
         let row = |a: u32, b: &str, c: u32, d: &str, k: &str| {
@@ -2452,17 +2387,33 @@ mod tests {
         let rows = toned_lines(&lines, &["meter-ok".to_string()], 120, &p);
         let spans = &rows[0].spans;
         let find = |text: &str| spans.iter().find(|s| s.content.contains(text)).unwrap();
-        assert_eq!(find("Weekly").style.fg, Some(p.text), "the label is neutral");
-        assert_eq!(find("━━━").style.fg, Some(p.success), "used cells take the tone");
+        assert_eq!(
+            find("Weekly").style.fg,
+            Some(p.text),
+            "the label is neutral"
+        );
+        assert_eq!(
+            find("━━━").style.fg,
+            Some(p.success),
+            "used cells take the tone"
+        );
         assert_eq!(find("┃").style.fg, Some(p.text), "the pace marker is plain");
-        assert_eq!(find("───").style.fg, Some(p.border_strong), "the track is dim");
+        assert_eq!(
+            find("───").style.fg,
+            Some(p.border_strong),
+            "the track is dim"
+        );
         assert_eq!(find("in reserve").style.fg, Some(p.success));
         assert_eq!(find("resets").style.fg, Some(p.muted));
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text.trim_start(), lines[0].trim_start(), "no text is lost");
         let over = vec!["  Monthly  ━━━━  80% used · 30% over pace".to_string()];
         let rows = toned_lines(&over, &["meter-warn".to_string()], 120, &p);
-        let over_span = rows[0].spans.iter().find(|s| s.content.contains("over pace")).unwrap();
+        let over_span = rows[0]
+            .spans
+            .iter()
+            .find(|s| s.content.contains("over pace"))
+            .unwrap();
         assert_eq!(over_span.style.fg, Some(p.warning));
     }
     #[test]
@@ -2513,244 +2464,6 @@ mod tests {
         .into();
         assert_eq!(targets(&cache), vec![(1, 2), (4, 4), (5, 6)]);
         assert!(targets(&Cache::default()).is_empty());
-    }
-    #[test]
-    fn project_chips_and_headings_filter_to_one_project() {
-        use crate::bridge::Session;
-        let session = |id: &str, workspace: &str, project: &str| Session {
-            group: format!("{project} · Today"),
-            project: project.into(),
-            day: "Today".into(),
-            id: id.into(),
-            title: format!("title {id}"),
-            workspace: workspace.into(),
-            ..Default::default()
-        };
-        let s = Snapshot {
-            sessions: vec![
-                session("a", "/w/nexus", "nexus"),
-                session("b", "/w/site", "site"),
-                session("c", "/w/nexus", "nexus"),
-            ],
-            ..Default::default()
-        };
-        let p = Palette::new(false);
-        assert_eq!(visible_sessions(&s, "", "/w/nexus"), vec![0, 2]);
-        assert_eq!(
-            visible_sessions(&s, "", "/w/gone"),
-            vec![0, 1, 2],
-            "stale pick"
-        );
-        let rows = session_sidebar(&s, &p, 37, 0, "", "", false, None);
-        let heading = rows
-            .iter()
-            .find(|(_, hit)| matches!(hit, Some(SidebarHit::Heading(_))))
-            .unwrap();
-        assert_eq!(heading.0.spans[0].content, "nexus");
-        assert_eq!(
-            heading.0.spans[0].style.fg,
-            Some(project_color(&p, "/w/nexus"))
-        );
-        assert_eq!(heading.0.spans[2].content, "Today");
-        assert_eq!(heading.0.spans[2].style.fg, Some(p.cyan));
-        let picked = session_sidebar(&s, &p, 37, 0, "", "/w/site", false, None);
-        let text = |line: &Line| {
-            line.spans
-                .iter()
-                .map(|x| x.content.as_ref())
-                .collect::<String>()
-        };
-        assert_eq!(text(&picked[1].0), "SESSIONS 1 of 3 · site");
-        let chips = project_chips(&s, 37);
-        assert_eq!(chips.len(), 1);
-        let labels: Vec<_> = chips[0].iter().map(|chip| chip.3.as_str()).collect();
-        assert_eq!(labels, ["All", "nexus", "site"]);
-        // Chips sit under the title (row 1), then a rule (row 2), then the list.
-        let region = Rect::new(0, 0, 40, 30);
-        assert_eq!(sessions_list_top(&s, region), 3);
-        assert_eq!(sessions_list_height(&s, region), 26);
-        let (start, _, _, _) = chips[0][2];
-        assert_eq!(
-            project_chip_at(&s, region, 1 + start as u16, 1),
-            Some("/w/site".into())
-        );
-        assert_eq!(project_chip_at(&s, region, 1, 1), Some(String::new()));
-        assert_eq!(project_chip_at(&s, region, 1, 2), None, "the rule row");
-        assert_eq!(sessions_row_at(&s, region, 0, 2), None);
-        assert_eq!(sessions_row_at(&s, region, 0, 3), Some(1), "SESSIONS N");
-        assert_eq!(sessions_row_at(&s, region, 4, 3), Some(5), "scrolled");
-        assert_eq!(sessions_row_at(&s, region, 0, 29), None, "the filter row");
-        // A linked worktree joins its repository: one chip, one color, its branch
-        // in the heading, and the project filter keeps it.
-        let mut s = s;
-        s.sessions.push(Session {
-            group: "nexus › feat/x · Today".into(),
-            repo: "/w/nexus".into(),
-            worktree: "feat/x".into(),
-            ..session("d", "/w/nexus-feat", "nexus")
-        });
-        let labels: Vec<_> = project_chips(&s, 37)[0]
-            .iter()
-            .map(|c| c.3.clone())
-            .collect();
-        assert_eq!(labels, ["All", "nexus +1wt", "site"]);
-        assert_eq!(visible_sessions(&s, "", "/w/nexus"), vec![0, 2, 3]);
-        assert_eq!(
-            visible_sessions(&s, "feat", ""),
-            vec![3],
-            "filter matches the branch"
-        );
-        let rows = session_sidebar(&s, &p, 37, 0, "", "", false, None);
-        let tree = rows
-            .iter()
-            .rev()
-            .find(|(_, hit)| matches!(hit, Some(SidebarHit::Heading(3))))
-            .unwrap();
-        assert_eq!(text(&tree.0), "nexus › feat/x · Today");
-        assert_eq!(
-            tree.0.spans[0].style.fg,
-            Some(project_color(&p, "/w/nexus"))
-        );
-        let picked = session_sidebar(&s, &p, 37, 0, "", "/w/nexus", false, None);
-        assert!(picked.iter().any(|(l, _)| text(l) == "› feat/x · Today"));
-        // Too many projects for three rows end in a `+N` chip.
-        let many = Snapshot {
-            sessions: (0..30)
-                .map(|i| session(&i.to_string(), &format!("/w/p{i}"), &format!("project{i}")))
-                .collect(),
-            ..Default::default()
-        };
-        let chips = project_chips(&many, 37);
-        assert_eq!(chips.len(), 3);
-        let last = chips[2].last().unwrap();
-        assert!(last.3.starts_with('+') && last.2.is_none(), "{}", last.3);
-        assert!(chips.iter().flatten().all(|chip| chip.1 <= 37));
-        let shown = chips.iter().flatten().filter(|c| c.2.is_some()).count() - 1;
-        assert_eq!(
-            shown
-                + last.3[1..]
-                    .trim_end_matches(" more")
-                    .parse::<usize>()
-                    .unwrap(),
-            30
-        );
-    }
-    #[test]
-    fn keyboard_selection_is_drawn_and_filtering_shares_one_visible_list() {
-        use crate::bridge::Session;
-        let session = |id: &str, title: &str, active: bool| Session {
-            group: "Today".into(),
-            id: id.into(),
-            title: title.into(),
-            active,
-            ..Default::default()
-        };
-        let s = Snapshot {
-            sessions: vec![
-                session("a", "Fix token refresh", true),
-                session("b", "Refresh docs", false),
-                session("c", "Audit licences", false),
-            ],
-            ..Default::default()
-        };
-        assert_eq!(visible_sessions(&s, "", ""), vec![0, 1, 2]);
-        assert_eq!(
-            visible_sessions(&s, "REFRESH", ""),
-            vec![0, 1],
-            "case-insensitive"
-        );
-        assert_eq!(visible_sessions(&s, "licenc", ""), vec![2]);
-        assert!(visible_sessions(&s, "zzz", "").is_empty());
-        let p = Palette::new(false);
-        let rows = session_sidebar(&s, &p, 27, 0, "", "", false, Some("c"));
-        let line = |sid: usize| {
-            rows.iter()
-                .find(|(_, hit)| *hit == Some(SidebarHit::Session(sid)))
-                .unwrap()
-                .0
-                .clone()
-        };
-        let picked = line(2);
-        assert_eq!(picked.spans[0].content, "▌", "the selected row has the bar");
-        assert_eq!(
-            picked.spans[2].style.bg,
-            Some(p.element_hi),
-            "and a raised row"
-        );
-        assert!(picked.spans[2].style.add_modifier.contains(Modifier::BOLD));
-        let plain = line(1);
-        assert_eq!(
-            plain.spans[0].content, " ",
-            "unselected, not current, no bar"
-        );
-        // The selection never changes what is shown or how hits map.
-        let without = session_sidebar(&s, &p, 27, 0, "", "", false, None);
-        assert_eq!(rows.len(), without.len());
-        assert!(rows.iter().zip(&without).all(|(a, b)| a.1 == b.1));
-    }
-
-    #[test]
-    fn sidebar_width_policy_retains_preferences_and_uses_full_height() {
-        for width in [80, 120, 170, 220] {
-            for left in [false, true] {
-                for right in [false, true] {
-                    for last in ["sessions", "details"] {
-                        let s = Snapshot {
-                            sessions_sidebar: left,
-                            details_sidebar: right,
-                            last_opened: last.into(),
-                            ..Default::default()
-                        };
-                        let r = regions(Rect::new(0, 0, width, 50), &s, 7, false);
-                        if r.sessions.width > 0 {
-                            assert_eq!(r.sessions.height, 50);
-                            assert_eq!(r.sessions.y, 0);
-                            // Docked columns replace the tab row; a narrow drawer overlays it.
-                            assert_eq!(r.tabs.height, u16::from(width < 90));
-                        }
-                        if width == 80 {
-                            assert_eq!(
-                                r.sessions.width, 0,
-                                "the preference alone never opens a drawer"
-                            );
-                            let opened = Snapshot {
-                                sessions_drawer: true,
-                                ..Default::default()
-                            };
-                            let r = regions(Rect::new(0, 0, width, 50), &opened, 7, false);
-                            assert!(r.sessions.width > 0 && r.sessions.width <= 40);
-                            assert_eq!(
-                                r.transcript.width, 80,
-                                "a drawer never shrinks the conversation"
-                            );
-                            if false {
-                                assert!(r.sessions.width <= 40);
-                                assert_eq!(
-                                    r.transcript.width, 80,
-                                    "a drawer never shrinks the conversation"
-                                );
-                            }
-                        }
-                        if r.details.width > 0 {
-                            assert_eq!(r.details.height, 50);
-                            assert_eq!(r.details.y, 0);
-                        }
-                        if width >= 170 {
-                            assert_eq!(r.sessions.width > 0, left);
-                            assert_eq!(r.details.width > 0, right);
-                        }
-                        if width == 120 && left && right {
-                            assert_eq!(r.details.width > 0, last == "details");
-                            assert_eq!(r.sessions.width > 0, last == "sessions");
-                        }
-                        if width == 80 && right {
-                            assert_eq!(r.details.right(), 80);
-                            assert_eq!(logs_region(&r), r.details);
-                        }
-                    }
-                }
-            }
-        }
     }
     #[test]
     fn selection_extracts_text_by_columns_and_reverses_the_highlight() {
@@ -2823,7 +2536,6 @@ mod tests {
                     false,
                     0,
                     0,
-                    0,
                 );
             })
             .unwrap();
@@ -2890,7 +2602,7 @@ mod tests {
         s.panel_title = "Layout".into();
         s.panel_lines = vec!["Panels hide automatically".into()];
         s.nav = Some(nav);
-        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(100, 50)).unwrap();
         let mut cache = Cache::default();
         terminal
             .draw(|frame| {
@@ -2911,12 +2623,11 @@ mod tests {
                     false,
                     0,
                     0,
-                    0,
                 );
             })
             .unwrap();
         let row_of = |needle: &str| {
-            (0..30u16)
+            (0..50u16)
                 .find(|y| {
                     (0..100u16)
                         .map(|x| terminal.backend().buffer()[(x, *y)].symbol().to_string())
@@ -2933,12 +2644,17 @@ mod tests {
             line.find(needle).unwrap()
         };
         assert!(
-            row_of("▸ Layout") > row_of("GENERAL") && row_of("Providers") > row_of("CONFIGURE")
+            row_of("Layout") > row_of("General") && row_of("Providers") > row_of("Configure"),
+            "the root list shows every area under its section header"
         );
         assert!(
-            col_of("Panels hide") > col_of("Providers"),
-            "the page sits to the right of the list"
+            (0..50u16).all(|y| !(0..100u16)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string())
+                .collect::<String>()
+                .contains("Panels hide")),
+            "a drilled page is not drawn while the root list is showing"
         );
+        let _ = col_of;
     }
     fn rich_snapshot(light: bool) -> Snapshot {
         serde_json::from_value(serde_json::json!({
@@ -2986,7 +2702,6 @@ mod tests {
                             false,
                             0,
                             0,
-                            0,
                         );
                     })
                     .unwrap();
@@ -3006,11 +2721,11 @@ mod tests {
                 assert!(screen.contains("Allow once"), "{at}");
                 assert!(screen.contains("Build"), "{at}: the runtime row");
                 if width >= 170 {
-                    assert!(screen.contains("Fix the parser"), "{at}: current session");
+                    assert!(screen.contains("Nexus · s1"), "{at}: top-bar title");
+                    assert!(screen.contains("‹ 1/2 ›"), "{at}: session arrows");
+                    assert!(screen.contains("[Dashboard]"), "{at}: dashboard button");
                 }
-                if width >= 170 {
-                    assert!(screen.contains("SESSIONS 1"), "{at}: sessions sidebar");
-                }
+                assert!(!screen.contains("SESSIONS"), "{at}: no sessions sidebar");
                 if width >= 170 {
                     assert!(
                         screen.contains("CHANGES · 1 file") && screen.contains("src/parser.py"),
@@ -3048,7 +2763,6 @@ mod tests {
                     false,
                     false,
                     false,
-                    0,
                     0,
                     0,
                 );
@@ -3094,18 +2808,27 @@ mod tests {
         queued.queue_items = vec![queue_item("q1", "Q", "a"), queue_item("s1", "S", "b")];
         assert_eq!(
             composer_height(Rect::new(0, 0, 80, 60), &Editor::default(), &queued),
-            8 + 4,
-            "two messages get a four-row box (with borders) above the editor"
+            8 + 3,
+            "two messages get a header and two rows above the editor"
+        );
+        queued.turn_status = Some(crate::bridge::TurnStatus {
+            activity: "Thinking".into(),
+            ..Default::default()
+        });
+        assert_eq!(
+            composer_height(Rect::new(0, 0, 80, 60), &Editor::default(), &queued),
+            8 + 3 + 2,
+            "a running turn adds the status line and a blank row"
         );
     }
     #[test]
     fn workspace_bar_is_between_composer_controls_and_activity() {
         for width in [60, 120, 180] {
-            for sessions_sidebar in [false, true] {
+            for details_sidebar in [false, true] {
                 let s = Snapshot {
                     breadcrumb: "/workspace · main · worktree".into(),
                     agent: "Agent".into(),
-                    sessions_sidebar,
+                    details_sidebar,
                     ..Default::default()
                 };
                 let area = Rect::new(0, 0, width, 40);
@@ -3140,28 +2863,33 @@ mod tests {
                             false,
                             0,
                             0,
-                            0,
                         );
                     })
                     .unwrap();
-                let row: String = (r.workspace.x..r.workspace.right())
+                let visible_end = if r.details.width > 0 {
+                    r.details.x.min(r.workspace.right())
+                } else {
+                    r.workspace.right()
+                };
+                let row: String = (r.workspace.x..visible_end)
                     .map(|x| terminal.backend().buffer()[(x, r.workspace.y)].symbol())
                     .collect();
-                assert!(row.contains("/workspace") && !row.contains("idle"), "{row}");
-                assert!(!row.contains('▐'), "no duplicate details toggle: {row}");
+                assert!(row.trim().is_empty(), "blank spacer row: {row}");
                 if r.tabs.height > 0 {
                     assert_eq!(r.tabs.height, 1, "top bar has no separator row");
                     let top: String = (r.tabs.x..r.tabs.right())
                         .map(|x| terminal.backend().buffer()[(x, r.tabs.y)].symbol())
                         .collect();
-                    assert!(top.contains('▐'), "top-bar toggle remains: {top}");
+                    if r.details.width == 0 {
+                        assert!(top.contains("[Dashboard]"), "dashboard button: {top}");
+                    }
+                    assert!(top.contains("/workspace"), "path in the top bar: {top}");
                 }
                 let buffer = terminal.backend().buffer();
-                assert_eq!(buffer[(r.workspace.x + 2, r.workspace.y)].symbol(), "/");
                 assert_eq!(
                     buffer[(r.workspace.x + 2, rows[2].y)].symbol(),
-                    "┃",
-                    "path starts at the rail"
+                    " ",
+                    "card has no left colour rail"
                 );
                 assert_eq!(buffer[(r.workspace.x + 5, rows[2].y)].symbol(), "A");
                 for x in r.workspace.x..r.workspace.right() {
@@ -3200,7 +2928,6 @@ mod tests {
                     false,
                     false,
                     false,
-                    0,
                     0,
                     0,
                 );
@@ -3355,7 +3082,6 @@ mod editor_layout_tests {
                             false,
                             0,
                             0,
-                            0,
                         )
                         .composer;
                     })
@@ -3377,15 +3103,34 @@ mod editor_layout_tests {
         let p = Palette::new(false);
         let mut cache = Cache::default();
         let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
-        for (text, shell) in [("!git status", true), ("!", true), ("git status", false), ("", false)] {
+        for (text, shell) in [
+            ("!git status", true),
+            ("!", true),
+            ("git status", false),
+            ("", false),
+        ] {
             let mut editor = Editor::default();
             editor.insert(text);
             let mut composer = Rect::default();
             terminal
                 .draw(|frame| {
                     composer = draw(
-                        frame, &s, &editor, &Editor::default(), &Editor::default(), "",
-                        0, 0, 0, &mut cache, false, false, false, false, 0, 0, 0,
+                        frame,
+                        &s,
+                        &editor,
+                        &Editor::default(),
+                        &Editor::default(),
+                        "",
+                        0,
+                        0,
+                        0,
+                        &mut cache,
+                        false,
+                        false,
+                        false,
+                        false,
+                        0,
+                        0,
                     )
                     .composer;
                 })
@@ -3393,13 +3138,17 @@ mod editor_layout_tests {
             let rows = composer_rows(composer, &s);
             let buffer = terminal.backend().buffer();
             let line = |y: u16| -> String {
-                (composer.x..composer.right()).map(|x| buffer[(x, y)].symbol().to_string()).collect()
+                (composer.x..composer.right())
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect()
             };
             let hint = line(rows[2].y - 1);
             assert_eq!(hint.contains("! bash"), shell, "{text:?}: {hint:?}");
             assert_eq!(hint.contains("output goes to context"), shell, "{text:?}");
-            let rail = &buffer[(rows[1].x + 2, rows[1].y)];
-            assert_eq!(rail.fg == p.warning, shell, "{text:?}: rail colour");
+            if shell {
+                assert!((composer.x..composer.right())
+                    .any(|x| buffer[(x, rows[2].y - 1)].fg == p.warning));
+            }
             if text == "!" {
                 assert!(line(rows[1].y + 1).contains("type a bash command"));
             }
@@ -3435,7 +3184,6 @@ mod editor_layout_tests {
                         false,
                         0,
                         0,
-                        0,
                     )
                     .composer;
                 })
@@ -3462,7 +3210,7 @@ mod editor_layout_tests {
             );
             let palette = Palette::new(false);
             assert_eq!((cell.fg, cell.bg), (palette.composer, palette.background));
-            assert_eq!(palette.composer, Color::Rgb(0x1e, 0x1e, 0x1e));
+            assert_eq!(palette.composer, Color::Rgb(0x1c, 0x1c, 0x1c));
             assert_eq!(
                 buffer[(composer.x + 5, rows[2].y)].bg,
                 palette.composer,
@@ -3470,14 +3218,14 @@ mod editor_layout_tests {
             );
             assert_eq!(
                 buffer[(composer.x + 2, pad)].symbol(),
-                "╹",
-                "the rail ends at the card's half-row edge"
+                "▀",
+                "card edge has no coloured rail"
             );
         }
     }
 
     #[test]
-    fn pending_messages_are_boxed_with_tags_and_controls() {
+    fn queued_section_is_unboxed_with_hover_controls_and_collapses() {
         use ratatui::{backend::TestBackend, Terminal};
         let mut s = Snapshot::default();
         s.queue_items = (0..5)
@@ -3489,6 +3237,99 @@ mod editor_layout_tests {
                 )
             })
             .collect();
+        let mut cache = Cache::default();
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        let mut composer = Rect::default();
+        let mut paint = |s: &Snapshot, cache: &mut Cache, composer: &mut Rect| {
+            terminal
+                .draw(|frame| {
+                    *composer = draw(
+                        frame,
+                        s,
+                        &Editor::default(),
+                        &Editor::default(),
+                        &Editor::default(),
+                        "",
+                        0,
+                        0,
+                        0,
+                        cache,
+                        false,
+                        false,
+                        false,
+                        false,
+                        0,
+                        0,
+                    )
+                    .composer;
+                })
+                .unwrap();
+            terminal.backend().buffer().clone()
+        };
+        let buffer = paint(&s, &mut cache, &mut composer);
+        let text = |y: u16| -> String {
+            (composer.x..composer.right())
+                .map(|x| buffer[(x, y)].symbol().to_string())
+                .collect()
+        };
+        let card = composer_rows(composer, &s)[1].y;
+        assert!(text(card - 1).trim().is_empty(), "blank margin above card");
+        assert!(text(card - 2).contains("+1 more"));
+        let header = text(card - 7);
+        assert!(header.trim_start().starts_with("▾ Queued 5"), "{header}");
+        assert!(!header.contains('╭'), "no box");
+        assert!(text(card - 6).contains("#1 msg 0"), "{}", text(card - 6));
+        assert!(text(card - 5).contains("#2 msg 1"));
+        assert!(!text(card - 5).contains('✕'), "controls only on the hovered row");
+        // Hovering the second message shows ↑ ↓ ✕ at the right.
+        let row = card - 5;
+        cache.pointer = Some((composer.x + 6, row));
+        let buffer = paint(&s, &mut cache, &mut composer);
+        let cells: Vec<u16> = (composer.x..composer.right())
+            .filter(|x| ["↑", "↓", "✕"].contains(&buffer[(*x, row)].symbol()))
+            .collect();
+        assert_eq!(cells.len(), 3);
+        let hits: Vec<_> = cells
+            .iter()
+            .map(|x| queue_control_at(composer, &s, *x, row))
+            .collect();
+        assert_eq!(
+            hits,
+            [
+                Some(("id1".into(), "up")),
+                Some(("id1".into(), "down")),
+                Some(("id1".into(), "remove"))
+            ]
+        );
+        assert_eq!(queue_control_at(composer, &s, cells[0] + 1, row), None);
+        assert_eq!(queue_control_at(composer, &s, cells[0], card - 2), None, "+N more row");
+        // The caret row collapses the list down to its header.
+        assert!(queue_header_at(composer, &s, composer.x + 2, card - 7));
+        assert!(!queue_header_at(composer, &s, composer.x + 2, card - 6));
+        s.queue_collapsed = true;
+        assert_eq!(queue_rows(&s), 1);
+        let buffer = paint(&s, &mut cache, &mut composer);
+        let card = composer_rows(composer, &s)[1].y;
+        let line: String = (composer.x..composer.right())
+            .map(|x| buffer[(x, card - 2)].symbol().to_string())
+            .collect();
+        assert!(line.trim_start().starts_with("▸ Queued 5"), "{line}");
+    }
+
+    #[test]
+    fn status_line_shows_activity_elapsed_tokens_and_stop() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let now = crate::live_bar::now_epoch();
+        let mut s = Snapshot::default();
+        s.status = "running".into();
+        s.turn_status = Some(crate::bridge::TurnStatus {
+            activity: "Waiting for response".into(),
+            activity_since: now - 2.0,
+            turn_since: now - 280.0,
+            output_tokens: 121_000,
+            output_estimated: false,
+        });
+        s.queue_items = vec![queue_item("q1", "Q", "composer should remain")];
         let mut cache = Cache::default();
         let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
         let mut composer = Rect::default();
@@ -3511,7 +3352,6 @@ mod editor_layout_tests {
                     false,
                     0,
                     0,
-                    0,
                 )
                 .composer;
             })
@@ -3522,45 +3362,26 @@ mod editor_layout_tests {
                 .map(|x| buffer[(x, y)].symbol().to_string())
                 .collect()
         };
-        let card = composer_rows(composer, &s)[1].y;
-        assert!(
-            text(card - 1).trim().is_empty(),
-            "blank margin between box and card"
-        );
-        let bottom = text(card - 2);
-        assert!(bottom.trim_start().starts_with('╰'), "{bottom}");
-        assert!(text(card - 3).contains("+1 more"));
-        let top = text(card - 8);
-        assert!(top.contains('╭') && top.contains("Sending next"), "{top}");
-        let first = text(card - 7);
-        assert!(
-            first.contains(" S  msg 0") && first.trim_end().ends_with("↑ ↓ ✕ │"),
-            "{first}"
-        );
-        assert!(text(card - 6).contains(" Q  msg 1"));
-        // Each control cell maps back to its message and action.
-        let row = card - 6;
-        let cells: Vec<u16> = (composer.x..composer.right())
-            .filter(|x| ["↑", "↓", "✕"].contains(&buffer[(*x, row)].symbol()))
-            .collect();
-        let hits: Vec<_> = cells
-            .iter()
-            .map(|x| queue_control_at(composer, &s, *x, row))
-            .collect();
-        assert_eq!(
-            hits,
-            [
-                Some(("id1".into(), "up")),
-                Some(("id1".into(), "down")),
-                Some(("id1".into(), "remove"))
-            ]
-        );
-        assert_eq!(queue_control_at(composer, &s, cells[0] + 1, row), None);
-        assert_eq!(
-            queue_control_at(composer, &s, cells[0], card - 3),
-            None,
-            "+N more row"
-        );
+        let layout = above_layout(composer, &s);
+        let status = text(layout.status.unwrap().y);
+        assert!(status.contains("⠋ Waiting for response… 2."), "{status}");
+        assert!(status.trim_end().ends_with("4m40s ↓121k [stop]"), "{status}");
+        assert!(text(layout.status.unwrap().y + 1).trim().is_empty(), "blank row");
+        assert!(text(layout.header.unwrap().y).contains("▾ Queued 1"));
+        assert!(text(layout.items[0].1.y).contains("#1 composer should remain"));
+        let row = layout.status.unwrap();
+        let stop_x = row.right() - 3;
+        assert!(stop_at(composer, &s, stop_x, row.y));
+        assert!(!stop_at(composer, &s, row.x + 3, row.y));
+        assert!(!stop_at(composer, &s, stop_x, row.y + 1));
+        s.turn_status.as_mut().unwrap().output_estimated = true;
+        let (est, _) = status_right(&s, now).unwrap();
+        assert!(est.contains("↓~121k [stop]"), "{est}");
+        s.turn_status = None;
+        assert!(above_layout(composer, &s).status.is_none());
+        assert_eq!(fmt_activity(2.04), "2.0s");
+        assert_eq!(fmt_turn(3725.0), "1h02m");
+        assert_eq!(fmt_tokens(1234), "1.2k");
     }
 
     #[test]
@@ -3592,7 +3413,6 @@ mod editor_layout_tests {
                         false,
                         0,
                         0,
-                        0,
                     )
                     .composer;
                 })
@@ -3610,12 +3430,12 @@ mod editor_layout_tests {
             };
             if !s.attachment_lines.is_empty() {
                 assert!(
-                    line(margin - 1).contains('╰'),
-                    "the queue box sits on the margin"
+                    line(margin - 1).contains("img.png"),
+                    "attachments sit on the margin"
                 );
                 assert!(
-                    line(composer.y).contains("img.png"),
-                    "attachments sit above the box"
+                    line(composer.y).contains("▾ Queued 1"),
+                    "the Queued section sits above the attachments"
                 );
             }
         }
@@ -4018,7 +3838,7 @@ mod redesign_regressions {
                 .draw(|frame| {
                     draw(
                         frame, &s, &draft, &draft, &draft, "", 0, scroll, 0, &mut cache, false,
-                        false, false, false, 0, 0, 0,
+                        false, false, false, 0, 0,
                     );
                 })
                 .unwrap();

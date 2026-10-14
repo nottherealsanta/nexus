@@ -700,7 +700,7 @@ async def test_ad_hoc_tools_narrow_and_drops_are_reported(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-async def test_requested_high_tier_is_clamped_and_reported(tmp_path):
+async def test_legacy_max_tier_does_not_cap_root_subagents(tmp_path):
     provider = ScriptedProvider(
         tool_response(
             (
@@ -717,7 +717,7 @@ async def test_requested_high_tier_is_clamped_and_reported(tmp_path):
     events = await drain(session)
 
     assert events[-1].type == "turn.completed"
-    assert "agent.clamped" in [e.type for e in events]
+    assert "agent.clamped" not in [e.type for e in events]
     result = tool_result_for(session, "t1")
     assert result is not None and result.is_error is False
     await runtime.aclose()

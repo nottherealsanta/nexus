@@ -53,8 +53,10 @@ class ModelRouter:
         fallback: Sequence[str] | None = None,
         registry: Any | None = None,
         tiers: Any | None = None,
+        tier_efforts: Mapping[str, Mapping[str, str]] | None = None,
     ) -> None:
         self._providers = dict(providers)
+        self._tier_efforts = {tier: dict(efforts) for tier, efforts in (tier_efforts or {}).items()}
         self._aliases = dict(aliases or {})
         if default is not None and (
             not isinstance(default, str) or not default.strip()
@@ -72,6 +74,11 @@ class ModelRouter:
         #: no concrete registry and the model layer stays acyclic.
         self._registry = registry
         self._tiers = tiers
+
+    def set_tiers(self, tiers: Any | None, *, tier_efforts: Mapping[str, Mapping[str, str]] | None = None) -> None:
+        """Swap the tier table and per-tier efforts in place (a tier-only reload)."""
+        self._tiers = tiers
+        self._tier_efforts = {tier: dict(efforts) for tier, efforts in (tier_efforts or {}).items()}
 
     # -- introspection -----------------------------------------------------
 
@@ -277,9 +284,13 @@ class ModelRouter:
         if (
             request.metadata.get("reasoning_effort_explicit")
             or not isinstance(tier, str)
-            or tier not in DEFAULT_TIER_MODELS
-            or self._tier_pinned(tier)
         ):
+            return request.params.reasoning_effort
+        reference = f"{candidate.provider.name}/{candidate.model}"
+        selected = self._tier_efforts.get(tier, {}).get(reference)
+        if selected is not None:
+            return selected
+        if tier not in DEFAULT_TIER_MODELS or self._tier_pinned(tier):
             return request.params.reasoning_effort
         return DEFAULT_TIER_EFFORTS.get(
             (tier, f"{candidate.provider.name}/{candidate.model}")

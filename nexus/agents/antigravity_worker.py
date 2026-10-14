@@ -111,7 +111,7 @@ SCHEMA: dict[str, Any] = {
 }
 MAX_TOOLS_LISTED = 200
 MAX_SUBAGENTS = 20
-_MODES = {"accept-edits": "accept-edits", "acceptEdits": "accept-edits", "plan": "plan"}
+_MODES = {"auto": "auto", "accept-edits": "accept-edits", "acceptEdits": "accept-edits", "plan": "plan"}
 _MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}")
 _VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
 #: Event types that mean agy is asking for something Nexus will never answer.
@@ -149,7 +149,7 @@ class WorkerConfig:
 
     executable: str = "agy"
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
-    permission_mode: str = "accept-edits"
+    permission_mode: str = "auto"
     tools: tuple[str, ...] | None = None
     allowed_tools: tuple[str, ...] = ()
     disallowed_tools: tuple[str, ...] = ()
@@ -182,7 +182,7 @@ class WorkerConfig:
         return cls(
             executable=getattr(section, "executable", None) or "agy",
             timeout_seconds=DEFAULT_TIMEOUT_SECONDS if timeout is None else timeout,
-            permission_mode=getattr(section, "worker_permission_mode", None) or "accept-edits",
+            permission_mode=getattr(section, "worker_permission_mode", None) or "auto",
             tools=listed("worker_tools"),
             allowed_tools=listed("worker_allowed_tools") or (),
             disallowed_tools=listed("worker_disallowed_tools") or (),
@@ -230,7 +230,7 @@ def resolve_policy(config: WorkerConfig, *, read_only: bool) -> WorkerPolicy:
             "(--mode plan) is not verified to prevent writes and Nexus cannot restrict agy's tools")
     mode = _MODES.get(config.permission_mode)
     if mode is None:
-        raise ConfigError("antigravity worker_permission_mode must be accept-edits or plan "
+        raise ConfigError("antigravity worker_permission_mode must be auto, accept-edits or plan "
                           f"(got {config.permission_mode!r}); bypass and other modes are never passed")
     unsupported = []
     if config.tools is not None:
@@ -611,7 +611,7 @@ class AntigravityWorker:
             raise ProviderError("antigravity worker requires POSIX process groups")
         if self._config.worker_inherits_agy_settings is not True or policy.read_only or policy.tools is not None \
                 or policy.mcp_config or policy.allowed_tools or policy.disallowed_tools or policy.restricted \
-                or policy.setting_sources or policy.permission_mode not in ("accept-edits", "plan"):
+                or policy.setting_sources or policy.permission_mode not in ("auto", "accept-edits", "plan"):
             raise ConfigError("antigravity policy is not one resolve_policy() would produce; refusing to start")
         if not _MODEL_RE.fullmatch(model or ""):
             raise ConfigError("antigravity requires an exact model ID from `agy models`")

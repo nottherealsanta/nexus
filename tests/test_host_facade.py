@@ -218,7 +218,7 @@ class _FakeTiers:
 
 class _FakeRegistry:
     def list(self, *, provider=None, tier=None, selectable_only=False, search=None):
-        return [{"id": "m", "provider": provider or "p", "tier": tier}]
+        return [SimpleNamespace(id="m", provider=provider or "p", tier=tier)]
 
     def get(self, ref):
         if ref == "p/m":
@@ -256,6 +256,13 @@ class _FakeRuntime:
 
     async def ensure_started(self):
         self.started = True
+
+    def _load_config(self):
+        # Model listing resolves provider kinds from config; none configured.
+        return None
+
+    def _adapter_kind(self, name, section):
+        return None
 
     def session(self, session_id, *, create=True, recover=True):
         return self.sessions.open(session_id)
@@ -314,6 +321,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.ProviderLoginCancel(login_id="l"),
         p.ProviderKeySet(provider="opencode-go", key="sk-test-key"),
         p.ProviderLogout(provider="codex"),
+        p.ProviderModelsRefresh(provider="antigravity"),
         p.ProviderLoginCode(login_id="l", code="abc#state"),
         p.ProvidersUsage(),
         p.SessionArchive(session="s"),
@@ -336,6 +344,8 @@ def test_protocol_round_trips_every_command_and_result():
         p.SessionFork(session="s", at_seq=2, new_id="c"),
         p.SessionDelete(session="s", force=True),
         p.SessionRestore(trash_id="t"),
+        p.SessionDashboardPreview(session_id="s", max_rows=5),
+        p.SessionRename(session_id="s", title="New name"),
         p.SessionExport(session="s", format="markdown"),
         p.PermissionResolve(session="s", request_id="r", decision="allow_once"),
         p.QuestionAnswer(session="s", answer="1", call_id="c"),
@@ -423,6 +433,7 @@ def test_protocol_round_trips_every_command_and_result():
         p.ProvidersStatusResult(providers=[{"id": "codex", "connected": False}]),
         p.ProviderLoginResult(login_id="l", provider="codex", url="https://auth.openai.com/x", user_code="AB-12"),
         p.ProviderAuthResult(provider="opencode-go", connected=True),
+        p.ProviderModelsRefreshResult(provider="antigravity", count=2, refreshed_at=1.0),
         p.ProvidersUsageResult(providers=[{"id": "codex", "windows": [{"label": "5-hour", "used_percent": 41.0}]}],
                                not_connected=["OpenCode Go"], fetched_at=1.0),
         p.SessionListResult(sessions=[summary]),
@@ -446,6 +457,12 @@ def test_protocol_round_trips_every_command_and_result():
         p.SessionForkResult(session=summary),
         p.SessionDeleteResult(session="s", trash_id="t", delete_after=2.0),
         p.SessionRestoreResult(session="s"),
+        p.SessionDashboardPreviewResult(
+            session="s", state="needs_input", context_fraction=0.5,
+            rows=[p.PreviewRow(kind="user", text="hi")],
+            pending=[p.PendingInput(kind="question", id="c", text="ok?", options=["a"])],
+        ),
+        p.SessionRenameResult(session=summary),
         p.SessionExportResult(session="s", format="json", content="{}"),
         p.PermissionResolveResult(session="s", request_id="r", resolved=True),
         p.QuestionAnswerResult(session="s", call_id="c", resolved=True),
@@ -1235,7 +1252,7 @@ async def test_facade_disconnect_then_reconnect_catches_up(tmp_path):
 
 async def test_facade_first_approval_from_two_views(tmp_path):
     provider = ScriptedProvider(
-        tool_response(("c1", "Write", {"path": "b.txt", "content": "B"})),
+        tool_response(("c1", "write", {"path": "b.txt", "content": "B"})),
         text_response("done"),
     )
     runtime = _runtime(tmp_path, provider)
@@ -1431,6 +1448,160 @@ async def test_facade_force_delete_then_view_disconnect_no_resurrection(tmp_path
     assert store.read("s").records == records_before_delete
     assert [item.session_id for item in facade.list_trashed()] == ["s"]
     assert runtime.sessions.restore(record.trash_id) == "s"
+    await runtime.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Sessions dashboard: bounded preview, durable rename, busy rows stay put
+# ---------------------------------------------------------------------------
+
+
+async def test_dashboard_preview_is_bounded_and_redacted(tmp_path):
+    reply = "\n".join(f"reply line {n} password=hunter2" for n in range(40))
+    runtime = _runtime(tmp_path, ScriptedProvider(text_response(reply)))
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+    await facade.start_turn("s", "first line api_key=sk-abcdef1234567890abcd\n" + "x" * 5000 + "\nthird\nfourth")
+    await facade.wait_idle(timeout=5.0)
+
+    result = await facade.handle(p.SessionDashboardPreview(session_id="s"))
+    assert isinstance(result, p.SessionDashboardPreviewResult)
+    assert result.session == "s" and result.state == "idle" and result.last_seq > 0
+    assert 0 < len(result.rows) <= 12
+    assert [r.kind for r in result.rows].count("user") <= 2
+    assert [r.kind for r in result.rows].count("assistant") <= 6
+    assert all(len(r.text) <= 200 and "\n" not in r.text for r in result.rows)
+    joined = "\n".join(r.text for r in result.rows)
+    assert "hunter2" not in joined and "sk-abcdef1234567890abcd" not in joined
+    assert "reply line 0" in joined and result.truncated
+    assert result.pending == []
+    assert "first line" in result.last_user and "sk-abcdef1234567890abcd" not in result.last_user
+    assert "reply line 0" in result.last_agent and "hunter2" not in result.last_agent
+    assert result.activity == ""
+
+    small = await facade.handle(p.SessionDashboardPreview(session_id="s", max_rows=3))
+    assert len(small.rows) == 3 and small.truncated
+    for bad in (0, 51, True):
+        error = await facade.handle(p.SessionDashboardPreview(session_id="s", max_rows=bad))
+        assert isinstance(error, p.ErrorResult)
+    missing = await facade.handle(p.SessionDashboardPreview(session_id="nope"))
+    assert isinstance(missing, p.ErrorResult)
+    # A read-only projection: it must not have created or touched another session.
+    assert [s.id for s in facade.list_sessions()] == ["s"]
+    await runtime.aclose()
+
+
+async def test_dashboard_preview_reports_pending_approval_as_needs_input(tmp_path):
+    provider = ScriptedProvider(
+        tool_response(("c1", "write", {"path": "b.txt", "content": "B"})),
+        text_response("done"),
+    )
+    runtime = _runtime(tmp_path, provider)
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+    viewer = facade.subscribe("s", 0, follow=True, client_id="dashboard")
+    await viewer.__anext__()
+    await facade.start_turn("s", "go")
+    handle = runtime.session("s")
+    await wait_for(lambda: handle.pending_permissions)
+    request_id = handle.pending_permissions[0]
+
+    result = await facade.handle(p.SessionDashboardPreview(session_id="s"))
+    assert result.state == "needs_input"
+    assert [(i.kind, i.id) for i in result.pending] == [("permission", request_id)]
+
+    facade.resolve_permission("s", request_id, Decision.ALLOW_ONCE, client_id="a")
+    await facade.wait_idle(timeout=5.0)
+    assert (await facade.handle(p.SessionDashboardPreview(session_id="s"))).state == "idle"
+    await viewer.aclose()
+    await runtime.aclose()
+
+
+async def test_session_rename_persists_across_reopen_and_beats_auto_title(tmp_path):
+    runtime = _runtime(tmp_path, ScriptedProvider(text_response("ok")))
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+    await facade.start_turn("s", "derived title")
+    await facade.wait_idle(timeout=5.0)
+    assert runtime.sessions.title_source("s") == "first_message"
+
+    result = await facade.handle(p.SessionRename(session_id="s", title="  My\n  renamed\tsession  "))
+    assert isinstance(result, p.SessionRenameResult)
+    assert result.session.title == "My renamed session"
+    assert runtime.sessions.title_source("s") == "user"
+    # Auto-titling can no longer replace it, and a later user rename can.
+    assert runtime.sessions.set_auto_title("s", "Model title") is False
+    again = await facade.handle(p.SessionRename(session_id="s", title="Second"))
+    assert again.session.title == "Second"
+    await facade.handle(p.SessionRename(session_id="s", title="x" * 500))
+    assert len(runtime.sessions.summary("s").title) == 100
+    await facade.handle(p.SessionRename(session_id="s", title="Final"))
+    await runtime.aclose()
+
+    reopened = _runtime(tmp_path, ScriptedProvider(text_response("ok")))
+    summary = reopened.sessions.summary("s")
+    assert summary.title == "Final"
+    assert reopened.sessions.title_source("s") == "user"
+    assert [s.title for s in reopened.sessions.list()] == ["Final"]
+    await reopened.aclose()
+
+
+async def test_session_rename_rejects_empty_and_unknown(tmp_path):
+    runtime = _runtime(tmp_path, ScriptedProvider(text_response("ok")))
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+    await facade.start_turn("s", "hello")
+    await facade.wait_idle(timeout=5.0)
+    for title in ("", "   \n\t "):
+        assert isinstance(await facade.handle(p.SessionRename(session_id="s", title=title)), p.ErrorResult)
+    assert isinstance(await facade.handle(p.SessionRename(session_id="nope", title="x")), p.ErrorResult)
+    assert runtime.sessions.summary("s").title == "hello"
+    await runtime.aclose()
+
+
+async def test_working_and_needs_input_sessions_refuse_delete_and_archive(tmp_path):
+    provider = ScriptedProvider(
+        tool_response(("c1", "write", {"path": "b.txt", "content": "B"})),
+        text_response("done"),
+    )
+    runtime = _runtime(tmp_path, provider)
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+    viewer = facade.subscribe("s", 0, follow=True, client_id="dashboard")
+    await viewer.__anext__()
+    await facade.start_turn("s", "go")
+    handle = runtime.session("s")
+    await wait_for(lambda: handle.pending_permissions)  # needs input (working too)
+
+    for command in (p.SessionDelete(session="s"), p.SessionDelete(session="s", force=True), p.SessionArchive(session="s")):
+        refused = await facade.handle(command)
+        assert isinstance(refused, p.ErrorResult) and refused.kind == "SessionBusy"
+    assert runtime.sessions.exists("s")
+    assert not runtime.sessions.archived()
+
+    facade.resolve_permission("s", handle.pending_permissions[0], Decision.ALLOW_ONCE, client_id="a")
+    await facade.wait_idle(timeout=5.0)
+    await viewer.aclose()
+    # Force may detach a lingering subscription once idle, but never cancels work.
+    assert isinstance(await facade.handle(p.SessionDelete(session="s", force=True)), p.SessionDeleteResult)
+    await runtime.aclose()
+
+
+async def test_working_session_refuses_delete_while_a_turn_streams(tmp_path):
+    gate = asyncio.Event()
+    provider = ScriptedProvider(
+        [MessageStart(model="m", provider="scripted"), TextDelta(text="busy"), Wait(gate), MessageStop(stop_reason="stop")]
+    )
+    runtime = _runtime(tmp_path, provider)
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+    await facade.start_turn("s", "go")
+    await wait_for(lambda: runtime.session("s").active)
+    assert (await facade.handle(p.SessionDashboardPreview(session_id="s"))).state == "working"
+    refused = await facade.handle(p.SessionDelete(session="s"))
+    assert isinstance(refused, p.ErrorResult) and refused.kind == "SessionBusy"
+    gate.set()
+    await facade.wait_idle(timeout=5.0)
     await runtime.aclose()
 
 
@@ -1712,3 +1883,44 @@ async def test_facade_shutdown_persists_live_ended_before_sessions_close(tmp_pat
     assert await facade.shutdown("bye") is True
     ended = [e for e in handle.events if e.type == "live.ended"]
     assert len(ended) == 1 and ended[0].data["reason"] == "daemon_shutdown"
+
+
+async def test_dashboard_preview_pending_question_is_redacted_bounded_and_needs_input(tmp_path):
+    runtime = _runtime(tmp_path, ScriptedProvider(
+        tool_response(("q1", "question", {
+            "question": "Choose password=hunter2\x1b\u202e " + "q" * 400,
+            "options": ["api_key=sk-abcdef1234567890abcd\x1b " + "x" * 40, "No"],
+        })),
+        text_response("done"),
+    ))
+    facade = HostFacade(runtime)
+    facade.open_session("s")
+    viewer = facade.subscribe("s", 0, follow=True, client_id="dashboard")
+    await viewer.__anext__()
+    await facade.start_turn("s", "go")
+    await wait_for(lambda: runtime.questions.pending_for("s"))
+    result = await facade.handle(p.SessionDashboardPreview(session_id="s"))
+    assert isinstance(result, p.SessionDashboardPreviewResult)
+    assert result.state == "needs_input"
+    assert result.pending[0].kind == "question"
+    assert result.pending[0].id == "q1"
+    import unicodedata
+    strings = [result.pending[0].text, *result.pending[0].options, *(r.text for r in result.rows)]
+    assert all(len(value) <= 200 for value in strings)
+    assert all(not any(unicodedata.category(c).startswith("C") for c in value) for value in strings)
+    assert "hunter2" not in str(result) and "sk-abcdef1234567890abcd" not in str(result)
+    assert (await facade.handle(p.QuestionAnswer(session="s", call_id="q1", answer="2"))).resolved is True
+    await facade.wait_idle(timeout=5.0)
+    assert facade.dashboard_preview("s").state == "idle"
+    await viewer.aclose()
+    await runtime.aclose()
+
+
+def test_dashboard_display_strings_are_redacted_control_free_and_bounded():
+    from nexus.host_support.session_preview import clean_preview_text
+    import unicodedata
+
+    value = clean_preview_text("password=hunter2\n\t\x1b\u202e" + "x" * 500)
+    assert len(value) <= 200
+    assert "hunter2" not in value
+    assert not any(unicodedata.category(c).startswith("C") for c in value)

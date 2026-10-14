@@ -31,7 +31,7 @@ run: the child is a normal Nexus `run_turn` child whose router includes an Agent
 built one, else one the child builds and closes itself). Claude's built-in tools
 are off there; it uses the child's Nexus tools under Nexus permissions and
 `PathGuard`, usage is measured, and the routing guards below (inheritance,
-worktree) do not apply. Enabling `sdk` does not make Claude Code a main model.
+worktree) do not apply. Enabling `sdk` does not make Claude Code a main model; main-agent routes still require `claude_code_main_enabled = true`. Worker-backed Claude Code is omitted from main model choices but available from child model/tier pickers even when the main toggle is off. Antigravity appears only in subagent model choices, including the native model dropdown.
 
 **Tiers.** A `[models.tiers]` entry may name a `claude-code/<model>` route
 (`low = ["claude-code/claude-haiku-5-5", ...]`). For **children only**,
@@ -180,7 +180,7 @@ usage URL. Event shapes live in `antigravity_worker.SCHEMA` so a real run can
 correct them in one place.
 
 **Launch.** `agy --input-format stream-json --output-format stream-json --model <id>
---mode <accept-edits|plan> --print-timeout <n>s` with `cwd` = the assigned
+--mode <auto|accept-edits|plan> --print-timeout <n>s` with `cwd` = the assigned
 workspace. There is no `-p` prompt and the prompt is never on argv: it is written to
 stdin as one stream-json user event (`{"event":"user","message":{"content":...}}`,
 64 KiB cap, refused rather than truncated, role instructions as a labelled prefix
@@ -315,12 +315,16 @@ authority its parent lacks:
 1. **Tools intersect:** `parent ∩ role ∩ requested`; dropped names are reported back.
 2. **Permissions inherit:** the parent's snapshot and session grants pass through
    unchanged; `deny` stays absolute.
-3. **Tier is bounded** by the role's `tiers` (when it declares them) and capped at
-   `agents.max_tier` (default `high`); either move emits `agent.clamped` with a
-   `reason` (`role` or `max_tier`). A role with **no** `tiers` keeps the older
-   rule: a bare tier hint labels the spawn but does not replace the role's model,
-   and with no role model the child inherits the parent's. Saving an agent
-   definition applies to the next child call, even mid-turn.
+3. **Tiers select subagent routes only.** The root's model/price does not cap
+   its subagents. The highest-tier setting is removed; legacy `agents.max_tier`
+   is accepted for config compatibility but ignored by runtime wiring. Role
+   `tiers` restrictions and nested-parent tier bounds remain, with clamping
+   reported. An explicit tier selects its ordered model list even for a role
+   without `tiers`; only an omitted/inherited model inherits the parent's model.
+   The tool description lists every tier's provider/model IDs in order and
+   instructs the caller to call the next model if a provider/model fails (passing
+   along the failure and partial work). This instruction does not bypass tool
+   permission checks or cause unsafe partial-stream replay.
 4. **Budgets:** a shared `SubagentBudget` bounds depth (`max_depth` 3), concurrency
    (`max_concurrent` 4), fan-out (`max_fanout` 16) and aggregate tokens/cost
    (`token_budget`, `cost_budget`) across the whole tree.
@@ -351,7 +355,7 @@ Which tier a child runs on (first match wins; `TierDecision` in `runner.py`):
 A tier outside the list moves to the **nearest allowed tier** (ties go to the
 cheaper one) instead of failing, because a hint should never break delegation;
 the report says so (`quick runs on low only; requested 'high' ran on 'low'`). The
-global `max_tier` is applied last. A tier with no runnable model falls through to
+nested-parent tier bound is applied last (there is no global ceiling). A tier with no runnable model falls through to
 the role's other tiers, then to the parent's model. A tier is only run as a tier
 when the router has a registry (a plain config has none, so the child inherits
 the parent's model). The permission key uses the final tier, so
@@ -489,3 +493,10 @@ matching targets. The search/call proxies are included when a target survives
 the intersection; search results and preparation enforce that same ceiling.
 Children inherit the root session's frozen modes. Read-only roles strip mutating
 targets, and proxy execution cannot turn a deferred name into new authority.
+
+Antigravity defaults to `--mode auto` (the installed CLI advertises this mode);
+explicit `worker_permission_mode` still overrides it. Auto is not a sandbox or
+read-only enforcement: read-only roles/tool selections remain refused. A
+pre-start refusal durably records `selected_model` separately from
+`resolved_model`, and shows the selected provider/model as **not started** plus
+the redacted configuration/policy error, never a claim that the model ran.

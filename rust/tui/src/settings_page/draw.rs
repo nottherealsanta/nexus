@@ -2,19 +2,18 @@
 //! flow into an off-screen buffer (`scrolled`), so focus, hit rectangles and scrolling
 //! share one geometry. Nothing the host sent is dropped: long text wraps, and clipped
 //! lists announce `… N more`.
+use super::grok::{self, Flow};
 use super::input::PageState;
 use super::model::*;
 use crate::render::{toasts, Palette};
 use nexus_widgets::{
-    button_view, callout, controls::TOGGLE_W, feedback::progress, key_hints, lists::*, put,
-    put_right, scrolled, segmented, segmented_view, segmented_width, select_popup, select_view,
-    setting_row, stepper_view, stepper_width, table, tabs, toggle_view, truncate, width, Button,
-    ButtonKind, Glyphs, Tab, Theme, Ui, SCOPE_W,
+    callout, feedback::progress, key_hints, put, scrolled, select_popup, tabs, truncate, width,
+    Glyphs, Tab, Theme, Ui,
 };
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Modifier, Style},
+    style::Style,
     Frame,
 };
 use unicode_segmentation::UnicodeSegmentation;
@@ -58,242 +57,23 @@ pub fn wrap(text: &str, width_: usize, max_lines: usize) -> Vec<String> {
     lines
 }
 
-struct Flow {
-    x: u16,
-    w: u16,
-    y: u16,
-}
-impl Flow {
-    fn rect(&mut self, h: u16) -> Rect {
-        let r = Rect::new(self.x, self.y, self.w, h);
-        self.y += h;
-        r
-    }
-}
-
 struct Ctx<'a> {
     edit: Option<(String, nexus_widgets::TextState)>,
     sections: &'a std::collections::HashMap<String, bool>,
     tables: usize,
 }
 
-fn control_width(c: &Control) -> u16 {
-    match c {
-        Control::Toggle { .. } => TOGGLE_W,
-        Control::Segmented { options, .. } => {
-            segmented_width(&options.iter().map(String::as_str).collect::<Vec<_>>())
-        }
-        Control::Select { options, value, .. } => {
-            let longest = options
-                .iter()
-                .map(|(l, _)| width(l))
-                .chain(std::iter::once(width(value)))
-                .max()
-                .unwrap_or(8);
-            (longest as u16 + 6).clamp(14, 34)
-        }
-        Control::Stepper { display, .. } => stepper_width(display),
-        Control::Text { .. } => 30,
-        Control::Button(b) => nexus_widgets::button_width(&b.label),
-        Control::Readout(v) => (width(v) as u16).clamp(1, 40),
-    }
-}
-
-fn kind_of(v: &str) -> ButtonKind {
-    match v {
-        "primary" => ButtonKind::Primary,
-        "danger" => ButtonKind::Danger,
-        "ghost" => ButtonKind::Ghost,
-        _ => ButtonKind::Secondary,
-    }
-}
-
-fn draw_row(buf: &mut Buffer, ui: &mut Ui, f: &mut Flow, r: &Row, cx: &Ctx) {
-    let rid = row_id(&r.id);
-    let cw = control_width(&r.control);
-    let rect = f.rect(setting_row_height(
-        f.w,
-        &r.label,
-        &r.description,
-        &r.scope,
-        cw,
-    ));
-    let editing = cx
-        .edit
-        .as_ref()
-        .filter(|(id, _)| *id == rid)
-        .map(|(_, t)| t.clone());
-    setting_row(
-        buf,
-        ui,
-        rect,
-        &rid,
-        &r.label,
-        &r.description,
-        &r.scope,
-        cw,
-        |b, ui, c, focused| {
-            let x = c.x + c.width - cw.min(c.width);
-            match &r.control {
-                Control::Toggle { on, locked, .. } => {
-                    toggle_view(b, ui, x, c.y, *on, !locked.is_empty(), focused)
-                }
-                Control::Segmented {
-                    options, active, ..
-                } => {
-                    let opts: Vec<&str> = options.iter().map(String::as_str).collect();
-                    segmented_view(
-                        b,
-                        ui,
-                        x,
-                        c.y,
-                        &rid,
-                        &opts,
-                        *active,
-                        focused.then_some(*active),
-                    );
-                }
-                Control::Select { value, .. } => {
-                    select_view(b, ui, x, c.y, cw.min(c.width), value, focused, 0.0);
-                    ui.hits.add(
-                        Rect::new(x, c.y, cw.min(c.width), 1),
-                        &rid,
-                        nexus_widgets::hit::Part::Named("control".into()),
-                    );
-                }
-                Control::Stepper { display, .. } => {
-                    stepper_view(b, ui, x, c.y, &rid, display, focused)
-                }
-                Control::Text {
-                    value,
-                    secret,
-                    placeholder,
-                    ..
-                } => {
-                    let t = ui.theme;
-                    let w = cw.min(c.width);
-                    let bg = if focused || editing.is_some() {
-                        t.element_hi
-                    } else {
-                        t.element
-                    };
-                    let st = Style::default().fg(t.text).bg(bg);
-                    nexus_widgets::fill(b, Rect::new(x, c.y, w, 1), st);
-                    let shown = match &editing {
-                        Some(e) if *secret => "•".repeat(e.value.graphemes(true).count()),
-                        Some(e) => e.value.clone(),
-                        None if value.is_empty() => String::new(),
-                        None if *secret => "•".repeat(value.graphemes(true).count().min(24)),
-                        None => value.clone(),
-                    };
-                    if shown.is_empty() && editing.is_none() {
-                        put(
-                            b,
-                            x + 1,
-                            c.y,
-                            &truncate(
-                                placeholder,
-                                w.saturating_sub(2) as usize,
-                                ui.glyphs.ellipsis,
-                            ),
-                            t.dim().bg(bg),
-                            w.saturating_sub(2),
-                        );
-                    } else {
-                        put(
-                            b,
-                            x + 1,
-                            c.y,
-                            &truncate(&shown, w.saturating_sub(2) as usize, ui.glyphs.ellipsis),
-                            st,
-                            w.saturating_sub(2),
-                        );
-                    }
-                    if let Some(e) = &editing {
-                        let cur = x + 1 + (e.cursor as u16).min(w.saturating_sub(3));
-                        b[(cur, c.y)].set_style(st.add_modifier(Modifier::REVERSED));
-                    }
-                    ui.hits.add(
-                        Rect::new(x, c.y, w, 1),
-                        &rid,
-                        nexus_widgets::hit::Part::Named("control".into()),
-                    );
-                }
-                Control::Button(btn) => {
-                    let kind = kind_of(&btn.variant);
-                    button_view(
-                        b,
-                        ui,
-                        x,
-                        c.y,
-                        &Button::new(&rid, &btn.label, kind),
-                        focused,
-                        0.0,
-                    );
-                }
-                Control::Readout(v) => {
-                    put(
-                        b,
-                        x,
-                        c.y,
-                        &truncate(v, c.width as usize, ui.glyphs.ellipsis),
-                        ui.theme.dim(),
-                        c.width,
-                    );
-                }
-            }
-        },
-    );
-    if !r.error.is_empty() {
-        let e = f.rect(1);
-        put(
-            buf,
-            e.x + 4,
-            e.y,
-            &truncate(&format!("! {}", r.error), e.w_minus(5), ui.glyphs.ellipsis),
-            Style::default().fg(ui.theme.error),
-            e.width,
-        );
-    }
-}
-
-trait WMinus {
-    fn w_minus(&self, n: u16) -> usize;
-}
-impl WMinus for Rect {
-    fn w_minus(&self, n: u16) -> usize {
-        self.width.saturating_sub(n) as usize
-    }
-}
-
 fn draw_blocks(buf: &mut Buffer, ui: &mut Ui, f: &mut Flow, blocks: &[Block], cx: &mut Ctx) {
-    let t = ui.theme;
     for block in blocks {
         match block {
-            Block::Heading(text) => {
-                put(
-                    buf,
-                    f.x,
-                    f.y,
-                    text,
-                    t.strong(Style::default().fg(t.muted).add_modifier(Modifier::BOLD)),
-                    f.w,
-                );
-                f.y += 1;
-            }
-            Block::Note { text, tone } => {
-                let st = match tone.as_str() {
-                    "warning" => Style::default().fg(t.warning),
-                    "error" => Style::default().fg(t.error),
-                    _ => t.dim(),
-                };
-                for line in wrap(text, f.w.saturating_sub(2) as usize, 4) {
-                    put(buf, f.x + 2, f.y, &line, st, f.w.saturating_sub(2));
-                    f.y += 1;
-                }
-            }
+            Block::Heading(text) => grok::heading(buf, ui, f, text),
+            Block::Note { text, tone } => grok::note(buf, ui, f, text, tone),
             Block::Gap => f.y += 1,
-            Block::Row(r) => draw_row(buf, ui, f, r, cx),
+            Block::Row(r) => {
+                let rid = row_id(&r.id);
+                let editing = cx.edit.as_ref().filter(|(id, _)| *id == rid).map(|(_, t)| t);
+                grok::row(buf, ui, f, r, editing);
+            }
             Block::Tabs(tb) => {
                 let items: Vec<Tab> = tb
                     .items
@@ -303,58 +83,11 @@ fn draw_blocks(buf: &mut Buffer, ui: &mut Ui, f: &mut Flow, blocks: &[Block], cx
                 let rect = f.rect(2);
                 tabs(buf, ui, rect, &tabs_id(&tb.id), &items, tb.active);
             }
-            Block::Ordered(o) => {
-                let items: Vec<OrderedItem> = o
-                    .items
-                    .iter()
-                    .map(|i| OrderedItem {
-                        label: &i.label,
-                        tag: &i.tag,
-                        note: &i.note,
-                    })
-                    .collect();
-                let rect = f.rect(ordered_list_height(items.len(), f.w));
-                let add = if o.editable { o.add_label.as_str() } else { "" };
-                ordered_list(
-                    buf,
-                    ui,
-                    rect,
-                    &ord_id(&o.id),
-                    &items,
-                    if add.is_empty() { "Add…" } else { add },
-                );
-            }
-            Block::Buttons(bs) => {
-                let rect = f.rect(1);
-                let mut x = rect.x + 2;
-                if !bs.label.is_empty() {
-                    x += put(buf, x, rect.y, &bs.label, t.dim(), rect.width) + 2;
-                }
-                for (k, item) in bs.items.iter().enumerate() {
-                    let id = btn_id(&bs.id, k);
-                    let b = Button::new(&id, &item.label, kind_of(&item.variant));
-                    x += nexus_widgets::button(buf, ui, x, rect.y, &b).rect.width + 1;
-                }
-            }
+            Block::Ordered(o) => grok::ordered(buf, ui, f, o),
+            Block::Buttons(bs) => grok::buttons(buf, ui, f, bs),
             Block::Section(sec) => {
                 let open = cx.sections.get(&sec.id).copied().unwrap_or(sec.open);
-                let rect = f.rect(1);
-                let color = match sec.tone.as_str() {
-                    "ok" | "success" => Some(t.success),
-                    "warning" => Some(t.warning),
-                    "error" => Some(t.error),
-                    _ => None,
-                };
-                section(
-                    buf,
-                    ui,
-                    rect,
-                    &sec_id(&sec.id),
-                    &sec.title,
-                    &sec.summary,
-                    color,
-                    open,
-                );
+                grok::section(buf, ui, f, sec, open);
                 if open {
                     draw_blocks(buf, ui, f, &sec.blocks, cx);
                     f.y += 1;
@@ -362,18 +95,7 @@ fn draw_blocks(buf: &mut Buffer, ui: &mut Ui, f: &mut Flow, blocks: &[Block], cx
             }
             Block::Table { cols, rows } => {
                 cx.tables += 1;
-                let c: Vec<(&str, u16)> = cols.iter().map(|(n, w)| (n.as_str(), *w)).collect();
-                let rect = f.rect(rows.len() as u16 + 2);
-                table(
-                    buf,
-                    ui,
-                    rect,
-                    &format!("tbl:{}", cx.tables),
-                    &c,
-                    rows,
-                    usize::MAX,
-                    0,
-                );
+                grok::table(buf, ui, f, &format!("tbl:{}", cx.tables), cols, rows);
             }
             Block::Progress { fraction, label } => {
                 let rect = f.rect(1);
@@ -406,6 +128,66 @@ fn draw_blocks(buf: &mut Buffer, ui: &mut Ui, f: &mut Flow, blocks: &[Block], cx
     }
 }
 
+/// Keys that do something on this page (Grok footer), ending with how to go back.
+fn page_hints(blocks: &[Block]) -> Vec<(&'static str, &'static str)> {
+    #[derive(Default)]
+    struct F {
+        change: bool,
+        toggle: bool,
+        open: bool,
+        reorder: bool,
+        tabs: bool,
+    }
+    fn scan(blocks: &[Block], f: &mut F) {
+        for b in blocks {
+            match b {
+                Block::Row(r) => row(r, f),
+                Block::Tabs(_) => f.tabs = true,
+                Block::Ordered(o) => {
+                    f.open = true;
+                    f.reorder |= o.editable;
+                    o.controls.iter().for_each(|r| row(r, f));
+                }
+                Block::Buttons(_) | Block::Callout { action: Some(_), .. } => f.open = true,
+                Block::Section(sec) => {
+                    f.open |= sec.collapsible;
+                    scan(&sec.blocks, f);
+                }
+                _ => {}
+            }
+        }
+    }
+    fn row(r: &Row, f: &mut F) {
+        match &r.control {
+            Control::Toggle { .. } => f.toggle = true,
+            Control::Segmented { .. } | Control::Stepper { .. } => f.change = true,
+            Control::Select { .. } | Control::Text { .. } | Control::Button(_) => f.open = true,
+            Control::Readout(_) => {}
+        }
+    }
+    let mut f = F::default();
+    scan(blocks, &mut f);
+    let mut out = vec![("↑/↓", "nav")];
+    if f.change {
+        out.push(("←/→", "change"));
+    }
+    if f.toggle {
+        out.push(("Space", "toggle"));
+    }
+    if f.open {
+        out.push(("Enter", "open"));
+    }
+    if f.reorder {
+        out.push(("Alt+↑/↓", "reorder"));
+        out.push(("Del", "remove"));
+    }
+    if f.tabs {
+        out.push(("Ctrl+PgUp/PgDn", "tab"));
+    }
+    out.push(("←/Esc", "back"));
+    out
+}
+
 /// Draw `page` into `area`. Focus, focus order and hit rectangles are written back to `st`.
 pub fn draw(
     frame: &mut Frame,
@@ -416,45 +198,46 @@ pub fn draw(
     light: bool,
 ) {
     st.reset_for(&page.area);
-    let theme: Theme = toasts::theme(p, light);
-    let glyphs = Glyphs::from_env();
+    let mut theme: Theme = toasts::theme(p, light);
+    // Grok row grammar: the focused row is the `element` fill with bold text, no accent bar.
+    theme.focus_bg = p.element;
+    let mut glyphs = Glyphs::from_env();
+    glyphs.focus_bar = " ";
     let mut ui = Ui::new(&theme, &glyphs);
     if !st.focus.is_empty() {
         ui.focus.set(&st.focus);
     }
     ui.begin_frame();
+    if st.popup.is_none() && st.edit.is_none() {
+        if let Some(id) = &st.hover {
+            ui.hover.insert(id.clone(), 1.0);
+        }
+    }
     let buf = frame.buffer_mut();
     let t = &theme;
-    // Header: title (and scope on pages that can differ per project), then the intro.
-    put(
-        buf,
-        area.x + 2,
-        area.y,
-        &page.title,
-        Style::default().fg(t.text).add_modifier(Modifier::BOLD),
-        area.width.saturating_sub(4),
-    );
+    // Header: the page title lives in the modal frame (`Settings › Area`); only the scope
+    // switch (pages that can differ per project) and the intro are drawn here.
     if let Some(sc) = &page.scope {
-        let opts: Vec<&str> = sc.options.iter().map(String::as_str).collect();
-        let w = segmented_width(&opts);
-        let x = area.x + area.width.saturating_sub(w + 2);
-        put(buf, x.saturating_sub(7), area.y, "Scope", t.dim(), 6);
-        segmented(buf, &mut ui, x, area.y, "scope", &opts, sc.value);
+        let (w, x) = (0, 0);
+        let _ = (w, x);
+        grok::scope(buf, &mut ui, area, sc);
     }
-    let mut y = area.y + 1;
+    let mut y = area.y + u16::from(page.scope.is_some());
     for line in wrap(&page.intro, area.width.saturating_sub(5) as usize, 2) {
         put(
             buf,
-            area.x + 2,
+            area.x,
             y,
             &line,
-            t.dim(),
-            area.width.saturating_sub(4),
+            t.quiet_style(),
+            area.width,
         );
         y += 1;
     }
     y += 1;
-    let footer_h = 2u16;
+    // Footer: the saved-where line, then only the keys that work on this page.
+    let hint_rows = crate::settings_page::root::hint_lines(&page_hints(&page.blocks), area.width as usize, p);
+    let footer_h = 1 + hint_rows.len() as u16;
     let body = Rect::new(
         area.x,
         y,
@@ -470,8 +253,8 @@ pub fn draw(
     let blocks = &page.blocks;
     scrolled(buf, &mut ui, body, &mut scroll, |b, ui, r| {
         let mut f = Flow {
-            x: 2,
-            w: r.width.saturating_sub(3),
+            x: 0,
+            w: r.width,
             y: 0,
         };
         draw_blocks(b, ui, &mut f, blocks, &mut cx);
@@ -485,6 +268,10 @@ pub fn draw(
         })) = page.find(&popup.id)
         {
             if let Some(anchor) = ui.hits.rect_of_part(&popup.id, "control") {
+                // The value is quiet text now, so widen the anchor to fit the longest option.
+                let longest = options.iter().map(|(l, _)| width(l) as u16).max().unwrap_or(0) + 4;
+                let grow = longest.saturating_sub(anchor.width);
+                let anchor = Rect::new(anchor.x.saturating_sub(grow), anchor.y, anchor.width + grow, anchor.height);
                 let labels: Vec<&str> = options.iter().map(|(l, _)| l.as_str()).collect();
                 let current = options.iter().position(|(l, _)| l == value).unwrap_or(0);
                 select_popup(
@@ -501,35 +288,23 @@ pub fn draw(
             }
         }
     }
-    // Footer: where it is saved, then the keys.
-    put(
-        buf,
-        area.x + 2,
-        area.bottom().saturating_sub(2),
-        &truncate(&page.footer, area.width.saturating_sub(4) as usize, "…"),
-        t.dim(),
-        area.width.saturating_sub(4),
-    );
-    key_hints(
-        buf,
-        &ui,
-        Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1),
-        &[
-            ("↑↓", "move"),
-            ("←→", "change"),
-            ("Space", "toggle"),
-            ("Enter", "open"),
-            ("Alt+↑↓", "reorder"),
-            ("Del", "remove"),
-            ("Esc", "close"),
-        ],
+    grok::tip(buf, &ui, area, area.bottom().saturating_sub(footer_h), &page.footer);
+    let _ = (key_hints, truncate, width);
+    frame.render_widget(
+        ratatui::widgets::Paragraph::new(hint_rows.clone())
+            .style(Style::default().bg(p.dialog)),
+        Rect::new(
+            area.x,
+            area.bottom().saturating_sub(hint_rows.len() as u16),
+            area.width,
+            hint_rows.len() as u16,
+        ),
     );
     ui.end_frame();
     st.focus = ui.focus.current().unwrap_or("").to_string();
     st.order = ui.focus.order().to_vec();
     st.hits = std::mem::take(&mut ui.hits);
-    let _ = (put_right, SCOPE_W);
-}
+    }
 
 #[cfg(test)]
 mod tests {
@@ -560,10 +335,9 @@ mod tests {
         let mut st = PageState::default();
         let screen = render(&page, &mut st, 100, 30);
         for want in [
-            "Models",
             "DEFAULT",
             "Titles",
-            "ON",
+            "on",
             "Effort",
             "Low",
             "High",
@@ -579,6 +353,53 @@ mod tests {
             assert!(screen.contains(want), "{want} missing:\n{screen}");
         }
         assert!(screen.contains("Saved in ~/.nexus/config.toml"), "{screen}");
+    }
+
+    #[test]
+    fn hover_tints_enabled_rows_only_and_stays_distinct_from_focus() {
+        use crate::settings_page::input::hover;
+        let value = serde_json::json!({"area": "x", "blocks": [
+            {"t": "row", "id": "a", "label": "A", "control": {"c": "toggle", "on": true, "locked": "", "operation": {"kind": "a"}}},
+            {"t": "row", "id": "b", "label": "B", "control": {"c": "toggle", "on": true, "locked": "managed", "operation": {"kind": "b"}}},
+            {"t": "row", "id": "c", "label": "C", "control": {"c": "readout", "value": "ro"}}
+        ]});
+        let page = Page::from_value(&value);
+        let mut st = PageState::default();
+        render(&page, &mut st, 80, 20);
+        let at = |st: &PageState, id: &str| {
+            let r = st.hits.rect_of(id).unwrap();
+            (r.x + 3, r.y)
+        };
+        let bg = |st: &mut PageState, id: &str| {
+            let mut t = Terminal::new(TestBackend::new(80, 20)).unwrap();
+            let p = Palette::new(false);
+            t.draw(|f| draw(f, f.area(), &page, st, &p, false)).unwrap();
+            let r = st.hits.rect_of(id).unwrap();
+            t.backend().buffer()[(r.x + 3, r.y)].bg
+        };
+        let (a, b, c) = (at(&st, "row:a"), at(&st, "row:b"), at(&st, "row:c"));
+        assert_eq!(st.focus, "row:a");
+        let focused = bg(&mut st, "row:b");
+        let idle = bg(&mut st, "row:b");
+        assert_eq!(focused, idle);
+        assert!(hover(&page, &mut st, Some(b)) == false, "locked row never hovers");
+        assert!(!hover(&page, &mut st, Some(c)), "read-only row never hovers");
+        assert!(hover(&page, &mut st, Some(a)));
+        assert!(!hover(&page, &mut st, Some(a)), "unchanged target is not a redraw");
+        st.focus = "row:b".into();
+        let hovered_unfocused = bg(&mut st, "row:a");
+        st.hover = None;
+        let plain = bg(&mut st, "row:a");
+        assert_ne!(hovered_unfocused, plain, "hover changes the row");
+        assert_ne!(hovered_unfocused, bg(&mut st, "row:b"), "hover differs from focus");
+        // A popup/edit invalidates hover, and leaving the page clears it.
+        hover(&page, &mut st, Some(a));
+        st.edit = Some(crate::settings_page::input::Edit { id: "row:a".into(), text: Default::default() });
+        assert!(hover(&page, &mut st, Some(a)));
+        assert!(st.hover.is_none());
+        st.edit = None;
+        hover(&page, &mut st, Some(a));
+        assert!(hover(&page, &mut st, None));
     }
 
     #[test]
@@ -603,6 +424,50 @@ mod tests {
             "the first stop holds focus until the user moves it"
         );
         assert!(st.hits.rect_of("row:eff").is_some());
+    }
+
+    #[test]
+    fn inline_effort_is_left_of_arrows_and_models_are_two_rows_at_any_width() {
+        let value = serde_json::json!({"area": "models", "blocks": [{
+            "t": "ordered", "id": "tier:low", "items": [
+                ["antigravity/gemini-3.1-flash-high", "in use", "subagents only"],
+                ["codex/gpt-6-luna", "fallback", ""]
+            ], "controls": [
+                {"t": "row", "id": "effort:0", "control": {"c": "select", "value": "Default", "options": [["Default", null], ["High", "high"]], "operation": {"kind": "effort"}}},
+                {"t": "row", "id": "effort:1", "control": {"c": "select", "value": "High", "options": [["High", "high"]], "operation": {"kind": "effort"}}}
+            ], "operation": {"kind": "tier"}
+        }]});
+        let page = Page::from_value(&value);
+        for width in [60, 100, 150] {
+            let mut st = PageState::default();
+            st.focus = "ord:tier:low:0".into();
+            render(&page, &mut st, width, 24); // the first draw of an area resets state
+            st.focus = "ord:tier:low:0".into();
+            render(&page, &mut st, width, 24);
+            let first = st.hits.rect_of("ord:tier:low:0").unwrap();
+            let second = st.hits.rect_of("ord:tier:low:1").unwrap();
+            let effort = st.hits.rect_of("row:effort:0").unwrap();
+            let screen = render(&page, &mut st, width, 24);
+            assert_eq!(first.height, 1);
+            assert_eq!(second.y - first.y, 2, "the selected row's note takes a line");
+            assert_eq!(effort.y, first.y);
+            assert_eq!(effort.right(), first.right() - 11);
+            assert!(st.hits.rect_of("row:effort:1").is_none(), "effort shows on the selected row only");
+            assert!(screen.contains("Default"));
+            st.focus = "row:effort:0".into();
+            assert_eq!(crate::settings_page::input::key(&page, &mut st,
+                crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Enter, crossterm::event::KeyModifiers::NONE)), crate::settings_page::input::Act::Done);
+            assert!(render(&page, &mut st, width, 24).contains("High"));
+            st.popup = None;
+            render(&page, &mut st, width, 24);
+            assert_eq!(crate::settings_page::input::click(&page, &mut st, effort.x, effort.y), crate::settings_page::input::Act::Done);
+            assert_eq!(st.popup.as_ref().unwrap().id, "row:effort:0");
+            crate::settings_page::input::key(&page, &mut st,
+                crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Down, crossterm::event::KeyModifiers::NONE));
+            assert_eq!(crate::settings_page::input::key(&page, &mut st,
+                crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Enter, crossterm::event::KeyModifiers::NONE)),
+                crate::settings_page::input::Act::Send(serde_json::json!({"kind": "effort", "value": "high"})));
+        }
     }
 
     #[test]

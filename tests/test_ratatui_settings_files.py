@@ -107,7 +107,7 @@ async def test_mcp_shows_global_then_project_servers_with_state_switch_and_loadi
     assert shell.workflows.settings_page["scope"] is None
     top = shell.workflows.settings_page["blocks"]
     headings = [b["text"] for b in top if b.get("t") == "heading"]
-    assert headings[0] == "GLOBAL · ~/.nexus/mcp.json" and "PROJECT · <workspace>/.agents/mcp.json" in headings
+    assert headings[0] == "Global · ~/.nexus/mcp.json" and "Project · <workspace>/.agents/mcp.json" in headings
     assert [b["title"] for b in top if b.get("t") == "section"] == ["github", "postgres", "bad"]
     assert any(b.get("t") == "callout" and b["level"] == "warning" for b in top)
     sections = {b["title"]: b for b in top if b.get("t") == "section"}

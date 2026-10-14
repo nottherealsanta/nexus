@@ -393,6 +393,9 @@ class SubagentOutcome:
         """The model-facing disclosure of the actual model beside its tier."""
         tier = self.tier or "unknown"
         if not self.models:
+            selected = self.metrics.get("selected_model")
+            if selected:
+                return f"[selected route: {selected} (not started); model: none started; tier: {tier}]"
             return (
                 f"[model: unavailable (not reported); tier: {tier} "
                 "is a routing label, not a model]"
@@ -418,6 +421,7 @@ class SubagentOutcome:
             "requested_tier": self.requested_tier,
             "actual_model": self.actual_model,
             "actual_models": list(self.models),
+            **({"selected_model": self.metrics["selected_model"]} if self.metrics.get("selected_model") else {}),
             "error": self.error,
             "worktree": dict(self.worktree) if self.worktree is not None else None,
             "files_changed": list(self.files_changed),
@@ -1062,6 +1066,7 @@ class SubagentRunner:
         runtime_supports_workspace: bool = False,
         worktree_scope: bool = False,
         tier_probe: Callable[[str], bool] | None = None,
+        tier_candidates: Callable[[str], Sequence[str]] | None = None,
     ) -> None:
         if not callable(runtime_factory):
             raise SubagentError("runtime_factory must be callable")
@@ -1107,6 +1112,7 @@ class SubagentRunner:
         #: Says whether a tier currently resolves to a runnable model. Absent
         #: (tests, static wiring) every tier is assumed runnable.
         self._tier_probe = tier_probe
+        self._tier_candidates = tier_candidates
         self._sessions: SessionFacade = (
             sessions if sessions is not None else DefaultSessionFacade(
                 segment=child_session_segment
@@ -1169,7 +1175,19 @@ class SubagentRunner:
             agent.name for agent in self._agents.agents if agent.eligible_in("subagent")
         }
         entries = tuple(entry for entry in self._agents.index if entry.name in eligible)
-        return AgentIndex(entries=entries).render(max_chars=max_chars)
+        lines = []
+        models = getattr(getattr(getattr(self._config, "v2", None), "models", None), "tier_efforts", {})
+        for tier in self._tiers.order:
+            refs = self._tier_candidates(tier) if self._tier_candidates else [ref for ref, name in {**self._tiers.builtin, **self._tiers.overrides}.items() if name == tier]
+            selections = models.get(tier, {})
+            listed = ", ".join(ref + (f" (effort: {selections[ref]})" if ref in selections else "") for ref in refs)
+            lines.append(f"{tier} models (in order): {listed or 'none configured'}")
+        roster = AgentIndex(entries=entries).render(max_chars=max_chars)
+        rendered = "\n".join(lines) + "\n\n" + roster
+        if len(rendered) > max_chars:
+            marker = "\n[Subagent roster and tier models clipped]"
+            return rendered[:max(0, max_chars - len(marker))] + marker[:max_chars]
+        return rendered
 
     @property
     def budget(self) -> SubagentBudget:
@@ -1519,10 +1537,8 @@ class SubagentRunner:
         tier = resolution.tier
         reference = self.role_model_reference(req)
         child_model = self._child_model(reference, resolution)
-        # With no concrete model pinned by the request or the role, the child
-        # runs the root's model. A bare tier hint still gates and labels the
-        # spawn, but it never swaps the model: routing a tier picks the first
-        # catalogue entry, which may not be usable with the parent's account.
+        # An explicit tier routes through its ordered subagent model list.
+        # Only an inherited/omitted model uses the parent's concrete model.
         if decision.allowed:
             child_model = self._tiered_child_model(role, req, reference, decision)
         elif (
@@ -1530,7 +1546,6 @@ class SubagentRunner:
             and (
                 req.model is None
                 or req.model == MODEL_INHERIT
-                or req.model in self._tiers.order
             )
             and (not role.model or role.model == MODEL_INHERIT)
         ):
@@ -1696,7 +1711,10 @@ class SubagentRunner:
                 requested_model=req.model,
                 parent_model=self._parent_model,
                 provider=child_provider,
-                reasoning_effort=role.reasoning_effort,
+                reasoning_effort=role.reasoning_effort or getattr(
+                    getattr(getattr(self._config, "v2", None), "models", None),
+                    "tier_efforts", {},
+                ).get(tier, {}).get(child_model),
                 fallback=tuple(role.fallback),
                 tier=tier,
                 requested_tier=(
@@ -1771,7 +1789,8 @@ class SubagentRunner:
                     f"{'was refused' if isinstance(exc, _WorktreeRefusal) else 'failed to start'}: "
                     f"{type(exc).__name__}: {_safe(exc)}"
                 ),
-                error=type(exc).__name__,
+                error=_safe(f"{type(exc).__name__}: {exc}") if isinstance(exc, NexusError) else type(exc).__name__,
+                metrics={"selected_model": _safe(getattr(exc, "selected_model", ""))},
                 dropped_tools=dropped,
                 clamped=clamped,
                 tier=tier,
@@ -1947,6 +1966,7 @@ class SubagentRunner:
                 "stop_reason": outcome.stop_reason,
                 "dropped_tools": list(outcome.dropped_tools),
                 "clamped": outcome.clamped,
+                **({"selected_model": outcome.metrics["selected_model"]} if outcome.metrics.get("selected_model") else {}),
                 **(
                     {"resolved_model": outcome.actual_model}
                     if outcome.actual_model

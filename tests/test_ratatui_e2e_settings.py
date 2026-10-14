@@ -181,52 +181,59 @@ def ordered_rows(screen: str):
 
 
 def test_opening_models_shows_the_page_from_the_real_host(app):
-    open_settings(app, b"\x1b5", "DEFAULT MODEL")  # Alt+5: Models
+    open_settings(app, b"\x1b5", "Default Model")  # Alt+5: Models
     screen = app.redraw()
-    for want in ["TIERS", "Low", "Medium", "High", "SESSION TITLES", "Name new sessions"]:
+    for want in ["Subagent Tiers", "Low", "Session Titles", "Name new sessions"]:
         assert want in screen, f"{want!r} missing:\n{screen}"
     assert "attribute" not in screen and "Error" not in screen, "no error toast"
 
 
-def test_a_tier_tab_changes_the_tier_through_the_real_bridge(app):
-    """The reported bug: the tier tabs did nothing, because the bridge dropped the operation the client sent."""
-    open_settings(app, b"\x1b5", "DEFAULT MODEL")
-    before = ordered_rows(app.redraw())
-    assert before, "the Low tier lists its models"
-    app.key(b"\x1b[6;5~", 1.2)  # Ctrl+PageDown: next tier, from anywhere on the page
-    after = ordered_rows(app.redraw())
-    assert after[:2] != before[:2], f"the tier tab did nothing:\n{before}\n{after}"
-    app.key(b"\x1b[5;5~", 1.2)  # Ctrl+PageUp: back to Low
-    assert ordered_rows(app.redraw())[:2] == before[:2], "and back again"
+def test_all_tiers_are_reachable_by_scrolling_through_the_real_bridge(app):
+    open_settings(app, b"\x1b5", "Default Model")
+    seen = app.redraw()
+    assert "Low" in seen
+    for _ in range(60):
+        app.key(b"\x1b[<65;80;22M", .03)
+        seen += app.redraw()
+    assert "Medium" in seen and "High" in seen
+    assert "Default" in seen and "Highest tier for subagents" not in seen
+
+
+def _toggles(screen):
+    import re
+    rows = [line for line in screen.splitlines() if "▸ " in line]
+    on = sum(bool(re.search(r"▸ .*\bon +[│┃]", line)) for line in rows)
+    off = sum(bool(re.search(r"▸ .*\boff +[│┃]", line)) for line in rows)
+    return on, off
 
 
 def test_a_toggle_saves_through_the_real_bridge_and_the_page_shows_it(app):
     open_settings(app, b"\x1b2", "Show context header")  # Alt+2: Layout
     first = app.redraw()
-    assert first.count("■ ON") == 3 and first.count("OFF□") == 1  # Centered conversation is off by default
-    app.key(b" ", 1.0)  # Space on the first row: Sessions sidebar off
+    assert _toggles(first) == (2, 1)  # Centered conversation is off by default
+    app.key(b" ", 1.0)  # Space on the first row: Details sidebar off
     after = app.redraw()
-    assert after.count("■ ON") == 2 and after.count("OFF□") == 2, "the host applied it and rebuilt the page"
+    assert _toggles(after) == (1, 2), "the host applied it and rebuilt the page"
 
 
 def test_the_wheel_scrolls_the_keyboard_page_past_its_second_section(app):
     """The reported bug: scrolling stopped before the third section, as every frame snapped back to the focused row."""
-    open_settings(app, b"\x1b3", "SHORTCUTS")  # Alt+3: Keyboard
+    open_settings(app, b"\x1b3", "Shortcuts")  # Alt+3: Keyboard
     top = app.redraw()
-    assert "IN LISTS AND SETTINGS" not in top and "Jump to an area" not in top
+    assert "In Lists and Settings" not in top and "Jump to an area" not in top
     for _ in range(40):
         app.key(b"\x1b[<65;80;22M", .03)  # mouse wheel down over the page
     time.sleep(.5)
     bottom = app.redraw()
-    for want in ["IN LISTS AND SETTINGS", "Jump to an area", "Show this page", "Read-only"]:
+    for want in ["In Lists and Settings", "Jump to an area", "Show this page", "Read-only"]:
         assert want in bottom, f"{want!r} missing after scrolling:\n{bottom}"
     for _ in range(80):
         app.key(b"\x1b[<64;80;22M", .02)  # and back up
-    assert "SHORTCUTS" in app.redraw()
+    assert "Shortcuts" in app.redraw()
 
 
 def test_the_keyboard_page_also_scrolls_with_the_arrow_keys(app):
-    open_settings(app, b"\x1b3", "SHORTCUTS")
+    open_settings(app, b"\x1b3", "Shortcuts")
     app.key(b"\x1b[C", .2)  # Right: focus moves from the area list into the page
     for _ in range(90):
         app.key(b"\x1b[B", .02)

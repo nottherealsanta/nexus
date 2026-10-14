@@ -323,6 +323,9 @@ async def providers_status(runtime: object) -> dict[str, Any]:
             extra = {"cli_present": view.get("cli_present") is True, "auth_verified": view.get("auth_verified") is True,
                      "scope": "subagents", "capabilities": ["subagent"]}
             detail = redact_secrets(str(view.get("message") or ""))[:240]
+            probe = getattr(runtime, "provider_models_info", None)
+            if callable(probe):
+                extra["models_probe"] = probe(provider)
         active = next((login for login in logins.values()
                        if login.provider == provider and login.status == "pending"), None)
         rows.append({
@@ -527,10 +530,28 @@ async def dispatch_providers(
         return p.ProviderAuthResult(**await provider_key_set(runtime, command.provider, command.key, idle))
     if isinstance(command, p.ProviderLogout):
         return p.ProviderAuthResult(**await provider_logout(runtime, command.provider))
+    if isinstance(command, p.ProviderModelsRefresh):
+        return p.ProviderModelsRefreshResult(**await provider_models_refresh(runtime, command.provider))
     return None
 
 
+async def provider_models_refresh(runtime: object, provider: str) -> dict[str, Any]:
+    """Re-probe a provider's own model list (Antigravity ``agy models`` only), on demand."""
+    if provider != "antigravity":
+        raise ConfigError(f"{provider!r} has no separate model list to refresh")
+    refresher = getattr(runtime, "refresh_provider_models", None)
+    if not callable(refresher):
+        raise ConfigError("model discovery is not available")
+    info = await refresher(provider)
+    count, error = int(info.get("count", 0)), str(info.get("error") or "")
+    message = (f"agy models failed: {error}" if error and not count else
+               f"{count} models from agy" + (f" (kept the last good list; refresh failed: {error})" if error else ""))
+    return {"provider": provider, "count": count, "refreshed_at": float(info.get("refreshed_at") or 0.0),
+            "error": error, "message": message}
+
+
 __all__ = [
+    "provider_models_refresh",
     "OPENCODE_GO_BASE_URL",
     "PROVIDERS",
     "connected",

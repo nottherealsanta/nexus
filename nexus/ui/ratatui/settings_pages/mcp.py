@@ -97,7 +97,7 @@ async def build(workflows) -> dict:
         inventory = await workflows.client.settings_inventory(scope)
         root = roots[scope] = inventory.root_display
         path = f"{root}/mcp.json"
-        blocks.append(sp.heading(f"{scope.upper()} · {path}"))
+        blocks.append(sp.heading(f"{scope.capitalize()} · {path}"))
         if scope == "project" and servers and all(str(r.get("source_path") or "").startswith(".nexus") for r in servers):
             blocks.append(sp.note("Read from the legacy .nexus/mcp.json (read-only fallback). Saving writes .agents/mcp.json."))
         for problem in problems:

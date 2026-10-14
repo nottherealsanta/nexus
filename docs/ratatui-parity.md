@@ -1,8 +1,9 @@
 # Ratatui implementation and parity ledger
 
-On Settings → Providers, Antigravity CLI entries expose **Re-check models** even
-when the CLI is not currently detected; it refreshes the model catalogue without
-starting sign-in. The page notes that Antigravity owns its CLI sign-in. Subagent
+On Settings → Providers, Antigravity CLI entries expose **Refresh models** even
+when the CLI is not currently detected; it re-runs `agy models` (command
+`ProviderModelsRefresh`, separate from the models.dev `ModelsRefresh`) without
+starting sign-in, and the section shows the cached count, last-refreshed time or error. The page notes that Antigravity owns its CLI sign-in. Subagent
 model tier entries are labeled as subagent-only, and are skipped for titles and
 other jobs.
 
@@ -203,8 +204,18 @@ A blank background row always sits directly above the card as a margin; queued
 messages and the attachment line get their own rows above that margin.
 
 `nexus chat` launches the most recently modified native executable among the one
-beside the interpreter, `rust/tui/target/{release,debug}` and `PATH`, so a fresh
-`cargo build` is used on the next launch; `NEXUS_TUI_BINARY` overrides this.
+beside the interpreter, `rust/tui/target/release` and `PATH`, so a fresh
+`cargo build --release` is used on the next launch. The unoptimized
+`rust/tui/target/debug` build is used only when none of those exist (it idled at
+high CPU); run it explicitly with `NEXUS_TUI_BINARY`, which overrides discovery.
+
+Idle cost: the client polls input every 50 ms when nothing is dirty or animating
+(8 ms otherwise; input wakes it at once), and the 3 s Python poll sends a new
+snapshot only when the polled data (sessions, archive label, MCP/doctor result,
+update notice, notice, preview) changed or voice, logs or dictation are live.
+The periodic doctor is cheap because `host_support/doctor.py` caches the SQLite
+`quick_check` and the session-tail scan per store for 10 minutes, so a doctor
+report (including `/doctor`) may show those two results up to 10 minutes old.
 
 Launch order: `nexus chat` starts the native client first (`ui/ratatui/run.py:spawn`), then
 connects to the daemon. Until the first snapshot arrives the client draws a splash (the word
@@ -296,6 +307,32 @@ Verification includes native editor/schema/layout tests, Python workflow and
 live/replay tests, a controlling-PTY submit/permission/form/quit/restoration
 check, and the offline suite (4,841 passed, 312 skipped, four timing-sensitive
 checks excluded). These counts describe the checked revision, not later changes.
+
+Grok Build TUI redesign acceptance run (supersedes the count above for the current
+tree): full offline suite 6264 passed, 335 skipped, 6 deselected (489.58 s); Rust
+`rust/tui` 394 passed, 2 ignored, plus 14 integration tests; release rebuild
+succeeded (8.42 s; rebuilt at 8.43 s after the final production changes). Latest
+Rust results: `rust/tui` 396 passed, 2 ignored, plus 16 integration tests;
+`rust/widgets` all passed; `design-mockups` 20 passed; `ruff check nexus tests`
+passed. The full offline suite ran before the last pure-Rust and dashboard changes
+(no Python production code changed since). A 24-capture screenshot matrix
+(dashboard, groups, mermaid, context × 50/90/140 columns × dark/light,
+`NEXUS_ASCII=1`, with paired text dumps and `.geometry.json` sidecars) was
+regenerated after a geometry fix and **all 24 PNGs were pixel-reviewed** for fit,
+contrast, right edge and footer. They are Rust → PTY → xterm captures at the PTY's
+own dimensions, not genuine OS screenshots. The web check
+(`tests/playwright_web_check.py`) **failed** twice, timing out in the archive
+sidebar check (line 762); a likely unrelated latent web `archivedCount` race is
+suspected from a static audit but not proven, and it is unresolved, so there is no
+all-green claim. Before/after timings against an archived clean `HEAD`
+(3 alternating paired runs, same harness; the current tree carries unrelated dirty
+changes, so not isolated attribution) gave median p95 draw 0.678 → 0.722 ms,
+key 17.392 → 17.544 ms, wheel 17.507 → 17.423 ms, snapshot 17.931 → 17.502 ms, and
+0.00% idle CPU in all six 1 s samples. Cold-startup max was about 2 s in every run,
+so no absolute max < 50 ms claim; streaming CPU medians (6.89% vs 6.56%) are noisy.
+The fixture exercises old warm static blocks, not the animate-only idle scenario, so
+idle-animation acceptance is not proven. See
+`plans/in-progress/GROK_BUILD_TUI_PLAN.md`.
 
 `PYTHONPATH=. python tests/playwright_ratatui_check.py` captures native terminal
 screens with deterministic events, draft input and narrow resizing through a
@@ -433,34 +470,8 @@ sends that file's diff lines (`ui_support/details.diff_preview_lines`, headers
 removed, 60 lines then a clipping notice); Rust colours `+`/`-`/`@@` rows. The
 sidebar scrolls with the wheel. Keyboard expansion is not implemented yet.
 
-The sessions sidebar (40 columns, `render::SESSIONS_WIDTH`) shows the title row
-(`▌ Sessions` … `+`), then **project chips** pinned under it: `All` and every project
-in the list, each in its color, wrapped onto at most three rows (the rest folds into
-a `+N more` chip), and a rule. Below scroll `SESSIONS N`, `project · day` headings and
-**one row per session**: a status glyph (spinner while working, `●` needs input, `·`
-otherwise) and the title. Each heading colors the project name with a stable
-per-project hue (`project_color`, hashed from the project path) and the day in cyan;
-session rows carry `project`, `day`, `repo` and `worktree` beside `group` for this.
-Message counts and ages are not shown per row (the heading's day dates the group).
-The current session has a left bar and bold text. An `Archived · N` row under the
-list (counted by the poll, `+` when more than 200) opens the archived sessions menu.
-
-**Worktrees** group with their repository. The host marks rows whose workspace is a
-linked Git worktree with `repo` (the main checkout) and `worktree` (its branch); the
-project key is `repo`, else the workspace. So a repository and its worktrees share
-one chip (`nexus +2wt` counts the worktrees with sessions), one color and one
-filter. Within each day the main checkout's sessions come first, then each worktree
-under its own heading `nexus › feat/x · Today` (the branch muted). Opening a session
-still targets its worktree workspace.
-
-Clicking a chip, or a group heading, shows only that project's sessions (`SESSIONS
-n of m · project`; headings then drop the project name, keeping `› branch` and the
-day); clicking the heading again, or `All`, shows every project. The `/ Filter
-sessions` box on the last row (click it; type; Enter keeps, Escape clears) matches
-title, id, workspace, project, branch or heading within the picked project. The
-picked project is client state and falls back to all projects when it leaves the
-list. The sidebar avoids symbol glyphs that terminals draw from fallback fonts
-(`☰`, `⌕`, `⎇`), which can spill into the next cell; it uses `▌` and plain text.
+The earlier left sessions sidebar (project chips, worktree grouping, filter) no longer
+exists; see "Grok chrome" below. Worktree and project data stay on the dashboard rows.
 Per-session delete is not in the native sidebar (use the right-click session
 actions).
 
@@ -542,12 +553,31 @@ The workspace/status row no longer repeats the details-sidebar toggle beside
 subagent row has a blank row above and below and shows only its latest tool call.
 Settings pages show each area's help line (`ui_support/settings_help.py`, shared with
 terminal); Appearance and Layout use labels and end with `Reset to default`.
-Settings has two-pane shape: a left list of areas (GENERAL: Appearance,
-Layout, Keyboard; CONFIGURE: Providers, Models, Session titles, Voice, Speech, Agents,
-Tools, MCP servers, Skills) beside the current page, with notes wrapped in full above
-the list. Workspace, Config, Soul and Hooks are hidden for now. Left moves focus to the
-area list (`▶` marker), Up/Down there switch areas, Right returns to the page; a click
-also switches. Settings stays open for every operation except an explicit close
+Settings is a Grok-style modal (GROK_TUI_PLAN WS-C): `min(120, width-8)` by `height-4`,
+centred over the dimmed backdrop. The root view is one scrolling list (`settings_page/root.rs`,
+no left area column): a `/ to search` field (`/` focuses it, typing filters labels and
+descriptions, Esc clears then closes), section headers (`General`, `Configure`), the two
+local appearance toggles (Animate activity, Monochrome; Alt+A / Alt+M still work) and one
+`▸ Label … ›` drill row per area (Appearance, Layout, Keyboard, Providers, Models, Voice &
+speech, Agents, Tools, MCP servers, Skills). The selected row has the `element` fill and bold
+text and shows its description beneath. Enter, Right or a click on a drill row sends
+`nav_select` and shows that area's page under the title `Settings › Area`; Esc or Left
+returns to the root list with the selection kept. The footer is an italic tip and wrapped
+key hints. Appearance (Theme, which cycles on Enter/←/→) and Layout rows are inlined: the snapshot's
+`settings_overview` carries the rows built by those areas' own builders, so operations are the
+drilled pages' (`sp_appearance`/`sp_layout`) and search filters them too. Keyboard stays a drill row
+with a `N shortcuts` summary. Every row starts with a quiet `▸`; drill rows
+show a summary from the snapshot where cheap (theme, model, agent); Providers shows `2 of 6 connected`
+from `summaries.providers` in the settings overview (`settings_pages.provider_summary`: cached 30 s,
+filled by the Providers page, one `providers_status` refresh capped at 1.5 s when stale, no host change). Framed modals centre over
+the whole window. Drilled pages use the same grammar, drawn centrally by `settings_page/grok.rs`: `Title · sub ───`
+headings (Title Case from the host, never uppercased), `▸ label … value` rows with the `element` fill
+and bold label on the selected row (its description shows only then; the page intro stays), toggles as
+`on`/`off`, selects as `value ›`, segmented controls as `A / B` with the active option bold, buttons as
+link rows (`+ New file` in success green, others quiet with `›`), groups as `▾ Name … status` (green
+connected, red failed, otherwise quiet), numbered model lists whose effort picker and `↑ ↓ ✕` show on the
+selected or hovered row only, and quiet Keyboard tables with a bold keys column. No accent fills; warning
+notes are quiet. The footer is a centred italic `Tip · …` line and the key hints valid on that page plus `←/Esc back`. Settings stays open for every operation except an explicit close
 (`close_panel`, `context_show`); `Workflows.NAV_KEEP` no longer exists. Clicks and
 keys are ignored while a page is loading. Models lists the default model chain and each
 tier in the order the router runs it (`ModelRouter.tier_candidates`), with `in use`,
@@ -597,12 +627,24 @@ The transcript shows a thin scrollbar on its right edge when it overflows, and
 typing returns the view to the live end.
 
 The runtime row's usage meter carries extras (`price ↑ at N` for tiered
-models and the live `Thinking · …` summary). Pending steering, queued and
-interrupt messages sit in a rounded `Sending next` box directly above the composer
-margin (on the rail's columns). Each row starts with an `S`, `Q` or `I` badge and
-ends with `↑ ↓ ✕` controls (move up, move down, remove, by durable `queued_id`
-through `SessionQueueMove`/`SessionQueueRemove`); four rows show, then `+N more`.
-The composer grows to fit the box; attachments sit above it. A newer release is announced
+models and the live `Thinking · …` summary). While a turn runs, one status line sits above the
+composer (`render.rs::above_layout`): `⠋ Waiting for response… 2.0s` on the left
+(agent-coloured spinner, activity, time in that activity) and `4m40s ↓121k [stop]`
+right-aligned (turn time, output tokens when known, `[stop]`). The fields come from
+`turn_status` in the snapshot (`ui/ratatui/turn_status.py`, epoch seconds from
+durable event timestamps; the client computes elapsed against its own clock and
+redraws at the spinner rate). Output tokens are live: usage lands per model call, so while text or
+thinking streams the count is `~` chars/4 of this turn's streamed text+thinking (`output_estimated`),
+shown only while it exceeds usage, and exact again once usage catches up. Activities: Waiting for response, Thinking, Running
+`tool`, Writing, Waiting for permission/answer. Clicking `[stop]` sends the same
+`cancel` action as Esc Esc and Ctrl+C. The transcript draws no second working row.
+Pending steering, queued and interrupt messages form Grok's unboxed section under it
+after one blank row: `▾ Queued N`, then `#n text` rows (`#n` quiet, accent for steer;
+four rows, then `+N more`). The hovered row shows `↑ ↓ ✕` at the right (move up,
+move down, remove, by durable `queued_id` through `SessionQueueMove`/
+`SessionQueueRemove`); a click on the caret or label collapses to `▸ Queued N`
+(client-local, kept across snapshots). One blank row separates the section from the
+card. The composer grows to fit the box; attachments sit above it. A newer release is announced
 once as an info toast that expires on its own (`UpdateStatus(announce=True)`;
 the host records the announced version in `~/.nexus/cache/update-announced.json`,
 so restarts do not repeat it); the footer never shows it, and `/update` still names
@@ -982,35 +1024,39 @@ text stays one click away. Skills and MCP counts are one total of enabled entrie
 projection filters disabled tools out of the inventory instead of listing them).
 Covered by `render/context.rs` tests and `tests/test_ratatui_workflows.py`.
 
-## One sessions surface (2026-10 overhaul, step 3)
+## Grok chrome: palette, backdrop dim, top bar (no left sessions sidebar)
 
-`/session`, `/sessions`, `Ctrl+O`, `Ctrl+B` and `Ctrl+X b` open the same thing: the
-left sessions sidebar, with keyboard focus in it. There is no separate Sessions
-dialog. `/sessions` (no argument) refreshes the list and bumps the snapshot field
-`sessions_request`; the client opens and focuses the sidebar when it sees a new value.
-The client does not wait for that: a submitted `/sessions` or `/session` (no
-argument) and the top-bar toggle open the sidebar locally at once, and the host's
-refresh lands later (the list is also polled every 3 s).
-`/sessions <id>` still switches directly. `Ctrl+B` opens and focuses it; with focus
-already inside it hides it again.
+Plan: `plans/GROK_TUI_PLAN.md` WS-A. The left **Sessions sidebar was removed**
+(drawer, docked column, filter, project chips, `SESSIONS N`, its hit-tests, `F6`
+focus, right-click actions, the `sessions_request` snapshot field and the
+Settings → Layout row). The Sessions dashboard replaces it: `/session`,
+`/sessions`, `Ctrl+O`, `Ctrl+S`, `Ctrl+B` and the top bar's `[Dashboard]` all send
+`/sessions`. The right details sidebar (`Ctrl+L`) stays. The saved
+`sessions_sidebar` preference and snapshot key remain only because the GPUI
+desktop client still reads them; the native TUI ignores them.
 
-With focus: `↑ ↓ Home End PgUp PgDn` move the selection (a raised row with a bar),
-`Enter` opens the session, typing or `/` filters (title, id, workspace, group;
-the first match is selected, and `Enter` while typing opens it), `Esc` clears typed
-filter text and otherwise closes the sidebar, `Ctrl+C` closes it at once (drawer, or
-the docked sidebar's preference, as `Ctrl+B` does), a click elsewhere leaves. Without
-focus, `Esc` in the composer also closes a visible sessions sidebar before it counts
-toward the double-`Esc` cancel. Keys that do not apply (Ctrl
-combinations) still reach the normal handlers.
+Palette: dark is Grok Night (`#141414` page, `#e1e1e1` text, composer `#1c1c1c`,
+element `#242424`), light is Grok Day (`#f5f5f5` page, `#262626` text), the Nexus
+accent kept; `render::Palette::new` and `nexus_widgets::theme::Theme` carry the
+same values.
 
-Below 90 columns the sidebar is a **drawer** (up to 40 columns) over the
-conversation, never a column, and it opens only on request: it is a local flag, not
-the saved `sessions_sidebar` preference (which defaults on), so a narrow window does
-not cover the transcript by itself. Choosing a session or `Esc` closes it.
-Covered by `render.rs` tests (regions, selection, shared filter), `tests/test_ratatui_toasts.py`
-(`/sessions` request) and `tests/test_ratatui_pty_sessions.py` (real PTY, docked and
-drawer). Not done yet: row actions (rename, fork, archive, multi-select) and
-`Load more` paging; they need host commands and are tracked in the plan.
+Modal backdrop: `render::dim_backdrop(frame, &palette)` (`render/dialogs.rs`,
+a port of Grok's `dim_area`; `dim_area(buf, area, bg, factor)` is the cell
+primitive) blends every cell's colours 50 % toward the page background, clears
+modifiers, and sets `DIM` on cells whose colours cannot be blended. `draw` calls
+it once, after the page and before any panel/Settings/picker/inspector or
+permission/question prompt; toasts and the completion popup draw after it and
+stay undimmed. Later modals (the Settings modal) reuse the same helper.
+
+Top bar (`render/chrome.rs::top_layout`, one row): left `Title │ branch ~/path`
+(title bold, branch quiet, path text), right the update notice, `used / window`
+(`72K / 256K`), `‹ i/n ›` (cycle the open sessions, wrapping; hidden with fewer
+than two) and `[Dashboard]`, separated by quiet `│`. Optional pieces drop (notice,
+then arrows, then counter) before the title is squeezed. Draw and hit-testing share
+one layout (`tab_cells`); `‹ ›` send `session_open` for the neighbouring tab,
+`[Dashboard]` sends `/sessions`, and the notice is clickable as before. The row
+under the composer card is now a blank spacer (path and branch live in the top
+bar). Covered by `render/chrome.rs` tests and `tests/test_ratatui_pty_sessions.py`.
 
 ## One-page Settings (2026-10 overhaul, step 4)
 
@@ -1033,8 +1079,8 @@ per-file areas that can differ per project; MCP servers has no scope tab and sho
 `GLOBAL · ~/.nexus/mcp.json` then `PROJECT · <project>/.agents/mcp.json` one after another
 (each: servers as sections of labelled rows, then that scope's file rows); everything else is always
 global and shows no scope. Models holds the default chain, the session-title model,
-the Low/Medium/High **tabs** (each an ordered list: `Alt+↑↓` reorders, `Delete`
-removes, `Add model…` opens the one allowed picker), the subagent ceiling and the
+all subagent tiers **stacked vertically** (each an ordered list: `Alt+↑↓` reorders, `Delete`
+removes, `Add model…` opens the one allowed picker), per-model effort and the
 catalogue. Providers is one section per provider (connected first), with API key,
 sign-in code and device code handled in place in masked fields. Voice and speech are one
 page; downloads always ask first. Agents, Tools, Skills and MCP list their files with
@@ -1203,6 +1249,66 @@ Discovery does not acknowledge inherited settings: worker execution still requir
 `worker_inherits_agy_settings = true` in an explicit provider section.
 
 Providers Settings always includes Antigravity, with manual CLI sign-in: run `agy`
-in your terminal, then **Re-check and refresh models**. CLI presence is not verified
+in your terminal, then **Refresh models** (re-runs `agy models`; the page shows the count and last-refreshed time). CLI presence is not verified
 authentication. Nexus does not run a login subcommand, manage CLI credentials, or
 perform a model turn to discover availability. A missing CLI is reported honestly.
+
+### Subagent tier settings
+
+Models shows every subagent tier sequentially, without tabs or a highest-tier
+control. Each provider/model entry exposes the model's supported efforts plus
+Default; choices persist per model per tier through `ModelTierSet.efforts`.
+The catalogue request uses `scope="subagents"`, so discovered Antigravity IDs
+are available here but remain excluded from main/title pickers. Titles use
+concrete models, not tiers. Subagent tool context lists the ordered IDs in every
+tier and instructs the caller to try the next model after a child route fails.
+
+Tier model entries use two terminal rows at all widths: the provider/model ID
+and inline effort selector are on the first row (selector immediately before
+up/down/remove); route status and diagnostics are on the second. Effort is no
+longer a separate settings row. The ordered block carries bounded per-item
+controls, and the Python bridge validates their choices like other selectors.
+
+Subagent start refusals show the concrete selected route labelled **not
+started**, separate from the model that actually streamed. The durable
+`agent.completed.selected_model` and redacted policy/config error replay into
+the same task link (rather than a bare `ConfigError` / model unavailable).
+Antigravity read-only/tool-selection refusals remain enforced in auto mode.
+# In-progress foundation and projection/host contract
+
+The widget-role foundation currently exposes roles through methods, rather than
+the role constants proposed in the Grok build plan. Projection-side verb grouping
+and tool signals are implemented and have focused Python test coverage. These
+changes are additive and preserve the existing UI/projection contract; they do
+not imply completion of the Ratatui port or PTY verification.
+
+The Sessions dashboard is a full-width status list (Needs input, Working, Idle,
+Done) in the Grok style: `▾ Idle 3 ────` group headers, and each session is two
+rows plus a blank (`◇ Title · branch project … age`, then a muted one-line
+summary). The selected row has the `element` background across the full width, a
+`│` rail and a bold title; hover is the same without the rail. Working rows show
+an animated braille glyph in purple, needs-input rows a warning `◆`. Nothing
+expands inline. Instead the selected (or hovered) session's `Response` box is a
+bordered, square-cornered box directly above the composer at the composer card's
+width: `❯ last user message`, `…` when clipped, the Markdown tail of the last agent
+message (at most half the region), and `Worked for Xs` when the host supplies a
+`worked` field (not projected yet, so usually absent). It updates live from the
+`SessionDashboardPreview` data. Known gap: the host cleans previews to one line, so
+the tail's Markdown block structure is flattened. The composer under the list is
+the existing composer and is not redrawn here. Enter with text sends to the
+selected session. Enter on an empty composer opens that session. `+ New Agent`,
+Open Previous (`/resume`) and Worktree are the header actions. Preview data is
+still the additive `SessionDashboardPreview` contract, distinct from archive
+`SessionPreview`. Keep the user-facing title **Sessions** and `/sessions`.
+The Mermaid module is registered and called from `markdown.rs`, with
+an explicit code-block fallback for unsupported or streaming fences.
+
+Interaction contract (current): a double-click within **300 ms** on the same
+semantic block and operation toggles a tool's disclosure locally; a single click
+only selects the row, and `i` opens the full inspector. An explicit inspector
+propagates to output rows. Local disclosure matches on semantic kind and id and
+ignores presentation metadata. Settings hover uses the actual hit ranges, and
+disabled rows and modals suppress it. The Sessions dashboard invalidates its
+in-flight work when a replacement overlay closes. The 24-capture matrix has had
+pixel review (PTY → xterm captures, not OS screenshots). Still open: the web check
+failure, and timings for a new animate-only idle scenario.

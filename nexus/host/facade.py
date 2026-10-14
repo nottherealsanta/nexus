@@ -56,7 +56,8 @@ from ..host_support.context_preview import (
     safe_text as _worktree_text,
 )
 from ..host_support import model_settings
-from ..host_support.auto_title import AutoTitler
+from ..host_support.auto_title import AutoTitler, set_user_title
+from ..host_support.session_preview import clean_preview_text, project_preview, validate_max_rows
 from ..host_support.user_shell import UserShells
 from ..host_support.doctor import doctor_report
 from ..host_support.update_check import claim_announcement, update_status
@@ -572,6 +573,54 @@ class HostFacade:
         self._managed.discard(session_id)
         return record
 
+    def dashboard_preview(self, session_id: str, max_rows: int = 12) -> p.SessionDashboardPreviewResult:
+        """A bounded, redacted mini transcript of one session, read without opening it.
+
+        Folds the session's own log through the shared reducer (like the archive
+        preview, so it never unarchives or creates a handle) and returns at most
+        ``max_rows`` display lines plus the pending approval/question summary.
+        """
+        max_rows = validate_max_rows(max_rows)
+        summary = self.runtime.sessions.summary(session_id)
+        view = initial_state(summary.id)
+        for event in self.runtime.sessions._consistent_read(summary.id).events():
+            view = apply(view, event)
+        # Live activity precedes the durable turn.started event. Do not create
+        # a handle here: opening one would unarchive this read-only preview.
+        live = session_id in getattr(self.runtime.sessions, "live_sessions", ())
+        active = live and bool(getattr(self.runtime.sessions._live_handle(session_id), "active", False))
+        data = project_preview(
+            view, max_rows=max_rows,
+            active=bool(active or self.supervisor.running_for(session_id)),
+        )
+        head = git_head(getattr(self.runtime, "workspace", None))
+        return p.SessionDashboardPreviewResult(
+            session=clean_preview_text(summary.id),
+            title=clean_preview_text(summary.title),
+            state=data["state"],
+            workspace=clean_preview_text(getattr(self.runtime, "workspace", "")),
+            branch=clean_preview_text(head.get("branch") or head.get("worktree_name")),
+            agent=data["agent"],
+            model=data["model"],
+            context_used=data["context_used"],
+            context_window=data["context_window"],
+            context_fraction=data["context_fraction"],
+            last_seq=data["last_seq"],
+            rows=[p.PreviewRow(**row) for row in data["rows"]],
+            pending=[p.PendingInput(**item) for item in data["pending"]],
+            truncated=data["truncated"],
+            last_user=data.get("last_user", ""),
+            last_agent=data.get("last_agent", ""),
+            activity=data.get("activity", ""),
+            worked=data.get("worked", ""),
+        )
+
+    def rename(self, session_id: str, title: str) -> SessionSummary:
+        """Set a session's title durably as a user title (never replaced by auto-titling)."""
+        set_user_title(self.runtime.sessions, session_id, title)
+        self.titles.cancel(session_id)  # a slower side call must not even try
+        return self.runtime.sessions.summary(session_id)
+
     def restore(self, trash_id: str) -> str:
         """Restore a trashed session; return its session id."""
         return self.runtime.sessions.restore(trash_id)
@@ -993,10 +1042,30 @@ class HostFacade:
         tier: str | None = None,
         selectable_only: bool = False,
         search: str | None = None,
+        scope: str = "all",
     ) -> list[Any]:
+        if scope not in {"main", "subagents", "all"}:
+            raise ValueError("model scope must be 'main', 'subagents', or 'all'")
         registry = self.runtime.registry
         if registry is None:
             return []
+        # Resolve configured aliases for every scope: registry kind may be
+        # absent for a catalogued provider alias (e.g. studio -> agy).
+        config = self.runtime._load_config()
+        claude_worker_backend = False
+        antigravity_sections: set[str] = set()
+        configured_aliases: dict[str, str | None] = {}
+        if config is not None:
+            models = getattr(getattr(config, "v2", None), "models", None)
+            claude_worker_backend = getattr(models, "claude_code_subagent_backend", "worker") == "worker"
+            antigravity_sections = {
+                name for name, section in (getattr(getattr(config, "v2", None), "providers", {}) or {}).items()
+                if self.runtime._adapter_kind(name, section) == "antigravity"
+            }
+            configured_aliases = {
+                name: self.runtime._adapter_kind(name, section)
+                for name, section in (getattr(getattr(config, "v2", None), "providers", {}) or {}).items()
+            }
         rows = list(
             registry.list(
                 provider=provider,
@@ -1005,13 +1074,40 @@ class HostFacade:
                 search=search,
             )
         )
-        enabled = getattr(self.runtime, "claude_code_main_enabled", lambda: False)()
-        if selectable_only and not enabled:
-            rows = [
-                row for row in rows
-                if row.provider != "claude-code"
-                and getattr(registry.provider_status(row.provider), "kind", None) != "claude-code"
-            ]
+        if scope == "subagents" and selectable_only:
+            known = {(row.provider, row.id) for row in rows}
+            for row in registry.list(
+                provider=provider, tier=tier, selectable_only=False, search=search,
+            ):
+                kind = getattr(registry.provider_status(row.provider), "kind", None)
+                kind = kind or configured_aliases.get(row.provider)
+                if (kind == "antigravity" or row.provider in antigravity_sections or
+                        (claude_worker_backend and (row.provider == "claude-code" or kind == "claude-code"))):
+                    if (row.provider, row.id) not in known:
+                        rows.append(row)
+                        known.add((row.provider, row.id))
+        if scope != "all":
+            filtered = []
+            for row in rows:
+                kind = getattr(registry.provider_status(row.provider), "kind", None)
+                kind = kind or configured_aliases.get(row.provider)
+                is_agi = kind == "antigravity"
+                is_claude_code = row.provider == "claude-code" or kind == "claude-code"
+                if scope == "main" and is_agi:
+                    continue
+                if scope == "main" and is_claude_code and not getattr(
+                    self.runtime, "claude_code_main_enabled", lambda: False
+                )():
+                    continue
+                if scope == "main" and is_claude_code and claude_worker_backend:
+                    continue
+                if scope == "subagents":
+                    # Ordinary provider rows remain valid child candidates.
+                    # Permit catalogue-only external routes in addition.
+                    if is_agi and row.provider not in antigravity_sections and kind != "antigravity":
+                        continue
+                filtered.append(row)
+            rows = filtered
         return rows
 
     def _model_row(self, model: Any, *, selectable_only: bool) -> dict[str, Any]:
@@ -1019,9 +1115,18 @@ class HostFacade:
         row = _asdict(model)
         registry = getattr(self.runtime, "_registry", None)
         status = registry.provider_status(model.provider) if registry is not None else None
-        if getattr(status, "kind", None) == "antigravity":
+        config = self.runtime._load_config()
+        section = (getattr(getattr(config, "v2", None), "providers", {}) or {}).get(model.provider)
+        kind = getattr(status, "kind", None) or self.runtime._adapter_kind(model.provider, section)
+        models = getattr(getattr(config, "v2", None), "models", None)
+        if kind == "antigravity":
             row["scope"] = "subagents"
             row["name"] = f"{row.get('name') or model.id} — Subagents only"
+        elif kind == "claude-code" and (
+            getattr(models, "claude_code_subagent_backend", "worker") == "worker"
+            or not getattr(models, "claude_code_main_enabled", False)
+        ):
+            row["scope"] = "subagents"
         if selectable_only:
             query = getattr(self.runtime, "candidate_supported_efforts", None)
             efforts: object = ()
@@ -1470,16 +1575,26 @@ class HostFacade:
             local = {row.id: row for row in self.list_sessions()}
             # Bounded: one .git read per distinct workspace (rows are capped at 1,001).
             trees = {workspace: _worktree_of(workspace) for workspace in {row["workspace"] for row in rows[:1000]}}
-            return p.ProjectSessionsListResult(workspace=str(self.runtime.workspace), sessions=[p.ProjectSession(
-                workspace=row["workspace"], project_id=row["project_id"],
-                repo=trees[row["workspace"]][0], worktree=trees[row["workspace"]][1],
-                session=local[row["id"]] if row["workspace"] == str(self.runtime.workspace) and row["id"] in local else SessionSummary(
-                    id=row["id"], title=row["title"], last_activity=row["last_activity"],
-                    last_seq=row["last_seq"], completion_seq=row["completion_seq"],
-                    message_count=row["message_count"],
-                    created_at=row["created_at"], parent_id=row["parent_id"], fork_seq=row["fork_seq"],
-                ),
-            ) for row in rows[:1000]], truncated=len(rows) > 1000)
+            current = str(self.runtime.workspace)
+            sessions = []
+            for row in rows[:1000]:
+                if row["workspace"] == current and row["id"] in local:
+                    summary = local[row["id"]]
+                else:
+                    summary = SessionSummary(
+                        id=row["id"], title=row["title"], last_activity=row["last_activity"],
+                        last_seq=row["last_seq"], completion_seq=row["completion_seq"],
+                        message_count=row["message_count"],
+                        created_at=row["created_at"], parent_id=row["parent_id"], fork_seq=row["fork_seq"],
+                    )
+                repo, worktree = trees[row["workspace"]]
+                sessions.append(p.ProjectSession(
+                    workspace=row["workspace"], project_id=row["project_id"], session=summary,
+                    repo=repo, worktree=worktree,
+                    last_user=str(row.get("last_user") or "")[:240],
+                    last_agent=str(row.get("last_agent") or "")[:240],
+                ))
+            return p.ProjectSessionsListResult(workspace=current, sessions=sessions, truncated=len(rows) > 1000)
         if isinstance(command, p.ProjectSessionOpen):
             # Only recorded project/session pairs may start another workspace host.
             rows = self.runtime.sessions.store.db.project_sessions(limit=10_000)
@@ -1704,6 +1819,10 @@ class HostFacade:
             )
         if isinstance(command, p.SessionRestore):
             return p.SessionRestoreResult(session=self.restore(command.trash_id))
+        if isinstance(command, p.SessionDashboardPreview):
+            return self.dashboard_preview(command.session_id, command.max_rows)
+        if isinstance(command, p.SessionRename):
+            return p.SessionRenameResult(session=self.rename(command.session_id, command.title))
         if isinstance(command, p.SessionExport):
             return p.SessionExportResult(
                 session=command.session,
@@ -1770,6 +1889,7 @@ class HostFacade:
                 tier=command.tier,
                 selectable_only=command.selectable_only,
                 search=command.search,
+                scope=command.scope,
             )
             return p.ModelsListResult(
                 count=len(models),
@@ -1805,7 +1925,7 @@ class HostFacade:
         if isinstance(command, (p.ModelTierSet, p.ModelTierReset, p.AgentMaxTierSet)):
             idle = not self.supervisor.running
             if isinstance(command, p.ModelTierSet):
-                await model_settings.tier_set(self.runtime, command.tier, list(command.refs), reload=idle)
+                await model_settings.tier_set(self.runtime, command.tier, list(command.refs), efforts=command.efforts, reload=idle)
             elif isinstance(command, p.ModelTierReset):
                 await model_settings.tier_reset(self.runtime, command.tier, reload=idle)
             else:

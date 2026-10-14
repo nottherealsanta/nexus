@@ -44,7 +44,7 @@ errors redact them and any URL userinfo (`util.redact_secrets`).
 | --- | --- |
 | `[agent]` | `name` build, `profile` coding, `instructions_file` SOUL.md, `memory_file` MEMORY.md, `agents_file` AGENTS.md, `max_iterations` 0 (unlimited), `max_turn_seconds` 0 (unlimited), `sandbox` workspace-write |
 | `[model]` | `default`, `fast`, `plan`, `fallback` list, `params` (`temperature`, `max_output_tokens`, `thinking_budget`) |
-| `[models]` | `claude_code_main_enabled` false, `claude_code_subagent_backend` `worker`, `default`/`fast`/`plan`, `refresh_ttl_days` 7, `catalogue_url` (models.dev), `offline` false, `tiers`, `reasoning_efforts`, `fallback` |
+| `[models]` | `claude_code_main_enabled` false, `claude_code_subagent_backend` `worker`, `default`/`fast`/`plan`, `refresh_ttl_days` 7, `catalogue_url` (models.dev), `offline` false, `tiers`, `tier_efforts`, `reasoning_efforts`, `fallback` |
 | `[providers.<name>]` | see [models.md](models.md#providers) |
 | `[context]` | `max_tokens` (unset = model window, 180000 if unknown), `safety_margin_tokens` 4000, `compaction` hybrid, `compact_at_fraction` 0.85, `[context.limits]` memory 8000, agents_md 8000, skills_index 4000, environment 2000, attachments 20000 |
 | `[permissions]` | `mode` allow, `allow`/`ask`/`deny` lists, `write_roots` (`./`), `read_denyroots`, `on_unattended` deny |
@@ -53,7 +53,7 @@ errors redact them and any URL userinfo (`util.redact_secrets`).
 | `[agents]` | `enabled`, `default_type` task, `max_depth` 3, `max_concurrent` 4, `max_fanout` 16, `max_tier` high (the ceiling; each role's own `tiers` narrow it), `token_budget`, `cost_budget`, `seed_roles` |
 | `[hooks]` | `enabled` (hook declarations live in `hooks.toml`, not here) |
 | `[mcp]` | `enabled`, `connect_timeout_s` 20, `restart_max` 5 (servers live in `mcp.json`) |
-| `[session]` / `[sessions]` | `snapshot_every` 20 (`store` is a legacy key kept for old files; storage is always SQLite) / `auto_archive_days` 2 (0 disables, ≤ 3650), `auto_title` true (name new sessions with one small model call), `title_model` `low` (a tier or `provider/model`) |
+| `[session]` / `[sessions]` | `snapshot_every` 20 (`store` is a legacy key kept for old files; storage is always SQLite) / `auto_archive_days` 2 (0 disables, ≤ 3650), `auto_title` true (name new sessions with one small model call), `title_model` `openai/gpt-5-mini` (a concrete `provider/model`) |
 | `[settings]` | `confirm_edits` false |
 | `[telemetry]` | `log_level`, `log_file`, `redact` patterns |
 | `[voice]` | `enabled`, `autoload` false, `model`, pinned `revision`, `device`, `max_seconds` 120, `auto_send` false, `unload_after_minutes` 0 |
@@ -140,7 +140,7 @@ reports. The section cannot be the main, plan, fast, fallback or title model.
 | `~/.nexus/daemon/<hash>.sock` (+ pid, lock, log, http discovery) | one daemon per workspace ([host.md](host.md)); falls back to a private short dir when the path is too long |
 | `~/.nexus/locks/sessions/<project-hash>/` | per-session `flock` files |
 | `~/.nexus/projects/<project-hash>/` | per-project machine state: cache, logs (incl. `logs/mcp/`), `stage/`, extension trash |
-| `~/.nexus/cache/` | shared models.dev cache, `update-check.json` |
+| `~/.nexus/cache/` | shared models.dev cache, `agy-models.json` (last good `agy models` list), `update-check.json` |
 | `~/.nexus/models/voice/` | downloaded dictation model ([voice.md](voice.md)) |
 | `~/.nexus/dev/` | isolated home in dev mode ([devtools.md](devtools.md)) |
 | `<workspace>/nexus.toml` | project config |
@@ -212,3 +212,18 @@ invalid row in Settings and the context header; fix the reported file rather tha
 server count means the file was ignored. Global `~/.nexus/mcp.json` definitions
 are merged with the selected workspace's `.agents/mcp.json` by name (project
 wins); `.nexus/mcp.json` is only a project fallback when `.agents/mcp.json` is absent.
+
+## Subagent tiers and effort
+
+Tiers are for subagents only. `[models.tiers]` lists provider/model IDs in fallback
+order. Optional `[models.tier_efforts.low]` (and other tier names) maps those IDs
+to supported effort strings, e.g. `"openai/gpt-5-mini" = "high"`. Settings edits
+these per-entry selections; Default removes an override. Unsupported efforts
+are refused by the host. Legacy `agents.max_tier` remains parseable but is no
+longer a runtime ceiling or a Settings control. Role restrictions and nested
+parent tier bounds still apply. Session titles default to `openai/gpt-5-mini`;
+legacy tier-valued title settings keep the first-message title until changed.
+
+Antigravity `worker_permission_mode` defaults to `auto`; explicit `accept-edits`
+or `plan` remain supported. The mode does not remove execution acknowledgement,
+read-only/tool restriction checks, or the ban on bypass/always-proceed flags.

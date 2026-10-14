@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import webbrowser
+from datetime import datetime
 
 from ....ui_support import settings_page as sp
 
@@ -30,6 +31,14 @@ def _login_of(workflows, provider):
         workflows.login = login_result(plain_login(kept))
         return workflows.login
     return None
+
+
+def _probe_summary(probe: dict) -> str:
+    """``12 models · refreshed 2026-10-14 09:30`` or the error, labelled and never silent."""
+    count, stamp, error = int(probe.get("count") or 0), float(probe.get("refreshed_at") or 0.0), str(probe.get("error") or "")
+    when = datetime.fromtimestamp(stamp).strftime("%Y-%m-%d %H:%M") if stamp > 0 else "never"
+    text = f"{count} models · refreshed {when}"
+    return f"{text} · last refresh failed: {error}" if error else text
 
 
 def _section(workflows, provider, expand: str) -> dict:
@@ -67,7 +76,11 @@ def _section(workflows, provider, expand: str) -> dict:
         if sign_in:
             blocks.append(sp.buttons(f"{pid}:methods", sign_in, label="Sign in"))
     if "cli" in methods:
-        blocks.append(sp.buttons(f"{pid}:recheck", [("Re-check models", sp.op(AREA, "recheck", provider=pid), "secondary")]))
+        probe = provider.get("models_probe")
+        if isinstance(probe, dict):
+            blocks.append(sp.row(f"{pid}:models", "Models from agy", sp.readout(_probe_summary(probe)),
+                                 description="Cached until you refresh; the model-list refresh in Settings > Models does not re-run agy."))
+        blocks.append(sp.buttons(f"{pid}:refresh-models", [("Refresh models", sp.op(AREA, "refresh_models", provider=pid), "secondary")]))
     if connected and provider.get("can_logout", True) is not False and login is None:
         blocks.append(sp.buttons(f"{pid}:manage", [("Sign out…", sp.op(AREA, "logout_ask", provider=pid, label=label), "danger")], label="Manage"))
     managed = provider.get("cli_present") is True and not connected and login is None  # sign-in is unverifiable, not absent
@@ -97,6 +110,8 @@ async def build(workflows) -> dict:
     if not providers:
         blocks.append(sp.note("The host reports no providers.", "warning"))
     connected = sum(bool(row.get("connected")) for row in providers)
+    from . import remember_provider_count
+    remember_provider_count(workflows, connected, len(providers))
     return sp.page(AREA, "Providers", blocks, footer=f"{connected} of {len(providers)} connected · credentials are stored by the daemon, not in config")
 
 
@@ -104,9 +119,11 @@ async def handle(workflows, operation) -> None:
     client = workflows.client
     key = operation["key"]
     flash = workflows.shell.flash
-    if key == "recheck":
-        await client.models_refresh()
-        flash("Models refreshed; sign-in remains managed by agy", "info")
+    if key == "refresh_models":
+        workflows.page_state.setdefault(AREA, {})["expand"] = operation["provider"]
+        result = await client.provider_models_refresh(operation["provider"])
+        flash(str(_get(result, "message", "") or "Models refreshed") + "; sign-in remains managed by agy",
+              "warning" if _get(result, "error") else "info")
     elif key == "login":
         workflows.page_state.setdefault(AREA, {})["expand"] = operation["provider"]
         started = await client.provider_login(operation["provider"], operation.get("method", ""))

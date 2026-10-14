@@ -43,7 +43,7 @@ inward-only exceptions. Errors are
 | Context and tools | `ContextInspect` `ContextMcpLoadingSelect` `ContextExtensionSelect` `ToolsList` |
 | Extensions | `ExtensionsReload` `ExtensionsList` `ExtensionsValidate` `ExtensionsTrash` |
 | Settings and setup | `SettingsInventory` `SettingsRead` `SettingsMcpLoadingSet` `SettingsWrite` `SettingsReset` `SettingsDelete` `SetupStatus` `SetupSave` |
-| Providers | `ProvidersStatus` `ProviderLogin` `ProviderLoginPoll` `ProviderLoginCode` `ProviderLoginCancel` `ProviderKeySet` `ProviderLogout` `ProvidersUsage` |
+| Providers | `ProvidersStatus` `ProviderLogin` `ProviderLoginPoll` `ProviderLoginCode` `ProviderLoginCancel` `ProviderKeySet` `ProviderLogout` `ProviderModelsRefresh` (agy model-list probe; result `ProviderModelsRefreshResult`) `ProvidersUsage` |
 | Worktrees | `WorktreeList` `WorktreeInspect` `WorktreeReview` `WorktreeAcknowledge` `WorktreeIntegrate` `WorktreeDiscard` |
 | Workspace | `FileSearch` `GitDiff` `LogsRead` |
 | Voice | `VoiceStatus` `VoicePrepare` `VoiceTranscribe` `VoiceCancel` `VoiceRemove` |
@@ -233,7 +233,7 @@ Read-only projections and helpers kept out of `host/`:
 | `model_settings.py`, `auto_title.py` | Tier lists, the subagent ceiling and the title switch (global config); the background title task |
 | `settings_inventory.py`, `settings_scope.py` | Settings console reads/writes and path policy ([extensions.md](extensions.md#settings-files-host)) |
 | `setup.py`, `provider_auth.py` | first-run setup and provider sign-in ([models.md](models.md#authentication)) |
-| `doctor.py` | bounded redacted health; aggregates durable `registry.mismatch` events from a bounded tail of a bounded set of logs, never opening a session |
+| `doctor.py` | bounded redacted health; aggregates durable `registry.mismatch` events from a bounded tail of a bounded set of logs, never opening a session; the `quick_check` and tail scan are cached per store for 10 min (`HEAVY_TTL`) |
 | `voice.py` | voice dispatch and Doctor projection ([voice.md](voice.md)) |
 | `live.py` | `Live*` dispatch and `FacadeLiveHost`, the manager's per-call seam ([live.md](live.md)) |
 | `mock.py` | `Mock*` dispatch (dev mode) |
@@ -339,3 +339,13 @@ uses the Agent SDK and that subagents are configured per role; `subagent_backend
 and `backend_message` state the backend and what it mediates.
 `Runtime.claude_code_main_enabled()` reads the effective config on every call, so
 the model picker follows the toggle without a restart.
+# In-progress session dashboard preview contract
+
+The dashboard host boundary is additive: `SessionDashboardPreview` describes
+the full session dashboard preview and is not a replacement for the existing
+archive `SessionPreview`. Preserve the durable user-facing title **Sessions**
+and the `/sessions` command. The result also carries `last_user`, `last_agent`
+and `activity` so the list can show both tails while a turn is working. The
+preview is a host/projection contract. The dashboard invalidates its in-flight
+preview requests when a replacement overlay closes, so a late result is dropped
+rather than applied.

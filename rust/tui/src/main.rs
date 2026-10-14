@@ -1,5 +1,6 @@
 //! Presentation-only terminal client. Python owns all host commands/reduction.
 mod bridge;
+mod config;
 mod copy_button;
 mod disclosure;
 mod editor;
@@ -8,7 +9,10 @@ mod input;
 mod live_bar;
 mod local_ui;
 mod markdown;
+mod mermaid;
+mod picker;
 mod render;
+mod session;
 mod settings_page;
 mod trace;
 mod transcript;
@@ -24,7 +28,7 @@ use crossterm::{
 use editor::Editor;
 use input::{action, base64, edit, pick, save, send, MAX_DRAFT};
 use ratatui::{backend::CrosstermBackend, Terminal};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::{
     collections::HashMap,
     io::{self, BufRead, Write},
@@ -32,6 +36,28 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+/// The composer draft belongs to the open session. Pin its transcript only when the
+/// dashboard send is aimed at that same session.
+fn composer_targets_session(composer_key: &str, session: &str) -> bool {
+    if session.is_empty() {
+        return true;
+    }
+    serde_json::from_str::<Vec<String>>(composer_key)
+        .ok()
+        .and_then(|parts| parts.into_iter().nth(1))
+        .is_some_and(|id| id == session)
+}
+
+/// `+ New Agent` takes the current draft with it into the new session.
+fn take_new_session_text(operation: &mut Value, draft: &mut Editor) {
+    if operation.get("kind").and_then(|value| value.as_str()) != Some("session_new") {
+        return;
+    }
+    if !draft.text.trim().is_empty() {
+        operation["text"] = json!(draft.take());
+    }
+}
+
 /// A row's click operation. Header rows carry one range per chip, so a click
 /// opens the chip under the column; the keyboard (no column) opens the menu.
 fn resolve_operation(
@@ -56,6 +82,17 @@ fn resolve_operation(
         );
         (column >= start && column < end).then(|| chip["operation"].clone())
     })
+}
+
+/// The inspector a row opens (`i` or a double click): the row's own `inspect_operation`
+/// (group and header rows share their hit region), else the tool/context inspector.
+fn inspect_for(operation: &Option<serde_json::Value>) -> Option<serde_json::Value> {
+    let operation = copy_button::inner(operation)?;
+    operation
+        .get("inspect_operation")
+        .filter(|inspect| inspect.is_object())
+        .cloned()
+        .or_else(|| input::inspector_operation(operation))
 }
 
 /// Edit distance with adjacent swaps, so `mew` is one step from `new`.
@@ -155,138 +192,6 @@ impl Drop for Cleanup {
 }
 /// Minimum time between terminal frames (about 60 fps).
 const FRAME_INTERVAL: Duration = Duration::from_millis(16);
-/// `Ctrl+B`, `Ctrl+X B` and `/sessions`: show the sessions sidebar and move keyboard
-/// focus into it. With `toggle_off`, a sidebar that already has focus is hidden again.
-fn sessions_surface(
-    s: &mut Snapshot,
-    cache: &mut render::Cache,
-    local_ui: &mut local_ui::LocalUi,
-    toggle_off: bool,
-    width: u16,
-) -> io::Result<()> {
-    // Narrow terminals use a local drawer (never the saved preference); wide ones the sidebar.
-    let drawer = width < 90;
-    let open = if drawer {
-        s.sessions_drawer
-    } else {
-        s.sessions_sidebar
-    };
-    if open && cache.sessions_focus && toggle_off {
-        cache.sessions_focus = false;
-        if drawer {
-            s.sessions_drawer = false;
-            return Ok(());
-        }
-        return local_ui.dispatch(json!({"type":"toggle","key":"sessions_sidebar"}), s);
-    }
-    if !open {
-        s.last_opened = "sessions".into();
-        if drawer {
-            s.sessions_drawer = true;
-        } else {
-            local_ui.dispatch(json!({"type":"toggle","key":"sessions_sidebar"}), s)?;
-        }
-    }
-    cache.sessions_focus = true;
-    select_visible_session(s, cache, true);
-    Ok(())
-}
-
-/// `/sessions` or `/session` with no argument: the client opens the sidebar itself at
-/// once (the host still refreshes the list), so it never waits on a round trip.
-fn opens_sessions(text: &str) -> bool {
-    matches!(text.trim(), "/sessions" | "/session")
-}
-
-/// Keep the keyboard selection on a session the sidebar shows (preferring the
-/// current one when `prefer_active`), or the first match.
-fn select_visible_session(s: &Snapshot, cache: &mut render::Cache, prefer_active: bool) {
-    let visible = render::visible_sessions(s, &cache.filter, &cache.project);
-    let kept = !prefer_active
-        && cache
-            .sessions_sel
-            .as_deref()
-            .is_some_and(|id| visible.iter().any(|i| s.sessions[*i].id == id));
-    if !kept {
-        cache.sessions_sel = visible
-            .iter()
-            .find(|i| prefer_active && s.sessions[**i].active)
-            .or(visible.first())
-            .map(|i| s.sessions[*i].id.clone());
-    }
-}
-
-/// Escape or Ctrl+C in the focused sessions sidebar: close it (the drawer, or the
-/// docked sidebar's saved preference, like `Ctrl+B`).
-fn close_sessions(
-    s: &mut Snapshot,
-    cache: &mut render::Cache,
-    local_ui: &mut local_ui::LocalUi,
-    width: u16,
-) -> io::Result<()> {
-    cache.sessions_focus = false;
-    cache.filtering = false;
-    if width < 90 {
-        s.sessions_drawer = false;
-    } else if s.sessions_sidebar {
-        local_ui.dispatch(json!({"type":"toggle","key":"sessions_sidebar"}), s)?;
-    }
-    Ok(())
-}
-
-/// The sidebar's rows exactly as drawn and hit-tested (without the selection).
-fn sidebar_rows(
-    s: &Snapshot,
-    cache: &render::Cache,
-    region: ratatui::layout::Rect,
-) -> Vec<(ratatui::text::Line<'static>, Option<render::SidebarHit>)> {
-    render::session_sidebar(
-        s,
-        &render::Palette::new(s.theme == "nexus-light"),
-        usize::from(region.width.saturating_sub(3)),
-        0,
-        &cache.filter,
-        &cache.project,
-        cache.filtering,
-        None,
-    )
-}
-
-/// Keep the keyboard-selected session on screen: line index of its first row in the
-/// drawn sidebar (row 0 is the title row, which is not scrolled).
-fn sessions_follow(
-    s: &Snapshot,
-    cache: &render::Cache,
-    region: ratatui::layout::Rect,
-    scroll: usize,
-) -> usize {
-    let Some(id) = cache.sessions_sel.as_deref() else {
-        return scroll;
-    };
-    let rows = sidebar_rows(s, cache, region);
-    let Some(line) = rows.iter().position(
-        |(_, hit)| matches!(hit, Some(render::SidebarHit::Session(i)) if s.sessions[*i].id == id),
-    ) else {
-        return scroll;
-    };
-    let height = render::sessions_list_height(s, region);
-    // Scroll offsets count from row 1 (row 0 is the fixed title).
-    let at = line - 1;
-    // Show the group heading (and its blank row) above the first session of a group.
-    let top = if matches!(rows[line - 1].1, Some(render::SidebarHit::Heading(_))) {
-        at.saturating_sub(2)
-    } else {
-        at
-    };
-    if top < scroll {
-        top
-    } else if at + 1 > scroll + height {
-        at + 1 - height
-    } else {
-        scroll
-    }
-}
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().any(|arg| arg == "--version") {
         println!("Nexus Ratatui · bridge 3 (schema 1/2 compatible)");
@@ -336,7 +241,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut form_changed = None;
     let mut scroll = 0usize;
     let mut panel_scroll = 0usize;
-    let mut sessions_scroll = 0usize;
     let mut details_scroll = 0usize;
     let mut page_positions: Vec<(String, usize, bool, usize)> = Vec::new();
     let mut panel_detail = false;
@@ -364,6 +268,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut asked = String::new();
     let mut follow = true;
     let mut cache = render::Cache::default();
+    cache.appearance = config::Animations::load();
+    cache.animate = cache.appearance.enabled();
+    cache.mono = cache.appearance.mono_enabled();
     let mut drawn_regions = render::Regions::default();
     let mut logs_open = false;
     let mut local_ui = local_ui::LocalUi::default();
@@ -372,9 +279,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut details_index = 0usize;
     let mut logs_scroll = 0usize;
     let mut leader = None;
-    let mut pending_sessions_focus = false;
     let mut escape = Instant::now() - Duration::from_secs(2);
-    let mut last_ctrl_c = Instant::now() - Duration::from_secs(2);
+    let mut ctrl_c = input::DoubleCtrlC::default();
+    let mut hint_id = u64::MAX / 2;
+    let mut clicks = input::ClickTracker::default();
     let mut history_loaded = false;
     // False until the host's first snapshot: the splash is drawn and input is held back.
     let mut loaded = false;
@@ -424,10 +332,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             next.merge_missing(&mut s, &fields);
             if cache.toasts.ingest(&next.toasts) {
                 dirty = true;
-            }
-            if next.sessions_request > cache.sessions_request_seen {
-                cache.sessions_request_seen = next.sessions_request;
-                pending_sessions_focus = true;
             }
             if next.schema == 3 && !transcript_changed {
                 next.blocks_from = s.blocks.len();
@@ -479,7 +383,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 nav = None;
             }
-            cache.disclosure.scope = format!("{}|{}", next.composer_key, next.agent_page);
+            let was_running = matches!(s.status.as_str(), "running" | "active" | "working");
+            let is_running = matches!(next.status.as_str(), "running" | "active" | "working");
+            if was_running && !is_running && next.generation == s.generation {
+                // Only a still-pending submit stops waiting; pinned and frozen views stay put.
+                cache.prompt_pin.finish(&next.blocks);
+            }
+            let scope = format!("{}|{}", next.composer_key, next.agent_page);
+            if scope != cache.disclosure.scope {
+                clicks.reset();
+            }
+            cache.disclosure.scope = scope;
             if next.theme != s.theme {
                 cache.reset();
             }
@@ -604,12 +518,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 details_index = 0;
             }
             next.last_opened = s.last_opened.clone();
+            next.queue_collapsed = s.queue_collapsed;
             // The completion cue is played by the Python shell
             // (`notify_completion`); ringing the terminal bell here as well
             // made one completion sound twice.
             s = next;
             loaded = true;
-            animating = render::animating(&s);
+            // The dashboard's working rows spin.
+            animating = render::animating(&s)
+                || s.dashboard.as_ref().is_some_and(|dashboard| {
+                    dashboard["rows"]
+                        .as_array()
+                        .is_some_and(|rows| rows.iter().any(|row| row["status"] == "working"))
+                });
             dirty = true;
         }
         if leader.is_some_and(|time: Instant| time.elapsed() > Duration::from_secs(3)) {
@@ -667,25 +588,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         dirty |= cache.component_hover.needs_redraw(Instant::now());
+        // Local dashboard view state lives only while the host shows the dashboard.
+        if s.dashboard.is_none() {
+            cache.dashboard = picker::Dashboard::default();
+        } else if s.panel_title.is_empty() && s.prompt.is_none() && s.form.is_none() {
+            if let Some(operation) = s
+                .dashboard
+                .as_ref()
+                .and_then(|dashboard| cache.dashboard.reconcile(dashboard))
+            {
+                send(json!({"type":"operation","operation":operation,"generation":s.generation}))?;
+            }
+        }
         dirty |= cache.toasts.tick(Instant::now(), cache.pointer);
-        if !(if terminal.size()?.width < 90 {
-            s.sessions_drawer
-        } else {
-            s.sessions_sidebar
-        }) {
-            cache.sessions_focus = false;
-        }
-        if std::mem::take(&mut pending_sessions_focus) {
-            details_focus = false;
-            sessions_surface(
-                &mut s,
-                &mut cache,
-                &mut local_ui,
-                false,
-                terminal.size()?.width,
-            )?;
-            dirty = true;
-        }
         if !loaded {
             if dirty && last_draw.elapsed() >= FRAME_INTERVAL {
                 last_draw = Instant::now();
@@ -714,7 +629,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     logs_open,
                     leader.is_some(),
                     panel_detail,
-                    sessions_scroll,
                     logs_scroll,
                     details_scroll,
                 );
@@ -789,9 +703,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             {
                 send(json!({"type":"draft_changed","text":draft.text,"generation":s.generation}))?;
             }
-            if typed.0 != draft.text && !draft.text.is_empty() {
-                follow = true; // typing returns to the live end of the conversation
-            }
+            // Typing never moves the transcript: only submit, jump and End do.
             typed = (draft.text.clone(), draft.cursor);
             let query = draft.text[..draft.cursor]
                 .rsplit(char::is_whitespace)
@@ -839,15 +751,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 dirty = true;
             }
         }
-        // A pending frame waits only for its slot; otherwise idle polling stays at 8 ms.
+        // A pending frame waits only for its slot. An animating or dirty loop polls at
+        // 8 ms; a fully idle one polls at 50 ms. Input wakes `poll` at once, and every
+        // timed duty above (leader 3 s, autosave 700 ms, completion debounce 120 ms,
+        // toast and hover redraws) is checked on each pass, so 50 ms only coarsens
+        // their deadlines, never their input latency.
         let wait = if dirty {
             FRAME_INTERVAL
                 .saturating_sub(last_draw.elapsed())
                 .max(Duration::from_millis(1))
-        } else {
+        } else if animating {
             Duration::from_millis(8)
+        } else {
+            Duration::from_millis(50)
         };
-        if !event::poll(wait.min(Duration::from_millis(8)))? {
+        if !event::poll(wait.min(Duration::from_millis(if animating || dirty {
+            8
+        } else {
+            50
+        })))? {
             continue;
         }
         input_received.get_or_insert_with(Instant::now);
@@ -879,6 +801,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             match queued_event {
                 Event::Key(key) if key.kind != event::KeyEventKind::Release => {
+                    clicks.reset();
+                    if !(key.code == KeyCode::Char('c')
+                        && key.modifiers.contains(KeyModifiers::CONTROL))
+                    {
+                        ctrl_c.disarm();
+                    }
                     if s.voice_phase == "transcribing" && key.code == KeyCode::Esc {
                         action("voice_discard", "")?;
                         continue;
@@ -894,6 +822,77 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     {
                         action("quit", "")?;
                         break 'app;
+                    }
+                    // The Sessions dashboard sits above the existing composer. Search, rename
+                    // and archive confirmation own every key. Otherwise arrows and shortcuts
+                    // move the list, and the composer receives everything else so Enter sends
+                    // to the selected session.
+                    if let Some(dashboard) = s.dashboard.as_ref().filter(|_| {
+                        s.panel_title.is_empty() && s.prompt.is_none() && s.form.is_none()
+                    }) {
+                        let draft_empty = draft.text.trim().is_empty() && s.attachments == 0;
+                        if cache.dashboard.owns(&key, draft_empty) {
+                            if let Some(mut operation) = cache.dashboard.key(key, dashboard) {
+                                take_new_session_text(&mut operation, &mut draft);
+                                send(
+                                    json!({"type":"operation","operation":operation,"generation":s.generation}),
+                                )?;
+                            }
+                            dirty = true;
+                            continue;
+                        }
+                        if key.code == KeyCode::Char('c')
+                            && key.modifiers.contains(KeyModifiers::CONTROL)
+                        {
+                            if !draft.text.is_empty() {
+                                draft.take();
+                            }
+                            dirty = true;
+                            continue;
+                        }
+                        if key.code == KeyCode::Enter
+                            && key.modifiers.contains(KeyModifiers::SHIFT)
+                        {
+                            draft.insert("\n");
+                            dirty = true;
+                            continue;
+                        }
+                        if key.code == KeyCode::Enter
+                            && (!draft.text.trim().is_empty() || s.attachments > 0)
+                        {
+                            let mode = if input::composer_submit(key) {
+                                "steer"
+                            } else if key.modifiers.contains(KeyModifiers::CONTROL) {
+                                "queue"
+                            } else {
+                                "interrupt"
+                            };
+                            let text = draft.take();
+                            let selected = cache.dashboard.selected_id.clone();
+                            let mut payload = json!({"type":"submit","text":text,"mode":mode,"generation":s.generation});
+                            if !selected.is_empty() {
+                                payload["session"] = json!(selected);
+                            }
+                            send(payload)?;
+                            if selected.is_empty()
+                                || composer_targets_session(&s.composer_key, &selected)
+                            {
+                                cache.prompt_pin.arm(
+                                    session::Scope {
+                                        session: s.composer_key.clone(),
+                                        page: s.agent_page.clone(),
+                                        generation: s.generation,
+                                    },
+                                    &s.blocks,
+                                );
+                                follow = true;
+                            }
+                            dirty = true;
+                            continue;
+                        }
+                        edit(&mut draft, key, true);
+                        dirty = true;
+                        continue;
                     }
                     if key.code == KeyCode::Esc
                         && s.panel_title.is_empty()
@@ -972,150 +971,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             _ => {}
                         }
                     }
-                    // Sessions filter (click the box): typing edits it, Enter keeps it, Escape clears it.
-                    // In the focused sidebar, Enter ends typing and opens the selected match at once.
-                    let mut open_selected = false;
-                    if cache.sessions_focus
-                        && key.code == KeyCode::Char('c')
-                        && key.modifiers.contains(KeyModifiers::CONTROL)
-                    {
-                        close_sessions(&mut s, &mut cache, &mut local_ui, terminal.size()?.width)?;
-                        dirty = true;
-                        continue;
-                    }
-                    if cache.filtering {
-                        match key.code {
-                            KeyCode::Enter => {
-                                cache.filtering = false;
-                                open_selected = cache.sessions_focus;
-                            }
-                            // Escape clears typed text; with nothing typed it closes the sidebar.
-                            KeyCode::Esc if cache.filter.is_empty() => {
-                                close_sessions(
-                                    &mut s,
-                                    &mut cache,
-                                    &mut local_ui,
-                                    terminal.size()?.width,
-                                )?;
-                                dirty = true;
-                                continue;
-                            }
-                            KeyCode::Esc => {
-                                cache.filter.clear();
-                                cache.filtering = false;
-                            }
-                            KeyCode::Backspace => {
-                                cache.filter.pop();
-                            }
-                            KeyCode::Char(c)
-                                if !key.modifiers.contains(KeyModifiers::CONTROL)
-                                    && cache.filter.chars().count() < 80 =>
-                            {
-                                cache.filter.push(c)
-                            }
-                            _ => {}
-                        }
-                        if cache.sessions_focus {
-                            // Keep the selection on a visible match while the filter changes.
-                            select_visible_session(&s, &mut cache, false);
-                        }
-                        sessions_scroll = 0;
-                        dirty = true;
-                        if !open_selected {
-                            continue;
-                        }
-                    }
-                    // Keyboard focus in the sessions sidebar: arrows move, Enter opens, `/` or
-                    // typing filters, Escape clears the filter and then closes the sidebar.
-                    if cache.sessions_focus {
-                        let visible = render::visible_sessions(&s, &cache.filter, &cache.project);
-                        let at = cache
-                            .sessions_sel
-                            .as_deref()
-                            .and_then(|id| visible.iter().position(|i| s.sessions[*i].id == id));
-                        let move_to = |delta: isize, from: Option<usize>| {
-                            let n = visible.len() as isize;
-                            if n == 0 {
-                                return None;
-                            }
-                            let base = from.map_or(if delta >= 0 { -1 } else { n }, |i| i as isize);
-                            visible
-                                .get((base + delta).clamp(0, n - 1) as usize)
-                                .copied()
-                        };
-                        let narrow = terminal.size()?.width < 90;
-                        let mut handled = true;
-                        let mut target: Option<usize> = None;
-                        match key.code {
-                            KeyCode::Up => target = move_to(-1, at),
-                            KeyCode::Down => target = move_to(1, at),
-                            KeyCode::PageUp => target = move_to(-8, at),
-                            KeyCode::PageDown => target = move_to(8, at),
-                            KeyCode::Home => target = visible.first().copied(),
-                            KeyCode::End => target = visible.last().copied(),
-                            KeyCode::Enter => {
-                                if let Some(row) = at.map(|i| &s.sessions[visible[i]]) {
-                                    send(
-                                        json!({"type":"session_open","workspace":row.workspace,"text":row.id,"generation":s.generation}),
-                                    )?;
-                                    cache.sessions_focus = false;
-                                    if narrow {
-                                        s.sessions_drawer = false;
-                                    }
-                                }
-                            }
-                            KeyCode::Esc => {
-                                if !cache.filter.is_empty() {
-                                    cache.filter.clear();
-                                    sessions_scroll = 0;
-                                } else {
-                                    close_sessions(
-                                        &mut s,
-                                        &mut cache,
-                                        &mut local_ui,
-                                        terminal.size()?.width,
-                                    )?;
-                                }
-                            }
-                            KeyCode::Char('/')
-                                if !key.modifiers.contains(KeyModifiers::CONTROL) =>
-                            {
-                                cache.filtering = true;
-                            }
-                            KeyCode::Char(c)
-                                if !key
-                                    .modifiers
-                                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-                                    && cache.filter.chars().count() < 80 =>
-                            {
-                                cache.filter.push(c);
-                                cache.filtering = true;
-                                sessions_scroll = 0;
-                            }
-                            _ => handled = false,
-                        }
-                        if handled {
-                            if let Some(i) = target {
-                                cache.sessions_sel = Some(s.sessions[i].id.clone());
-                            } else if matches!(key.code, KeyCode::Char(_)) {
-                                // The filter changed: select its first match.
-                                cache.sessions_sel =
-                                    render::visible_sessions(&s, &cache.filter, &cache.project)
-                                        .first()
-                                        .map(|i| s.sessions[*i].id.clone());
-                            }
-                            if cache.sessions_focus {
-                                sessions_scroll = sessions_follow(
-                                    &s,
-                                    &cache,
-                                    drawn_regions.sessions,
-                                    sessions_scroll,
-                                );
-                            }
-                            dirty = true;
-                            continue;
-                        }
-                    }
                     // Keyboard focus over clickable transcript blocks: Tab (empty draft) enters,
                     // arrows/Tab move, Enter or Space opens what a click would, Escape or any
                     // other key leaves.
@@ -1147,7 +1002,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .height as usize;
                             let (first, end) = blocks[next];
                             if follow {
-                                scroll = cache.max_scroll;
+                                scroll = cache.current_offset;
                             }
                             follow = false;
                             if first < scroll || end + 1 - first > height {
@@ -1175,6 +1030,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             json!({"type":"operation","operation":&operation,"generation":s.generation}),
                                         )?;
                                     }
+                                }
+                                continue;
+                            }
+                            KeyCode::Char('i') if key.modifiers.is_empty() => {
+                                if let Some(inspect) = blocks
+                                    .get(index)
+                                    .and_then(|(first, _)| cache.operations.get(*first))
+                                    .and_then(inspect_for)
+                                {
+                                    send(
+                                        json!({"type":"operation","operation":inspect,"generation":s.generation}),
+                                    )?;
                                 }
                                 continue;
                             }
@@ -1232,16 +1099,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             action("command", command)?;
                         } else {
                             match key.code {
-                                KeyCode::Char('b') => {
-                                    details_focus = false;
-                                    sessions_surface(
-                                        &mut s,
-                                        &mut cache,
-                                        &mut local_ui,
-                                        true,
-                                        terminal.size()?.width,
-                                    )?;
-                                }
+                                KeyCode::Char('b') => action("command", "/sessions")?,
                                 KeyCode::Char('l') => {
                                     s.last_opened = "details".into();
                                     details_focus = true;
@@ -1433,6 +1291,94 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             dirty = true;
                             continue;
                         }
+                        // Settings root list: search, rows, drill and local toggles.
+                        if let (Some(nav), true, true) =
+                            (s.nav.as_ref(), cache.settings_root.active, s.form.is_none())
+                        {
+                            let toggles = config::checkboxes(&cache.appearance);
+                            let rows = settings_page::root::build(
+                                nav,
+                                &toggles,
+                                &cache.settings_root.query,
+                                &s,
+                            );
+                            match settings_page::root::key(&mut cache.settings_root, &rows, key) {
+                                settings_page::root::RootAct::Pass => {}
+                                settings_page::root::RootAct::Done => {
+                                    dirty = true;
+                                    continue;
+                                }
+                                settings_page::root::RootAct::Close => {
+                                    action("dismiss", "")?;
+                                    continue;
+                                }
+                                settings_page::root::RootAct::Drill(index) => {
+                                    cache.settings_root.active = false;
+                                    send(
+                                        json!({"type":"nav_select","text":index.to_string(),"generation":s.generation}),
+                                    )?;
+                                    dirty = true;
+                                    continue;
+                                }
+                                settings_page::root::RootAct::Send(operation) => {
+                                    send(
+                                        json!({"type":"operation","operation":operation,"generation":s.generation}),
+                                    )?;
+                                    dirty = true;
+                                    continue;
+                                }
+                                settings_page::root::RootAct::Toggle(name) => {
+                                    if let Some((animate, mono)) =
+                                        render::appearance::apply(&mut cache.appearance, name)
+                                    {
+                                        let _ = config::save(&cache.appearance);
+                                        cache.animate = animate;
+                                        cache.mono = mono;
+                                    }
+                                    dirty = true;
+                                    continue;
+                                }
+                            }
+                        }
+                        // A drilled Settings page: Esc returns to the root list (selection kept).
+                        if s.nav.is_some()
+                            && !cache.settings_root.active
+                            && s.form.is_none()
+                            && key.code == KeyCode::Esc
+                            && filter.is_empty()
+                            && cache.page_state.edit.is_none()
+                            && cache.page_state.popup.is_none()
+                        {
+                            cache.settings_root.active = true;
+                            dirty = true;
+                            continue;
+                        }
+                        // Appearance accelerators: Alt+A animation, Alt+M monochrome; saved at once.
+                        if render::appearance_selected(&s) {
+                            let alt = key.modifiers.contains(KeyModifiers::ALT);
+                            if alt {
+                                match render::appearance::key(cache.appearance_cursor, key.code, alt)
+                                {
+                                    render::appearance::Act::Pass => {}
+                                    render::appearance::Act::Move(row) => {
+                                        cache.appearance_cursor = row;
+                                        dirty = true;
+                                        continue;
+                                    }
+                                    render::appearance::Act::Toggle(name) => {
+                                        if let Some((animate, mono)) =
+                                            render::appearance::apply(&mut cache.appearance, name)
+                                        {
+                                            let _ = config::save(&cache.appearance);
+                                            cache.animate = animate;
+                                            cache.mono = mono;
+                                        }
+                                        dirty = true;
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
                         // Alt+1…9 jumps to the n-th Settings area (Ctrl+digit is not delivered by terminals).
                         if let (Some(nav), KeyCode::Char(digit @ '1'..='9')) =
                             (s.nav.as_ref(), key.code)
@@ -1446,6 +1392,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     .filter(|(_, item)| !item.2)
                                     .nth(n)
                                 {
+                                    cache.settings_root.active = false;
                                     send(
                                         json!({"type":"nav_select","text":index.to_string(),"generation":s.generation}),
                                     )?;
@@ -1479,7 +1426,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         continue;
                                     }
                                     settings_page::Act::Nav => {
-                                        settings_nav_focus = true;
+                                        cache.settings_root.active = true;
                                         dirty = true;
                                         continue;
                                     }
@@ -1501,7 +1448,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 continue;
                             }
                             if key.code == KeyCode::Left && s.form.is_none() {
-                                settings_nav_focus = true;
+                                cache.settings_root.active = true;
                                 dirty = true;
                                 continue;
                             }
@@ -1654,16 +1601,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     [completion_index.min(completion.completions.len() - 1)]
                                 .clone();
                                 draft.take();
-                                if opens_sessions(&value) {
-                                    details_focus = false;
-                                    sessions_surface(
-                                        &mut s,
-                                        &mut cache,
-                                        &mut local_ui,
-                                        false,
-                                        terminal.size()?.width,
-                                    )?;
-                                }
                                 send(
                                     json!({"type":"submit","text":value,"mode":"steer","generation":s.generation}),
                                 )?;
@@ -1700,16 +1637,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             KeyCode::PageUp => {
                                 if follow {
-                                    scroll = cache.max_scroll;
+                                    scroll = cache.current_offset;
                                 }
                                 scroll = scroll.saturating_sub(10);
-                                follow = scroll >= cache.max_scroll;
+                                follow = scroll == cache.live_scroll;
                             }
                             KeyCode::PageDown | KeyCode::Down => {
+                                if follow {
+                                    scroll = cache.current_offset;
+                                }
                                 scroll = (scroll
                                     + if key.code == KeyCode::PageDown { 10 } else { 1 })
                                 .min(cache.max_scroll);
-                                follow = scroll >= cache.max_scroll;
+                                follow = scroll == cache.live_scroll;
                             }
                             KeyCode::Home => {
                                 follow = false;
@@ -1728,33 +1668,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         dirty = true;
                         continue;
                     }
-                    // F6 moves keyboard focus between the composer and the sessions sidebar.
-                    if key.code == KeyCode::F(6)
-                        || key.code == KeyCode::BackTab
-                            && key.modifiers.contains(KeyModifiers::CONTROL)
-                    {
-                        if cache.sessions_focus {
-                            cache.sessions_focus = false;
-                        } else {
-                            details_focus = false;
-                            sessions_surface(
-                                &mut s,
-                                &mut cache,
-                                &mut local_ui,
-                                false,
-                                terminal.size()?.width,
-                            )?;
-                        }
-                        dirty = true;
-                        continue;
-                    }
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
+                        // Ctrl+S, Ctrl+O and Ctrl+B open the Sessions dashboard;
+                        // Settings stays on Ctrl+X S.
                         let command = match key.code {
                             KeyCode::Char('n') => "/new",
-                            KeyCode::Char('o') => "/sessions",
+                            KeyCode::Char('o') | KeyCode::Char('s') | KeyCode::Char('b') => "/sessions",
                             KeyCode::Char('f') => "/fork",
                             KeyCode::Char('g') => "/agent",
-                            KeyCode::Char('s') => "/settings",
                             KeyCode::Char('i') => "/context",
                             KeyCode::Char('p') => "/help",
                             KeyCode::Char('u') => "/usage",
@@ -1767,18 +1688,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             continue;
                         }
                         match key.code {
-                            KeyCode::Char('b') => {
-                                details_focus = false;
-                                sessions_surface(
-                                    &mut s,
-                                    &mut cache,
-                                    &mut local_ui,
-                                    true,
-                                    terminal.size()?.width,
-                                )?;
-                                dirty = true;
-                                continue;
-                            }
                             KeyCode::Char('l') => {
                                 s.last_opened = "details".into();
                                 details_focus = true;
@@ -1801,37 +1710,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 continue;
                             }
                             // Text in the composer: Ctrl+C clears it first; an empty one cancels the turn.
-                            // Ctrl+C twice on an empty composer within 1.5 s quits; clearing a
+                            // Ctrl+C twice on an empty composer within 2 s quits; clearing a
                             // draft never counts as the first press, so clear-then-cancel is safe.
                             KeyCode::Char('c') if !draft.text.is_empty() => {
                                 draft.clear();
                                 dirty = true;
-                                last_ctrl_c = Instant::now() - Duration::from_secs(2);
+                                ctrl_c.disarm();
                                 continue;
                             }
                             KeyCode::Char('c') => {
-                                if last_ctrl_c.elapsed() < Duration::from_millis(1500) {
+                                if ctrl_c.press(Instant::now()) == input::CtrlC::Quit {
                                     action("quit", "")?;
                                     break 'app;
                                 }
-                                last_ctrl_c = Instant::now();
+                                hint_id += 1;
+                                cache.toasts.ingest(&[bridge::ToastWire {
+                                    id: hint_id,
+                                    level: "info".into(),
+                                    title: "Press Ctrl+C again to quit".into(),
+                                    body: String::new(),
+                                    key: "ctrl_c_hint".into(),
+                                    action: None,
+                                }]);
+                                dirty = true;
                                 action("cancel", "")?;
+                                continue;
+                            }
+                            // Ctrl+D does nothing while the composer holds text or attachments
+                            // (it never deletes forward); on an empty one it quits, like EOF.
+                            KeyCode::Char('d') => {
+                                if draft.text.is_empty() && s.attachments == 0 {
+                                    action("quit", "")?;
+                                    break 'app;
+                                }
                                 continue;
                             }
                             _ => {}
                         }
                     }
                     match key.code {
-                        // Escape closes a visible sessions sidebar first (focused or not);
-                        // otherwise a double Escape cancels the turn.
-                        KeyCode::Esc if drawn_regions.sessions.width > 0 => {
-                            close_sessions(
-                                &mut s,
-                                &mut cache,
-                                &mut local_ui,
-                                terminal.size()?.width,
-                            )?;
-                        }
                         KeyCode::Esc => {
                             if escape.elapsed() < Duration::from_millis(1500) {
                                 action("cancel", "")?;
@@ -1843,44 +1760,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         KeyCode::Enter => {
                             if !draft.text.trim().is_empty() || s.attachments > 0 {
-                                let mode = if key.modifiers.contains(KeyModifiers::CONTROL) {
-                                    "queue"
-                                } else if key.modifiers.contains(KeyModifiers::ALT) {
-                                    "interrupt"
-                                } else {
+                                // Plain Enter sends; Ctrl+Enter queues, Alt+Enter interrupts.
+                                // Shift+Enter and Ctrl+J insert a newline instead.
+                                let mode = if input::composer_submit(key) {
                                     "steer"
+                                } else if key.modifiers.contains(KeyModifiers::CONTROL) {
+                                    "queue"
+                                } else {
+                                    "interrupt"
                                 };
                                 let text = draft.take();
-                                if opens_sessions(&text) {
-                                    details_focus = false;
-                                    sessions_surface(
-                                        &mut s,
-                                        &mut cache,
-                                        &mut local_ui,
-                                        false,
-                                        terminal.size()?.width,
-                                    )?;
-                                }
                                 send(
                                     json!({"type":"submit","text":text,"mode":mode,"generation":s.generation}),
                                 )?;
+                                cache.prompt_pin.arm(
+                                    session::Scope {
+                                        session: s.composer_key.clone(),
+                                        page: s.agent_page.clone(),
+                                        generation: s.generation,
+                                    },
+                                    &s.blocks,
+                                );
                                 follow = true;
                             }
                         }
                         KeyCode::PageDown => {
+                            if follow {
+                                scroll = cache.current_offset;
+                            }
                             scroll = (scroll + 10).min(cache.max_scroll);
                             // Reaching the bottom resumes auto-scroll.
-                            follow = scroll >= cache.max_scroll;
+                            follow = scroll == cache.live_scroll;
                         }
                         KeyCode::PageUp => {
                             if follow {
-                                scroll = cache.max_scroll;
+                                scroll = cache.current_offset;
                             }
                             scroll = scroll.saturating_sub(10);
-                            follow = scroll >= cache.max_scroll;
+                            follow = scroll == cache.live_scroll;
                         }
                         KeyCode::End if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             follow = true;
+                            cache.prompt_pin.release();
                             draft.cursor = draft.text.len();
                         }
                         KeyCode::Up | KeyCode::Down => {
@@ -1943,24 +1864,118 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 Event::Resize(_, _) => {
+                    clicks.reset();
                     cache.reset();
                     dirty = true;
                 }
                 Event::Mouse(mouse) => {
+                    // The Sessions dashboard owns clicks, hover and the wheel over its region.
+                    // The composer below that region is unchanged.
+                    let dashboard_open = s.dashboard.is_some()
+                        && s.panel_title.is_empty()
+                        && s.prompt.is_none()
+                        && s.form.is_none();
+                    let over_dashboard = dashboard_open
+                        && drawn_regions.transcript.contains(ratatui::layout::Position::new(
+                            mouse.column,
+                            mouse.row,
+                        ));
+                    if dashboard_open && !over_dashboard && !cache.dashboard.hovered_id.is_empty() {
+                        if let Some(operation) = cache.dashboard.leave() {
+                            send(
+                                json!({"type":"operation","operation":operation,"generation":s.generation}),
+                            )?;
+                        }
+                        dirty = true;
+                    }
+                    if over_dashboard {
+                        if let Some(dashboard) = s.dashboard.as_ref() {
+                            let operation = match mouse.kind {
+                                MouseEventKind::Down(event::MouseButton::Left) => {
+                                    cache.dashboard.click(mouse.column, mouse.row, dashboard)
+                                }
+                                MouseEventKind::ScrollUp => cache.dashboard.wheel(
+                                    mouse.column,
+                                    mouse.row,
+                                    false,
+                                    dashboard,
+                                ),
+                                MouseEventKind::ScrollDown => cache.dashboard.wheel(
+                                    mouse.column,
+                                    mouse.row,
+                                    true,
+                                    dashboard,
+                                ),
+                                MouseEventKind::Moved => {
+                                    cache.dashboard.hover(mouse.column, mouse.row, dashboard)
+                                }
+                                _ => None,
+                            };
+                            if let Some(mut operation) = operation {
+                                take_new_session_text(&mut operation, &mut draft);
+                                send(
+                                    json!({"type":"operation","operation":operation,"generation":s.generation}),
+                                )?;
+                            }
+                            cache.pointer = Some((mouse.column, mouse.row));
+                            dirty = true;
+                            continue;
+                        }
+                    }
                     let r = drawn_regions;
                     let pointer = Some((mouse.column, mouse.row));
                     if cache.pointer != pointer {
                         let left_transcript = cache.pointer.is_some_and(|(x, y)| {
                             r.transcript.contains(ratatui::layout::Position::new(x, y))
                         });
+                        let in_composer = |x: u16, y: u16| {
+                            r.composer.contains(ratatui::layout::Position::new(x, y))
+                        };
+                        let was_in_composer = cache
+                            .pointer
+                            .is_some_and(|(x, y)| in_composer(x, y));
                         cache.pointer = pointer;
                         // Pointer motion is presentation-only; redraw only if a
-                        // transcript hover target or a component transition changes.
+                        // transcript hover target, the composer rows or a component changes.
                         if mouse.kind != MouseEventKind::Moved
+                            || in_composer(mouse.column, mouse.row)
+                            || was_in_composer
                             || left_transcript
                             || r.transcript
                                 .contains(ratatui::layout::Position::new(mouse.column, mouse.row))
                         {
+                            dirty = true;
+                        }
+                    }
+                    // Settings row hover follows the pointer only over the visible page
+                    // (not the nav, overlays, or a closed page) so no stale highlight stays.
+                    if matches!(mouse.kind, MouseEventKind::Moved | MouseEventKind::Drag(_)) {
+                        let over_page = s.settings_page.is_some()
+                            && !cache.settings_root.active
+                            && !s.panel_title.is_empty()
+                            && s.prompt.is_none()
+                            && s.form.is_none() && {
+                                let area = render::panel_area(render::panel_host(&r, &s), &s);
+                                let at = ratatui::layout::Position::new(mouse.column, mouse.row);
+                                area.contains(at) && !render::nav_rect(area).contains(at)
+                            };
+                        let changed = match s.settings_page.as_ref().filter(|_| over_page) {
+                            Some(raw) => {
+                                let page = cache.page_for(s.revision, raw);
+                                let mut state = std::mem::take(&mut cache.page_state);
+                                let changed = settings_page::hover(
+                                    &page,
+                                    &mut state,
+                                    Some((mouse.column, mouse.row)),
+                                );
+                                cache.page_state = state;
+                                changed
+                            }
+                            None => {
+                                cache.page_state.hover.take().is_some()
+                            }
+                        };
+                        if changed {
                             dirty = true;
                         }
                     }
@@ -1969,7 +1984,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Some(raw) = s
                         .settings_page
                         .as_ref()
-                        .filter(|_| !s.panel_title.is_empty())
+                        .filter(|_| !s.panel_title.is_empty() && !cache.settings_root.active)
                     {
                         let area = render::panel_area(render::panel_host(&r, &s), &s);
                         let at = ratatui::layout::Position::new(mouse.column, mouse.row);
@@ -2017,6 +2032,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
+                    if let (Some(nav), true) = (s.nav.as_ref(), cache.settings_root.active) {
+                        let delta = match mouse.kind {
+                            MouseEventKind::ScrollUp => Some(-1),
+                            MouseEventKind::ScrollDown => Some(1),
+                            _ => None,
+                        };
+                        if let Some(delta) = delta {
+                            let toggles = config::checkboxes(&cache.appearance);
+                            let rows = settings_page::root::build(
+                                nav,
+                                &toggles,
+                                &cache.settings_root.query,
+                                &s,
+                            );
+                            settings_page::root::wheel(&mut cache.settings_root, &rows, delta);
+                            dirty = true;
+                            continue;
+                        }
+                    }
+                    if matches!(
+                        mouse.kind,
+                        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                    ) {
+                        clicks.reset();
+                    }
                     match mouse.kind {
                         MouseEventKind::ScrollUp => {
                             if !s.panel_title.is_empty() {
@@ -2041,17 +2081,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 dirty = true;
                                 continue;
                             }
-                            if r.sessions.contains((mouse.column, mouse.row).into()) {
-                                sessions_scroll = sessions_scroll.saturating_sub(3);
-                                dirty = true;
-                                continue;
-                            }
                             if s.panel_title.is_empty() && s.prompt.is_none() {
                                 if follow {
-                                    scroll = cache.max_scroll;
+                                    scroll = cache.current_offset;
                                 }
                                 scroll = scroll.saturating_sub(3);
-                                follow = scroll >= cache.max_scroll;
+                                follow = scroll == cache.live_scroll;
                             } else {
                                 panel_scroll = panel_scroll.saturating_sub(3);
                             }
@@ -2116,52 +2151,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 dirty = true;
                                 continue;
                             }
-                            if r.sessions.contains((mouse.column, mouse.row).into()) {
-                                sessions_scroll = (sessions_scroll + 3).min(
-                                    sidebar_rows(&s, &cache, r.sessions).len().saturating_sub(
-                                        1 + render::sessions_list_height(&s, r.sessions),
-                                    ),
-                                );
-                                dirty = true;
-                                continue;
-                            }
                             if s.panel_title.is_empty() && s.prompt.is_none() {
+                                if follow {
+                                    scroll = cache.current_offset;
+                                }
                                 scroll = (scroll + 3).min(cache.max_scroll);
                                 // Back at the bottom: follow new output again.
-                                follow = scroll >= cache.max_scroll;
+                                follow = scroll == cache.live_scroll;
                             } else {
                                 panel_scroll += 3;
                             }
                         }
-                        MouseEventKind::Down(event::MouseButton::Right) => {
-                            if !s.panel_title.is_empty() || s.prompt.is_some() {
-                                continue;
-                            }
-                            if r.sessions.contains((mouse.column, mouse.row).into()) {
-                                if let Some(row) = render::sessions_row_at(
-                                    &s,
-                                    r.sessions,
-                                    sessions_scroll,
-                                    mouse.row,
-                                )
-                                .and_then(|at| {
-                                    sidebar_rows(&s, &cache, r.sessions).into_iter().nth(at)
-                                })
-                                .and_then(|(_, hit)| match hit {
-                                    Some(render::SidebarHit::Session(index)) => {
-                                        s.sessions.get(index)
-                                    }
-                                    _ => None,
-                                }) {
-                                    send(
-                                        json!({"type":"session_actions","workspace":row.workspace,"text":row.id,"generation":s.generation}),
-                                    )?;
-                                }
-                            }
-                        }
                         MouseEventKind::Drag(event::MouseButton::Left) => {
                             if let Some(start) = press {
-                                let offset = if follow { cache.max_scroll } else { scroll };
+                                let offset = if follow { cache.current_offset } else { scroll };
                                 let row = usize::from(
                                     mouse.row.clamp(
                                         r.transcript.y,
@@ -2205,7 +2208,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             resolve_operation(operation, Some(column))
                                         })
                                     {
-                                        if cache.disclosure.toggle(&operation, &s.blocks) {
+                                        // D1: a tool row selects on one click and toggles its
+                                        // inline view on two; `i` is the full inspector.
+                                        let tool = input::tool_click_key(&operation);
+                                        let double = tool.as_deref().is_some_and(|key| {
+                                            clicks.click(
+                                                Instant::now(),
+                                                &cache.disclosure.scope,
+                                                key,
+                                            )
+                                        });
+                                        if tool.is_none() {
+                                            clicks.reset();
+                                        }
+                                        if tool.is_some() && !double {
+                                            nav = render::targets(&cache)
+                                                .iter()
+                                                .position(|&(first, end)| {
+                                                    (first..=end).contains(&line)
+                                                });
+                                            dirty = true;
+                                        } else if cache.disclosure.toggle(&operation, &s.blocks) {
                                             cache.invalidate_disclosure();
                                         } else {
                                             send(
@@ -2225,12 +2248,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                         MouseEventKind::Down(event::MouseButton::Left) => {
-                            if cache.sessions_focus
-                                && !r.sessions.contains((mouse.column, mouse.row).into())
-                            {
-                                cache.sessions_focus = false;
-                                dirty = true;
-                            }
                             if let Some(hit) = cache.toasts.hit(mouse.column, mouse.row) {
                                 use render::toasts::Hit;
                                 match hit {
@@ -2256,7 +2273,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 )?;
                                 continue;
                             }
-                            if render::update_notice_at(&s, r.workspace, mouse.column, mouse.row) {
+                            if render::stop_at(r.composer, &s, mouse.column, mouse.row) {
+                                action("cancel", "")?;
+                                continue;
+                            }
+                            if render::queue_header_at(r.composer, &s, mouse.column, mouse.row) {
+                                s.queue_collapsed = !s.queue_collapsed;
+                                dirty = true;
+                                continue;
+                            }
+                            if render::update_notice_at(&s, r.tabs, mouse.column, mouse.row) {
                                 action("update_help", "")?;
                                 continue;
                             }
@@ -2300,28 +2326,59 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 if s.panel_loading {
                                     continue;
                                 }
-                                if let Some(nav) = &s.nav {
-                                    let list = render::nav_rect(render::panel_area(
-                                        render::panel_host(&r, &s),
+                                if let (Some(nav), true) =
+                                    (s.nav.as_ref(), cache.settings_root.active)
+                                {
+                                    let toggles = config::checkboxes(&cache.appearance);
+                                    let rows = settings_page::root::build(
+                                        nav,
+                                        &toggles,
+                                        &cache.settings_root.query,
                                         &s,
-                                    ));
-                                    if list.contains((mouse.column, mouse.row).into()) {
-                                        settings_nav_focus = true;
-                                        let index = usize::from(mouse.row - list.y);
-                                        if nav.items.get(index).is_some_and(|item| !item.2) {
+                                    );
+                                    match settings_page::root::click(
+                                        &mut cache.settings_root,
+                                        &rows,
+                                        mouse.column,
+                                        mouse.row,
+                                    ) {
+                                        settings_page::root::RootAct::Drill(index) => {
+                                            cache.settings_root.active = false;
                                             send(
                                                 json!({"type":"nav_select","text":index.to_string(),"generation":s.generation}),
                                             )?;
+                                            dirty = true;
+                                            continue;
                                         }
-                                        dirty = true;
-                                        continue;
+                                        settings_page::root::RootAct::Send(operation) => {
+                                            send(
+                                                json!({"type":"operation","operation":operation,"generation":s.generation}),
+                                            )?;
+                                            dirty = true;
+                                            continue;
+                                        }
+                                        settings_page::root::RootAct::Toggle(name) => {
+                                            if let Some((animate, mono)) =
+                                                render::appearance::apply(&mut cache.appearance, name)
+                                            {
+                                                let _ = config::save(&cache.appearance);
+                                                cache.animate = animate;
+                                                cache.mono = mono;
+                                            }
+                                            dirty = true;
+                                            continue;
+                                        }
+                                        _ => {}
                                     }
                                 }
                             }
                             if !s.panel_title.is_empty() {
                                 settings_nav_focus = false;
                                 let area = render::panel_area(render::panel_host(&r, &s), &s);
-                                if !area.contains((mouse.column, mouse.row).into()) {
+                                if !area.contains((mouse.column, mouse.row).into())
+                                    || render::close_rect(area)
+                                        .contains((mouse.column, mouse.row).into())
+                                {
                                     action("dismiss", "")?;
                                 } else if s.form.is_none() && !panel_detail {
                                     if let Some(index) = render::panel_item_at(
@@ -2440,89 +2497,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         &mut s,
                                     )?;
                                 }
-                            } else if r.sessions.contains((mouse.column, mouse.row).into()) {
-                                details_focus = false;
-                                if mouse.row == r.sessions.bottom().saturating_sub(1) {
-                                    cache.filtering = true;
-                                    dirty = true;
-                                    continue;
-                                }
-                                if mouse.row == r.sessions.y {
-                                    if mouse.column < r.sessions.x + 4 {
-                                        if terminal.size()?.width < 90 {
-                                            s.sessions_drawer = false;
-                                            cache.sessions_focus = false;
-                                        } else {
-                                            local_ui.dispatch(
-                                                json!({"type":"toggle","key":"sessions_sidebar"}),
-                                                &mut s,
-                                            )?;
-                                        }
-                                    } else if mouse.column >= r.sessions.right().saturating_sub(4) {
-                                        action("command", "/new")?;
-                                    }
-                                    continue;
-                                }
-                                // Project chips under the title filter the list to one project.
-                                if let Some(project) =
-                                    render::project_chip_at(&s, r.sessions, mouse.column, mouse.row)
-                                {
-                                    cache.project = project;
-                                    sessions_scroll = 0;
-                                    select_visible_session(&s, &mut cache, false);
-                                    dirty = true;
-                                    continue;
-                                }
-                                let rows = sidebar_rows(&s, &cache, r.sessions);
-                                let at = render::sessions_row_at(
-                                    &s,
-                                    r.sessions,
-                                    sessions_scroll,
-                                    mouse.row,
-                                );
-                                let hit = at.and_then(|at| rows.get(at)).and_then(|(_, hit)| *hit);
-                                match hit {
-                                    Some(render::SidebarHit::New) => action("command", "/new")?,
-
-                                    Some(render::SidebarHit::Archived) => {
-                                        action("command", "/archived")?
-                                    }
-                                    // A heading picks its project; again, all projects.
-                                    Some(render::SidebarHit::Heading(index)) => {
-                                        let key =
-                                            render::project_key(&s.sessions[index]).to_string();
-                                        cache.project = if cache.project == key {
-                                            String::new()
-                                        } else {
-                                            key
-                                        };
-                                        sessions_scroll = 0;
-                                        select_visible_session(&s, &mut cache, false);
-                                    }
-                                    _ => {}
-                                }
-                                if let Some(row) =
-                                    at.and_then(|at| rows.get(at))
-                                        .and_then(|(_, hit)| match hit {
-                                            Some(render::SidebarHit::Session(index)) => {
-                                                s.sessions.get(*index)
-                                            }
-                                            _ => None,
-                                        })
-                                {
-                                    send(
-                                        json!({"type":"session_open","workspace":row.workspace,"text":row.id,"generation":s.generation}),
-                                    )?;
-                                    if terminal.size()?.width < 90 {
-                                        s.sessions_drawer = false;
-                                        cache.sessions_focus = false;
-                                    }
-                                }
                             } else if r.transcript.contains((mouse.column, mouse.row).into())
                                 && s.panel_title.is_empty()
                                 && s.prompt.is_none()
                             {
-                                let offset = if follow { cache.max_scroll } else { scroll };
+                                let offset = if follow { cache.current_offset } else { scroll };
                                 // Press only starts a selection; releasing without dragging is a click.
                                 cache.selection = None;
                                 press = Some((
@@ -2544,44 +2523,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let hit = render::top_cells(&s, r.tabs).into_iter().find(|cell| {
                                     column >= cell.start && column < cell.end.max(cell.start + 1)
                                 });
-                                match hit.map(|cell| (cell.kind, cell.end)) {
-                                    Some((render::TabHit::Tab(index), end))
-                                        if mouse.row == r.tabs.y =>
-                                    {
-                                        let row = &s.tabs[index];
-                                        let kind = if column + 3 >= end {
-                                            "tab_close"
-                                        } else {
-                                            "session_open"
-                                        };
-                                        send(
-                                            json!({"type":kind,"workspace":row.workspace,"text":row.id,"generation":s.generation}),
-                                        )?;
-                                    }
-                                    Some((render::TabHit::New, _)) if mouse.row == r.tabs.y => {
-                                        action("command", "/new")?
-                                    }
-                                    Some((render::TabHit::Sessions, _)) => {
-                                        // Narrow: open (or close) locally at once; the list is
-                                        // already kept fresh by the host's poll.
-                                        if r.tabs.width < 110 {
-                                            details_focus = false;
-                                            sessions_surface(
-                                                &mut s,
-                                                &mut cache,
-                                                &mut local_ui,
-                                                true,
-                                                terminal.size()?.width,
-                                            )?;
-                                        } else {
-                                            s.last_opened = "sessions".into();
-                                            local_ui.dispatch(
-                                                json!({"type":"toggle","key":"sessions_sidebar"}),
-                                                &mut s,
+                                match hit.map(|cell| cell.kind) {
+                                    // `‹ ›` switch between the open sessions; `[Dashboard]`
+                                    // is `/sessions`.
+                                    Some(kind @ (render::TabHit::Prev | render::TabHit::Next)) => {
+                                        let step = if kind == render::TabHit::Prev { -1 } else { 1 };
+                                        if let Some(row) = render::cycle_tab(&s, step) {
+                                            send(
+                                                json!({"type":"session_open","workspace":row.workspace,"text":row.id,"generation":s.generation}),
                                             )?;
                                         }
                                     }
-                                    Some((render::TabHit::Details, _)) => {
+                                    Some(render::TabHit::Dashboard) => {
+                                        action("command", "/sessions")?
+                                    }
+                                    Some(render::TabHit::Details) => {
                                         s.last_opened = "details".into();
                                         details_focus = true;
                                         local_ui.dispatch(
@@ -2632,6 +2588,19 @@ mod tests {
         assert_eq!(completion_candidates(&cache, "/effort h"), vec!["high"]);
         assert!(completion_candidates(&cache, "/agent h").is_empty());
         assert!(completion_candidates(&cache, "ordinary text").is_empty());
+    }
+
+    #[test]
+    fn inspector_comes_only_from_explicit_fields() {
+        let body = Some(json!({"kind":"block_toggle","id":"c:output"}));
+        assert_eq!(inspect_for(&body), None);
+        let header = Some(json!({"kind":"block_toggle","id":"c:detail",
+            "inspect_operation":{"kind":"tool_details","id":"c"}}));
+        assert_eq!(
+            inspect_for(&header),
+            Some(json!({"kind":"tool_details","id":"c"}))
+        );
+        assert_eq!(inspect_for(&Some(json!({"kind":"block_toggle","id":"g"}))), None);
     }
 
     #[test]

@@ -37,18 +37,16 @@ def _items(refs, resolved, candidates):
 
 async def build(workflows) -> dict:
     client = workflows.client
-    state = workflows.page_state.setdefault(AREA, {"tab": 0})
     tiers = await client.model_tiers()
     order = list(_get(tiers, "order", []) or ["low", "medium", "high"])
     rows = {_get(row, "name"): row for row in _get(tiers, "tiers", [])}
-    tab = max(0, min(state.get("tab", 0), len(order) - 1))
-    state["tab"] = tab
-    name = order[tab]
-    tier = rows.get(name, {})
+    catalogue = await client.list_models(selectable_only=True, scope="subagents")
+    model_rows = catalogue if isinstance(catalogue, list) else _get(catalogue, "models", [])
+    models_by_ref = {f"{row['provider']}/{row['id']}": row for row in model_rows}
 
     blocks = []
     # -- default model chain -------------------------------------------------
-    blocks.append(sp.heading("DEFAULT MODEL"))
+    blocks.append(sp.heading("Default Model"))
     default = await client.default_model_settings() if hasattr(client, "default_model_settings") else None
     if default is not None:
         refs = list(_get(default, "refs", []))
@@ -62,14 +60,12 @@ async def build(workflows) -> dict:
 
     # -- session titles ------------------------------------------------------
     titles = await client.session_title_settings()
-    model = _get(titles, "model", "low")
+    model = _get(titles, "model", "openai/gpt-5-mini")
     resolved = _get(titles, "resolved", "")
-    choices = [(f"{t} tier", t) for t in order]
-    if model not in order:
-        choices.append((model, model))
+    choices = [(model, model)]
     choices.append(("Other model…", PICK))
-    shown = f"{model} tier" if model in order else model
-    blocks.append(sp.heading("SESSION TITLES"))
+    shown = model
+    blocks.append(sp.heading("Session Titles"))
     blocks.append(sp.row("titles", "Name new sessions automatically", sp.toggle(_get(titles, "enabled", True), sp.op(AREA, "titles")),
                          description="Your first message is sent to a fast, low-cost model to write the title."))
     blocks.append(sp.row("title-model", "Title model", sp.select(shown, choices, sp.op(AREA, "title_model")),
@@ -79,7 +75,7 @@ async def build(workflows) -> dict:
     # -- claude code ---------------------------------------------------------
     claude = await client.claude_code_settings() if hasattr(client, "claude_code_settings") else None
     if claude is not None:
-        blocks.append(sp.heading("CLAUDE CODE"))
+        blocks.append(sp.heading("Claude Code"))
         blocks.append(sp.row("claude-main", "Allow Claude Code as a main model",
                              sp.toggle(_get(claude, "main_enabled", False), sp.op(AREA, "claude_main")),
                              description=_get(claude, "message", "") or "Main selection uses the Agent SDK."))
@@ -92,38 +88,47 @@ async def build(workflows) -> dict:
                              description=_get(claude, "backend_message", "")))
         blocks.append(sp.gap())
 
-    # -- tiers (tabs) --------------------------------------------------------
-    blocks.append(sp.heading("TIERS"))
-    blocks.append(sp.note(ts.MODELS_HELP))
-    badges = ["!" if not _get(rows.get(t, {}), "resolved", "") else "" for t in order]
-    blocks.append(sp.tabs("tiers", [t.title() for t in order], tab, sp.op(AREA, "tab"), badges))
-    refs = list(_get(tier, "refs", []))
-    blocks.append(sp.ordered(f"tier:{name}", _items(refs, _get(tier, "resolved", ""), _get(tier, "candidates", [])),
-                             sp.op(AREA, "tier", tier=name), "Add model…", editable=bool(_get(tier, "editable", True))))
-    source = _get(tier, "source", "")
-    blocks.append(sp.note({
-        "your list": "Your own list, saved in your global config.",
-        "built-in": "Nexus's built-in choice. Add a model to make your own list.",
-        "by price": "Models are sorted into this tier by price. Add a model to pin your own.",
-    }.get(str(source), str(source))))
-    if not _get(tier, "resolved", ""):
-        blocks.append(sp.note("No model in this tier can run: connect its provider or add another model.", "warning"))
-    if not _get(tier, "editable", True):
-        blocks.append(sp.note("This tier's name needs quoting; edit it in Settings → Config.", "warning"))
-    if source == "your list":
-        blocks.append(sp.buttons("tier-reset", [(f"Reset {name} to default…", sp.op(AREA, "tier_reset_ask", tier=name), "secondary")]))
-    blocks.append(sp.gap())
+    # -- subagent tiers ------------------------------------------------------
+    blocks.append(sp.heading("Subagent Tiers"))
+    blocks.append(sp.note("Tiers are for subagents only. " + ts.MODELS_HELP))
+    for name in order:
+        tier = rows.get(name, {})
+        refs = list(_get(tier, "refs", []))
+        blocks.append(sp.heading(name.capitalize()))
+        items = _items(refs, _get(tier, "resolved", ""), _get(tier, "candidates", []))
+        controls = []
+        efforts = _get(tier, "efforts", {})
+        for ref in refs:
+            supported = models_by_ref.get(ref, {}).get("supported_efforts", [])
+            selected = efforts.get(ref)
+            choices = [("Default", None), *((effort, effort) for effort in supported)]
+            if selected and selected not in supported:
+                choices.append((f"{selected} (unavailable)", selected))
+            controls.append(sp.row(f"effort:{name}:{ref}", "Effort",
+                                 sp.select(selected or "Default", choices, sp.op(AREA, "effort", tier=name, model=ref)),
+                                 description="Effort for this subagent model in this tier." if supported else "This model does not expose effort selection."))
+            if not supported:
+                index = refs.index(ref)
+                label, tag, note = items[index]
+                items[index] = (label, tag, f"{note} · effort: provider default" if note else "effort: provider default")
+        blocks.append(sp.ordered(f"tier:{name}", items, sp.op(AREA, "tier", tier=name), "Add model…",
+                                 editable=bool(_get(tier, "editable", True)), controls=controls))
+        source = _get(tier, "source", "")
+        blocks.append(sp.note({
+            "your list": "Your own list, saved in your global config.",
+            "built-in": "Nexus's built-in choice. Add a model to make your own list.",
+            "by price": "Models are sorted into this tier by price. Add a model to pin your own.",
+        }.get(str(source), str(source))))
+        if not _get(tier, "resolved", ""):
+            blocks.append(sp.note("No model in this tier can run: connect its provider or add another model.", "warning"))
+        if not _get(tier, "editable", True):
+            blocks.append(sp.note("This tier's name needs quoting; edit it in Settings → Config.", "warning"))
+        if source == "your list":
+            blocks.append(sp.buttons(f"tier-reset:{name}", [(f"Reset {name} to default…", sp.op(AREA, "tier_reset_ask", tier=name), "secondary")]))
+        blocks.append(sp.gap())
 
-    # -- subagent limit and catalogue ---------------------------------------
-    blocks.append(sp.heading("LIMITS"))
-    ceiling = _get(tiers, "max_tier", "") or "high"
-    blocks.append(sp.row("ceiling", "Highest tier for subagents",
-                         sp.segmented([t.title() for t in order], order.index(ceiling) if ceiling in order else len(order) - 1,
-                                      sp.op(AREA, "ceiling"), values=order),
-                         description="Subagents never run above this tier, whatever their own list allows."))
-    blocks.append(sp.gap())
-    blocks.append(sp.heading("CATALOGUE"))
-    models = await client.list_models(selectable_only=False) if hasattr(client, "list_models") else None
+    blocks.append(sp.heading("Catalogue"))
+    models = await client.list_models(selectable_only=False, scope="all") if hasattr(client, "list_models") else None
     count = len(models) if isinstance(models, list) else _get(models, "count", None)
     blocks.append(sp.row("catalogue", "Model catalogue", sp.button("Refresh", sp.op(AREA, "refresh")),
                          description=f"{count} models known." if count is not None else ""))
@@ -154,7 +159,8 @@ async def _pick(workflows, target: str) -> None:
     """The one allowed drill-in: choose a model to add; the page returns when it is added."""
     from ....ui_support.model_choice import model_groups, recent_models
     current = set(await _refs(workflows, target))
-    rows = [row for row in recent_models(await workflows.client.list_models(selectable_only=True))
+    scope = "subagents" if target.startswith("tier:") else "main"
+    rows = [row for row in recent_models(await workflows.client.list_models(selectable_only=True, scope=scope))
             if row.get("provider") and row.get("id") and f"{row['provider']}/{row['id']}" not in current]
     groups, _ = model_groups(rows, favorites=workflows.shell.preferences.values["model_favorites"],
                              recent=workflows.shell.preferences.values["model_recent"])
@@ -169,10 +175,7 @@ async def _pick(workflows, target: str) -> None:
 async def handle(workflows, operation) -> None:
     client = workflows.client
     key = operation["key"]
-    state = workflows.page_state.setdefault(AREA, {"tab": 0})
-    if key == "tab":
-        state["tab"] = int(operation.get("value", 0))
-    elif key in {"chain", "tier"}:
+    if key in {"chain", "tier"}:
         target = "chain" if key == "chain" else f"tier:{operation['tier']}"
         action, index = operation.get("action"), int(operation.get("index", 0))
         if action == "add":
@@ -210,8 +213,17 @@ async def handle(workflows, operation) -> None:
     elif key == "title_set":
         await client.session_title_settings_set(model=operation["model"])
         workflows.return_to_page()
-    elif key == "ceiling":
-        await client.agent_max_tier_set(operation["value"])
+    elif key == "effort":
+        tiers = await client.model_tiers()
+        tier = next(row for row in _get(tiers, "tiers", []) if _get(row, "name") == operation["tier"])
+        efforts = dict(_get(tier, "efforts", {}))
+        if operation["value"] is None:
+            efforts.pop(operation["model"], None)
+        else:
+            efforts[operation["model"]] = operation["value"]
+        result = await client.model_tier_set(operation["tier"], list(_get(tier, "refs", [])), efforts=efforts)
+        if _get(result, "restart_required"):
+            workflows.shell.flash("Saved · restart the daemon to apply", "success")
     elif key == "tier_reset_ask":
         name = operation["tier"]
         workflows.menu(f"Reset {name}?", [("Keep my list", {"kind": "back"}), ("Reset to default", sp.op(AREA, "tier_reset", tier=name))],
@@ -230,7 +242,7 @@ async def handle(workflows, operation) -> None:
 
 async def _title_pick(workflows) -> None:
     from ....ui_support.model_choice import model_groups, recent_models
-    models = [row for row in recent_models(await workflows.client.list_models(selectable_only=True)) if row.get("provider") and row.get("id")]
+    models = [row for row in recent_models(await workflows.client.list_models(selectable_only=True, scope="main")) if row.get("provider") and row.get("id")]
     groups, _ = model_groups(models, favorites=workflows.shell.preferences.values["model_favorites"],
                              recent=workflows.shell.preferences.values["model_recent"])
     items = [(f"{row.get('name') or row['id']} · {row['provider']}/{row['id']}",

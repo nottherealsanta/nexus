@@ -25,8 +25,12 @@ term.attachCustomKeyEventHandler(e=>{
  socket.send(encoder.encode(e.ctrlKey?'\x1b[13;5u':'\x1b[13;2u'));return false;
  }return true;
 });
-function resize(){const size={width:Math.max(20,Math.floor(innerWidth/9.6)),height:Math.max(8,Math.floor(innerHeight/19))};
- term.resize(size.width,size.height);if(socket.readyState===1)socket.send(JSON.stringify(['resize',size]));}
+let fixedSize=false;
+function applySize(size){term.resize(size.width,size.height);if(socket.readyState===1)socket.send(JSON.stringify(['resize',size]));}
+function resize(){if(fixedSize)return;
+ applySize({width:Math.max(20,Math.floor(innerWidth/9.6)),height:Math.max(8,Math.floor(innerHeight/19))});}
+// Capture freeze: pins the grid (and PTY) to cols x rows; window resizes no longer change it.
+window.__nexusResize=(cols,rows)=>{fixedSize=true;applySize({width:cols,height:rows});};
 socket.onopen=resize;window.onresize=resize;
 </script></body></html>'''
 

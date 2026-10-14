@@ -198,6 +198,7 @@ class ModelsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     offline: bool = False
     tiers: dict[str, list[str]] = msgspec.field(default_factory=dict)
     reasoning_efforts: dict[str, list[str]] = msgspec.field(default_factory=dict)
+    tier_efforts: dict[str, dict[str, str]] = msgspec.field(default_factory=dict)
     #: Ordered provider/model references tried only on a provider-level failure
     #: *before* any output has streamed (plan section 8). A refusal or a partial
     #: stream never falls back.
@@ -277,14 +278,25 @@ class ModelsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
                     )
                 seen.add(effort)
 
+        if len(self.tier_efforts) > 64:
+            raise ValueError("models.tier_efforts has too many tiers")
+        for tier, selections in self.tier_efforts.items():
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", tier) or len(selections) > 16:
+                raise ValueError("models.tier_efforts must contain bounded tier selections")
+            for reference, effort in selections.items():
+                if not reference or "/" not in reference or len(reference) > _MAX_MODEL_REFERENCE_LEN:
+                    raise ValueError("models.tier_efforts keys must be provider/model")
+                if effort not in _REASONING_EFFORT_ORDER:
+                    raise ValueError("models.tier_efforts contains an unknown effort")
+
 
 class AgentsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     """Canonical ``[agents]`` section (plan sections 5.6, 15.8).
 
     Bounds every subagent tree: depth, concurrent children, the requested tier,
     fan-out, and the aggregate token/cost budget. A child can never exceed its
-    parent; these values only ever clamp further. ``max_tier`` is validated
-    against the runtime tier table (this layer does not import ``model``).
+    parent; these values only ever clamp further. Legacy ``max_tier`` remains
+    parseable for config compatibility but is ignored by runtime wiring.
     """
 
     enabled: bool = True
@@ -826,13 +838,13 @@ class SessionsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     """``[sessions]``: archiving and automatic titles.
 
     ``auto_title`` names a new session with one small side call to ``title_model``
-    (a tier name or a ``provider/model`` reference); off keeps the first line of
+    (a concrete ``provider/model`` reference); off keeps the first line of
     the first message as the title (plans/done/SESSION_TITLE_PLAN.md).
     """
 
     auto_archive_days: int = 2
     auto_title: bool = True
-    title_model: str = "low"
+    title_model: str = "openai/gpt-5-mini"
 
     def __post_init__(self) -> None:
         if type(self.auto_archive_days) is not int or not 0 <= self.auto_archive_days <= 3650:

@@ -176,12 +176,12 @@ def test_tier_set_rejects_bad_input_and_writes_nothing(tmp_path, monkeypatch, ti
     assert not (home / ".nexus" / "config.toml").exists()
 
 
-def test_agent_max_tier_is_validated_and_written(tmp_path, monkeypatch):
+def test_removed_agent_max_tier_command_is_refused_without_writing(tmp_path, monkeypatch):
     runtime, home = _runtime(tmp_path, monkeypatch)
-    asyncio.run(model_settings.agent_max_tier_set(runtime, "medium"))
-    assert _config(home)["agents"]["max_tier"] == "medium"
-    with pytest.raises(ConfigError, match="unknown tier"):
-        asyncio.run(model_settings.agent_max_tier_set(runtime, "huge"))
+    for tier in ("medium", "huge"):
+        with pytest.raises(ConfigError, match="setting was removed"):
+            asyncio.run(model_settings.agent_max_tier_set(runtime, tier))
+    assert not (home / ".nexus" / "config.toml").exists()
 
 
 # -- session title settings -------------------------------------------------
@@ -190,11 +190,11 @@ def test_agent_max_tier_is_validated_and_written(tmp_path, monkeypatch):
 def test_title_settings_default_and_toggle(tmp_path, monkeypatch):
     runtime, home = _runtime(tmp_path, monkeypatch)
     state = model_settings.session_title_settings(runtime)
-    assert state["enabled"] is True and state["model"] == "low"
-    assert state["resolved"] == "openai/cheap-1" and state["message"] == ""
+    assert state["enabled"] is True and state["model"] == "openai/gpt-5-mini"
+    assert state["resolved"] == "openai/gpt-5-mini" and state["message"] == ""
 
-    asyncio.run(model_settings.session_title_settings_set(runtime, enabled=False, model="medium"))
-    assert _config(home)["sessions"] == {"auto_title": False, "title_model": "medium"}
+    asyncio.run(model_settings.session_title_settings_set(runtime, enabled=False, model="openai/cheap-1"))
+    assert _config(home)["sessions"] == {"auto_title": False, "title_model": "openai/cheap-1"}
 
 
 def test_title_settings_say_when_the_model_cannot_run(tmp_path, monkeypatch):
@@ -202,7 +202,7 @@ def test_title_settings_say_when_the_model_cannot_run(tmp_path, monkeypatch):
     runtime.router = _router(runtime.tiers, runtime.registry, providers=())
     state = model_settings.session_title_settings(runtime)
     assert state["resolved"] == ""
-    assert "no runnable model" in state["message"] and "first message" in state["message"]
+    assert "cannot be resolved" in state["message"] and "first message" in state["message"]
 
 
 @pytest.mark.parametrize("model", ["", "two words", "x" * 200])
@@ -256,7 +256,7 @@ def test_claude_code_settings_with_no_field_writes_nothing(tmp_path, monkeypatch
 def test_sessions_section_validates_title_keys():
     from nexus.config.schema import SessionsSection
 
-    assert SessionsSection().auto_title is True and SessionsSection().title_model == "low"
+    assert SessionsSection().auto_title is True and SessionsSection().title_model == "openai/gpt-5-mini"
     with pytest.raises(ValueError):
         SessionsSection(auto_title="yes")  # type: ignore[arg-type]
     with pytest.raises(ValueError):
@@ -288,3 +288,23 @@ def test_shared_candidates_include_skipped_pins_in_runtime_order(tmp_path, monke
     assert row["resolved"] == "openai/cheap-1"
     assert row["candidates"][0]["reason"] == "provider not connected"
     assert row["candidates"][1]["selected"]
+
+
+def test_tier_effort_selections_persist_validate_and_reset(tmp_path, monkeypatch):
+    runtime, home = _runtime(tmp_path, monkeypatch)
+    runtime.candidate_supported_efforts = lambda provider, model: ["low", "high"]
+    asyncio.run(model_settings.tier_set(runtime, "low", ["openai/cheap-1"], efforts={"openai/cheap-1": "high"}))
+    assert _config(home)["models"]["tier_efforts"]["low"] == {"openai/cheap-1": "high"}
+    before = (home / ".nexus" / "config.toml").read_text()
+    for efforts in ({"openai/cheap-1": "max"}, {"openai/mid-1": "high"}):
+        with pytest.raises(ConfigError):
+            asyncio.run(model_settings.tier_set(runtime, "low", ["openai/cheap-1"], efforts=efforts))
+        assert (home / ".nexus" / "config.toml").read_text() == before
+    asyncio.run(model_settings.tier_reset(runtime, "low"))
+    assert "low" not in _config(home)["models"].get("tier_efforts", {})
+
+
+def test_title_tiers_are_refused(tmp_path, monkeypatch):
+    runtime, _ = _runtime(tmp_path, monkeypatch)
+    with pytest.raises(ConfigError, match="subagents only"):
+        asyncio.run(model_settings.session_title_settings_set(runtime, model="low"))

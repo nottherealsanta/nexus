@@ -29,7 +29,7 @@ async def build(workflows) -> dict:
     speech = await client.speech_status()
     language = str(speech_values["language"])
 
-    blocks = [sp.heading("VOICE INPUT · local dictation"),
+    blocks = [sp.heading("Voice Input · local dictation"),
               sp.note("Audio is transcribed on this device. Auto-send submits at once; turn it off to review the transcript in the composer.")]
     blocks.append(sp.row("voice", "Voice input", sp.toggle(voice.enabled, sp.op(AREA, "voice", name="enabled"))))
     blocks.append(sp.row("auto_send", "Send transcript automatically", sp.toggle(voice.auto_send, sp.op(AREA, "voice", name="auto_send")),
@@ -50,7 +50,7 @@ async def build(workflows) -> dict:
         blocks.append(sp.buttons("voice-download", [("Download local model…", sp.op(AREA, "voice_download_ask"), "primary")]))
     blocks.append(sp.gap())
 
-    blocks += [sp.heading("SPEECH · /speak, local Paradee"),
+    blocks += [sp.heading("Speech · /speak, local Paradee"),
                sp.note("/speak reads the latest answer aloud with Paradee, a small CPU model with one voice (Kokoro's af_heart). Settings are saved in nexus.toml [speech]. Nothing downloads without your consent.")]
     blocks.append(sp.row("language", "Language", sp.select(next((l for l, v in LANGUAGES if v == language), language),
                                                             [(l, v) for l, v in LANGUAGES], sp.op(AREA, "speech", name="language"))))

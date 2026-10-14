@@ -70,6 +70,9 @@ class ProjectSession(msgspec.Struct, frozen=True):
     repo: str = ""
     #: The worktree's branch (or its name when detached); "" outside a linked worktree.
     worktree: str = ""
+    #: Bounded display snippets from the session row. Not part of ``SessionSummary``.
+    last_user: str = ""
+    last_agent: str = ""
 
 
 class ProjectSessionsListResult(msgspec.Struct, tag=True, frozen=True):
@@ -179,6 +182,15 @@ class ProviderKeySet(msgspec.Struct, tag=True, frozen=True, repr_omit_defaults=T
 
 class ProviderLogout(msgspec.Struct, tag=True, frozen=True):
     """Remove one provider's credential from the private credential file."""
+
+    provider: str
+
+
+class ProviderModelsRefresh(msgspec.Struct, tag=True, frozen=True):
+    """Re-run one provider's own model discovery (today only Antigravity ``agy models``).
+
+    Separate from ``ModelsRefresh`` (the models.dev catalogue), which never re-probes ``agy``.
+    """
 
     provider: str
 
@@ -339,6 +351,24 @@ class SessionRestore(msgspec.Struct, tag=True, frozen=True):
     trash_id: str
 
 
+class SessionDashboardPreview(msgspec.Struct, tag=True, frozen=True):
+    """Bounded, redacted mini transcript of one session for the sessions dashboard.
+
+    Distinct from ``SessionPreview`` (archive browser text). ``max_rows`` is
+    1-50. Read-only: it never opens, unarchives or starts the session.
+    """
+
+    session_id: str
+    max_rows: int = 12
+
+
+class SessionRename(msgspec.Struct, tag=True, frozen=True):
+    """Set a session's title durably (``title_source='user'``); auto titles never replace it."""
+
+    session_id: str
+    title: str
+
+
 class SessionExport(msgspec.Struct, tag=True, frozen=True):
     session: str
     format: str = "json"
@@ -424,6 +454,7 @@ class ModelsList(msgspec.Struct, tag=True, frozen=True):
     tier: str | None = None
     selectable_only: bool = False
     search: str | None = None
+    scope: Literal["main", "subagents", "all"] = "all"
 
 
 class ModelShow(msgspec.Struct, tag=True, frozen=True):
@@ -440,10 +471,13 @@ class ModelTierSet(msgspec.Struct, tag=True, frozen=True):
     """Settings -> Models: save the ordered models of one tier (global config).
 
     The first model whose provider can run is used. Returns the refreshed rows.
+    ``efforts`` optionally replaces this tier's per-model effort selections;
+    ``None`` preserves selections for models still in the list.
     """
 
     tier: str
     refs: list[str]
+    efforts: dict[str, str] | None = None
 
 
 class ModelTierReset(msgspec.Struct, tag=True, frozen=True):
@@ -453,7 +487,7 @@ class ModelTierReset(msgspec.Struct, tag=True, frozen=True):
 
 
 class AgentMaxTierSet(msgspec.Struct, tag=True, frozen=True):
-    """Set ``[agents] max_tier``: subagents never run above this tier."""
+    """Legacy command, refused: the configurable subagent ceiling was removed."""
 
     tier: str
 
@@ -837,6 +871,7 @@ Command = (
     | ProviderLoginCancel
     | ProviderKeySet
     | ProviderLogout
+    | ProviderModelsRefresh
     | ProviderLoginCode
     | ProvidersUsage
     | SessionArchive
@@ -861,6 +896,8 @@ Command = (
     | SessionFork
     | SessionDelete
     | SessionRestore
+    | SessionDashboardPreview
+    | SessionRename
     | SessionExport
     | PermissionResolve
     | QuestionAnswer
@@ -945,6 +982,7 @@ COMMANDS: tuple[type, ...] = (
     ProviderLoginCancel,
     ProviderKeySet,
     ProviderLogout,
+    ProviderModelsRefresh,
     ProviderLoginCode,
     ProvidersUsage,
     SessionArchive,
@@ -969,6 +1007,8 @@ COMMANDS: tuple[type, ...] = (
     SessionFork,
     SessionDelete,
     SessionRestore,
+    SessionDashboardPreview,
+    SessionRename,
     SessionExport,
     PermissionResolve,
     QuestionAnswer,
@@ -1152,6 +1192,16 @@ class ProviderAuthResult(msgspec.Struct, tag=True, frozen=True):
     message: str = ""
 
 
+class ProviderModelsRefreshResult(msgspec.Struct, tag=True, frozen=True):
+    """``count`` models in the refreshed list, ``refreshed_at`` (epoch seconds, 0 = never), redacted ``error``."""
+
+    provider: str
+    count: int = 0
+    refreshed_at: float = 0.0
+    error: str = ""
+    message: str = ""
+
+
 class SessionOpenResult(msgspec.Struct, tag=True, frozen=True):
     session: SessionSummary
 
@@ -1260,6 +1310,54 @@ class SessionDeleteResult(msgspec.Struct, tag=True, frozen=True):
 
 class SessionRestoreResult(msgspec.Struct, tag=True, frozen=True):
     session: str
+
+
+class PreviewRow(msgspec.Struct, frozen=True):
+    """One redacted display line; ``kind`` is ``user``, ``assistant`` or ``activity``."""
+
+    kind: str
+    text: str
+
+
+class PendingInput(msgspec.Struct, frozen=True):
+    """An open approval (``permission``, ``id`` = request id) or ``question`` (``id`` = call id)."""
+
+    kind: str
+    id: str
+    text: str
+    options: list[str] = msgspec.field(default_factory=list)
+
+
+class SessionDashboardPreviewResult(msgspec.Struct, tag=True, frozen=True):
+    """``state`` is ``idle``, ``working`` or ``needs_input``; ``context_fraction`` is
+    ``None`` when the window or usage is unknown. At most ``max_rows`` rows and 3
+    pending entries; ``truncated`` says anything was cut."""
+
+    session: str
+    title: str = ""
+    state: str = "idle"
+    workspace: str = ""
+    branch: str = ""
+    agent: str = ""
+    model: str = ""
+    context_used: int | None = None
+    context_window: int | None = None
+    context_fraction: float | None = None
+    last_seq: int = 0
+    rows: list[PreviewRow] = msgspec.field(default_factory=list)
+    pending: list[PendingInput] = msgspec.field(default_factory=list)
+    truncated: bool = False
+    #: Latest cleaned user and assistant text, plus the running tool. Empty when unknown.
+    #: Independent of ``rows``, which replaces the reply with activity while a turn works.
+    last_user: str = ""
+    last_agent: str = ""
+    activity: str = ""
+    #: Duration of the last completed agent turn (``13s``); empty when unknown.
+    worked: str = ""
+
+
+class SessionRenameResult(msgspec.Struct, tag=True, frozen=True):
+    session: SessionSummary
 
 
 class SessionExportResult(msgspec.Struct, tag=True, frozen=True):
@@ -1752,6 +1850,7 @@ Result = (
     | ProvidersStatusResult
     | ProviderLoginResult
     | ProviderAuthResult
+    | ProviderModelsRefreshResult
     | ProvidersUsageResult
     | SessionListResult
     | SessionArchiveResult
@@ -1775,6 +1874,8 @@ Result = (
     | SessionForkResult
     | SessionDeleteResult
     | SessionRestoreResult
+    | SessionDashboardPreviewResult
+    | SessionRenameResult
     | SessionExportResult
     | PermissionResolveResult
     | QuestionAnswerResult
@@ -1838,6 +1939,7 @@ RESULTS: tuple[type, ...] = (
     ProvidersStatusResult,
     ProviderLoginResult,
     ProviderAuthResult,
+    ProviderModelsRefreshResult,
     ProvidersUsageResult,
     SessionListResult,
     SessionArchiveResult,
@@ -1866,6 +1968,8 @@ RESULTS: tuple[type, ...] = (
     SessionForkResult,
     SessionDeleteResult,
     SessionRestoreResult,
+    SessionDashboardPreviewResult,
+    SessionRenameResult,
     SessionExportResult,
     PermissionResolveResult,
     QuestionAnswerResult,
@@ -2029,6 +2133,8 @@ __all__ = [
     "ProviderLoginPoll",
     "ProviderLoginResult",
     "ProviderLogout",
+    "ProviderModelsRefresh",
+    "ProviderModelsRefreshResult",
     "ProvidersStatus",
     "ProvidersStatusResult",
     "ProvidersUsage",
@@ -2066,6 +2172,12 @@ __all__ = [
     "SessionPreviewResult",
     "SessionRestore",
     "SessionRestoreResult",
+    "SessionDashboardPreview",
+    "SessionDashboardPreviewResult",
+    "SessionRename",
+    "SessionRenameResult",
+    "PreviewRow",
+    "PendingInput",
     "SessionSearch",
     "SessionSearchResult",
     "SessionStart",

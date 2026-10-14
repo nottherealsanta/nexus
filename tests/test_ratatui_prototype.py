@@ -37,7 +37,7 @@ def test_native_blocks_follow_durable_conversation_order():
     assert ids.index("turn:activity:firstthinking") < ids.index("lasttext")
     group = next(block for block in blocks if block["kind"] == "tool_group")
     assert [member["id"] for member in group["members"]] == ["firstthinking", "read"]
-    assert group["text"] == "Thought 1 time · Read 1 file"
+    assert group["text"] == "Thought 1 time, Read 1 file"
 
 
 def test_projection_cache_reuses_unchanged_turns_and_invalidates_replacements(tmp_path, monkeypatch):

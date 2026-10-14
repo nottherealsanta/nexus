@@ -394,10 +394,10 @@ async def test_layout_and_appearance_toggle_and_reset_to_defaults(shell):
     # The pages themselves are covered in test_ratatui_settings_simple_pages.py.
     await shell.workflows.operate({"kind": "layout"})
     rows = {b["id"]: b for b in shell.workflows.settings_page["blocks"] if b.get("t") == "row"}
-    await shell.workflows.operate({**rows["sessions_sidebar"]["control"]["operation"], "value": False})
-    assert shell.preferences.values["sessions_sidebar"] is False
+    await shell.workflows.operate({**rows["details_sidebar"]["control"]["operation"], "value": False})
+    assert shell.preferences.values["details_sidebar"] is False
     await shell.workflows.operate({"kind": "sp_layout", "area": "layout", "key": "reset"})
-    assert shell.preferences.values["sessions_sidebar"] is True
+    assert shell.preferences.values["details_sidebar"] is True
     await shell.workflows.settings_area("appearance")
     await shell.workflows.operate({"kind": "sp_appearance", "area": "appearance", "key": "theme", "value": "nexus-light"})
     assert shell.panel_title == "Settings · Appearance" and shell.preferences.values["theme"] == "nexus-light"

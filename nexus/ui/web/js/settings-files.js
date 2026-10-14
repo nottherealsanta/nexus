@@ -159,7 +159,7 @@ export function createSettingsFiles({api, el, $, notify, onChange = () => {}, pi
   const fallbacks = () => fallbackItems(agentFields(editor().value).fallback || '');
   async function loadModels() {
     if (s.models) return s.models;
-    try { const r = await api.command({type: 'ModelsList', selectable_only: true}); s.models = (r.models || []).filter(m => m.provider && m.id); } catch { s.models = []; }
+    try { const r = await api.command({type: 'ModelsList', selectable_only: true, scope: 'main'}); s.models = (r.models || []).filter(m => m.provider && m.id); } catch { s.models = []; }
     $('agent-model-options').replaceChildren(...s.models.map(m => { const o = el('option'); o.value = `${m.provider}/${m.id}`; return o; }));
     return s.models;
   }

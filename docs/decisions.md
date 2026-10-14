@@ -630,3 +630,81 @@ client. Claude's CLI prints only reset text, so the host parses it (in the named
 zone, inferring the year); an unparsed reset simply shows no reserve. The bars
 became thin line glyphs (`━─`) and colour only the bar, so the rows read as
 data rather than a wall of colour; `N% left` was dropped as the bar's track.
+
+## The `agy models` list is cached until the model list refreshes (2026-10)
+
+Every tier or default-model edit rebuilt the registry, which re-ran `agy models`
+(network, 3.5-7 s) and re-parsed the 5.6 MB catalogue, so Settings > Models
+lagged per edit. The probe result now lives on a `RegistryCache` owned by the
+runtime and on disk (`cache/agy-models.json`). There is deliberately no TTL: the
+list changes only when the user updates agy, which is what the model-list
+refresh is for, so the agy list has its own refresh, separate from the models.dev
+refresh: the `ProviderModelsRefresh` host command, a **Refresh models** button on
+the Antigravity provider page that also shows the count and last-refreshed time
+(kept in the cache file). Other triggers: a changed executable/section or an
+empty cache. `ModelsRefresh` and catalogue re-fetches leave it alone. A failed probe
+keeps the last good list. Tier-only edits skip the provider/registry rebuild
+entirely (`Runtime.reload_tier_config`). Not verified: behaviour when agy is
+upgraded without a refresh (the old list stays until refreshed).
+## The sessions page shows both tails and reuses the composer (2026-10)
+
+The sessions dashboard is a full-width list grouped by status, matching the
+reference layout: location and `[Choose Ctrl+L]`, `+ New Agent`, Open Previous,
+Worktree, and a two-line row. Hovering a row (or keyboard-selecting it) shows
+the last user message and the last agent message. Those snippets live on the
+session row (`last_user`, `last_agent`, schema 4), not on `SessionSummary`, so
+ordinary session lists do not carry message text. The open session overlays its
+live view on every snapshot. The composer below the list is the existing
+composer; Enter sends to the selected session. Verified in a 140-column
+dark capture (`artifacts/ratatui-parity/grok-dashboard-dark-140-unicode.png`):
+status groups, header actions, the working row, and the existing composer
+card. The keyboard-selected row is expanded into You / Agent lines. A live
+`nexus chat` still shows the previous screen until it is quit and reopened,
+because it keeps the release binary it was launched with.
+
+## The native TUI has no left sessions sidebar; the dashboard and top bar replace it (2026-10)
+
+The Ratatui client dropped the left Sessions sidebar (drawer, docked column, project
+chips, filter, `F6` focus). Two surfaces covered the same job: the sidebar was a
+second, narrower list of the sessions the dashboard already shows with more
+context, and it cost 40 columns plus a drawer mode, a focus state and a client-side
+filter that had to stay in step with the dashboard. Now `/sessions` (also `Ctrl+B`,
+`Ctrl+O`, `Ctrl+S`) opens the dashboard, and the Grok-style top bar carries
+`‹ i/n ›` to cycle the open sessions and a clickable `[Dashboard]`. The right
+details sidebar stays: it shows facts about the current session, not a list of
+others. The `sessions_sidebar` preference and snapshot key are kept only for the
+GPUI desktop client, which still has its own sidebar; the Settings → Layout row is
+gone. The web client keeps its sidebar (it is being deprecated, not changed).
+Modals share one backdrop dim (`render::dim_backdrop`) instead of each drawing its
+own scrim. Not verified: native screenshots of every modal kind over the dim.
+
+# In-progress Grok TUI implementation notes
+
+- The widget-role foundation is implemented as methods, not role constants.
+- Projection/tool verb signals are implemented with focused Python tests passing.
+- The host preview contract is implemented. The unrelated fake `_load_config`
+  failure in `test_facade_handle_dispatches_every_verb` is pre-existing.
+- The Mermaid module is registered and called from `markdown.rs`. Its actual
+  reference revision is `559751fdcec02d413e4c57c8832ab275e4f44980`, not the
+  planned `2bdd1d6`.
+- Double-click on a tool uses a 300 ms window on the same semantic block and
+  operation, and toggles local disclosure. A single click selects, and `i` opens
+  the full inspector (so nothing the agent saw is unreachable). Local disclosure
+  matches on semantic kind and id and ignores presentation metadata.
+- Settings hover uses real hit ranges. The dashboard invalidates in-flight work
+  when a replacement overlay closes.
+- Not claimed: screenshot acceptance, performance acceptance, final combined
+  verification, or commits.
+
+## Settings is one root list with drill rows, not an area column (2026-10)
+
+The native TUI Settings modal drops the left list of areas. The root list (client-side,
+`settings_page/root.rs`) shows section headers, the local appearance toggles and one drill
+row per area from the host's `nav`; drilling sends the existing `nav_select`, and Esc/Left go
+back locally. This matches Grok's settings modal and needs no new host command. Cost: the
+host still loads Appearance behind the root on open. Appearance and Layout rows are inlined via a
+`settings_overview` snapshot field built from those areas' builders (same handlers and
+allow-list); Keyboard stays a drill row. Every framed dialog
+(pickers, panels, Settings) shares `dialog_frame`: `border` outline, bold title top-left,
+clickable `[×]` top-right (`render::close_rect`), and `element` selection fill. Not verified
+on a light theme.

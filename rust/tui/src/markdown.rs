@@ -2,11 +2,18 @@
 //! (`app.tcss` `.timeline-assistant ...`): coloured headings, colour-only inline
 //! code, fences and quotes on the panel colour with a quote bar,
 //! hanging-indent lists and aligned tables. HTML is literal; URLs stay visible.
+use crate::mermaid;
 use crate::render::Palette;
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::{
     style::{Color, Modifier, Style},
-    text::Span,
+    text::{Line, Span},
+};
+use std::{
+    cell::RefCell,
+    collections::{hash_map::DefaultHasher, HashMap},
+    hash::{Hash, Hasher},
+    rc::Rc,
 };
 use ratatui_markdown::{
     markdown::{MarkdownBlock, MarkdownRenderer},
@@ -197,36 +204,89 @@ impl<'a> Walker<'a> {
             }
         }
     }
-    fn fence(&mut self, body: &str, language: &str) {
+    fn fence(&mut self, body: &str, language: &str, closed: bool) {
         let index = self.fences;
         self.fences += 1;
-        // Keep the literal, labelled mermaid fallback without invoking diagram
-        // hooks: this text-only transcript cannot place graphical output.
-        if language != "mermaid" {
-            let block = MarkdownBlock::code_block(language, body.replace('\t', "    "));
-            for line in MarkdownRenderer::new(self.width).render(&[block], &MarkdownTheme(self.p)) {
-                self.cur.extend(line.spans.into_iter().map(|mut span| {
-                    span.style = span.style.bg(self.p.panel);
-                    span
-                }));
-                self.fence_row(index);
-            }
+        // Closed mermaid fences draw as Unicode art on the transcript
+        // background when the diagram fits; everything else (still streaming,
+        // unsupported type, parse failure, too wide) is an ordinary code block.
+        if closed && language == "mermaid" && self.mermaid_art(body, index) {
             return;
         }
-        let bg = self.p.panel;
-        let style = Style::default().fg(self.p.text).bg(bg);
-        if !language.is_empty() {
-            self.cur.push(Span::styled(
-                language.to_string(),
-                Style::default().fg(self.p.quiet).bg(bg),
-            ));
+        // ratatui-markdown without its `mermaid` feature renders a mermaid
+        // fence as zero lines, swallowing the source. Render it as `text`
+        // and relabel the header so the original language stays visible.
+        let relabel = language == "mermaid";
+        let render_language = if relabel { "text" } else { language };
+        let block = MarkdownBlock::code_block(render_language, body.replace('\t', "    "));
+        for (n, mut line) in MarkdownRenderer::new(self.width)
+            .render(&[block], &MarkdownTheme(self.p))
+            .into_iter()
+            .enumerate()
+        {
+            if relabel && n == 0 {
+                if let Some(span) = line.spans.iter_mut().find(|s| s.content.contains("text")) {
+                    let mut label = span.content.replacen("text", "mermaid", 1);
+                    // Keep the row width: absorb the 3 extra cells from padding.
+                    for _ in 0..3 {
+                        if let Some(at) = label.rfind("  ") {
+                            label.remove(at);
+                        }
+                    }
+                    span.content = label.into();
+                }
+            }
+            self.cur.extend(line.spans.into_iter().map(|mut span| {
+                span.style = span.style.bg(self.p.panel);
+                span
+            }));
             self.fence_row(index);
         }
-        for line in body.trim_end_matches('\n').split('\n') {
-            self.cur
-                .push(Span::styled(line.replace('\t', "    "), style));
-            self.fence_row(index);
+    }
+    /// Push the diagram rows plus a quiet `◇ mermaid` label. `false` means the
+    /// source cannot be drawn within the row width and nothing was pushed.
+    fn mermaid_art(&mut self, body: &str, index: usize) -> bool {
+        let avail = self.width.saturating_sub(self.quote * 2 + self.indent());
+        let Some(art) = mermaid_cached(body, self.p, avail) else {
+            return false;
+        };
+        let bg = self.bg();
+        for line in art.iter() {
+            let (prefix, _) = self.prefix();
+            let spans = line
+                .spans
+                .iter()
+                .cloned()
+                .map(|mut span| {
+                    if let Some(bg) = bg {
+                        span.style = span.style.bg(bg);
+                    }
+                    span
+                })
+                .collect();
+            self.rows.push(Row {
+                prefix,
+                spans,
+                bg,
+                blank: false,
+                fence: Some(index),
+            });
         }
+        let mut label = Style::default().fg(self.p.quiet);
+        if let Some(bg) = bg {
+            label = label.bg(bg);
+        }
+        self.cur.push(Span::styled("◇ mermaid", label));
+        let (prefix, _) = self.prefix();
+        let spans = std::mem::take(&mut self.cur);
+        self.rows.push(Row {
+            prefix,
+            spans,
+            bg,
+            blank: false,
+            fence: Some(index),
+        });
+        true
     }
     fn fence_row(&mut self, index: usize) {
         let (mut prefix, _) = self.prefix();
@@ -406,6 +466,73 @@ fn wrap_cell(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
+type Art = Rc<Vec<Line<'static>>>;
+const ART_CACHE_LIMIT: usize = 64;
+
+thread_local! {
+    // (source + palette hash, available width) -> drawn art, or None when the
+    // diagram cannot be drawn there. Bounded: cleared when full.
+    static ART_CACHE: RefCell<HashMap<(u64, usize), Option<Art>>> = RefCell::new(HashMap::new());
+}
+
+/// Lay a mermaid diagram out once per `(source, palette, width)`, so
+/// scrolling and re-wrapping do not repeat the layout.
+fn mermaid_cached(body: &str, p: &Palette, width: usize) -> Option<Art> {
+    let mut hasher = DefaultHasher::new();
+    body.hash(&mut hasher);
+    [p.text, p.border_strong, p.quiet, p.muted].hash(&mut hasher);
+    let key = (hasher.finish(), width);
+    if let Some(hit) = ART_CACHE.with(|c| c.borrow().get(&key).cloned()) {
+        return hit;
+    }
+    let styles = mermaid::MermaidStyles {
+        border: Style::default().fg(p.border_strong),
+        node_text: Style::default().fg(p.text),
+        edge: Style::default().fg(p.quiet),
+        edge_label: Style::default().fg(p.muted),
+        title: Style::default().fg(p.muted),
+    };
+    let art = mermaid::render(body, &styles, Some(width))
+        .filter(|art| {
+            art.styled_lines
+                .iter()
+                .all(|line| line.spans.iter().map(|s| s.content.width()).sum::<usize>() <= width)
+        })
+        .map(|art| Rc::new(art.styled_lines));
+    ART_CACHE.with(|c| {
+        let mut cache = c.borrow_mut();
+        if cache.len() >= ART_CACHE_LIMIT {
+            cache.clear();
+        }
+        cache.insert(key, art.clone());
+    });
+    art
+}
+
+/// Whether the fenced block spanning `block` (opening through closing line)
+/// ends with a closing fence. pulldown-cmark ends an unclosed fence at the end
+/// of the document, so the parser alone cannot tell.
+fn fence_is_closed(block: &str) -> bool {
+    let strip = |line: &str| -> String {
+        line.trim_start_matches(|c: char| c == '>' || c.is_whitespace())
+            .trim_end()
+            .to_string()
+    };
+    let lines: Vec<String> = block.trim_end().lines().map(strip).collect();
+    let (Some(open), Some(close)) = (lines.first(), lines.last()) else {
+        return false;
+    };
+    if lines.len() < 2 {
+        return false;
+    }
+    let Some(mark) = open.chars().next().filter(|c| *c == '`' || *c == '~') else {
+        return false;
+    };
+    let run = open.chars().take_while(|c| *c == mark).count();
+    let closing = close.chars().take_while(|c| *c == mark).count();
+    closing >= run.max(3) && closing == close.chars().count()
+}
+
 /// The literal source of each fenced or indented code block, in the order
 /// [`lines`] numbers them; Copy buttons recover their text from here.
 pub fn fence_sources(text: &str) -> Vec<String> {
@@ -454,10 +581,12 @@ pub fn lines(text: &str, p: &Palette, width: usize) -> Vec<Row> {
         fences: 0,
     };
     let mut fence_body = String::new();
-    for event in Parser::new_ext(
+    for (event, range) in Parser::new_ext(
         &safe_text,
         Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS,
-    ) {
+    )
+    .into_offset_iter()
+    {
         match event {
             Event::Start(Tag::Strong) => w.bold += 1,
             Event::End(TagEnd::Strong) => w.bold = w.bold.saturating_sub(1),
@@ -490,7 +619,8 @@ pub fn lines(text: &str, p: &Palette, width: usize) -> Vec<Row> {
             Event::End(TagEnd::CodeBlock) => {
                 let language = w.code_block.take().unwrap_or_default();
                 let body = std::mem::take(&mut fence_body);
-                w.fence(&body, &language);
+                let closed = fence_is_closed(&safe_text[range]);
+                w.fence(&body, &language, closed);
                 w.blank();
             }
             Event::Start(Tag::List(start)) => {
@@ -724,13 +854,18 @@ mod tests {
     }
     #[test]
     fn terminal_only_fallbacks_keep_content() {
-        let text = render("![diagram](https://example.com/image.png)\n\n![](empty.png)\n\n<div>raw HTML</div>\n\n```mermaid\ngraph TD; A-->B\n```\n\n```unknown\nopaque source\n```").join("\n");
+        let text = render("![diagram](https://example.com/image.png)\n\n![](empty.png)\n\n<div>raw HTML</div>\n\n```mermaid\ngraph TD\n  A[Start] --> B[End]\n```\n\n```mermaid\npie\n\"a\" : 1\n```\n\n```unknown\nopaque source\n```").join("\n");
         for expected in [
             "[image: diagram (https://example.com/image.png)]",
             "[image:  (empty.png)]",
             "<div>raw HTML</div>",
-            "mermaid",
-            "graph TD; A-->B",
+            // Valid diagram: drawn as art plus the quiet label.
+            "┌",
+            "Start",
+            "◇ mermaid",
+            // Unsupported diagram type: ordinary code block keeping its source.
+            "pie",
+            "\"a\" : 1",
             "unknown",
             "opaque source",
         ] {
@@ -788,5 +923,120 @@ mod tests {
             assert!(style.add_modifier.contains(Modifier::BOLD));
             assert_eq!(rows[0].bg, Some(p.panel));
         }
+    }
+
+    fn mermaid_rows(source: &str, width: usize) -> Vec<Row> {
+        lines(&format!("```mermaid\n{source}\n```"), &Palette::new(false), width)
+    }
+    fn drawn(rows: &[Row]) -> bool {
+        rows.iter().any(|r| plain(r).contains('┌')) && rows.iter().all(|r| r.bg != Some(Palette::new(false).panel))
+    }
+    fn as_code_block(rows: &[Row]) -> bool {
+        rows.iter().all(|r| r.bg == Some(Palette::new(false).panel))
+    }
+    const WIDE: &str = "graph TD\n  R[root] --> A[service_alpha]\n  R --> B[service_bravo]\n  R --> C[service_charlie]\n  R --> D[service_delta]\n  R --> E[service_echo]\n  R --> F[service_foxtrot]";
+
+    #[test]
+    fn mermaid_flowcharts_and_sequences_draw_art() {
+        for source in [
+            "graph TD\n  A[Start] --> B[End]",
+            "graph LR\n  A[Start] --> B[End]",
+            "sequenceDiagram\n  Alice->>Bob: hello",
+        ] {
+            let rows = mermaid_rows(source, 80);
+            assert!(drawn(&rows), "{source}: {:#?}", rows.iter().map(plain).collect::<Vec<_>>());
+            assert!(rows.iter().all(|r| r.fence == Some(0)));
+            assert!(plain(rows.last().unwrap()).contains("◇ mermaid"));
+            assert!(rows.iter().all(|r| plain(r).width() <= 80));
+        }
+    }
+    #[test]
+    fn mermaid_cjk_labels_fit() {
+        let rows = mermaid_rows("graph TD\n  A[开始] --> B[结束]", 40);
+        assert!(drawn(&rows));
+        assert!(rows.iter().all(|r| plain(r).width() <= 40));
+        assert!(rows.iter().map(plain).collect::<String>().contains("开始"));
+    }
+    #[test]
+    fn mermaid_unsupported_unclosed_and_extra_tokens() {
+        assert!(as_code_block(&mermaid_rows("pie\n\"a\" : 1", 80)));
+        let open = lines("```mermaid\ngraph TD\n  A --> B", &Palette::new(false), 80);
+        assert!(as_code_block(&open));
+        let themed = lines("```mermaid theme=dark\ngraph TD\n  A --> B\n```", &Palette::new(false), 80);
+        assert!(drawn(&themed));
+        let tilde = lines("~~~mermaid\ngraph TD\n  A --> B\n~~~", &Palette::new(false), 80);
+        assert!(drawn(&tilde));
+    }
+    #[test]
+    fn mermaid_invalid_fallback_keeps_original_body() {
+        let rows = mermaid_rows("pie\n\"a\" : 1", 80);
+        let text = rows.iter().map(plain).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("pie") && text.contains("\"a\" : 1"), "{text}");
+        assert!(text.contains("mermaid") && !text.contains("◇ mermaid"), "{text}");
+        assert!(as_code_block(&rows));
+        let open = lines("```mermaid\ngraph TD\n  A --> B", &Palette::new(false), 80);
+        let open = open.iter().map(plain).collect::<Vec<_>>().join("\n");
+        assert!(open.contains("graph TD") && open.contains("A --> B"), "{open}");
+        // A later fence after drawn art still falls back with its own source.
+        let both = lines(
+            "```mermaid\ngraph TD\n  A --> B\n```\n\n```mermaid\npie\n\"a\" : 1\n```",
+            &Palette::new(false),
+            80,
+        );
+        let text = both.iter().map(plain).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("◇ mermaid") && text.contains("pie"), "{text}");
+        assert_eq!(crate::markdown::fence_sources("```mermaid\npie\n\"a\" : 1\n```"), ["pie\n\"a\" : 1"]);
+    }
+    #[test]
+    fn mermaid_streaming_matches_one_shot() {
+        let full = "text\n\n```mermaid\ngraph TD\n  A --> B\n```\n";
+        let one_shot: Vec<String> = lines(full, &Palette::new(false), 60).iter().map(plain).collect();
+        let mut last = Vec::new();
+        for end in (0..=full.len()).filter(|i| full.is_char_boundary(*i)) {
+            last = lines(&full[..end], &Palette::new(false), 60).iter().map(plain).collect();
+        }
+        assert_eq!(last, one_shot);
+    }
+    #[test]
+    fn mermaid_wide_lr_retries_top_down() {
+        let source = "graph LR\n  A[service_alpha] --> B[service_bravo] --> C[service_charlie] --> D[service_delta] --> E[service_echo]";
+        let rows = mermaid_rows(source, 60);
+        assert!(drawn(&rows), "{:#?}", rows.iter().map(plain).collect::<Vec<_>>());
+        assert!(rows.iter().any(|r| plain(r).contains('▼')));
+    }
+    #[test]
+    fn mermaid_too_wide_either_way_and_resize_switch() {
+        assert!(as_code_block(&mermaid_rows(WIDE, 40)));
+        assert!(drawn(&mermaid_rows(WIDE, 160)));
+        assert!(as_code_block(&mermaid_rows(WIDE, 40)));
+    }
+    #[test]
+    fn mermaid_copy_source_is_not_the_art() {
+        let text = format!("```mermaid\n{WIDE}\n```");
+        assert_eq!(fence_sources(&text), vec![WIDE.to_string()]);
+        assert!(drawn(&lines(&text, &Palette::new(false), 160)));
+    }
+    #[test]
+    fn mermaid_fuzzed_bodies_never_panic() {
+        let tokens = [
+            "graph TD", "graph LR", "flowchart RL", "A", "B[x]", "-->", "-.->", "==>", "subgraph s",
+            "end", "stateDiagram-v2", "[*]", ": ev", "classDiagram", "class A", "A <|-- B", "erDiagram",
+            "A ||--o{ B : has", "sequenceDiagram", "Alice->>Bob: hi", "Note over A: n", "界", "|lbl|",
+            "((", "))", "{", "}", ";", "\n", "\n", " ",
+        ];
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let start = std::time::Instant::now();
+        for _ in 0..300 {
+            let mut body = String::new();
+            for _ in 0..(seed % 40) {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                body.push_str(tokens[(seed >> 33) as usize % tokens.len()]);
+                body.push(' ');
+            }
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let width = 20 + (seed >> 40) as usize % 120;
+            let _ = mermaid_rows(&body.replace("```", ""), width);
+        }
+        assert!(start.elapsed() < std::time::Duration::from_secs(20));
     }
 }

@@ -470,9 +470,8 @@ async def test_cap_is_configurable_and_never_widens(tmp_path):
     assert outcome.clamped is False
 
 
-async def test_tier_hint_without_role_model_runs_the_parent_model(tmp_path):
-    # A role without ``tiers`` keeps the earlier rule: a bare tier hint labels
-    # the spawn but never swaps the model, so the child inherits the parent's.
+async def test_tier_hint_without_role_model_routes_the_requested_tier(tmp_path):
+    # Explicit tiers route their own lists; only omitted models inherit.
     factory = Factory()
     agents = tmp_path / "ws" / ".agents" / "agents"
     agents.mkdir(parents=True)
@@ -484,7 +483,7 @@ async def test_tier_hint_without_role_model_runs_the_parent_model(tmp_path):
     await runner.spawn(TaskRequest(prompt="x", subagent_type="worker"))
     await runner.spawn(TaskRequest(prompt="x", model="codex/gpt-5-mini"))
     assert [spec.model for spec in factory.specs] == [
-        "codex/gpt-6-luna",
+        "low",
         "codex/gpt-6-luna",
         "codex/gpt-5-mini",
     ]
@@ -1227,3 +1226,40 @@ def test_role_index_lists_only_subagent_eligible_roles(tmp_path: Path) -> None:
     assert "build" not in names and "lead" not in names
     assert "reviewer: Reviews a diff for bugs." in lines
     assert len(runner.role_index(max_chars=40)) <= 40
+
+
+async def test_tool_roster_lists_all_tier_models_and_failure_instruction(tmp_path):
+    from nexus.tools.builtin.task import make_task_spec
+    factory = Factory()
+    runner = make_runner(tmp_path, factory, tier_candidates=lambda tier: [f"antigravity/{tier}-model", f"openai/{tier}-fallback"])
+    description = make_task_spec(runner).description
+    for tier in ("low", "medium", "high"):
+        assert f"{tier} models (in order): antigravity/{tier}-model, openai/{tier}-fallback" in description
+    assert "call the next model in line for that tier" in description
+
+
+async def test_refused_start_preserves_selected_route_and_redacted_policy_reason(tmp_path):
+    from types import SimpleNamespace
+    from nexus.errors import ConfigError
+    from nexus.view import fold, initial_state
+    from nexus.ui_support.timeline import agent_model_label
+
+    def refused(spec):
+        error = ConfigError("read-only restriction cannot be enforced; token=sk-secret123456789")
+        error.selected_model = "antigravity/gemini-3.1-flash-high"
+        raise error
+
+    runner = make_runner(tmp_path, refused)
+    events = []
+    outcome = await runner.spawn(TaskRequest(prompt="read a file", model="low"), emit=SimpleNamespace(emit=events.append))
+    assert outcome.actual_model is None
+    assert outcome.to_dict()["selected_model"] == "antigravity/gemini-3.1-flash-high"
+    assert "(not started)" in outcome.model_line()
+    completed = next(event for event in events if event.type == "agent.completed")
+    assert "ConfigError: read-only restriction cannot be enforced" in completed.data["error"]
+    assert "sk-secret123456789" not in completed.data["error"]
+    view = fold(events, initial_state("root"))
+    agent = next(iter(view.agents.values()))
+    assert agent.resolved_model is None
+    assert agent.selected_model == "antigravity/gemini-3.1-flash-high"
+    assert "selected antigravity/gemini-3.1-flash-high (not started)" in agent_model_label(agent)

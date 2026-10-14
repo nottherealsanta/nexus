@@ -11,9 +11,6 @@ impl LocalUi {
     fn apply(action: &Value, s: &mut Snapshot) {
         match action["type"].as_str().unwrap_or("") {
             "toggle" => match action["key"].as_str().unwrap_or("") {
-                "sessions_sidebar" => {
-                    s.sessions_sidebar = action["value"].as_bool().unwrap_or(s.sessions_sidebar)
-                }
                 "details_sidebar" => {
                     s.details_sidebar = action["value"].as_bool().unwrap_or(s.details_sidebar)
                 }
@@ -59,7 +56,6 @@ impl LocalUi {
             "toggle" => {
                 let key = action["key"].as_str().unwrap_or("").to_owned();
                 let value = match key.as_str() {
-                    "sessions_sidebar" => !s.sessions_sidebar,
                     "details_sidebar" => !s.details_sidebar,
                     _ => return input::send(action),
                 };

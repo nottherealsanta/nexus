@@ -1469,6 +1469,7 @@ def _on_agent_completed(state: ConversationView, event: Event, data: Mapping[str
         # The runner's final-model disclosure backs up a child whose own
         # model events were never relayed; a seen start is never replaced.
         resolved_model=agent.resolved_model or _qualified_model(None, data.get("resolved_model")),
+        selected_model=_qualified_model(None, data.get("selected_model")) or agent.selected_model,
         body=body,
         completed_ts=event.ts,
     )

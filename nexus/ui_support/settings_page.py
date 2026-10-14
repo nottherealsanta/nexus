@@ -89,10 +89,11 @@ def tabs(id_: str, labels: list[str], active: int, operation: dict, badges: list
             "active": max(0, min(active, len(labels) - 1)) if labels else 0, "operation": operation}
 
 
-def ordered(id_: str, items: list[tuple[str, str, str]], operation: dict, add_label: str = "Add model…", *, editable: bool = True) -> dict:
+def ordered(id_: str, items: list[tuple[str, str, str]], operation: dict, add_label: str = "Add model…", *, editable: bool = True, controls: list[dict] | None = None) -> dict:
     """``items``: ``(label, tag, note)``; an empty tag means ``in use`` for the first and ``fallback`` after."""
     return {"t": "ordered", "id": id_, "items": [[label, tag, note_] for label, tag, note_ in items[:MAX_ITEMS]],
-            "add_label": add_label, "editable": editable, "operation": operation}
+            "add_label": add_label, "editable": editable, "operation": operation,
+            "controls": (controls or [])[:MAX_ITEMS]}
 
 
 def buttons(id_: str, items: list[tuple[str, dict, str]], label: str = "") -> dict:
@@ -163,6 +164,8 @@ def _key(operation: dict) -> str:
 def _walk(blocks):
     for block in blocks:
         yield block
+        if block.get("t") == "ordered":
+            yield from block.get("controls", [])
         if block.get("t") == "section":
             yield from _walk(block.get("blocks", []))
 

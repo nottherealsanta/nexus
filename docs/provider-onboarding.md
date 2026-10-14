@@ -136,6 +136,6 @@ Discovery does not acknowledge inherited settings: worker execution still requir
 `worker_inherits_agy_settings = true` in an explicit provider section.
 
 Providers Settings always includes Antigravity, with manual CLI sign-in: run `agy`
-in your terminal, then **Re-check and refresh models**. CLI presence is not verified
+in your terminal, then **Refresh models** (re-runs `agy models`; the page shows the count and last-refreshed time). CLI presence is not verified
 authentication. Nexus does not run a login subcommand, manage CLI credentials, or
 perform a model turn to discover availability. A missing CLI is reported honestly.

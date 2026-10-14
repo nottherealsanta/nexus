@@ -142,3 +142,10 @@ Overload retries record `model.retrying` with `reason: provider_overloaded`,
 message; the next `model.started` opens a separate attempt, retaining partial
 text for live display and replay. Failed/cancelled turns mark unfinished tool
 rows failed, so a task cannot remain at “Starting…” after its turn has ended.
+
+`agent.completed.selected_model` optionally discloses a concrete route selected
+before a child-start refusal (e.g. an Antigravity read-only policy mismatch).
+The reducer retains it as `AgentView.selected_model`; it is never treated as
+`resolved_model` or counted as a model start. Terminal links label it selected /
+not started and display the redacted configuration error. Replay reproduces
+this disclosure.

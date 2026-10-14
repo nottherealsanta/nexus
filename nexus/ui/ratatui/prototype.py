@@ -21,8 +21,11 @@ from ...ui_support.context import context_usage, context_measure, price_tier_thr
 from ...ui_support.completion import root_agents
 from ...ui_support.prompt_history import load_history
 from .controller import NativeController as TuiController
+from .verb_groups import activity_entries, format_time
+from .turn_status import turn_status
 from ...ui_support.text import escape_controls, sanitize
 from ...ui_support.tool_details import sections_to_text
+from ...ui_support.tool_signal import tool_signal
 
 
 _OUTPUT_SECTIONS = frozenset({"Result", "Summary", "Error", "Progress"})
@@ -75,17 +78,36 @@ def operation_allowed(shell, allowed: set, operation) -> bool:
         return True
     workflows = shell.workflows
     page = workflows.settings_page if shell.panel_title and shell.panel_title == workflows.page_title else None
-    return sp.accepts(page, operation)
+    dashboard = getattr(workflows, "dashboard", None)
+    if dashboard is not None and dashboard.accepts(operation):
+        return True
+    overview = workflows.settings_overview if page else None
+    return sp.accepts(page, operation) or sp.accepts(overview, operation)
+
+
+def _dashboard_hidden(shell, prompt) -> bool:
+    """A prompt, panel or form owns input; the dashboard stays out of the snapshot meanwhile."""
+    return bool(prompt or shell.panel_title or shell.workflows.form)
+
+
+def _dashboard_state(shell, prompt=None):
+    """The ``dashboard`` snapshot field: the visible Sessions dashboard, else ``None``."""
+    dashboard = getattr(shell.workflows, "dashboard", None) if shell else None
+    if dashboard is None or _dashboard_hidden(shell, prompt):
+        return None
+    return dashboard.snapshot()
 
 
 def _block_operations(blocks):
     """Allow only actions present in the current projected transcript, including chips."""
     for block in blocks:
-        for key in ("operation", "output_operation", "chip_operation"):
+        for key in ("operation", "output_operation", "chip_operation", "inspect_operation"):
             if operation := block.get(key):
                 yield operation
         yield from block.get("chip_operations", [])
         yield from _block_operations(block.get("members", []))
+        yield from _block_operations(block.get("failed_members", []))
+        yield from _block_operations([block["live_member"]] if block.get("live_member") else [])
 
 
 def _explored_summary(tools) -> str:
@@ -150,6 +172,7 @@ def _change_block(tool, shell, local_ui, body):
              "text": heading, "heading": suffix, "added": added, "removed": removed,
              "files": len(paths), "path": ", ".join(p for p in paths if p),
              "operation": {"kind": "block_toggle", "id": op_id},
+             "inspect_operation": {"kind": "tool_details", "id": tool.call_id},
              "output_operation": {"kind": "block_toggle", "id": out_id} if len(rows) > _EXPAND_AFTER_LINES else None}
     if local_ui:
         block.update(local_ui=True, local_open=default_open, diff_lines=rows, local_detail=detail,
@@ -163,14 +186,6 @@ def _change_block(tool, shell, local_ui, body):
     block.update(collapsed=not opened, diff_lines=rows if opened else [], detail=detail if opened else "")
     return block
 
-
-def _thought_took(ms: int) -> str:
-    """`671ms`, `4.2s`, `1m 5s`."""
-    if ms < 1000:
-        return f"{ms}ms"
-    if ms < 60_000:
-        return f"{ms / 1000:.1f}s"
-    return f"{ms // 60_000}m {(ms // 1000) % 60}s"
 
 #: Projected-turn cache bound, shared by every open tab (keys are namespaced by session).
 TURN_CACHE_BYTES = 64 * 1024 * 1024
@@ -238,7 +253,7 @@ def _project_turn(turn, shell, agents=None, literal=True):
     from ...ui_support.timeline import (
         _has_message_content, _literal, submitted_attachment_summary,
         thought_title, tool_status, turn_footer_text,
-        _turn_duration, _text, turn_agent_label)
+        _turn_duration, _text)
     local_ui = bool(shell and getattr(shell, "local_transcript", False))
     collapsed = bool(not local_ui and shell and turn.id in shell.collapsed_turns)
     lines = [f"\nTurn {turn.index} · {turn.phase}"] if literal else []
@@ -259,7 +274,6 @@ def _project_turn(turn, shell, agents=None, literal=True):
             if collapsed and rest:
                 first, rest = first + " …", ""
             block = {"id": message.id + ":user", "kind": "user", "title": first, "text": rest,
-                     "color": turn_agent_label(turn)[1] or _agent_color(shell, getattr(getattr(shell, "controller", None), "agent_name", "build")),
                      "number": turn.index + 1, "collapsed": collapsed,
                      "chips": [] if collapsed else chips,
                      "operation": {"kind": "turn_toggle", "id": turn.id}}
@@ -275,12 +289,19 @@ def _project_turn(turn, shell, agents=None, literal=True):
             if thinking.strip():
                 expanded = bool(not local_ui and shell and message.id + "thinking" in shell.expanded)
                 count = len([line for line in thinking.splitlines() if line.strip()])
-                # `Thought: 671ms`; the reasoning opens beneath it. Collapsed, the first
-                # sentence and the line count announce what is hidden.
+                # `Thought for 3.2s`; the reasoning opens beneath it. Collapsed, the first
+                # sentence and the line count announce what is hidden. A thought that is the
+                # newest event of an unfinished turn and has no closed run is still thinking.
                 took = message.thinking_ms
-                title = "Thought" if took is None else f"Thought: {_thought_took(took)}"
+                newest = message.event_seq >= max([message.event_seq, *(t.event_seq for t in turn.tools),
+                                                   *(m.event_seq for m in turn.messages)])
+                live = took is None and newest and not turn.terminal
+                title = "Thinking…" if live else "Thought" if took is None else f"Thought for {format_time(took)}"
+                started = next((b.started_ts for b in message.blocks if b.kind == "thinking" and b.started_ts), None)
                 suffix = "" if expanded else (f"{thought_title(thinking)} · {count} lines ▸" if count > 1 else f"{thought_title(thinking)} ▸")
                 block = {"id": message.id + "thinking", "kind": "thought", "title": title,
+                         "status": "running" if live else "completed",
+                         "started_ms": round(started * 1000) if started else 0, "elapsed_ms": took or 0,
                          "text": suffix, "detail": _literal(thinking) if expanded and not local_ui else "",
                          **({"local_ui": True, "local_detail": _literal(thinking), "local_open": False} if local_ui else {}),
                          "operation": {"kind": "block_toggle", "id": message.id + "thinking"}}
@@ -317,6 +338,8 @@ def _project_turn(turn, shell, agents=None, literal=True):
 
         emit(body)
         operation = {"kind": "block_toggle", "id": tool.call_id + ":detail"}
+        # `i` on the row opens the full labelled details (tool_details), which the relevant-only view omits.
+        inspect = {"kind": "tool_details", "id": tool.call_id}
         if tool.name.casefold() in {"task", "subagent"}:
             from ...ui_support.timeline import _agent_metrics, _task_child_activity, _task_children, _task_header, _task_metrics
             child = next(iter(_task_children(tool, agents or {})), None)
@@ -342,7 +365,7 @@ def _project_turn(turn, shell, agents=None, literal=True):
                      "text": (_task_child_activity(child) if child else "Starting…") if running else "",
                      "metrics": _agent_metrics(child) if child else _task_metrics(tool, None, False),
                      "color": _agent_color(shell, child.type or child.id) if child else "", "operation": operation,
-                     "detail": detail}
+                     "detail": detail, "inspect_operation": inspect}
             entries.append((tool.event_seq, 3, block, 1, 1, "task"))
             continue
         if tool.name.casefold() in STANDALONE_TOOLS:
@@ -358,7 +381,12 @@ def _project_turn(turn, shell, agents=None, literal=True):
             text = text.replace(SPINNER_FRAMES[0], SPINNER_SLOT, 1)
         block = {"id": tool.call_id, "kind": "tool", "status": tool_status(tool), "text": text,
                  "detail": body if detail_open else "", "operation": operation,
+                 "inspect_operation": inspect,
                  "output_operation": {"kind": "block_toggle", "id": out_id} if (detail_open or local_ui) and expandable else None}
+        if local_ui or detail_open:
+            # The relevant-only expanded body; `detail`/`local_detail` keep the full labelled
+            # details for /verbose and for `inspect_operation`.
+            block["signal"] = tool_signal(tool, getattr(shell, "workspace", "") or None).wire()
         if local_ui:
             block.update(local_ui=True, local_detail=full_body, fold_lines=output_end, local_open=False)
         # A subagent row stands apart: one blank row above and below.
@@ -384,70 +412,7 @@ def _project_turn(turn, shell, agents=None, literal=True):
     diff_members = {tool.call_id: [row[2] for row in entries
         if row[5] == "diff" and row[0] == tool.event_seq
         and row[2]["id"].startswith(tool.call_id)] for tool in turn.tools}
-    grouped, pending = [], []
-
-    def flush_activity():
-        if not pending:
-            return
-        seq, rank, first, _, _, _ = pending[0]
-        group_id = turn.id + ":activity:" + first["id"]
-        opened = bool(not local_ui and shell and (shell.verbose or group_id in shell.expanded))
-        members, counts = [], {}
-        for _, _, block, _, _, role in pending:
-            member = block
-            if role == "thought":
-                category = ("Thought", "time", "times")
-            else:
-                tool = tools_by_id[block["id"]]
-                name = tool.name.casefold()
-                category = {
-                    "bash": ("Ran", "command", "commands"),
-                    "run": ("Ran", "command", "commands"),
-                    "read": ("Read", "file", "files"),
-                    "edit": ("Edited", "file", "files"),
-                    "write": ("Wrote", "file", "files"),
-                    "apply_patch": ("Applied", "patch", "patches"),
-                    "grep": ("Searched", "time", "times"),
-                    "glob": ("Searched", "time", "times"),
-                }.get(name, (tool.name.title(), "call", "calls"))
-                if tool.provenance:  # the external worker ran it; never counted as a Nexus-run command or read
-                    owner = tool.provenance.removesuffix(" (own tools)").removesuffix(" own tools").strip()
-                    category = (f"{owner or 'External worker'} ran", "tool", "tools")
-                _, _, heading_full, summary = tool_presentation(tool, shell)
-                heading = heading_full.split(" ", 1)[-1]
-                if tool.diff:
-                    from ...ui_support.timeline import diff_sections
-                    diffs = diff_sections(tool.diff)
-                    summary = f"+{sum(d.added for d in diffs)} −{sum(d.removed for d in diffs)}"
-                if tool.provenance and heading_full:
-                    heading_full += f" · {tool.provenance}"
-                if name not in {"task", "subagent"}:
-                    member = {**block, "heading": heading_full + (f" · {summary}" if summary else ""),
-                        "title": tool.name.title(), "text": heading.removeprefix(tool.name.title()).strip() + (f" · {summary}" if summary else "")}
-                member = {**member, "members": diff_members[tool.call_id]}
-            counts[category] = counts.get(category, 0) + 1
-            members.append(member)
-        text = " · ".join(f"{verb} {count} {one if count == 1 else many}"
-                          for (verb, one, many), count in counts.items())
-        running = any(member.get("status") == "running" for member in members)
-        grouped.append((seq, rank, {"id": group_id, "kind": "tool_group", "text": text,
-            "color": _agent_color(shell, getattr(getattr(shell, "controller", None), "agent_name", "build")),
-            "status": "running" if running else "completed", "count": len(members), "collapsed": not opened,
-            "members": members if opened or local_ui else [],
-            **({"local_ui": True, "local_open": False} if local_ui else {}),
-            "operation": {"kind": "block_toggle", "id": group_id}}, 1, 1, "tool"))
-        pending.clear()
-
-    for entry in entries:
-        if entry[5] == "diff":
-            continue
-        name = tools_by_id[entry[2]["id"]].name.casefold() if entry[5] == "tool" else ""
-        if entry[5] in {"tool", "thought"} and name not in {"task", "subagent"}:
-            pending.append(entry)
-        else:
-            flush_activity()
-            grouped.append(entry)
-    flush_activity()
+    grouped = activity_entries(entries, tools_by_id, diff_members, turn=turn, shell=shell, local_ui=local_ui)
     # Only the trailing activity of an active turn previews automatically. Replies
     # close the previous run; explicit local expansion still reveals every item.
     if grouped and grouped[-1][2]["kind"] == "tool_group" and not turn.terminal:
@@ -460,7 +425,7 @@ def _project_turn(turn, shell, agents=None, literal=True):
         if previous is not None:
             if previous[0] == "user":
                 top = max(top, 1)
-            elif (previous[0] in {"tool", "change"} and role in {"assistant", "agent"}) or (previous[0] == "assistant" and role in {"tool", "change"}):
+            elif (previous[0] in {"tool", "change"} and role == "assistant") or (previous[0] == "assistant" and role in {"tool", "change"}):
                 top = max(top, 1)
             block = {**block, "gap": max(previous[1], top)}
         blocks.append(block)
@@ -508,11 +473,22 @@ def _context_blocks(shell, view):
     def token_status(block):
         return f"~{_compact_tokens(block.tokens)} tokens" if block.tokens is not None else "tokens unknown"
 
+    def active(block):
+        """False when the block contributes nothing: zero or unknown tokens with no content, or not loaded."""
+        return bool(block.tokens) or bool(block.inventory) or (block.tokens is None and bool(block.body))
+
+    # Closed by default (GROK_BUILD_TUI_PLAN §8C): `tokens` is all a closed row shows. The body
+    # fields ride along marked local so Rust opens a header without a round trip. No agent colour:
+    # headers are grey, and `active` picks the lighter or darker grey.
     return [{"id": "context:" + block.key, "kind": "context", "title": block.label,
              "text": "\n".join(block.inventory) if block.key in {"tools", "skills", "mcp"} else block.body,
              "local_preview": block.inventory_note,
-             "status": token_status(block), "color": block.color,
-             "gap": 1, "operation": {"kind": "context_show", "key": block.key}}
+             "tokens": f"~{_compact_tokens(block.tokens)}" if block.tokens is not None else "~?",
+             "active": active(block),
+             "local_ui": True, "local_open": False,
+             "status": token_status(block),  # deprecated: the pre-§8C spelling of `tokens`
+             "gap": 0, "operation": {"kind": "context_show", "key": block.key},
+             "inspect_operation": {"kind": "context_show", "key": block.key}}
             for block in found]
 
 
@@ -532,7 +508,7 @@ def _compact_header(shell, view):
     # Every block shows what it holds: inventories for tools/skills/MCP, a one-line
     # preview for the system prompt and AGENTS.md ("None included" once a preview exists).
     chips = [{**chip, "counts": counts.get(chip["id"], []) if preview else [], "gap": 0} for chip in chips]
-    return [{"id": "context:header", "kind": "context_header", "gap": 1, "color": _agent_color(shell, getattr(getattr(shell, "controller", None), "agent_name", (getattr(preview, "agent", {}) or {}).get("name", "build"))),
+    return [{"id": "context:header", "kind": "context_header", "gap": 1,
              "members": chips, "operation": {"kind": "context_menu"}}]
 
 
@@ -661,6 +637,8 @@ def _queue_lines(view):
     if len(queue) > 3:
         rows.append(f"+{len(queue) - 3} more queued")
     return [escape_controls(row) for row in rows]
+
+
 
 
 def _queue_items(view):
@@ -853,6 +831,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "context_label": _context_label(display_view),
             "queue_lines": _queue_lines(view),
             "queue_items": _queue_items(view),
+            "turn_status": turn_status(view),
             "composer_key": json.dumps([shell.workspace if shell else "", getattr(controller, "session", view.session_id)]),
             "nav": _settings_nav(shell),
             "update_notice": "",  # announced once as a toast, never pinned to the footer
@@ -870,8 +849,9 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "sessions": shell.sessions if shell else [],
             "archived_label": shell.archived_label if shell else "",
             "sessions_truncated": bool(shell and shell.sessions_truncated),
-            "sessions_request": shell.sessions_request if shell else 0,
+            "dashboard": _dashboard_state(shell, prompt),
             "settings_page": (shell.workflows.settings_page if shell.panel_title and shell.panel_title == shell.workflows.page_title else None) if shell else None,
+            "settings_overview": (shell.workflows.settings_overview if shell.panel_title and shell.panel_title == shell.workflows.page_title else None) if shell else None,
             "tabs": _tab_rows(controller, shell) if shell else [],
             "breadcrumb": escape_controls(_display_breadcrumb(shell.breadcrumb)) if shell else "",
             "details_panel": details_panel,
@@ -914,19 +894,19 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             context = shell.workflows.agent_context
             preview = ContextInspectResult(session=agent.id, **{k: v for k, v in context.items() if k in fields})
             child_shell = SimpleNamespace(preview=preview)
-            child_blocks = _compact_header(child_shell, agent.body)
             prompt_text = next((str(block.get("text") or "") for message in preview.messages[:1]
                                for block in message.get("blocks", []) if block.get("text")), "")
             if not prompt_text:
                 prompt_text = next((str(tool.input.get("prompt") or "") for turn in view.turns for tool in turn.tools
                                     if tool.call_id == agent.parent_call_id), agent.task or agent.description)
             from ...ui_support.timeline import _literal
-            rail = child_blocks[0]["color"]
-            # A subagent page opens with the task as a prompt card in the agent's
-            # colour (no header strip), then its thoughts, tool rows and reply.
+            page_color = _agent_color(child_shell, (getattr(preview, "agent", {}) or {}).get("name", "build"))
+            # A subagent page opens with the task as a prompt card (no header strip, and no
+            # agent colour: the colour marks only the agent's name), then its thoughts,
+            # tool rows and reply.
             first, _, rest = prompt_text.partition("\n")
             child_blocks = [{"id": agent.id + ":task", "kind": "user", "title": _literal(first),
-                             "text": _literal(rest), "color": rail, "gap": 0}]
+                             "text": _literal(rest), "gap": 0}]
             if not context and agent.status == "spawned":
                 child_blocks.append({"id": agent.id + ":wait", "kind": "literal", "text": "Waiting for the first request…", "gap": 1})
             child_blocks = _safe_blocks(child_blocks)
@@ -938,6 +918,13 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
                 child_blocks.extend(_child_turn_blocks(shell, agent, turn, flags))
             child_blocks.extend(_safe_blocks(external_foot))
             from dataclasses import replace
+            # The page's context meter is the child's own accounting; never the root's counters.
+            child_display = _context_display_view(agent.body, child_shell)
+            child_used, child_window, _child_measured = context_measure(child_display)
+            snapshot.update(context_used=child_used, context_window=child_window,
+                            context_tiers=_context_tiers(child_display),
+                            context_usage=context_usage(child_display),
+                            context_label=_context_label(child_display) if child_used is not None else "")
             agent_status = "failed" if agent.is_error or agent.ok is False else agent.status
             snapshot.update(blocks=child_blocks, agent_page=agent.id,
                 status="running" if agent.status == "spawned" else "done",
@@ -954,8 +941,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
         snapshot["inline_images"] = inline_images(view, shell)
     snapshot["agent_color"] = _agent_color(shell, snapshot["agent"])
     if snapshot.get("agent_page"):
-        snapshot["agent_color"] = next((block["color"] for block in snapshot["blocks"]
-                                        if block.get("id", "").endswith(":task")), snapshot["agent_color"])
+        snapshot["agent_color"] = page_color
     for block in snapshot["blocks"]:
         if not block.get("rev"):
             block["rev"] = _revision(block)
@@ -1039,6 +1025,8 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                 snapshot = project(controller, revision, shell=shell, literal=False)
                 stream_projection.remember(snapshot, controller, shell)
             stream_turn = None
+            # The streamed tail reuses the last full snapshot; the dashboard is never stale.
+            snapshot["dashboard"] = _dashboard_state(shell, snapshot.get("prompt"))
             trace.elapsed("project", started)
             snapshot["event_sent_at"] = event_sent_at if trace.enabled else 0
             snapshot["event_kind"] = event_kind if trace.enabled else ""
@@ -1104,8 +1092,15 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
     poll_task = None
     live_task = None
     startup_task = None
+    def polled_state():
+        """Everything one poll cycle can change, as a comparable text; unchanged means no repaint."""
+        return repr((shell.tabs, shell.sessions, shell.sessions_truncated, shell.archived_label,
+                     shell.workflows.agent_context, shell.mcp_report, shell.mcp_error,
+                     shell.update_notice, getattr(shell, "preview_at", None), shell.notice,
+                     shell.breadcrumb))
     async def poll():
         preview_cursor = -1
+        last_polled = None
         while True:
             await asyncio.sleep(.2 if shell.voice.phase != "idle" else 1 if shell.logs.open else 3)
             failures = []
@@ -1176,6 +1171,13 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                 await section(label, work)
             if failures:
                 shell.notice = "; ".join(failures)
+            # Voice, the log tail and the dictation panel change on their own; otherwise a
+            # cycle that found nothing new sends no snapshot, so an idle chat stays idle.
+            polled = polled_state()
+            live = shell.voice.phase != "idle" or shell.logs.open or shell.panel_title == "Local dictation"
+            if polled == last_polled and not live and not failures:
+                continue
+            last_polled = polled
             try:
                 await update(immediate=False)
             except Exception as exc:
@@ -1252,7 +1254,9 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                         await update()
                     continue
                 if action["type"] == "submit":
-                    if not await shell.submit(action["text"], action.get("mode", "steer")):
+                    if not await shell.submit(
+                        action["text"], action.get("mode", "steer"), session=action.get("session") or None,
+                    ):
                         process.stdin.close()
                         break
                 elif action["type"] == "draft_changed":
@@ -1427,6 +1431,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
                 await update()
         return await process.wait()
     finally:
+        shell.workflows.close_dashboard()
         await background.close()
         await shell.preferences.flush()
         trace.finish()

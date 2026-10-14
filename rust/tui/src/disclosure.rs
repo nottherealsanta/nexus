@@ -24,6 +24,11 @@ pub struct Disclosure {
     /// folding a turn without one would hide it with no way to open it again.
     handled: HashSet<String>,
 }
+/// Operations name the same target by `kind` and `id`; presentation metadata such as
+/// `inspect_operation` (added to row operations for the inspector) is not identity.
+fn same_target(source: &Value, op: &Value) -> bool {
+    source["kind"] == op["kind"] && source["id"] == op["id"]
+}
 impl Disclosure {
     fn default_folded(&self, turn: &str) -> bool {
         self.handled.contains(turn) && !self.recent.iter().any(|recent| recent == turn)
@@ -79,18 +84,26 @@ impl Disclosure {
             })
             .unwrap_or(default)
     }
+    pub fn is_open(&self, id: &str) -> bool {
+        self.verbose || self.opened(id, false)
+    }
     pub fn toggle(&mut self, operation: &Value, blocks: &[Content]) -> bool {
         let kind = operation["kind"].as_str().unwrap_or("");
-        if !matches!(kind, "block_toggle" | "turn_toggle") {
+        if !matches!(kind, "block_toggle" | "turn_toggle" | "context_toggle") {
             return false;
         }
         let Some(id) = operation["id"].as_str() else {
             return false;
         };
         fn contains(block: &Content, op: &Value) -> bool {
-            (block.local_ui
-                && (block.operation.as_ref() == Some(op)
-                    || block.output_operation.as_ref() == Some(op)))
+            ((block.local_ui || op["kind"] == "context_toggle")
+                && (block.operation.as_ref().is_some_and(|source| same_target(source, op))
+                    || block
+                        .output_operation
+                        .as_ref()
+                        .is_some_and(|source| same_target(source, op))
+                    || (op["kind"] == "context_toggle"
+                        && block.id == op["id"].as_str().unwrap_or(""))))
                 || block.members.iter().any(|member| contains(member, op))
         }
         let Some(index) = blocks.iter().position(|block| contains(block, operation)) else {
@@ -143,6 +156,18 @@ impl Disclosure {
         if folded && source.kind != "user" {
             return None;
         }
+        if source.kind == "context_header" {
+            let mut shown = source.clone();
+            for member in &mut shown.members {
+                member.collapsed = !self.is_open(&member.id);
+                member.operation =
+                    Some(serde_json::json!({"kind":"context_toggle", "id": member.id}));
+                shown
+                    .rev
+                    .push_str(if member.collapsed { ":closed" } else { ":open" });
+            }
+            return Some(Cow::Owned(shown));
+        }
         if !source.local_ui && !folded {
             return Some(Cow::Borrowed(source));
         }
@@ -188,7 +213,7 @@ impl Disclosure {
                 .is_none_or(|scope| !scope.contains_key(id));
         match source.kind.as_str() {
             "tool_group" => {
-                shown.collapsed = !(open || preview);
+                shown.collapsed = !(open || preview || source.failures > 0);
             }
             "tool" | "thought" => {
                 let full = self.verbose
@@ -252,8 +277,10 @@ impl Disclosure {
             }
             _ => {}
         }
-        if (open || preview) && source.kind != "user" {
-            let start = if preview {
+        if (open || preview || (source.kind == "tool_group" && source.failures > 0))
+            && source.kind != "user"
+        {
+            let start = if preview && source.failures == 0 {
                 source.members.len().saturating_sub(source.preview_limit)
             } else {
                 0
@@ -265,6 +292,8 @@ impl Disclosure {
                 .filter_map(|member| self.block(member).map(Cow::into_owned))
                 .collect();
         }
+        // Signal rows are the relevant-only view of a body, so `/verbose` (full detail) drops them.
+        source.carry_presentation(&mut shown, open && !self.verbose);
         for member in &shown.members {
             shown.rev.push_str(&member.rev);
         }
@@ -301,6 +330,46 @@ impl Disclosure {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn context_headers_are_local_closed_and_independent() {
+        let mut disclosure = Disclosure::default();
+        let blocks = vec![Content {
+            kind: "context_header".into(),
+            members: vec![
+                Content {
+                    id: "context:system".into(),
+                    title: "System prompt".into(),
+                    ..Default::default()
+                },
+                Content {
+                    id: "context:tools".into(),
+                    title: "Tools".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }];
+        assert!(disclosure.project(&blocks)[0]
+            .members
+            .iter()
+            .all(|m| m.collapsed));
+        assert!(disclosure.toggle(
+            &json!({"kind":"context_toggle", "id":"context:system"}),
+            &blocks
+        ));
+        let shown = disclosure.project(&blocks);
+        assert!(!shown[0].members[0].collapsed);
+        assert!(shown[0].members[1].collapsed);
+        let revision = shown[0].rev.clone();
+        assert_eq!(revision, disclosure.project(&blocks)[0].rev);
+        disclosure.scope = "other".into();
+        assert!(disclosure.project(&blocks)[0].members[0].collapsed);
+        disclosure.verbose = true;
+        assert!(disclosure.project(&blocks)[0]
+            .members
+            .iter()
+            .all(|m| !m.collapsed));
+    }
     #[test]
     fn borrowed_plain_content_and_lru_eviction() {
         let mut ui = Disclosure::default();
@@ -459,6 +528,84 @@ mod tests {
     }
     fn shown(ui: &Disclosure, blocks: &[Content]) -> Vec<String> {
         ui.project(blocks).into_iter().map(|b| b.id).collect()
+    }
+    #[test]
+    fn adorned_output_operation_still_routes_locally() {
+        let blocks = vec![Content {
+            id: "c".into(),
+            local_ui: true,
+            output_operation: Some(json!({"kind":"block_toggle","id":"c:output"})),
+            ..Default::default()
+        }];
+        let adorned = json!({"kind":"block_toggle","id":"c:output",
+            "inspect_operation":{"kind":"tool_details","id":"c"}});
+        let mut ui = Disclosure::default();
+        assert!(ui.toggle(&adorned, &blocks));
+        assert!(ui.is_open("c:output"));
+        let wrong_id = json!({"kind":"block_toggle","id":"other","inspect_operation":{}});
+        let wrong_kind = json!({"kind":"turn_toggle","id":"c:output"});
+        assert!(!ui.toggle(&wrong_id, &blocks));
+        assert!(!ui.toggle(&wrong_kind, &blocks));
+    }
+    #[test]
+    fn local_ui_projection_keeps_presentation_fields() {
+        let bad = Content {
+            id: "bad".into(),
+            status: "failed".into(),
+            ..Default::default()
+        };
+        let live = Content {
+            id: "now".into(),
+            status: "running".into(),
+            ..Default::default()
+        };
+        let group = |open: bool| Content {
+            id: "g".into(),
+            kind: "tool_group".into(),
+            local_ui: true,
+            local_open: open,
+            running_label: "Running 1 command".into(),
+            elapsed_label: "3s".into(),
+            started_ms: 7,
+            elapsed_ms: 3000,
+            failed_members: vec![bad.clone()],
+            live_member: Some(Box::new(live.clone())),
+            ..Default::default()
+        };
+        let ui = Disclosure::default();
+        for open in [false, true] {
+            let shown = ui.block(&group(open)).unwrap().into_owned();
+            assert_eq!(shown.running_label, "Running 1 command");
+            assert_eq!(shown.elapsed_label, "3s");
+            assert_eq!((shown.started_ms, shown.elapsed_ms), (7, 3000));
+            assert_eq!(shown.failed_members[0].id, "bad");
+            assert_eq!(shown.live_member.as_deref().unwrap().id, "now");
+            assert_eq!(shown.collapsed, !open);
+        }
+
+        let tool = |open: bool| Content {
+            id: "t".into(),
+            kind: "tool".into(),
+            local_ui: true,
+            local_open: open,
+            local_detail: "body".into(),
+            tokens: "~12".into(),
+            active: true,
+            signal: vec![("text".into(), "x".into())],
+            inspect_operation: Some(json!({"kind":"tool_details","id":"t"})),
+            ..Default::default()
+        };
+        let closed = ui.block(&tool(false)).unwrap().into_owned();
+        assert!(closed.signal.is_empty() && closed.detail.is_empty());
+        assert_eq!(closed.tokens, "~12");
+        assert!(closed.active);
+        assert_eq!(closed.inspect_operation.as_ref().unwrap()["id"], "t");
+        let open = ui.block(&tool(true)).unwrap().into_owned();
+        assert_eq!(open.signal.len(), 1);
+        assert_eq!(open.detail, "body");
+        let mut verbose = Disclosure::default();
+        verbose.verbose = true;
+        assert!(verbose.block(&tool(true)).unwrap().signal.is_empty());
     }
     #[test]
     fn only_the_newest_two_turns_start_open() {

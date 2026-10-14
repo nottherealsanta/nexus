@@ -40,7 +40,7 @@ async def file_blocks(workflows, area: str, *, empty: str = "No files yet. New f
     items = [item for item in inventory.items if item.category == area]
     if area == "agents":
         items.sort(key=lambda item: (AGENT_ORDER.get(item.id, 9), item.id.casefold()))
-    blocks: list[dict] = [sp.heading(f"FILES · {scope}")] if heading else []
+    blocks: list[dict] = [sp.heading(f"Files · {scope}")] if heading else []
     if not items:
         blocks.append(sp.note(empty))
     for item in items:

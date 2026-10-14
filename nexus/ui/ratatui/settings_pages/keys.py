@@ -16,13 +16,13 @@ async def build(workflows) -> dict:
     leader = [[description, f"Ctrl+X {letter.upper()}", "Leader"] for letter, _, description in LEADER_SHORTCUTS]
     extra = [["Dismiss all toasts", "Ctrl+X X", "Leader"], ["Run the newest toast's action", "Ctrl+X A", "Leader"]]
     blocks = [
-        sp.heading("SHORTCUTS"),
+        sp.heading("Shortcuts"),
         sp.table([("Action", 0), ("Keys", 24), ("Where", 8)], direct),
         sp.gap(),
-        sp.heading("CTRL+X LEADER · press Ctrl+X, then a key"),
+        sp.heading("Ctrl+X Leader · press Ctrl+X, then a key"),
         sp.table([("Action", 0), ("Keys", 24), ("Where", 8)], leader + extra),
         sp.gap(),
-        sp.heading("IN LISTS AND SETTINGS"),
+        sp.heading("In Lists and Settings"),
         sp.table([("Action", 0), ("Keys", 24), ("Where", 8)], [
             ["Move", "Up / Down", "Lists"], ["Change a value", "Left / Right", "Settings"], ["Toggle, open", "Space / Enter", "Settings"],
             ["Reorder a model", "Alt+Up / Alt+Down", "Settings"], ["Remove a model", "Delete", "Settings"],

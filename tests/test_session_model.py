@@ -125,7 +125,7 @@ async def test_tier_without_a_registry_is_refused(tmp_path):
 
     result = await facade.handle(p.ModelSelect(session="s", ref="high"))
     assert isinstance(result, p.ErrorResult)
-    assert "registry" in result.message
+    assert "subagents only" in result.message
     await runtime.aclose()
 
 
@@ -257,7 +257,7 @@ async def test_two_sessions_stay_isolated(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-async def test_tier_name_selects_a_runnable_model(tmp_path):
+async def test_tier_name_is_refused_for_main_even_with_registry(tmp_path):
     provider = ScriptedProvider(text_response("tiered"))
     models = [
         _StubModel("scripted", "opus", tier="high"),
@@ -270,13 +270,8 @@ async def test_tier_name_selects_a_runnable_model(tmp_path):
     facade.open_session("s")
 
     result = await facade.handle(p.ModelSelect(session="s", ref="high"))
-    assert isinstance(result, p.ModelSelectResult)
-    assert (result.provider, result.model, result.tier) == ("scripted", "opus", "high")
-    assert result.tier_source == "tier"
-
-    await facade.start_turn("s", "go")
-    await facade.wait_idle(timeout=5.0)
-    assert provider.requests[-1].model == "opus"
+    assert isinstance(result, p.ErrorResult)
+    assert "subagents only" in result.message
     await runtime.aclose()
 
 
@@ -364,7 +359,7 @@ def test_model_selection_from_dict_is_strict_about_bool():
         assert parsed.clamped is False
 
 
-async def test_selected_tier_caps_subagent_authority(tmp_path):
+async def test_low_main_model_does_not_cap_root_subagent_tiers(tmp_path):
     models = [
         _StubModel("scripted", "opus", tier="high"),
         _StubModel("scripted", "haiku", tier="low"),
@@ -374,7 +369,7 @@ async def test_selected_tier_caps_subagent_authority(tmp_path):
     runtime = _runtime(tmp_path, ScriptedProvider(), registry=registry, tiers=tiers)
     facade = HostFacade(runtime)
     facade.open_session("s")
-    await facade.handle(p.ModelSelect(session="s", ref="low"))
+    await facade.handle(p.ModelSelect(session="s", ref="scripted/haiku"))
 
     captured: dict[str, object] = {}
     original = runtime._make_subagent_runner
@@ -391,9 +386,10 @@ async def test_selected_tier_caps_subagent_authority(tmp_path):
         turn_id="t",
         attended=False,
     )
-    # A child of this session can never exceed the session's selected tier.
+    # Main model classification is descriptive, not a root subagent cap.
     assert captured.get("parent_tier") == "low"
     assert bundle.environment_for._model_selection.tier == "low"
+    assert bundle.dispatcher._subagents._parent_tier == "high"
     await runtime.aclose()
 
 

@@ -109,37 +109,37 @@ async def test_fresh_provider_status_installed_manual_cli_and_custom_alias(tmp_p
         assert made[-1]["executable"] == executable
 
 
-async def test_provider_recheck_refreshes_models_without_login():
+async def test_provider_refresh_models_dispatches_the_provider_command_only():
     from nexus.ui.ratatui.settings_pages import providers
     calls = []
     class Client:
-        async def models_refresh(self):
-            calls.append("models")
-    class Workflows:
-        client = Client()
-        page_state = {}
-        def flash(self, message, level):
-            calls.append(level)
-    workflows = Workflows()
-    workflows.shell = SimpleNamespace(flash=workflows.flash)
-    await providers.handle(workflows, {"key": "recheck"})
-    assert calls == ["models", "info"]
+        async def provider_models_refresh(self, provider):
+            calls.append(("provider", provider))
+            return SimpleNamespace(message="3 models from agy", error="")
+        async def refresh_models(self):
+            calls.append("catalogue")  # must NOT be used
+    flashes = []
+    workflows = SimpleNamespace(client=Client(), page_state={}, shell=SimpleNamespace(flash=lambda m, level: flashes.append((m, level))))
+    await providers.handle(workflows, {"key": "refresh_models", "provider": "antigravity"})
+    assert calls == [("provider", "antigravity")] and flashes[0][1] == "info" and "3 models" in flashes[0][0]
 
 
-async def test_antigravity_provider_page_emits_recheck_operation_when_cli_missing():
+async def test_antigravity_provider_page_shows_refresh_action_and_last_result():
     from nexus.ui.ratatui.settings_pages import providers
+    probe = {"count": 4, "refreshed_at": 1_700_000_000.0, "error": ""}
     class Client:
         async def providers_status(self):
             return SimpleNamespace(providers=[{"id": "antigravity", "label": "Antigravity", "methods": ["cli"],
-                                                "cli_present": False, "connected": False, "can_logout": False}])
+                                                "cli_present": False, "connected": False, "can_logout": False, "models_probe": probe}])
         async def setup_status(self):
             return SimpleNamespace(required=False)
     page = await providers.build(SimpleNamespace(client=Client(), page_state={}, login=None))
     section = next(b for b in page["blocks"] if b.get("id") == "prov-antigravity")
     button = next(item for block in section["blocks"] if block.get("t") == "buttons" for item in block["items"]
-                  if item["label"] == "Re-check models")
-    assert button["label"] == "Re-check models"
-    assert button["operation"] == {"kind": "sp_providers", "area": "providers", "key": "recheck", "provider": "antigravity"}
+                  if item["label"] == "Refresh models")
+    assert button["operation"] == {"kind": "sp_providers", "area": "providers", "key": "refresh_models", "provider": "antigravity"}
+    assert "4 models · refreshed 20" in str(section["blocks"])
+    assert "never" in providers._probe_summary({"count": 0, "refreshed_at": 0, "error": "boom"}) and "boom" in providers._probe_summary({"count": 0, "error": "boom"})
 
 
 def test_antigravity_subagent_tier_items_keep_provider_neutral_note():

@@ -40,7 +40,7 @@ async def test_layout_toggles_each_panel_and_resets(shell):
     await shell.workflows.operate({"kind": "layout"})
     page = shell.workflows.settings_page
     rows = _rows(page)
-    assert set(rows) == {"sessions_sidebar", "details_sidebar", "context_preview", "centered_layout"}
+    assert set(rows) == {"details_sidebar", "context_preview", "centered_layout"}
     assert [key for key, row in rows.items() if not row["control"]["on"]] == ["centered_layout"]  # off by default
     assert all(row["scope"] == "" for row in rows.values())
     await shell.workflows.operate({**rows["centered_layout"]["control"]["operation"], "value": True})
@@ -83,3 +83,24 @@ async def test_every_operation_the_client_can_send_is_accepted_by_the_bridge(she
         await shell.workflows.settings_area(area)
         assert_every_client_op_is_accepted(shell)
 
+
+
+@pytest.mark.asyncio
+async def test_overview_inlines_appearance_and_layout_rows_with_their_own_operations(tmp_path, monkeypatch):
+    """The root list's rows come from the area builders, so every operation is one the drilled page also offers."""
+    from types import SimpleNamespace
+
+    from nexus.ui.ratatui.settings_pages import build_overview, page_module
+    from nexus.ui_support import settings_page as sp
+
+    prefs = SimpleNamespace(values={"theme": "nexus-light", "details_sidebar": True, "context_preview": False, "centered_layout": False})
+    workflows = SimpleNamespace(shell=SimpleNamespace(preferences=prefs))
+    overview = await build_overview(workflows)
+    headings = [b["text"] for b in overview["blocks"] if b["t"] == "heading"]
+    assert headings == ["Appearance", "Layout"]
+    labels = [b["label"] for b in overview["blocks"] if b["t"] == "row"]
+    assert labels[0] == "Theme" and "Show context header" in labels
+    assert overview["summaries"]["keys"].endswith("shortcuts")
+    theme = await page_module("appearance").build(workflows)
+    op = next(b for b in theme["blocks"] if b["t"] == "row")["control"]["operation"]
+    assert sp.accepts(overview, {**op, "value": "nexus-dark"})

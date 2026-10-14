@@ -15,7 +15,7 @@ AREA = "agents"
 
 async def build(workflows) -> dict:
     client = workflows.client
-    top = [sp.heading("DEFAULT")]
+    top = [sp.heading("Default")]
     try:
         current = await client.default_agent()
         names = [row["name"] for row in root_agents(await client.list_agents())]

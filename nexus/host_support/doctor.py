@@ -25,7 +25,10 @@ Design constraints (all defensive, because persisted records are untrusted input
 from __future__ import annotations
 
 import contextlib
+import copy
 import math
+import threading
+import time
 import stat as stat_mod
 from dataclasses import dataclass
 from pathlib import Path
@@ -89,6 +92,29 @@ class ScanLimits:
                 )
 
 
+# The heavy half of doctor (SQLite ``quick_check`` and the session-tail scan) is cached per
+# store for ``HEAVY_TTL`` seconds, so the chat client's periodic doctor poll stays cheap on a
+# multi-gigabyte database. Explicit ``/doctor`` shares the cache; results may be up to the TTL old.
+HEAVY_TTL = 600.0
+_HEAVY_MAX = 16
+_heavy_lock = threading.Lock()
+_heavy_cache: dict[tuple, tuple[float, Any]] = {}
+
+
+def _cached(key: tuple, compute):
+    now = time.monotonic()
+    with _heavy_lock:
+        hit = _heavy_cache.get(key)
+        if hit is not None and now - hit[0] < HEAVY_TTL:
+            return copy.deepcopy(hit[1])
+    value = compute()
+    with _heavy_lock:
+        if len(_heavy_cache) >= _HEAVY_MAX and key not in _heavy_cache:
+            _heavy_cache.pop(min(_heavy_cache, key=lambda k: _heavy_cache[k][0]), None)
+        _heavy_cache[key] = (time.monotonic(), copy.deepcopy(value))
+    return value
+
+
 def mismatch_summary(
     sessions: object, *, limits: ScanLimits | None = None
 ) -> dict[str, Any]:
@@ -104,8 +130,13 @@ def mismatch_summary(
     result = _empty_summary()
     if not _is_sqlite_store(sessions):
         return result
-    _scan_sqlite_store(sessions, limits, result)
-    return result
+    key = ("scan", str(getattr(getattr(sessions, "db", None), "path", "")),
+           getattr(sessions, "project_id", None), getattr(sessions, "namespace", None), limits)
+
+    def compute() -> dict[str, Any]:
+        _scan_sqlite_store(sessions, limits, result)
+        return result
+    return _cached(key, compute)
 
 
 def database_diagnostics(sessions: object) -> dict[str, Any] | None:
@@ -126,12 +157,14 @@ def database_diagnostics(sessions: object) -> dict[str, Any] | None:
             schema_version = None
     except Exception:  # noqa: BLE001 - diagnostics must never break doctor
         schema_version = None
-    try:
-        check = getattr(db, "quick_check", None)
-        raw_check = check() if callable(check) else "unavailable"
-        quick_check = "ok" if raw_check == "ok" else "issues"
-    except Exception:  # noqa: BLE001 - diagnostics must never break doctor
-        quick_check = "unavailable"
+    def run_quick_check() -> str:
+        try:
+            check = getattr(db, "quick_check", None)
+            raw_check = check() if callable(check) else "unavailable"
+            return "ok" if raw_check == "ok" else "issues"
+        except Exception:  # noqa: BLE001 - diagnostics must never break doctor
+            return "unavailable"
+    quick_check = _cached(("quick_check", str(path)), run_quick_check)
 
     size_bytes = _file_size(path)
     wal_size_bytes = _file_size(path.with_name(path.name + "-wal"))

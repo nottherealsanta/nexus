@@ -46,7 +46,7 @@ async def test_voice_and_speech_are_one_page_and_opening_it_never_records(shell)
     assert shell.panel_title == "Settings · Voice & speech" and shell.settings_nav == "voice"
     assert shell.voice.phase == "idle", "opening the page never starts capture"
     headings = [b["text"] for b in page["blocks"] if b.get("t") == "heading"]
-    assert headings == ["VOICE INPUT · local dictation", "SPEECH · /speak, local Paradee"]
+    assert headings == ["Voice Input · local dictation", "Speech · /speak, local Paradee"]
     assert _row(page, "device")["control"]["value"] == "cpu"
     assert _row(page, "max_seconds")["control"]["value"] == "60 seconds"
     assert page["scope"] is None and all(b.get("scope", "") == "" for b in page["blocks"] if b.get("t") == "row")

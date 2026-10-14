@@ -75,7 +75,7 @@ def _has_user_input(alias: str = "sessions") -> str:
 #: Current schema version. Bumped whenever ``_SCHEMA_STEPS`` grows a step; a
 #: database with a *higher* ``user_version`` than this was written by a newer
 #: Nexus and is refused rather than misread.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 #: Forward-only DDL, one tuple of statements per schema version. Applied inside
 #: a single ``BEGIN IMMEDIATE`` transaction so two processes racing to create a
@@ -153,6 +153,12 @@ _SCHEMA_STEPS: tuple[tuple[str, ...], ...] = (
         "('turn.completed','turn.failed','turn.cancelled')"
         "), 0)",
     ),
+    # v4: bounded display snippets for the sessions dashboard. They stay off
+    # SessionSummary. A Python backfill fills existing rows after these ALTERs.
+    (
+        "ALTER TABLE sessions ADD COLUMN last_user TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE sessions ADD COLUMN last_agent TEXT NOT NULL DEFAULT ''",
+    ),
 )
 
 #: Every ``kv``/session mutation this module performs is bounded by these; a
@@ -220,6 +226,8 @@ class StateDatabase:
                     for step in range(version, SCHEMA_VERSION):
                         for statement in _SCHEMA_STEPS[step]:
                             conn.execute(statement)
+                    if version < 4 <= SCHEMA_VERSION:
+                        _backfill_message_snippets(conn)
                     if version < SCHEMA_VERSION:
                         conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
                     conn.execute("COMMIT")
@@ -309,6 +317,39 @@ def _decode_record(raw: bytes) -> SessionRecord:
             f"Unsupported session log version {record.v}; expected {SESSION_LOG_VERSION}"
         )
     return record
+
+
+def _backfill_message_snippets(conn: sqlite3.Connection) -> None:
+    """Fill ``last_user`` and ``last_agent`` from message records. Schema 4 only."""
+    sessions = conn.execute("SELECT project_id, namespace, id FROM sessions").fetchall()
+    for project_id, namespace, session_id in sessions:
+        last_user = ""
+        last_agent = ""
+        rows = conn.execute(
+            "SELECT body FROM records WHERE project_id=? AND namespace=? "
+            "AND session_id=? AND kind='message' ORDER BY seq ASC",
+            (project_id, namespace, session_id),
+        ).fetchall()
+        for (body,) in rows:
+            try:
+                record = _decode_record(body)
+            except (SessionError, msgspec.DecodeError, msgspec.ValidationError):
+                continue
+            if not isinstance(record, MessageRecord):
+                continue
+            snippet = export_mod.message_snippet(record.message)
+            if not snippet:
+                continue
+            if record.message.role == "user":
+                last_user = snippet
+            elif record.message.role == "assistant":
+                last_agent = snippet
+        if last_user or last_agent:
+            conn.execute(
+                "UPDATE sessions SET last_user=?, last_agent=? "
+                "WHERE project_id=? AND namespace=? AND id=?",
+                (last_user, last_agent, project_id, namespace, session_id),
+            )
 
 
 class SqliteSessionStore:
@@ -447,19 +488,28 @@ class SqliteSessionStore:
             if isinstance(r, MessageRecord) and r.message.role == "user"
         )
         title = ""
+        last_user = ""
+        last_agent = ""
         for r in records:
-            if isinstance(r, MessageRecord) and r.message.role == "user":
+            if not isinstance(r, MessageRecord):
+                continue
+            if r.message.role == "user" and not title:
                 title = export_mod.derive_title([r.message])
-                if title:
-                    break
+            snippet = export_mod.message_snippet(r.message)
+            if not snippet:
+                continue
+            if r.message.role == "user":
+                last_user = snippet
+            elif r.message.role == "assistant":
+                last_agent = snippet
         try:
             with self.db.transaction() as conn:
                 conn.execute(
                     "INSERT INTO sessions"
                     "(project_id, namespace, id, created_at, last_seq, completion_seq, last_activity,"
                     " message_count, title, title_source, parent_id, fork_seq, archived_at, archive_reason,"
-                    " trash_id, trashed_at, trash_expires_at, trash_reason)"
-                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    " trash_id, trashed_at, trash_expires_at, trash_reason, last_user, last_agent)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         self.project_id,
                         self.namespace,
@@ -479,6 +529,8 @@ class SqliteSessionStore:
                         trashed_at,
                         trash_expires_at,
                         trash_reason,
+                        last_user,
+                        last_agent,
                     ),
                 )
                 conn.executemany(
@@ -714,15 +766,22 @@ class SqliteSessionStore:
                 return record
         with self.db.transaction() as conn:
             row = conn.execute(
-                "SELECT last_seq, title, message_count, created_at, last_activity, title_source "
-                "FROM sessions WHERE project_id=? AND namespace=? AND id=?",
+                "SELECT last_seq, title, message_count, created_at, last_activity, title_source, "
+                "last_user, last_agent FROM sessions WHERE project_id=? AND namespace=? AND id=?",
                 (self.project_id, self.namespace, session),
             ).fetchone()
             if row is None:
                 raise SessionError(f"Session {session!r} does not exist")
-            last_seq, title, message_count, created_at, last_activity, title_source = (
-                row
-            )
+            (
+                last_seq,
+                title,
+                message_count,
+                created_at,
+                last_activity,
+                title_source,
+                last_user,
+                last_agent,
+            ) = row
             assigned = requested_seq if requested_seq is not None else last_seq + 1
             payload, encoded = build(assigned)
             try:
@@ -748,24 +807,29 @@ class SqliteSessionStore:
             new_message_count = message_count
             new_title = title
             new_title_source = title_source
-            if (
-                kind == "message"
-                and isinstance(payload, Message)
-                and payload.role == "user"
-            ):
+            new_last_user = last_user
+            new_last_agent = last_agent
+            if kind == "message" and isinstance(payload, Message) and payload.role == "user":
                 new_message_count += 1
+                snippet = export_mod.message_snippet(payload)
+                if snippet:
+                    new_last_user = snippet
                 if not new_title:
                     candidate = export_mod.derive_title([payload])
                     if candidate:
                         new_title = candidate
                         new_title_source = "first_message"
+            elif kind == "message" and isinstance(payload, Message) and payload.role == "assistant":
+                snippet = export_mod.message_snippet(payload)
+                if snippet:
+                    new_last_agent = snippet
             new_created_at = (
                 created_at if created_at > 0 else (ts if ts > 0 else created_at)
             )
             new_activity = max(last_activity, ts) if ts > 0 else last_activity
             conn.execute(
                 "UPDATE sessions SET last_seq=?, title=?, title_source=?, message_count=?, "
-                "created_at=?, last_activity=?, completion_seq=CASE "
+                "created_at=?, last_activity=?, last_user=?, last_agent=?, completion_seq=CASE "
                 "WHEN ? THEN MAX(completion_seq, ?) ELSE completion_seq END "
                 "WHERE project_id=? AND namespace=? AND id=?",
                 (
@@ -775,6 +839,8 @@ class SqliteSessionStore:
                     new_message_count,
                     new_created_at,
                     new_activity,
+                    new_last_user,
+                    new_last_agent,
                     kind == "event"
                     and isinstance(payload, Event)
                     and payload.type

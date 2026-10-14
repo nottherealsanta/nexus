@@ -45,9 +45,10 @@ pub fn selectable(p: &Palette, state: State) -> Style {
         .fg(p.text)
         .bg(mix(p.dialog, p.element_hi, state.hover));
     if state.selected {
+        // Grok selection: the `element` fill with bold text, never the accent bar.
         style = style
-            .fg(p.background)
-            .bg(mix(p.accent, p.element_hi, state.hover * 0.35))
+            .fg(p.text)
+            .bg(mix(p.element, p.element_hi, state.hover * 0.5))
             .add_modifier(Modifier::BOLD);
     }
     if state.focused {
@@ -168,12 +169,7 @@ impl Hover {
                 if detail || s.form.is_some() || s.panel_format == "image" {
                     return None;
                 }
-                let mut inner = super::panel_inner(area, s.panel_layout == "drawer");
-                if s.nav.is_some() {
-                    let taken = super::nav_rect(area).width + 2;
-                    inner.x += taken;
-                    inner.width = inner.width.saturating_sub(taken);
-                }
+                let inner = super::panel_inner(area, s.panel_layout == "drawer");
                 if !inner.contains(point) {
                     return None;
                 }
@@ -302,8 +298,6 @@ impl Hover {
                 continue;
             }
             let selected = match cell.kind {
-                super::TabHit::Tab(index) => s.tabs[index].active,
-                super::TabHit::Sessions => s.sessions_sidebar,
                 super::TabHit::Details => s.details_sidebar,
                 _ => false,
             };

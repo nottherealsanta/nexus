@@ -97,13 +97,13 @@ read-deny roots, the `Task` tool profile, and budgets. agy applies its **own** u
 and global settings, MCP servers and plugins, which is why the operator must set
 `worker_inherits_agy_settings = true`; without it every assignment is refused. No
 sandbox is requested (`--sandbox` is never passed), and agy may edit files or run
-commands under its own permission mode (`accept-edits` by default, or `plan`).
+commands under its own permission mode (`auto` by default; explicit `accept-edits` or `plan` overrides).
 
 Enforced at launch (refuse, never widen or ignore): read-only roles, tool lists,
 MCP config, setting sources, `worker_restricted`, worktree children, and token or
 cost budgets are all refused with `ConfigError`, because agy's `--mode plan` is not
 verified to prevent writes and Nexus cannot restrict agy's tools. Only
-`accept-edits` and `plan` are ever passed; bypass or "always proceed" flags never
+`auto`, `accept-edits` and `plan` are ever passed; bypass or "always proceed" flags never
 are, and an `init` reporting `always-proceed` (for example from agy's global
 settings) ends the run as refused. The prompt travels on stdin, never argv, and
 Nexus writes nothing else, so it never answers a login, trust or permission prompt:
@@ -174,3 +174,14 @@ When changing anything in the table above, add or extend a regression test
 (`tests/test_security_regressions.py`, `test_extension_security.py`,
 `test_outbound_*.py`, `test_config_secrets.py`, `test_web_transport.py`) and keep
 [decisions.md](decisions.md) accurate.
+# In-progress UI signal and session preview boundaries
+
+Tool verb/activity signals are presentation/projection data; they are not
+authorization evidence and must not grant capabilities or bypass host policy.
+Session dashboard preview uses the additive `SessionDashboardPreview` contract,
+separate from archive `SessionPreview`; preserve the existing user-facing
+Sessions title. `last_user` and `last_agent` are bounded snippets cleaned before
+they reach the terminal. They are not copied onto every `SessionSummary`. Late
+dashboard results are discarded after the overlay closes.
+The `i` inspector keeps full tool details reachable, so the local double-click
+view hides nothing from the user. This note does not assert final verification.

@@ -79,28 +79,20 @@ pub fn completion(
         area,
     );
 }
-/// Where a panel is laid out. Settings (it has the area list) spans the whole window width so it
-/// keeps a usable page beside open sidebars; every other panel stays within the transcript.
+/// Where a panel is laid out. Framed modals (Settings, pickers, inspectors) centre over the
+/// whole window (the union of every region), like Grok's modal; the bottom drawer and full
+/// page layouts stay in the transcript.
 pub fn panel_host(r: &super::Regions, s: &Snapshot) -> Rect {
-    if s.nav.is_none() {
+    if matches!(s.panel_layout.as_str(), "drawer" | "page" | "") && s.nav.is_none() {
         return r.transcript;
     }
-    let left = if r.sessions.width > 0 {
-        r.sessions.x
-    } else {
-        r.transcript.x
-    };
-    let right = if r.details.width > 0 {
-        r.details.right()
-    } else {
-        r.transcript.right()
-    };
-    Rect::new(
-        left,
-        r.transcript.y,
-        right.saturating_sub(left),
-        r.transcript.height,
-    )
+    let mut union = r.transcript;
+    for rect in [r.composer, r.details, r.tabs, r.workspace, r.context] {
+        if rect.width > 0 && rect.height > 0 {
+            union = union.union(rect);
+        }
+    }
+    union
 }
 /// A shared rectangle for painting and input; legacy snapshots retain full pages.
 pub fn panel_area(transcript: Rect, s: &Snapshot) -> Rect {
@@ -188,13 +180,15 @@ pub fn panel_area(transcript: Rect, s: &Snapshot) -> Rect {
         );
     }
     if s.nav.is_some() {
+        // Grok settings modal: `min(120, area - 8)` wide, `area - 4` tall, centred.
         let width = transcript
             .width
-            .saturating_sub(4)
+            .saturating_sub(8)
+            .min(120)
             .max(transcript.width.min(8));
         let height = transcript
             .height
-            .saturating_sub(2)
+            .saturating_sub(4)
             .max(transcript.height.min(8));
         return Rect::new(
             transcript.x + (transcript.width - width) / 2,
@@ -281,12 +275,7 @@ pub fn panel_item_at(
     selection: usize,
     y: u16,
 ) -> Option<usize> {
-    let mut inner = panel_inner(area, s.panel_layout == "drawer");
-    if s.nav.is_some() {
-        let taken = nav_rect(area).width + 2;
-        inner.x += taken;
-        inner.width = inner.width.saturating_sub(taken);
-    }
+    let inner = panel_inner(area, s.panel_layout == "drawer");
     let header = 2 + if s.nav.is_some() {
         usize::from(settings_header_height(s, inner.width, inner.height))
     } else {
@@ -383,8 +372,59 @@ pub fn panel_action_at(
     let start = end.saturating_sub((item.action_label.width() + 5) as u16);
     (start..end).contains(&x)
 }
-/// Dialog background with an accent title and a rule (The terminal modal look);
-/// returns the padded content area.
+/// Share of the way every backdrop cell moves toward the page background under a modal.
+pub const BACKDROP_BLEND: f32 = 0.5;
+
+/// Port of Grok's `dim_area` (`xai-grok-pager-render` `render/color.rs`): clear the
+/// modifiers of every cell in `area` and blend its foreground and background `factor` of
+/// the way toward `blend_bg`. Cells whose colours cannot be blended (indexed, reset)
+/// keep their colours and get `DIM`, so the backdrop still recedes.
+pub fn dim_area(buf: &mut ratatui::buffer::Buffer, area: Rect, blend_bg: Color, factor: f32) {
+    let area = area.intersection(buf.area);
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            let Some(cell) = buf.cell_mut((x, y)) else {
+                continue;
+            };
+            cell.modifier = Modifier::empty();
+            let (fg, bg) = (cell.fg, cell.bg);
+            let blendable = |c: Color| matches!(c, Color::Rgb(..)) || c == Color::Reset;
+            if !matches!(blend_bg, Color::Rgb(..)) || !blendable(fg) && !blendable(bg) {
+                cell.modifier = Modifier::DIM;
+                continue;
+            }
+            if matches!(fg, Color::Rgb(..)) {
+                cell.fg = nexus_widgets::theme::mix(fg, blend_bg, factor);
+            } else if fg != Color::Reset {
+                cell.modifier = Modifier::DIM;
+            }
+            if matches!(bg, Color::Rgb(..)) {
+                cell.bg = nexus_widgets::theme::mix(bg, blend_bg, factor);
+            } else if bg != Color::Reset {
+                cell.modifier = Modifier::DIM;
+            }
+        }
+    }
+}
+
+/// Dim the whole frame as a modal backdrop. Call it once, after the page is drawn and
+/// immediately before the modal (Settings, pickers, inspectors, prompts, confirmations);
+/// toasts and the completion popup are drawn afterwards and stay undimmed.
+pub fn dim_backdrop(frame: &mut Frame, p: &Palette) {
+    let area = frame.area();
+    dim_area(frame.buffer_mut(), area, p.background, BACKDROP_BLEND);
+}
+/// The `[×]` close button on the top-right border of a framed modal (clickable, closes).
+pub fn close_rect(area: Rect) -> Rect {
+    if area.width < 12 {
+        return Rect::default();
+    }
+    Rect::new(area.right().saturating_sub(5), area.y, 3, 1)
+}
+/// Grok modal frame (`views/modal_window.rs`): `border` outline, bold title in the top-left
+/// border, quiet `[×]` top-right, `dialog` background. Every picker, panel and Settings page
+/// goes through here. Returns the padded content area. A borderless drawer keeps the old
+/// plain look (title row, no outline).
 pub fn dialog_frame(
     frame: &mut Frame,
     area: Rect,
@@ -393,36 +433,57 @@ pub fn dialog_frame(
     borderless: bool,
 ) -> Rect {
     frame.render_widget(Clear, area);
-    frame.render_widget(
-        Block::default()
-            .borders(Borders::NONE)
-            .style(Style::default().bg(p.dialog).fg(p.text)),
-        area,
-    );
-    let width = usize::from(area.width.saturating_sub(4));
-    let esc = if borderless { "" } else { "esc" };
-    let title: String = title
-        .chars()
-        .take(width.saturating_sub(esc.len() + 1))
-        .collect();
-    let gap = width.saturating_sub(title.chars().count() + esc.len());
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
+    if borderless {
+        frame.render_widget(
+            Block::default()
+                .borders(Borders::NONE)
+                .style(Style::default().bg(p.dialog).fg(p.text)),
+            area,
+        );
+        let width = usize::from(area.width.saturating_sub(4));
+        let title: String = title.chars().take(width).collect();
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
                 title,
                 Style::default().fg(p.text).add_modifier(Modifier::BOLD),
+            )))
+            .style(Style::default().bg(p.dialog)),
+            Rect {
+                x: area.x + 2,
+                y: area.y + 1,
+                width: area.width.saturating_sub(4),
+                height: 1.min(area.height),
+            },
+        );
+        return panel_inner(area, borderless);
+    }
+    let border = Style::default().fg(p.border).bg(p.dialog);
+    let room = usize::from(area.width.saturating_sub(10));
+    let title: String = title.chars().take(room).collect();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(ratatui::widgets::BorderType::Rounded)
+        .border_style(border)
+        .style(Style::default().bg(p.dialog).fg(p.text))
+        .title(Line::from(vec![
+            Span::styled(" ", border),
+            Span::styled(
+                title,
+                Style::default()
+                    .fg(p.text)
+                    .bg(p.dialog)
+                    .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" ".repeat(gap)),
-            Span::styled(esc, Style::default().fg(p.quiet)),
-        ]))
-        .style(Style::default().bg(p.dialog)),
-        Rect {
-            x: area.x + 2,
-            y: area.y + 1,
-            width: area.width.saturating_sub(4),
-            height: 1.min(area.height),
-        },
-    );
+            Span::styled(" ", border),
+        ]));
+    frame.render_widget(block, area);
+    let close = close_rect(area);
+    if close.width > 0 {
+        frame.render_widget(
+            Paragraph::new("[×]").style(Style::default().fg(p.quiet).bg(p.dialog)),
+            close,
+        );
+    }
     panel_inner(area, borderless)
 }
 /// Glyphs of a usage bar: used, remaining, and the even-pace marker.
@@ -536,10 +597,10 @@ pub fn toned_lines(
 }
 /// The Settings area list inside the dialog (left 24 columns), when a page has one.
 pub fn nav_rect(transcript: Rect) -> Rect {
-    let inner = dialog_inner(transcript);
+    // The area list is gone: Settings is one root list (`settings_page::root`).
     Rect {
-        width: 24.min(inner.width),
-        ..inner
+        width: 0,
+        ..dialog_inner(transcript)
     }
 }
 /// Step to the next/previous selectable area (headings are skipped).
@@ -571,9 +632,9 @@ pub fn panel_inner(area: Rect, borderless: bool) -> Rect {
 pub fn dialog_inner(area: Rect) -> Rect {
     Rect {
         x: area.x + 2,
-        y: area.y + 4.min(area.height),
+        y: area.y + 2.min(area.height),
         width: area.width.saturating_sub(4),
-        height: area.height.saturating_sub(5),
+        height: area.height.saturating_sub(4),
     }
 }
 /// The bottom of the transcript reserved for a permission or question panel.
@@ -608,6 +669,26 @@ pub fn logs_region(r: &Regions) -> Rect {
 mod tests {
     use super::*;
     #[test]
+    fn dim_area_blends_rgb_halfway_and_clears_modifiers() {
+        let mut buf = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 2, 1));
+        {
+            let cell = buf.cell_mut((0, 0)).unwrap();
+            cell.set_fg(Color::Rgb(200, 100, 0));
+            cell.set_bg(Color::Rgb(40, 40, 40));
+            cell.modifier = Modifier::BOLD;
+            let cell = buf.cell_mut((1, 0)).unwrap();
+            cell.set_fg(Color::Indexed(4));
+            cell.set_bg(Color::Indexed(0));
+        }
+        dim_area(&mut buf, Rect::new(0, 0, 2, 1), Color::Rgb(20, 20, 20), 0.5);
+        let a = buf.cell((0, 0)).unwrap();
+        assert_eq!(a.fg, Color::Rgb(110, 60, 10));
+        assert_eq!(a.bg, Color::Rgb(30, 30, 30));
+        assert_eq!(a.modifier, Modifier::empty());
+        let b = buf.cell((1, 0)).unwrap();
+        assert_eq!((b.fg, b.modifier), (Color::Indexed(4), Modifier::DIM));
+    }
+    #[test]
     fn overlays_are_bounded_and_drawer_reaches_composer() {
         for (width, height) in [(120, 40), (60, 20), (8, 6), (1, 1)] {
             let parent = Rect::new(5, 4, width, height);
@@ -630,35 +711,20 @@ mod tests {
         }
     }
     #[test]
-    fn settings_spans_the_window_beside_both_sidebars_and_other_panels_stay_in_the_transcript() {
+    fn framed_modals_centre_over_the_whole_window_and_drawers_stay_in_the_transcript() {
         let regions = crate::render::Regions {
-            sessions: Rect::new(0, 0, 30, 50),
-            transcript: Rect::new(30, 0, 60, 43),
-            details: Rect::new(90, 0, 40, 50),
+            transcript: Rect::new(0, 0, 60, 43),
+            composer: Rect::new(0, 43, 60, 7),
+            details: Rect::new(60, 0, 40, 50),
             ..Default::default()
         };
         let mut s = Snapshot::default();
-        assert_eq!(
-            panel_host(&regions, &s),
-            regions.transcript,
-            "ordinary panels stay in the transcript"
-        );
+        s.panel_layout = "drawer".into();
+        assert_eq!(panel_host(&regions, &s), regions.transcript);
+        s.panel_layout = "modal".into();
+        assert_eq!(panel_host(&regions, &s), Rect::new(0, 0, 100, 50));
         s.nav = Some(crate::bridge::Nav::default());
-        let host = panel_host(&regions, &s);
-        assert_eq!((host.x, host.right(), host.y, host.height), (0, 130, 0, 43));
-        assert!(
-            panel_area(host, &s).width > panel_area(regions.transcript, &s).width * 2,
-            "a far wider settings window"
-        );
-        let narrow = crate::render::Regions {
-            transcript: Rect::new(0, 1, 80, 22),
-            ..Default::default()
-        };
-        assert_eq!(
-            panel_host(&narrow, &s),
-            narrow.transcript,
-            "with no sidebars it is the transcript"
-        );
+        assert_eq!(panel_host(&regions, &s), Rect::new(0, 0, 100, 50));
     }
 
     #[test]
@@ -668,8 +734,8 @@ mod tests {
         s.panel_layout = "page".into();
         s.nav = Some(crate::bridge::Nav::default());
         let area = panel_area(parent, &s);
-        assert_eq!(area, Rect::new(7, 5, 116, 38));
-        assert!(nav_rect(area).right() < area.right());
+        assert_eq!(area, Rect::new(9, 6, 112, 36), "min(120, w-8) by h-4, centred");
+        assert_eq!(nav_rect(area).width, 0, "no left area column any more");
     }
     #[test]
     fn list_layout_is_thin_clamped_and_falls_back_below_44_columns() {
@@ -862,7 +928,7 @@ pub fn draw_menu(
             },
         );
         let (name_style, detail_style, fill) = if on {
-            (base, base.remove_modifier(Modifier::BOLD), base)
+            (base, base.fg(p.muted).remove_modifier(Modifier::BOLD), base)
         } else {
             (
                 base.fg(if item.current { p.accent } else { p.text }),

@@ -46,9 +46,9 @@ def test_current_agent_color_overrides_stale_preview_everywhere(tmp_path, monkey
     after = project(state.controller, 2, shell=state)
     assert before["agent_color"] == "#112233" and after["agent_color"] == "#abcdef"
     header = next(block for block in after["blocks"] if block["kind"] == "context_header")
-    assert header["color"] == after["agent_color"]
-    # Empty blocks are greyed; every other chip carries the current agent colour.
-    assert all(chip["color"] in {after["agent_color"], "$nx-label-neutral"} for chip in header["members"])
+    # The header is neutral grey: the current agent colour lives on the projection, not the header.
+    assert "color" not in header
+    assert all(after["agent_color"] not in chip.values() for chip in header["members"])
 
 
 @pytest.mark.asyncio

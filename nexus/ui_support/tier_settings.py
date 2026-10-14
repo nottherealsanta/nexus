@@ -32,8 +32,8 @@ __all__ = [
 NEW_AGENT_TIERS = ("low", "medium")
 
 MODELS_HELP = (
-    "Tiers let you refer to a model by size. `low` is used for quick background "
-    "jobs such as session titles. The first model in a list that can run is used."
+    "Tiers select subagent models only. The first model in a list that can run "
+    "is used. Provider/model IDs are listed in fallback order."
 )
 TIERS_HELP = (
     "Which model tiers the calling agent may run this subagent on. The first is "

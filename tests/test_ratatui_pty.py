@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
 import select
 import subprocess
 import sys
@@ -143,7 +144,7 @@ def test_native_bridge_keyboard_and_terminal_restoration():
             "items": [{"label": "Context", "command": "/context"}]}) + "\n").encode())
         process.stdin.flush()
         time.sleep(.1)
-        os.write(master, b"\x1b[<0;10;11M")  # first item row; moves with the composer height
+        os.write(master, b"\x1b[<0;10;12M")  # first item row (inside the modal frame); moves with the composer height
         assert read_action() == {"type": "pick", "text": "/context", "generation": 0}
         os.write(master, b"\x1b[<0;1;1M")
         assert read_action() == {"type": "dismiss", "text": ""}
@@ -240,6 +241,12 @@ def test_context_dialog_toggle_keyboard_and_lock():
         os.close(slave)
 
 
+def _plain(data) -> str:
+    """Decode terminal output with CSI/OSC escape sequences removed."""
+    text = bytes(data).decode("utf-8", "replace")
+    return re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", "", text)
+
+
 @pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
 def test_local_disclosure_without_python_reply():
     from ratatui_latency_probe import NativeProbe
@@ -259,13 +266,13 @@ def test_local_disclosure_without_python_reply():
         probe.keys(b"\t\r")
         time.sleep(.1)
         assert not probe.read_actions()
-        assert b"Bash ls" in probe.output
+        assert re.search(r"BASH\s+ls", _plain(probe.output))
         probe.keys(b"\t\r")
         time.sleep(.1)
         assert not probe.read_actions()
         assert b"command" in probe.output
-        # Mouse on the output label opens the rest without a Python snapshot.
-        probe.keys(b"\x1b[<0;12;4M\x1b[<0;12;4m")
+        # A double click on the output label opens the rest without a Python snapshot.
+        probe.keys(b"\x1b[<0;12;4M\x1b[<0;12;4m\x1b[<0;12;4M\x1b[<0;12;4m")
         time.sleep(.1)
         assert not probe.read_actions()
         assert b"UNIQUE LOCAL RESULT" in probe.output
@@ -276,6 +283,49 @@ def test_local_disclosure_without_python_reply():
         time.sleep(.1)
         assert not probe.read_actions()
         assert b"STREAMED RESULT" in probe.output
+        assert probe.process.poll() is None
+    finally:
+        probe.close()
+
+
+@pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
+def test_tool_single_click_selects_double_click_toggles_locally():
+    from ratatui_latency_probe import NativeProbe
+    probe = NativeProbe(BINARY)
+    inspect = {"kind": "tool_details", "id": "c"}
+    block = {"id":"g", "kind":"tool_group", "text":"Bash · 1 call", "local_ui":True,
+             "operation":{"kind":"block_toggle","id":"g"}, "members":[
+                 {"id":"c", "kind":"tool", "heading":"Bash ls", "local_ui":True,
+                  "operation":{"kind":"block_toggle","id":"c:detail"},
+                  "output_operation":{"kind":"block_toggle","id":"c:output"},
+                  "inspect_operation":inspect,
+                  "fold_lines":2, "local_detail":"  command: ls\nResult:\nUNIQUE LOCAL RESULT"}]}
+    down_up = lambda x: b"\x1b[<0;%d;4M\x1b[<0;%d;4m" % (x, x)
+    try:
+        probe.send({"schema":3,"reset":True,"revision":1,"generation":1,"blocks":[block],"sessions_sidebar":False,"details_sidebar":False})
+        deadline=time.monotonic()+4
+        while b"Bash" not in probe.output and probe.process.poll() is None and time.monotonic()<deadline:
+            time.sleep(.02)
+        probe.keys(b"\t\r")  # open the group and the call, as in the disclosure test
+        time.sleep(.1)
+        probe.keys(b"\t\r")
+        time.sleep(.1)
+        probe.read_actions()
+        # One click only selects: no toggle, no Python operation.
+        probe.keys(down_up(12))
+        time.sleep(.5)  # longer than the 300 ms double-click window
+        assert not probe.read_actions()
+        assert b"UNIQUE LOCAL RESULT" not in probe.output
+        # Two clicks on different cells of the same tool within 300 ms toggle it locally.
+        probe.keys(down_up(12) + down_up(14))
+        time.sleep(.15)
+        assert not probe.read_actions()
+        assert b"UNIQUE LOCAL RESULT" in probe.output
+        # The keyboard `i` inspector is still a Python operation.
+        probe.keys(b"i")
+        time.sleep(.15)
+        ops = [a["operation"] for a in probe.read_actions() if a.get("type") == "operation"]
+        assert ops == [inspect]
         assert probe.process.poll() is None
     finally:
         probe.close()
@@ -326,18 +376,18 @@ def test_static_completion_and_optimistic_toggle_ignore_stale_echo():
         time.sleep(.15)
         assert not probe.read_actions()
         assert b"/model" in probe.output
-        probe.keys(b"\x02")
+        probe.keys(b"\x0c")
         time.sleep(.08)
         first=probe.read_actions()
         assert first[0]["type"]=="toggle" and first[0]["value"] is True
-        probe.keys(b"\x02")
+        probe.keys(b"\x0c")
         time.sleep(.08)
         second=probe.read_actions()
         assert second[0]["value"] is False
         # Delayed persistence echo from the first click must not reopen the sidebar.
-        probe.send({"schema":3,"revision":2,"generation":1,"sessions_sidebar":True,"ui_ack":first[0]["ui_sequence"]})
+        probe.send({"schema":3,"revision":2,"generation":1,"details_sidebar":True,"ui_ack":first[0]["ui_sequence"]})
         time.sleep(.08)
-        probe.keys(b"\x02")
+        probe.keys(b"\x0c")
         time.sleep(.08)
         third=probe.read_actions()
         assert third[0]["value"] is True
@@ -384,7 +434,8 @@ def test_settings_native_focus_reorder_and_loading_guard():
         while termios.tcgetattr(slave) == before:
             assert time.monotonic() < deadline
             time.sleep(.01)
-        os.write(master, b"\x1b[D\x1b[B")
+        # Settings opens at the root list: Animate, Monochrome, then the Models drill row.
+        os.write(master, b"\x1b[B\x1b[B\r")
         assert action()["type"] == "nav_select"
         os.write(master, b"\x1b[C\r")
         assert action()["operation"]["kind"] == "tier_ref"
@@ -394,7 +445,9 @@ def test_settings_native_focus_reorder_and_loading_guard():
         os.write(master, b"\r\x1b[D\x1b[B")
         assert not select.select([process.stdout], [], [], .25)[0], "loading must suppress stale actions"
         snapshot(3)
-        os.write(master, b"\x1b")
+        os.write(master, b"\x1b")  # a drilled page: Escape returns to the root list
+        time.sleep(.2)
+        os.write(master, b"\x1b")  # the root list: Escape closes Settings
         assert action()["type"] == "dismiss"
     finally:
         process.terminate(); process.wait(timeout=3)

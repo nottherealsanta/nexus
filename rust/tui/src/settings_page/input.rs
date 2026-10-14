@@ -30,6 +30,8 @@ pub struct PageState {
     /// Focus order and hit rectangles of the last drawn frame.
     pub order: Vec<String>,
     pub hits: HitMap,
+    /// Hit id under the pointer; presentation only (never focus, never an activation).
+    pub hover: Option<String>,
     /// The area the state belongs to; a different area starts with fresh focus and scroll.
     pub area: String,
 }
@@ -432,6 +434,40 @@ fn remove(page: &Page, st: &mut PageState) -> Act {
         &o.op,
         &[("action", json!("remove")), ("index", json!(i))],
     ))
+}
+
+/// Whether a click on `id` could do anything; locked and read-only rows never hover.
+fn hoverable(page: &Page, id: &str) -> bool {
+    match page.find(id) {
+        Some(Target::Row(r)) => match &r.control {
+            Control::Toggle { locked, .. } => locked.is_empty(),
+            Control::Readout(_) => false,
+            _ => true,
+        },
+        Some(Target::OrderedItem(o, _)) | Some(Target::OrderedAdd(o)) => o.editable,
+        Some(Target::Tabs(_) | Target::Button(_) | Target::Section(_) | Target::Scope(_)) => true,
+        None => false,
+    }
+}
+
+/// Pointer motion at (x, y) or leaving the page (`None`). Reuses the click hit ranges, so
+/// hover lands exactly where a click would. An open popup or text edit owns the pointer and
+/// clears hover. Returns whether the hover target changed (the caller redraws).
+pub fn hover(page: &Page, st: &mut PageState, at: Option<(u16, u16)>) -> bool {
+    let next = match at {
+        Some((x, y)) if st.popup.is_none() && st.edit.is_none() => st
+            .hits
+            .at(x, y)
+            .map(|(id, _)| id)
+            .filter(|id| hoverable(page, id))
+            .map(str::to_string),
+        _ => None,
+    };
+    if st.hover == next {
+        return false;
+    }
+    st.hover = next;
+    true
 }
 
 /// A left click at (x, y). Returns what to do; sets focus to what was clicked.

@@ -77,6 +77,11 @@ pub struct Snapshot {
     pub queue_lines: Vec<String>,
     /// The same messages with their durable ids, for the boxed ↑ ↓ ✕ list.
     pub queue_items: Vec<QueueItem>,
+    /// Local: the Queued section is collapsed (caret click); carried across snapshots.
+    #[serde(skip)]
+    pub queue_collapsed: bool,
+    /// The running turn's status line; absent while idle.
+    pub turn_status: Option<TurnStatus>,
     pub update_notice: String,
     /// Dismissible notices from the host (plan §8). Always the newest bounded list;
     /// the client shows each id once and owns timers, dedup and dismissal.
@@ -89,8 +94,11 @@ pub struct Snapshot {
     pub sessions_truncated: bool,
     /// The typed one-page Settings area (`nexus/ui_support/settings_page.py`), or null.
     pub settings_page: Option<Value>,
-    /// Bumped by `/sessions`: the client opens and focuses the sessions sidebar.
-    pub sessions_request: u64,
+    /// Appearance and Layout rows inlined into the Settings root list (plus drill summaries), or null.
+    pub settings_overview: Option<Value>,
+    /// The Sessions dashboard payload (rows, groups, preview), or null while it is closed.
+    /// Opaque here: the dashboard module decodes it.
+    pub dashboard: Option<Value>,
     pub breadcrumb: String,
     pub details_panel: DetailsPanel,
     pub logs: Vec<String>,
@@ -98,14 +106,9 @@ pub struct Snapshot {
     /// The daemon is unreachable; the shell shows a banner and disables the composer.
     #[serde(default)]
     pub disconnected: bool,
-    pub sessions_sidebar: bool,
     pub details_sidebar: bool,
     /// Local width arbitration, preserved across Python snapshots.
     pub last_opened: String,
-    /// Local only: the sessions drawer is open (terminals under 90 columns). Never the
-    /// persisted sidebar preference, so a narrow window does not open a drawer by itself.
-    #[serde(skip)]
-    pub sessions_drawer: bool,
     pub context_preview: bool,
     /// Settings → Layout: the conversation column is at most `render::CENTERED_WIDTH` wide, centered.
     pub centered_layout: bool,
@@ -117,6 +120,17 @@ pub struct Snapshot {
     pub completions: Vec<String>,
     pub completion_query: String,
     pub completion_prefix: String,
+}
+/// `Waiting for response… 2.0s` / `4m40s ↓121k [stop]`; times are epoch seconds.
+#[derive(Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct TurnStatus {
+    pub activity: String,
+    pub activity_since: f64,
+    pub turn_since: f64,
+    pub output_tokens: u64,
+    /// True while the count is a chars/4 estimate of streamed output (shown as `~`).
+    pub output_estimated: bool,
 }
 #[derive(Clone, Default, Deserialize)]
 #[serde(default)]
@@ -355,6 +369,67 @@ pub struct Content {
     pub counts: Vec<usize>,
     pub members: Vec<Content>,
     pub output_operation: Option<Value>,
+    /// `tool_group`: the present-tense label (`Running 1 command, Read 3 files`) while a member runs.
+    pub running_label: String,
+    /// `tool_group`: the finished wall time as text (`1.8s`); empty while running.
+    pub elapsed_label: String,
+    /// Epoch milliseconds when a group, tool or thought began (0 = unknown), for the live
+    /// elapsed time; and the milliseconds it took once finished (0 = unknown or running).
+    pub started_ms: u64,
+    pub elapsed_ms: u64,
+    /// `tool_group`: failed members, drawn under the folded header so a failure is never hidden.
+    pub failed_members: Vec<Content>,
+    /// `tool_group`: the newest running member, drawn as the live tail of a folded group.
+    pub live_member: Option<Box<Content>>,
+    /// The full labelled details of a tool (`i`), or the inspector of a context header.
+    pub inspect_operation: Option<Value>,
+    /// A tool's relevant-only body: `[kind, text]` rows (`nexus/ui_support/tool_signal.py`).
+    pub signal: Vec<(String, String)>,
+    /// Context blocks: the compact figure (`~348`, `~?`) and whether the block contributes anything.
+    pub tokens: String,
+    pub active: bool,
+}
+
+impl Content {
+    /// Whether a context block contributes anything. Hosts that send `tokens` also send
+    /// `active`; older ones are judged by their content.
+    pub fn is_active(&self) -> bool {
+        if !self.tokens.is_empty() {
+            return self.active;
+        }
+        !self.text.is_empty() || self.count > 0 || self.local_preview != "~0"
+    }
+
+    /// The token figure beside a context title: `tokens`, else the first `~figure` the
+    /// older fields carry. `None` when the host sent no figure at all.
+    pub fn token_label(&self) -> Option<String> {
+        if !self.tokens.is_empty() {
+            return Some(self.tokens.clone());
+        }
+        [&self.status, &self.local_preview, &self.text]
+            .into_iter()
+            .find(|text| text.starts_with('~'))
+            .map(|text| text.split_whitespace().next().unwrap_or("~?").to_owned())
+            .or_else(|| (!self.status.is_empty()).then(|| "~?".to_owned()))
+    }
+
+    /// Copy the fields a lazily built view (`Disclosure::block`) must keep so the activity
+    /// rows draw: the group's live/failed members and times, a tool's inspector and, when
+    /// the row is `open` and not `/verbose`, its relevant-only `signal` rows.
+    pub fn carry_presentation(&self, shown: &mut Content, open: bool) {
+        shown.running_label = self.running_label.clone();
+        shown.elapsed_label = self.elapsed_label.clone();
+        shown.started_ms = self.started_ms;
+        shown.elapsed_ms = self.elapsed_ms;
+        shown.failed_members = self.failed_members.clone();
+        shown.live_member = self.live_member.clone();
+        shown.inspect_operation = self.inspect_operation.clone();
+        shown.tokens = self.tokens.clone();
+        shown.active = self.active;
+        if open {
+            shown.signal = self.signal.clone();
+        }
+    }
 }
 
 #[derive(Default, Deserialize)]
@@ -511,6 +586,9 @@ impl Snapshot {
         if !present.contains_key("queue_items") {
             self.queue_items = std::mem::take(&mut previous.queue_items);
         }
+        if !present.contains_key("turn_status") {
+            self.turn_status = previous.turn_status.take();
+        }
         if !present.contains_key("update_notice") {
             self.update_notice = std::mem::take(&mut previous.update_notice);
         }
@@ -543,15 +621,17 @@ impl Snapshot {
         if !present.contains_key("theme") {
             self.theme = previous.theme.clone();
         }
-        if !present.contains_key("sessions_sidebar") {
-            self.sessions_sidebar = std::mem::take(&mut previous.sessions_sidebar);
-        }
         if !present.contains_key("details_sidebar") {
             self.details_sidebar = std::mem::take(&mut previous.details_sidebar);
         }
-        self.sessions_drawer = previous.sessions_drawer;
+        if !present.contains_key("settings_overview") {
+            self.settings_overview = std::mem::take(&mut previous.settings_overview);
+        }
         if !present.contains_key("settings_page") {
             self.settings_page = std::mem::take(&mut previous.settings_page);
+        }
+        if !present.contains_key("dashboard") {
+            self.dashboard = std::mem::take(&mut previous.dashboard);
         }
         if !present.contains_key("last_opened") {
             self.last_opened = previous.last_opened.clone();
@@ -715,6 +795,74 @@ mod section_tests {
         assert!(next.restore.is_empty());
         assert_eq!(next.blocks[0].id, "a");
     }
+    #[test]
+    fn dashboard_is_opaque_kept_across_omissions_and_cleared_by_null() {
+        let mut old = Snapshot {
+            schema: 3,
+            dashboard: Some(serde_json::json!({"rows": []})),
+            ..Default::default()
+        };
+        let fields = serde_json::from_str::<serde_json::Map<String, Value>>(r#"{"schema":3}"#)
+            .unwrap();
+        let mut next: Snapshot = serde_json::from_value(Value::Object(fields.clone())).unwrap();
+        next.merge_missing(&mut old, &fields);
+        assert_eq!(next.dashboard, Some(serde_json::json!({"rows": []})));
+        let fields = serde_json::from_str::<serde_json::Map<String, Value>>(
+            r#"{"schema":3,"dashboard":null}"#,
+        )
+        .unwrap();
+        let mut cleared: Snapshot = serde_json::from_value(Value::Object(fields.clone())).unwrap();
+        cleared.merge_missing(&mut next, &fields);
+        assert_eq!(cleared.dashboard, None);
+    }
+
+    #[test]
+    fn activity_fields_decode_and_context_figures_fall_back() {
+        let group: Content = serde_json::from_str(
+            r#"{"kind":"tool_group","running_label":"Running 1 command","elapsed_label":"1.8s",
+                "started_ms":1700000000000,"elapsed_ms":1800,"failures":1,
+                "failed_members":[{"id":"bad","status":"failed"}],
+                "live_member":{"id":"now","status":"running","inspect_operation":{"kind":"tool_details","id":"now"},
+                               "signal":[["out","1  a"],["clip","… 3 lines"]]}}"#,
+        )
+        .unwrap();
+        assert_eq!(group.started_ms, 1_700_000_000_000);
+        assert_eq!(group.failed_members[0].id, "bad");
+        let live = group.live_member.as_deref().unwrap();
+        assert_eq!(live.signal[1], ("clip".to_string(), "… 3 lines".to_string()));
+        assert_eq!(live.inspect_operation.as_ref().unwrap()["id"], "now");
+
+        let explicit = Content { tokens: "~348".into(), active: false, text: "body".into(), ..Default::default() };
+        assert!(!explicit.is_active(), "explicit `active` wins over content");
+        assert_eq!(explicit.token_label().as_deref(), Some("~348"));
+        let legacy = Content { status: "~2.1k tokens".into(), ..Default::default() };
+        assert!(legacy.is_active());
+        assert_eq!(legacy.token_label().as_deref(), Some("~2.1k"));
+        let unknown = Content { status: "tokens unknown".into(), ..Default::default() };
+        assert_eq!(unknown.token_label().as_deref(), Some("~?"));
+        assert_eq!(Content::default().token_label(), None);
+        let zero = Content { local_preview: "~0".into(), ..Default::default() };
+        assert!(!zero.is_active());
+    }
+
+    #[test]
+    fn carried_presentation_keeps_signal_only_while_open() {
+        let source = Content {
+            running_label: "Running 1 command".into(),
+            failed_members: vec![Content { id: "bad".into(), ..Default::default() }],
+            signal: vec![("text".into(), "x".into())],
+            ..Default::default()
+        };
+        let mut closed = Content::default();
+        source.carry_presentation(&mut closed, false);
+        assert_eq!(closed.running_label, "Running 1 command");
+        assert_eq!(closed.failed_members.len(), 1);
+        assert!(closed.signal.is_empty());
+        let mut open = Content::default();
+        source.carry_presentation(&mut open, true);
+        assert_eq!(open.signal.len(), 1);
+    }
+
     #[test]
     fn picker_filter_matches_hidden_model_reference() {
         let item = Item {

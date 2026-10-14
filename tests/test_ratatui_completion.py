@@ -78,8 +78,10 @@ async def test_agent_model_picker_details_preserve_original_metadata(tmp_path, m
            "context": 128000, "max_output": 8192, "cost": {"input": 0},
            "extra": {"future": [1, 2]}}
     c.list_models.return_value = [row]
+    c.list_models.side_effect = None
     shell = ShellActions(SimpleNamespace(client=c))
     await shell.workflows.agent_model_picker("fallback", 0)
+    c.list_models.assert_awaited_once_with(selectable_only=True, scope="subagents")
     item = shell.items[0]
     assert item["label"] == "Display · other"
     assert item["operation"]["ref"] == "other/internal"
@@ -123,6 +125,26 @@ async def test_native_model_picker_orders_and_commits_effort(tmp_path, monkeypat
     assert shell.panel_title == "Select model"
     assert first in shell.items
     controller.select_model_and_effort.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_native_model_picker_marks_only_subagent_routes(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    from nexus.ui.ratatui.actions import ShellActions
+    agy = {"provider": "agy", "id": "gemini-flash", "name": "Gemini Flash", "scope": "subagents"}
+    worker_claude = {"provider": "claude-code", "id": "haiku", "name": "Claude Haiku", "scope": "subagents"}
+    sdk_main_claude = {"provider": "claude-code", "id": "sonnet", "name": "Claude Sonnet"}
+    c = client()
+    c.list_models.return_value = [agy, worker_claude, sdk_main_claude]
+    controller = SimpleNamespace(client=c, session="s", provider="agy", model="gemini-flash",
+        reasoning_effort=None, stored_override=None, reasoning_effort_source=None, supported_levels=[],
+        select_model_and_effort=AsyncMock())
+    shell = ShellActions(controller)
+    await shell.workflows.agent_model_picker("model", 0)
+    assert {item["search"] for item in shell.items} == {
+        "agy/gemini-flash", "claude-code/haiku", "claude-code/sonnet"
+    }
 
 
 @pytest.mark.asyncio

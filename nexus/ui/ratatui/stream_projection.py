@@ -54,5 +54,7 @@ class StreamProjection:
         if activity:
             rows.append(["Activity", activity])
         snapshot["details_panel"] = {**panel, "session": rows}
+        from .turn_status import turn_status
+        snapshot["turn_status"] = turn_status(controller.view)
         self.snapshot = snapshot
         return snapshot

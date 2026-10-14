@@ -99,6 +99,41 @@ def test_append_and_read_round_trip_byte_identical_encoding(tmp_path):
     assert read.messages()[0] == message
 
 
+def test_message_snippets_follow_the_latest_text(tmp_path):
+    from nexus.model.message import Thinking, ToolResult
+    from nexus.session.db import _backfill_message_snippets
+
+    store = _store(_db(tmp_path))
+    store.create("s1")
+    store.append_message("s1", _msg("hello\nthere"))
+    store.append_message("s1", _msg("the reply", "assistant"))
+    row = store.session_row("s1")
+    assert row["last_user"] == "hello there"
+    assert row["last_agent"] == "the reply"
+    assert row["message_count"] == 1
+
+    store.append_message("s1", _msg("next prompt"))
+    store.append_message(
+        "s1",
+        Message(role="user", content=[ToolResult(tool_use_id="t", content=[Text(text="tool output")])]),
+    )
+    store.append_message("s1", Message(role="assistant", content=[Thinking(text="hmm")]))
+    row = store.session_row("s1")
+    assert row["last_user"] == "next prompt"
+    assert row["last_agent"] == "the reply"
+    assert row["message_count"] == 3
+
+    store.db._connection().execute("UPDATE sessions SET last_user='', last_agent=''")
+    _backfill_message_snippets(store.db._connection())
+    row = store.session_row("s1")
+    assert row["last_user"] == "next prompt"
+    assert row["last_agent"] == "the reply"
+
+    store.create_draft("d")
+    store.append_message("d", _msg("draft hello"))
+    assert store.session_row("d")["last_user"] == "draft hello"
+
+
 def test_append_event_and_summary_round_trip(tmp_path):
     store = _store(_db(tmp_path))
     store.create("s1")

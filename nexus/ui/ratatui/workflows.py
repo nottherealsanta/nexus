@@ -34,6 +34,7 @@ class Workflows(TierPages, SpeakPages):
         self.agent_context = {}
         self.agent_parents = []
         self.settings_page = None  # the typed one-page Settings area currently shown, if any
+        self.settings_overview = None  # the root list's inlined Appearance/Layout rows, if any
         self.page_area = ""
         self.page_title = ""
         self.page_state: dict[str, dict] = {}  # per-area view state (active tab, ...)
@@ -193,6 +194,7 @@ class Workflows(TierPages, SpeakPages):
         self.page_area = area
         self.page_title = f"Settings · {label}"
         self.settings_page = None
+        self.settings_overview = None
         self.shell.settings_nav = area
         self.shell.show(self.page_title, [], layout="modal")
         self.shell.items = []
@@ -209,9 +211,10 @@ class Workflows(TierPages, SpeakPages):
         """Rebuild the current page from the host (a no-op unless a page is the open panel)."""
         if not self.page_area or self.shell.panel_title != self.page_title:
             return
-        from .settings_pages import page_module
+        from .settings_pages import build_overview, page_module
         try:
             self.settings_page = await page_module(self.page_area).build(self)
+            self.settings_overview = await build_overview(self)
         except Exception as exc:  # noqa: BLE001 - keep the last page and say what failed
             self.shell.flash(f"{self.page_title} could not be refreshed: {exc}", "error")
         self.shell.panel_revision += 1
@@ -547,15 +550,40 @@ class Workflows(TierPages, SpeakPages):
                 self.shell.collapsed_turns.remove(operation["id"])
             else:
                 self.shell.collapsed_turns.add(operation["id"])
-        elif kind == "tool_page":
+        elif kind in {"tool_page", "tool_details"}:
             from ...ui_support.tool_details import styled_lines, tool_detail_sections
-            tool = next(tool for tool in self.active_view.tools if tool.call_id == operation["id"])
-            self.shell.show_styled(tool.name, *styled_lines(tool_detail_sections(tool)))
+            tool = find_tool(self.active_view, operation["id"])
+            if tool is None:
+                self.shell.notice = "Tool is no longer available"
+            else:
+                lines, tones = styled_lines(tool_detail_sections(tool))
+                self.shell.show_styled(escape_controls(tool.name), [escape_controls(line) for line in lines], tones)
+        elif kind == "sessions":
+            await self.sessions()
+        elif kind == "session_preview":
+            await self.dashboard.select(operation["id"])
+        elif kind == "sessions_close":
+            self.close_dashboard()
+        elif kind == "sessions_refresh":
+            await self.dashboard.refresh()
+        elif kind == "session_rename":
+            await self.dashboard.rename(operation["id"], operation["title"])
+        elif kind == "session_new":
+            text = operation.get("text") if isinstance(operation.get("text"), str) else ""
+            self.close_dashboard()
+            await self.shell.command("/new", ())
+            if text.strip():
+                await self.shell.submit(text)
         elif kind == "session_open":
+            self.close_dashboard()
             await self.shell.switch_project(operation["workspace"], operation["id"])
         elif kind == "session_archive":
-            await self.client.archive_session(operation["id"])
-            await self.sessions()
+            dashboard = getattr(self, "dashboard", None)
+            if dashboard is not None and dashboard.visible:
+                await dashboard.archive(operation["id"])
+            else:
+                await self.client.archive_session(operation["id"])
+                self.shell.flash("Session archived", "success")
         elif kind == "session_unarchive":
             await self.client.unarchive_session(operation["id"])
             await self.shell.switch(operation["id"])
@@ -636,7 +664,7 @@ class Workflows(TierPages, SpeakPages):
                      for row in status.providers if isinstance(row, dict) and row.get("id")]
             self.menu("Connect a provider", rows, ["Nexus starts with the newest model of the first provider you connect. Change it any time with /model."] + lines)
         elif kind == "setup_models":
-            rows = await self.client.list_models(selectable_only=True)
+            rows = await self.client.list_models(selectable_only=True, scope="main")
             self.menu("Choose the default model", [(str(row.get("name") or row["id"]),
                 {"kind": "setup_save", "provider": row["provider"], "model": row["id"]}) for row in rows])
         elif kind == "setup_save":
@@ -806,7 +834,7 @@ class Workflows(TierPages, SpeakPages):
 
     async def agent_model_picker(self, field, index):
         from ...ui_support.model_choice import model_groups, recent_models
-        rows = [row for row in recent_models(await self.client.list_models(selectable_only=True)) if row.get("provider") and row.get("id")]
+        rows = [row for row in recent_models(await self.client.list_models(selectable_only=True, scope="subagents")) if row.get("provider") and row.get("id")]
         groups, _ = model_groups(rows, favorites=self.shell.preferences.values["model_favorites"], recent=self.shell.preferences.values["model_recent"])
         items = [(f"{row.get('name') or row['id']} · {row['provider']}", {"kind": "agent_set", "field": field, "index": index, "ref": f"{row['provider']}/{row['id']}"}, title, row)
                  for title, group in groups for row in group]
@@ -922,14 +950,31 @@ class Workflows(TierPages, SpeakPages):
         context_sections.section(self, category)
 
     async def sessions(self):
-        """The sessions surface is the left sidebar: refresh it and ask the client to open and focus it.
+        """Open the dashboard without switching the selected session."""
+        from .bridge import SessionDashboard
+        if not hasattr(self, "dashboard"):
+            self.dashboard = SessionDashboard(self.shell)
+        await self.dashboard.open()
 
-        ``/session``, ``/sessions``, ``/archived`` and Ctrl+B all land there; there is no separate dialog.
-        """
-        result = await self.client.project_sessions()
-        self.shell.refresh_session_tabs(session_rows(result, self.shell.controller.session, self.shell.seen_seq))
-        self.shell.sessions_truncated = bool(result.truncated)
-        self.shell.sessions_request += 1
+    def close_dashboard(self):
+        """Hide the dashboard (idempotent): dismissed, replaced by a session switch, or shutdown."""
+        dashboard = getattr(self, "dashboard", None)
+        if dashboard is not None:
+            dashboard.close()
+
+
+def find_tool(view, call_id):
+    """Find the full tool record, including nested subagent views."""
+    for tool in field(view, "tools", []) or []:
+        if field(tool, "call_id") == call_id:
+            return tool
+    children = field(view, "agents", {}) or {}
+    children = children.values() if isinstance(children, dict) else children
+    for child in children:
+        tool = find_tool(field(child, "body", child), call_id)
+        if tool is not None:
+            return tool
+    return None
 
 
 REVIEW_PAGE_LIMIT = 8
@@ -986,7 +1031,8 @@ def _repo_of(entry) -> str:
 
 
 def _session_row(summary, entry, project, day, tree, current, seen, now):
-    from ...ui_support.session_status import session_status, session_subline
+    from ...host_support.session_preview import clean_preview_text
+    from ...ui_support.session_status import relative_time, session_status, session_subline
     from ...ui_support.text import escape_controls
     if summary.id not in seen or summary.id == current:
         seen[summary.id] = max(
@@ -996,9 +1042,13 @@ def _session_row(summary, entry, project, day, tree, current, seen, now):
     status = session_status(summary, seen, current)
     head = f"{project} › {tree}" if tree else project
     group = f"{head} · {day}" if project else day
+    age = relative_time(getattr(summary, "last_activity", 0.0), now).removesuffix(" ago")
     return {"id": summary.id, "title": escape_controls(summary.title or "New Session"),
             "workspace": entry.workspace, "state": summary.state, "group": escape_controls(group),
             "project": escape_controls(project), "day": escape_controls(day),
             "repo": _repo_of(entry), "worktree": escape_controls(tree),
             "status": status, "sub": escape_controls(session_subline(summary, status, now, compact=True)),
+            "age": escape_controls(age),
+            "last_user": clean_preview_text(getattr(entry, "last_user", "") or "", 240),
+            "last_agent": clean_preview_text(getattr(entry, "last_agent", "") or "", 240),
             "active": summary.id == current}

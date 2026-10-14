@@ -211,7 +211,7 @@ def test_schema_upgrade_keeps_old_rows_and_leaves_their_title_alone(tmp_path):
     )
     conn.close()
     db = StateDatabase(path)
-    assert db.schema_version() == SCHEMA_VERSION == 3
+    assert db.schema_version() == SCHEMA_VERSION == 4
     store = SqliteSessionStore(db, "project", "main", root=str(tmp_path), lock_dir=tmp_path)
     row = store.session_row("old")
     assert (row["title"], row["title_source"]) == ("Old title", "")
@@ -250,7 +250,7 @@ class _Sessions:
         return self.source
 
 
-def _runtime(sessions, provider=None, *, enabled=True, model="low"):
+def _runtime(sessions, provider=None, *, enabled=True, model="openai/title"):
     config = SimpleNamespace(
         v2=SimpleNamespace(sessions=SimpleNamespace(auto_title=enabled, title_model=model))
     )
@@ -504,11 +504,11 @@ async def test_a_forked_session_is_not_a_title_candidate_on_enqueue(tmp_path):
 
 def test_no_title_call_when_the_tier_cannot_run():
     """A plain config has no tiers: never send ``low`` to a provider as a model id."""
-    runtime = _runtime(_Sessions())
+    runtime = _runtime(_Sessions(), model="low")
     runtime.router.tier_runnable = lambda tier: False
     assert AutoTitler(runtime).candidate("s", "hello") is None
     runtime.router.tier_runnable = lambda tier: True
-    assert AutoTitler(runtime).candidate("s", "hello") == "hello"
+    assert AutoTitler(runtime).candidate("s", "hello") is None
     # An explicit model reference is not a tier, so the tier probe does not apply.
     pinned = _runtime(_Sessions(), model="openai/gpt-5-mini")
     pinned.router.tier_runnable = lambda tier: False

@@ -1,6 +1,17 @@
 //! Transcript blocks to styled, wrapped rows, for the native timeline. Python decides order
 //! and blank-row gaps; this module only draws and wraps at word boundaries.
+//!
+//! Activity drawing lives in submodules, each pure over `Content` and `Palette`:
+//! `groups` (verb groups), `thought` (reasoning), `tools` (standalone tool rows),
+//! `signal` (a tool's relevant-only rows), `header` (context headers) and `look` (glyphs,
+//! time format and the live-run marker the draw loop animates).
 use crate::{bridge::Content, markdown, render::Palette};
+mod groups;
+mod header;
+pub mod look;
+mod signal;
+mod thought;
+mod tools;
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -201,11 +212,12 @@ fn user(out: &mut Rows, b: &Content, full: usize, p: &Palette) {
 
 fn user_card(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
     let base = Style::default().fg(p.text).bg(p.panel);
-    let rail = color(&b.color, p.blue, p);
+    // The composer's card shape: panel background and padding, no coloured left rail.
+    // The rail's column stays panel-coloured so the prompt text does not move.
     let bar = |_: ()| {
         vec![
             Span::styled("  ", Style::default().bg(p.background)),
-            Span::styled("│", Style::default().fg(rail).bg(p.panel)),
+            Span::styled(" ", base),
             Span::styled("  ", base),
         ]
     };
@@ -235,8 +247,7 @@ fn user_card(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
     for (i, cells) in wrap(&head, room).into_iter().enumerate() {
         let mut row = line(
             if i == 0 {
-                // The fold chevron sits in the left margin, outside the card, barely visible;
-                // the rail stays unbroken.
+                // The fold chevron sits in the left margin, outside the card, barely visible.
                 let mut prefix = bar(());
                 prefix[0] = Span::styled(
                     if b.collapsed { "▸ " } else { "▾ " },
@@ -514,11 +525,7 @@ fn change(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
         Span::raw("    "),
         Span::styled(
             glyph,
-            Style::default().fg(if running {
-                color(&b.color, p.blue, p)
-            } else {
-                p.muted
-            }),
+            Style::default().fg(if running { p.text } else { p.muted }),
         ),
         Span::raw(" "),
         Span::styled(b.text.clone(), Style::default().fg(p.muted)),
@@ -724,96 +731,9 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
     let op = &b.operation;
     match b.kind.as_str() {
         "user" => user(&mut out, b, width, p),
-        "context_header" => {
-            // Compact, marker-free context rows. Counts sit beside their labels;
-            // project/global counts retain their distinct tones inside one bracket.
-            let lead = 5usize.min(viewport_width);
-            // Agent colour for titles, plus a thin left rail like the user card's (header lines only).
-            let rail = color(&b.color, p.blue, p);
-            for (n, chip) in b.members.iter().enumerate() {
-                if n > 0 {
-                    out.push((Line::default(), None));
-                }
-                // Empty blocks arrive with the neutral colour and are drawn greyed out.
-                let rail = if chip.color.is_empty() {
-                    rail
-                } else {
-                    color(&chip.color, rail, p)
-                };
-                let mut parts = vec![Span::styled(
-                    chip.title.clone(),
-                    Style::default().fg(rail).add_modifier(Modifier::BOLD),
-                )];
-                if !chip.counts.is_empty() {
-                    parts.push(Span::styled(" [", Style::default().fg(p.muted)));
-                    for (index, count) in chip.counts.iter().enumerate() {
-                        if index > 0 {
-                            parts.push(Span::raw(" "));
-                        }
-                        parts.push(Span::styled(
-                            count.to_string(),
-                            Style::default().fg(if chip.counts.len() == 2 && index == 0 {
-                                p.quiet
-                            } else {
-                                p.muted
-                            }),
-                        ));
-                    }
-                    parts.push(Span::styled("]", Style::default().fg(p.muted)));
-                }
-                let status = chip.status.replace(" tokens", "");
-                if !status.is_empty() {
-                    parts.push(Span::styled(
-                        format!("  {status}"),
-                        Style::default().fg(p.muted),
-                    ));
-                }
-                let w: usize = parts.iter().map(|s| s.content.width()).sum();
-                let row = serde_json::json!({"kind":"context_chips","chips":[
-                    {"start":lead,"end":(lead + w).min(viewport_width),"operation":chip.operation}]});
-                out.push((
-                    Line::from(
-                        [
-                            Span::raw(" ".repeat(2.min(lead))),
-                            Span::styled("│", Style::default().fg(rail)),
-                            Span::raw(" ".repeat(lead.saturating_sub(3))),
-                        ]
-                        .into_iter()
-                        .chain(parts)
-                        .collect::<Vec<_>>(),
-                    ),
-                    Some(row),
-                ));
-            }
-        }
+        "context_header" => header::draw(&mut out, b, viewport_width, p),
         "live" => live_card(&mut out, b, width, p),
-        "context" => {
-            let chip = color(&b.color, Color::Rgb(138, 138, 138), p);
-            let mut head = vec![Span::styled(
-                format!(" {} ", b.title),
-                Style::default()
-                    .fg(p.background)
-                    .bg(chip)
-                    .add_modifier(Modifier::BOLD),
-            )];
-            if !b.status.is_empty() {
-                head.push(Span::styled(
-                    format!(" {}", b.status),
-                    Style::default().fg(p.quiet),
-                ));
-            }
-            indented(&mut out, head, 2, width, op);
-            let tone = if b.text.is_empty() { p.quiet } else { p.muted };
-            for text in b.text.lines() {
-                indented(
-                    &mut out,
-                    vec![Span::styled(text.to_string(), Style::default().fg(tone))],
-                    4,
-                    width,
-                    op,
-                );
-            }
-        }
+        "context" => header::chip(&mut out, b, width, p),
         "hints" => {
             // Tips for an empty session: "keys\ttext" rows, centred as one block
             // (Python pads both columns to equal width, like the terminal's EmptyHints).
@@ -832,68 +752,8 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
                 out.push((Line::from(spans), None));
             }
         }
-        "agent" => {
-            let c = color(&b.color, p.blue, p);
-            indented(
-                &mut out,
-                vec![
-                    Span::styled("◆", Style::default().fg(c)),
-                    Span::raw(" "),
-                    Span::styled(
-                        b.title.clone(),
-                        Style::default().fg(c).add_modifier(Modifier::BOLD),
-                    ),
-                ],
-                4,
-                width,
-                op,
-            );
-        }
-        "thought" => {
-            // `Thought: 671ms` in amber, then the reasoning dimmed behind a left rule.
-            let rule = |strong: bool| {
-                vec![
-                    Span::raw("    "),
-                    Span::styled(
-                        "│",
-                        Style::default().fg(if strong { p.border_strong } else { p.border }),
-                    ),
-                    Span::raw(" "),
-                ]
-            };
-            let mut head = vec![Span::styled(
-                b.title.clone(),
-                Style::default().fg(p.warning),
-            )];
-            if !b.text.is_empty() {
-                head.push(Span::raw("  "));
-                head.push(Span::styled(b.text.clone(), Style::default().fg(p.quiet)));
-            }
-            for cells in wrap(&head, width.saturating_sub(8)) {
-                out.push((line(rule(false), cells, None, Style::default()), op.clone()));
-            }
-            if !b.detail.is_empty() {
-                out.push((Line::default(), op.clone()));
-                for text in b.detail.lines() {
-                    let trimmed = text.trim();
-                    let heading = trimmed.len() > 4
-                        && trimmed.starts_with("**")
-                        && trimmed.ends_with("**")
-                        && !trimmed[2..trimmed.len() - 2].contains("**");
-                    let (shown, style) = if heading {
-                        (
-                            trimmed[2..trimmed.len() - 2].to_string(),
-                            Style::default().fg(p.muted).add_modifier(Modifier::BOLD),
-                        )
-                    } else {
-                        (text.replace("**", ""), Style::default().fg(p.quiet))
-                    };
-                    for cells in wrap(&[Span::styled(shown, style)], width.saturating_sub(8)) {
-                        out.push((line(rule(true), cells, None, Style::default()), op.clone()));
-                    }
-                }
-            }
-        }
+        // The transcript names no agent: only the composer and a subagent's own row do.
+        "thought" => thought::draw(&mut out, b, width, p, look::now_ms()),
         "markdown" => {
             let total = width.saturating_sub(2);
             for row in markdown::lines(&b.text, p, total.saturating_sub(4)) {
@@ -923,150 +783,7 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
                 }
             }
         }
-        "tool_group" => {
-            // No ✓/✗ and no failure count: failed calls recover on their own, and
-            // the expanded member still shows the error output in full.
-            let running = b.status == "running";
-            let glyph = if running {
-                "\u{e000}"
-            } else if b.collapsed {
-                "›"
-            } else {
-                "⌄"
-            };
-            let tone = if running {
-                color(&b.color, p.blue, p)
-            } else {
-                p.muted
-            };
-            let head = vec![
-                Span::raw("    "),
-                Span::styled(glyph, Style::default().fg(tone)),
-                Span::raw(" "),
-                Span::styled(
-                    truncate(&b.text, width.saturating_sub(6)),
-                    Style::default().fg(p.muted),
-                ),
-            ];
-            out.push((Line::from(head), op.clone()));
-            for member in &b.members {
-                let text = if member.kind == "thought" {
-                    member.title.clone()
-                } else if member.heading.is_empty() {
-                    format!("{:<8} {}", member.title, member.text)
-                } else {
-                    member.heading.clone()
-                };
-                out.push((
-                    Line::from(vec![
-                        Span::styled("    ", Style::default().fg(p.muted)),
-                        Span::styled(
-                            truncate(&text, width.saturating_sub(4)),
-                            Style::default().fg(p.quiet),
-                        ),
-                    ]),
-                    member.operation.clone(),
-                ));
-                for row in member.detail.lines() {
-                    let operation = member
-                        .output_operation
-                        .clone()
-                        .or_else(|| member.operation.clone());
-                    let label_value = if row.starts_with("  ") && !row.starts_with("    ") {
-                        row.trim_start().split_once(": ")
-                    } else {
-                        None
-                    };
-                    if let Some((label, value)) = label_value {
-                        let label_width = 12;
-                        let labels = wrap(
-                            &[Span::styled(
-                                label.to_string(),
-                                Style::default().fg(p.muted),
-                            )],
-                            label_width,
-                        );
-                        for cells in labels.iter().take(labels.len().saturating_sub(1)) {
-                            // Preserve long parameter keys before the value.
-                            out.push((
-                                line(
-                                    vec![Span::styled("    │ ", Style::default().fg(p.border))],
-                                    cells.clone(),
-                                    None,
-                                    Style::default(),
-                                ),
-                                operation.clone(),
-                            ));
-                        }
-                        let last_label = if label.width() <= label_width {
-                            label
-                        } else {
-                            ""
-                        };
-                        if label.width() > label_width {
-                            out.push((
-                                line(
-                                    vec![Span::styled("    │ ", Style::default().fg(p.border))],
-                                    labels.last().unwrap().clone(),
-                                    None,
-                                    Style::default(),
-                                ),
-                                operation.clone(),
-                            ));
-                        }
-                        for (i, cells) in wrap(
-                            &[Span::styled(value.to_string(), Style::default().fg(p.text))],
-                            width.saturating_sub(6 + label_width),
-                        )
-                        .into_iter()
-                        .enumerate()
-                        {
-                            let prefix = vec![
-                                Span::styled("    │ ", Style::default().fg(p.border)),
-                                Span::styled(
-                                    if i == 0 {
-                                        format!("{last_label:<label_width$}")
-                                    } else {
-                                        " ".repeat(label_width)
-                                    },
-                                    Style::default().fg(p.muted),
-                                ),
-                            ];
-                            out.push((
-                                line(prefix, cells, None, Style::default()),
-                                operation.clone(),
-                            ));
-                        }
-                    } else {
-                        let text = row.strip_prefix("  ").unwrap_or(row);
-                        for cells in wrap(
-                            &[Span::styled(
-                                text.to_string(),
-                                Style::default().fg(if row.starts_with(' ') {
-                                    p.text
-                                } else {
-                                    p.muted
-                                }),
-                            )],
-                            width.saturating_sub(6),
-                        ) {
-                            out.push((
-                                line(
-                                    vec![Span::styled("    │ ", Style::default().fg(p.border))],
-                                    cells,
-                                    None,
-                                    Style::default(),
-                                ),
-                                operation.clone(),
-                            ));
-                        }
-                    }
-                }
-                for child in &member.members {
-                    out.extend(build_inner(child, width as u16, p));
-                }
-            }
-        }
+        "tool_group" => groups::draw(&mut out, b, width, p, look::now_ms()),
         "task" => {
             // The host supplies only the latest activity, never arrow-joined history.
             let running = b.status == "running";
@@ -1084,19 +801,31 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
             } else {
                 String::new()
             };
-            out.push((
-                Line::from(vec![
-                    Span::raw("    "),
-                    Span::styled(
-                        if running { "\u{e000}" } else { " " },
-                        Style::default().fg(color(&b.color, p.blue, p)),
-                    ),
-                    Span::raw(" "),
-                    Span::styled(title, Style::default().fg(color(&b.color, p.blue, p))),
-                    Span::styled(metrics.clone(), Style::default().fg(p.muted)),
-                ]),
-                op.clone(),
-            ));
+            // The agent colour marks only the subagent's name (`Explore Subagent — …`); the
+            // glyph and the rest of the title are neutral.
+            let (name, rest) = match title.find(" Subagent") {
+                Some(at) => title.split_at(at),
+                None => ("", title.as_str()),
+            };
+            let mut head = vec![
+                Span::raw("    "),
+                Span::styled(
+                    if running { look::SLOT } else { " " },
+                    Style::default().fg(p.text),
+                ),
+                Span::raw(" "),
+            ];
+            if !name.is_empty() {
+                head.push(Span::styled(
+                    name.to_string(),
+                    Style::default()
+                        .fg(color(&b.color, p.blue, p))
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
+            head.push(Span::styled(rest.to_string(), Style::default().fg(p.text)));
+            head.push(Span::styled(metrics.clone(), Style::default().fg(p.muted)));
+            out.push((Line::from(head), op.clone()));
             let activity = if running { &b.text } else { &b.metrics };
             for text in activity.lines() {
                 out.push((
@@ -1126,28 +855,7 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
                 );
             }
         }
-        "tool" => {
-            let tone = p.quiet;
-            let gutter = "    ";
-            for text in b.text.lines() {
-                out.push((
-                    Line::styled(
-                        format!("{}{}", gutter, truncate(text, width.saturating_sub(6))),
-                        Style::default().fg(tone),
-                    ),
-                    op.clone(),
-                ));
-            }
-            for text in b.detail.lines() {
-                indented(
-                    &mut out,
-                    vec![Span::styled(text.to_string(), Style::default().fg(p.muted))],
-                    6,
-                    width,
-                    op,
-                );
-            }
-        }
+        "tool" => tools::draw(&mut out, b, width, p),
         "summary" => {
             let text = truncate(&b.text, width.saturating_sub(4));
             let pad = width.saturating_sub(2 + text.width());
@@ -1419,7 +1127,8 @@ mod tests {
             last.content == " " && last.style == Style::default()
         }));
         let header: String = rows[1].0.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(header.starts_with("▾ │ "));
+        // Composer-style card: chevron in the margin, panel padding, no coloured rail.
+        assert!(header.starts_with("▾ ") && !header.contains('│'));
         let number = rows[1]
             .0
             .spans
@@ -1432,7 +1141,7 @@ mod tests {
             Some(p.panel),
             "number blends into the card without a badge"
         );
-        assert!(header.starts_with("▾ │  hello") && header.trim_end().ends_with("#3"));
+        assert!(header.starts_with("▾    hello") && header.trim_end().ends_with("#3"));
         let all: String = rows
             .iter()
             .flat_map(|(l, _)| l.spans.iter())
@@ -1458,7 +1167,7 @@ mod tests {
                 let (line, operation) = &rows[index];
                 assert_eq!(line.width(), 40);
                 let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-                assert_eq!(text.trim(), "│");
+                assert_eq!(text.trim(), "", "padding rows are blank panel, no rail");
                 let card = &line.spans[line.spans.len() - 2];
                 assert_eq!(
                     card.style.bg,
@@ -1487,11 +1196,16 @@ mod tests {
             .iter()
             .map(|(l, _)| l.spans.iter().map(|s| s.content.as_ref()).collect())
             .collect();
-        assert!(lines[0].contains("│ Thought: 671ms"));
+        // Opened: quiet header (no amber, no rail before it), reasoning behind a dim rail.
+        assert_eq!(lines[0], "     ▾ Thought: 671ms");
         assert!(lines
             .iter()
             .any(|l| l.contains("│ Exploring setup") && !l.contains("**")));
-        assert_eq!(rows[0].0.spans.last().unwrap().style.fg, Some(p.warning));
+        assert!(rows
+            .iter()
+            .flat_map(|(l, _)| &l.spans)
+            .all(|s| s.style.fg != Some(p.warning)));
+        assert_eq!(rows[0].0.spans.last().unwrap().style.fg, Some(p.quiet));
     }
 
     #[test]
@@ -1611,8 +1325,8 @@ mod tests {
         assert_eq!(rows.len(), 4);
         assert_eq!(
             rows[2].0.style.fg,
-            Some(p.quiet),
-            "failed tools are not marked red"
+            Some(p.error),
+            "a failed standalone tool row is red"
         );
         let context = Content {
             kind: "context".into(),
@@ -1623,7 +1337,12 @@ mod tests {
             ..Default::default()
         };
         let rows = build(&context, 40, &p);
-        assert_eq!(rows[0].0.spans[1].style.bg, Some(p.blue));
+        // Grey chip, never the agent colour (spans: indent, chip, tokens).
+        assert_eq!(rows[0].0.spans[1].style.bg, Some(p.element));
+        assert!(rows
+            .iter()
+            .flat_map(|(line, _)| &line.spans)
+            .all(|span| span.style.bg != Some(p.blue)));
         assert_eq!(rows.len(), 2);
     }
 
@@ -1724,7 +1443,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_tool_groups_carry_no_marks_and_header_chips_own_click_ranges() {
+    fn failed_tool_groups_count_failures_in_red_and_header_chips_own_click_ranges() {
         let p = Palette::new(false);
         let group = Content {
             kind: "tool_group".into(),
@@ -1734,16 +1453,15 @@ mod tests {
             failures: 2,
             ..Default::default()
         };
-        let text: String = build(&group, 60, &p)[0]
-            .0
-            .spans
+        let rows = build(&group, 60, &p);
+        let spans = &rows[0].0.spans;
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        // No per-row marks; the header carries the failure count in the error colour.
+        assert!(!text.contains('✗') && !text.contains('✓'), "{text}");
+        assert!(text.ends_with("Grep pattern=x · 2 failed"), "{text}");
+        assert!(spans
             .iter()
-            .map(|s| s.content.as_ref())
-            .collect();
-        assert!(
-            !text.contains('✗') && !text.contains('✓') && !text.contains("failed"),
-            "{text}"
-        );
+            .any(|s| s.content.contains("2 failed") && s.style.fg == Some(p.error)));
         let chip = |title: &str, counts: Vec<usize>, key: &str| Content {
             title: title.into(),
             counts,

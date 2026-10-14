@@ -51,8 +51,8 @@ with a `base_url`.
 | `ollama.py` | `ollama` | native `/api/chat` or OpenAI-compatible mode; keyless, loopback default `http://localhost:11434`; conservative capabilities (`tools = false` unless the registry says otherwise) |
 | `opencode.py` | `opencode` (`kind` `acp`) | OpenCode over its Agent Client Protocol subprocess only; ACP tool calls stay inside that agent; child env is an explicit allowlist |
 | `claude_agent.py` (+ `_claude_agent_worker.py`, `claude_agent_auth.py`) | `claude-agent` | included in every install; text-only, buffers replies; SDK built-ins, hooks, settings and persistence disabled; Nexus schemas registered through an in-process MCP intention bridge |
-| `claude_code` kind (no adapter file) | `claude-code` | Two roles. Main-agent selection reuses `ClaudeAgentProvider` (as `claude-agent`) and is hidden from pickers and rejected unless `[models] claude_code_main_enabled = true`. An explicit `claude-code/<model>` subagent role is run by the external worker `agents/claude_code_worker.py` with Claude's own tools, never through a provider `stream()`, unless `[models] claude_code_subagent_backend = "sdk"`, which runs it as a normal Nexus child on `ClaudeAgentProvider` ([agents.md](agents.md#external-claude-code-workers)). Registry projection reuses the Claude subscription catalogue with text-only capabilities; model IDs are not verified live |
-| `antigravity` kind (no streaming adapter) | `antigravity` (alias `agy`) | **Subagent-only** external CLI. It is never a main, plan, fast, fallback or title model (`ConfigError` if named there) and is not in the catalogue. Models are the exact IDs `agy models` reports (probed locally by `model/providers/antigravity_cli.py`, never hard-coded; an unreported ID is refused with a refresh hint). Run by `agents/antigravity_worker.py` with agy's own tools, never through a provider `stream()` ([agents.md](agents.md#external-antigravity-workers)). Implemented offline only: quota usage is read from the built-in `agy -p /usage` TSV format verified with agy 1.3.4; no live model turn was tested and no credentials were used |
+| `claude_code` kind (no adapter file) | `claude-code` | Main-agent selection reuses `ClaudeAgentProvider` (as `claude-agent`) and requires `[models] claude_code_main_enabled = true`. Worker backend (`claude_code_subagent_backend = "worker"`, default) is subagent-only and hidden from main model pickers; use `"sdk"` for ordinary SDK-backed main routes. Worker-based subagent pickers expose exact Claude subscription catalogue rows even when main selection is disabled. An explicit worker subagent is run by `agents/claude_code_worker.py` with Claude's own tools, never through a provider `stream()` ([agents.md](agents.md#external-claude-code-workers)). Registry projection reuses the Claude subscription catalogue with text-only capabilities; model IDs are not verified live |
+| `antigravity` kind (no streaming adapter) | `antigravity` (alias `agy`) | **Subagent-only** external CLI. Main-model pickers exclude it; worker/task/role/tier subagent routes can select it. It is never a main, plan, fast, fallback or title model (`ConfigError` if named there). Models are the exact IDs `agy models` reports (probed locally by `model/providers/antigravity_cli.py`, never hard-coded; an unreported ID is refused with a refresh hint). Run by `agents/antigravity_worker.py` with agy's own tools, never through a provider `stream()` ([agents.md](agents.md#external-antigravity-workers)). Implemented offline only: quota usage is read from the built-in `agy -p /usage` TSV format verified with agy 1.3.4; no live model turn was tested and no credentials were used |
 | `scripted.py` | tests | deterministic offline provider ([testing.md](testing.md)) |
 | `discovery.py` | `.agents/providers/*.py`, `~/.nexus/providers/*.py` | quarantined file providers (`PROVIDER`, `PROVIDERS` or `build(context)`); a configured section always wins a same-named file; legacy `.nexus/providers/` is a lower-precedence fallback |
 | `devtools/mock/provider.py` | dev mode | `mock/<scenario>` models ([devtools.md](devtools.md)) |
@@ -82,7 +82,9 @@ Resolution order, first hit wins:
 3. a registry reference: `provider/model`, a bare id, or an aggregator alias;
 4. adapter fallback: split `provider/model` and use the adapter's own capabilities.
 
-A tier name works anywhere a model string does. Unpinned built-in tiers prefer
+Tier names select subagent routes, not main models or titles. The router also
+accepts legacy tier-valued main config for compatibility; new main selections
+are concrete IDs. Unpinned built-in subagent tiers prefer
 these ordered routes (skipping providers that are not configured):
 
 | Tier | Primary | Ordered fallbacks |
@@ -146,8 +148,8 @@ the effort prompt for remembered models; `/effort` remains available to change i
   stay with the adapter.
 - Tier resolution, deterministic: `[models.tiers]` user pin → curated map shipped
   with Nexus → blended cost `input + output/4` (`low ≤ 2.5 < medium ≤ 10 < high`)
-  → no cost data reads as `low`. `clamp` (used for `agents.max_tier`) only ever
-  narrows.
+  → no cost data reads as `low`. Role/nested-child tier clamps only ever
+  narrow.
 - **A tier runs the first runnable model of the user's list.** `[models.tiers]`
   lists are ordered; `ModelRouter._first_pinned` walks the list in order and uses
   the first model whose provider can stream, before falling back to the
@@ -156,8 +158,17 @@ the effort prompt for remembered models; `/effort` remains available to change i
   `ModelRouter.tier_runnable(tier)` says whether a tier resolves; it is `False`
   without a registry, because a plain config has no tiers and a bare `low` would
   be sent to the provider as a model id.
-- Tiers are used by subagents ([agents.md](agents.md#tiers-per-role)) and by the
-  automatic session title ([sessions.md](sessions.md#automatic-titles)).
+- Tiers are **subagent-only**; main-model selection and automatic titles use
+  concrete provider/model IDs. Settings stacks every tier on one page (no tabs
+  or highest-tier control). Each entry has supported effort choices, saved in
+  `[models.tier_efforts.<tier>]` as `"provider/model" = "effort"`. Default removes
+  the override. Routing applies each fallback model's own effort; an explicit
+  role effort wins. The subagent tool lists each tier's ordered provider/model
+  IDs and tells the caller to try the next listed model if a child route fails.
+- Antigravity discovery probes the built-in `antigravity` route even when a
+  differently named Antigravity section exists. Reported models appear in the
+  subagent picker, never the main/title picker. Discovery does not authorize
+  execution: the configured acknowledgement and permission gates still apply.
 
 ## Authentication
 
@@ -260,7 +271,12 @@ migration is performed: sign in again after upgrading. The legacy
 
 Settings → Models shows each tier's list in this run order (`ModelRouter.tier_candidates`, shared with resolution so the label and the page cannot disagree) and edits the default model chain (`models.default` plus `models.fallback`, global config) through `DefaultModelSet`.
 
-When the workspace leaves `models.default` unset (or set to a built-in tier), Nexus routes built-in tiers through these ordered model preferences. An explicitly configured `[models.tiers]` list or a session-pinned model takes precedence. Provider or model failures can move to the next model before ordinary workspace/agent fallback handling; agent fallbacks retain priority over the global `model.fallback` chain.
+The tier **Add model** picker lists routes selectable by subagents (including
+external worker routes such as Antigravity and Claude); the default-chain
+picker remains limited to main-agent routes. Adding a tier route changes that
+tier's ordered preferences and does not make it available to the main agent.
+
+Subagent tier requests use these ordered model preferences. An explicitly configured `[models.tiers]` list takes precedence. Provider or model failures can move to the next model before ordinary workspace/agent fallback handling; agent fallbacks retain priority over the global `model.fallback` chain.
 
 | Tier | Ordered route | Default reasoning effort |
 | --- | --- | --- |
@@ -269,6 +285,23 @@ When the workspace leaves `models.default` unset (or set to a built-in tier), Ne
 | `high` | `openai-codex/gpt-6.1-sol` → `claude-agent/claude-sonnet-5.5` | `low` on Codex; provider default on Claude |
 
 A user-selected effort remains authoritative, and the tier effort applies consistently to fallback attempts when that fallback has a tier-specific default.
+
+### Probe cache and tier reload
+
+The `agy models` result is cached, not re-run per registry build. `Runtime`
+owns a `RegistryCache` handed to every `ModelRegistry` it builds, so a route
+reload (`reload_model_routes`: provider or default-model change) reuses the
+list and the already-parsed models.dev catalogue (keyed on path, mtime, size).
+The list is re-probed only by the provider's own **Refresh models** action
+(`ProviderModelsRefresh`, Settings > Providers > Antigravity; the models.dev
+`ModelsRefresh` never re-runs `agy`), when the resolved `agy` path or the
+section changes, or when nothing is cached. A failed probe keeps the last good
+list and records the error. Good lists persist, with their refresh time, as `~/.nexus/cache/agy-models.json`
+beside `models.dev.json` (bounded, atomic; corrupt means probe), so a daemon
+restart does not wait on `agy`. Tier-only edits (`ModelTierSet`, `ModelTierReset`)
+call `Runtime.reload_tier_config`: new `TierTable`, registry re-index from the
+held catalogue (`ModelRegistry.retier`), `ModelRouter.set_tiers`, and the
+context coordinator; providers and the registry object are untouched.
 
 ### Antigravity visibility and safe discovery
 
@@ -281,6 +314,14 @@ Discovery does not acknowledge inherited settings: worker execution still requir
 `worker_inherits_agy_settings = true` in an explicit provider section.
 
 Providers Settings always includes Antigravity, with manual CLI sign-in: run `agy`
-in your terminal, then **Re-check and refresh models**. CLI presence is not verified
+in your terminal, then **Refresh models** (re-runs `agy models`; the page shows the count and last-refreshed time). CLI presence is not verified
 authentication. Nexus does not run a login subcommand, manage CLI credentials, or
 perform a model turn to discover availability. A missing CLI is reported honestly.
+
+### Antigravity discovery output
+
+The local `agy models` parser accepts both bare model IDs and the current
+`model-id<TAB>display name` format. Display labels are sanitized and bounded;
+IDs remain exact and validated. Verified against the installed CLI's local
+model listing (no model turn or credential operation). This fixes empty
+subagent pickers when a CLI returns labelled TSV rather than bare IDs.

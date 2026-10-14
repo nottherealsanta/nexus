@@ -53,6 +53,21 @@ def test_parse_models_keeps_single_token_ids_once():
     assert parse_models("\x1b[1mgpt-oss-120b-medium\x1b[0m\n; rm -rf /\n") == [("gpt-oss-120b-medium",) * 2]
 
 
+def test_parse_models_accepts_current_tab_separated_display_names():
+    assert parse_models(
+        "gemini-3.1-pro-high\tGemini 3.1 Pro (High)\n"
+        "gemini-3.1-flash-high\tGemini 3.1 Flash\n"
+        "claude-sonnet-4-6-thinking\tClaude Sonnet 4.6 (Thinking)\n"
+        "claude-sonnet-4-6-thinking\tDuplicate\n"
+        "bad id\tNot a model\n"
+        "not-a-row\tlabel\textra\n"
+    ) == [
+        ("gemini-3.1-pro-high", "Gemini 3.1 Pro (High)"),
+        ("gemini-3.1-flash-high", "Gemini 3.1 Flash"),
+        ("claude-sonnet-4-6-thinking", "Claude Sonnet 4.6 (Thinking)"),
+    ]
+
+
 def test_parse_usage_inverts_remaining_and_keeps_resets():
     parsed = parse_usage(USAGE)
     assert [w["label"] for w in parsed["windows"]] == [

@@ -210,3 +210,14 @@ def test_pinned_tier_does_not_inherit_builtin_chain(tmp_path):
     assert router.resolve(request).provider.name == "github-copilot"
     assert router.fallbacks(request) == []
     assert router.tier_effort(request, router.resolve(request)) is None
+
+
+def test_tier_effort_selections_follow_each_model_including_fallback(tmp_path):
+    from nexus.model.request import SamplingParams
+    router = _default_tier_router(tmp_path)
+    router._tier_efforts = {"medium": {"codex/gpt-6.1-sol": "high", "opencode-go/deepseek-v4.1-flash": "low"}}
+    request = ModelRequest(messages=[], model="medium", metadata={"tier": "medium"})
+    assert router.tier_effort(request, router.resolve(request)) == "high"
+    assert router.tier_effort(request, router.fallbacks(request)[0]) == "low"
+    explicit = ModelRequest(messages=[], model="medium", metadata={"tier": "medium", "reasoning_effort_explicit": True}, params=SamplingParams(reasoning_effort="max"))
+    assert router.tier_effort(explicit, router.resolve(explicit)) == "max"

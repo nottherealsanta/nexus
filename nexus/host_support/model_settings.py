@@ -66,16 +66,8 @@ def _resolved(runtime: object, tier: str) -> str:
 
 
 def _effective_agents_max_tier(runtime: object) -> str:
-    config = None
-    loader = getattr(runtime, "_load_config", None)
-    if callable(loader):
-        try:
-            config = loader()
-        except (ConfigError, OSError):
-            config = None
-    section = getattr(getattr(config, "v2", None), "agents", None)
-    value = getattr(section, "max_tier", "high")
-    return value if isinstance(value, str) and value else "high"
+    # Compatibility field for older clients, not a configurable ceiling.
+    return _tiers(runtime).order[-1]
 
 
 def tier_rows(runtime: object) -> dict[str, Any]:
@@ -86,8 +78,17 @@ def tier_rows(runtime: object) -> dict[str, Any]:
     for a price-based tier), ``resolved`` the model it runs on now.
     """
     tiers = _tiers(runtime)
+    loader = getattr(runtime, "_load_config", None)
+    config = None
+    if callable(loader):
+        try:
+            config = loader()
+        except (ConfigError, OSError):
+            pass
+    efforts = getattr(getattr(getattr(config, "v2", None), "models", None), "tier_efforts", {})
     overrides = dict(tiers.overrides)
     builtin = dict(tiers.builtin)
+    workers = _claude_code_providers(runtime) | antigravity_providers(runtime)  # one config load for every row
     rows: list[dict[str, Any]] = []
     for name in tiers.order:
         mine = [ref for ref, tier in overrides.items() if tier == name]
@@ -106,9 +107,10 @@ def tier_rows(runtime: object) -> dict[str, Any]:
             {
                 "name": name,
                 "refs": refs,
+                "efforts": dict(efforts.get(name, {})),
                 "source": source,
                 "resolved": resolved,
-                "candidates": candidate_rows(runtime, refs, resolved),
+                "candidates": candidate_rows(runtime, refs, resolved, workers=workers),
                 "message": "" if resolved else "No connected provider can serve this tier",
                 "runnable": bool(resolved),
                 "editable": _TIER_RE.fullmatch(name) is not None,
@@ -145,12 +147,13 @@ def antigravity_providers(runtime: object) -> frozenset[str]:
     return _worker_providers(runtime, (ADAPTER_ANTIGRAVITY,)) | frozenset(("antigravity", "agy"))
 
 
-def candidate_rows(runtime: object, refs: list[str], resolved: str = "") -> list[dict[str, Any]]:
+def candidate_rows(runtime: object, refs: list[str], resolved: str = "", *,
+                   workers: frozenset[str] | None = None) -> list[dict[str, Any]]:
     """Per-model status. A ``claude-code`` route is not a Nexus provider: only subagents
     run it (``scope = "subagents"``); session titles and other background jobs skip it."""
     router = getattr(runtime, "router", None)
     providers = getattr(router, "providers", {})
-    worker = _claude_code_providers(runtime) | antigravity_providers(runtime)
+    worker = workers if workers is not None else _claude_code_providers(runtime) | antigravity_providers(runtime)
     rows: list[dict[str, Any]] = []
     for ref in refs[:MAX_TIER_REFS]:
         head = ref.split("/", 1)[0]
@@ -216,8 +219,9 @@ def _validate_tier(runtime: object, tier: str) -> str:
     return tier
 
 
-async def _reload(runtime: object, reload: bool) -> bool:
-    reloader = getattr(runtime, "reload_model_routes", None)
+async def _reload(runtime: object, reload: bool, *, tiers_only: bool = False) -> bool:
+    reloader = getattr(runtime, "reload_tier_config", None) if tiers_only else None
+    reloader = reloader or getattr(runtime, "reload_model_routes", None)
     if not reload or not callable(reloader):
         return False
     try:
@@ -260,34 +264,44 @@ def _refuse_subagent_only(runtime: object, refs: list[str]) -> None:
             raise ConfigError(f"{ref!r} runs subagents only; it cannot be the default or a fallback model")
 
 
-async def tier_set(runtime: object, tier: str, refs: list[str], *, reload: bool = False) -> dict[str, Any]:
+async def tier_set(runtime: object, tier: str, refs: list[str], *, efforts: dict[str, str] | None = None, reload: bool = False) -> dict[str, Any]:
     """Write ``[models.tiers] <tier> = [refs]`` (the first runnable one is used)."""
     tier = _validate_tier(runtime, tier)
     refs = _validate_refs(refs)
     _check_refs_known(runtime, refs)
-    _write(runtime, (("models.tiers", tier, refs),))
-    reloaded = await _reload(runtime, reload)
+    updates = [("models.tiers", tier, refs)]
+    if efforts is None:
+        previous = next(row["efforts"] for row in tier_rows(runtime)["tiers"] if row["name"] == tier)
+        retained = {reference: effort for reference, effort in previous.items() if reference in refs}
+        if retained != previous:
+            updates.append(("models.tier_efforts", tier, retained))
+    if efforts is not None:
+        if not isinstance(efforts, dict) or len(efforts) > MAX_TIER_REFS:
+            raise ConfigError("invalid tier effort selections")
+        for reference, effort in efforts.items():
+            if reference not in refs:
+                raise ConfigError("tier effort model must be in the tier list")
+            query = getattr(runtime, "candidate_supported_efforts", None)
+            supported = query(*reference.split("/", 1)) if callable(query) else ()
+            if effort not in supported:
+                raise ConfigError(f"{reference} does not support effort {effort!r}")
+        updates.append(("models.tier_efforts", tier, efforts))
+    _write(runtime, tuple(updates))
+    reloaded = await _reload(runtime, reload, tiers_only=True)
     return {**tier_rows(runtime), "restart_required": not reloaded}
 
 
 async def tier_reset(runtime: object, tier: str, *, reload: bool = False) -> dict[str, Any]:
     """Remove the user's list so the tier returns to the built-in or price rule."""
     tier = _validate_tier(runtime, tier)
-    _write(runtime, (("models.tiers", tier, None),))
-    reloaded = await _reload(runtime, reload)
+    _write(runtime, (("models.tiers", tier, None), ("models.tier_efforts", tier, None)))
+    reloaded = await _reload(runtime, reload, tiers_only=True)
     return {**tier_rows(runtime), "restart_required": not reloaded}
 
 
 async def agent_max_tier_set(runtime: object, tier: str, *, reload: bool = False) -> dict[str, Any]:
-    """Write ``[agents] max_tier``; subagents never run above it."""
-    if not isinstance(tier, str) or tier not in _tiers(runtime).order:
-        raise ConfigError(f"unknown tier {tier!r}")
-    if _TIER_RE.fullmatch(tier) is None:
-        raise ConfigError("invalid tier name")
-    _write(runtime, (("agents", "max_tier", tier),))
-    # max_tier is read when a turn builds its subagent runner, so no route
-    # rebuild is needed for it to apply to the next turn.
-    return {**tier_rows(runtime), "restart_required": False}
+    """Reject the removed ceiling command from older clients."""
+    raise ConfigError("the highest-tier setting was removed; use each subagent role's tiers")
 
 
 def session_title_settings(runtime: object) -> dict[str, Any]:
@@ -301,7 +315,7 @@ def session_title_settings(runtime: object) -> dict[str, Any]:
             config = None
     section = getattr(getattr(config, "v2", None), "sessions", None)
     enabled = bool(getattr(section, "auto_title", True))
-    model = str(getattr(section, "title_model", "low") or "low")
+    model = str(getattr(section, "title_model", "openai/gpt-5-mini") or "openai/gpt-5-mini")
     resolved, message = resolve_title_model(runtime, model)
     return {"enabled": enabled, "model": model, "resolved": resolved, "message": message}
 
@@ -310,10 +324,7 @@ def resolve_title_model(runtime: object, model: str) -> tuple[str, str]:
     """``(provider/model, "")`` or ``("", why not)`` for a title model setting."""
     tiers = getattr(runtime, "tiers", None)
     if tiers is not None and model in tiers.order:
-        resolved = _resolved(runtime, model)
-        if resolved:
-            return resolved, ""
-        return "", f"The {model} tier has no runnable model; titles use your first message."
+        return "", "Tiers are for subagents only; choose a title model. Titles use your first message."
     router = getattr(runtime, "router", None)
     try:
         resolved_model = router.resolve(ModelRequest(messages=[], model=model))
@@ -337,7 +348,10 @@ async def session_title_settings_set(
     if model is not None:
         model = model.strip() if isinstance(model, str) else ""
         if not model or len(model) > _MAX_REF_CHARS or _REF_RE.fullmatch(model) is None:
-            raise ConfigError("title model must be a tier or a model reference")
+            raise ConfigError("title model must be a model reference")
+        if model in _tiers(runtime).order:
+            raise ConfigError("tiers are for subagents only; choose a title model")
+        _refuse_subagent_only(runtime, [model])
         updates.append(("sessions", "title_model", model))
     if updates:
         _write(runtime, tuple(updates))

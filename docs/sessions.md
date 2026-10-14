@@ -48,6 +48,10 @@ One SQLite database, `~/.nexus/nexus.db`, shared by every project and daemon.
   `turn.failed` or `turn.cancelled` event. Unlike `last_seq`, it ignores presence
   and other log activity, so session-unread acknowledgements remain stable when
   a view detaches or presence changes.
+- `last_user` and `last_agent` (schema 4) are bounded display snippets for the
+  sessions dashboard. They are the latest top-level text of a user prompt and an
+  assistant reply (whitespace collapsed, 240 characters). Thinking blocks and
+  tool results do not replace them. They are not fields of `SessionSummary`.
 - `records.body` is exactly `msgspec.json.encode(record)`: the bytes a JSONL
   export line carries, so the reducer, export, fork and replay read the same data.
 - **Durability:** WAL, `synchronous=FULL`, `busy_timeout=5000`, every write in
@@ -57,7 +61,7 @@ One SQLite database, `~/.nexus/nexus.db`, shared by every project and daemon.
 - `namespace = "main"` for user sessions, `"agents"` for subagent child sessions
   (their own real, replayable logs; logical id `<parent>/sub/<n>`, stored under a
   sanitised id with a hash suffix).
-- Schema is versioned by `PRAGMA user_version` (`SCHEMA_VERSION` 3); the record
+- Schema is versioned by `PRAGMA user_version` (`SCHEMA_VERSION` 4); the record
   envelope by `SESSION_LOG_VERSION` (1). A future runtime refuses old logs
   explicitly rather than misreading them.
 
@@ -156,7 +160,7 @@ Host-side archive projections (`SessionListArchived`, `SessionSearch`,
 A session's title starts as the first line of the first user message
 (`export.derive_title`, instant, `title_source = first_message`). When
 `[sessions] auto_title` is on, `AutoTitler` (`host_support/auto_title.py`) then
-makes **one small side call** to `[sessions] title_model` (the `low` tier by
+makes **one small side call** to `[sessions] title_model` (`openai/gpt-5-mini` by
 default) and `SessionManager.set_auto_title` stores the result (`auto`).
 
 - It is not a session: no loop, no tools, no memory, no events, and no cost in the
@@ -179,4 +183,22 @@ default) and `SessionManager.set_auto_title` stores the result (`auto`).
   'first_message'`, so a title the user sets (reserved source `user`) always wins.
   Clients see the new title on their normal session-list refresh.
 - Settings → Session titles switches it off and shows which model titles go to.
+
+# Session dashboard naming and preview
+
+The durable user-facing title remains **Sessions**, with `/sessions` as its
+command. `SessionDashboardPreview` is an additive preview contract for the
+dashboard; the existing archive `SessionPreview` remains distinct and unchanged.
+
+The Ratatui sessions page is a full-width list grouped by status (Needs input,
+Working, Idle, Done). Each row shows its age and a one-line tail. Hovering a row,
+or leaving the pointer off the list so the selected row stands in, expands that
+row to the last user message and the last agent message. The open session's tails
+come from the live view on every snapshot. Other sessions use the schema 4
+snippets, refreshed on the list poll, and a hovered row's preview re-reads the log
+so a streaming reply shows up before the message record is stored. The composer
+under the list is the normal composer. Enter sends to the selected session.
+`+ New Agent` starts a session, Open Previous opens the archived list (`/resume`),
+and Worktree opens the worktree list. Cross-workspace sends switch to that
+workspace. Attachments stay on the open session.
 

@@ -6,7 +6,6 @@ from ....ui_support import settings_page as sp
 AREA = "layout"
 #: key, label, description
 PANELS = (
-    ("sessions_sidebar", "Sessions sidebar", "Ctrl+B. The list of sessions on the left; a drawer on narrow terminals."),
     ("details_sidebar", "Details sidebar", "Ctrl+L. Session facts, modified files, MCP servers and logs on the right."),
     ("context_preview", "Show context header", "The labelled blocks that open every conversation: system prompt, tools, skills, MCP."),
     ("centered_layout", "Centered conversation", "Keep the conversation and composer at most 80 columns wide, centered between the sidebars."),

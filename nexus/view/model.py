@@ -529,6 +529,8 @@ class AgentView(_View):
     #: Concrete ``provider/model`` the child last started on, from its
     #: ``model.started``/``external.started``; ``None`` until one is seen.
     resolved_model: str | None = None
+    #: Concrete selected route, distinct from a model that actually started.
+    selected_model: str | None = None
     tools: list[str] = field(default_factory=list)
     dropped_tools: list[str] = field(default_factory=list)
     clamped: bool = False

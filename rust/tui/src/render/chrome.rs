@@ -64,428 +64,16 @@ pub(super) fn control_spans(
     spans
 }
 
-/// What a sidebar row opens when clicked.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum SidebarHit {
-    New,
-    Archived,
-    Session(usize),
-    /// A project · day heading; the index is its first session. Clicking it shows
-    /// only that session's project (again: all projects).
-    Heading(usize),
-}
-
-/// The project a session belongs to: a linked worktree's repository, else its
-/// workspace. Filtering, chips and colors all key on this path.
-pub fn project_key(row: &crate::bridge::Session) -> &str {
-    if row.repo.is_empty() {
-        &row.workspace
-    } else {
-        &row.repo
-    }
-}
-
-/// A project's display name: the host's label, else the project folder name.
-pub fn project_label(row: &crate::bridge::Session) -> String {
-    if !row.project.is_empty() {
-        return row.project.clone();
-    }
-    let key = project_key(row);
-    std::path::Path::new(key)
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| key.to_string())
-}
-
-/// A stable color per project (by its path), so a project reads the same in its
-/// headings and its filter chip.
-pub fn project_color(p: &Palette, key: &str) -> Color {
-    let hues = [p.blue, p.purple, p.success, p.warning, p.accent, p.error];
-    let hash = key.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
-        (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3)
-    });
-    hues[(hash % hues.len() as u64) as usize]
-}
-
-/// Day headings use one color, distinct from every project color.
-fn day_color(p: &Palette) -> Color {
-    p.cyan
-}
-
-/// The projects in the session list, most recently active first: (key, label,
-/// number of worktrees with sessions).
-pub fn session_projects(s: &Snapshot) -> Vec<(String, String, usize)> {
-    let mut out: Vec<(String, String, Vec<&str>)> = Vec::new();
-    for row in &s.sessions {
-        let key = project_key(row);
-        let at = match out.iter().position(|(k, _, _)| k == key) {
-            Some(at) => at,
-            None => {
-                out.push((key.to_string(), project_label(row), Vec::new()));
-                out.len() - 1
-            }
-        };
-        if !row.worktree.is_empty() && !out[at].2.contains(&row.worktree.as_str()) {
-            out[at].2.push(&row.worktree);
-        }
-    }
-    out.into_iter()
-        .map(|(key, label, trees)| (key, label, trees.len()))
-        .collect()
-}
-
-/// The project filter in effect: a picked project that left the list (archived,
-/// deleted) no longer filters.
-pub fn picked_project<'a>(s: &Snapshot, project: &'a str) -> &'a str {
-    if s.sessions.iter().any(|row| project_key(row) == project) {
-        project
-    } else {
-        ""
-    }
-}
-
-/// At most this many rows of project chips sit under the sidebar title.
-const CHIP_ROWS: usize = 3;
-const CHIP_LABEL: usize = 20;
-
-/// The project filter chips laid out in `width` columns: for each chip row, the
-/// chips as (start column, end column, project key — empty for "All", label). A
-/// project with worktrees reads `name +Nwt` (N worktrees, grouped under it). One
-/// layout serves drawing and clicks. Projects that do not fit end in a `+N more`
-/// chip with no target (`None`).
-pub fn project_chips(
-    s: &Snapshot,
-    width: usize,
-) -> Vec<Vec<(usize, usize, Option<String>, String)>> {
-    let projects = session_projects(s);
-    if projects.is_empty() || width < 8 {
-        return Vec::new();
-    }
-    let mut chips: Vec<(Option<String>, String)> = vec![(Some(String::new()), "All".into())];
-    chips.extend(projects.into_iter().map(|(key, label, trees)| {
-        let label = crate::transcript::truncate(&label, CHIP_LABEL);
-        (
-            Some(key),
-            if trees > 0 {
-                format!("{label} +{trees}wt")
-            } else {
-                label
-            },
-        )
-    }));
-    let total = chips.len();
-    let mut rows: Vec<Vec<(usize, usize, Option<String>, String)>> = vec![Vec::new()];
-    let mut x = 0;
-    for (index, (key, label)) in chips.into_iter().enumerate() {
-        let size = label.width() + 2;
-        if x > 0 && x + size > width {
-            if rows.len() == CHIP_ROWS {
-                // Out of room: replace chips from the end of the last row with `+N more`.
-                let last = rows.last_mut().unwrap();
-                let mut hidden = total - index;
-                loop {
-                    let more = format!("+{hidden} more");
-                    let end = last.last().map_or(0, |chip| chip.1 + 1);
-                    if end + more.width() + 2 <= width || last.is_empty() {
-                        last.push((end, end + more.width() + 2, None, more));
-                        break;
-                    }
-                    last.pop();
-                    hidden += 1;
-                }
-                return rows;
-            }
-            rows.push(Vec::new());
-            x = 0;
-        }
-        rows.last_mut().unwrap().push((x, x + size, key, label));
-        x += size + 1;
-    }
-    rows
-}
-
-/// Chip rows as styled lines; `project` is the selected project key (empty: All).
-pub fn project_chip_lines(
-    s: &Snapshot,
-    p: &Palette,
-    width: usize,
-    project: &str,
-) -> Vec<Line<'static>> {
-    let project = picked_project(s, project);
-    project_chips(s, width)
-        .into_iter()
-        .map(|row| {
-            let mut spans = Vec::new();
-            let mut x = 0;
-            for (start, end, key, label) in row {
-                spans.push(Span::raw(" ".repeat(start.saturating_sub(x))));
-                let style = match key.as_deref() {
-                    None => Style::default().fg(p.quiet),
-                    Some(key) => {
-                        let fg = if key.is_empty() {
-                            p.text
-                        } else {
-                            project_color(p, key)
-                        };
-                        if key == project {
-                            Style::default()
-                                .fg(fg)
-                                .bg(p.element_hi)
-                                .add_modifier(Modifier::BOLD)
-                        } else {
-                            Style::default().fg(fg).bg(p.element)
-                        }
-                    }
-                };
-                spans.push(Span::styled(format!(" {label} "), style));
-                x = end;
-            }
-            Line::from(spans)
-        })
-        .collect()
-}
-
-/// Rows above the session list: the title, then the project chips and a rule (when
-/// there are chips), else one blank row.
-pub fn sessions_list_top(s: &Snapshot, region: Rect) -> u16 {
-    let chips = project_chips(s, usize::from(region.width.saturating_sub(3))).len() as u16;
-    if chips == 0 {
-        2
-    } else {
-        chips + 2
-    }
-}
-
-/// Session list rows visible in a sidebar `region` (the filter box is the last row).
-pub fn sessions_list_height(s: &Snapshot, region: Rect) -> usize {
-    usize::from(
-        region
-            .height
-            .saturating_sub(sessions_list_top(s, region) + 1),
-    )
-    .max(1)
-}
-
-/// The index into `session_sidebar` rows under screen `row`, for list scroll `scroll`
-/// (row 0 is the fixed title, so the list starts at index 1).
-pub fn sessions_row_at(s: &Snapshot, region: Rect, scroll: usize, row: u16) -> Option<usize> {
-    let offset = usize::from(row.checked_sub(region.y + sessions_list_top(s, region))?);
-    (offset < sessions_list_height(s, region)).then_some(scroll + 1 + offset)
-}
-
-/// The project chip under a click in the sidebar `region`: `Some(key)` (empty for
-/// All), or `None` when the click is not on a chip.
-pub fn project_chip_at(s: &Snapshot, region: Rect, column: u16, row: u16) -> Option<String> {
-    let chips = project_chips(s, usize::from(region.width.saturating_sub(3)));
-    let line = chips.get(usize::from(row.checked_sub(region.y + 1)?))?;
-    let x = usize::from(column.checked_sub(region.x + 1)?);
-    line.iter()
-        .find(|chip| x >= chip.0 && x < chip.1)
-        .and_then(|chip| chip.2.clone())
-}
-
-/// Indexes of the sessions the sidebar shows for `filter` (title, id, workspace,
-/// project, worktree or group, case-insensitive) within `project` (a project key;
-/// empty: all). Keyboard selection and drawing share this one list.
-pub fn visible_sessions(s: &Snapshot, filter: &str, project: &str) -> Vec<usize> {
-    let needle = filter.to_lowercase();
-    let project = picked_project(s, project);
-    (0..s.sessions.len())
-        .filter(|i| {
-            let row = &s.sessions[*i];
-            (project.is_empty() || project_key(row) == project)
-                && (needle.is_empty()
-                    || format!(
-                        "{} {} {} {} {} {}",
-                        row.title, row.id, row.workspace, row.project, row.worktree, row.group
-                    )
-                    .to_lowercase()
-                    .contains(&needle))
-        })
-        .collect()
-}
-
-/// The sessions sidebar as styled rows: a New session button, `SESSIONS N`, colored
-/// `project › worktree · day` headings and one row per session (status glyph and
-/// title) with a left bar on the current session. `selected` is the
-/// keyboard-selected session id (drawn with a raised row and a bar).
-#[allow(clippy::too_many_arguments)]
-pub fn session_sidebar(
-    s: &Snapshot,
-    p: &Palette,
-    width: usize,
-    spin: usize,
-    filter: &str,
-    project: &str,
-    _editing: bool,
-    selected: Option<&str>,
-) -> Vec<(Line<'static>, Option<SidebarHit>)> {
-    let pad = |text: String, style: Style| {
-        let used = text.width();
-        Span::styled(
-            format!("{text}{}", " ".repeat(width.saturating_sub(used))),
-            style,
-        )
-    };
-    let mut rows = vec![(
-        Line::styled("▌ Sessions", Style::default().fg(p.text)),
-        Some(SidebarHit::New),
-    )];
-    let project = picked_project(s, project);
-    let shown = visible_sessions(s, filter, project);
-    let mut count = vec![Span::styled(
-        if filter.is_empty() && project.is_empty() {
-            format!("SESSIONS {}", s.sessions.len())
-        } else {
-            format!("SESSIONS {} of {}", shown.len(), s.sessions.len())
-        },
-        Style::default().fg(p.quiet).add_modifier(Modifier::BOLD),
-    )];
-    if let Some(row) = s
-        .sessions
-        .iter()
-        .find(|row| !project.is_empty() && project_key(row) == project)
-    {
-        count.push(Span::styled(" · ", Style::default().fg(p.quiet)));
-        count.push(Span::styled(
-            crate::transcript::truncate(&project_label(row), width.saturating_sub(20)),
-            Style::default()
-                .fg(project_color(p, project))
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
-    rows.push((Line::from(count), None));
-    let mut previous = "";
-    for i in shown {
-        let session = &s.sessions[i];
-        if session.group != previous {
-            // A blank row before each group keeps one-line rows easy to scan.
-            rows.push((Line::default(), None));
-            let bold = Style::default().add_modifier(Modifier::BOLD);
-            let heading = if session.day.is_empty() {
-                Line::styled(session.group.clone(), bold.fg(p.muted))
-            } else {
-                // `project › worktree · day`; with a project picked, its name is in
-                // the count row above, so headings drop it.
-                let mut spans = Vec::new();
-                let tree = if session.worktree.is_empty() {
-                    String::new()
-                } else {
-                    format!("› {}", session.worktree)
-                };
-                let room = width.saturating_sub(session.day.width() + 3);
-                if project.is_empty() {
-                    let name = crate::transcript::truncate(
-                        &project_label(session),
-                        room.saturating_sub(if tree.is_empty() { 0 } else { 6 })
-                            .max(4),
-                    );
-                    let used = name.width();
-                    spans.push(Span::styled(
-                        name,
-                        bold.fg(project_color(p, project_key(session))),
-                    ));
-                    if !tree.is_empty() {
-                        spans.push(Span::styled(
-                            format!(
-                                " {}",
-                                crate::transcript::truncate(&tree, room.saturating_sub(used + 1))
-                            ),
-                            Style::default().fg(p.muted),
-                        ));
-                    }
-                } else if !tree.is_empty() {
-                    spans.push(Span::styled(
-                        crate::transcript::truncate(&tree, room),
-                        Style::default().fg(p.muted),
-                    ));
-                }
-                if !spans.is_empty() {
-                    spans.push(Span::styled(" · ", Style::default().fg(p.quiet)));
-                }
-                spans.push(Span::styled(
-                    session.day.clone(),
-                    Style::default().fg(day_color(p)),
-                ));
-                Line::from(spans)
-            };
-            rows.push((heading, Some(SidebarHit::Heading(i))));
-            previous = &session.group;
-        }
-        let tone = match session.status.as_str() {
-            "working" => p.accent,
-            "input" => p.warning,
-            "done" => p.quiet,
-            _ => p.quiet,
-        };
-        let glyph = match session.status.as_str() {
-            "working" => SPINNER[spin % SPINNER.len()],
-            "input" => "●",
-            "done" => "·",
-            _ => "·",
-        };
-        let picked = selected == Some(session.id.as_str());
-        let bg = if picked {
-            p.element_hi
-        } else if session.active {
-            p.element
-        } else {
-            p.panel
-        };
-        let bar = Span::styled(
-            if session.active || picked {
-                "▌"
-            } else if s
-                .tabs
-                .iter()
-                .any(|tab| tab.id == session.id && tab.workspace == session.workspace)
-            {
-                "◦"
-            } else {
-                " "
-            },
-            Style::default().fg(p.accent).bg(bg),
-        );
-        let bold = if session.active || picked {
-            Modifier::BOLD
-        } else {
-            Modifier::empty()
-        };
-        let title = crate::transcript::truncate(&session.title, width.saturating_sub(3));
-        let fg = if session.active || picked {
-            p.text
-        } else {
-            p.muted
-        };
-        rows.push((
-            Line::from(vec![
-                bar,
-                Span::styled(format!("{glyph} "), Style::default().fg(tone).bg(bg)),
-                pad(title, Style::default().fg(fg).bg(bg).add_modifier(bold)),
-            ]),
-            Some(SidebarHit::Session(i)),
-        ));
-    }
-    if s.sessions_truncated {
-        rows.push((
-            Line::styled("[Session list truncated]", Style::default().fg(p.warning)),
-            None,
-        ));
-    }
-    if !s.archived_label.is_empty() {
-        rows.push((
-            Line::styled(s.archived_label.clone(), Style::default().fg(p.quiet)),
-            Some(SidebarHit::Archived),
-        ));
-    }
-    rows
-}
 /// What a top-bar cell is, for drawing and for mouse hit-testing.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum TabHit {
-    Sessions,
-    Tab(usize),
-    New,
+    /// `‹`: the previous open session.
+    Prev,
+    /// `›`: the next open session.
+    Next,
+    /// `[Dashboard]`: opens the Sessions dashboard (`/sessions`).
+    Dashboard,
+    /// Sub-agent page only: toggles the details sidebar.
     Details,
 }
 pub struct TabCell {
@@ -493,9 +81,154 @@ pub struct TabCell {
     pub start: usize,
     pub end: usize,
 }
-/// Column layout of the tab row: toggle at 0, tabs from 2 (each ` ` + glyph + title
-/// + ` × `), then `+` and the details toggle at the right. When tabs do not fit,
-/// the leftmost ones scroll out so the current tab stays visible.
+/// How a top-bar segment is painted.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Seg {
+    Title,
+    Branch,
+    Path,
+    Sep,
+    Notice,
+    Counter,
+    Arrow(TabHit),
+    Index,
+    Dashboard,
+    Gap,
+}
+/// `72K`, `256K`, `1.0M`: token counts for the top-bar counter.
+fn short_count(n: u64) -> String {
+    match n {
+        0..=999 => n.to_string(),
+        1_000..=999_999 => format!("{}K", (n + 500) / 1000),
+        _ => format!("{:.1}M", n as f64 / 1_000_000.0),
+    }
+}
+/// The open tab to switch to from the current one: `step` is `-1` (`‹`) or `1` (`›`),
+/// wrapping around; `None` with fewer than two open tabs.
+pub fn cycle_tab(s: &Snapshot, step: isize) -> Option<&crate::bridge::Session> {
+    let n = s.tabs.len();
+    if n < 2 {
+        return None;
+    }
+    let current = s.tabs.iter().position(|row| row.active).unwrap_or(0);
+    s.tabs.get((current as isize + step).rem_euclid(n as isize) as usize)
+}
+/// Grok's in-session top bar, laid out once for drawing and hit-testing. Left:
+/// `Title │ branch ~/path`. Right: update notice, `used / window`, `‹ i/n ›` (two or more
+/// open sessions) and `[Dashboard]`, each separated by `│`. Optional pieces drop out
+/// (notice first, then the nav, then the counter) before the title is squeezed below 12
+/// columns. Returns (start column, text, how to paint it).
+/// Split the host breadcrumb into (path, branch). The projection sends `path:branch`
+/// (`prototype._display_breadcrumb`); `path › branch` is accepted too. Git refs cannot
+/// contain `:`, so the last one separates the branch.
+fn partition(text: &str) -> (&str, &str) {
+    text.split_once(" › ")
+        .or_else(|| text.rsplit_once(':'))
+        .unwrap_or((text, ""))
+}
+fn top_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
+    let dash = "[Dashboard]".to_string();
+    let counter = match (s.context_used, s.context_window) {
+        (Some(used), Some(window)) if window > 0 => {
+            Some(format!("{} / {}", short_count(used), short_count(window)))
+        }
+        _ => None,
+    };
+    let nav = (s.tabs.len() > 1).then(|| {
+        let at = s.tabs.iter().position(|row| row.active).unwrap_or(0) + 1;
+        format!("{at}/{}", s.tabs.len())
+    });
+    let notice =
+        Some(crate::transcript::truncate(&s.update_notice, 28)).filter(|text| !text.is_empty());
+    let sep = " │ ";
+    // Right group pieces in drop order: the first listed is dropped last.
+    let build = |use_counter: bool, use_nav: bool, use_notice: bool| {
+        let mut pieces: Vec<Vec<(String, Seg)>> = Vec::new();
+        if use_notice {
+            if let Some(text) = &notice {
+                pieces.push(vec![(text.clone(), Seg::Notice)]);
+            }
+        }
+        if use_counter {
+            if let Some(text) = &counter {
+                pieces.push(vec![(text.clone(), Seg::Counter)]);
+            }
+        }
+        if use_nav {
+            if let Some(text) = &nav {
+                pieces.push(vec![
+                    ("‹".into(), Seg::Arrow(TabHit::Prev)),
+                    (format!(" {text} "), Seg::Index),
+                    ("›".into(), Seg::Arrow(TabHit::Next)),
+                ]);
+            }
+        }
+        pieces.push(vec![(dash.clone(), Seg::Dashboard)]);
+        let mut out: Vec<(String, Seg)> = Vec::new();
+        for (i, piece) in pieces.into_iter().enumerate() {
+            if i > 0 {
+                out.push((sep.into(), Seg::Sep));
+            }
+            out.extend(piece);
+        }
+        out.push((" ".into(), Seg::Gap));
+        out
+    };
+    let size = |v: &[(String, Seg)]| v.iter().map(|(t, _)| t.width()).sum::<usize>();
+    let mut right = build(true, true, true);
+    for flags in [(true, true, false), (false, true, false), (false, false, false)] {
+        if width < size(&right) + 14 {
+            right = build(flags.0, flags.1, flags.2);
+        }
+    }
+    let right_width = size(&right);
+    // Left: title, then `branch ~/path` from the breadcrumb (`path › branch`).
+    let (path, branch) = partition(&s.breadcrumb);
+    let room = width.saturating_sub(right_width + 2 + 1);
+    let mut left: Vec<(String, Seg)> = Vec::new();
+    let place = |text: &str, seg: Seg, left: &mut Vec<(String, Seg)>, room: &mut usize| {
+        if text.is_empty() || *room == 0 {
+            return;
+        }
+        let text = crate::transcript::truncate(text, *room);
+        *room -= text.width();
+        left.push((text, seg));
+    };
+    let mut room = room;
+    let title = if s.title.is_empty() { "Nexus" } else { s.title.as_str() };
+    // The title keeps at most 40 columns, and leaves space for the path when there is any.
+    let title_cap = if path.is_empty() { 40 } else { room.min(40) };
+    place(
+        &crate::transcript::truncate(title, title_cap.min(room)),
+        Seg::Title,
+        &mut left,
+        &mut room,
+    );
+    if !path.is_empty() && room > 8 {
+        place(sep, Seg::Sep, &mut left, &mut room);
+        if !branch.is_empty() && room > branch.width() + 6 {
+            place(branch, Seg::Branch, &mut left, &mut room);
+            place(" ", Seg::Gap, &mut left, &mut room);
+        }
+        place(path, Seg::Path, &mut left, &mut room);
+    }
+    let mut out = Vec::new();
+    let mut at = 2usize.min(width);
+    for (text, seg) in left {
+        let w = text.width();
+        out.push((at, text, seg));
+        at += w;
+    }
+    let mut at = width.saturating_sub(right_width);
+    for (text, seg) in right {
+        let w = text.width();
+        out.push((at, text, seg));
+        at += w;
+    }
+    out
+}
+/// Clickable cells of the top bar (arrows and `[Dashboard]`). On a sub-agent page the
+/// only cell is the details toggle.
 pub fn tab_cells(s: &Snapshot, width: usize) -> Vec<TabCell> {
     if !s.agent_page.is_empty() {
         return vec![TabCell {
@@ -504,52 +237,17 @@ pub fn tab_cells(s: &Snapshot, width: usize) -> Vec<TabCell> {
             end: width,
         }];
     }
-    let mut cells = vec![TabCell {
-        kind: TabHit::Sessions,
-        start: 0,
-        end: 3.min(width),
-    }];
-    let avail = width.saturating_sub(4 + 7);
-    let sizes: Vec<usize> = s
-        .tabs
-        .iter()
-        .map(|row| 6 + crate::transcript::truncate(&row.title, 24).width())
-        .collect();
-    let current = s.tabs.iter().position(|row| row.active).unwrap_or(0);
-    let mut first = 0;
-    while first < current
-        && sizes[first..=current.min(sizes.len() - 1)]
-            .iter()
-            .sum::<usize>()
-            > avail
-    {
-        first += 1;
-    }
-    let mut x = 4;
-    for (index, size) in sizes.iter().enumerate().skip(first) {
-        if x + size > 4 + avail {
-            break;
-        }
-        cells.push(TabCell {
-            kind: TabHit::Tab(index),
-            start: x,
-            end: x + size,
-        });
-        x += size;
-    }
-    cells.push(TabCell {
-        kind: TabHit::New,
-        start: width.saturating_sub(7),
-        end: width.saturating_sub(4),
-    });
-    cells.push(TabCell {
-        kind: TabHit::Details,
-        start: width.saturating_sub(3),
-        end: width,
-    });
-    cells
+    top_layout(s, width)
+        .into_iter()
+        .filter_map(|(start, text, seg)| match seg {
+            Seg::Arrow(kind) => Some((kind, start, start + text.width())),
+            Seg::Dashboard => Some((TabHit::Dashboard, start, start + text.width())),
+            _ => None,
+        })
+        .map(|(kind, start, end)| TabCell { kind, start, end })
+        .collect()
 }
-pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Palette, spin: usize) {
+pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Palette, _spin: usize) {
     if !s.agent_page.is_empty() {
         let status = if s.status == "running" {
             "Working"
@@ -585,109 +283,26 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
         return;
     }
     let width = usize::from(area.width);
-    let background = Style::default().bg(p.panel);
-    // Row 0: sessions toggle, tabs, new, details toggle (hit-testing uses the same `tab_cells`).
-    let mut tabs: Vec<Span<'static>> = Vec::new();
+    let background = Style::default().bg(p.background);
+    let mut spans: Vec<Span<'static>> = Vec::new();
     let mut at = 0usize;
-    let put = |tabs: &mut Vec<Span<'static>>,
-               at: &mut usize,
-               start: usize,
-               text: String,
-               style: Style| {
-        if start > *at {
-            tabs.push(Span::styled(" ".repeat(start - *at), background));
-            *at = start;
+    for (start, text, seg) in top_layout(s, width) {
+        if start > at {
+            spans.push(Span::styled(" ".repeat(start - at), background));
         }
-        *at += text.width();
-        tabs.push(Span::styled(text, style));
-    };
-    for cell in tab_cells(s, width) {
-        match cell.kind {
-            TabHit::Sessions => {
-                put(
-                    &mut tabs,
-                    &mut at,
-                    cell.start,
-                    " ▌ ".into(),
-                    background.fg(if s.sessions_sidebar {
-                        p.accent
-                    } else {
-                        p.border_strong
-                    }),
-                );
-                if s.tabs.is_empty() {
-                    put(
-                        &mut tabs,
-                        &mut at,
-                        4,
-                        crate::transcript::truncate(&s.title, width.saturating_sub(12)),
-                        background.fg(p.text).add_modifier(Modifier::BOLD),
-                    );
-                }
-            }
-            TabHit::Details => put(
-                &mut tabs,
-                &mut at,
-                cell.start,
-                " ▐ ".into(),
-                background.fg(if s.details_sidebar {
-                    p.accent
-                } else {
-                    p.border_strong
-                }),
-            ),
-            TabHit::New => put(
-                &mut tabs,
-                &mut at,
-                cell.start,
-                " + ".into(),
-                background.fg(p.muted),
-            ),
-            TabHit::Tab(index) => {
-                let row = &s.tabs[index];
-                let bg = if row.active {
-                    Style::default().bg(p.panel)
-                } else {
-                    background
-                };
-                let tone = match row.status.as_str() {
-                    "working" => p.accent,
-                    "input" => p.warning,
-                    "done" => p.blue,
-                    _ => p.quiet,
-                };
-                let glyph = match row.status.as_str() {
-                    "working" => SPINNER[spin % SPINNER.len()],
-                    "input" => "●",
-                    "done" => "●",
-                    _ => "·",
-                };
-                let title = crate::transcript::truncate(&row.title, 24);
-                let title_style = if row.active {
-                    bg.fg(p.text).add_modifier(Modifier::BOLD)
-                } else {
-                    bg.fg(p.quiet)
-                };
-                put(&mut tabs, &mut at, cell.start, " ".into(), bg);
-                put(
-                    &mut tabs,
-                    &mut at,
-                    cell.start + 1,
-                    format!("{glyph} "),
-                    bg.fg(tone),
-                );
-                put(&mut tabs, &mut at, cell.start + 3, title, title_style);
-                put(
-                    &mut tabs,
-                    &mut at,
-                    cell.end - 3,
-                    " × ".into(),
-                    bg.fg(p.quiet),
-                );
-            }
-        }
+        at = start + text.width();
+        let style = match seg {
+            Seg::Title => background.fg(p.text).add_modifier(Modifier::BOLD),
+            Seg::Branch | Seg::Sep | Seg::Index | Seg::Gap => background.fg(p.quiet),
+            Seg::Path => background.fg(p.text),
+            Seg::Notice => background.fg(p.accent),
+            Seg::Counter => background.fg(p.muted),
+            Seg::Arrow(_) => background.fg(p.muted),
+            Seg::Dashboard => background.fg(p.muted),
+        };
+        spans.push(Span::styled(text, style));
     }
-    frame.render_widget(Paragraph::new(Line::from(tabs)).style(background), area);
+    frame.render_widget(Paragraph::new(Line::from(spans)).style(background), area);
 }
 /// Details sidebar rows, and for each row the modified file it toggles (if any).
 pub fn details_rows(
@@ -882,16 +497,17 @@ pub fn details_rows(
     (out, file_rows)
 }
 
-/// Workspace metadata below the composer and above the activity meter.
+/// The row below the composer card is a blank spacer: the path and branch live in the top
+/// bar now, so it only keeps the page background.
 pub(super) fn draw_workspace_bar(
     frame: &mut Frame,
-    s: &Snapshot,
+    _s: &Snapshot,
     area: Rect,
     p: &Palette,
-    spin: usize,
+    _spin: usize,
 ) {
     frame.render_widget(
-        Paragraph::new(breadcrumb_row(s, area, p, spin)).style(Style::default().bg(p.background)),
+        Paragraph::new("").style(Style::default().bg(p.background)),
         area,
     );
 }
@@ -911,61 +527,79 @@ pub fn details_tab_at(area: Rect, x: u16) -> Option<&'static str> {
     None
 }
 
-fn notice_width(s: &Snapshot, area: Rect) -> usize {
-    crate::transcript::truncate(
-        &s.update_notice,
-        20.min(area.width as usize).saturating_sub(1),
-    )
-    .width()
-}
-fn breadcrumb_row(s: &Snapshot, area: Rect, p: &Palette, _spin: usize) -> Line<'static> {
-    let width = area.width as usize;
-    let notice = crate::transcript::truncate(&s.update_notice, notice_width(s, area));
-    let suffix = if width == 0 { "" } else { " " };
-    let reserved = suffix.width() + notice.width();
-    // Start at the composer card's `▎` rail (its two-cell inset), not its text column.
-    let indent = 2.min(width.saturating_sub(reserved));
-    let available = width.saturating_sub(reserved + indent);
-    let crumb = if available == 0 {
-        String::new()
-    } else {
-        crate::transcript::truncate(&s.breadcrumb, available)
-    };
-    let gap = width.saturating_sub(crumb.width() + reserved + indent);
-    Line::from(vec![
-        Span::styled(
-            format!("{}{crumb}{}", " ".repeat(indent), " ".repeat(gap)),
-            Style::default().fg(p.quiet),
-        ),
-        Span::styled(notice.clone(), Style::default().fg(p.accent)),
-        Span::styled(suffix, Style::default().fg(p.border_strong)),
-    ])
-}
-
 #[cfg(test)]
 mod chrome_tests {
     use super::*;
 
+    fn bar_text(s: &Snapshot, width: u16) -> String {
+        let backend = ratatui::backend::TestBackend::new(width, 1);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw_top_bar(frame, s, frame.area(), &Palette::new(false), 0))
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    fn open_tabs(count: usize, active: usize) -> Vec<crate::bridge::Session> {
+        (0..count)
+            .map(|i| crate::bridge::Session {
+                id: format!("s{i}"),
+                workspace: "/w".into(),
+                active: i == active,
+                ..Default::default()
+            })
+            .collect()
+    }
+
     #[test]
-    fn breadcrumb_starts_at_the_composer_rail_and_keeps_suffix() {
+    fn top_bar_shows_title_branch_path_counter_nav_and_dashboard() {
         let s = Snapshot {
-            breadcrumb: "~/repo › main".into(),
+            title: "Fix the parser".into(),
+            breadcrumb: "~/repo:main".into(),
+            context_used: Some(72_000),
+            context_window: Some(256_000),
+            tabs: open_tabs(3, 1),
             ..Snapshot::default()
         };
-        let p = Palette::new(false);
-        let line = breadcrumb_row(&s, Rect::new(0, 0, 48, 1), &p, 0);
-        let text: String = line
-            .spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect();
-        assert!(text.starts_with("  ~/repo › main"));
-        assert_eq!(text.width(), 48);
-        for width in 0..8 {
-            assert!(
-                breadcrumb_row(&s, Rect::new(0, 0, width as u16, 1), &p, 0).width() <= width.max(1)
-            );
+        let text = bar_text(&s, 100);
+        assert!(text.contains("Fix the parser │ main ~/repo"), "{text}");
+        assert!(text.contains("72K / 256K │ ‹ 2/3 › │ [Dashboard]"), "{text}");
+        let cells = tab_cells(&s, 100);
+        let kinds: Vec<_> = cells.iter().map(|c| c.kind).collect();
+        assert_eq!(kinds, [TabHit::Prev, TabHit::Next, TabHit::Dashboard]);
+        let dash = &cells[2];
+        assert_eq!(&text.chars().skip(dash.start).take(dash.end - dash.start).collect::<String>(), "[Dashboard]");
+        assert_eq!(cycle_tab(&s, 1).unwrap().id, "s2");
+        assert_eq!(cycle_tab(&s, -1).unwrap().id, "s0");
+    }
+
+    #[test]
+    fn top_bar_hides_arrows_for_one_session_and_fits_any_width() {
+        let s = Snapshot {
+            title: "A long conversation title that keeps going".into(),
+            breadcrumb: "~/a/very/long/path/to/the/repo › feature/branch".into(),
+            update_notice: "update 9.9.9".into(),
+            context_used: Some(1),
+            context_window: Some(2_000_000),
+            tabs: open_tabs(1, 0),
+            ..Snapshot::default()
+        };
+        let text = bar_text(&s, 100);
+        assert!(!text.contains('‹') && !text.contains('›'));
+        assert!(text.contains("update 9.9.9"));
+        assert!(cycle_tab(&s, 1).is_none());
+        for width in 12..120u16 {
+            let cells = tab_cells(&s, usize::from(width));
+            assert!(cells.iter().all(|c| c.end <= usize::from(width).max(1)), "{width}");
+            let _ = bar_text(&s, width.max(1));
         }
+        assert!(bar_text(&s, 30).contains("[Dashboard]"));
     }
 
     #[test]
@@ -1010,10 +644,15 @@ mod chrome_tests {
         assert!(hits.iter().all(Option::is_none));
     }
 }
+/// The update notice in the top bar (`area` is the top-bar row) is under this point.
 pub fn update_notice_at(s: &Snapshot, area: Rect, x: u16, y: u16) -> bool {
     if s.update_notice.is_empty() || !area.contains((x, y).into()) || y != area.y {
         return false;
     }
-    let end = area.right().saturating_sub(1);
-    x >= end.saturating_sub(notice_width(s, area) as u16) && x < end
+    let column = usize::from(x - area.x);
+    top_layout(s, usize::from(area.width))
+        .iter()
+        .any(|(start, text, seg)| {
+            *seg == Seg::Notice && column >= *start && column < start + text.width()
+        })
 }

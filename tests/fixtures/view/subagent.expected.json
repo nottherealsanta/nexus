@@ -120,7 +120,8 @@
         "input_tokens": 5,
         "output_tokens": 2,
         "reasoning_tokens": 0
-      }
+      },
+      "selected_model": null
     }
   ],
   "closed": false,

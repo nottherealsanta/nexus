@@ -20,11 +20,13 @@ Every path is injectable, so the default test suite never touches the network.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import json
 import math
 import os
 import re
+import shutil
 import tempfile
 import time
 from collections.abc import Callable, Mapping
@@ -73,6 +75,7 @@ __all__ = [
     "map_provider",
     "normalize_adapter_kind",
     "parse_catalogue",
+    "RegistryCache",
 ]
 
 #: The published catalogue. The URL comes from config or this constant, never
@@ -1132,6 +1135,33 @@ def _default_snapshot_path() -> Path:
     return Path(__file__).resolve().parent / "data" / "models.min.json"
 
 
+_MAX_PROBE_ENTRIES = 16
+_MAX_PROBE_FILE_BYTES = 256 * 1024
+PROBE_FILE_NAME = "agy-models.json"
+
+
+class RegistryCache:
+    """Probe and catalogue results that outlive one :class:`ModelRegistry`.
+
+    The Runtime owns one and hands it to every registry it builds, so a route
+    reload does not re-run ``agy models`` (network, seconds) or re-parse the
+    multi-megabyte catalogue file. The ``agy models`` list is cached until the
+    model list itself is refreshed (no TTL), and its good results persist next
+    to the catalogue cache so a daemon restart does not wait on the probe.
+    Bounded: at most ``_MAX_PROBE_ENTRIES`` probe entries and one catalogue.
+    """
+
+    def __init__(self) -> None:
+        #: key -> (good models or None, last error or "", refreshed-at epoch seconds).
+        self.probes: dict[tuple[str, str, str], tuple[tuple[tuple[str, str], ...] | None, str, float]] = {}
+        self.disk_loaded = False
+        #: ``(path, mtime_ns, size, max_bytes) -> Catalogue`` for the last parsed cache file.
+        self.catalogue: tuple[tuple[str, int, int, int], Catalogue] | None = None
+
+    def clear_probes(self) -> None:
+        self.probes.clear()
+
+
 class ModelRegistry:
     """Acquire, index, and query the model catalogue (plan section 15.3)."""
 
@@ -1157,6 +1187,7 @@ class ModelRegistry:
         reasoning_effort_overrides: Mapping[str, object] | None = None,
         antigravity_cli: Callable[..., object] | None = None,
         antigravity_timeout_s: float = 15.0,
+        shared_cache: RegistryCache | None = None,
     ) -> None:
         if (
             isinstance(ttl_days, bool)
@@ -1203,6 +1234,7 @@ class ModelRegistry:
         #: ``AntigravityCli`` factory seam (``executable=, environ=``); default imports the real one.
         self._antigravity_cli = antigravity_cli
         self._antigravity_timeout_s = float(antigravity_timeout_s)
+        self._shared = shared_cache if shared_cache is not None else RegistryCache()
         #: Models the last ``agy models`` probe reported, per section. Rebuilt on every
         #: probe, so a failed or empty probe leaves no stale or unverified model behind.
         self._external_models: dict[str, tuple[tuple[str, str], ...]] = {}
@@ -1365,6 +1397,7 @@ class ModelRegistry:
         async with self._load_lock:
             if self._loaded and not force:
                 return self._status
+            # The agy list is refreshed on its own (``refresh_external``), never by a catalogue refresh.
             await self._discover_external()
             return await self._acquire(force=force)
 
@@ -1372,32 +1405,132 @@ class ModelRegistry:
         """Why the last ``agy models`` probe produced nothing, per section (redacted)."""
         return dict(self._external_errors)
 
+    def external_info(self) -> dict[str, dict[str, object]]:
+        """Per Antigravity section: ``{count, refreshed_at, error}`` of the cached ``agy models`` list."""
+        out: dict[str, dict[str, object]] = {}
+        for name, cfg in self._providers.items():
+            if not is_antigravity_section(name, cfg):
+                continue
+            hit = self._shared.probes.get(self._probe_key(name, cfg))
+            out[name] = {"count": len(hit[0] or ()) if hit else 0, "refreshed_at": hit[2] if hit else 0.0,
+                         "error": self._external_errors.get(name, hit[1] if hit else "")}
+        return out
+
     async def refresh_external(self) -> RegistryStatus:
         """Re-probe ``agy models`` and rebuild the index; the catalogue is not refetched."""
         if self._load_lock is None:
             self._load_lock = asyncio.Lock()
         async with self._load_lock:
-            await self._discover_external()
+            await self._discover_external(force=True)
             if not self._loaded:
                 return self._status
             return self._install(
                 self._catalogue, source=self._status.source, stale=self._status.stale,
                 error=self._status.error)
 
-    async def _discover_external(self) -> None:
-        """Probe ``agy models`` for each Antigravity section: bounded, local, never fatal."""
+    def retier(self, tier_table: object) -> None:
+        """Swap the tier table and re-index from the loaded catalogue (no probe, no parse)."""
+        self._tier_table = tier_table
+        if self._loaded:
+            self._install(self._catalogue, source=self._status.source, stale=self._status.stale,
+                          error=self._status.error)
+
+    def _probe_key(self, name: str, cfg: object) -> tuple[str, str, str]:
+        """``(section, configured executable, resolved path)``: a changed CLI or section re-probes."""
+        env = self._env if self._env is not None else os.environ
+        configured = str(_cfg_value(cfg, "executable") or "")
+        resolved = shutil.which(configured or "agy", path=env.get("PATH")) or configured
+        return (name, configured, str(resolved))
+
+    def _probe_file(self) -> Path | None:
+        return self._cache_path.parent / PROBE_FILE_NAME if self._cache_path is not None else None
+
+    def _load_probe_file(self) -> None:
+        """Seed the shared cache from disk once; a missing/corrupt file just means probe."""
+        shared = self._shared
+        if shared.disk_loaded:
+            return
+        shared.disk_loaded = True
+        path = self._probe_file()
+        if path is None:
+            return
+        try:
+            if path.stat().st_size > _MAX_PROBE_FILE_BYTES:
+                return
+            data = json.loads(path.read_bytes())
+            for entry in data["entries"][:_MAX_PROBE_ENTRIES]:
+                key = tuple(entry["key"])
+                if len(key) != 3 or not all(isinstance(part, str) for part in key):
+                    continue
+                models = clean_external_models(entry["models"])
+                if models:
+                    shared.probes.setdefault(key, (models, "", float(entry.get("refreshed_at") or 0.0)))
+        except (OSError, ValueError, KeyError, TypeError):
+            return
+
+    def _save_probe_file(self) -> None:
+        path = self._probe_file()
+        if path is None:
+            return
+        entries = [{"key": list(key), "models": [list(m) for m in models], "refreshed_at": stamp}
+                   for key, (models, _err, stamp) in self._shared.probes.items() if models]
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd, temp = tempfile.mkstemp(dir=path.parent, prefix=".agy-models-")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    json.dump({"entries": entries}, handle)
+                os.replace(temp, path)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.unlink(temp)
+                raise
+        except OSError:
+            return
+
+    async def _discover_external(self, *, force: bool = False) -> None:
+        """Probe ``agy models`` for each Antigravity section: bounded, local, never fatal.
+
+        The result is cached (shared across registry rebuilds, persisted beside
+        the catalogue cache) and reused until ``force`` -- the model-list refresh --
+        or until the executable/section changes. A failed probe keeps the last
+        good list and records the error.
+        """
         # Probe-only default; never supplies worker execution acknowledgement.
-        if not any(is_antigravity_section(name, cfg) for name, cfg in self._providers.items()):
+        if "antigravity" not in self._providers:
             self._providers["antigravity"] = {}
+        await asyncio.to_thread(self._load_probe_file)
         names = [name for name, cfg in self._providers.items() if is_antigravity_section(name, cfg)]
         found: dict[str, tuple[tuple[str, str], ...]] = {}
         errors: dict[str, str] = {}
+        probes = self._shared.probes
+        dirty = False
         for name in names:
+            key = self._probe_key(name, self._providers[name])
+            hit = probes.get(key)
+            if hit is not None and not force:
+                if hit[0] is not None:
+                    found[name] = hit[0]
+                if hit[1]:
+                    errors[name] = hit[1]
+                continue
+            good = hit[0] if hit is not None else None
             try:
-                found[name] = await asyncio.wait_for(
+                listed = await asyncio.wait_for(
                     self._probe_antigravity(self._providers[name]), timeout=self._antigravity_timeout_s)
+                found[name], err = listed, ""
+                good = listed
             except Exception as exc:  # noqa: BLE001 - a missing/broken CLI just means no models
-                errors[name] = redact_url_userinfo(f"{type(exc).__name__}: {exc}")[:300]
+                err = redact_url_userinfo(f"{type(exc).__name__}: {exc}")[:300]
+                errors[name] = err
+                if good:
+                    found[name] = good
+            if len(probes) >= _MAX_PROBE_ENTRIES and key not in probes:
+                probes.pop(next(iter(probes)))
+            probes[key] = (good, err, self._now() if err == "" else (hit[2] if hit is not None else 0.0))
+            dirty = dirty or bool(good)
+        if dirty:
+            await asyncio.to_thread(self._save_probe_file)
         self._external_models, self._external_errors = found, errors
 
     async def _probe_antigravity(self, cfg: object) -> tuple[tuple[str, str], ...]:
@@ -1411,7 +1544,7 @@ class ModelRegistry:
         return clean_external_models(listed)
 
     async def _acquire(self, *, force: bool) -> RegistryStatus:
-        cache = self._read_cache()
+        cache = await asyncio.to_thread(self._read_cache)
         if cache is not None and not force and self._is_fresh(cache[1]):
             return self._install(cache[0], source="cache", stale=False)
 
@@ -1529,6 +1662,13 @@ class ModelRegistry:
             return None
         try:
             stat = self._cache_path.stat()
+        except OSError:
+            return None
+        key = (str(self._cache_path), stat.st_mtime_ns, stat.st_size, self._max_bytes)
+        held = self._shared.catalogue
+        if held is not None and held[0] == key:
+            return held[1], stat.st_mtime
+        try:
             raw = self._cache_path.read_bytes()
         except OSError:
             return None
@@ -1536,6 +1676,7 @@ class ModelRegistry:
             catalogue = parse_catalogue(raw, max_bytes=self._max_bytes)
         except CatalogueError:
             return None
+        self._shared.catalogue = (key, catalogue)
         return catalogue, stat.st_mtime
 
     def _read_snapshot(self) -> Catalogue | None:

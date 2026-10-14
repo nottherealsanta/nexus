@@ -27,9 +27,23 @@ PAGE = {
 NAV = {"items": [["GENERAL", "", True], ["Appearance", "appearance", False], ["Models", "models", False]], "selected": 2}
 
 
+def drill_to_models(t):
+    """Settings opens at the root list: search `models`, then Enter opens the page (the host answers nav_select)."""
+    t.key(b"/")
+    for ch in b"models":
+        t.key(bytes([ch]))
+    t.key(b"\r")
+    t.key(b"\r")
+    assert t.action()["type"] == "nav_select"
+    time.sleep(.2)
+
+
 def send_page(t, **extra):
     t.send(panel_title="Settings · Models", panel_layout="modal", nav=NAV, settings_page=PAGE, generation=1, **extra)
     time.sleep(.4)
+    if not getattr(t, "drilled", False):
+        t.drilled = True
+        drill_to_models(t)
 
 
 @pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
@@ -39,8 +53,8 @@ def test_settings_page_renders_and_is_operated_by_keyboard_alone():
         send_page(t)
         t.redraw()
         screen = t.text()
-        for want in ["Models", "Name new sessions automatically", "ON", "Highest tier", "Medium", "Device", "auto", "TIERS",
-                     "openai/gpt-5-mini", "in use", "skipped", "not connected", "Add model", "Saved in ~/.nexus/config.toml", "Appearance"]:
+        for want in ["Models", "Name new sessions automatically", "on", "Highest tier", "Medium", "Device", "auto", "TIERS",
+                     "openai/gpt-5-mini", "in use", "skipped", "not connected", "Add model", "Saved in ~/.nexus/config.toml", "Settings › Models"]:
             assert want in screen, f"{want!r} missing:\n{screen}"
         # Space toggles the first row: one operation with the negated value, nothing local.
         t.key(b" ")
@@ -65,16 +79,16 @@ def test_settings_page_renders_and_is_operated_by_keyboard_alone():
             t.key(b"\x1b[B")
         t.key(b"\x1b[1;3B")  # Alt+Down
         assert t.action()["operation"] == {**OP, "key": "tier", "tier": "low", "action": "down", "index": 0}
-        # Left on a plain row hands focus to the area list; Up there selects the Appearance area.
+        # Left on a plain row returns to the root list; Escape there asks the host to close Settings.
         t.key(b"\x1b[A")
         t.key(b"\x1b[A")
         t.key(b"\x1b[A")
         t.key(b"\x1b[D")
-        t.key(b"\x1b[A")
-        assert t.action() == {"type": "nav_select", "text": "1", "generation": 1}
-        # Escape with nothing local to close asks the host to close Settings.
-        t.key(b"\x1b[C")
         time.sleep(.2)
+        t.redraw()
+        assert "Default models, tiers and fallbacks." in t.text(), "Left returns to the root list, selection kept"
+        t.key(b"\x1b")  # clears the kept search filter first
+        t.key(b"\x1b")
         t.key(b"\x1b")
         assert t.action()["type"] == "dismiss"
     finally:
@@ -132,10 +146,12 @@ async def test_the_pythons_own_snapshot_renders_and_its_operations_round_trip(tm
         t.process.stdin.write((json.dumps(snapshot) + "\n").encode())
         t.process.stdin.flush()
         time.sleep(.5)
+        t.drilled = True
+        drill_to_models(t)
         t.redraw()
         screen = t.text()
-        for want in ["Models", "DEFAULT MODEL", "SESSION TITLES", "Name new sessions automatically", "TIERS", "Low", "Medium", "High",
-                     "openai/gpt-5-mini", "in use", "LIMITS", "Highest tier for subagents", "CATALOGUE", "Appearance", "Providers"]:
+        for want in ["Models", "Default Model", "Session Titles", "Name new sessions automatically", "Subagent Tiers", "Low", "Medium", "High",
+                     "openai/gpt-5-mini", "in use", "Catalogue", "Settings › Models"]:
             assert want in screen, f"{want!r} missing:\n{screen}"
         # Walk to the first model of the default chain and move it: the operation is exactly what Python offered.
         offered = next(b for b in snapshot["settings_page"]["blocks"] if b.get("t") == "ordered" and b["id"] == "chain")
@@ -172,30 +188,6 @@ def test_question_mark_alt_digits_and_f6_navigate_across_the_app():
         assert t.action() == {"type": "nav_select", "text": "2", "generation": 1}
         t.key(b"\x1b9")  # there is no ninth area: nothing is sent
         t.key(b"\x1b[24~")  # F12: unrelated key, ignored
-        t.key(b"\x11")
-        assert t.action()["type"] == "quit"
-    finally:
-        t.close()
-
-
-@pytest.mark.skipif(not BINARY.exists(), reason="build the native prototype first")
-def test_f6_moves_focus_between_the_composer_and_the_sessions_sidebar():
-    from test_ratatui_pty_sessions import SESSIONS
-
-    t = Terminal(30, 120)
-    try:
-        t.send(sessions_sidebar=True, sessions=SESSIONS, composer_key="w/s1", generation=1)
-        time.sleep(.4)
-        t.redraw()
-        assert "type to filter" not in t.text()
-        t.key(b"\x1b[17~")  # F6
-        t.redraw()
-        assert "type to filter" in t.text(), "F6 focuses the sidebar"
-        t.key(b"\x1b[17~")
-        t.redraw()
-        assert "type to filter" not in t.text(), "and F6 again returns to the composer"
-        t.key(b"hello\r")
-        assert t.action() == {"type": "submit", "text": "hello", "mode": "steer", "generation": 1}
         t.key(b"\x11")
         assert t.action()["type"] == "quit"
     finally:

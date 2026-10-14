@@ -10,6 +10,8 @@ from nexus.ui_support import settings_page as sp
 def _walk(blocks):
     for block in blocks:
         yield block
+        if block.get("t") == "ordered":
+            yield from block.get("controls", [])
         if block.get("t") == "section":
             yield from _walk(block["blocks"])
 

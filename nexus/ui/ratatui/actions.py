@@ -126,7 +126,6 @@ class ShellActions:
         self.model_sort = "updated"  # model picker order: updated|name (Ctrl+S)
         self.update_notice = ""  # "<version> available: <command>" for /update; toasted once per release
         self.sessions_truncated = False  # the host list hit its cap
-        self.sessions_request = 0  # bumped by /sessions: the client opens and focuses the sidebar
         self.archived_label = ""  # "Archived · N" under the sessions list, "" when none
         self.seen_seq: dict[str, int] = {}  # completion sequence viewed per session
         self.open_files: set[str] = set()  # modified files expanded in the details sidebar
@@ -213,6 +212,7 @@ class ShellActions:
         self.items = []
         if hasattr(self, "workflows"):
             self.workflows.form = None
+            self.workflows.close_dashboard()  # any panel, picker or detail replaces the dashboard
         self.panel_title = title
         self.panel_lines = value.splitlines() if isinstance(value, str) else labelled(value)
         # Labelled values read as dim `label: ` then the value; plain text stays plain.
@@ -269,6 +269,7 @@ class ShellActions:
         self.usage_task = asyncio.create_task(refresh())
 
     async def switch_project(self, workspace, session):
+        self.workflows.close_dashboard()
         if self.attachment_draft_key is None:
             self.attachment_draft_key = (self.workspace, self.controller.session)
         if workspace != self.workspace:
@@ -297,6 +298,7 @@ class ShellActions:
 
     async def switch(self, session):
         self.mark_current_seen()  # a reply watched live must not read as unseen after leaving
+        self.workflows.close_dashboard()  # a replaced session never keeps a dashboard over it
         await self.voice.discard()
         self.workflows.form = None
         self.workflows.stack.clear()
@@ -415,23 +417,72 @@ class ShellActions:
                 row = self.tabs[min(index, len(self.tabs) - 1)]
                 await self.switch_project(row["workspace"], row["id"])
 
-    async def submit(self, text, mode="steer"):
+    async def submit(self, text, mode="steer", session=None):
         command = parse(text)
         if command:
             return await self.command(command.name, command.args)
+        target = self.controller.session
+        dashboard = getattr(getattr(self, "workflows", None), "dashboard", None)
+        row = None
+        if isinstance(session, str) and session and dashboard is not None and dashboard.visible:
+            row = dashboard.row(session)
+        if row is not None and row.get("id"):
+            workspace = row.get("workspace") or ""
+            if workspace and workspace != self.workspace:
+                if self.attachments:
+                    self.composer_restore = text
+                    self.flash("Open that session to send attachments", "warning")
+                    return True
+                try:
+                    await self.switch_project(workspace, row["id"])
+                except Exception:
+                    self.composer_restore = text
+                    raise
+                target = self.controller.session
+            else:
+                target = row["id"]
+        if target != self.controller.session and self.attachments:
+            self.composer_restore = text
+            self.flash("Open that session to send attachments", "warning")
+            return True
         if text.startswith("!"):
-            return await self.run_shell(text)
+            if target == self.controller.session:
+                return await self.run_shell(text)
+            command_text = text[1:].strip()
+            if not command_text:
+                self.composer_restore = text
+                raise ValueError("Type a command after ! to run it with bash")
+            try:
+                await self.client.shell(target, command_text)
+            except Exception:
+                self.composer_restore = text
+                raise
+            from ...ui_support.prompt_history import append_history
+            append_history(text)
+            if dashboard is not None and dashboard.visible:
+                await dashboard.refresh()
+                await dashboard.refresh_preview()
+            return True
         try:
-            await self.client.enqueue(self.controller.session, text, mode=mode,
-                attachments=[item.attachment_id for item in self.attachments],
-                attachment_labels=[self.attachment_label(index) for index in range(len(self.attachments))])
+            kwargs = {}
+            if target == self.controller.session:
+                kwargs["attachments"] = [item.attachment_id for item in self.attachments]
+                kwargs["attachment_labels"] = [
+                    self.attachment_label(index) for index in range(len(self.attachments))
+                ]
+            await self.client.enqueue(target, text, mode=mode, **kwargs)
         except Exception:
             self.composer_restore = text
             raise
         from ...ui_support.prompt_history import append_history
         append_history(text)
-        self.attachments.clear(); self.attachment_labels.clear()
-        self.marker_attachments.clear()
+        if target == self.controller.session:
+            self.attachments.clear()
+            self.attachment_labels.clear()
+            self.marker_attachments.clear()
+        if dashboard is not None and dashboard.visible:
+            await dashboard.refresh()
+            await dashboard.refresh_preview()
         return True
 
     async def run_shell(self, text):
@@ -497,7 +548,7 @@ class ShellActions:
             await self.switch(session_id)
             await self.client.select_agent(session_id, agent)
             await self.controller.bootstrap()
-        elif name == "/sessions":
+        elif name in {"/session", "/sessions"}:
             if argument:
                 rows = await self.client.list_sessions()
                 matched = next((row for row in rows if row.id == args[0] or row.id.startswith(args[0])), None)
@@ -527,7 +578,7 @@ class ShellActions:
                 self.preferences.set("model_recent", [argument, *[ref for ref in recent if ref != argument]])
             else:
                 from ...ui_support.model_choice import model_groups, recent_models
-                rows = [row for row in recent_models(await self.client.list_models(selectable_only=True))
+                rows = [row for row in recent_models(await self.client.list_models(selectable_only=True, scope="main"))
                         if row.get("provider") and row.get("id")]
                 for row in rows:
                     row["original_metadata"] = dict(row)

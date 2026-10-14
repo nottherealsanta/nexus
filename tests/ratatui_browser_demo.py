@@ -61,6 +61,69 @@ async def fixture():
             snapshot["status"]="running"
         if mode=="Logs":
             snapshot["logs"]=["12:04:20 [ERROR] session · tool.failed · Parse failed", "4 routine entries folded · Ctrl+A toggle"]
+    elif state.startswith("grok-"):
+        # grok-<scene>-<theme>: curated blocks over the reference snapshot; scene widths come from the harness.
+        _, scene, theme = state.split("-", 2)
+        shell.preferences.values.update(theme=f"nexus-{theme}", sessions_sidebar=False, details_sidebar=False)
+        snapshot = project(controller, 1, shell=shell)
+        snapshot["theme"] = f"nexus-{theme}"
+        snapshot.update(context_used=52140, context_window=1000000, context_tiers=[200000, 1000000], context_label="52.1K · 26.1% · 5.2%")
+        toggle = lambda name: {"kind": "block_toggle", "id": name}
+        if scene == "dashboard":
+            def row(sid, title, status, age, project_name, branch, last_user, last_agent, activity=""):
+                return {"id": sid, "title": title, "status": status,
+                        "state": {"input": "awaiting_input", "working": "running"}.get(status, "idle"),
+                        "day": "Today", "sub": age, "age": age, "project": project_name, "branch": branch,
+                        "workspace": str(ROOT), "group": project_name,
+                        "last_user": last_user, "last_agent": last_agent, "activity": activity}
+            snapshot["dashboard"] = {
+                "kind": "sessions", "selected": "s3", "error": "", "truncated": False,
+                "path": "~/repos/nexus", "branch": "main", "workspace": str(ROOT),
+                "preview": {"session": "s3", "last_user": "What should we work on in Nexus?",
+                            "last_agent": "Python sample: frozen Task, remaining() lists open titles", "activity": ""},
+                "rows": [
+                    row("s2", "Redesign session page hover preview and composer", "working", "just now", "nexus", "main",
+                        "Redesign the session page", "", "Waiting for response..."),
+                    row("s1", "Why Tests Take So Long To Run", "idle", "3m", "nexus", "main",
+                        "Why do tests take so long?", "Serial pytest: 6121 tests in 15m32s, no xdist"),
+                    row("s3", "User Greeting Hello There Session Start", "idle", "4m", "nexus", "main",
+                        "What should we work on in Nexus?", "Python sample: frozen Task, remaining() lists open titles"),
+                    row("s4", "Sample Mermaid diagram and Python code", "idle", "4m", "nexus", "main",
+                        "Show a mermaid diagram", "Python sample: frozen Task, remaining() lists open titles"),
+                ]}
+        elif scene == "mermaid":
+            snapshot["blocks"] = [{"id": "m", "kind": "markdown", "rev": "1", "text": (
+                "Valid diagram, then an unsupported one that must fall back to code:\n\n"
+                "```mermaid\ngraph TD\n  A[Start] --> B{Parse ok?}\n  B --> C[Render]\n  B --> D[Report]\n```\n\n"
+                "```mermaid\npie\n\"cats\" : 3\n\"dogs\" : 2\n```\n\nAfter the fences.")}]
+        elif scene == "groups":
+            def member(call, title, text, status, ms):
+                return {"id": call, "kind": "tool", "title": title, "text": text, "heading": f"→ {title} {text}", "status": status,
+                        "elapsed_ms": ms, "operation": toggle(call + ":detail")}
+            snapshot["blocks"] = [
+                {"id": "t1", "kind": "thought", "title": "Thought for 2.1s", "text": "Check the parser entry ▸", "detail": "", "rev": "1", "operation": toggle("t1")},
+                {"id": "g1", "kind": "tool_group", "status": "completed", "text": "Ran 2 commands, Read 3 files", "count": 5, "failures": 2,
+                 "elapsed_ms": 1800, "elapsed_label": "1.8s", "collapsed": False, "rev": "1", "operation": toggle("g1"),
+                 "members": [member("a", "Read", "src/parse.py", "completed", 300), member("b", "Shell", "pytest -q", "failed", 900),
+                             member("c", "Shell", "ruff check .", "failed", 600)]},
+                {"id": "g2", "kind": "tool_group", "status": "running", "text": "Read 1 file", "running_label": "Reading 1 file, Running 1 command",
+                 "count": 2, "failures": 0, "collapsed": False, "rev": "1", "operation": toggle("g2"),
+                 "members": [member("d", "Read", "src/main.rs", "completed", 200), member("e", "Shell", "cargo test", "running", 0)]},
+                {"id": "t2", "kind": "thought", "title": "Thinking…", "status": "running", "text": "Planning the fix ▸", "detail": "", "rev": "1", "operation": toggle("t2")}]
+            snapshot["status"] = "running"
+        elif scene == "context":
+            def chip(key, label, tokens, body, counts, collapsed):
+                return {"id": "context:" + key, "kind": "context", "title": label, "text": body, "local_preview": "", "tokens": tokens,
+                        "status": f"{tokens} tokens", "active": True, "collapsed": collapsed, "counts": counts, "gap": 0, "local_ui": True,
+                        "operation": {"kind": "context_show", "key": key}}
+            snapshot["blocks"] = [{"id": "context:header", "kind": "context_header", "gap": 1, "operation": {"kind": "context_menu"}, "members": [
+                chip("system", "System prompt", "~2.1k", "You are Nexus, a provider-agnostic coding agent.", [], False),
+                chip("tools", "Tools", "~1.4k", "read\nwrite\nshell", [3], False),
+                chip("agents", "AGENTS.md", "~348", "", [], True),
+                chip("skills", "Skills", "~0", "", [0, 0], True)]},
+                {"id": "u", "kind": "markdown", "rev": "1", "text": "Context is listed above; the prompt tail follows."}]
+        else:
+            raise SystemExit(f"unknown grok scene: {scene}")
     elif state == "subagent":
         from ratatui_fixture import subagent_fixture
         agent, context = subagent_fixture()

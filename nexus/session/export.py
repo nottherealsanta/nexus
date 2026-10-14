@@ -49,6 +49,8 @@ _ALIASES = {"md": "markdown", "markdown": "markdown", "json": "json", "jsonl": "
 
 #: Title length cap, in characters.
 TITLE_LIMIT = 80
+#: Dashboard snippet cap. Longer than a title so the last prompt and reply stay readable.
+SNIPPET_LIMIT = 240
 
 
 def derive_title(messages: Sequence[Message], *, limit: int = TITLE_LIMIT) -> str:
@@ -67,6 +69,21 @@ def derive_title(messages: Sequence[Message], *, limit: int = TITLE_LIMIT) -> st
                 if text:
                     return text[:limit]
     return ""
+
+
+def message_snippet(message: Message, *, limit: int = SNIPPET_LIMIT) -> str:
+    """Collapsed display text from top-level ``Text`` blocks, or ``""``.
+
+    Thinking and tool results are skipped, so a tool reply or a reasoning-only
+    turn does not replace the last prompt or answer the sessions dashboard shows.
+    """
+    parts: list[str] = []
+    for block in message.content:
+        if isinstance(block, Text):
+            text = " ".join(block.text.split())
+            if text:
+                parts.append(text)
+    return " ".join(parts)[:limit]
 
 
 def last_activity(

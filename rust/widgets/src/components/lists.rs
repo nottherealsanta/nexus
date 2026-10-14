@@ -162,9 +162,13 @@ pub fn ordered_list_height(n: usize, width: u16) -> u16 {
     n as u16 * ordered_row_height(width) + 1
 }
 pub fn ordered_list(buf: &mut Buffer, ui: &mut Ui, area: Rect, id: &str, items: &[OrderedItem], add_label: &str) -> u16 {
+    ordered_list_with_controls(buf, ui, area, id, items, add_label, false)
+}
+/// Inline selectors reserve space immediately before the reorder buttons; entries use two rows.
+pub fn ordered_list_with_controls(buf: &mut Buffer, ui: &mut Ui, area: Rect, id: &str, items: &[OrderedItem], add_label: &str, controls: bool) -> u16 {
     let t = ui.theme;
     let g = ui.glyphs;
-    let rh = ordered_row_height(area.width);
+    let rh = if controls { 2 } else { ordered_row_height(area.width) };
     let right = area.x + area.width;
     let btn_w = 3 * 3 + 2;
     // Wide: tags line up in one column after the longest label (capped so buttons always fit).
@@ -199,7 +203,7 @@ pub fn ordered_list(buf: &mut Buffer, ui: &mut Ui, area: Rect, id: &str, items: 
                 put(buf, tx + 1, y, &format!("· {}", it.note), st.fg(t.warning), 24);
             }
         } else {
-            let room = right.saturating_sub(area.x + 7 + btn_w + 1);
+            let room = right.saturating_sub(area.x + 7 + btn_w + 1 + if controls { 16 } else { 0 });
             put(buf, area.x + 7, y, &truncate(it.label, room as usize, g.ellipsis), lab, room);
             let mut tx = area.x + 7;
             tx += put(buf, tx, y + 1, tag, tag_st, 12) + 1;
@@ -228,7 +232,7 @@ pub fn ordered_list(buf: &mut Buffer, ui: &mut Ui, area: Rect, id: &str, items: 
         }
         put(buf, area.x + 7, ay, &if t.is_mono() { format!("[ + {add_label} ]") } else { format!("+ {add_label}") }, st.fg(t.accent), area.width.saturating_sub(7));
     }
-    ordered_list_height(items.len(), area.width)
+    items.len() as u16 * rh + 1
 }
 
 /// Collapsible section header with a summary so collapsed sections hide nothing.

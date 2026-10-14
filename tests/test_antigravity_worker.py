@@ -31,7 +31,7 @@ args = sys.argv[1:]
 if args == ["--version"]:
     print(scenario.get("version", "1.3.4")); sys.exit(0)
 if args == ["--help"]:
-    print(scenario.get("help", "--input-format --output-format stream-json --model --mode accept-edits|plan --print-timeout"))
+    print(scenario.get("help", "--input-format --output-format stream-json --model --mode auto|accept-edits|plan --print-timeout"))
     sys.exit(0)
 stdin = sys.stdin.read()
 json.dump({{"argv": args, "stdin": stdin, "cwd": os.getcwd()}}, open(os.path.join(here, "record.json"), "w"))
@@ -122,8 +122,8 @@ def test_read_only_and_unenforceable_settings_are_refused():
                      {"mcp_config": "{}"}, {"setting_sources": "user"}, {"restricted": True}):
         with pytest.raises(ConfigError, match="cannot be enforced"):
             resolve_policy(WorkerConfig(worker_inherits_agy_settings=True, **override), read_only=False)
-    for mode in ("auto", "dontAsk", "bypassPermissions", "yolo"):
-        with pytest.raises(ConfigError, match="accept-edits or plan"):
+    for mode in ("dontAsk", "bypassPermissions", "yolo"):
+        with pytest.raises(ConfigError, match="auto, accept-edits or plan"):
             resolve_policy(WorkerConfig(worker_inherits_agy_settings=True, permission_mode=mode), read_only=False)
 
 
@@ -132,6 +132,7 @@ def test_from_section_and_authority_disclosure():
                               worker_inherits_agy_settings=True)
     policy = resolve_policy(WorkerConfig.from_section(section), read_only=False)
     assert (policy.executable, policy.permission_mode, policy.timeout_seconds) == ("agy", "accept-edits", 30.0)
+    assert resolve_policy(WorkerConfig.from_section(SimpleNamespace(worker_inherits_agy_settings=True)), read_only=False).permission_mode == "auto"
     text = policy.authority("/w")
     assert "did not mediate" in text and "no sandbox requested" in text and "read-only" not in text
     with pytest.raises(ConfigError):
@@ -164,7 +165,7 @@ def test_success_argv_stdin_events(tmp_path):
     assert Path(record["cwd"]).resolve() == (tmp_path / "ws").resolve()
     argv = record["argv"]
     assert argv[:9] == ["--input-format", "stream-json", "--output-format", "stream-json", "--model", MODEL,
-                        "--mode", "accept-edits", "--print-timeout"]
+                        "--mode", "auto", "--print-timeout"]
     assert argv[9].endswith("s") and argv[9][:-1].isdigit() and "-p" not in argv
     assert not any("dangerous" in a or "yolo" in a or "sandbox" in a or "always-proceed" in a or a == "--yes"
                    for a in argv)

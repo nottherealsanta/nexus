@@ -126,6 +126,22 @@ missed.
 
 ## Native redesign verification
 
+Latest acceptance run: full offline suite 6264 passed, 335 skipped, 6 deselected
+(489.58 s, run before the last pure-Rust and dashboard changes; no Python production
+code changed since); `cargo test` for `rust/tui` 396 passed, 2 ignored, plus 16
+integration tests; `rust/widgets` all passed; `design-mockups` 20 passed;
+`ruff check nexus tests` passed. The screenshot matrix (4 scenes × 50/90/140
+columns × dark/light, 24 captures under `NEXUS_ASCII=1` with paired text dumps and
+`.geometry.json` sidecars asserting grid, PTY size and screen fit) was regenerated
+and all 24 PNGs were pixel-reviewed; they are Rust → PTY → xterm captures, not OS
+screenshots. `tests/playwright_web_check.py` failed twice (timeout in the archive
+sidebar check, line 762; cause unproven, possibly an unrelated web `archivedCount`
+race) and is unresolved: this is not an all-green run. The native harnesses honour `NEXUS_TUI_BINARY` (binary under
+test) and `NEXUS_TUI_TRACE_FILE`, which lets a clean `HEAD` build be compared with
+the working tree. Before/after data is in `artifacts/grok-acceptance/` (ignored);
+it is not isolated attribution and not an idle-animation proof (see
+`docs/ratatui-parity.md`).
+
 Run `cargo test --locked --manifest-path rust/tui/Cargo.toml` and
 `.venv/bin/python -m pytest -q tests -k ratatui`. The two ignored Rust benchmarks
 are manual measurements; the 2,000-turn case is

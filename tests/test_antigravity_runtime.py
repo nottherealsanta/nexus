@@ -11,7 +11,7 @@ import pytest
 from nexus.agents import AgentManager, ChildSpec, SubagentBudget
 from nexus.agents.antigravity_worker import AntigravityWorker
 from nexus.config import Config
-from nexus.config.schema import ConfigV2, ModelsSection, ProviderSection
+from nexus.config.schema import ConfigV2, ModelSection, ModelsSection, ProviderSection
 from nexus.errors import ConfigError
 from nexus.host import facade
 from nexus.host_support import model_settings
@@ -92,6 +92,60 @@ def test_never_a_nexus_provider_and_never_the_main_model(tmp_path):
             Runtime(tmp_path, config=bad, home=tmp_path / "home", environ={})
 
 
+def test_claude_worker_main_guard_is_independent_of_main_toggle():
+    providers = {"claude-code": ProviderSection(kind="claude-code")}
+    worker_main_on = Config(v2=ConfigV2(
+        model=ModelSection(default="claude-code/claude-haiku-5-5"),
+        providers=providers,
+        models=ModelsSection(claude_code_main_enabled=True),
+    ))
+    with pytest.raises(ConfigError, match="subagent-only"):
+        Runtime._refuse_subagent_only_selection(worker_main_on, providers)
+
+    # Worker-backed Claude Code stays subagent-only even with its main toggle on.
+    worker_backend_main_on = Config(v2=ConfigV2(
+        model=ModelSection(default="claude-code/claude-haiku-5-5"),
+        providers=providers,
+        models=ModelsSection(
+            claude_code_subagent_backend="worker", claude_code_main_enabled=True,
+        ),
+    ))
+    with pytest.raises(ConfigError, match="subagent-only"):
+        Runtime._refuse_subagent_only_selection(worker_backend_main_on, providers)
+
+    sdk_main_off = Config(v2=ConfigV2(
+        model=ModelSection(default="claude-code/claude-haiku-5-5"),
+        providers=providers,
+        models=ModelsSection(claude_code_subagent_backend="sdk"),
+    ))
+    with pytest.raises(ConfigError, match="requires claude_code_main_enabled"):
+        Runtime._refuse_subagent_only_selection(sdk_main_off, providers)
+
+    sdk_main_on = Config(v2=ConfigV2(
+        model=ModelSection(default="claude-code/claude-haiku-5-5"),
+        providers=providers,
+        models=ModelsSection(
+            claude_code_subagent_backend="sdk", claude_code_main_enabled=True,
+        ),
+    ))
+    Runtime._refuse_subagent_only_selection(sdk_main_on, providers)
+
+    # Exercise the canonical [model] fields independently of their mirrored
+    # [models] values: every worker route must be rejected as a main default.
+    for field, value in (
+        ("default", "claude-code/claude-haiku-5-5"),
+        ("fast", "claude-code/claude-haiku-5-5"),
+        ("plan", "claude-code/claude-haiku-5-5"),
+        ("fallback", ["claude-code/claude-haiku-5-5"]),
+    ):
+        config_with_legacy_model = Config(v2=ConfigV2(
+            model=ModelSection(**{field: value}), providers=providers,
+            models=ModelsSection(claude_code_main_enabled=True),
+        ))
+        with pytest.raises(ConfigError, match="subagent-only"):
+            Runtime._refuse_subagent_only_selection(config_with_legacy_model, providers)
+
+
 def test_ordinary_children_never_see_antigravity(tmp_path):
     other = ScriptedProvider(text_response("hi"))
     leaked = ScriptedProvider(text_response("no"))
@@ -111,7 +165,7 @@ def test_explicit_child_plans_the_antigravity_worker(tmp_path):
     assert isinstance(external.worker, AntigravityWorker) and external.model == MODEL
     assert external.provider == "antigravity" and external.kind == ADAPTER_ANTIGRAVITY
     assert external.inherits_settings and external.provenance
-    assert not external.policy.read_only and external.policy.permission_mode == "accept-edits"
+    assert not external.policy.read_only and external.policy.permission_mode == "auto"
 
 
 def test_alias_section_and_bare_model_with_explicit_provider(tmp_path):
@@ -433,14 +487,45 @@ async def test_fresh_host_contract_exposes_subagents_and_refuses_root():
         Runtime._validate_model_selection(runtime, REF)
 
 
-async def test_custom_alias_discovery_uses_only_configured_executable():
+def test_claude_code_model_scopes_follow_sdk_and_worker_backend():
+    from nexus.host.facade import HostFacade
+
+    row = SimpleNamespace(provider="claude-code", id="claude-sonnet-4-5")
+
+    class Registry:
+        def list(self, **kwargs):
+            return [row]
+
+        def provider_status(self, provider):
+            return SimpleNamespace(kind="claude-code")
+
+    for backend, expected_subagent in (("sdk", True), ("worker", True)):
+        config = SimpleNamespace(v2=SimpleNamespace(
+            models=ModelsSection(claude_code_subagent_backend=backend, claude_code_main_enabled=True),
+            providers={"claude-code": ProviderSection(kind="claude-code")},
+        ))
+        runtime = SimpleNamespace(
+            registry=Registry(), _load_config=lambda config=config: config,
+            claude_code_main_enabled=lambda: True,
+            _adapter_kind=Runtime._adapter_kind,
+        )
+        host = HostFacade.__new__(HostFacade)
+        host.runtime = runtime
+        assert [r.provider for r in host.list_models(selectable_only=True, scope="subagents")] == (
+            ["claude-code"] if expected_subagent else []
+        )
+        main = host.list_models(selectable_only=True, scope="main")
+        assert bool(main) is (backend == "sdk")
+
+
+async def test_custom_alias_discovery_keeps_builtin_antigravity_visible():
     cli = FakeCli([(MODEL, "Flash")])
     registry = ModelRegistry(providers={"studio": {"kind": "agy", "executable": "/opt/studio-agy"}},
                              offline=True, use_snapshot=False, antigravity_cli=cli)
     await registry.load()
-    assert cli.made == [("/opt/studio-agy", None)]
-    assert [row.ref for row in registry.list(selectable_only=True)] == [f"studio/{MODEL}"]
-    assert registry.provider_status("antigravity") is None
+    assert cli.made == [("/opt/studio-agy", None), (None, None)]
+    assert {row.ref for row in registry.list(selectable_only=True)} == {f"studio/{MODEL}", REF}
+    assert registry.provider_status("antigravity").kind == ADAPTER_ANTIGRAVITY
     assert registry.provider_status("studio").kind == ADAPTER_ANTIGRAVITY
 
 
@@ -450,3 +535,14 @@ async def test_fresh_missing_cli_has_no_models():
     await registry.load()
     assert registry.list(selectable_only=True) == []
     assert not registry.provider_status("antigravity").reachable
+
+
+def test_low_tier_antigravity_refusal_discloses_selected_route(tmp_path):
+    runtime = fake_runtime()
+    runtime._tiers = SimpleNamespace(order=("low", "medium", "high"))
+    runtime._external_tier_route = lambda tier, **kwargs: REF if tier == "low" else None
+    spec = replace_spec(spec_for(tmp_path, model="low"), tools=("glob", "read"))
+    with pytest.raises(ConfigError, match="read-only") as refused:
+        _ChildRuntime(runtime, spec, object())
+    assert refused.value.selected_model == REF
+    assert "Auto mode does not enforce" in str(refused.value)

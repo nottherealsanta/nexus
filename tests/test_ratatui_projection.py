@@ -37,10 +37,18 @@ def _snapshot(tmp_path, monkeypatch, turns, literal=True, **shell_values):
 
 
 @pytest.mark.parametrize("color", ["", "#ab12cd"])
-def test_user_border_matches_agent_color(tmp_path, monkeypatch, color):
+def test_agent_color_marks_the_agent_not_the_prompt_card(tmp_path, monkeypatch, color):
     snapshot = _snapshot(tmp_path, monkeypatch, [_turn(agent={"name": "review", "color": color})])
     user = next(block for block in snapshot["blocks"] if block["kind"] == "user")
-    assert user["color"] == (color or snapshot["agent_color"])
+    assert "color" not in user, "the prompt card rail is grey (GROK_BUILD_TUI_PLAN §8B)"
+    assert snapshot["agent_color"]
+
+
+def test_no_transcript_block_names_the_agent(tmp_path, monkeypatch):
+    turns = [_turn(agent={"name": "review"}), replace(_turn(agent={"name": "plan"}), id="t2", index=1)]
+    snapshot = _snapshot(tmp_path, monkeypatch, turns)
+    assert not any(block["kind"] == "agent" for block in snapshot["blocks"])
+    assert not any(block.get("color") for block in snapshot["blocks"] if block["kind"] in {"user", "tool_group", "context_header"})
 
 
 @pytest.mark.parametrize("prompt", ["界" * 4000, "\n".join(["line"] * 100)])
@@ -133,7 +141,7 @@ def test_thought_and_tools_share_one_activity_group(tmp_path, monkeypatch, expan
                        expanded={"thoughtthinking"} if expanded else set())["blocks"]
     transcript = [b for b in blocks if b["kind"] in {"tool_group", "thought"}]
     assert len(transcript) == 1
-    assert transcript[0]["text"] == "Read 2 files · Thought 1 time"
+    assert transcript[0]["text"] == "Read 2 files, Thought 1 time"
     assert transcript[0]["count"] == 3
     if expanded:
         assert [m["kind"] for m in transcript[0]["members"]] == ["tool", "thought", "tool"]
@@ -159,9 +167,33 @@ def test_error_only_for_terminal_turns_and_context_header_placeholders(tmp_path,
     snapshot = project(SimpleNamespace(view=view, session="s"), 1, shell=shell)
     header = next(block for block in snapshot["blocks"] if block["kind"] == "context_header")["members"]
     assert [block["title"] for block in header] == ["System prompt", "Tools", "AGENTS.md", "Skills", "MCP"]
-    assert all(block["color"] == snapshot["agent_color"] for block in header)
-    assert header[0]["gap"] == 0
+    assert all("color" not in block for block in header), "headers are grey, never the agent colour"
+    assert "color" not in next(block for block in snapshot["blocks"] if block["kind"] == "context_header")
+    assert all(block["gap"] == 0 for block in header), "closed headers stack with no blank rows"
     assert header[4]["operation"] == {"kind": "context_show", "key": "mcp"}
+    assert header[4]["inspect_operation"] == {"kind": "context_show", "key": "mcp"}
+    # Not loaded yet: every header is inactive, tokens unknown, and the body is marked closed-local.
+    assert all(block["tokens"] == "~?" and block["active"] is False for block in header)
+    assert all(block["local_ui"] is True and block["local_open"] is False for block in header)
+
+
+def test_context_header_tokens_and_activity(tmp_path, monkeypatch):
+    from nexus.ui.ratatui.prototype import _compact_header
+    from nexus.ui_support import context_header
+    blocks = [
+        context_header.HeaderBlock("system", "System prompt", "You are", "", 348, "#fff"),
+        context_header.HeaderBlock("agents", "AGENTS.md", "# AGENTS.md", "", 2500, "#fff"),
+        context_header.HeaderBlock("memory", "MEMORY.md", "", "", 0, "#fff"),
+        context_header.HeaderBlock("tools", "Tools", "", "", None, "#fff", inventory=("read", "bash")),
+        context_header.HeaderBlock("mcp", "MCP", "", "", None, "#fff"),
+    ]
+    monkeypatch.setattr(context_header, "header_blocks", lambda preview, color: blocks)
+    preview = SimpleNamespace(tools=[], skills_index=[], mcp_servers=[], agent={"name": "build"})
+    shell = SimpleNamespace(preview=preview, controller=SimpleNamespace(agent_name="build"), agent_definitions={})
+    [header] = _compact_header(shell, None)
+    rows = {m["title"]: m for m in header["members"]}
+    assert [rows[t]["tokens"] for t in rows] == ["~348", "~2.5K", "~0", "~?", "~?"]
+    assert [rows[t]["active"] for t in rows] == [True, True, False, True, False]
 
 
 def test_details_panel_matches_textual_sections(tmp_path, monkeypatch):
@@ -396,6 +428,8 @@ def test_session_cards_carry_status_words_age_and_the_current_marker():
     assert rows["b"]["status"] == "done" and rows["b"]["sub"] == "3 · 5m"
     assert rows["c"]["status"] == "input" and rows["c"]["sub"] == "3 · 5m"
     assert rows["a"]["title"] == "Busy"
+    assert rows["a"]["age"] == "5m"
+    assert rows["a"]["last_user"] == "" and rows["a"]["last_agent"] == ""
     assert rows["d"]["title"] == "New Session"
     # The sidebar colors project and day separately in each "project · day" heading.
     assert rows["a"]["project"] == "w" and rows["a"]["group"] == f"w · {rows['a']['day']}"
@@ -542,12 +576,33 @@ def test_agent_page_uses_child_conversation_and_recorded_context(tmp_path, monke
     assert snapshot["agent_page"] == "child" and snapshot["panel_title"] == ""
     assert not snapshot["sessions_sidebar"] and snapshot["prompt"] is None
     first = snapshot["blocks"][0]  # the task opens the page as a prompt card, no header strip
-    assert first["kind"] == "user" and first["title"] == "Inspect the UI" and first["color"]
+    assert first["kind"] == "user" and first["title"] == "Inspect the UI" and "color" not in first
+    assert snapshot["agent_color"]
     assert all(b["kind"] != "context_header" for b in snapshot["blocks"])
     assert shell.workflows.agent_context["system_text"] == "Child instructions"
     assert any(b["kind"] == "markdown" and b["text"] == "Hello!" for b in snapshot["blocks"])
     shell.workflows.back()
     assert shell.workflows.agent_page_id is None
+
+
+def test_agent_page_never_repeats_root_context_counters(tmp_path, monkeypatch):
+    from nexus.view.model import AgentView
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    view, body = initial_state("s"), initial_state("child")
+    view.context = {"context": {"measured_tokens": 5000, "context_window": 10000}}
+    body.turns = [_turn()]
+    view.agents = {"child": AgentView(id="child", type="advisor", task="Inspect", body=body)}
+    controller = SimpleNamespace(view=view, session="s")
+    shell = ShellActions(controller)
+    assert project(controller, 1, shell=shell)["context_used"] == 5000
+    shell.workflows.agent_page_id = "child"
+    unknown = project(controller, 2, shell=shell)
+    assert unknown["context_used"] is None and unknown["context_window"] is None
+    assert unknown["context_usage"] == "0 (0%)" and unknown["context_label"] == ""
+    body.context = {"context": {"measured_tokens": 300, "context_window": 1000}}
+    known = project(controller, 3, shell=shell)
+    assert known["context_used"] == 300 and known["context_window"] == 1000
 
 
 @pytest.mark.parametrize("name, inputs, summary", [
@@ -596,8 +651,8 @@ def test_explored_group_summarises_lookups_and_thought_carries_duration(tmp_path
     blocks = _snapshot(tmp_path, monkeypatch, [replace(_turn(), messages=messages, tools=tools)], literal=False,
                        expanded={"t:activity:athinking"})["blocks"]
     group = next(b for b in blocks if b["kind"] == "tool_group")
-    assert group["members"][0]["title"] == "Thought: 671ms"
-    assert group["text"] == "Thought 1 time · Searched 1 time · Read 1 file"
+    assert group["members"][0]["title"] == "Thought for 671ms"
+    assert group["text"] == "Thought 1 time, Searched 1 pattern, Read 1 file"
     assert [m["heading"].split(" ")[0] for m in group["members"][1:]] == ["✱", "→"]
 
 

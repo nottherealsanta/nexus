@@ -123,6 +123,12 @@ class Client:
             p.SessionPreview(session=session, max_chars=max_chars)
         )  # type: ignore[return-value]
 
+    async def dashboard_preview(self, session_id: str, *, max_rows: int = 12):
+        return await self._request(p.SessionDashboardPreview(session_id, max_rows))
+
+    async def rename_session(self, session_id: str, title: str):
+        return await self._request(p.SessionRename(session_id, title))
+
     async def search_sessions(
         self, query: str, *, archived_only: bool = True, limit: int = 50
     ) -> list[str]:
@@ -343,16 +349,17 @@ class Client:
     async def list_models(
         self, *, provider: str | None = None, tier: str | None = None,
         selectable_only: bool = False, search: str | None = None,
+        scope: str = "all",
     ) -> list[dict[str, Any]]:
-        result = await self._request(p.ModelsList(provider=provider, tier=tier, selectable_only=selectable_only, search=search))
+        result = await self._request(p.ModelsList(provider=provider, tier=tier, selectable_only=selectable_only, search=search, scope=scope))
         return list(result.models)  # type: ignore[union-attr]
 
     async def show_model(self, ref: str) -> Any: return await self._request(p.ModelShow(ref=ref))
 
     async def model_tiers(self) -> Any: return await self._request(p.ModelTiers())
 
-    async def model_tier_set(self, tier: str, refs: list[str]) -> Any:
-        return await self._request(p.ModelTierSet(tier=tier, refs=list(refs)))
+    async def model_tier_set(self, tier: str, refs: list[str], *, efforts: dict[str, str] | None = None) -> Any:
+        return await self._request(p.ModelTierSet(tier=tier, refs=list(refs), efforts=efforts))
 
     async def model_tier_reset(self, tier: str) -> Any: return await self._request(p.ModelTierReset(tier=tier))
 
@@ -413,6 +420,9 @@ class Client:
 
     async def provider_logout(self, provider: str) -> p.ProviderAuthResult:
         return await self._request(p.ProviderLogout(provider=provider))  # type: ignore[return-value]
+
+    async def provider_models_refresh(self, provider: str) -> p.ProviderModelsRefreshResult:
+        return await self._request(p.ProviderModelsRefresh(provider=provider))  # type: ignore[return-value]
 
     async def provider_login_code(self, login_id: str, code: str) -> p.ProviderLoginResult:
         return await self._request(p.ProviderLoginCode(login_id=login_id, code=code))  # type: ignore[return-value]
