@@ -853,3 +853,57 @@ def test_multi_file_patch_stands_alone_with_file_count(tmp_path, monkeypatch):
     assert patch_block["files"] == 2 and patch_block["path"] == "a.py, b.py"
     assert (patch_block["added"], patch_block["removed"]) == (3, 2)
     assert ["file", 0, "a.py"] in patch_block["diff_lines"] and ["file", 0, "b.py"] in patch_block["diff_lines"]
+
+def test_turn_numbers_survive_queue_steer_and_interrupt_and_replay(tmp_path, monkeypatch):
+    """#N counts user-initiated turns: a steer folded into a turn and shell turns take no number."""
+    from nexus.events import Event
+    from nexus.view import apply, apply_many
+
+    def ev(kind, seq, data, turn):
+        return Event(type=kind, data=data, seq=seq, session="s", turn=turn, ts=1_759_000_000.0 + seq)
+
+    def cards(snapshot):
+        return [(b["title"], b["number"]) for b in snapshot["blocks"] if b["kind"] == "user"]
+
+    events = [
+        ev("input.queued", 1, {"queued_id": "a", "content": [{"text": "first"}]}, "t1"),
+        ev("turn.started", 2, {}, "t1"),
+        ev("input.consumed", 3, {"queued_id": "a", "turn": "t1"}, "t1"),
+        ev("input.queued", 4, {"queued_id": "s", "content": [{"text": "steer"}], "mode": "steer"}, "t1"),
+        ev("input.consumed", 5, {"queued_id": "s", "turn": "t1", "mode": "steer"}, "t1"),
+        ev("turn.cancelled", 6, {"reason": "interrupted"}, "t1"),
+        ev("input.queued", 7, {"queued_id": "i", "content": [{"text": "interrupt"}], "mode": "interrupt"}, "t2"),
+        ev("turn.started", 8, {}, "t2"),
+        ev("input.consumed", 9, {"queued_id": "i", "turn": "t2"}, "t2"),
+        ev("turn.completed", 10, {"stop_reason": "end_turn"}, "t2"),
+        ev("input.queued", 11, {"queued_id": "q", "content": [{"text": "queued"}]}, "t3"),
+        ev("turn.started", 12, {}, "t3"),
+        ev("input.consumed", 13, {"queued_id": "q", "turn": "t3"}, "t3"),
+    ]
+    expected = [("first", 1), ("steer", 0), ("interrupt", 2), ("queued", 3)]
+    state = initial_state("s")
+    live = []
+    for event in events:
+        state = apply(state, event)
+        live.append(state)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    def project_state(view):
+        controller = SimpleNamespace(view=view, session="s")
+        shell = ShellActions(controller)
+        shell.preferences.values["context_preview"] = False
+        return project(controller, 1, shell=shell, literal=False)
+
+    assert cards(project_state(state)) == expected
+    replay = apply_many(initial_state("s"), events)
+    assert cards(project_state(replay)) == expected, "live and replay agree"
+
+
+def test_turn_footer_starts_with_the_local_start_time(tmp_path, monkeypatch):
+    from datetime import datetime
+    turn = _turn(started_ts=1_759_000_000.0)
+    snapshot = _snapshot(tmp_path, monkeypatch, [turn], literal=False)
+    footer = next(b for b in snapshot["blocks"] if b["kind"] == "summary")["text"]
+    clock = datetime.fromtimestamp(1_759_000_000.0).strftime("%I:%M %p").lstrip("0")
+    assert footer.startswith(f"{clock} · ")

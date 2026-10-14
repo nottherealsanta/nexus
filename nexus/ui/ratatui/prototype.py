@@ -253,7 +253,19 @@ def _chip_operations(message, count):
     return operations[:count] + [{"kind": "message_page", "id": message.id}] * (count - len(operations))
 
 
-def _project_turn(turn, shell, agents=None, literal=True):
+def _turn_number(turns, turn):
+    """``#N`` of ``turn``: user-initiated turns before it plus one (0 for shell or prompt-less turns)."""
+    from ...ui_support.timeline import _has_message_content
+    ordinal = 0
+    for item in turns:
+        if item.kind != "shell" and any(m.role == "user" and _has_message_content(m) for m in item.messages):
+            ordinal += 1
+        if item.id == turn.id:
+            return ordinal if item.kind != "shell" and any(m.role == "user" and _has_message_content(m) for m in item.messages) else 0
+    return 0
+
+
+def _project_turn(turn, shell, agents=None, literal=True, number=None):
     """Blocks of one turn in canonical transcript order and spacing.
 
     Each block carries ``gap`` (blank rows before it, after margin collapsing),
@@ -263,11 +275,15 @@ def _project_turn(turn, shell, agents=None, literal=True):
         _has_message_content, _literal, submitted_attachment_summary,
         thought_title, tool_status, turn_footer_text,
         _turn_duration, _text)
+    if number is None:  # streamed tail / child page: derive it from the view's turn order
+        turns = getattr(getattr(getattr(shell, "controller", None), "view", None), "turns", None) or []
+        number = _turn_number(turns, turn)
     local_ui = bool(shell and getattr(shell, "local_transcript", False))
     collapsed = bool(not local_ui and shell and turn.id in shell.collapsed_turns)
     lines = [f"\nTurn {turn.index} · {turn.phase}"] if literal else []
     emit = lines.append if literal else (lambda _line: None)
     entries = []  # (seq, rank, block, top_margin, bottom_margin)
+    numbered = False  # only the turn's first user card carries #N; a steer folded in does not
     for retry in turn.retries:
         if retry.reason == "provider_overloaded":
             entries.append((retry.event_seq, 1, {"id": f"{turn.id}:retry:{retry.event_seq}", "kind": "literal",
@@ -283,9 +299,10 @@ def _project_turn(turn, shell, agents=None, literal=True):
             if collapsed and rest:
                 first, rest = first + " …", ""
             block = {"id": message.id + ":user", "kind": "user", "title": first, "text": rest,
-                     "number": turn.index + 1, "collapsed": collapsed,
+                     "number": 0 if numbered else number, "collapsed": collapsed,
                      "chips": [] if collapsed else chips,
                      "operation": {"kind": "turn_toggle", "id": turn.id}}
+            numbered = True
             if (message.origin or {}).get("kind") == "live":
                 block["status"] = "live"  # drawn as "via voice" beside the turn number
             if chips and not collapsed:
@@ -763,17 +780,23 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
         while live_cards and live_cards[0][0] <= moment:
             blocks.append({**live_cards.pop(0)[1], "gap": 1})
 
+    ordinal = 0  # user-initiated turns so far (shell turns and turns without a prompt don't count)
     for turn in () if on_agent_page else view.turns:
+        number = 0
+        from ...ui_support.timeline import _has_message_content
+        if turn.kind != "shell" and any(m.role == "user" and _has_message_content(m) for m in turn.messages):
+            ordinal += 1
+            number = ordinal
         cards_before(turn.started_ts if turn.started_ts is not None else float("inf"))
         turn_flags = (*flags, tuple((tool.call_id, tuple(dependencies.get(tool.call_id, ())),
                                     tuple(id(view.agents.get(child)) for child in tool.child_agent_ids))
-                                   for tool in turn.tools if tool.child_agent_ids or tool.call_id in dependencies))
+                                   for tool in turn.tools if tool.child_agent_ids or tool.call_id in dependencies), number)
         cache_key = f"{getattr(controller, 'session', view.session_id)}\x00{turn.id}"
         cached = shell.turn_cache.get(cache_key) if shell else None
         if cached and cached[0] is turn and cached[1] == turn_flags:
             turn_lines, turn_blocks = cached[2], cached[3]
         else:
-            turn_lines, turn_blocks = _guarded(failures, f"Turn {turn.id}", lambda: _project_turn(turn, shell, view.agents, literal),
+            turn_lines, turn_blocks = _guarded(failures, f"Turn {turn.id}", lambda: _project_turn(turn, shell, view.agents, literal, number),
                                                ([], [{"id": turn.id, "title": "Turn", "text": "This turn could not be rendered", "kind": "literal"}]))
             if blocks and turn_blocks and turn_blocks[0].get("gap", 0) < 1:
                 first = {**turn_blocks[0], "gap": 1}

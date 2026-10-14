@@ -1,6 +1,7 @@
 """Pure formatting and filtering for reducer-backed conversation timelines."""
 from __future__ import annotations
 
+from datetime import datetime
 import json
 import math
 import re
@@ -719,6 +720,17 @@ def _turn_summary(turn: TurnView) -> str:
     return "  ·  ".join(parts)
 
 
+def _turn_clock(turn: TurnView) -> str:
+    """The turn's start time in local short form (``1:04 PM``); empty when unknown."""
+    ts = turn.user_ts if turn.user_ts is not None else turn.started_ts
+    if not isinstance(ts, (int, float)) or isinstance(ts, bool) or not math.isfinite(ts) or ts <= 0:
+        return ""
+    try:
+        return datetime.fromtimestamp(ts).strftime("%I:%M %p").lstrip("0")
+    except (OverflowError, OSError, ValueError):
+        return ""
+
+
 def turn_footer_text(turn: TurnView) -> str:
     """Plain right-aligned stats for a completed turn (model, time, tokens, cache, reasoning)."""
     from .context import _compact_tokens
@@ -735,7 +747,7 @@ def turn_footer_text(turn: TurnView) -> str:
     # A configured limit ended the turn, not the model: say so, or the turn
     # looks like it simply stopped after its last tool result.
     stopped = _LIMIT_STOPS.get(turn.stop_reason or "", "") if turn.phase == "completed" else ""
-    return " · ".join(part for part in (stopped, model if model != "unknown" else "", _turn_duration(turn) or "", tokens, cached, reasoning) if part)
+    return " · ".join(part for part in (_turn_clock(turn), stopped, model if model != "unknown" else "", _turn_duration(turn) or "", tokens, cached, reasoning) if part)
 
 
 _LIMIT_STOPS = {
