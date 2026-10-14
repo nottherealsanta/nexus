@@ -18,7 +18,7 @@ def test_projection_preserves_tool_fields_and_escapes_controls():
     assert snapshot["revision"] == 3
     assert "sample.py" in text
     assert "entire output" in text
-    assert "PARAMETERS" in text
+    assert "Parameters" in text
     assert "\x1b" not in text
 
 

@@ -60,6 +60,9 @@ fn quiet(t: &Theme) -> Style {
 fn success(t: &Theme) -> Style {
     Style::default().fg(t.success)
 }
+fn purple(t: &Theme) -> Style {
+    Style::default().fg(t.purple)
+}
 
 /// Draw spans so they end at `right` (exclusive), registering their hit parts.
 fn put_spans_right(buf: &mut Buffer, ui: &mut Ui, id: &str, right: u16, y: u16, spans: &[Span], bg: Color) {
@@ -134,7 +137,7 @@ fn desc_lines(desc: &str, w: u16) -> Vec<String> {
     }
 }
 
-/// Create-style buttons read as `+ New file` in green.
+/// Create-style buttons read as `+ New file` in purple.
 fn is_create(label: &str) -> bool {
     label.starts_with('+') || label.starts_with("New ") || label.starts_with("Add ")
 }
@@ -142,7 +145,7 @@ fn is_create(label: &str) -> bool {
 fn button_spans(t: &Theme, label: &str, variant: &str) -> Vec<Span> {
     if is_create(label) {
         let l = if label.starts_with('+') { label.to_string() } else { format!("+ {label}") };
-        vec![sp(l, success(t))]
+        vec![sp(l, purple(t))]
     } else if variant == "danger" {
         vec![sp(format!("{label} ›"), Style::default().fg(t.error))]
     } else {
@@ -400,7 +403,7 @@ pub fn ordered(buf: &mut Buffer, ui: &mut Ui, f: &mut Flow, o: &Ordered) {
     let label = if o.add_label.is_empty() { "Add…" } else { o.add_label.as_str() };
     let label = if label.starts_with('+') { label.to_string() } else { format!("+ {label}") };
     let weight = if resp.focused { Modifier::BOLD } else { Modifier::empty() };
-    put(buf, f.x + 3, f.y, &label, success(t).bg(st.bg.unwrap_or(t.bg)).add_modifier(weight), f.w.saturating_sub(3));
+    put(buf, f.x + 3, f.y, &label, purple(t).bg(st.bg.unwrap_or(t.bg)).add_modifier(weight), f.w.saturating_sub(3));
     f.y += 1;
     // Effort pickers register after the list (focus order is unchanged) and draw at their row.
     for (i, row) in o.controls.iter().take(o.items.len()).enumerate() {

@@ -9,7 +9,7 @@ def test_search_queries_and_schema_rows():
     tool = ToolCallView(name="McpSearch", result=[{"type": "text", "text":
         'Query 1 · server fs · read · 1 of 2 tools\n1. fs/read (read only)\n   Description: Read a file\n   Input schema: {"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}\nQuery 2 · server missing · x · Unknown MCP server'}])
     text = sections_to_text(tool_detail_sections(tool))
-    assert "QUERY 1" in text and "QUERY 2" in text
+    assert "Query 1" in text and "Query 2" in text
     assert "Input schema.properties.path.type: string" in text
     assert '{"type"' not in text
 

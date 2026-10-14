@@ -266,7 +266,7 @@ def test_local_disclosure_without_python_reply():
         probe.keys(b"\t\r")
         time.sleep(.1)
         assert not probe.read_actions()
-        assert re.search(r"BASH\s+ls", _plain(probe.output))
+        assert re.search(r"Bash\s+ls", _plain(probe.output))
         probe.keys(b"\t\r")
         time.sleep(.1)
         assert not probe.read_actions()

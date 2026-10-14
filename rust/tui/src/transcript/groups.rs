@@ -3,11 +3,11 @@
 //! Header: `▸ Ran 2 commands, Read 3 files · 1.8s · 1 failed`. While anything runs the
 //! header shows the present-tense label brightly (`Running 1 command`) with the live
 //! elapsed time; finished, the past-tense label is subdued, the seconds are quiet and the
-//! failures are red. Folded, only a live tail (`╰─ ⠋ READ path`) and failed members show
+//! failures are red. Folded, only a live tail (`╰─ ⠋ Read path`) and failed members show
 //! under the header, so a failure is never folded away.
 //!
-//! An expanded member is a small box: `┌ READ path`, the relevant rows or reasoning behind
-//! a `│` rail, then `╰ 0.8s` in italics. A collapsed member is one row, `▸ READ path  0.8s`.
+//! An expanded member is a small box: `┌ Read path`, the relevant rows or reasoning behind
+//! a `│` rail, then `╰ 0.8s` in italics. A collapsed member is one row, `▸ Read path  0.8s`.
 use super::{look, thought, tools, truncate, Rows};
 use crate::{bridge::Content, render::Palette};
 use ratatui::{
@@ -16,7 +16,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-/// `READ` and `rest` of a member row; a thought is `THOUGHT` and `for 3.2s`.
+/// `Read` and `rest` of a member row; a thought is `Thought` and `for 3.2s`.
 fn verb_rest(m: &Content) -> (String, String) {
     let heading = m.heading.trim_start_matches(['→', ' ']);
     let (verb, rest) = if m.kind == "thought" {
@@ -27,7 +27,7 @@ fn verb_rest(m: &Content) -> (String, String) {
         heading.split_once(' ').unwrap_or((heading, ""))
     };
     let rest = tools::relevant(rest.lines().next().unwrap_or(""));
-    (verb.to_uppercase(), rest.to_string())
+    (super::capitalized(verb), rest.to_string())
 }
 
 /// Seconds of a finished member, from the projection's `elapsed_ms`.
@@ -132,7 +132,7 @@ fn member(out: &mut Rows, m: &Content, width: usize, p: &Palette) {
     }
 }
 
-/// The live member under a folded, running header: `╰─ ⠋ READ path`.
+/// The live member under a folded, running header: `╰─ ⠋ Read path`.
 fn tail(out: &mut Rows, m: &Content, width: usize, p: &Palette) {
     let glyphs = look::glyphs();
     let (verb, rest) = verb_rest(m);
@@ -335,8 +335,8 @@ mod tests {
         draw(&mut rows, &block, 80, &p, 0);
         let lines = plain(&rows);
         assert_eq!(lines.len(), 3, "{lines:#?}");
-        assert_eq!(lines[1], "    ✗ READ src/main.rs  0.8s");
-        assert_eq!(lines[2], format!("    ╰─ {} READ src/main.rs", look::SLOT));
+        assert_eq!(lines[1], "    ✗ Read src/main.rs  0.8s");
+        assert_eq!(lines[2], format!("    ╰─ {} Read src/main.rs", look::SLOT));
         assert_eq!(rows[1].0.spans[1].style.fg, Some(p.error), "red mark");
         assert_eq!(rows[1].0.spans[3].style.fg, Some(p.error));
         assert!(look::is_live(&rows[2].0.spans[5]));
@@ -365,11 +365,11 @@ mod tests {
             plain(&rows),
             [
                 "    ▾ Ran 2 commands, Read 3 files · 1.8s",
-                "    ┌ READ src/main.rs",
+                "    ┌ Read src/main.rs",
                 "    │ 1  fn main() {}",
                 "    │ … 112 lines",
                 "    ╰ 0.8s",
-                "    ▸ READ src/main.rs  0.8s",
+                "    ▸ Read src/main.rs  0.8s",
             ]
         );
         let last = rows[4].0.spans.last().unwrap();
@@ -393,7 +393,7 @@ mod tests {
         draw(&mut rows, &block, 80, &p, 0);
         let lines = plain(&rows);
         assert_eq!(lines.iter().filter(|l| l.contains('✗')).count(), 1);
-        assert_eq!(lines.iter().filter(|l| l.contains("READ")).count(), 2);
+        assert_eq!(lines.iter().skip(1).filter(|l| l.contains("Read")).count(), 2, "{lines:?}");
     }
 
     #[test]
@@ -413,7 +413,7 @@ mod tests {
         let mut rows = Vec::new();
         draw(&mut rows, &block, 80, &p, 0);
         let lines = plain(&rows);
-        assert_eq!(lines[1], "    ┌ THOUGHT for 1.1s");
+        assert_eq!(lines[1], "    ┌ Thought for 1.1s");
         assert_eq!(lines[2], "    │ Plan");
         assert_eq!(lines[3], "    │ read first");
         assert_eq!(lines[4], "    ╰ 1.1s");
@@ -433,7 +433,7 @@ mod tests {
             assert!(rows.iter().all(|(row, _)| row.width() <= width), "{width}: {lines:?}");
             assert!(lines[0].width() <= width);
             assert_eq!(rows[0].0.spans.last().unwrap().style.fg, Some(p.error));
-            assert!(lines.iter().skip(1).any(|l| l.contains("READ")), "{width}: {lines:?}");
+            assert!(lines.iter().skip(1).any(|l| l.contains("Read")), "{width}: {lines:?}");
         }
         let mut rows = Vec::new();
         draw(&mut rows, &block, 50, &p, 0);

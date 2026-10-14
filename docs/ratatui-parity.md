@@ -1312,3 +1312,7 @@ disabled rows and modals suppress it. The Sessions dashboard invalidates its
 in-flight work when a replacement overlay closes. The 24-capture matrix has had
 pixel review (PTY → xterm captures, not OS screenshots). Still open: the web check
 failure, and timings for a new animate-only idle scenario.
+
+## Sentence-case tool verbs and purple accents
+
+Tool verbs in verb groups and tool-detail section headings are sentence case (`Read`, `Bash`, `Parameters`), never uppercase, and the Sessions dashboard and Settings create/primary accents (`+ New Agent`, `Worktree`, `+ New file`, `+ Add model…`) use the palette `purple`; green stays reserved for status ("in use", "connected").

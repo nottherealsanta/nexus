@@ -228,11 +228,16 @@ def tool_detail_sections(tool: ToolCallView) -> list[DetailSection]:
     return sections
 
 
+def _capitalized(text: str) -> str:
+    """Upper-case only the first character; the rest of a section title stays as given."""
+    return text[:1].upper() + text[1:]
+
+
 def sections_to_text(sections: Sequence[DetailSection]) -> str:
     """Plain-text form of ``sections`` (what tests and logs read)."""
     parts: list[str] = []
     for section in sections:
-        lines = [section.title.upper()]
+        lines = [_capitalized(section.title)]
         for row in section.rows:
             pad = "  " * (row.indent + 1)
             if row.header:
@@ -264,7 +269,7 @@ def styled_lines(sections: Sequence[DetailSection]) -> tuple[list[str], list[str
     for index, section in enumerate(sections):
         if index:
             put("")
-        put(section.title.upper(), "title")
+        put(_capitalized(section.title), "title")
         for row in section.rows:
             pad = "  " * (row.indent + 1)
             if row.header:

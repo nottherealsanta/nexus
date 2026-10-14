@@ -29,7 +29,6 @@ pub struct Colors {
     pub border_strong: Color,
     pub purple: Color,
     pub warning: Color,
-    pub success: Color,
     /// Renders the preview's Markdown tail at a width; plain wrapped text without it.
     pub markdown: Option<MarkdownFn>,
 }
@@ -47,7 +46,6 @@ impl Default for Colors {
             border_strong: Color::Gray,
             purple: Color::Magenta,
             warning: Color::Yellow,
-            success: Color::Green,
             markdown: None,
         }
     }
@@ -348,7 +346,7 @@ pub fn draw(
         if !right.is_empty() {
             right.push(Span::styled(" | ", quiet));
         }
-        right.push(Span::styled("Worktree", Style::default().fg(colors.success)));
+        right.push(Span::styled("Worktree", Style::default().fg(colors.purple)));
         if work_key {
             right.push(Span::styled(" Ctrl+w", quiet));
         }
@@ -360,7 +358,7 @@ pub fn draw(
     if show_new {
         actions.push(Span::styled(
             new_label,
-            Style::default().fg(colors.success).add_modifier(Modifier::BOLD),
+            Style::default().fg(colors.purple).add_modifier(Modifier::BOLD),
         ));
     }
     let actions_w = spans_width(&actions);

@@ -1434,7 +1434,6 @@ pub fn draw(
                 border_strong: p.border_strong,
                 purple: p.purple,
                 warning: p.warning,
-                success: p.success,
                 markdown: Some(Box::new({
                     let p = p.clone();
                     move |text, width| {

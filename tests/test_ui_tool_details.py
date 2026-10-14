@@ -15,7 +15,7 @@ def test_parameters_flatten_nested_values_and_miss_nothing():
     text = sections_to_text(tool_detail_sections(tool))
     for needle in ("path: a.py", "edits[0]\n    old:\n      x\n      y\n    new: z", "flags: {}", "n: 3", "on: false", "none: null"):
         assert needle in text, needle
-    assert '"' not in text.split("PARAMETERS")[1]
+    assert '"' not in text.split("Parameters")[1]
 
 
 def test_result_blocks_error_metrics_progress_and_overview_are_all_present():
