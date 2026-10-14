@@ -13,3 +13,10 @@ Nexus does not use OpenCode's GitHub OAuth app. Copilot request headers
 (``x-initiator``, ``copilot-vision-request``, ``openai-intent``) follow the
 public Copilot client convention; they are not an authorization to sign in as
 OpenCode.
+
+Nexus xAI SuperGrok device sign-in constants (issuer, OAuth client id, scope,
+grant types and polling rules) are adapted from anomalyco/opencode,
+packages/core/src/plugin/provider/xai.ts,
+commit 6a7cedcbf1823eeb1c8dfc4baf5a7951854f578b (MIT, Copyright (c) Anomaly
+Innovations Inc.). Nexus sends its own referrer and user agent; it is not an
+authorization to sign in as OpenCode.

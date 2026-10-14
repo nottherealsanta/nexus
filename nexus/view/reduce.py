@@ -1466,6 +1466,9 @@ def _on_agent_completed(state: ConversationView, event: Event, data: Mapping[str
         dropped_tools=_str_list(data.get("dropped_tools")) or agent.dropped_tools,
         clamped=bool(data.get("clamped")) if "clamped" in data else agent.clamped,
         usage_unknown=bool(data.get("usage_unknown")) or agent.usage_unknown,
+        # The runner's final-model disclosure backs up a child whose own
+        # model events were never relayed; a seen start is never replaced.
+        resolved_model=agent.resolved_model or _qualified_model(None, data.get("resolved_model")),
         body=body,
         completed_ts=event.ts,
     )
@@ -1490,6 +1493,28 @@ def _on_agent_clamped(state: ConversationView, event: Event, data: Mapping[str, 
     agents[agent_id] = agent
     return replace(state, agents=agents, agent_order=list(state.agent_order))
 
+
+def _qualified_model(provider: object, model: object) -> str | None:
+    """``provider/model`` without doubling an already-qualified model id."""
+    name = model.strip() if isinstance(model, str) else ""
+    if not name:
+        return None
+    prefix = provider.strip() if isinstance(provider, str) else ""
+    if not prefix or name.startswith(f"{prefix}/"):
+        return name
+    return f"{prefix}/{name}"
+
+def _resolved_model(agent: AgentView, event: Event, *, applied: bool) -> str | None:
+    """The agent's actual model after a routed child event.
+
+    Only a ``model.started``/``external.started`` the child body really applied
+    (not a replayed, already-seen seq) moves it; the latest one wins. The
+    spawn reference ``AgentView.model`` is never consulted.
+    """
+    if applied and event.type in ("model.started", "external.started"):
+        data = event.data if isinstance(event.data, Mapping) else {}
+        return _qualified_model(data.get("provider"), data.get("model")) or agent.resolved_model
+    return agent.resolved_model
 
 def _find_agent(state: ConversationView, agent_id: str) -> AgentView | None:
     direct = state.agents.get(agent_id)
@@ -1524,7 +1549,11 @@ def _update_agent_body(
         else:
             body = apply(owner.body, body_event)
         agents = dict(state.agents)
-        agents[agent_id] = replace(owner, body=body)
+        agents[agent_id] = replace(
+            owner,
+            body=body,
+            resolved_model=_resolved_model(owner, event, applied=body is not owner.body),
+        )
         return replace(state, agents=agents)
 
     for parent_id, parent in state.agents.items():
@@ -1581,6 +1610,7 @@ def _apply_agent(
     agent = replace(
         agent,
         body=body,
+        resolved_model=_resolved_model(agent, event, applied=body is not agent.body),
         parent_session=_as_str(meta.get("parent_session")) or agent.parent_session,
         parent_agent_id=_as_str(meta.get("parent_agent_id")) or agent.parent_agent_id,
         parent_call_id=_as_str(meta.get("parent_call_id")) or agent.parent_call_id,

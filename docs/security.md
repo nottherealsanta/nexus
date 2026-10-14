@@ -7,6 +7,9 @@ Do not weaken any boundary below to make a feature easier.
 
 ## Boundaries
 
+The optional device gateway has a separate trust boundary; see [Gateway](gateway.md)
+for setup and usage.
+
 | Boundary | Enforcement | Code |
 | --- | --- | --- |
 | Loopback only | UDS `0600` in a `0700` dir; HTTP binds `127.0.0.1` (non-loopback refused at construction) | `host/daemon.py`, `host/transports/http_sse.py` |
@@ -21,13 +24,27 @@ Do not weaken any boundary below to make a feature easier.
 | Untrusted data | MCP descriptions/results, web pages and search results are wrapped with no-authority delimiters and sanitised; results' links are never fetched | `mcp/bridge.py`, `tools/builtin/webfetch.py`, `websearch.py` |
 | Outbound network | public-address-only, resolve once and pin the vetted address, validated redirects (≤ 5), size/time caps, rate limit | `net/outbound.py`, `net/local_search.py` |
 | Model catalogue | only descriptive fields read; cannot set endpoints or credentials | `model/registry.py` |
+| xAI SuperGrok token | `auth = "xai_oauth"` only on `[providers.xai]` with no `api_key` and no `base_url` but `https://api.x.ai/v1`; the device verification URL must be HTTPS on `x.ai`; only the refresh token is stored, sign-in responses are capped at 64 KiB, and errors never carry a token | `auth/xai.py`, `config/schema.py` |
 | Provider URLs | http(s) only; plain http only for loopback; userinfo always redacted | `config/schema.py` |
 | Extension code | quarantine validates (syntax, import in isolated subprocess with timeout, hash re-check); **does not sandbox** | `ext/quarantine.py` |
 | External Claude Code worker | Nexus does **not** mediate Claude's tools; it bounds launch authority only ([below](#external-claude-code-worker)) | `agents/claude_code_worker.py` |
+| External Antigravity worker | Nexus does **not** mediate agy's tools, settings, MCP servers or plugins; no `PathGuard`; requires an explicit `worker_inherits_agy_settings = true` ([below](#external-antigravity-worker)) | `agents/antigravity_worker.py` |
 | Worktrees | authenticated records, service-root lock, no shell for children, integration applies frozen bytes only to a clean parent | `agents/worktrees*.py` |
 | Settings agent | blocked from `credentials.json`, sessions, cache, daemon files, trash, `nexus.db` | `tools/permissions.py`, `host_support/settings_scope.py` |
 | GPT Live (experimental) | the ChatGPT OAuth bearer and account id exist only in `live/transport.py` (headers per request, scrubbed with `redact_secrets` plus the literal values from every error, raw dev log and result); `Live*` results carry the SDP answer and state only; the audio helper sees SDP, never a credential; the voice model's delegations are untrusted input that go through the normal permission engine; **approvals are resolved only on screen, never by audio**; the signaling and sideband hosts are fixed OpenAI hosts, not user URLs, and (like provider calls) bypass `net/outbound.py`; no raw audio is stored | `live/`, `host_support/live.py` |
 | State at rest | `nexus.db` `0600` in a `0700` dir; Settings redacts secret-looking fields | `session/db.py`, `settings_inventory.py` |
+
+### Gateway
+
+The optional gateway is separate and opt-in. It binds loopback only; remote
+access requires an operator-managed private HTTPS proxy. Do not expose it
+publicly or use Tailscale Funnel. Pairing codes expire after 120 seconds by
+default and are stored hashed. Device bearer tokens are revocable, scoped and
+expire after seven days by default; the registry is not stored in the OS
+Keychain. A bearer token grants its assigned scopes and workspace access. The
+gateway does not sandbox host processes: access to allowed workspaces is bounded
+by the host process's OS permissions. Trust the gateway machine and grant only
+the required scopes and roots. See [gateway setup](gateway.md).
 
 ## External Claude Code worker
 
@@ -66,6 +83,41 @@ Residual risks: the file-change snapshot is workspace-wide, and an approved
 Claude tool can touch anything its own policy allows. Prompt and permission
 wording matched by the attention detection is not verified against every Claude
 release. The trust prompt and a read-only `Haiku` run were verified live once (2026-10-13); permission prompts were not.
+
+## External Antigravity worker
+
+An explicit `antigravity/<model>` subagent runs the `agy` CLI headless
+([agents.md](agents.md#external-antigravity-workers)). Like the Claude Code worker
+this is an authority boundary, not a sandbox, and every result says so. It is
+implemented and tested offline only: no real model turn was run, no credentials
+were used, and the stream schema is not live-verified.
+
+Not enforced by Nexus: tool grants, `[permissions]` rules, `PathGuard` write and
+read-deny roots, the `Task` tool profile, and budgets. agy applies its **own** user
+and global settings, MCP servers and plugins, which is why the operator must set
+`worker_inherits_agy_settings = true`; without it every assignment is refused. No
+sandbox is requested (`--sandbox` is never passed), and agy may edit files or run
+commands under its own permission mode (`accept-edits` by default, or `plan`).
+
+Enforced at launch (refuse, never widen or ignore): read-only roles, tool lists,
+MCP config, setting sources, `worker_restricted`, worktree children, and token or
+cost budgets are all refused with `ConfigError`, because agy's `--mode plan` is not
+verified to prevent writes and Nexus cannot restrict agy's tools. Only
+`accept-edits` and `plan` are ever passed; bypass or "always proceed" flags never
+are, and an `init` reporting `always-proceed` (for example from agy's global
+settings) ends the run as refused. The prompt travels on stdin, never argv, and
+Nexus writes nothing else, so it never answers a login, trust or permission prompt:
+those end the run as `needs_attention`. EOF, a non-zero exit or an unknown terminal
+status is never success. The child environment is an allowlist, so provider API keys
+are not inherited; the child leads its own process group, which is terminated on
+completion, cancel and deadline; stderr and tool text are ANSI-stripped, redacted
+and bounded; and file changes are measured by Nexus, not taken from agy's report.
+
+Credentials: agy owns its login and credential store. Nexus never signs in, reads
+tokens, stores them or signs out; `agy` exposes no token-free sign-in check, so
+Settings shows the CLI as present but sign-in as unverified. Residual risks: the
+file-change snapshot is workspace-wide, anything agy's own policy allows can touch
+anything, and attention detection wording is unverified against real agy output.
 
 ## GPT Live: data sent to OpenAI and consent
 

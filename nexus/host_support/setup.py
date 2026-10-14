@@ -23,9 +23,9 @@ from ..model.registry import DEFAULT_CATALOGUE_URL, ModelInfo, ModelRegistry
 from . import provider_auth, settings_inventory
 from .settings_scope import settings_target
 
-_PROVIDERS = ("codex", "github-copilot", "opencode-go", "openai", "anthropic", "claude-agent", "google", "ollama")
+_PROVIDERS = ("codex", "github-copilot", "opencode-go", "openai", "anthropic", "claude-agent", "google", "xai", "ollama")
 #: Signed in from Settings → Providers; credentials live in the private credential file.
-_SIGNED_IN = ("codex", "github-copilot", "opencode-go")
+_SIGNED_IN = ("codex", "github-copilot", "opencode-go", "xai")
 _ENV_NAMES = {
     "openai": ("OPENAI_API_KEY",),
     "anthropic": ("ANTHROPIC_API_KEY",),
@@ -48,6 +48,7 @@ _PROVIDER_INFO = {
         "Google Gemini",
         "Set GEMINI_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY in the daemon environment.",
     ),
+    "xai": ("xAI (SuperGrok)", "Sign in with your SuperGrok subscription in Settings → Providers."),
     "ollama": ("Ollama", "Local provider; availability is not checked. Install and run Ollama locally."),
 }
 #: Setup providers whose models.dev entry has another id.

@@ -538,7 +538,43 @@ def _task_phrase(tool: ToolCallView, agent: AgentView | None) -> str:
     return ""
 
 
-def _task_header(tool: ToolCallView, agent: AgentView | None, spinner_index: int) -> tuple[str, bool]:
+def agent_actual_model(agent: AgentView) -> str | None:
+    """The latest concrete ``provider/model`` the subagent actually ran on.
+
+    ``resolved_model`` is reducer-owned; older views fall back to the newest
+    assistant message metadata. The spawn reference (``agent.model``) and the
+    tier are never reported as the actual model.
+    """
+    resolved = getattr(agent, "resolved_model", None)
+    if isinstance(resolved, str) and resolved.strip():
+        return resolved
+    for turn in reversed(agent.body.turns):
+        for message in reversed(turn.messages):
+            # A provider alone is not a concrete model; keep looking.
+            if message.role != "assistant" or not message.model:
+                continue
+            if message.provider and "/" not in message.model:
+                return f"{message.provider}/{message.model}"
+            return message.model
+    return None
+
+
+def agent_model_label(agent: AgentView | None) -> str:
+    """``tier fast · openai/gpt-x``: explicit tier plus the concrete model."""
+    if agent is None:
+        return "tier unknown · model pending"
+    tier = _literal(agent.tier or agent.requested_tier or "unknown", 24)
+    actual = agent_actual_model(agent)
+    if actual:
+        return f"tier {tier} · {_literal(actual, 120)}"
+    requested = agent.model if isinstance(agent.model, str) and "/" in agent.model else None
+    state = "model pending" if agent.status in {"spawned", "running"} else "model unavailable"
+    if requested:
+        state += f" (requested {_literal(requested, 120)})"
+    return f"tier {tier} · {state}"
+
+
+def _task_header(tool: ToolCallView, agent: AgentView | None, spinner_index: int, *, with_model: bool = True) -> tuple[str, bool]:
     marker = tool_status(tool)
     kind = (
         agent.type
@@ -552,7 +588,8 @@ def _task_header(tool: ToolCallView, agent: AgentView | None, spinner_index: int
     phrase = _task_phrase(tool, agent) or "completed"
     spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
     mark = spinner[spinner_index] if running else "·"
-    return f"{mark} {kind} · {phrase}", running
+    model = f" · {agent_model_label(agent)}" if with_model else ""
+    return f"{mark} {kind} · {phrase}{model}", running
 
 
 def _task_child_activity(agent: AgentView) -> str:
@@ -591,7 +628,7 @@ def _task_metrics(tool: ToolCallView, agent: AgentView | None, running: bool) ->
 def _task_child_details(agents: tuple[AgentView, ...]) -> list[str]:
     return [
         f"{_text(agent.type or agent.id, 48)} · {_text(agent.task or agent.description, 96)}"
-        f" · {_text(agent.status, 24)} · {_agent_metrics(agent)}\n  {_latest_activity(agent)}"
+        f" · {_text(agent.status, 24)} · {agent_model_label(agent)} · {_agent_metrics(agent)}\n  {_latest_activity(agent)}"
         for agent in agents
     ]
 
@@ -606,7 +643,7 @@ def _agent_link_label(agent: AgentView) -> str:
         activity += f" · {tool_status(tool)}"
     return (
         f"{_text(agent.type or agent.id, 36)} · "
-        f"{_text(agent.status, 18)} · {_agent_metrics(agent)} · {activity}"
+        f"{_text(agent.status, 18)} · {agent_model_label(agent)} · {_agent_metrics(agent)} · {activity}"
     )
 
 
@@ -760,6 +797,8 @@ __all__ = [
     "DiffSection",
     "_agent_link_label",
     "_agent_metrics",
+    "agent_actual_model",
+    "agent_model_label",
     "_has_message_content",
     "_latest_activity",
     "_literal",

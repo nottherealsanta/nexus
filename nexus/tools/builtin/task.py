@@ -320,6 +320,12 @@ def _to_result(outcome: object) -> ToolExecutionResult:
     requested_tier = getattr(outcome, "requested_tier", None)
     if isinstance(requested_tier, str):
         metrics["requested_tier"] = requested_tier
+    actual_model = getattr(outcome, "actual_model", None)
+    metrics["actual_model"] = actual_model if isinstance(actual_model, str) else None
+    models = getattr(outcome, "models", None)
+    metrics["actual_models"] = (
+        [str(model) for model in models] if isinstance(models, (list, tuple)) else []
+    )
     worktree = getattr(outcome, "worktree", None)
     if isinstance(worktree, Mapping):
         metrics["worktree"] = dict(worktree)

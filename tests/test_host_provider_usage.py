@@ -135,6 +135,7 @@ def _runtime(**overrides):
         _copilot_auth_factory=lambda **_: Manager({"authorization": "Bearer gho_token", "copilot-integration-id": "x"}),
         _api_key_auth_factory=lambda provider, **_: Disconnected(),
         _claude_auth_factory=lambda **_: Claude(),
+        _xai_auth_factory=lambda **_: Disconnected(),
     )
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -155,7 +156,7 @@ async def test_providers_usage_fetches_connected_providers_concurrently():
         result = await providers_usage(_runtime(), client)
     rows = {row["id"]: row for row in result["providers"]}
     assert list(rows) == ["codex", "claude-agent", "github-copilot"]
-    assert result["not_connected"] == ["OpenCode Go"]
+    assert result["not_connected"] == ["OpenCode Go", "xAI"]
     assert rows["claude-agent"]["plan"] == "Max" and rows["claude-agent"]["source"] == "claude CLI · /usage"
     assert rows["github-copilot"]["windows"][0]["detail"] == "14,979 of 15,000 left"
     assert sorted(seen) == [("api.github.com", "/copilot_internal/user", "Bearer gho_token"),
@@ -174,7 +175,7 @@ async def test_one_failing_provider_is_a_redacted_row_error():
     rows = {row["id"]: row for row in result["providers"]}
     assert rows["codex"]["error"] == "HTTP 401: sign in again in Settings → Providers"
     assert "supersecret" not in rows["github-copilot"]["error"]
-    assert result["not_connected"] == ["Claude", "OpenCode Go"]
+    assert result["not_connected"] == ["Claude", "OpenCode Go", "xAI"]
 
 
 async def test_opencode_go_reads_with_the_stored_key():
@@ -241,3 +242,79 @@ async def test_cli_login_prints_url_reads_the_pasted_code_and_never_opens_a_brow
     await claude_agent_auth.login(cli, {"PATH": os.environ.get("PATH", "")}, on_url=on_url, code=lambda: code, cancel=asyncio.Event())
     assert urls == ["https://claude.com/cai/oauth/authorize?code=true"]
     assert record.read_text().strip() == "good-code|true"
+
+
+# -- xAI (SuperGrok) -------------------------------------------------------------------
+# Shapes follow CodexBar's GrokCreditsProxyFetcher and a live response (2026-10-14).
+
+XAI_NOW = 1_792_000_000.0  # inside the period below
+XAI_BILLING = {"config": {
+    "currentPeriod": {"type": "weekly", "start": "2026-10-14T01:39:48.866+00:00", "end": "2026-10-21T01:39:48.866+00:00"},
+    "billingPeriodStart": "2026-10-01T00:00:00+00:00", "billingPeriodEnd": "2026-11-01T00:00:00+00:00",
+    "creditUsagePercent": 37.5,
+    "productUsage": [{"product": "GrokBuild", "usagePercent": 30}, {"product": "GrokChat", "usagePercent": 7.5}, {"bad": 1}],
+    "prepaidBalance": {"val": 1446}, "isUnifiedBillingUser": True}}
+
+
+def test_parse_xai_uses_the_current_period_and_credit_percent():
+    from nexus.host_support.provider_usage import parse_xai
+
+    result = parse_xai(XAI_BILLING, "SuperGrok Lite", now=XAI_NOW)
+    [window] = result["windows"]
+    assert (window["label"], window["used_percent"], window["period_seconds"]) == ("Weekly", 37.5, 7 * 86_400)
+    assert window["resets_at"] == 1_792_546_788  # 2026-10-21T01:39:48Z, never the billing period's end
+    assert result["plan"] == "SuperGrok Lite"
+    assert result["notes"] == ["GrokBuild: 30% of credits", "GrokChat: 7.5% of credits", "Prepaid credits: $14.46"]
+
+
+def test_parse_xai_reads_an_omitted_zero_and_on_demand_fallback():
+    from nexus.host_support.provider_usage import parse_xai
+
+    config = {k: v for k, v in XAI_BILLING["config"].items() if k not in ("creditUsagePercent", "productUsage")}
+    config["prepaidBalance"] = {}
+    zero = parse_xai({"config": config}, now=XAI_NOW)
+    assert zero["windows"][0]["used_percent"] == 0.0
+    assert zero["windows"][0]["detail"] == "xAI omits a zero usage percent"
+    assert zero["plan"] == "SuperGrok" and zero["notes"] == ["Prepaid credits: $0.00"]
+    on_demand = parse_xai({"config": {**config, "onDemandCap": {"val": 2000}, "onDemandUsed": {"val": 500}}}, now=XAI_NOW)
+    assert on_demand["windows"][0]["used_percent"] == 25.0 and on_demand["windows"][0]["detail"] == ""
+    monthly = parse_xai({"config": {"billingPeriodStart": "2026-10-01T00:00:00Z", "billingPeriodEnd": "2026-11-01T00:00:00Z",
+                                    "creditUsagePercent": 10}}, now=XAI_NOW)
+    assert monthly["windows"][0]["label"] == "Monthly" and monthly["windows"][0]["period_seconds"] == 31 * 86_400
+    with pytest.raises(provider_usage.UsageError):
+        parse_xai({"config": {}})
+
+
+async def test_xai_usage_sends_the_supergrok_bearer_to_the_cli_proxy_only():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.host, request.url.path, request.headers.get("authorization"),
+                     request.headers.get("x-xai-token-auth")))
+        if request.url.path == "/v1/settings":
+            return httpx.Response(200, json={"subscription_tier_display": "SuperGrok Heavy"})
+        return httpx.Response(200, json=XAI_BILLING)
+
+    runtime = _runtime(_codex_auth_factory=lambda **_: Disconnected(), _copilot_auth_factory=lambda **_: Disconnected(),
+                       _claude_auth_factory=lambda **_: Disconnected(),
+                       _xai_auth_factory=lambda **_: Manager({"authorization": "Bearer sgk-access", "user-agent": "x"}))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await providers_usage(runtime, client)
+    [row] = result["providers"]
+    assert (row["id"], row["label"], row["plan"]) == ("xai", "xAI", "SuperGrok Heavy")
+    assert row["source"] == "cli-chat-proxy.grok.com · v1/billing"
+    assert sorted(seen) == [("cli-chat-proxy.grok.com", "/v1/billing", "Bearer sgk-access", "xai-grok-cli"),
+                            ("cli-chat-proxy.grok.com", "/v1/settings", "Bearer sgk-access", "xai-grok-cli")]
+    assert "sgk-access" not in json.dumps(result)
+
+
+async def test_xai_plan_failure_still_shows_usage():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500) if request.url.path == "/v1/settings" else httpx.Response(200, json=XAI_BILLING)
+
+    runtime = _runtime(_codex_auth_factory=lambda **_: Disconnected(), _copilot_auth_factory=lambda **_: Disconnected(),
+                       _claude_auth_factory=lambda **_: Disconnected(),
+                       _xai_auth_factory=lambda **_: Manager({"authorization": "Bearer sgk-access"}))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        [row] = (await providers_usage(runtime, client))["providers"]
+    assert row["plan"] == "SuperGrok" and row["windows"][0]["used_percent"] == 37.5 and not row["error"]

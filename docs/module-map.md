@@ -11,6 +11,7 @@ here, so add a row when you add a file.
 | Path | Contents |
 | --- | --- |
 | `nexus/` | the package (below) |
+| `nexus/gateway/` | opt-in loopback device gateway; module file map below |
 | `rust/desktop/` | GPUI desktop executable, native editor/transcript/panels, shared typed Settings renderer in `src/settings.rs`, declarative `src/keymap.rs`, GPT Live call bar and card in `src/live.rs`, bounded toast stack in `src/notice.rs`, turn minimap derivation in `src/minimap.rs`, bounded opt-in CPU timing in `src/trace.rs`, and visual fixtures ([desktop.md](desktop.md)) |
 | `rust/live/` | `nexus-live` helper for GPT Live calls: stdio JSONL (`src/protocol.rs`), call state machine (`src/app.rs`), webrtc-rs peer (`src/peer.rs`), Opus (`src/codec.rs`), rings/resampler/echo gate (`src/dsp.rs`), cpal or fake audio (`src/audio.rs`); protocol in `rust/live/README.md` |
 | `skills/gpui-nexus/` | version-aware GPUI implementation/design guidance, reviewed upstream references and licenses |
@@ -41,6 +42,20 @@ here, so add a row when you add a file.
 
 ## Python modules
 
+### `nexus/gateway/`
+
+| File | Purpose |
+| --- | --- |
+| `__init__.py` | Gateway package boundary |
+| `app.py` | Gateway routes, authentication and bridge orchestration |
+| `cli.py` | `python -m nexus gateway` command implementation |
+| `httpd.py` | Loopback HTTP server and request handling |
+| `policy.py` | Workspace and scope authorization policy |
+| `runner.py` | Local daemon web-launch ticket integration |
+| `sse.py` | Device event stream management |
+| `store.py` | Pairing code and device credential registry |
+| `upstream.py` | Host HTTP protocol bridge and origin validation |
+
 ### `nexus/`
 
 | File | Purpose |
@@ -63,6 +78,7 @@ here, so add a row when you add a file.
 | `model.py` | Subagent definitions: restricted `*.md` parsing and the immutable model |
 | `runner.py` | SubagentRunner: bounded, nested execution of subagent definitions |
 | `claude_code_worker.py` | External Claude Code worker: one interactive PTY session per assignment running Claude's own tools under an explicit policy; hook + JSONL transcript readback, attention states, file-change verification |
+| `antigravity_worker.py` | **NEW.** External Antigravity (`agy`) worker: one headless `agy --input-format stream-json --output-format stream-json` process per assignment running agy's own tools; stdin user event, NDJSON `init`/`step_update`/`result` readback, refuses read-only, tool/MCP/restriction fields and bypass modes; same duck contract as `claude_code_worker.py` |
 | `handoff.py` | Failure handoff: bounded markdown report of a failed child's context, saved for the root to read |
 | `worktree_integrate.py` | Apply an acknowledged, frozen worktree review to a clean parent checkout |
 | `worktree_review.py` | Immutable, read-only review snapshots for finalized agent worktrees |
@@ -76,6 +92,7 @@ here, so add a row when you add a file.
 | `api_key.py` | Pasted provider API keys kept in the private credential file (OpenCode Go) |
 | `codex.py` | Experimental ChatGPT OAuth support for the private Codex Responses endpoint |
 | `copilot.py` | GitHub.com device OAuth and short-lived GitHub Copilot credentials |
+| `xai.py` | xAI SuperGrok device OAuth; refresh-token storage and Bearer headers for `api.x.ai` |
 | `store.py` | Owner-only file-backed provider credentials, atomic writes and bounded locks |
 
 ### `nexus/client/`
@@ -273,6 +290,7 @@ here, so add a row when you add a file.
 | --- | --- |
 | `__init__.py` | Provider adapters behind the :class:`nexus.model.provider.Provider` protocol |
 | `_claude_agent_worker.py` | Isolated official SDK call; private bounded JSON worker |
+| `antigravity_cli.py` | **NEW.** Bounded local probes of the `agy` CLI (`--version`, `models`); presence only, sign-in is never verified, no token files read, no sign-out |
 | `anthropic.py` | Anthropic Messages streaming adapter |
 | `claude_agent.py` | Claude subscription provider through the official Agent SDK |
 | `claude_agent_auth.py` | Bounded official CLI subscription status, usage and sign-in, never token files |
@@ -282,6 +300,7 @@ here, so add a row when you add a file.
 | `openai.py` | OpenAI adapter: Responses API and Chat Completions behind one class |
 | `opencode.py` | OpenCode adapter over its documented Agent Client Protocol surface |
 | `scripted.py` | Deterministic, offline provider for tests and examples |
+| `xai.py` | xAI (Grok) preset over the OpenAI Responses adapter: endpoint, `store: false`, cache header, image types |
 
 ### `nexus/net/`
 

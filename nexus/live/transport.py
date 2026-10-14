@@ -45,6 +45,7 @@ from .protocol import (
     LiveEvent,
     LiveSession,
     SidebandOpen,
+    SidebandReconnected,
     close_message,
     parse_event,
     valid_call_id,
@@ -65,8 +66,13 @@ SIGNALING_TIMEOUT_S = 30.0
 SIGNALING_5XX_RETRIES = 1
 #: Plan §6: a dropped sideband gets a reconnect attempt within 5 s, at most twice per call.
 RECONNECT_TIMEOUT_S = 5.0
+#: The per-call reconnect budget. Receive-detected and send-detected drops share it; it is
+#: never reset or raised after a successful reconnect.
 MAX_RECONNECTS = 2
+#: One write attempt. A write that raises or times out is delivery-ambiguous and never replayed.
 SEND_TIMEOUT_S = 5.0
+#: How long a send waits (lock, initial connect, reconnect) before failing as "not sent".
+SEND_WAIT_TIMEOUT_S = RECONNECT_TIMEOUT_S
 CLOSE_TIMEOUT_S = 1.0
 MAX_DETAIL_CHARS = 300  # notes §8.2 (OC cuts error bodies to 300 characters)
 MAX_ANSWER_BYTES = 262_144
@@ -168,6 +174,10 @@ async def _default_connector(url: str, headers: Mapping[str, str]) -> WebSocketL
         raise error_for_status(exc.response.status_code) from None
 
 
+class _SendDropped(Exception):
+    """Internal: a failed write invalidated the socket the reader was waiting on."""
+
+
 class CodexLiveTransport:
     """Signaling POST plus sideband WebSocket, authenticated by the Codex OAuth manager."""
 
@@ -204,6 +214,19 @@ class CodexLiveTransport:
         self._on_event: EventHandler | None = None
         self._on_closed: ClosedHandler | None = None
         self._first_open = asyncio.Event()
+        #: Set while ``_ws`` is a usable socket; cleared the moment a drop is detected.
+        self._ready = asyncio.Event()
+        #: Set once the transport is finished for good (close, or the reader ended).
+        self._terminal = asyncio.Event()
+        #: Set to tell the reader its current socket is damaged (send-detected drop).
+        self._drop = asyncio.Event()
+        #: Why the current socket was invalidated by a send (None: cancelled write / receive-detected).
+        self._drop_cause: Exception | None = None
+        #: Sockets taken out of service (damaged by a write, replaced, or finished) whose close has
+        #: not completed. Whoever retires a socket owns closing it; a cancelled close leaves it
+        #: here so ``_run``'s cleanup or ``close`` finishes it. Never written to, never reused;
+        #: bounded by the reconnect budget because every drain empties it.
+        self._retired: list[WebSocketLike] = []
 
     # -- headers -----------------------------------------------------------
 
@@ -307,19 +330,75 @@ class CodexLiveTransport:
             if asyncio.iscoroutine(outcome) or isinstance(outcome, asyncio.Future):
                 await outcome
 
+    def _install(self, ws: WebSocketLike) -> asyncio.Event:
+        """Make ``ws`` the current socket and return its drop signal (reader only)."""
+        self._ws = ws
+        self._drop = drop = asyncio.Event()
+        self._drop_cause = None
+        self._ready.set()
+        return drop
+
+    def _invalidate(self, ws: WebSocketLike, cause: Exception | None = None) -> None:
+        """Mark ``ws`` damaged: nothing may use it, and the reader (sole reconnect owner) is woken.
+
+        A no-op if ``ws`` was already replaced or retired, so a receive-detected and a
+        send-detected drop of the same socket start exactly one reconnect.
+        """
+        if self._ws is ws:
+            self._ws = None
+            self._retired.append(ws)  # ownership moves to the retired list until it is closed
+            self._drop_cause = cause
+            self._ready.clear()
+            self._drop.set()
+
+    async def _close_socket(self, ws: WebSocketLike, code: int = 1000, reason: str = "") -> None:
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(ws.close(code, reason), CLOSE_TIMEOUT_S)
+
+    async def _close_retired(self, code: int = 1011, reason: str = "sideband replaced") -> None:
+        """Close every retired socket. A socket stays owned until its close finishes, even on cancel."""
+        while self._retired:
+            ws = self._retired.pop(0)
+            try:
+                await self._close_socket(ws, code, reason)
+            except BaseException:  # cancelled mid-close: keep ownership for the next drain
+                self._retired.insert(0, ws)
+                raise
+
+    async def _read(self, ws: WebSocketLike, drop: asyncio.Event) -> tuple[str | bytes | None, Exception | None]:
+        """Next frame from ``ws``, or the failure that ended it (a send-detected drop included)."""
+        if drop.is_set():
+            return None, self._drop_cause or _SendDropped("a write to the sideband failed")
+        recv = asyncio.ensure_future(ws.recv())
+        dropped = asyncio.ensure_future(drop.wait())
+        try:
+            await asyncio.wait({recv, dropped}, return_when=asyncio.FIRST_COMPLETED)
+            if not recv.done():
+                return None, self._drop_cause or _SendDropped("a write to the sideband failed")
+            try:
+                return recv.result(), None
+            except Exception as exc:  # noqa: BLE001 - any socket failure
+                return None, exc
+        finally:
+            recv.cancel()
+            dropped.cancel()
+            await asyncio.gather(recv, dropped, return_exceptions=True)
+
     async def _run(self) -> None:
         reconnects = 0
         try:
-            self._ws = await self._connect(attempts=CONNECT_ATTEMPTS, timeout=CONNECT_TIMEOUT_S)
+            ws = await self._connect(attempts=CONNECT_ATTEMPTS, timeout=CONNECT_TIMEOUT_S)
+            drop = self._install(ws)
             self._first_open.set()
             await self._emit(SidebandOpen())
             while True:
-                ws = self._ws
-                try:
-                    frame = await ws.recv()  # type: ignore[union-attr]
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:  # noqa: BLE001 - any socket failure
+                if self._closing:
+                    return
+                frame, exc = await self._read(ws, drop)
+                if exc is not None:
+                    lost_at = asyncio.get_running_loop().time()
+                    self._invalidate(ws)  # clear readiness/socket before anything else can use it
+                    await self._close_retired()
                     if self._closing:
                         return
                     if getattr(exc, "code", None) == 1000 or type(exc).__name__ == "ConnectionClosedOK":
@@ -330,10 +409,21 @@ class CodexLiveTransport:
                         return
                     reconnects += 1
                     try:
-                        self._ws = await self._connect(attempts=1, timeout=RECONNECT_TIMEOUT_S)
+                        # Fresh credentials: the access token may have rotated since the call began.
+                        self._headers_cache = await asyncio.wait_for(self._headers(), RECONNECT_TIMEOUT_S)
+                        ws = await self._connect(attempts=1, timeout=RECONNECT_TIMEOUT_S)
+                    except asyncio.TimeoutError:
+                        await self._notify_closed("sideband_lost", "Timed out refreshing credentials")
+                        return
                     except LiveError as err:
                         await self._notify_closed("sideband_lost", err.message)
                         return
+                    if self._closing:
+                        self._retired.append(ws)
+                        await self._close_retired(1000, "")
+                        return
+                    drop = self._install(ws)
+                    await self._emit(SidebandReconnected(gap_s=max(0.0, asyncio.get_running_loop().time() - lost_at)))
                     continue
                 if isinstance(frame, bytes):
                     await self._notify_closed("protocol_error", "Unexpected binary sideband frame")
@@ -347,18 +437,107 @@ class CodexLiveTransport:
             await self._notify_closed("startup_failed" if not self._first_open.is_set() else "sideband_lost", exc.message)
         except Exception as exc:  # noqa: BLE001 - never leak a traceback or token
             await self._notify_closed("transport_error", self._clean(exc))
+        finally:
+            # The reader is the only reconnect owner: once it ends, nothing can recover.
+            self._terminal.set()
+            self._ready.clear()
+            leftover, self._ws = self._ws, None
+            if leftover is not None:
+                self._retired.append(leftover)
+            await self._close_retired(1000, "")
+
+    # -- send ----------------------------------------------------------------
+
+    def _not_sent(self, why: str) -> LiveError:
+        return LiveError("live_not_connected", f"The GPT Live sideband is not connected ({why}); the message was not sent")
+
+    async def _race(self, *awaitables: Awaitable[Any], timeout: float) -> None:
+        """Wait until one of ``awaitables`` finishes or ``timeout`` passes; cancel the rest."""
+        tasks = [asyncio.ensure_future(item) for item in awaitables]
+        try:
+            await asyncio.wait(tasks, timeout=max(timeout, 0.0), return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _acquire_send_lock(self, deadline: float) -> None:
+        """Take the send lock, giving up at ``deadline`` or on terminal close (never hangs)."""
+        loop = asyncio.get_running_loop()
+        locking = asyncio.ensure_future(self._send_lock.acquire())
+        terminal = asyncio.ensure_future(self._terminal.wait())
+        try:
+            await asyncio.wait({locking, terminal}, timeout=max(deadline - loop.time(), 0.0),
+                               return_when=asyncio.FIRST_COMPLETED)
+        except BaseException:  # our own cancellation: never leak a lock that was already granted
+            terminal.cancel()
+            if locking.done() and not locking.cancelled():
+                self._send_lock.release()
+            else:
+                locking.cancel()
+            raise
+        terminal.cancel()
+        got = locking.done() and not locking.cancelled()
+        if not got:
+            locking.cancel()  # asyncio.Lock passes the lock on if a grant raced this cancel
+            raise self._not_sent("closed" if self._terminal.is_set() else "timed out waiting for the connection")
+        if self._terminal.is_set():
+            self._send_lock.release()
+            raise self._not_sent("closed")
+
+    async def _socket_for_send(self, deadline: float) -> WebSocketLike:
+        """The current ready socket, read under the send lock; waits (bounded) for a reconnect."""
+        loop = asyncio.get_running_loop()
+        while True:
+            if self._terminal.is_set() or self._closed:
+                raise self._not_sent("closed")
+            ws = self._ws
+            if ws is not None and self._ready.is_set():
+                return ws
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise self._not_sent("timed out waiting for the connection")
+            await self._race(self._ready.wait(), self._terminal.wait(), timeout=remaining)
 
     async def send(self, message: Mapping[str, Any]) -> None:
-        ws = self._ws
-        if ws is None or self._closed:
-            raise LiveError("live_not_connected", "The GPT Live sideband is not connected")
-        text = json.dumps(message, ensure_ascii=False)
-        if self._raw_log is not None:
-            self._raw_log("out", self._clean(text, 8192))
+        """Send one message in order.
+
+        ``live_not_connected`` means *definitely not sent* (closed, or no socket within
+        ``SEND_WAIT_TIMEOUT_S``). ``live_send_ambiguous`` means a write was attempted and
+        raised or timed out, so delivery is unknown: the message is never replayed and the
+        damaged socket is dropped so the reader recovers (within the call's reconnect budget).
+        """
+        if self._closed or self._terminal.is_set() or self._reader is None:
+            raise self._not_sent("closed" if self._closed or self._terminal.is_set() else "not started")
         try:
-            async with self._send_lock:
-                await asyncio.wait_for(ws.send(text), SEND_TIMEOUT_S)
-        except Exception as exc:  # noqa: BLE001
+            # ASCII escapes keep any text (even a lone surrogate) UTF-8 encodable on the wire.
+            text = json.dumps(message, ensure_ascii=True)
+            deadline = asyncio.get_running_loop().time() + SEND_WAIT_TIMEOUT_S
+            await self._acquire_send_lock(deadline)
+            try:
+                ws = await self._socket_for_send(deadline)  # read AFTER the lock: never a stale socket
+                if self._raw_log is not None:
+                    self._raw_log("out", self._clean(text, 8192))
+                try:
+                    await asyncio.wait_for(ws.send(text), SEND_TIMEOUT_S)
+                except asyncio.CancelledError:
+                    self._invalidate(ws)  # a half-written frame may be on the wire; now retired
+                    raise
+                except Exception as exc:  # noqa: BLE001 - raised or timed out: delivery unknown
+                    self._invalidate(ws, exc)
+                    await self._close_retired(1011, "send failed")
+                    detail = self._clean(exc) or type(exc).__name__
+                    raise LiveError(
+                        "live_send_ambiguous",
+                        f"A message to GPT Live may or may not have been delivered ({detail}). "
+                        "It was not retried; the connection is being re-established, so check the "
+                        "call's state before sending it again.",
+                    ) from None
+            finally:
+                self._send_lock.release()
+        except (LiveError, asyncio.CancelledError):
+            raise
+        except Exception as exc:  # noqa: BLE001 - legacy fatal fallback
             raise LiveError("live_send_failed", f"Could not send to GPT Live: {self._clean(exc)}") from None
 
     async def close(self, reason: str = "done") -> None:
@@ -366,17 +545,33 @@ class CodexLiveTransport:
             return
         self._closed = True
         self._closing = True
+        self._terminal.set()  # wakes every waiting send
+        self._ready.clear()
         ws, self._ws = self._ws, None
         if ws is not None:
-            with contextlib.suppress(Exception):
+            # session.close must not interleave with a write, but a stuck writer must not
+            # block close: after CLOSE_TIMEOUT_S skip the message; closing the socket frees it.
+            # Best effort. A damaged socket was already invalidated (so ``ws`` is never one),
+            # and it is closed from ``_retired`` below without a ``session.close`` write.
+            locked = False
+            try:
+                await asyncio.wait_for(self._send_lock.acquire(), CLOSE_TIMEOUT_S)
+                locked = True
                 await asyncio.wait_for(ws.send(json.dumps(close_message())), CLOSE_TIMEOUT_S)
-            with contextlib.suppress(Exception):
-                await asyncio.wait_for(ws.close(1000, reason[:100]), CLOSE_TIMEOUT_S)
+            except Exception:  # noqa: BLE001
+                pass
+            finally:
+                if locked:
+                    self._send_lock.release()
+            self._retired.append(ws)
         reader, self._reader = self._reader, None
-        if reader is not None and reader is not asyncio.current_task():
-            reader.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await reader
+        try:
+            await self._close_retired(1000, reason[:100])  # includes sockets a cancelled send damaged
+        finally:
+            if reader is not None and reader is not asyncio.current_task():
+                reader.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await reader  # its cleanup closes anything still retired
         if self._owns_client and self._client is not None:
             with contextlib.suppress(Exception):
                 await self._client.aclose()

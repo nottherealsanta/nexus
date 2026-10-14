@@ -1,12 +1,14 @@
 """Provider sign-in behind the host boundary: Settings → Providers (plan section 7).
 
-Four providers connect from any surface:
+Five providers connect from any surface:
 
 * ``codex`` — ChatGPT sign-in in the browser (PKCE, local callback on port
   1455) or with a device code.
 * ``github-copilot`` — GitHub.com device sign-in with Nexus's first-party OAuth
   app. GitHub Enterprise is not supported yet.
 * ``opencode-go`` — an OpenCode Go API key pasted once.
+* ``xai`` — SuperGrok subscription device sign-in (``auth.x.ai``). It is the
+  only xAI credential; API keys are not accepted.
 * ``claude-agent`` — the official ``claude auth login`` run headless: the
   client opens the printed URL and pastes back the one-time code the page
   shows (``ProviderLoginCode``). The login belongs to the Claude CLI and is
@@ -39,6 +41,8 @@ from typing import Any
 from ..auth.api_key import StoredKeyAuth, validate_api_key
 from ..auth.codex import CodexOAuthManager
 from ..auth.copilot import CopilotAuthManager, api_base_url, normalize_domain
+from ..auth.xai import XAIOAuthManager
+from ..model.providers.antigravity_cli import LOGIN_INSTRUCTION, AntigravityCli
 from ..model.providers.claude_agent_auth import ClaudeCliAuth
 from ..errors import ConfigError
 from ..util import redact_secrets
@@ -61,14 +65,27 @@ PROVIDERS: dict[str, tuple[str, tuple[str, ...], str]] = {
         "OpenCode Go", ("api_key",),
         "Paste the API key from your OpenCode Go subscription (opencode.ai/auth).",
     ),
+    "xai": (
+        "xAI (SuperGrok)", ("device",),
+        "Sign in with your SuperGrok subscription: open the link and enter the code. API keys are not used.",
+    ),
     "claude-agent": (
         "Claude (Pro/Max)", ("browser",),
         "Sign in with your Claude subscription through the Claude CLI, then paste the code the page shows. "
         "The login is shared with Claude Code; sign out with `claude auth logout`.",
     ),
+    "antigravity": (
+        "Antigravity (agy)", ("cli",),
+        "Run `agy` in a terminal and sign in there. The login belongs to the agy CLI; Nexus never signs in, "
+        "reads its credentials, or signs out.",
+    ),
 }
+#: Providers whose sign-in is a manual step in the provider's own CLI; Nexus starts nothing.
+_MANUAL = frozenset({"antigravity"})
 #: Providers whose credential Nexus may remove from Settings.
-_LOGOUT = frozenset({"codex", "github-copilot", "opencode-go"})
+_LOGOUT = frozenset({"codex", "github-copilot", "opencode-go", "xai"})
+#: Providers that connect with a pasted API key.
+_PASTED_KEY = frozenset({"opencode-go"})
 _LOGIN_TTL = 900.0
 _MAX_LOGINS = 8
 _READY_TIMEOUT = 15.0
@@ -110,6 +127,10 @@ def _copilot(runtime: object) -> Any:
     return _factory(runtime, "_copilot_auth_factory", CopilotAuthManager)(profile="default")
 
 
+def _xai(runtime: object) -> Any:
+    return _factory(runtime, "_xai_auth_factory", XAIOAuthManager)(profile="default")
+
+
 def _api_key(runtime: object, provider: str) -> Any:
     return _factory(runtime, "_api_key_auth_factory", StoredKeyAuth)(provider, profile="default")
 
@@ -123,13 +144,28 @@ def _claude(runtime: object, provider: str = "claude-agent") -> Any:
         executable=getattr(section, "executable", None), environ=environ if isinstance(environ, Mapping) else None)
 
 
+def _antigravity(runtime: object) -> Any:
+    from .setup import _load_config
+
+    from ..model.registry import is_antigravity_section
+    sections = getattr(getattr(_load_config(runtime), "v2", None), "providers", {})
+    section = next((cfg for name, cfg in sections.items() if is_antigravity_section(name, cfg)), None)
+    environ = getattr(runtime, "_environ", None)
+    return _factory(runtime, "_antigravity_cli_factory", AntigravityCli)(
+        executable=getattr(section, "executable", None), environ=environ if isinstance(environ, Mapping) else None)
+
+
 def _manager(runtime: object, provider: str) -> Any:
+    if provider == "antigravity":
+        return _antigravity(runtime)
     if provider == "codex":
         return _codex(runtime)
     if provider == "github-copilot":
         return _copilot(runtime)
-    if provider == "opencode-go":
+    if provider in _PASTED_KEY:
         return _api_key(runtime, provider)
+    if provider == "xai":
+        return _xai(runtime)
     if provider in {"claude-agent", "claude-code"}:
         return _claude(runtime, provider)
     raise ConfigError("unknown provider")
@@ -176,6 +212,8 @@ def _route(provider: str, domain: str | None = None) -> tuple[tuple[str, str], .
         return (("auth", "github_copilot"), ("base_url", api_base_url(domain)), ("api", "chat"))
     if provider == "claude-agent":
         return (("kind", "claude-agent"),)
+    if provider == "xai":
+        return (("auth", "xai_oauth"), ("api", "responses"))
     return (("auth", "keychain"), ("base_url", OPENCODE_GO_BASE_URL), ("api", "chat"))
 
 
@@ -275,12 +313,22 @@ async def providers_status(runtime: object) -> dict[str, Any]:
                 detail = (await _claude(runtime).plan()).title()
             except Exception:  # noqa: BLE001 - the plan label is best-effort
                 detail = ""
+        extra: dict[str, Any] = {}
+        if provider == "antigravity":
+            # Presence and sign-in are separate facts; agy offers no token-free sign-in check.
+            try:
+                view = await _antigravity(runtime).status_view()
+            except Exception:  # noqa: BLE001 - status is best-effort
+                view = {}
+            extra = {"cli_present": view.get("cli_present") is True, "auth_verified": view.get("auth_verified") is True,
+                     "scope": "subagents", "capabilities": ["subagent"]}
+            detail = redact_secrets(str(view.get("message") or ""))[:240]
         active = next((login for login in logins.values()
                        if login.provider == provider and login.status == "pending"), None)
         rows.append({
             "id": provider, "label": label, "methods": list(methods), "help": help_text,
             "connected": is_connected, "detail": detail, "can_logout": provider in _LOGOUT,
-            "login": active.view() if active else None,
+            "login": active.view() if active else None, **extra,
         })
     return {"providers": rows}
 
@@ -296,6 +344,13 @@ async def provider_login(
     method = method or (methods[0] if methods else "")
     if method not in methods or method == "api_key":
         raise ConfigError(f"{PROVIDERS[provider][0]} does not support {method or 'that'} sign-in")
+    if provider in _MANUAL:
+        # The provider's own CLI owns sign-in: no URL, browser, task or stored credential.
+        logins = _logins(runtime)
+        login = _Login(id=secrets.token_urlsafe(16), provider=provider, method=method, started=time.monotonic(),
+                       status="manual", message=LOGIN_INSTRUCTION)
+        logins[login.id] = login
+        return login.view()
     host = None
     if provider == "github-copilot":
         try:
@@ -333,6 +388,8 @@ async def provider_login(
                     await manager.device_login(on_code=show, cancel=login.cancel)
                 elif provider == "github-copilot":
                     await manager.device_login(domain=host, on_code=show, cancel=login.cancel)
+                elif provider == "xai":
+                    await manager.device_login(on_code=show, cancel=login.cancel)
                 elif provider == "claude-agent":
                     await manager.browser_login(on_url=show, code=lambda: asyncio.shield(login.code), cancel=login.cancel)
         except asyncio.CancelledError:
@@ -430,6 +487,8 @@ async def provider_key_set(
 async def provider_logout(runtime: object, provider: str) -> dict[str, Any]:
     if provider not in PROVIDERS:
         raise ConfigError("unknown provider")
+    if provider in _MANUAL:
+        raise ConfigError("Antigravity's login belongs to the agy CLI; Nexus never signs it out")
     if provider not in _LOGOUT:
         raise ConfigError("Claude's login is shared with Claude Code; run `claude auth logout` in a terminal to sign out")
     for login in list(_logins(runtime).values()):

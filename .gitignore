@@ -16,3 +16,9 @@ rust/tui/target/
 rust/desktop/target/
 rust/live/target/
 rust/desktop/Nexus.app/
+
+# Native iOS/Swift generated build and user data
+.DS_Store
+ios/**/.build/
+ios/**/xcuserdata/
+ios/**/DerivedData/

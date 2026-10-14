@@ -30,6 +30,7 @@ from nexus.model.providers.anthropic import AnthropicProvider
 from nexus.model.providers.gemini import GeminiProvider
 from nexus.model.providers.openai import OpenAIProvider
 from nexus.model.providers.scripted import ScriptedProvider, Wait
+from nexus.model.providers.xai import XAIProvider
 from nexus.model.stream import StreamEvent
 
 from .contract import (
@@ -75,6 +76,7 @@ __all__ = [
     "OpenAIChatAdapter",
     "OpenAIResponsesAdapter",
     "ScriptedAdapter",
+    "XAIResponsesAdapter",
 ]
 
 ANTHROPIC_BASE_URL = "https://anthropic.conformance"
@@ -82,6 +84,7 @@ GEMINI_BASE_URL = "https://gemini.conformance"
 #: The official host, so the ``count_tokens`` path (which is gated to it) can be
 #: exercised offline through ``httpx.MockTransport``. No network is touched.
 OPENAI_RESPONSES_BASE_URL = "https://api.openai.com/v1"
+XAI_BASE_URL = "https://api.x.ai/v1"
 OPENAI_CHAT_BASE_URL = "https://api.openai.com/v1"
 
 ANTHROPIC_TAGS = frozenset(
@@ -136,6 +139,8 @@ OPENAI_RESPONSES_TAGS = frozenset(
         CANCEL,
     }
 )
+#: xAI speaks the same Responses wire but publishes no input-token counter.
+XAI_RESPONSES_TAGS = OPENAI_RESPONSES_TAGS - {COUNT_TOKENS}
 #: Chat Completions has no document carrier and no official counter, so those
 #: tags are deliberately absent and the corresponding cases are skipped.
 OPENAI_CHAT_TAGS = frozenset(
@@ -412,6 +417,29 @@ class OpenAIResponsesAdapter(_HTTPAdapter):
         return httpx.Response(200, json=payload)
 
 
+class XAIResponsesAdapter(OpenAIResponsesAdapter):
+    """The xAI preset over the Responses dialect (no input-token counter)."""
+
+    name = "xai_responses"
+    model = "grok-conformance"
+    tags = XAI_RESPONSES_TAGS
+
+    def __init__(self, *, api_key: str = "conformance-key") -> None:
+        _HTTPAdapter.__init__(self, api_key=api_key, base_url=XAI_BASE_URL)
+
+    def _build_provider(self, api_key: str, base_url: str) -> XAIProvider:
+        return XAIProvider(
+            api_key=api_key,
+            model=self.model,
+            base_url=base_url,
+            retry=_RETRY,
+            sleep=self._sleep,
+            jitter=lambda: 0.0,
+            environ={},
+            http_transport=httpx.MockTransport(self._handle),
+        )
+
+
 class OpenAIChatAdapter(_HTTPAdapter):
     """The Chat Completions dialect, backed by a ``MockTransport``."""
 
@@ -525,6 +553,13 @@ ADAPTER_SPECS: tuple[AdapterSpec, ...] = (
         make=OpenAIResponsesAdapter,
         dialect=OPENAI_RESPONSES_DIALECT,
         description="OpenAI Responses adapter over httpx.MockTransport",
+    ),
+    AdapterSpec(
+        name="xai_responses",
+        tags=XAI_RESPONSES_TAGS,
+        make=XAIResponsesAdapter,
+        dialect=OPENAI_RESPONSES_DIALECT,
+        description="xAI preset over the Responses adapter (httpx.MockTransport)",
     ),
     AdapterSpec(
         name="openai_chat",

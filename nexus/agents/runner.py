@@ -91,7 +91,25 @@ __all__ = [
     "SubagentUsage",
     "TaskRequest",
     "files_changed",
+    "qualify_model",
 ]
+
+#: Child events that name the concrete model a run actually started on.
+_MODEL_START_EVENTS = frozenset({"model.started", "external.started"})
+
+
+def qualify_model(provider: object, model: object) -> str | None:
+    """``provider/model`` for a started model, without doubling a qualified id.
+
+    ``None`` when no model is named: a tier label is never a stand-in.
+    """
+    if not isinstance(model, str) or not model.strip():
+        return None
+    model = model.strip()
+    if not isinstance(provider, str) or not provider.strip():
+        return model
+    provider = provider.strip()
+    return model if model.startswith(f"{provider}/") else f"{provider}/{model}"
 
 #: The event names this module emits (plan sections 3.5 and 15.10). They are
 #: plain strings; the event catalogue already lists ``agent.spawned``/
@@ -356,10 +374,33 @@ class SubagentOutcome:
     #: inline digest is in ``handoff`` and ``handoff_path`` is where it was saved.
     handoff: str = ""
     handoff_path: str | None = None
+    #: Concrete ``provider/model`` references the child actually started, in
+    #: order, taken from its durable ``model.started``/``external.started``
+    #: events. Empty means unavailable (never started, or an external worker
+    #: started without reporting a model), not "the tier's model".
+    models: tuple[str, ...] = ()
 
     @property
     def ok(self) -> bool:
         return not self.is_error and self.status == "completed"
+
+    @property
+    def actual_model(self) -> str | None:
+        """The model the child last ran on (the final fallback), else ``None``."""
+        return self.models[-1] if self.models else None
+
+    def model_line(self) -> str:
+        """The model-facing disclosure of the actual model beside its tier."""
+        tier = self.tier or "unknown"
+        if not self.models:
+            return (
+                f"[model: unavailable (not reported); tier: {tier} "
+                "is a routing label, not a model]"
+            )
+        line = f"[model: {self.models[-1]}; tier: {tier}"
+        if len(self.models) > 1:
+            line += "; fallback path: " + " -> ".join(self.models)
+        return line + "]"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -375,6 +416,8 @@ class SubagentOutcome:
             "clamped": self.clamped,
             "tier": self.tier,
             "requested_tier": self.requested_tier,
+            "actual_model": self.actual_model,
+            "actual_models": list(self.models),
             "error": self.error,
             "worktree": dict(self.worktree) if self.worktree is not None else None,
             "files_changed": list(self.files_changed),
@@ -400,7 +443,8 @@ class SubagentOutcome:
         """Extra fields for a run executed by an external worker (else empty)."""
         if not self.usage_unknown and "authority" not in self.metrics:
             return {}
-        keys = ("authority", "provider", "model", "transcript_path", "claude_session",
+        keys = ("authority", "provider", "model", "transcript_path", "claude_session", "external_session",
+                "external_kind", "external_label", "inherits_agy_settings", "provenance",
                 "tool_calls", "files_changed_note", "files_changed_total")
         return {
             "usage_unknown": self.usage_unknown,
@@ -409,7 +453,7 @@ class SubagentOutcome:
 
     def render(self) -> str:
         """The model-facing body: child text plus clamp/drop notes."""
-        lines: list[str] = []
+        lines: list[str] = [self.model_line()]
         label = f"{self.agent} (session {self.session_id})" if self.session_id else self.agent
         if self.clamp_note:
             lines.append(self.clamp_note)
@@ -433,7 +477,7 @@ class SubagentOutcome:
         if self.metrics.get("authority"):
             lines.append(f"[authority: {self.metrics['authority']}]")
         if self.usage_unknown:
-            lines.append("[usage: unknown — external Claude Code worker]")
+            lines.append(f"[usage: unknown — external {self.metrics.get('external_label') or 'Claude Code'} worker]")
         attention = self.attention
         if attention:
             lines.append(
@@ -469,7 +513,7 @@ class SubagentOutcome:
                 "in the prompt.]"
             )
             lines.append(self.handoff)
-        if not lines:
+        if len(lines) == 1:
             lines.append(f"{label}: no report")
         return "\n".join(lines)
 
@@ -878,7 +922,7 @@ async def _forward(
 class _ChildRelay:
     """An isolated relay that tags every child event with its agent metadata."""
 
-    __slots__ = ("_meta", "_session", "_sink")
+    __slots__ = ("_meta", "_models", "_session", "_sink")
 
     def __init__(
         self,
@@ -887,6 +931,7 @@ class _ChildRelay:
         session: str,
     ) -> None:
         self._sink = sink
+        self._models: list[str] = []
         self._meta = dict(meta)
         self._meta["id"] = self._meta.get("agent_id", self._meta.get("id"))
         self._session = session
@@ -894,6 +939,11 @@ class _ChildRelay:
     @property
     def meta(self) -> dict[str, Any]:
         return dict(self._meta)
+
+    @property
+    def models(self) -> tuple[str, ...]:
+        """Distinct concrete models the direct child started, in order."""
+        return tuple(self._models)
 
     async def emit(
         self, event_type: str, data: dict[str, Any] | None = None
@@ -927,6 +977,10 @@ class _ChildRelay:
             payload["agent"] = inner
         else:
             payload["agent"] = dict(self._meta)
+            if event_type in _MODEL_START_EVENTS:
+                ref = qualify_model(payload.get("provider"), payload.get("model"))
+                if ref is not None and (not self._models or self._models[-1] != ref):
+                    self._models.append(ref)
         await _forward(self._sink, event_type, payload, session=self._session)
 
 
@@ -1823,6 +1877,8 @@ class SubagentRunner:
 
         if outcome is None:  # pragma: no cover - a BaseException path never reaches
             raise SubagentError("subagent run produced no outcome")
+        if not outcome.models and relay.models:
+            outcome = replace(outcome, models=relay.models)
         await self._emit_completed(sink, meta, outcome)
         if task_cancelled:
             raise asyncio.CancelledError
@@ -1891,6 +1947,11 @@ class SubagentRunner:
                 "stop_reason": outcome.stop_reason,
                 "dropped_tools": list(outcome.dropped_tools),
                 "clamped": outcome.clamped,
+                **(
+                    {"resolved_model": outcome.actual_model}
+                    if outcome.actual_model
+                    else {}
+                ),
                 "error": (
                     redact_secrets(outcome.error)[:500] if outcome.error else None
                 ),

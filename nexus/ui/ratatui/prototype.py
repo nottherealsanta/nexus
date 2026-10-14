@@ -320,19 +320,22 @@ def _project_turn(turn, shell, agents=None, literal=True):
         if tool.name.casefold() in {"task", "subagent"}:
             from ...ui_support.timeline import _agent_metrics, _task_child_activity, _task_children, _task_header, _task_metrics
             child = next(iter(_task_children(tool, agents or {})), None)
-            head, running = _task_header(tool, child, 0)
+            from ...ui_support.timeline import agent_model_label
+            head, running = _task_header(tool, child, 0, with_model=False)
             name, _, phrase = head.partition(" ")[2].partition(" · ")
             phrase = " ".join(phrase.split())[:64]
-            title = f"{name} Subagent — {phrase}"
-            if child is not None and child.model:
+            title = f"{name} Subagent — {phrase} · {agent_model_label(child)}"
+            if child is not None:
                 effort = next((t.reasoning_effort for t in child.body.turns if t.reasoning_effort), None)
-                title += f" · {child.model.rsplit('/', 1)[-1]}" + (f" ({effort})" if effort else "")
+                if effort:
+                    title += f" ({effort})"
             operation = {"kind": "agent_page", "id": child.id} if child is not None else None
             # Never the tool details: a click opens the subagent page, so only a failure shows inline.
             detail = f"Error: {child.error}" if child is not None and child.error else ""
             if child is not None and child.body.external:
-                from ...ui_support.external_worker import task_note
-                title += " · Claude Code (external, own tools)"
+                from ...ui_support.external_worker import header_rows, task_note
+                provider = next((v for k, v in header_rows(child.body.external) if k == "Provider"), "")
+                title += f" · {provider.removesuffix(' (external worker)') or 'External worker'} (external, own tools)"
                 detail = "\n".join(part for part in (task_note(child.body.external), detail) if part)
             block = {"id": tool.call_id, "kind": "task", "title": title,
                      "status": "running" if running else "done",
@@ -407,8 +410,9 @@ def _project_turn(turn, shell, agents=None, literal=True):
                     "grep": ("Searched", "time", "times"),
                     "glob": ("Searched", "time", "times"),
                 }.get(name, (tool.name.title(), "call", "calls"))
-                if tool.provenance:  # Claude Code ran it; never counted as a Nexus-run command or read
-                    category = ("Claude Code ran", "tool", "tools")
+                if tool.provenance:  # the external worker ran it; never counted as a Nexus-run command or read
+                    owner = tool.provenance.removesuffix(" (own tools)").removesuffix(" own tools").strip()
+                    category = (f"{owner or 'External worker'} ran", "tool", "tools")
                 _, _, heading_full, summary = tool_presentation(tool, shell)
                 heading = heading_full.split(" ", 1)[-1]
                 if tool.diff:
@@ -926,6 +930,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             if not context and agent.status == "spawned":
                 child_blocks.append({"id": agent.id + ":wait", "kind": "literal", "text": "Waiting for the first request…", "gap": 1})
             child_blocks = _safe_blocks(child_blocks)
+            from ...ui_support.timeline import agent_model_label
             from ...ui_support.external_worker import external_blocks
             external_head, external_foot = external_blocks(agent.id, agent.body.external)
             child_blocks.extend(_safe_blocks(external_head))
@@ -938,9 +943,12 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
                 status="running" if agent.status == "spawned" else "done",
                 sessions_sidebar=False, sessions=[], tabs=[], prompt=None, queue_lines=[],
                 completions=[], voice_phase="idle", voice_preview="",
-                agent=agent.type or "subagent", model=agent.model or preview.model or "default",
+                agent=agent.type or "subagent", model=agent_model_label(agent),
                 title=f"{agent.type or 'Subagent'} · {agent.description or agent.task}",
-                details_panel=_details_panel(SimpleNamespace(agent_name=agent.type, model=agent.model), replace(agent.body, phase=agent_status), shell))
+                details_panel=_details_panel(SimpleNamespace(
+                    agent_name=agent.type, model=agent_model_label(agent),
+                    reasoning_effort=next((t.reasoning_effort for t in reversed(agent.body.turns) if t.reasoning_effort), None)),
+                    replace(agent.body, phase=agent_status), shell))
     if shell and getattr(shell, "inline_images_enabled", False):
         from ...ui_support.native_images import inline_images
         snapshot["inline_images"] = inline_images(view, shell)

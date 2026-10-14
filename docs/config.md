@@ -100,6 +100,34 @@ or the Agent SDK inside a normal Nexus child with Nexus tools and permissions
 ([agents.md](agents.md#external-claude-code-workers)). Settings -> Models shows it as
 `Claude Code subagents run via` with a note on what each backend mediates.
 
+## Antigravity worker keys
+
+For `[providers.<name>]` with `kind = "antigravity"` (alias `agy`; a section
+literally named `antigravity` or `agy` with no `kind` also resolves). It configures
+the subagent-only external worker ([agents.md](agents.md#external-antigravity-workers)).
+Minimal config:
+
+```toml
+[providers.antigravity]
+kind = "antigravity"
+worker_inherits_agy_settings = true
+```
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `executable` | `agy` | agy binary (`agy` on `PATH`, or an absolute path) |
+| `timeout_seconds` | 600 (max 3600) | Wall clock; shortened by a nonzero `[agent] max_turn_seconds`; passed to agy as `--print-timeout <n>s` plus 5 s slack |
+| `worker_inherits_agy_settings` | unset (**required `true`**) | Explicit opt-in: agy applies its own user/global settings, MCP servers and plugins and Nexus `PathGuard` does not apply. Without it every assignment is refused. Valid only on this kind |
+| `worker_permission_mode` | `accept-edits` | `accept-edits` or `plan` (passed as `--mode`); anything else, including bypass, is refused |
+
+The Claude `worker_tools`, `worker_allowed_tools`, `worker_disallowed_tools`,
+`worker_setting_sources`, `worker_mcp_config` and `worker_restricted` keys, and
+`api_key`, `base_url`, `api`, `auth`, `profile`, `command`, `args`, `env`,
+`inherit_env` and `permission_policy`, are refused rather than silently ignored.
+There is no model key: the model is always explicit, as `antigravity/<id>` on a
+role, a `Task` call or a `[models.tiers]` entry, and must be an ID `agy models`
+reports. The section cannot be the main, plan, fast, fallback or title model.
+
 ## On-disk layout
 
 | Location | Holds |

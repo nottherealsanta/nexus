@@ -670,8 +670,127 @@ def test_files_changed_tracks_successful_edit_tools_only(tmp_path):
     assert files_changed(messages, workspace=tmp_path) == ("pkg/mod.py", "src/a.py", "src/new.py")
     outcome = SubagentOutcome(agent="task", session_id="s", text="Done.", files_changed=("pkg/mod.py",))
     rendered = outcome.render()
-    assert rendered.startswith("Done.")
+    assert "Done." in rendered
     assert "[files changed by task:" in rendered and "- pkg/mod.py" in rendered
+
+
+def test_outcome_discloses_actual_model_beside_tier():
+    outcome = SubagentOutcome(
+        agent="task", session_id="s", text="Done.", tier="low",
+        models=("anthropic/claude-haiku",),
+    )
+    assert outcome.actual_model == "anthropic/claude-haiku"
+    assert outcome.render().splitlines()[0] == "[model: anthropic/claude-haiku; tier: low]"
+    data = outcome.to_dict()
+    assert data["actual_model"] == "anthropic/claude-haiku"
+    assert data["actual_models"] == ["anthropic/claude-haiku"]
+    assert data["tier"] == "low"
+
+
+def test_outcome_model_is_unknown_not_guessed_from_tier():
+    outcome = SubagentOutcome(
+        agent="task", session_id="s", status="failed", is_error=True,
+        text="failed to start", tier="low",
+    )
+    assert outcome.actual_model is None
+    first = outcome.render().splitlines()[0]
+    assert first.startswith("[model: unavailable (not reported); tier: low")
+    assert outcome.to_dict()["actual_model"] is None
+    assert outcome.to_dict()["actual_models"] == []
+    # An empty report still says so, after the model line.
+    assert SubagentOutcome(agent="task", session_id="s").render().endswith("task (session s): no report")
+
+
+def test_outcome_fallback_names_final_model_and_path():
+    outcome = SubagentOutcome(
+        agent="task", session_id="s", text="ok", tier="medium",
+        models=("anthropic/a", "openai/b"),
+    )
+    assert outcome.actual_model == "openai/b"
+    line = outcome.render().splitlines()[0]
+    assert line == "[model: openai/b; tier: medium; fallback path: anthropic/a -> openai/b]"
+
+
+def test_qualify_model_does_not_duplicate_or_guess():
+    from nexus.agents.runner import qualify_model
+
+    assert qualify_model("openai", "gpt-x") == "openai/gpt-x"
+    assert qualify_model("openai", "openai/gpt-x") == "openai/gpt-x"
+    assert qualify_model("openrouter", "anthropic/claude") == "openrouter/anthropic/claude"
+    assert qualify_model(None, "gpt-x") == "gpt-x"
+    assert qualify_model("openai", None) is None
+    assert qualify_model("openai", "  ") is None
+
+
+async def test_runner_fills_models_from_relayed_child_events(tmp_path):
+    recorder = Recorder()
+
+    async def behavior(spec: ChildSpec) -> SubagentOutcome:
+        await spec.emit("model.started", {"provider": "anthropic", "model": "claude-a"})
+        await spec.emit("model.started", {"provider": "anthropic", "model": "claude-a"})
+        await spec.emit("model.started", {"provider": "openai", "model": "openai/gpt-b"})
+        return SubagentOutcome(agent=spec.agent, session_id=spec.session_id, text="done")
+
+    runner = make_runner(tmp_path, Factory(behavior), event_sink=recorder)
+    outcome = await runner.spawn(TaskRequest(prompt="go"))
+    assert outcome.models == ("anthropic/claude-a", "openai/gpt-b")
+    assert outcome.actual_model == "openai/gpt-b"
+    assert recorder.of("agent.completed")[-1]["resolved_model"] == "openai/gpt-b"
+    assert "[model: openai/gpt-b; tier:" in outcome.render()
+
+
+async def test_runner_models_keep_transitions_and_end_on_recovered_model(tmp_path):
+    async def behavior(spec: ChildSpec) -> SubagentOutcome:
+        for model in ("claude-a", "claude-a", "claude-b", "claude-a"):
+            await spec.emit("model.started", {"provider": "anthropic", "model": model})
+        return SubagentOutcome(agent=spec.agent, session_id=spec.session_id, text="done")
+
+    runner = make_runner(tmp_path, Factory(behavior), event_sink=Recorder())
+    outcome = await runner.spawn(TaskRequest(prompt="go"))
+    assert outcome.models == ("anthropic/claude-a", "anthropic/claude-b", "anthropic/claude-a")
+    assert outcome.actual_model == "anthropic/claude-a"
+
+
+def test_child_models_collapses_only_consecutive_repeats():
+    from types import SimpleNamespace
+
+    from nexus.runtime import _child_models
+
+    def started(model, **extra):
+        return SimpleNamespace(
+            type="model.started", data={"provider": "anthropic", "model": model, **extra}
+        )
+
+    session = SimpleNamespace(
+        events=[
+            started("a"),
+            started("a"),
+            started("grandchild", agent={"id": "g"}),
+            started("b"),
+            started("a"),
+        ]
+    )
+    assert _child_models(session) == ("anthropic/a", "anthropic/b", "anthropic/a")
+
+
+async def test_runner_failure_before_any_model_start_is_unknown(tmp_path):
+    recorder = Recorder()
+    runner = make_runner(tmp_path, Factory(fail_on_build=True), event_sink=recorder)
+    outcome = await runner.spawn(TaskRequest(prompt="go"))
+    assert outcome.status == "failed" and outcome.models == ()
+    assert "resolved_model" not in recorder.of("agent.completed")[-1]
+    assert "[model: unavailable (not reported)" in outcome.render()
+
+
+async def test_runner_crashed_child_keeps_the_model_it_started(tmp_path):
+    async def behavior(spec: ChildSpec) -> SubagentOutcome:
+        await spec.emit("external.started", {"provider": "claude-code", "model": "sonnet"})
+        raise RuntimeError("boom after start")
+
+    runner = make_runner(tmp_path, Factory(behavior))
+    outcome = await runner.spawn(TaskRequest(prompt="go"))
+    assert outcome.status == "failed"
+    assert outcome.models == ("claude-code/sonnet",)
 
 
 async def test_child_runtime_exception_becomes_an_error_outcome(tmp_path):

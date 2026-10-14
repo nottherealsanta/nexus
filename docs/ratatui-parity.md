@@ -1,5 +1,11 @@
 # Ratatui implementation and parity ledger
 
+On Settings → Providers, Antigravity CLI entries expose **Re-check models** even
+when the CLI is not currently detected; it refreshes the model catalogue without
+starting sign-in. The page notes that Antigravity owns its CLI sign-in. Subagent
+model tier entries are labeled as subagent-only, and are skipped for titles and
+other jobs.
+
 Expanded user-message previews render up to 16,000 display characters and 200
 logical lines, rather than using the generic 1,600-character literal preview.
 If either limit is exceeded, a final `... (N characters total)` line announces
@@ -149,7 +155,8 @@ is derived in the reducer from the `thinking.delta`/`thinking.end` event
 timestamps (`BlockView.elapsed_ms`, so replay reproduces it), and the reasoning
 opens beneath its activity member dimmed, with a whole-line `**heading**` shown bold.
 Expanded activity members show their full heading (`✱ Grep …`, `→ Read …`). A subagent
-call is one row, `<spinner|✓> Explore Subagent — short phrase · model (effort) · time`,
+call is one row, `<spinner|✓> Explore Subagent — short phrase · tier low · provider/model (effort) · time`
+(the model is the latest actual one; `model pending`/`model unavailable` until known, never the tier alone),
 with elapsed time after the model/effort only once finished, derived
 from the child's durable spawn/completion timestamps. Running subagents do not
 show a duration. Missing
@@ -609,7 +616,11 @@ count models. Ctrl+S toggles `Updated ↓` and `Name A–Z`. Fuzzy ranking stays
 Python (`model_choice`), and the Rust filter is a substring match on the label.
 
 Labelled panels read as dim `label: ` then value. `/usage` renders per-provider
-limit bars coloured by tone (`ui_support/usage.usage_lines`, the same wording as
+thin limit bars (`ui_support/usage.usage_lines`, tone `meter-<tone>`): the
+label stays in the text colour, used cells take the tone, the track and summary
+are dim, the pace marker `┃` is plain, and `N% in reserve` / `N% over pace` are
+green / amber (`render/dialogs.rs:meter_spans`). The desktop client draws the
+same rows as plain dimmed text (same wording as
 modal). `/settings` opens on Appearance, like terminal.
 
 Dictation shows a strip above the composer like `VoiceStrip`: `● Recording m:ss`,
@@ -1129,6 +1140,36 @@ Tests: `tests/test_ratatui_external.py` (projection, replay equality, attention,
 the projected page), Rust `external_worker_card_is_labelled_and_attention_is_distinct`.
 Not verified: a live Claude Code run; the web client intentionally has none of this.
 
+### External Antigravity workers
+
+The same blocks render an explicit `antigravity/<model>` subagent
+([agents.md](agents.md#external-antigravity-workers)); `ui_support/external_worker.py`
+picks a provider profile from the `provider` field of the `external.*` payload
+(an absent or unknown provider is treated as legacy Claude Code). The wording
+changes, not the structure:
+
+- **Titles and rows:** `Antigravity (agy)` names the worker, tool rows carry
+  `Antigravity (agy) own tools` provenance, the authority sentence says agy ran its own
+  tools and Nexus permissions did not mediate them, and an unpinned tool list reads
+  `agy default set (inherited)`.
+- **Opening card:** no Claude-style allow/deny, restricted or settings-source
+  configuration is offered, because Nexus cannot enforce any.
+- **Closing card:** adds the effective agy permission mode and the tool names agy's
+  `init` reported; `Usage` shows the token counts agy's terminal `result` carried, or
+  `unknown (agy reported no tokens to Nexus; this is not zero)`; `Cost` is always
+  `unknown (not estimated)`. `needs_attention` states the manual instruction (run `agy`
+  to sign in or trust the folder).
+- **Settings → Providers:** an Antigravity row with the manual `How to sign in with
+  agy` method and a "CLI available; sign-in managed by agy" status; no login, code
+  entry or sign-out. The Usage modal row has no windows and says to run `/usage` in
+  `agy` ([models.md](models.md#plan-usage-and-limits-providersusage)).
+- **Not in the native subagent backend switch:** there is no Antigravity backend toggle;
+  the `Claude Code subagents run via` choice (historically "Interactive worker (ZMX)",
+  a PTY) concerns Claude only. `agy` is headless, not a PTY.
+
+Not verified: a live agy run (no real model turn, no credentials). The web client has
+no Antigravity-specific feature.
+
 ## GPT Live call bar and commands (M4)
 
 `/live [stop|mute|new|status|revoke]` and `Ctrl+X D` (Rust `main.rs` leader `d`, Python
@@ -1150,3 +1191,18 @@ carry `status = "live"` and show `via voice · #N`. Covered by `tests/test_ratat
 tests and `tests/test_ratatui_pty_live.py` (real bridge, real binary, fake transport and helper:
 consent dialog, call bar, mute, card, hang up). No `live-call` mock scenario was added: mock scenarios
 script model responses, not `live.*` events. Real microphone and OpenAI behavior: not verified.
+
+### Antigravity visibility and safe discovery
+
+An installed `agy` is discovered without a handwritten provider section using a
+bounded `agy models` probe only. Configured `agy` aliases and custom executables
+are respected. The host model list exposes these rows labelled **Subagents only**
+(including native clients); selecting one as the main model is refused with an
+explanation, while explicit subagent tier/role/Task references remain supported.
+Discovery does not acknowledge inherited settings: worker execution still requires
+`worker_inherits_agy_settings = true` in an explicit provider section.
+
+Providers Settings always includes Antigravity, with manual CLI sign-in: run `agy`
+in your terminal, then **Re-check and refresh models**. CLI presence is not verified
+authentication. Nexus does not run a login subcommand, manage CLI credentials, or
+perform a model turn to discover availability. A missing CLI is reported honestly.

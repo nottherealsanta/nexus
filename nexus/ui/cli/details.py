@@ -8,6 +8,7 @@ and every untrusted label is sanitized before it can reach a terminal.
 from __future__ import annotations
 
 from ...ui_support.context import context_measure
+from ...ui_support.timeline import agent_model_label
 from ...view import ConversationView
 from .render import sanitize
 
@@ -94,7 +95,7 @@ def detail_lines(session: str, view: ConversationView) -> list[str]:
     while stack:
         agent, depth = stack.pop(0)
         label = sanitize(agent.task or agent.type or agent.id, 60)
-        tier = f" [{sanitize(agent.tier, 24)}]" if agent.tier else ""
+        tier = f" [{agent_model_label(agent)}]"
         tail = " \u00b7 ".join(filter(None, [
             f"{agent.iterations} it" if agent.iterations else "",
             f"{agent.usage.total_tokens} tok" if agent.usage.total_tokens else "",

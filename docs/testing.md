@@ -19,6 +19,7 @@ python -m playwright install chromium               # once, for browser checks
 .venv/bin/python tests/playwright_ratatui_check.py  # native PTY screenshots
 python -m tests.provider_conformance                # provider conformance matrix (offline)
 ANTHROPIC_API_KEY=… pytest -m live tests/test_anthropic_live.py   # gated live test
+NEXUS_XAI_LIVE=1 pytest -m live tests/test_xai_live.py           # xAI over an existing SuperGrok sign-in
 ```
 
 CI (`.github/workflows/ci.yml`) runs locked Rust builds/tests, Ruff and the full

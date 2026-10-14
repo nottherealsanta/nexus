@@ -40,7 +40,7 @@ Pure presentation helpers, importable by all surfaces. Rich is used only by
 | `prompts.py` | `approval_choices` (four decisions, unavailable ones disabled), pending questions | `approvalChoices` |
 | `text.py` | control-safe text | `el(tag, cls, text)` |
 | `agent_frontmatter.py` | read/rewrite agent frontmatter lines for the Settings form | `settings-files.js` |
-| `usage.py` | provider usage wording: `bar`, `tone` (ok < 70 % ≤ warn < 90 % ≤ critical), `summary` (`41% used · 59% left · resets in 6d 5h (Wed Oct 7 17:05)`), `heading` | `ui/web/js/usage.js` |
+| `usage.py` | provider usage wording: thin `bar` (`━` used, `─` left, `┃` even pace), `tone` (ok < 70 % ≤ warn < 90 % ≤ critical), `reserve` / `reserve_phrase`, `summary` (`38% used · 12% in reserve · resets in 6d 5h (Wed Oct 21 14:15)`), `heading` | `ui/web/js/usage.js` |
 | `ui/cli/commands.py` | slash commands | `SLASH_COMMANDS` |
 
 ## Layout (both surfaces)
@@ -180,8 +180,19 @@ input is durable and visible after reconnecting ([loop.md](loop.md#steering-queu
 The source is `ui_support/shortcuts.py`:
 `Ctrl+P/N/O/F/G/B/L/S/I/T/E/U/C/R`, `Shift+Tab`, `a`, `Esc`; `Ctrl+Space` toggles
 dictation. `Ctrl+U` (also `Ctrl+X U` and `/usage`) opens the provider usage modal:
-one section per connected provider with a bar per limit window, its reset,
-notes and source, plus who is not connected; `r`/Refresh re-reads it. In the
+one section per connected provider with a thin bar per limit window, its reset,
+notes and source, plus who is not connected; `r`/Refresh re-reads it. Weekly
+and monthly windows (`period_seconds` ≥ 7 days, with a known reset) also show
+**reserve**: the share of the window elapsed minus the share used, so half the
+month gone with 20% used reads `30% in reserve` (usage that can still be spent
+on an even pace); a negative value reads `N% over pace`, and `on pace` when it
+rounds to zero. The bar marks the even-pace point, and one dim line under the
+report explains reserve when any row shows it. A configured Antigravity (`agy`)
+row reads the built-in `agy -p /usage` TSV quota command (verified with agy
+1.3.4), inverts remaining percentages into used bars, and reports parse or CLI
+failures as unavailable notes/row errors without inventing quota numbers. Settings → Providers shows Antigravity as a manual CLI
+sign-in (`agy` in a terminal); the browser client gains nothing new for it. The remaining share is the bar's
+track and is no longer repeated as `N% left`. In the
 TUI it takes precedence over the composer's delete-to-line-start. **`Ctrl+X` is a leader**: then `M` (model picker), `V` (dictation), `D` (start or end a GPT Live call; `L` is the details sidebar), or
 an alias from `LEADER_SHORTCUTS` (`?` lists them). The model picker is one
 searchable modal with provider groups, favorites (`Ctrl+F`), recents, sort

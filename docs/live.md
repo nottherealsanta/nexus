@@ -147,6 +147,58 @@ The bridge watches the session through `Session.observe()`, a tap that is **not*
 a viewer, so it can neither make an unattended session look attended nor change
 the unattended approval policy. Sub-agent events are ignored.
 
+### Delivery failures, reconnects and silence
+
+Transport contract (implemented in `transport.py`, consumed by `manager.py`): the
+transport waits a bounded time for a sideband reconnect before writing, recovers on its
+own or calls `on_closed` terminally, and emits the synthetic `SidebandReconnected(gap_s)`
+after a gap. `LiveError` codes from `send`: `live_not_connected` means definitely **not
+sent**; `live_send_ambiguous` means the write failed and delivery is **unknown**. Neither
+is ever replayed. Any other send error (`live_send_failed`) is fatal and ends the call
+with `transport_error`.
+
+Transport timing and credentials:
+
+- Waiting for a connection (the lock, the initial connect or a reconnect) is bounded at 5 s
+  and each write at 5 s; both failures are reported as above and never replayed.
+- At most **2 reconnects per call**, shared by receive-detected and send-detected drops,
+  each bounded at 5 s. A clean server close (code 1000), whether seen by the reader or by a
+  failed write, ends the call as `remote_closed` without reconnecting.
+- Every reconnect fetches **fresh credentials** from the auth manager first (the access
+  token may have rotated); a new token is redacted like the first. An auth failure at
+  that point ends the call at once instead of retrying.
+- Outgoing JSON is ASCII-escaped, so text containing a lone surrogate cannot fail the
+  UTF-8 encode of a healthy socket.
+- Stopping is **best effort**: the call is marked terminal in the same loop turn as the
+  cancellation of in-flight sends, so a send cancelled mid-write cannot start a reconnect.
+  `session.close` is attempted (<= 1 s) only on a socket no write was cancelled or failed
+  on; otherwise the socket is just closed locally. The server may not see an explicit close.
+- Liveness uses the WebSocket library's default ping (every 20 s, 20 s timeout), not an
+  application keepalive.
+
+- **Appends** are serialized per call under one lock, and the call is rechecked for
+  ending once the lock is held. If chunk N fails, `live.appended` records only the
+  confirmed prefix (`text` is exactly those chunks, `chunks` their count). For the two
+  recoverable codes a `live.error` says how many parts were confirmed and whether the
+  next one was not sent or may have arrived, and the call stays active. Nothing is retried.
+- **Reconnect**: a durable, unthrottled `live.error` warns that a spoken request or an
+  interruption may have been missed. A tracked task (at most one at a time, cancelled
+  with the call) appends a short speakable notice to the voice model; it is not awaited
+  from the reader callback, which would deadlock. No delegation is repeated.
+- **Enqueue failure** in the bridge: a speakable notice asks the user to try again and a
+  `live.error` is recorded; no `live.delegated` is written. A delegation whose input the
+  session tap already consumed leaves no stale queued mapping.
+- **Delegation cap** (8 pending): the request is dropped with a `live.error` and at most 4
+  rejection notices in flight tell the voice model to ask the user to try again; beyond
+  that only the error is recorded.
+- **Silence** is normal and never ends the call: no application keepalive, no periodic or
+  invented progress appends, no error-count thresholds and no automatic session retries.
+  Only the deadline, detach, explicit stop and terminal transport closes end a call. The
+  bundled instructions tell the voice model that user silence and quiet agent work are
+  normal, never to duplicate a delegation because it is quiet, to keep commentary silent,
+  and to explain interruptions honestly, asking for a repeat only if necessary.
+  Progress commentary still comes only from real `tool.requested` events.
+
 ## Headless CLI (`nexus live`)
 
 `nexus live [--session ID] [--voice V] [--new] [--workspace PATH]` is the same call
@@ -237,7 +289,7 @@ Durable, turn-less, one `call_id` per call (see [events-and-view.md](events-and-
 | `live.delegated` | `delegation_id text mode queued_id` |
 | `live.appended` | `delegation_id channel(commentary/final/notice) text chunks`, text exactly as sent |
 | `live.phase` | `connecting listening speaking working muted`; <= 4 Hz |
-| `live.error` | a redacted non-fatal error, <= 1 per second |
+| `live.error` | a redacted non-fatal error, <= 1 per second (reconnect, partial-append and enqueue warnings are always recorded) |
 | `live.levels` | reserved, never persisted (see decisions) |
 | `live.ended` | `reason duration_s error` (redacted), exactly one per `live.started` |
 

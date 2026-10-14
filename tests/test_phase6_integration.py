@@ -649,10 +649,12 @@ async def test_parallel_tasks_both_run(tmp_path):
     first = tool_result_for(session, "t1")
     second = tool_result_for(session, "t2")
     assert first is not None and second is not None
-    assert {first.content[0].text, second.content[0].text} == {
-        "report-a",
-        "report-b",
-    }
+    bodies = set()
+    for result in (first, second):
+        head, _, body = result.content[0].text.partition("\n")
+        assert head.startswith("[model: ") and "; tier: " in head
+        bodies.add(body.strip())
+    assert bodies == {"report-a", "report-b"}
     spawned = [e for e in events if e.type == "agent.spawned"]
     assert len(spawned) == 2
     assert {e.data["agent"]["session"] for e in spawned} == {

@@ -112,12 +112,12 @@ def _config(home: Path) -> dict:
     return tomllib.loads((home / ".nexus" / "config.toml").read_text(encoding="utf-8"))
 
 
-async def test_status_lists_the_four_providers_without_credentials(home):
+async def test_status_lists_the_six_providers_without_credentials(home):
     runtime, _ = _runtime(home)
     rows = (await provider_auth.providers_status(runtime))["providers"]
-    assert [row["id"] for row in rows] == ["codex", "github-copilot", "opencode-go", "claude-agent"]
-    assert [row["methods"] for row in rows] == [["browser", "device"], ["device"], ["api_key"], ["browser"]]
-    assert [row["can_logout"] for row in rows] == [True, True, True, False]
+    assert [row["id"] for row in rows] == ["codex", "github-copilot", "opencode-go", "xai", "claude-agent", "antigravity"]
+    assert [row["methods"] for row in rows] == [["browser", "device"], ["device"], ["api_key"], ["device"], ["browser"], ["cli"]]
+    assert [row["can_logout"] for row in rows] == [True, True, True, True, False, False]
     assert not any(row["connected"] for row in rows)
 
 

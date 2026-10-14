@@ -1,0 +1,18 @@
+// !$*UTF8*$!
+{
+ archiveVersion = 1;
+ classes = {};
+ objectVersion = 56;
+ objects = {
+ A1 = {isa = PBXProject; attributes = {LastUpgradeCheck = 2700;}; buildConfigurationList = A10; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; mainGroup = A11; productRefGroup = A12; projectDirPath = ""; projectRoot = ""; targets = (A2,);};
+ A2 = {isa = PBXNativeTarget; buildConfigurationList = A20; buildPhases = (A30,A31,A32,); buildRules = (); dependencies = (); name = Nexus; productName = Nexus; productReference = A40; productType = "com.apple.product-type.application";};
+ A10 = {isa = XCConfigurationList; buildConfigurations = (A60,A61,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;}; A20 = {isa = XCConfigurationList; buildConfigurations = (A62,A63,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;};
+ A11 = {isa = PBXGroup; children = (A70,A71,A12,); sourceTree = "<group>";}; A12 = {isa = PBXGroup; children = (A40,); name = Products; sourceTree = "<group>";};
+ A70 = {isa = PBXGroup; children = (A74,A75,); path = NexusApp; sourceTree = "<group>";}; A71 = {isa = PBXGroup; children = (); name = NexusKit; path = NexusKit; sourceTree = "<group>";};
+ A74 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusApp.swift; sourceTree = "<group>";}; A75 = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>";}; A40 = {isa = PBXFileReference; explicitFileType = wrapper.application; path = Nexus.app; sourceTree = BUILT_PRODUCTS_DIR;};
+ A30 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A80,); runOnlyForDeploymentPostprocessing = 0;}; A31 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;}; A32 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;}; A80 = {isa = PBXBuildFile; fileRef = A74;};
+ A60 = {isa = XCBuildConfiguration; buildSettings = {IPHONEOS_DEPLOYMENT_TARGET = 17.0; SDKROOT = iphoneos;}; name = Debug;}; A61 = {isa = XCBuildConfiguration; buildSettings = {IPHONEOS_DEPLOYMENT_TARGET = 17.0; SDKROOT = iphoneos;}; name = Release;};
+ A62 = {isa = XCBuildConfiguration; buildSettings = {GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = NexusApp/Info.plist; PRODUCT_BUNDLE_IDENTIFIER = com.nexus.ios; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Debug;}; A63 = {isa = XCBuildConfiguration; buildSettings = {GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = NexusApp/Info.plist; PRODUCT_BUNDLE_IDENTIFIER = com.nexus.ios; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Release;};
+ };
+ rootObject = A1;
+}

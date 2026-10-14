@@ -20,9 +20,11 @@ Every path is injectable, so the default test suite never touches the network.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import math
 import os
+import re
 import tempfile
 import time
 from collections.abc import Callable, Mapping
@@ -43,10 +45,12 @@ __all__ = [
     "ADAPTER_ANTHROPIC",
     "ADAPTER_GEMINI",
     "ADAPTER_OLLAMA",
+    "ADAPTER_XAI",
     "ADAPTER_OPENAI",
     "ADAPTER_OPENCODE",
     "ADAPTER_CLAUDE_AGENT",
     "ADAPTER_CLAUDE_CODE",
+    "ADAPTER_ANTIGRAVITY",
     "DEFAULT_CATALOGUE_URL",
     "DEFAULT_MAX_BYTES",
     "DEFAULT_TIMEOUT_S",
@@ -87,16 +91,25 @@ ADAPTER_ANTHROPIC = "anthropic"
 ADAPTER_OPENAI = "openai"
 ADAPTER_GEMINI = "gemini"
 ADAPTER_OLLAMA = "ollama"
+#: xAI (Grok): the OpenAI Responses wire with xAI's endpoint, key and request
+#: rules (``providers/xai.py``). Its own name so the catalogue's ``xai`` entry
+#: is runnable without a ``base_url``.
+ADAPTER_XAI = "xai"
 #: The OpenCode ACP subprocess agent. It is an agent surface, not a model wire
 #: protocol, so it declares no model capabilities; the registry maps it only so
 #: a catalogue listing is not reported as adapter-less.
 ADAPTER_OPENCODE = "opencode"
 ADAPTER_CLAUDE_AGENT = "claude-agent"
 ADAPTER_CLAUDE_CODE = "claude-code"
+#: Antigravity (``agy``): a subagent-only external CLI. Its models are not in the
+#: catalogue; they are discovered from ``agy models`` and never selectable as a
+#: main model.
+ADAPTER_ANTIGRAVITY = "antigravity"
 OPENAI_COMPATIBLE = "openai_compatible"
 
 _KNOWN_ADAPTERS = frozenset(
-    {ADAPTER_ANTHROPIC, ADAPTER_OPENAI, ADAPTER_GEMINI, ADAPTER_OLLAMA, ADAPTER_OPENCODE, ADAPTER_CLAUDE_AGENT, ADAPTER_CLAUDE_CODE}
+    {ADAPTER_ANTHROPIC, ADAPTER_OPENAI, ADAPTER_GEMINI, ADAPTER_OLLAMA, ADAPTER_XAI, ADAPTER_OPENCODE,
+     ADAPTER_CLAUDE_AGENT, ADAPTER_CLAUDE_CODE, ADAPTER_ANTIGRAVITY}
 )
 
 #: ``kind`` spellings that alias a canonical adapter. ``google`` is the
@@ -106,6 +119,7 @@ _KIND_ALIASES: dict[str, str] = {
     "google": ADAPTER_GEMINI,
     "claude_code": ADAPTER_CLAUDE_CODE,
     "claudecode": ADAPTER_CLAUDE_CODE,
+    "agy": ADAPTER_ANTIGRAVITY,
     "opencode_agent": ADAPTER_OPENCODE,
     "opencode-agent": ADAPTER_OPENCODE,
 }
@@ -138,6 +152,7 @@ _NPM_ADAPTERS: dict[str, str] = {
     "@ai-sdk/openai-compatible": ADAPTER_OPENAI,
     "@ai-sdk/google": ADAPTER_GEMINI,
     "@ai-sdk/ollama": ADAPTER_OLLAMA,
+    "@ai-sdk/xai": ADAPTER_XAI,
 }
 
 #: Direct provider ids, for entries whose ``npm`` is missing or unfamiliar.
@@ -150,6 +165,7 @@ _DIRECT_ADAPTERS: dict[str, str] = {
     "google": ADAPTER_GEMINI,
     "gemini": ADAPTER_GEMINI,
     "ollama": ADAPTER_OLLAMA,
+    "xai": ADAPTER_XAI,
     "opencode": ADAPTER_OPENCODE,
     "claude-agent": ADAPTER_CLAUDE_AGENT,
     "claude-code": ADAPTER_CLAUDE_CODE,
@@ -828,6 +844,48 @@ class _ModelIndex:
     aliases: dict[str, ModelInfo]
 
 
+#: Bounds on what ``agy models`` may contribute.
+_MAX_EXTERNAL_MODELS = 256
+_EXTERNAL_MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}\Z")
+#: Tier of a discovered external model: deliberately not a tier name, so a
+#: price-ranked tier never lists a subagent-only CLI route; it runs only when named.
+EXTERNAL_TIER = "external"
+ANTIGRAVITY_LABEL = "Antigravity (agy)"
+ANTIGRAVITY_REASON = (
+    "subagent-only external CLI (agy): name antigravity/<model> on a role, tier or Task call; "
+    "it is never a main, title or fallback model"
+)
+
+
+def is_antigravity_section(name: str, cfg: object) -> bool:
+    """Whether a ``[providers.<name>]`` section is the Antigravity external worker."""
+    kind = normalize_adapter_kind(_cfg_value(cfg, "kind"))
+    if kind is not None:
+        return kind == ADAPTER_ANTIGRAVITY
+    return cfg is not None and name in ("antigravity", "agy")
+
+
+def clean_external_models(raw: object) -> tuple[tuple[str, str], ...]:
+    """Bound and validate a discovery result: ``(id, label)`` pairs, ids unique and safe."""
+    out: dict[str, str] = {}
+    if not isinstance(raw, (list, tuple)):
+        return ()
+    for item in raw:
+        if len(out) >= _MAX_EXTERNAL_MODELS:
+            break
+        if isinstance(item, str):
+            model_id, label = item, item
+        elif isinstance(item, (list, tuple)) and len(item) >= 1 and isinstance(item[0], str):
+            model_id = item[0]
+            label = item[1] if len(item) > 1 and isinstance(item[1], str) and item[1].strip() else model_id
+        else:
+            continue
+        if _EXTERNAL_MODEL_ID.fullmatch(model_id) is None:
+            continue
+        out.setdefault(model_id, label.strip()[:_MAX_NAME_LEN])
+    return tuple(out.items())
+
+
 def build_index(
     catalogue: Catalogue,
     *,
@@ -838,6 +896,7 @@ def build_index(
     source: Literal["catalogue", "config", "builtin"] = "catalogue",
     provider_aliases: Mapping[str, str] | None = None,
     reasoning_effort_overrides: Mapping[str, object] | None = None,
+    external_models: Mapping[str, tuple[tuple[str, str], ...]] | None = None,
 ) -> _ModelIndex:
     """Filter, canonicalize, and index a validated catalogue.
 
@@ -952,6 +1011,21 @@ def build_index(
             "models.reasoning_efforts references do not resolve to retained "
             f"catalogue models: {references}"
         )
+    # Antigravity: configured sections are always listed (never selectable as a
+    # main model); only models ``agy models`` just reported are indexed.
+    discovered = external_models or {}
+    taken = {status.id for status in statuses}
+    for name, cfg in provider_cfg.items():
+        if name in taken or not is_antigravity_section(name, cfg):
+            continue
+        found = discovered.get(name, ())
+        statuses.append(ProviderStatus(
+            id=name, name=ANTIGRAVITY_LABEL, adapter=ADAPTER_ANTIGRAVITY, kind=ADAPTER_ANTIGRAVITY,
+            configured=True, reachable=bool(found), selectable=False, reason=ANTIGRAVITY_REASON))
+        for model_id, label in found:
+            models.append(ModelInfo(
+                name, model_id, "", name=label, input_modalities=("text",), output_modalities=("text",),
+                tier=EXTERNAL_TIER, source="config"))
     models.sort(key=lambda info: (info.provider, info.id))
     by_ref = {info.ref: info for info in models}
     by_id: dict[str, list[ModelInfo]] = {}
@@ -1081,6 +1155,8 @@ class ModelRegistry:
         default_tier: str = "low",
         provider_aliases: Mapping[str, str] | None = None,
         reasoning_effort_overrides: Mapping[str, object] | None = None,
+        antigravity_cli: Callable[..., object] | None = None,
+        antigravity_timeout_s: float = 15.0,
     ) -> None:
         if (
             isinstance(ttl_days, bool)
@@ -1124,6 +1200,14 @@ class ModelRegistry:
             reasoning_effort_overrides
         )
         self._provider_aliases, self._index = dict(provider_aliases or {}), _ModelIndex((), (), {}, {}, {})
+        #: ``AntigravityCli`` factory seam (``executable=, environ=``); default imports the real one.
+        self._antigravity_cli = antigravity_cli
+        self._antigravity_timeout_s = float(antigravity_timeout_s)
+        #: Models the last ``agy models`` probe reported, per section. Rebuilt on every
+        #: probe, so a failed or empty probe leaves no stale or unverified model behind.
+        self._external_models: dict[str, tuple[tuple[str, str], ...]] = {}
+        self._external_errors: dict[str, str] = {}
+        self._catalogue = Catalogue()
         self._loaded = False
         #: Single-flight guard so N concurrent turn boundaries share one
         #: acquisition instead of racing duplicate network fetches and duplicate
@@ -1193,7 +1277,9 @@ class ModelRegistry:
                 continue
             if tier is not None and info.tier != tier:
                 continue
-            if selectable_only and not selectable.get(info.provider, False):
+            status = self.provider_status(info.provider)
+            subagent = status is not None and status.kind == ADAPTER_ANTIGRAVITY and status.reachable
+            if selectable_only and not selectable.get(info.provider, False) and not subagent:
                 continue
             if needle is not None and (
                 needle not in info.id.lower() and needle not in info.name.lower()
@@ -1279,7 +1365,50 @@ class ModelRegistry:
         async with self._load_lock:
             if self._loaded and not force:
                 return self._status
+            await self._discover_external()
             return await self._acquire(force=force)
+
+    def external_errors(self) -> dict[str, str]:
+        """Why the last ``agy models`` probe produced nothing, per section (redacted)."""
+        return dict(self._external_errors)
+
+    async def refresh_external(self) -> RegistryStatus:
+        """Re-probe ``agy models`` and rebuild the index; the catalogue is not refetched."""
+        if self._load_lock is None:
+            self._load_lock = asyncio.Lock()
+        async with self._load_lock:
+            await self._discover_external()
+            if not self._loaded:
+                return self._status
+            return self._install(
+                self._catalogue, source=self._status.source, stale=self._status.stale,
+                error=self._status.error)
+
+    async def _discover_external(self) -> None:
+        """Probe ``agy models`` for each Antigravity section: bounded, local, never fatal."""
+        # Probe-only default; never supplies worker execution acknowledgement.
+        if not any(is_antigravity_section(name, cfg) for name, cfg in self._providers.items()):
+            self._providers["antigravity"] = {}
+        names = [name for name, cfg in self._providers.items() if is_antigravity_section(name, cfg)]
+        found: dict[str, tuple[tuple[str, str], ...]] = {}
+        errors: dict[str, str] = {}
+        for name in names:
+            try:
+                found[name] = await asyncio.wait_for(
+                    self._probe_antigravity(self._providers[name]), timeout=self._antigravity_timeout_s)
+            except Exception as exc:  # noqa: BLE001 - a missing/broken CLI just means no models
+                errors[name] = redact_url_userinfo(f"{type(exc).__name__}: {exc}")[:300]
+        self._external_models, self._external_errors = found, errors
+
+    async def _probe_antigravity(self, cfg: object) -> tuple[tuple[str, str], ...]:
+        factory = self._antigravity_cli
+        if factory is None:
+            from .providers.antigravity_cli import AntigravityCli as factory
+        cli = factory(executable=_cfg_value(cfg, "executable") or None, environ=self._env)
+        listed = cli.models()  # async on the real CLI helper; a plain list is accepted too
+        if inspect.isawaitable(listed):
+            listed = await listed
+        return clean_external_models(listed)
 
     async def _acquire(self, *, force: bool) -> RegistryStatus:
         cache = self._read_cache()
@@ -1366,7 +1495,9 @@ class ModelRegistry:
             source=model_source,
             provider_aliases=self._provider_aliases,
             reasoning_effort_overrides=self._reasoning_effort_overrides,
+            external_models=self._external_models,
         )
+        self._catalogue = catalogue
         self._index = index
         self._loaded = True
         self._status = RegistryStatus(

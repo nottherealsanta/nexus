@@ -93,6 +93,17 @@ class SidebandOpen(msgspec.Struct, frozen=True):
     """Synthetic: the transport opened the sideband socket (not a wire event)."""
 
 
+class SidebandReconnected(msgspec.Struct, frozen=True):
+    """Synthetic: a replacement sideband socket is established after a drop (not a wire event).
+
+    Emitted once per successful recovery, never at startup (that is ``SidebandOpen``).
+    ``gap_s`` is the monotonic seconds between detecting the drop and the new socket opening.
+    Events sent on the old socket may have been lost; delivery of in-flight sends is unknown.
+    """
+
+    gap_s: float = 0.0
+
+
 class SessionStarted(msgspec.Struct, frozen=True):
     session_id: str = ""
 
@@ -147,7 +158,7 @@ class Unknown(msgspec.Struct, frozen=True):
 
 
 LiveEvent = (
-    SidebandOpen | SessionStarted | SessionUpdated | SessionClosed | TranscriptAdded
+    SidebandOpen | SidebandReconnected | SessionStarted | SessionUpdated | SessionClosed | TranscriptAdded
     | TranscriptDelta | TurnDone | DelegationCreated | ErrorEvent | Unknown
 )
 
@@ -301,7 +312,7 @@ def valid_call_id(value: str) -> bool:
 __all__ = [
     "CHANNELS", "DEFAULT_VOICE", "FINAL_LABEL", "MAX_APPEND_BYTES", "MAX_DELEGATION_CHARS", "MODEL",
     "VOICES", "CallRequest", "LiveError", "DelegationCreated", "ErrorEvent", "LiveEvent", "LiveSession",
-    "SessionClosed", "SessionStarted", "SessionUpdated", "SidebandOpen", "TranscriptAdded",
+    "SessionClosed", "SessionStarted", "SessionUpdated", "SidebandOpen", "SidebandReconnected", "TranscriptAdded",
     "TranscriptDelta", "TurnDone", "Unknown", "append_message", "append_messages", "chunk_utf8",
     "close_message", "final_message", "parse_event", "resolve_voice", "valid_call_id",
 ]

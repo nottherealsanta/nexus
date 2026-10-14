@@ -326,6 +326,302 @@ async def test_missing_websocket_client_hint_says_reinstall_not_extra_or_cargo(m
     assert "[live]" not in hint and "cargo" not in hint.lower()
 
 
+class WriteSocket(FakeSocket):
+    """A socket whose writes can be gated, failed or hung; ``close`` frees a hung write."""
+
+    def __init__(self, mode="ok", error=None):
+        super().__init__()
+        self.mode, self.error = mode, error
+        self.started = asyncio.Event()
+        self.gate = asyncio.Event()
+
+    async def send(self, text):
+        self.started.set()
+        if self.mode == "gated":
+            await self.gate.wait()
+            raise self.error or OSError("write failed")
+        if self.mode == "hang":
+            await self.gate.wait()
+            raise OSError("closed while writing")
+        if self.mode == "raise":
+            raise self.error or OSError("write failed")
+        self.sent.append(text)
+
+    async def close(self, code=1000, reason=""):
+        self.gate.set()
+        await super().close(code, reason)
+
+
+async def open_transport(sockets, gate=None):
+    """Transport whose connector hands out ``sockets`` in order; the 2nd+ connect waits on ``gate``."""
+    pool = iter(sockets)
+    sink = Sink()
+    connects = []
+
+    async def connector(url, headers):
+        connects.append(url)
+        if len(connects) > 1 and gate is not None:
+            await gate.wait()
+        return next(pool)
+
+    transport = CodexLiveTransport(Auth(), client=signaling_client(ok_handler([])), connector=connector, sleep=no_sleep)
+    await transport.start("sdp", SESSION, on_event=sink.on_event, on_closed=sink.on_closed)
+    await settle(lambda: sink.events)
+    return transport, sink
+
+
+def msg(text):
+    return lp.append_message(text, channel="speakable")
+
+
+async def test_waiter_never_writes_to_a_socket_replaced_while_it_waited_for_the_lock():
+    old, new, gate = WriteSocket("gated"), WriteSocket("ok"), asyncio.Event()
+    transport, sink = await open_transport([old, new], gate)
+    first = asyncio.create_task(transport.send(msg("one")))
+    await old.started.wait()
+    second = asyncio.create_task(transport.send(msg("two")))  # snapshots nothing; waits on the send lock
+    await asyncio.sleep(0)
+    old.gate.set()  # first write fails -> ambiguous, old socket invalidated, reconnect gated
+    with pytest.raises(lp.LiveError) as err:
+        await first
+    assert err.value.code == "live_send_ambiguous"
+    assert not second.done()
+    gate.set()
+    await asyncio.wait_for(second, 2)
+    assert old.sent == [] and [json.loads(t)["content"][0]["text"] for t in new.sent] == ["two"]  # one never replayed
+    assert old.closed is not None
+    assert [type(e) for e in sink.events] == [lp.SidebandOpen, lp.SidebandReconnected]
+    assert sink.events[1].gap_s >= 0 and sink.closed == []
+    await transport.close()
+
+
+async def test_send_during_reconnect_waits_and_succeeds_on_the_new_socket():
+    old, new, gate = FakeSocket(), WriteSocket("ok"), asyncio.Event()
+    transport, sink = await open_transport([old, new], gate)
+    old.inbox.put_nowait(ConnectionResetError("dropped"))
+    await settle(lambda: not transport._ready.is_set())
+    pending = asyncio.create_task(transport.send(msg("hello")))
+    await asyncio.sleep(0.01)
+    assert not pending.done() and old.closed is not None  # waiting, replaced socket closed
+    gate.set()
+    await asyncio.wait_for(pending, 2)
+    assert len(new.sent) == 1 and old.sent == []
+    assert sum(isinstance(e, lp.SidebandReconnected) for e in sink.events) == 1
+    await transport.close()
+
+
+async def test_send_wait_for_reconnect_is_bounded_and_means_not_sent(monkeypatch):
+    monkeypatch.setattr("nexus.live.transport.SEND_WAIT_TIMEOUT_S", 0.05)
+    old = FakeSocket()
+    transport, _ = await open_transport([old, FakeSocket()], asyncio.Event())  # reconnect never completes
+    old.inbox.put_nowait(ConnectionResetError("dropped"))
+    await settle(lambda: not transport._ready.is_set())
+    with pytest.raises(lp.LiveError) as err:
+        await asyncio.wait_for(transport.send(msg("x")), 2)
+    assert err.value.code == "live_not_connected" and "not sent" in err.value.message
+    await transport.close()
+
+
+async def test_send_before_initial_connect_is_bounded_not_sent(monkeypatch):
+    monkeypatch.setattr("nexus.live.transport.SEND_WAIT_TIMEOUT_S", 0.05)
+    gate = asyncio.Event()
+
+    async def connector(url, headers):
+        await gate.wait()
+        return FakeSocket()
+
+    transport = CodexLiveTransport(Auth(), client=signaling_client(ok_handler([])), connector=connector)
+    await transport.start("sdp", SESSION, on_event=Sink().on_event, on_closed=Sink().on_closed)
+    with pytest.raises(lp.LiveError) as err:
+        await asyncio.wait_for(transport.send(msg("x")), 2)
+    assert err.value.code == "live_not_connected"
+    await transport.close()
+
+
+@pytest.mark.parametrize("mode", ["raise", "hang"])
+async def test_failed_or_timed_out_write_is_ambiguous_never_replayed_and_recovers(mode, monkeypatch):
+    monkeypatch.setattr("nexus.live.transport.SEND_TIMEOUT_S", 0.05)
+    bad = WriteSocket(mode, OSError(f"boom Bearer {SECRET} acct"))
+    good = WriteSocket("ok")
+    transport, sink = await open_transport([bad, good])
+    with pytest.raises(lp.LiveError) as err:
+        await transport.send(msg("once"))
+    error = err.value
+    assert error.code == "live_send_ambiguous"
+    assert "not retried" in error.message and "may or may not" in error.message
+    assert SECRET not in error.message and "acct" not in error.message and "Bearer" not in error.message
+    await settle(lambda: any(isinstance(e, lp.SidebandReconnected) for e in sink.events))
+    assert bad.sent == [] and good.sent == []  # nothing replayed on the replacement
+    assert bad.closed is not None  # damaged socket closed
+    await transport.send(msg("next"))  # recovered: new traffic flows
+    assert len(good.sent) == 1 and sink.closed == []
+    await transport.close()
+
+
+async def test_ambiguous_drops_share_the_reconnect_budget():
+    sockets = [WriteSocket("raise"), WriteSocket("raise"), WriteSocket("raise")]
+    transport, sink = await open_transport(sockets)
+    for index in range(2):
+        with pytest.raises(lp.LiveError) as err:
+            await transport.send(msg(f"m{index}"))
+        assert err.value.code == "live_send_ambiguous"
+        await settle(lambda n=index + 1: sum(isinstance(e, lp.SidebandReconnected) for e in sink.events) == n)
+    with pytest.raises(lp.LiveError):
+        await transport.send(msg("third"))
+    await settle(lambda: sink.closed)  # budget of 2 exhausted: the call ends instead of a 3rd reconnect
+    assert sink.closed[0][0] == "sideband_lost"
+    with pytest.raises(lp.LiveError) as err:
+        await transport.send(msg("after"))
+    assert err.value.code == "live_not_connected"
+    await transport.close()
+
+
+async def test_close_wakes_senders_waiting_for_a_reconnect_and_for_the_lock():
+    old, gate = WriteSocket("hang"), asyncio.Event()
+    transport, _ = await open_transport([old, FakeSocket()], gate)
+    stuck = asyncio.create_task(transport.send(msg("stuck")))
+    await old.started.wait()
+    queued = asyncio.create_task(transport.send(msg("queued")))
+    await asyncio.sleep(0)
+    await asyncio.wait_for(transport.close(), 5)
+    for task in (stuck, queued):
+        with pytest.raises(lp.LiveError):
+            await asyncio.wait_for(task, 2)
+    assert queued.exception().code == "live_not_connected"
+    assert old.closed is not None
+
+
+async def test_close_wakes_a_sender_waiting_for_reconnect():
+    old, gate = FakeSocket(), asyncio.Event()
+    transport, _ = await open_transport([old, FakeSocket()], gate)
+    old.inbox.put_nowait(ConnectionResetError("dropped"))
+    await settle(lambda: not transport._ready.is_set())
+    waiting = asyncio.create_task(transport.send(msg("w")))
+    await asyncio.sleep(0.01)
+    await asyncio.wait_for(transport.close(), 5)
+    with pytest.raises(lp.LiveError) as err:
+        await asyncio.wait_for(waiting, 2)
+    assert err.value.code == "live_not_connected"
+
+
+class ConnectionClosedOK(Exception):
+    code = 1000
+
+
+async def test_clean_server_close_seen_by_a_send_ends_the_call_without_reconnect():
+    bad = WriteSocket("raise", ConnectionClosedOK("sent 1000 (OK)"))
+    transport, sink = await open_transport([bad, WriteSocket("ok")])
+    connects_before = len(sink.events)
+    with pytest.raises(lp.LiveError) as err:
+        await transport.send(msg("x"))
+    assert err.value.code == "live_send_ambiguous"
+    await settle(lambda: sink.closed)
+    assert sink.closed == [("remote_closed", None)]
+    assert len(sink.events) == connects_before and bad.sent == []
+    await transport.close()
+
+
+async def test_reconnect_uses_fresh_credentials_and_redacts_them():
+    new_secret = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ5In0.rotatedrotatedrotated1234567890"
+    seen: list[str] = []
+
+    class Rotating(Auth):
+        calls = 0
+
+        async def headers(self):
+            Rotating.calls += 1
+            token = SECRET if Rotating.calls == 1 else new_secret
+            return {"authorization": f"Bearer {token}", "originator": "nexus"}
+
+    old, new = FakeSocket(), FakeSocket()
+    pool = iter([old, new])
+
+    async def connector(url, headers):
+        seen.append(headers["authorization"])
+        return next(pool)
+
+    sink = Sink()
+    transport = CodexLiveTransport(Rotating(), client=signaling_client(ok_handler([])), connector=connector, sleep=no_sleep)
+    await transport.start("sdp", SESSION, on_event=sink.on_event, on_closed=sink.on_closed)
+    await settle(lambda: sink.events)
+    old.inbox.put_nowait(ConnectionResetError(f"drop Bearer {new_secret}"))
+    await settle(lambda: len(seen) == 2)
+    assert seen == [f"Bearer {SECRET}", f"Bearer {new_secret}"]
+    assert new_secret in transport._secret_values
+    assert new_secret not in transport._clean(f"x {new_secret} y")
+    await transport.close()
+
+
+async def test_reconnect_auth_failure_fails_fast():
+    class Flaky(Auth):
+        calls = 0
+
+        async def headers(self):
+            Flaky.calls += 1
+            if Flaky.calls > 1:
+                raise RuntimeError(f"expired Bearer {SECRET}")
+            return await super().headers()
+
+    old = FakeSocket()
+    connects = []
+
+    async def connector(url, headers):
+        connects.append(url)
+        return old
+
+    sink = Sink()
+    transport = CodexLiveTransport(Flaky(), client=signaling_client(ok_handler([])), connector=connector, sleep=no_sleep)
+    await transport.start("sdp", SESSION, on_event=sink.on_event, on_closed=sink.on_closed)
+    await settle(lambda: sink.events)
+    old.inbox.put_nowait(ConnectionResetError("dropped"))
+    await settle(lambda: sink.closed)
+    assert sink.closed[0][0] == "sideband_lost" and SECRET not in (sink.closed[0][1] or "")
+    assert len(connects) == 1
+    await transport.close()
+
+
+async def test_lone_surrogate_is_escaped_and_does_not_damage_the_connection():
+    class StrictSocket(WriteSocket):
+        async def send(self, text):
+            text.encode("utf-8")  # what the real client does
+            await super().send(text)
+
+    sock = StrictSocket("ok")
+    transport, sink = await open_transport([sock, StrictSocket("ok")])
+    await transport.send(msg("bad \ud800 text"))
+    assert json.loads(sock.sent[0])["content"][0]["text"] == "bad \ud800 text"
+    await transport.send(msg("next"))
+    assert len(sock.sent) == 2 and len(sink.events) == 1 and sink.closed == []
+    await transport.close()
+
+
+async def test_cancel_mid_send_then_close_leaves_no_reconnect_or_close_write():
+    hung = WriteSocket("hang")
+    connects = []
+    pool = iter([hung, FakeSocket()])
+
+    async def connector(url, headers):
+        connects.append(url)
+        return next(pool)
+
+    sink = Sink()
+    transport = CodexLiveTransport(Auth(), client=signaling_client(ok_handler([])), connector=connector, sleep=no_sleep)
+    await transport.start("sdp", SESSION, on_event=sink.on_event, on_closed=sink.on_closed)
+    await settle(lambda: sink.events)
+    reader = transport._reader
+    sender = asyncio.create_task(transport.send(msg("stuck")))
+    await hung.started.wait()
+    sender.cancel()
+    closing = asyncio.ensure_future(transport.close())  # same turn, like the manager's _finish
+    with pytest.raises(asyncio.CancelledError):
+        await sender
+    await asyncio.wait_for(closing, 5)
+    assert len(connects) == 1 and reader.done()
+    assert hung.sent == [] and hung.closed is not None  # no session.close on the damaged socket
+    assert [type(e) for e in sink.events] == [lp.SidebandOpen] and sink.closed == []
+    assert transport._ws is None and transport._reader is None and transport._retired == []
+
+
 def test_safe_detail_redacts_and_bounds():
     assert SECRET not in safe_detail(f"x Bearer {SECRET} y")
     assert len(safe_detail("a " * 1000)) <= 300

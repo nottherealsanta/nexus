@@ -189,12 +189,103 @@ def test_task_card_links_child_and_hides_duplicate_agent_entry(tmp_path, monkeyp
     blocks = project(SimpleNamespace(view=view, session="s"), 1, shell=shell)["blocks"]
     card = next(block for block in blocks if block["id"] == "task-1")
     assert card["kind"] == "task"
-    assert card["title"] == "Explore Subagent — Scan"
+    assert card["title"] == "Explore Subagent — Scan · tier unknown · model pending"
     assert card["status"] == "running"
     assert card["text"] == "Starting…"
     assert card["gap"] == 1
     assert card["operation"] == {"kind": "agent_page", "id": "a1"}
     assert [block["id"] for block in blocks if block["id"] in {"a1", "a2"}] == ["a2"]
+
+
+def _agent(**kwargs):
+    from nexus.view.model import AgentView
+    return AgentView(id="a1", type="explore", description="Scan", **kwargs)
+
+
+def test_agent_model_label_prefers_actual_over_tier_and_spawn_reference():
+    from nexus.ui_support.timeline import agent_model_label
+    actual = _agent(tier="low", model="openai/spawn-ref", resolved_model="anthropic/claude-x")
+    assert agent_model_label(actual) == "tier low · anthropic/claude-x"
+    # A tier name is never presented as the model; the spawn reference is only "requested".
+    pending = _agent(tier="low", model="openai/spawn-ref")
+    assert agent_model_label(pending) == "tier low · model pending (requested openai/spawn-ref)"
+    assert agent_model_label(_agent(tier="low", model="low")) == "tier low · model pending"
+    assert agent_model_label(_agent(tier="low", status="completed")) == "tier low · model unavailable"
+    assert agent_model_label(_agent(requested_tier="high")) == "tier high · model pending"
+    assert agent_model_label(None) == "tier unknown · model pending"
+
+
+def test_agent_model_label_falls_back_to_child_turn_metadata():
+    from nexus.ui_support.timeline import agent_model_label
+    agent = _agent(tier="medium", status="completed")
+    agent.body.turns = [TurnView(id="ct", index=0, messages=[
+        MessageView(id="m", role="assistant", event_seq=2, provider="openai", model="gpt-6")])]
+    assert agent_model_label(agent) == "tier medium · openai/gpt-6"
+
+
+def _with_assistant(**message):
+    agent = _agent(tier="medium", status="completed")
+    agent.body.turns = [TurnView(id="ct", index=0, messages=[
+        MessageView(id="m", role="assistant", event_seq=2, **message)])]
+    return agent
+
+
+def test_agent_actual_model_fallback_edge_cases():
+    from nexus.ui_support.timeline import agent_actual_model, agent_model_label
+    # Provider alone is not a concrete model.
+    provider_only = _with_assistant(provider="openai")
+    assert agent_actual_model(provider_only) is None
+    assert agent_model_label(provider_only) == "tier medium · model unavailable"
+    # An already provider-qualified model is not prefixed twice.
+    assert agent_actual_model(_with_assistant(provider="openai", model="openai/gpt-6")) == "openai/gpt-6"
+    # A bare model keeps working with or without a provider.
+    assert agent_actual_model(_with_assistant(model="gpt-6")) == "gpt-6"
+    # Provider-only newest message falls through to an older concrete one.
+    agent = _with_assistant(provider="openai", model="gpt-5")
+    agent.body.turns[0].messages.append(MessageView(id="m2", role="assistant", event_seq=3, provider="openai"))
+    assert agent_actual_model(agent) == "openai/gpt-5"
+
+
+def test_agent_model_label_running_status_is_pending():
+    from nexus.ui_support.timeline import agent_model_label
+    assert agent_model_label(_agent(tier="low", status="running")) == "tier low · model pending"
+    assert agent_model_label(_agent(tier="low", status="failed")) == "tier low · model unavailable"
+
+
+def test_task_card_and_child_page_disclose_actual_model(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    view = initial_state("s")
+    task = ToolCallView(call_id="task-1", name="Task", event_seq=2, status="running",
+                        input={"subagent_type": "explore", "description": "Scan"}, child_agent_ids=["a1"])
+    view.turns = [TurnView(id="t", index=0, phase="active", messages=[
+        MessageView(id="u", role="user", event_seq=1, blocks=[BlockView(text="go")])], tools=[task])]
+    child = _agent(tier="low", status="spawned", resolved_model="openai/gpt-6")
+    child.body.turns = [TurnView(id="ct", index=0, reasoning_effort="high")]
+    view.agents = {"a1": child}
+    shell = ShellActions(SimpleNamespace(view=view, session="s"))
+    shell.preferences.values["context_preview"] = False
+    controller = SimpleNamespace(view=view, session="s")
+    card = next(b for b in project(controller, 1, shell=shell)["blocks"] if b["id"] == "task-1")
+    assert card["title"] == "Explore Subagent — Scan · tier low · openai/gpt-6 (high)"
+    shell.workflows.agent_page_id = "a1"
+    page = project(controller, 2, shell=shell)
+    assert page["model"] == "tier low · openai/gpt-6"
+    assert ("Model", "tier low · openai/gpt-6") in [tuple(r) for r in page["details_panel"]["session"]]
+    assert ("Effort", "high") in [tuple(r) for r in page["details_panel"]["session"]]
+
+
+def test_cli_details_and_link_label_disclose_model():
+    from nexus.ui.cli.details import detail_lines
+    from nexus.ui_support.timeline import _agent_link_label
+    view = initial_state("s")
+    done = _agent(tier="low", status="completed", resolved_model="openai/gpt-6")
+    view.agents = {"a1": done}
+    view.agent_order = ["a1"]
+    assert any("tier low · openai/gpt-6" in line for line in detail_lines("s", view))
+    assert "tier low · openai/gpt-6" in _agent_link_label(done)
+    view.agents = {"a1": _agent(tier="low", status="completed")}
+    assert any("model unavailable" in line for line in detail_lines("s", view))
 
 
 @pytest.mark.parametrize(
@@ -219,7 +310,7 @@ def test_subagent_elapsed_time_only_when_finished(tmp_path, monkeypatch, status,
     )
     child = AgentView(
         id="kid", type="explore", status="spawned" if status == "running" else status,
-        model="openai/gpt-x", spawned_ts=spawned, completed_ts=completed,
+        tier="low", resolved_model="openai/gpt-x", spawned_ts=spawned, completed_ts=completed,
     )
     child.body.turns = [TurnView(id="t", reasoning_effort="medium")]
     view = initial_state("s")
@@ -229,7 +320,7 @@ def test_subagent_elapsed_time_only_when_finished(tmp_path, monkeypatch, status,
     shell = ShellActions(controller)
     shell.preferences.values["context_preview"] = False
     row = next(row for row in project(controller, 1, shell=shell)["blocks"] if row["kind"] == "task")
-    assert row["title"].endswith(" · gpt-x (medium)")
+    assert row["title"].endswith(" · tier low · openai/gpt-x (medium)")
     assert row["status"] == ("running" if status == "running" else "done")
     assert row["text"] == ("Starting…" if status == "running" else "")
     assert row["metrics"].startswith("0 tools")
@@ -411,7 +502,7 @@ def test_usage_lines_bar_each_window_with_its_tone():
     lines, tones = usage_lines(result, now=0)
     assert len(lines) == len(tones) and tones[0] == "title"
     window_tones = [t for line, t in zip(lines, tones) if "session" in line or "Weekly" in line]
-    assert window_tones == ["warn", "ok"] or window_tones[1] == "ok"
+    assert window_tones == ["meter-warn", "meter-ok"]
     assert "dim" in tones and lines[-1].startswith("Not connected")
     assert usage_lines({"providers": []})[0][0] == "No connected provider reports usage."
 

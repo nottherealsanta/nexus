@@ -275,6 +275,18 @@ async def test_run_converts_the_outcome_with_notes_and_metrics(tmp_path):
     assert result.metrics["usage"]["total_tokens"] == 15
 
 
+async def test_run_metrics_carry_actual_models(tmp_path):
+    service = FakeService(outcome(tier="low", models=("anthropic/a", "openai/b")))
+    result = await task.run({"prompt": "x"}, make_ctx(tmp_path, subagents=service))
+    assert result.metrics["actual_model"] == "openai/b"
+    assert result.metrics["actual_models"] == ["anthropic/a", "openai/b"]
+
+    service = FakeService(outcome(tier="low"))
+    result = await task.run({"prompt": "x"}, make_ctx(tmp_path, subagents=service))
+    assert result.metrics["actual_model"] is None
+    assert result.metrics["actual_models"] == []
+
+
 async def test_run_reports_a_child_failure_as_an_error(tmp_path):
     service = FakeService(
         outcome(status="failed", is_error=True, text="the child failed")

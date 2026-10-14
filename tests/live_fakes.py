@@ -26,6 +26,9 @@ class FakeLiveTransport:
         self.fail_start, self.hang_start, self.fail_send = fail_start, hang_start, fail_send
         self.open_on_start = open_on_start
         self.sent: list[dict[str, Any]] = []
+        self.fail_at: dict[int, Exception] = {}
+        self.send_gate: asyncio.Event | None = None
+        self.attempts = self.in_flight = self.max_in_flight = 0
         self.close_reasons: list[str] = []
         self.offer: str | None = None
         self.session: lp.LiveSession | None = None
@@ -50,9 +53,20 @@ class FakeLiveTransport:
         self._on_closed(reason, error)
 
     async def send(self, message) -> None:
-        if self.fail_send:
-            raise lp.LiveError("live_send_failed", "send failed")
-        self.sent.append(dict(message))
+        index = self.attempts
+        self.attempts += 1
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        try:
+            if self.send_gate is not None:
+                await self.send_gate.wait()
+            if self.fail_send:
+                raise lp.LiveError("live_send_failed", "send failed")
+            if index in self.fail_at:  # attempt index -> LiveError (a failed chunk is never replayed)
+                raise self.fail_at[index]
+            self.sent.append(dict(message))
+        finally:
+            self.in_flight -= 1
 
     async def close(self, reason="done") -> None:
         self.close_reasons.append(reason)

@@ -18,7 +18,7 @@ agent can see is hidden from the user. Keep this in mind for every change.
 | Know *why* something is the way it is | [decisions.md](decisions.md) | |
 | Change config keys, defaults, file locations, env vars | [config.md](config.md) | `nexus/config/` |
 | Add or read an event; change what the UI can draw | [events-and-view.md](events-and-view.md) | `nexus/events.py`, `nexus/view/` |
-| Add a provider, model behavior, tiers, sign-in | [models.md](models.md), [provider-onboarding.md](provider-onboarding.md) | `nexus/model/`, `nexus/auth/` |
+| Add a provider, model behavior, tiers, sign-in | [adding-a-provider.md](adding-a-provider.md), [models.md](models.md), [provider-onboarding.md](provider-onboarding.md) | `nexus/model/`, `nexus/auth/` |
 | Change how a turn runs (iterations, retries, limits, cancel) | [loop.md](loop.md) | `nexus/core/` |
 | Change the prompt, budget, compaction, caching | [context.md](context.md) | `nexus/context/` |
 | Change session storage, locks, fork, export, archive | [sessions.md](sessions.md) | `nexus/session/` |
@@ -26,6 +26,7 @@ agent can see is hidden from the user. Keep this in mind for every change.
 | Subagents, worktrees, agent definitions | [agents.md](agents.md) | `nexus/agents/` |
 | Skills, hooks, MCP, hot-loaded extensions, Settings files | [extensions.md](extensions.md) | `nexus/ext/`, `nexus/skills/`, `nexus/hooks/`, `nexus/mcp/` |
 | Add a host command; daemon, transports, presence | [host.md](host.md) | `nexus/host/`, `nexus/host_support/` |
+| Enable the optional device gateway | [gateway.md](gateway.md) | `nexus/gateway/` |
 | Add a CLI subcommand or a chat slash command | [cli.md](cli.md) | `nexus/cli.py`, `nexus/ui/cli/` |
 | Something every client must do the same way | [surfaces.md](surfaces.md) | `nexus/ui_support/` |
 | Work on `nexus chat` (Ratatui) | [ratatui-parity.md](ratatui-parity.md) | `nexus/ui/ratatui/`, `rust/tui/` |

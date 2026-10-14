@@ -15,13 +15,14 @@ import re
 from typing import Any
 
 from ..errors import ConfigError
-from ..model.registry import ADAPTER_CLAUDE_CODE, normalize_adapter_kind
+from ..model.registry import ADAPTER_ANTIGRAVITY, ADAPTER_CLAUDE_CODE, normalize_adapter_kind
 from ..model.request import ModelRequest
 from . import provider_auth
 
 __all__ = [
     "MAX_TIER_REFS",
     "agent_max_tier_set",
+    "antigravity_providers",
     "claude_code_settings",
     "claude_code_settings_set",
     "session_title_settings",
@@ -120,8 +121,8 @@ def tier_rows(runtime: object) -> dict[str, Any]:
     }
 
 
-def _claude_code_providers(runtime: object) -> frozenset[str]:
-    """Names of configured ``kind = "claude-code"`` sections (run by the external worker)."""
+def _worker_providers(runtime: object, kinds: tuple[str, ...]) -> frozenset[str]:
+    """Names of configured sections whose normalized kind is in ``kinds`` (external-worker routes)."""
     loader = getattr(runtime, "_load_config", None)
     try:
         config = loader() if callable(loader) else None
@@ -129,7 +130,19 @@ def _claude_code_providers(runtime: object) -> frozenset[str]:
         return frozenset()
     sections = getattr(getattr(config, "v2", None), "providers", None) or {}
     return frozenset(name for name, section in sections.items()
-                     if normalize_adapter_kind(getattr(section, "kind", None)) == ADAPTER_CLAUDE_CODE)
+                     if normalize_adapter_kind(getattr(section, "kind", None)) in kinds
+                     or (getattr(section, "kind", None) is None and ADAPTER_ANTIGRAVITY in kinds
+                         and name in (ADAPTER_ANTIGRAVITY, "agy")))
+
+
+def _claude_code_providers(runtime: object) -> frozenset[str]:
+    """Names of configured ``kind = "claude-code"`` sections (run by the external worker)."""
+    return _worker_providers(runtime, (ADAPTER_CLAUDE_CODE,))
+
+
+def antigravity_providers(runtime: object) -> frozenset[str]:
+    """Names of configured Antigravity (``agy``) sections: subagent-only external routes."""
+    return _worker_providers(runtime, (ADAPTER_ANTIGRAVITY,)) | frozenset(("antigravity", "agy"))
 
 
 def candidate_rows(runtime: object, refs: list[str], resolved: str = "") -> list[dict[str, Any]]:
@@ -137,7 +150,7 @@ def candidate_rows(runtime: object, refs: list[str], resolved: str = "") -> list
     run it (``scope = "subagents"``); session titles and other background jobs skip it."""
     router = getattr(runtime, "router", None)
     providers = getattr(router, "providers", {})
-    worker = _claude_code_providers(runtime)
+    worker = _claude_code_providers(runtime) | antigravity_providers(runtime)
     rows: list[dict[str, Any]] = []
     for ref in refs[:MAX_TIER_REFS]:
         head = ref.split("/", 1)[0]
@@ -171,6 +184,7 @@ async def default_models_set(runtime: object, refs: list[str], *, reload: bool =
     cleaned = _validate_refs(refs)
     if len(cleaned) != len(refs):
         raise ConfigError("default model chain contains duplicate references")
+    _refuse_subagent_only(runtime, cleaned)
     _check_refs_known(runtime, cleaned)
     _write(runtime, (("models", "default", cleaned[0]), ("models", "fallback", cleaned[1:])))
     reloaded = await _reload(runtime, reload)
@@ -232,7 +246,18 @@ def _check_refs_known(runtime: object, refs: list[str]) -> None:
         if ref in tiers.order:
             raise ConfigError(f"{ref!r} is a tier, not a model")
         if get(ref) is None:
+            if ref.partition("/")[0] in antigravity_providers(runtime):
+                raise ConfigError(
+                    f"{ref!r} is not in the models `agy models` reported; fix agy and refresh the model list")
             raise ConfigError(f"unknown model {ref!r}")
+
+
+def _refuse_subagent_only(runtime: object, refs: list[str]) -> None:
+    """Antigravity routes run subagents only: never the default model or its fallbacks."""
+    subagent_only = antigravity_providers(runtime)
+    for ref in refs:
+        if ref.partition("/")[0] in subagent_only:
+            raise ConfigError(f"{ref!r} runs subagents only; it cannot be the default or a fallback model")
 
 
 async def tier_set(runtime: object, tier: str, refs: list[str], *, reload: bool = False) -> dict[str, Any]:

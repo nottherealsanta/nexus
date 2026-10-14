@@ -95,6 +95,8 @@ paths themselves. See [desktop.md](desktop.md).
 | **Claude subscription via the official Agent SDK in an isolated worker,** SDK tools/hooks/settings/persistence disabled; text-only, buffered. | Nexus keeps logging, permissions and execution. | `model/providers/claude_agent.py` |
 | **Explicit `claude-code/<model>` subagents run Claude Code's own agent loop and tools in a PTY, outside Nexus's dispatcher; the earlier text-only PTY model bridge (`model/providers/claude_code.py`) was dropped and deleted.** | A bridge that disables Claude's tools and feeds JSON tool intentions into a Nexus child loop wastes what Claude Code is for and implies Nexus enforcement it cannot give an interactive CLI. Instead the policy is explicit and refuse-don't-widen (read-only roles only get `Read,Grep,Glob`; budgets refused; bypass/auto never passed; no prompt is ever answered), usage is reported as unknown, and file changes are measured by Nexus. Main-agent use stays on the SDK. Live behavior not verified; remaining gaps are listed in [agents.md](agents.md#external-claude-code-workers). | `agents/claude_code_worker.py`, `runtime.py:_ChildRuntime` |
 | **`claude-code` subagents have a backend switch (`[models] claude_code_subagent_backend`: `worker` default, or `sdk`).** | Some users want Claude as a subagent under Nexus's tools, permissions and measured usage rather than Claude's own tools. `sdk` reuses the Agent SDK provider in the normal child loop, built per child so it never makes Claude a selectable main model. No silent default model on either backend. | `runtime.py:_ChildRuntime`, `host_support/model_settings.py` |
+| **Antigravity (`kind = "antigravity"`, alias `agy`) is a subagent-only external worker, run headless over stream-json with agy's own tools; it requires `worker_inherits_agy_settings = true` and refuses what Nexus cannot enforce.** | Same refuse-don't-widen rule as `claude-code`, but agy is driven over pipes (the Claude worker's earlier "ZMX" design used a PTY) so no terminal is emulated. A separate provider kind rather than extending `claude_code_subagent_backend`, which keeps Claude behaviour untouched and lets agy have no Nexus-tools backend. agy applies its own settings, MCP servers and plugins and PathGuard cannot reach it, so read-only roles, tool/MCP/restriction fields, worktrees and token/cost budgets are refused, and only `accept-edits`/`plan` are passed. Models are the exact IDs `agy models` reports (no hard-coded catalogue); tiers may name `antigravity/<id>` explicitly, with no price ranking; never the root, title or fallback model. Usage is the terminal `result.usage` or `unknown`; cost is always `unknown`. Implemented offline only (no real model turn, no credentials). | `agents/antigravity_worker.py`, `model/providers/antigravity_cli.py`, `runtime.py:_plan_antigravity` |
+| **Antigravity sign-in and quota are manual and honest.** | `agy` has no `auth` subcommand, so Nexus can prove only that the CLI exists, never that it is signed in; Settings says to run `agy`. Usage is shown as unavailable (no windows) with a note to run `/usage` in `agy`: its output format is unverified, so `agy -p /usage` is not run and no numbers are invented. | `host_support/provider_auth.py`, `host_support/provider_usage.py` |
 | **Provider usage reuses the credentials Nexus already holds;** Claude's comes from `claude -p /usage`, not the `api/oauth/usage` endpoint CodexBar calls. | Reading Claude Code's OAuth token from its keychain item would break "the CLI owns the credential store"; `/usage` is a local command that costs no tokens. Its text format is unversioned, so a CLI change shows as a row error rather than wrong numbers. | `host_support/provider_usage.py` |
 | **Claude sign-in runs `claude auth login` headless and takes a pasted code;** Settings never signs Claude out. | The daemon never opens a browser, and the login is shared with Claude Code, so a Nexus "Disconnect" would surprise the user. | `host_support/provider_auth.py` |
 | **`Ctrl+U` opens usage even in the composer.** | One direct key in both surfaces; the TUI composer loses readline's delete-to-line-start (`Cmd+Backspace` still works). | `ui/ratatui/actions.py` |
@@ -591,3 +593,40 @@ are persisted at most 4 times a second, only on change, and replay folds them
 harmlessly. `live.levels` is in the catalogue but never emitted by the daemon:
 clients draw their meter from the helper's own output. Revisit if a bus-only
 path appears.
+
+## xAI is a preset over the Responses adapter, not a new parser (2026-10)
+
+Grok speaks the OpenAI Responses wire with the standard reasoning-summary
+events (OpenCode's `xai-responses` protocol differs only in hosted-tool
+vocabulary). A config block could already reach it, but could not express
+`store: false`, the `x-grok-conv-id` cache header, or xAI's PNG/JPEG/WebP-only
+image rule, so `providers/xai.py` subclasses `OpenAIProvider` through small
+hooks (`_prepare_request`, `_finalize_body`, `_headers`) instead of copying
+its decoder. Hosted tools need new timeline semantics and the WebSocket
+transport is an optimisation, so neither is implemented.
+
+## xAI connects only through the SuperGrok subscription (2026-10)
+
+The user asked for the subscription and nothing else, so xAI has one credential
+route: `auth = "xai_oauth"`, a device-code sign-in from Settings → Providers.
+API keys (config, `${env:XAI_API_KEY}`, a pasted key) are refused for xAI, and
+`xai_oauth` is refused on any other section or `base_url`, so the subscription
+token can only ever reach `api.x.ai`. As with Copilot, Nexus has no OAuth app of
+its own and uses OpenCode's xAI client id and scope (attributed in
+`auth/NOTICE`); it sends `referrer = nexus` rather than claiming to be OpenCode,
+which xAI accepted in a live sign-in on 2026-10-14. Like the ChatGPT route, only
+the refresh token is persisted. Not yet observed live: a token refresh after
+expiry.
+
+## Usage reserve is elapsed share minus used share (2026-10)
+
+The usage page answers "can I spend more?" for weekly and monthly limits with
+one number: reserve = share of the window elapsed − share used (half the month
+gone, 20% used → 30% in reserve). It assumes an even spending pace, which is a
+heuristic, not a provider forecast, so it is labelled and explained on the page.
+Shorter windows (5-hour) get none: they reset before pacing matters. Window
+length comes from the host (`period_seconds`), never guessed from a label in the
+client. Claude's CLI prints only reset text, so the host parses it (in the named
+zone, inferring the year); an unparsed reset simply shows no reserve. The bars
+became thin line glyphs (`━─`) and colour only the bar, so the rows read as
+data rather than a wall of colour; `N% left` was dropped as the bar's track.

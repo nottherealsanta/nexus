@@ -2,8 +2,9 @@
 
 `nexus/model/` (L1) is provider-neutral: message IR, the `Provider` protocol,
 adapters, the router, the models.dev registry and tiers. `nexus/auth/` holds
-file-backed sign-in. To add or change a wire dialect, follow
-[provider-onboarding.md](provider-onboarding.md) as well.
+file-backed sign-in. To add a provider, follow
+[adding-a-provider.md](adding-a-provider.md); to add or change a wire dialect,
+run the [provider-onboarding.md](provider-onboarding.md) stream inventory as well.
 
 ## Files
 
@@ -46,21 +47,28 @@ with a `base_url`.
 | `anthropic.py` | `anthropic` | Messages API; `count_tokens` endpoint; `usage_input_excludes_cache` |
 | `openai.py` | `openai`, `codex`, any `kind = "openai_compatible"` | Responses and Chat Completions behind one class (`api = "responses"\|"chat"`); `EndpointFallback` remembers the dialect a model accepts when a host serves some models on only one endpoint (GitHub Copilot, OpenCode Go) |
 | `gemini.py` | `google`, `gemini`, `kind = "google"` | `generateContent` streaming; synthetic call ids |
+| `xai.py` | `xai` | xAI Grok preset over `OpenAIProvider`: `https://api.x.ai/v1`, `api = "responses"` default (`chat` selectable). **Subscription only:** the section must set `auth = "xai_oauth"` (SuperGrok sign-in); an API key, an env variable, a bare section or any other `kind = "xai"` route is a `ConfigError`. `store: false` on Responses; session id as `x-grok-conv-id`; non-PNG/JPEG/WebP images become a text note; no token counter. Verified live 2026-10-14: SuperGrok device sign-in from Settings (xAI accepted `referrer = nexus`) and grok-4.7 turns over `/responses` with usage and a normal stop (`tests/test_xai_live.py`, `nexus chat`) |
 | `ollama.py` | `ollama` | native `/api/chat` or OpenAI-compatible mode; keyless, loopback default `http://localhost:11434`; conservative capabilities (`tools = false` unless the registry says otherwise) |
 | `opencode.py` | `opencode` (`kind` `acp`) | OpenCode over its Agent Client Protocol subprocess only; ACP tool calls stay inside that agent; child env is an explicit allowlist |
 | `claude_agent.py` (+ `_claude_agent_worker.py`, `claude_agent_auth.py`) | `claude-agent` | included in every install; text-only, buffers replies; SDK built-ins, hooks, settings and persistence disabled; Nexus schemas registered through an in-process MCP intention bridge |
 | `claude_code` kind (no adapter file) | `claude-code` | Two roles. Main-agent selection reuses `ClaudeAgentProvider` (as `claude-agent`) and is hidden from pickers and rejected unless `[models] claude_code_main_enabled = true`. An explicit `claude-code/<model>` subagent role is run by the external worker `agents/claude_code_worker.py` with Claude's own tools, never through a provider `stream()`, unless `[models] claude_code_subagent_backend = "sdk"`, which runs it as a normal Nexus child on `ClaudeAgentProvider` ([agents.md](agents.md#external-claude-code-workers)). Registry projection reuses the Claude subscription catalogue with text-only capabilities; model IDs are not verified live |
+| `antigravity` kind (no streaming adapter) | `antigravity` (alias `agy`) | **Subagent-only** external CLI. It is never a main, plan, fast, fallback or title model (`ConfigError` if named there) and is not in the catalogue. Models are the exact IDs `agy models` reports (probed locally by `model/providers/antigravity_cli.py`, never hard-coded; an unreported ID is refused with a refresh hint). Run by `agents/antigravity_worker.py` with agy's own tools, never through a provider `stream()` ([agents.md](agents.md#external-antigravity-workers)). Implemented offline only: quota usage is read from the built-in `agy -p /usage` TSV format verified with agy 1.3.4; no live model turn was tested and no credentials were used |
 | `scripted.py` | tests | deterministic offline provider ([testing.md](testing.md)) |
 | `discovery.py` | `.agents/providers/*.py`, `~/.nexus/providers/*.py` | quarantined file providers (`PROVIDER`, `PROVIDERS` or `build(context)`); a configured section always wins a same-named file; legacy `.nexus/providers/` is a lower-precedence fallback |
 | `devtools/mock/provider.py` | dev mode | `mock/<scenario>` models ([devtools.md](devtools.md)) |
 
 `ProviderSection` keys: `kind`, `api_key`, `base_url`, `api`, `auth`
-(`chatgpt_oauth` \| `github_copilot` \| `keychain`), `profile`, `executable`,
+(`chatgpt_oauth` \| `github_copilot` \| `keychain` \| `xai_oauth`), `profile`, `executable`,
 `timeout_seconds`, `command`, `args`, `permission_policy`, `inherit_env`, `env`,
 and, for `kind = "claude-code"` only, the `worker_*` keys
 ([config.md](config.md#claude-code-worker-keys)); `worker_*` on any other kind is a `ConfigError`.
+`kind = "antigravity"` (alias `agy`) accepts only `executable`, `timeout_seconds`,
+`worker_inherits_agy_settings` and `worker_permission_mode`
+([config.md](config.md#antigravity-worker-keys)); any other field is refused.
 A `base_url` must be http(s); plain `http` only for loopback; any `user:pass@`
-userinfo is always redacted. An OpenAI-compatible vendor **must** have a
+userinfo is always redacted. `auth = "xai_oauth"` is accepted only on
+`[providers.xai]`, with no `api_key` and no `base_url` other than
+`https://api.x.ai/v1`, so the subscription token can only reach xAI. An OpenAI-compatible vendor **must** have a
 `base_url`, otherwise its model id and key could go to `api.openai.com`
 (a hard `ConfigError`).
 
@@ -159,6 +167,7 @@ the effort prompt for remembered models; `/effort` remains available to change i
 | ChatGPT / Codex OAuth (`auth = "chatgpt_oauth"`) | `auth/codex.py`: browser PKCE or device code; protocol pinned to a cited OpenCode commit (see `auth/NOTICE`) | rotating refresh token + routing metadata in the private credential file; access/ID tokens never persisted |
 | GitHub Copilot (`auth = "github_copilot"`) | `auth/copilot.py`: GitHub.com device flow using OpenCode's OAuth app id (`CLIENT_ID`); the GitHub token is the Copilot API bearer (no `copilot_internal` exchange), verified against `/models` at login | private credential file |
 | Pasted key (`auth = "keychain"`, e.g. OpenCode Go) | `auth/api_key.py` | private credential file |
+| xAI SuperGrok (`auth = "xai_oauth"`) | `auth/xai.py`: device code at `auth.x.ai/oauth2` with OpenCode's xAI OAuth client id and scope (see `auth/NOTICE`); the access token is the Bearer for `api.x.ai`, refreshed 5 min before expiry under the cross-process credential lock | refresh token only (rotations saved) in the private credential file; access token in memory. Sign-in verified live 2026-10-14 with `referrer = nexus`; a refresh after expiry has not yet been observed live |
 
 OpenCode Go (`opencode.ai` base URLs) additionally gets an `x-opencode-session` header on every chat/responses request, set to the Nexus session id (the loop stamps it into `ModelRequest.metadata["session_id"]`); the gateway asks for one stable id per conversation.
 | Claude subscription (`kind = "claude-agent"`) | `model/providers/claude_agent_auth.py:ClaudeCliAuth`: runs `claude auth login --claudeai` headless (`BROWSER` is a no-op), returns the printed URL, then pipes the code the user pastes (`ProviderLoginCode`) to the CLI | the Claude CLI's own store, shared with Claude Code; Nexus never reads it and never signs it out |
@@ -178,17 +187,29 @@ GitHub.com-only; expiring GitHub OAuth tokens require another sign-in. GPT-6
 Luna on `/responses` is learned after Copilot rejects `/chat/completions`.
 Live `/models` and Luna inference were verified; the device sign-in flow was not
 live-tested. CLI: `nexus auth codex login|status|logout`, `nexus claude init`.
+xAI signs in from Settings → Providers only (no CLI subcommand).
 Claude sign-in from Settings was verified up to the printed URL and the code
 prompt; completing it with a real code was not live-tested (it would replace the
 machine's Claude Code login).
+Antigravity has no Nexus sign-in at all: `agy` has no `auth` subcommand, so
+Settings → Providers shows a manual `cli` method ("run `agy` in a terminal and
+sign in there", cached login) and never starts, reads or signs out a login.
+`AntigravityCli` can only prove the CLI is present (`cli_present`, version);
+`auth_verified` is always `False`. Install state and sign-in are separate facts.
 
 ### Plan usage and limits (`ProvidersUsage`)
 
 `host_support/provider_usage.py` reads every connected provider concurrently
 (40 s cap each, 512 KiB bodies) and returns rows of labelled windows
-(`used_percent`, `resets_at` or the provider's `reset_text`, `detail`), notes,
-plan and source. Endpoints and field mappings follow CodexBar
-(github.com/steipete/CodexBar):
+(`used_percent`, `resets_at` and/or the provider's `reset_text`, `detail`,
+`period_seconds`), notes, plan and source. `period_seconds` is the window's
+length: Codex's `limit_window_seconds`; 5 hours or a week for OpenCode Go and
+Claude windows; for a monthly window, the calendar month (UTC) ending at its
+reset. Claude's reset text (`Oct 15 at 8:30pm (Asia/Calcutta)`, or a bare
+`12pm (…)` meaning the next one) is parsed in its named zone into `resets_at`;
+the year is inferred (the earliest match no more than a day in the past), and
+text that does not parse leaves `resets_at` empty. Endpoints and field mappings
+follow CodexBar (github.com/steipete/CodexBar):
 
 | Provider | Source | Windows |
 | --- | --- | --- |
@@ -196,9 +217,19 @@ plan and source. Endpoints and field mappings follow CodexBar
 | `claude-agent` | the CLI's `claude -p /usage` (local command, no model request, no tokens read) | `Current session` → 5-hour session, `Current week (…)` → Weekly (…); reset is the CLI's own text |
 | `github-copilot` | `GET api.github.com/copilot_internal/user` with the stored GitHub token | monthly `quota_snapshots` (premium requests; chat/completions when metered), reset `quota_reset_date_utc` |
 | `opencode-go` | `GET opencode.ai/zen/go/v1/usage` with the stored key | `usage.rolling/weekly/monthly` (`usagePercent`, `resetInSec`) — not verified against a live account |
+| `xai` | `GET cli-chat-proxy.grok.com/v1/billing?format=credits` with the SuperGrok bearer and `x-xai-token-auth: xai-grok-cli`; plan from `/v1/settings` `subscription_tier_display` (3 s, best effort) | one window from `config.currentPeriod` (else `billingPeriodStart/End`), labelled Weekly/Monthly by its length; `creditUsagePercent`, else `onDemandUsed/onDemandCap`; an omitted percent with a current period reads 0% (the JSON drops zeros) and says so; `productUsage` shares and `prepaidBalance` (cents) as notes. Verified live 2026-10-14 (SuperGrok Lite, weekly) |
+
+`antigravity` is honestly unavailable: its usage row (shown once an explicit `[providers.antigravity]`
+section exists; the Providers Settings row is always present) has empty `windows`, source `agy CLI`, and a note to run `agy` and
+enter `/usage` manually. Nexus does not run `agy -p /usage` yet because no output
+format is verified, and it shows no quota numbers. Eventual run usage comes only
+from agy's terminal `result.usage`; tokens are reported when present and cost is
+always `unknown`.
 
 A provider that fails becomes that row's redacted `error`; the others still
-render. Codex, Claude and Copilot were verified live on 2026-10-01.
+render. Codex, Claude and Copilot were verified live on 2026-10-01; xAI on
+2026-10-14 (CodexBar's `docs/grok.md` documents the endpoint; the SuperGrok
+token from Nexus's own sign-in is accepted).
 
 First run: `SetupStatus` offers packaged candidate models; `SetupSave` writes
 `[providers.*]` and `[models].default` to `~/.nexus/config.toml` (blank model
@@ -238,3 +269,18 @@ When the workspace leaves `models.default` unset (or set to a built-in tier), Ne
 | `high` | `openai-codex/gpt-6.1-sol` → `claude-agent/claude-sonnet-5.5` | `low` on Codex; provider default on Claude |
 
 A user-selected effort remains authoritative, and the tier effort applies consistently to fallback attempts when that fallback has a tier-specific default.
+
+### Antigravity visibility and safe discovery
+
+An installed `agy` is discovered without a handwritten provider section using a
+bounded `agy models` probe only. Configured `agy` aliases and custom executables
+are respected. The host model list exposes these rows labelled **Subagents only**
+(including native clients); selecting one as the main model is refused with an
+explanation, while explicit subagent tier/role/Task references remain supported.
+Discovery does not acknowledge inherited settings: worker execution still requires
+`worker_inherits_agy_settings = true` in an explicit provider section.
+
+Providers Settings always includes Antigravity, with manual CLI sign-in: run `agy`
+in your terminal, then **Re-check and refresh models**. CLI presence is not verified
+authentication. Nexus does not run a login subcommand, manage CLI credentials, or
+perform a model turn to discover availability. A missing CLI is reported honestly.

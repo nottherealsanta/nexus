@@ -169,6 +169,39 @@ async def test_delegation_mode_follows_whether_a_turn_runs():
     assert phases == ["working", "working"]
 
 
+async def test_enqueue_failure_gives_a_speakable_notice_and_a_durable_error():
+    bridge, sent, emitted, phases, _c = unit_bridge()
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("queue full Bearer abcdefghijklmnop1234")
+
+    bridge._host.enqueue = boom
+    await bridge.on_delegation("d1", "do it")
+    assert len(sent) == 1 and sent[0][1] == "notice" and sent[0][2] == "d1" and "try again" in sent[0][0]
+    errors = [d for k, d in emitted if k == "live.error"]
+    assert len(errors) == 1 and "abcdefghijklmnop1234" not in errors[0]["message"]
+    assert not any(k == "live.delegated" for k, _d in emitted) and phases == []
+    assert bridge._queued == {}
+
+
+async def test_quick_tap_consuming_input_leaves_no_stale_mapping():
+    bridge, sent, *_ = unit_bridge()
+    host = bridge._host
+
+    async def fast_enqueue(session, text, mode, origin):
+        # the tap delivers queued + consumed before enqueue() returns to the bridge
+        await bridge.handle_event(ev("input.queued", on=None, queued_id="q1", origin=origin))
+        await bridge.handle_event(ev("input.consumed", on="t1", queued_id="q1", mode="queue", turn="t1"))
+        return "q1"
+
+    host.enqueue = fast_enqueue
+    await bridge.on_delegation("d1", "do it")
+    assert bridge._queued == {} and bridge._turns == {"t1": ["d1"]}
+    await bridge.handle_event(ev("text", text="done"))
+    await bridge.handle_event(ev("turn.completed"))
+    assert [label for _t, label, d in sent] == ["final"]
+
+
 async def test_bridge_close_stops_the_tap():
     bridge, *_ = unit_bridge()
     bridge.start()
