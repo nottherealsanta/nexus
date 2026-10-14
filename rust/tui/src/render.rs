@@ -1145,9 +1145,10 @@ pub fn composer_height(area: Rect, draft: &Editor, s: &Snapshot) -> u16 {
 /// Settings → Layout → Centered conversation: the widest the conversation column gets.
 pub const CENTERED_WIDTH: u16 = 80;
 pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool) -> Regions {
-    // The Sessions dashboard is full-width and draws its own header on row 0.
+    // The Sessions dashboard draws its own header on row 0 and takes the width the details
+    // sidebar leaves.
     let dash = s.dashboard.is_some();
-    let right = if s.details_sidebar && area.width >= 100 && !dash {
+    let right = if s.details_sidebar && area.width >= 100 {
         40
     } else {
         0
@@ -1164,7 +1165,7 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
         Constraint::Length(composer_height),
     ])
     .split(middle);
-    let drawer = s.details_sidebar && area.width < 100 && !dash;
+    let drawer = s.details_sidebar && area.width < 100;
     Regions {
         tabs: center[0],
         workspace: Rect::new(
@@ -2745,7 +2746,7 @@ mod tests {
                 assert!(screen.contains("Build"), "{at}: the runtime row");
                 if width >= 170 {
                     assert!(screen.contains("Nexus · s1"), "{at}: top-bar title");
-                    assert!(screen.contains("‹ 1/2 ›"), "{at}: session arrows");
+                    assert!(!screen.contains('‹'), "{at}: no session arrows");
                     assert!(screen.contains("[Sessions]"), "{at}: dashboard button");
                 }
                 assert!(!screen.contains("SESSIONS"), "{at}: no sessions sidebar");
@@ -4028,6 +4029,36 @@ mod selection_highlight_tests {
             narrow.transcript.width, 60,
             "narrow terminals keep their full width"
         );
+    }
+    #[test]
+    fn details_sidebar_shows_beside_the_sessions_dashboard() {
+        let area = Rect::new(0, 0, 160, 40);
+        let mut s = Snapshot {
+            details_sidebar: true,
+            dashboard: Some(serde_json::json!({"rows": []})),
+            ..Default::default()
+        };
+        let r = regions(area, &s, 8, false);
+        assert_eq!(r.details.width, 40);
+        assert_eq!(r.tabs.height, 0, "the dashboard draws its own header row");
+        assert_eq!(r.transcript.width, 120, "the dashboard uses the remaining width");
+        s.details_sidebar = false;
+        assert_eq!(regions(area, &s, 8, false).details.width, 0);
+    }
+    #[test]
+    fn clicking_the_composer_context_text_is_a_context_hit() {
+        let s = Snapshot {
+            context_label: "6.2K · 3.1%".into(),
+            context_used: Some(6200),
+            context_window: Some(200000),
+            ..Default::default()
+        };
+        let area = Rect::new(0, 20, 100, 8);
+        let row = composer_rows(area, &s)[2].y;
+        let layout = control_layout(&s, area.width.saturating_sub(9) as usize);
+        let x = area.x + 5 + layout.context_start as u16;
+        assert!(composer_context_at(area, &s, x, row));
+        assert!(!composer_context_at(area, &s, x, row + 1));
     }
     #[test]
     fn selected_text_gets_the_accent_background() {

@@ -227,5 +227,6 @@ class SessionDashboard:
             "preview": preview, "error": self.error,
             "truncated": bool(self.shell.sessions_truncated),
             "path": escape_controls(path), "branch": escape_controls(branch),
+            "worktree": escape_controls(str(getattr(self.shell, "worktree", "") or ""))[:80],
             "workspace": escape_controls(workspace),
         }

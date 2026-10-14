@@ -121,6 +121,7 @@ class ShellActions:
         self.tabs = []
         self.last_completion_cue = 0
         self.breadcrumb = ""
+        self.worktree = ""  # linked-worktree name of the workspace ("" in a main checkout)
         self.model_names: dict[tuple[str, str], str] = {}  # (provider, id) -> catalogue display name
         self.settings_nav: str | None = None  # selected Settings area while Settings is open
         self.model_sort = "updated"  # model picker order: updated|name (Ctrl+S)

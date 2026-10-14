@@ -67,10 +67,6 @@ pub(super) fn control_spans(
 /// What a top-bar cell is, for drawing and for mouse hit-testing.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum TabHit {
-    /// `‹`: the previous open session.
-    Prev,
-    /// `›`: the next open session.
-    Next,
     /// `[Sessions]`: opens the Sessions dashboard (`/sessions`).
     Dashboard,
     /// Sub-agent page only: toggles the details sidebar.
@@ -89,35 +85,15 @@ enum Seg {
     Path,
     Sep,
     Notice,
-    Counter,
-    Arrow(TabHit),
-    Index,
+    Worktree,
     Dashboard,
     Gap,
 }
-/// `72K`, `256K`, `1.0M`: token counts for the top-bar counter.
-fn short_count(n: u64) -> String {
-    match n {
-        0..=999 => n.to_string(),
-        1_000..=999_999 => format!("{}K", (n + 500) / 1000),
-        _ => format!("{:.1}M", n as f64 / 1_000_000.0),
-    }
-}
-/// The open tab to switch to from the current one: `step` is `-1` (`‹`) or `1` (`›`),
-/// wrapping around; `None` with fewer than two open tabs.
-pub fn cycle_tab(s: &Snapshot, step: isize) -> Option<&crate::bridge::Session> {
-    let n = s.tabs.len();
-    if n < 2 {
-        return None;
-    }
-    let current = s.tabs.iter().position(|row| row.active).unwrap_or(0);
-    s.tabs.get((current as isize + step).rem_euclid(n as isize) as usize)
-}
 /// Grok's in-session top bar, laid out once for drawing and hit-testing. Left:
-/// `Title │ branch ~/path`. Right: update notice, `used / window`, `‹ i/n ›` (two or more
-/// open sessions) and `[Sessions]`, each separated by `│`. Optional pieces drop out
-/// (notice first, then the nav, then the counter) before the title is squeezed below 12
-/// columns. Returns (start column, text, how to paint it).
+/// `Title │ ~/path branch worktree` (path text colour, branch and worktree quiet; the
+/// worktree only inside a linked worktree). Right: update notice and `[Sessions]`,
+/// separated by `│`; the notice drops out before the title is squeezed below 12 columns.
+/// Returns (start column, text, how to paint it).
 /// Split the host breadcrumb into (path, branch). The projection sends `path:branch`
 /// (`prototype._display_breadcrumb`); `path › branch` is accepted too. Git refs cannot
 /// contain `:`, so the last one separates the branch.
@@ -128,61 +104,28 @@ fn partition(text: &str) -> (&str, &str) {
 }
 fn top_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
     let dash = "[Sessions]".to_string();
-    let counter = match (s.context_used, s.context_window) {
-        (Some(used), Some(window)) if window > 0 => {
-            Some(format!("{} / {}", short_count(used), short_count(window)))
-        }
-        _ => None,
-    };
-    let nav = (s.tabs.len() > 1).then(|| {
-        let at = s.tabs.iter().position(|row| row.active).unwrap_or(0) + 1;
-        format!("{at}/{}", s.tabs.len())
-    });
     let notice =
         Some(crate::transcript::truncate(&s.update_notice, 28)).filter(|text| !text.is_empty());
     let sep = " │ ";
-    // Right group pieces in drop order: the first listed is dropped last.
-    let build = |use_counter: bool, use_nav: bool, use_notice: bool| {
-        let mut pieces: Vec<Vec<(String, Seg)>> = Vec::new();
+    let build = |use_notice: bool| {
+        let mut out: Vec<(String, Seg)> = Vec::new();
         if use_notice {
             if let Some(text) = &notice {
-                pieces.push(vec![(text.clone(), Seg::Notice)]);
-            }
-        }
-        if use_counter {
-            if let Some(text) = &counter {
-                pieces.push(vec![(text.clone(), Seg::Counter)]);
-            }
-        }
-        if use_nav {
-            if let Some(text) = &nav {
-                pieces.push(vec![
-                    ("‹".into(), Seg::Arrow(TabHit::Prev)),
-                    (format!(" {text} "), Seg::Index),
-                    ("›".into(), Seg::Arrow(TabHit::Next)),
-                ]);
-            }
-        }
-        pieces.push(vec![(dash.clone(), Seg::Dashboard)]);
-        let mut out: Vec<(String, Seg)> = Vec::new();
-        for (i, piece) in pieces.into_iter().enumerate() {
-            if i > 0 {
+                out.push((text.clone(), Seg::Notice));
                 out.push((sep.into(), Seg::Sep));
             }
-            out.extend(piece);
         }
+        out.push((dash.clone(), Seg::Dashboard));
         out.push((" ".into(), Seg::Gap));
         out
     };
     let size = |v: &[(String, Seg)]| v.iter().map(|(t, _)| t.width()).sum::<usize>();
-    let mut right = build(true, true, true);
-    for flags in [(true, true, false), (false, true, false), (false, false, false)] {
-        if width < size(&right) + 14 {
-            right = build(flags.0, flags.1, flags.2);
-        }
+    let mut right = build(true);
+    if width < size(&right) + 14 {
+        right = build(false);
     }
     let right_width = size(&right);
-    // Left: title, then `branch ~/path` from the breadcrumb (`path › branch`).
+    // Left: title, then `~/path branch worktree`.
     let (path, branch) = partition(&s.breadcrumb);
     let room = width.saturating_sub(right_width + 2 + 1);
     let mut left: Vec<(String, Seg)> = Vec::new();
@@ -206,11 +149,15 @@ fn top_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
     );
     if !path.is_empty() && room > 8 {
         place(sep, Seg::Sep, &mut left, &mut room);
-        if !branch.is_empty() && room > branch.width() + 6 {
-            place(branch, Seg::Branch, &mut left, &mut room);
-            place(" ", Seg::Gap, &mut left, &mut room);
-        }
         place(path, Seg::Path, &mut left, &mut room);
+        if !branch.is_empty() && room > branch.width() + 2 {
+            place(" ", Seg::Gap, &mut left, &mut room);
+            place(branch, Seg::Branch, &mut left, &mut room);
+        }
+        if !s.worktree.is_empty() && room > s.worktree.width() + 2 {
+            place(" ", Seg::Gap, &mut left, &mut room);
+            place(&s.worktree, Seg::Worktree, &mut left, &mut room);
+        }
     }
     let mut out = Vec::new();
     let mut at = 2usize.min(width);
@@ -240,7 +187,6 @@ pub fn tab_cells(s: &Snapshot, width: usize) -> Vec<TabCell> {
     top_layout(s, width)
         .into_iter()
         .filter_map(|(start, text, seg)| match seg {
-            Seg::Arrow(kind) => Some((kind, start, start + text.width())),
             Seg::Dashboard => Some((TabHit::Dashboard, start, start + text.width())),
             _ => None,
         })
@@ -293,11 +239,9 @@ pub(super) fn draw_top_bar(frame: &mut Frame, s: &Snapshot, area: Rect, p: &Pale
         at = start + text.width();
         let style = match seg {
             Seg::Title => background.fg(p.text).add_modifier(Modifier::BOLD),
-            Seg::Branch | Seg::Sep | Seg::Index | Seg::Gap => background.fg(p.quiet),
+            Seg::Branch | Seg::Worktree | Seg::Sep | Seg::Gap => background.fg(p.quiet),
             Seg::Path => background.fg(p.text),
             Seg::Notice => background.fg(p.accent),
-            Seg::Counter => background.fg(p.muted),
-            Seg::Arrow(_) => background.fg(p.muted),
             Seg::Dashboard => background.fg(p.muted),
         };
         spans.push(Span::styled(text, style));
@@ -558,42 +502,41 @@ mod chrome_tests {
     }
 
     #[test]
-    fn top_bar_shows_title_branch_path_counter_nav_and_dashboard() {
+    fn top_bar_shows_title_path_branch_worktree_and_dashboard_only() {
         let s = Snapshot {
             title: "Fix the parser".into(),
             breadcrumb: "~/repo:main".into(),
+            worktree: "wt-fix".into(),
             context_used: Some(72_000),
             context_window: Some(256_000),
             tabs: open_tabs(3, 1),
             ..Snapshot::default()
         };
         let text = bar_text(&s, 100);
-        assert!(text.contains("Fix the parser │ main ~/repo"), "{text}");
-        assert!(text.contains("72K / 256K │ ‹ 2/3 › │ [Sessions]"), "{text}");
+        assert!(text.contains("Fix the parser │ ~/repo main wt-fix"), "{text}");
+        assert!(!text.contains("72K") && !text.contains('‹') && !text.contains('›'), "{text}");
+        assert!(text.contains("[Sessions]"), "{text}");
         let cells = tab_cells(&s, 100);
         let kinds: Vec<_> = cells.iter().map(|c| c.kind).collect();
-        assert_eq!(kinds, [TabHit::Prev, TabHit::Next, TabHit::Dashboard]);
-        let dash = &cells[2];
+        assert_eq!(kinds, [TabHit::Dashboard]);
+        let dash = &cells[0];
         assert_eq!(&text.chars().skip(dash.start).take(dash.end - dash.start).collect::<String>(), "[Sessions]");
-        assert_eq!(cycle_tab(&s, 1).unwrap().id, "s2");
-        assert_eq!(cycle_tab(&s, -1).unwrap().id, "s0");
+        let plain = Snapshot { worktree: String::new(), ..s };
+        assert!(bar_text(&plain, 100).contains("Fix the parser │ ~/repo main "));
     }
 
     #[test]
-    fn top_bar_hides_arrows_for_one_session_and_fits_any_width() {
+    fn top_bar_keeps_the_notice_and_fits_any_width() {
         let s = Snapshot {
             title: "A long conversation title that keeps going".into(),
             breadcrumb: "~/a/very/long/path/to/the/repo › feature/branch".into(),
             update_notice: "update 9.9.9".into(),
-            context_used: Some(1),
-            context_window: Some(2_000_000),
+            worktree: "feature-wt".into(),
             tabs: open_tabs(1, 0),
             ..Snapshot::default()
         };
         let text = bar_text(&s, 100);
-        assert!(!text.contains('‹') && !text.contains('›'));
         assert!(text.contains("update 9.9.9"));
-        assert!(cycle_tab(&s, 1).is_none());
         for width in 12..120u16 {
             let cells = tab_cells(&s, usize::from(width));
             assert!(cells.iter().all(|c| c.end <= usize::from(width).max(1)), "{width}");

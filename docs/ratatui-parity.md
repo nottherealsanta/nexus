@@ -1038,7 +1038,7 @@ Plan: `plans/GROK_TUI_PLAN.md` WS-A. The left **Sessions sidebar was removed**
 focus, right-click actions, the `sessions_request` snapshot field and the
 Settings → Layout row). Sessions replaces it: `/session`,
 `/sessions`, `Ctrl+O`, `Ctrl+S`, `Ctrl+B` and the top bar's `[Sessions]` all send
-`/sessions`. The right details sidebar (`Ctrl+L`) stays. The saved
+`/sessions`. The right details sidebar (`Ctrl+L`) stays, on the Sessions page too. The saved
 `sessions_sidebar` preference and snapshot key remain only because the GPUI
 desktop client still reads them; the native TUI ignores them.
 
@@ -1055,15 +1055,19 @@ it once, after the page and before any panel/Settings/picker/inspector or
 permission/question prompt; toasts and the completion popup draw after it and
 stay undimmed. Later modals (the Settings modal) reuse the same helper.
 
-Top bar (`render/chrome.rs::top_layout`, one row): left `Title │ branch ~/path`
-(title bold, branch quiet, path text), right the update notice, `used / window`
-(`72K / 256K`), `‹ i/n ›` (cycle the open sessions, wrapping; hidden with fewer
-than two) and `[Sessions]`, separated by quiet `│`. Optional pieces drop (notice,
-then arrows, then counter) before the title is squeezed. Draw and hit-testing share
-one layout (`tab_cells`); `‹ ›` send `session_open` for the neighbouring tab,
-`[Sessions]` sends `/sessions`, and the notice is clickable as before. The row
-under the composer card is now a blank spacer (path and branch live in the top
-bar). Covered by `render/chrome.rs` tests and `tests/test_ratatui_pty_sessions.py`.
+Top bar (`render/chrome.rs::top_layout`, one row): left `Title │ ~/path branch worktree`
+(title bold, path text colour, branch and worktree quiet; the worktree name comes from
+the snapshot's `worktree` key, set by `prototype._worktree_name` when the workspace is a
+linked Git worktree), right the update notice and `[Sessions]`, separated by quiet `│`.
+There is no context counter (the composer row shows usage) and no `‹ i/n ›` session
+cycler. The notice drops before the title is squeezed. Draw and hit-testing share one
+layout (`tab_cells`); `[Sessions]` sends `/sessions` and the notice is clickable. The
+Sessions page header reads the same way (`path branch worktree`); its project-scope
+toggle moved to `Alt+L` so `Ctrl+L` toggles the details sidebar there too. The details
+sidebar (default on) shows beside the Sessions page; the dashboard takes the remaining
+width. Clicking the context text on the composer row sends `/context`, the same modal as
+`Ctrl+I`. The row under the composer card is a blank spacer. Covered by `render/chrome.rs`
+and `render.rs` tests and `tests/test_ratatui_pty_sessions.py`.
 
 ## One-page Settings (2026-10 overhaul, step 4)
 

@@ -314,15 +314,20 @@ pub fn draw(
 
     let chips = status_chips(&shown, colors, width / 2);
     let chips_w = spans_width(&chips);
-    let hint = "[Choose Ctrl+L]";
-    let mut location = String::new();
+    let hint = "[Choose Alt+L]";
     let branch = text(dashboard, "branch");
     let path = text(dashboard, "path");
-    if !branch.is_empty() {
-        location.push_str(branch);
-        location.push(' ');
+    let worktree = text(dashboard, "worktree");
+    // Path first (text colour), then branch and worktree (quiet), as in the session top bar.
+    let mut location = String::from(path);
+    for part in [branch, worktree] {
+        if !part.is_empty() {
+            if !location.is_empty() {
+                location.push(' ');
+            }
+            location.push_str(part);
+        }
     }
-    location.push_str(path);
     if state.this_project {
         location.push_str(" · this project");
     }
@@ -338,7 +343,15 @@ pub fn draw(
         left_budget
     };
     let location = fit(&location, text_budget.max(1));
-    let mut header = vec![Span::styled(location.clone(), Style::default().fg(colors.text))];
+    let path_len = location
+        .char_indices()
+        .nth(path.chars().count())
+        .map_or(location.len(), |(i, _)| i);
+    let (head, tail) = location.split_at(path_len);
+    let mut header = vec![Span::styled(head.to_owned(), Style::default().fg(colors.text))];
+    if !tail.is_empty() {
+        header.push(Span::styled(tail.to_owned(), quiet));
+    }
     if show_hint {
         header.push(Span::raw(" "));
         header.push(Span::styled(hint, quiet));

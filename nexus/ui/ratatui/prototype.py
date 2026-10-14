@@ -48,6 +48,15 @@ def _user_prompt(prompt: str) -> str:
     return preview
 
 
+def _worktree_name(workspace) -> str:
+    """The workspace directory name when it is a linked Git worktree (`.git` is a file), else ""."""
+    try:
+        path = Path(workspace)
+        return path.name[:80] if (path / ".git").is_file() else ""
+    except OSError:
+        return ""
+
+
 def _display_breadcrumb(breadcrumb: str, home: Path | None = None) -> str:
     """Abbreviate only the actual home component; show the branch as ``path:branch``."""
     home_text = str(Path.home() if home is None else home).rstrip("/")
@@ -875,6 +884,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "settings_overview": (shell.workflows.settings_overview if shell.panel_title and shell.panel_title == shell.workflows.page_title else None) if shell else None,
             "tabs": _tab_rows(controller, shell) if shell else [],
             "breadcrumb": escape_controls(_display_breadcrumb(shell.breadcrumb)) if shell else "",
+            "worktree": escape_controls(str(getattr(shell, "worktree", "") or ""))[:80] if shell else "",
             "details_panel": details_panel,
             "logs": shell.logs.lines() if shell else [],
             **({"logs_all": shell.logs.lines(show_all=True), "logs_folded": shell.logs.lines(show_all=False),
@@ -1210,6 +1220,7 @@ async def run(workspace: Path, session: str, binary: Path, client=None, reconnec
             process = await asyncio.create_subprocess_exec(
                 str(binary), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 limit=16 * 1024 * 1024)
+        shell.worktree = _worktree_name(workspace)
         shell.breadcrumb = str(workspace)  # the branch joins it when the doctor report arrives
         await update()
         controller.resume(update)

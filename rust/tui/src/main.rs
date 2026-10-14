@@ -2466,7 +2466,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             if render::composer_context_at(r.composer, &s, mouse.column, mouse.row)
                             {
-                                action("context_popover", "")?;
+                                // Same modal as Ctrl+I.
+                                action("command", "/context")?;
                                 dirty = true;
                                 continue;
                             }
@@ -2537,16 +2538,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     column >= cell.start && column < cell.end.max(cell.start + 1)
                                 });
                                 match hit.map(|cell| cell.kind) {
-                                    // `‹ ›` switch between the open sessions; `[Sessions]`
-                                    // is `/sessions`.
-                                    Some(kind @ (render::TabHit::Prev | render::TabHit::Next)) => {
-                                        let step = if kind == render::TabHit::Prev { -1 } else { 1 };
-                                        if let Some(row) = render::cycle_tab(&s, step) {
-                                            send(
-                                                json!({"type":"session_open","workspace":row.workspace,"text":row.id,"generation":s.generation}),
-                                            )?;
-                                        }
-                                    }
+                                    // `[Sessions]` is `/sessions`.
                                     Some(render::TabHit::Dashboard) => {
                                         action("command", "/sessions")?
                                     }

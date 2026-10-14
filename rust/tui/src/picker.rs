@@ -354,7 +354,8 @@ impl Dashboard {
             }
             KeyCode::Char('c' | 's') if control => return Some(json!({"kind":"sessions_close"})),
             KeyCode::Char('n') if control => return Some(json!({"kind":"session_new"})),
-            KeyCode::Char('l') if control => {
+            // Ctrl+L stays the global details-sidebar toggle on this page.
+            KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::ALT) => {
                 self.this_project = !self.this_project;
                 self.list_top = 0;
                 self.sync(dashboard);
@@ -445,7 +446,8 @@ impl Dashboard {
             KeyCode::Char('k') if control => true,
             KeyCode::Enter if plain && draft_empty => true,
             KeyCode::Char('c') if control => draft_empty,
-            KeyCode::Char('s' | 'n' | 'l' | 'w') if control => true,
+            KeyCode::Char('s' | 'n' | 'w') if control => true,
+            KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::ALT) => true,
             KeyCode::Char('k' | 'j' | '/' | 'g' | 'q' | 'n' | 'r' | 'd') if plain && draft_empty => {
                 true
             }

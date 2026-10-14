@@ -102,6 +102,9 @@ pub struct Snapshot {
     /// Opaque here: the dashboard module decodes it.
     pub dashboard: Option<Value>,
     pub breadcrumb: String,
+    /// Linked-worktree name of the workspace ("" in a main checkout).
+    #[serde(default)]
+    pub worktree: String,
     pub details_panel: DetailsPanel,
     pub logs: Vec<String>,
     pub theme: String,
@@ -622,6 +625,9 @@ impl Snapshot {
         }
         if !present.contains_key("breadcrumb") {
             self.breadcrumb = std::mem::take(&mut previous.breadcrumb);
+        }
+        if !present.contains_key("worktree") {
+            self.worktree = std::mem::take(&mut previous.worktree);
         }
         if !present.contains_key("details_panel") {
             let tab = previous.details_panel.tab.clone();
