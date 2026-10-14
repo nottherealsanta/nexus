@@ -649,7 +649,7 @@ upgraded without a refresh (the old list stays until refreshed).
 ## The sessions page shows both tails and reuses the composer (2026-10)
 
 The sessions dashboard is a full-width list grouped by status, matching the
-reference layout: location and `[Choose Ctrl+L]`, `+ New Agent`, Open Previous,
+reference layout: location and `[Choose Alt+L]`, `+ New Agent`, Open Previous,
 Worktree, and a two-line row. Hovering a row (or keyboard-selecting it) shows
 the last user message and the last agent message. Those snippets live on the
 session row (`last_user`, `last_agent`, schema 4), not on `SessionSummary`, so
