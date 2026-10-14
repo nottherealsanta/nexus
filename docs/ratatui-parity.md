@@ -141,6 +141,22 @@ The transcript auto-scrolls only while the reader is at the bottom: scrolling up
 (wheel, PageUp) stops following, and any scroll that lands back on the last row
 (wheel, PageDown, Down) resumes it. Typing, sending and Ctrl+End also return to the live end.
 
+While scrolled up with content below, a centred quiet pill sits on the transcript's last row:
+`↓ N more lines · Ctrl+End to jump`; when new content arrived after the reader scrolled away it
+reads `↓ New messages · Ctrl+End` in the purple accent (`rust/tui/src/jump.rs`). Clicking the
+pill (only its own cells) or Ctrl+End scrolls to the bottom and follows again; it is hidden at
+the bottom.
+
+**Sticky user message.** When a turn's user card has scrolled off the top (its title row is above
+the viewport) but the turn's content is still visible, the card's first rows (at most 3, last
+row ending in `…` when longer; `#N` included) are pinned over the top of the transcript
+(`rust/tui/src/sticky.rs`, `Cache.sticky`). The next turn's card pushes the pin up and then
+replaces it; with the real card visible at the top there is no pin. Clicking the pin scrolls to
+the real card; the pinned rows cover what is beneath, so clicks there never start a selection.
+
+**Top bar spacing.** One empty row above and one below the in-session top bar (bar on screen
+row 2); the Sessions page header also starts on row 2 so both screens line up (`regions()`).
+
 Settings → Layout → **Centered conversation** (`centered_layout`, off by default, saved
 in `tui.json`) caps the conversation column (top bar, transcript, composer) at
 `render::CENTERED_WIDTH` = 80 columns, centered between the sidebars; narrower
@@ -757,7 +773,11 @@ scroll crash has not been reproduced on the user's session.
 
 The completed-turn `turn ↑… ↓…` footer reports cumulative provider usage across
 the turn's iterations; the composer context meter reports the latest request's
-prompt occupancy. These intentionally differ on multi-request turns.
+prompt occupancy. These intentionally differ on multi-request turns. The footer starts with
+the turn's local start time (`1:04 PM · hello · 0.4s · turn ↑50 ↓56`); the user card itself shows
+no time or prompt glyph, only `#N`. `#N` counts user-initiated turns in order (derived in
+`prototype.py` from the replayed view, so live and replay agree): a steer folded into a running
+turn carries no number, and shell turns and prompt-less turns take none.
 
 
 Settings opens in a large inset modal so the conversation remains visible around it.

@@ -144,7 +144,7 @@ def test_native_bridge_keyboard_and_terminal_restoration():
             "items": [{"label": "Context", "command": "/context"}]}) + "\n").encode())
         process.stdin.flush()
         time.sleep(.1)
-        os.write(master, b"\x1b[<0;10;12M")  # first item row (inside the modal frame); moves with the composer height
+        os.write(master, b"\x1b[<0;10;13M")  # first item row (inside the modal frame); moves with the composer height
         assert read_action() == {"type": "pick", "text": "/context", "generation": 0}
         os.write(master, b"\x1b[<0;1;1M")
         assert read_action() == {"type": "dismiss", "text": ""}
@@ -272,7 +272,7 @@ def test_local_disclosure_without_python_reply():
         assert not probe.read_actions()
         assert b"command" in probe.output
         # A double click on the output label opens the rest without a Python snapshot.
-        probe.keys(b"\x1b[<0;12;4M\x1b[<0;12;4m\x1b[<0;12;4M\x1b[<0;12;4m")
+        probe.keys(b"\x1b[<0;12;6M\x1b[<0;12;6m\x1b[<0;12;6M\x1b[<0;12;6m")
         time.sleep(.1)
         assert not probe.read_actions()
         assert b"UNIQUE LOCAL RESULT" in probe.output
@@ -300,7 +300,7 @@ def test_tool_single_click_selects_double_click_toggles_locally():
                   "output_operation":{"kind":"block_toggle","id":"c:output"},
                   "inspect_operation":inspect,
                   "fold_lines":2, "local_detail":"  command: ls\nResult:\nUNIQUE LOCAL RESULT"}]}
-    down_up = lambda x: b"\x1b[<0;%d;4M\x1b[<0;%d;4m" % (x, x)
+    down_up = lambda x: b"\x1b[<0;%d;6M\x1b[<0;%d;6m" % (x, x)
     try:
         probe.send({"schema":3,"reset":True,"revision":1,"generation":1,"blocks":[block],"sessions_sidebar":False,"details_sidebar":False})
         deadline=time.monotonic()+4
@@ -346,14 +346,14 @@ def test_hover_copy_buttons_on_user_cards_and_code_fences():
         time.sleep(.1)
         assert b"Copy" not in probe.output  # hidden until the pointer is over a block
         mark = len(probe.output)
-        probe.keys(b"\x1b[<35;100;3M")  # pointer over the card body
+        probe.keys(b"\x1b[<35;100;5M")  # pointer over the card body
         time.sleep(.1)
         assert b"Copy" in probe.output[mark:]
-        probe.keys(b"\x1b[<0;138;2M\x1b[<0;138;2m")  # the card's button, top-right
+        probe.keys(b"\x1b[<0;138;4M\x1b[<0;138;4m")  # the card's button, top-right
         time.sleep(.1)
         copied = [a for a in probe.read_actions() if a.get("type") == "copy_selection"]
         assert [a["text"] for a in copied] == ["COPY ME\nsecond"]
-        probe.keys(b"\x1b[<0;136;9M\x1b[<0;136;9m")  # the fence header's button
+        probe.keys(b"\x1b[<0;136;11M\x1b[<0;136;11m")  # the fence header's button
         time.sleep(.1)
         copied = [a for a in probe.read_actions() if a.get("type") == "copy_selection"]
         assert [a["text"] for a in copied] == ["let x = 1;"]

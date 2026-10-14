@@ -228,6 +228,12 @@ pub struct Cache {
     /// Offset actually drawn in the last frame (pinned prompt, live bottom or frozen scroll).
     pub current_offset: usize,
     pub prompt_pin: crate::session::PromptPin,
+    /// Pinned user message drawn by the last frame: its rectangle and the real card's top row.
+    pub sticky: Option<(Rect, usize)>,
+    /// Jump-to-latest pill drawn by the last frame, and the transcript length when the user
+    /// scrolled away (new content after that is announced).
+    pub jump_hit: Option<Rect>,
+    away_len: Option<usize>,
     pub animate: bool,
     /// Monochrome preference: the drawn frame loses all colour.
     pub mono: bool,
@@ -1159,7 +1165,10 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
         middle.x += (middle.width - CENTERED_WIDTH) / 2;
         middle.width = CENTERED_WIDTH;
     }
+    // One empty row above the top bar (and the Sessions header) and, in a session, one below.
     let center = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(u16::from(!dash)),
         Constraint::Length(u16::from(!dash)),
         Constraint::Min(1),
         Constraint::Length(composer_height),
@@ -1167,11 +1176,11 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
     .split(middle);
     let drawer = s.details_sidebar && area.width < 100;
     Regions {
-        tabs: center[0],
+        tabs: center[1],
         workspace: Rect::new(
-            center[2].x,
-            center[2].bottom().saturating_sub(2),
-            center[2].width,
+            center[4].x,
+            center[4].bottom().saturating_sub(2),
+            center[4].width,
             1,
         ),
         details: if drawer {
@@ -1185,8 +1194,8 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
             columns[1]
         },
         context: Rect::default(),
-        transcript: center[1],
-        composer: center[2],
+        transcript: center[3],
+        composer: center[4],
     }
 }
 pub fn editor_text(editor: &Editor, secret: bool, palette: &Palette) -> Vec<Line<'static>> {
@@ -1440,6 +1449,71 @@ pub fn draw(
             r.transcript,
             &mut state,
         );
+    }
+    cache.sticky = None;
+    if s.dashboard.is_none() && s.panel_title.is_empty() && offset > 0 {
+        let mut tops = std::collections::HashMap::new();
+        for (row, op) in cache.operations.iter().enumerate().take(offset + height) {
+            if let Some(turn) = op.as_ref().and_then(|op| op["prompt_turn"].as_str()) {
+                tops.insert(turn.to_string(), row);
+            }
+        }
+        let cards: Vec<(usize, usize)> = s
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.kind == "user" && !b.turn_id.is_empty())
+            .filter_map(|(i, b)| Some((*tops.get(&b.turn_id)?, cache.block_rows(i)?)))
+            .collect();
+        if let Some(pin) = crate::sticky::select(&cards, offset, cache.lines.len()) {
+            let skip = pin.rows - pin.shown;
+            let lines: Vec<Line<'static>> = (skip..pin.rows)
+                .filter_map(|k| {
+                    let line = cache.lines.get(pin.first + k)?.clone();
+                    Some(if pin.clipped && k + 1 == pin.rows {
+                        crate::sticky::ellipsize(line)
+                    } else {
+                        line
+                    })
+                })
+                .collect();
+            let rect = Rect::new(
+                r.transcript.x,
+                r.transcript.y,
+                r.transcript
+                    .width
+                    .saturating_sub(u16::from(total > height && r.transcript.width > 2)),
+                lines.len() as u16,
+            );
+            frame.render_widget(Block::default().style(Style::default().bg(p.background)), rect);
+            frame.render_widget(Paragraph::new(lines), rect);
+            cache.sticky = Some((rect, cards[pin.card].0));
+        }
+    }
+    cache.jump_hit = None;
+    let below = cache.lines.len().saturating_sub(offset + height);
+    if follow || below == 0 || s.dashboard.is_some() || !s.panel_title.is_empty() {
+        cache.away_len = None;
+    } else if r.transcript.width > 4 && height > 0 {
+        let away = *cache.away_len.get_or_insert(cache.lines.len());
+        if let Some((text, fresh)) = crate::jump::label(below, away, cache.lines.len()) {
+            let w = (text.width() as u16 + 2).min(r.transcript.width.saturating_sub(2));
+            let rect = Rect::new(
+                r.transcript.x + (r.transcript.width - w) / 2,
+                r.transcript.bottom() - 1,
+                w,
+                1,
+            );
+            let tone = if fresh { p.purple } else { p.muted };
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    format!(" {text} "),
+                    Style::default().fg(tone).bg(p.element),
+                ))),
+                rect,
+            );
+            cache.jump_hit = Some(rect);
+        }
     }
     // The Sessions dashboard replaces the transcript region while the host shows it.
     if let Some(dashboard) = &s.dashboard {
@@ -2679,6 +2753,83 @@ mod tests {
             "a drilled page is not drawn while the root list is showing"
         );
         let _ = col_of;
+    }
+    #[test]
+    fn a_pill_offers_the_jump_to_latest_only_while_scrolled_up() {
+        let blocks: Vec<_> = (0..30)
+            .map(|i| serde_json::json!({"id": format!("m{i}"), "kind": "markdown", "text": format!("line {i}"), "gap": 1}))
+            .collect();
+        let s: Snapshot = serde_json::from_value(serde_json::json!({
+            "schema": 1, "revision": 1, "title": "T", "status": "idle", "blocks": blocks,
+        }))
+        .unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        let mut cache = Cache::default();
+        let frame_at = |terminal: &mut Terminal<TestBackend>, scroll: usize, follow: bool, cache: &mut Cache| {
+            terminal
+                .draw(|frame| {
+                    draw(
+                        frame, &s, &Editor::default(), &Editor::default(), &Editor::default(),
+                        "", 0, scroll, 0, cache, follow, false, false, false, 0, 0,
+                    );
+                })
+                .unwrap();
+        };
+        frame_at(&mut terminal, 0, true, &mut cache);
+        assert!(cache.jump_hit.is_none(), "following the bottom");
+        frame_at(&mut terminal, 0, false, &mut cache);
+        let rect = cache.jump_hit.expect("scrolled up");
+        let bottom = regions(Rect::new(0, 0, 80, 24), &s, composer_height(Rect::new(0, 0, 80, 24), &Editor::default(), &s), false).transcript.bottom();
+        assert_eq!(rect.bottom(), bottom, "on the transcript's last row");
+        let text: String = (rect.x..rect.right())
+            .map(|x| terminal.backend().buffer()[(x, rect.y)].symbol().to_string())
+            .collect();
+        assert!(text.contains("more lines"), "{text}");
+        frame_at(&mut terminal, 1000, false, &mut cache);
+        assert!(cache.jump_hit.is_none(), "clamped to the bottom"); 
+    }
+    #[test]
+    fn a_scrolled_turn_pins_its_user_message_and_the_top_bar_has_spacing() {
+        let mut blocks = Vec::new();
+        for turn in 1..=3 {
+            blocks.push(serde_json::json!({"id": format!("u{turn}"), "kind": "user", "turn_id": format!("t{turn}"), "title": format!("question number {turn}"), "number": turn}));
+            blocks.push(serde_json::json!({"id": format!("m{turn}"), "kind": "markdown", "text": (0..12).map(|i| format!("answer {turn} line {i}")).collect::<Vec<_>>().join("\n\n")}));
+        }
+        let s: Snapshot = serde_json::from_value(serde_json::json!({
+            "schema": 1, "revision": 1, "title": "T", "status": "idle", "blocks": blocks,
+        }))
+        .unwrap();
+        let screen = |scroll: usize, cache: &mut Cache| {
+            let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+            terminal
+                .draw(|frame| {
+                    draw(
+                        frame, &s, &Editor::default(), &Editor::default(), &Editor::default(),
+                        "", 0, scroll, 0, cache, false, false, false, false, 0, 0,
+                    );
+                })
+                .unwrap();
+            (0..24u16)
+                .map(|y| {
+                    (0..80u16)
+                        .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut cache = Cache::default();
+        let top = screen(0, &mut cache);
+        assert!(top[0].trim().is_empty() && top[2].trim().is_empty(), "spacing rows");
+        assert!(!top[1].trim().is_empty(), "top bar on row 1");
+        assert!(cache.sticky.is_none(), "at the top there is no pin");
+        let mid = screen(10, &mut cache);
+        let (rect, row) = cache.sticky.expect("pinned card");
+        assert_eq!(rect.y, 3, "pinned at the top of the transcript");
+        assert!(mid[3].contains("question number 1"), "{:?}", &mid[..6]);
+        assert_eq!(row, cache.prompt_top("t1").unwrap());
+        let later = screen(cache.prompt_top("t2").unwrap() + 3, &mut cache);
+        assert!(later[3].contains("question number 2"), "{:?}", &later[..6]);
+        assert_eq!(later.iter().filter(|l| l.contains("question number 2")).count(), 1);
     }
     fn rich_snapshot(light: bool) -> Snapshot {
         serde_json::from_value(serde_json::json!({

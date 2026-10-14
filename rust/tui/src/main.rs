@@ -13,6 +13,8 @@ mod mermaid;
 mod picker;
 mod render;
 mod session;
+mod jump;
+mod sticky;
 mod settings_page;
 mod trace;
 mod transcript;
@@ -2510,6 +2512,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         json!({"type":"file_toggle","text":file.path}),
                                         &mut s,
                                     )?;
+                                }
+                            } else if cache
+                                .jump_hit
+                                .is_some_and(|rect| rect.contains((mouse.column, mouse.row).into()))
+                            {
+                                follow = true;
+                                cache.prompt_pin.release();
+                            } else if cache
+                                .sticky
+                                .is_some_and(|(rect, _)| rect.contains((mouse.column, mouse.row).into()))
+                                && s.panel_title.is_empty()
+                                && s.prompt.is_none()
+                            {
+                                // The pinned user message covers the rows below it: a click
+                                // scrolls back to the real message and never starts a selection.
+                                if let Some((_, top)) = cache.sticky {
+                                    cache.selection = None;
+                                    press = None;
+                                    follow = false;
+                                    scroll = top.min(cache.max_scroll);
                                 }
                             } else if r.transcript.contains((mouse.column, mouse.row).into())
                                 && s.panel_title.is_empty()
