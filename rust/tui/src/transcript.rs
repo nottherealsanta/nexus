@@ -807,12 +807,20 @@ fn build_inner(b: &Content, width: u16, p: &Palette) -> Rows {
                 Some(at) => title.split_at(at),
                 None => ("", title.as_str()),
             };
+            // A finished subagent gets a filled diamond in its agent colour (error colour
+            // when it failed); running ones keep the spinner slot.
+            let (mark, mark_color) = if running {
+                (look::SLOT, p.text)
+            } else if b.status == "failed" || b.detail.starts_with("Error:") {
+                ("\u{25c6}", p.error)
+            } else if matches!(b.status.as_str(), "completed" | "done") {
+                ("\u{25c6}", color(&b.color, p.blue, p))
+            } else {
+                (" ", p.text)
+            };
             let mut head = vec![
                 Span::raw("    "),
-                Span::styled(
-                    if running { look::SLOT } else { " " },
-                    Style::default().fg(p.text),
-                ),
+                Span::styled(mark, Style::default().fg(mark_color)),
                 Span::raw(" "),
             ];
             if !name.is_empty() {
@@ -1232,6 +1240,30 @@ mod tests {
             assert!(displayed.contains("e\u{301}"));
             assert_eq!(block.text, source);
         }
+    }
+
+    #[test]
+    fn finished_subagents_get_a_coloured_diamond() {
+        let p = Palette::new(false);
+        let mut task = Content {
+            kind: "task".into(),
+            title: "Explore Subagent — map files".into(),
+            status: "completed".into(),
+            color: "#ff0000".into(),
+            ..Default::default()
+        };
+        let mark = |task: &Content| {
+            let rows = build(task, 80, &p);
+            let span = rows[0].0.spans.iter().find(|s| s.content == "\u{25c6}").cloned();
+            span.map(|s| s.style.fg)
+        };
+        assert_eq!(mark(&task), Some(Some(color("#ff0000", p.blue, &p))));
+        task.status = "done".into();
+        assert_eq!(mark(&task), Some(Some(color("#ff0000", p.blue, &p))));
+        task.detail = "Error: boom".into();
+        assert_eq!(mark(&task), Some(Some(p.error)));
+        task.status = "running".into();
+        assert_eq!(mark(&task), None);
     }
 
     #[test]

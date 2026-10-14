@@ -1,5 +1,5 @@
-//! Full-width Sessions dashboard (Grok style). Rows are grouped by status, two lines each
-//! (title and branch, then a one-line summary). Nothing expands inline: the selected or
+//! Full-width Sessions dashboard (Grok style). Rows are grouped by status, one line each
+//! (`◇ Title · branch project … age`) followed by a blank spacer row. Nothing expands inline: the selected or
 //! hovered session's `Response` preview is a bordered box at the bottom of this region,
 //! directly above the composer and as wide as its card. The composer is the normal
 //! composer; this module does not draw one.
@@ -161,40 +161,6 @@ fn tail_field(row: &Value, preview: &Value, key: &str) -> String {
         }
     }
     text(row, key).to_owned()
-}
-
-/// First line of Markdown source as plain text: markers stripped, cut at the first
-/// sentence end when that leaves a usable summary.
-fn plain_summary(source: &str) -> String {
-    let line = source
-        .lines()
-        .map(|l| l.trim().trim_start_matches(['#', '>', '-', '*', '+', ' ']))
-        .find(|l| !l.is_empty() && !l.starts_with("```"))
-        .unwrap_or("");
-    let line = line.trim_start_matches(|c: char| c.is_ascii_digit()).trim_start_matches(". ");
-    let mut out = line.replace("**", "").replace("__", "").replace(['`', '*'], "");
-    if let Some(at) = out.find(". ") {
-        if at >= 12 {
-            out.truncate(at + 1);
-        }
-    }
-    out.trim().to_owned()
-}
-
-fn one_line(row: &Value, user: &str, agent: &str, activity: &str) -> String {
-    let (user, agent) = (plain_summary(user), plain_summary(agent));
-    let (user, agent, activity) = (user.as_str(), agent.as_str(), activity);
-    if !activity.is_empty() {
-        return activity.to_owned();
-    }
-    if text(row, "status") == "working" && agent.is_empty() {
-        return "Waiting for response...".to_owned();
-    }
-    if !agent.is_empty() {
-        agent.to_owned()
-    } else {
-        user.to_owned()
-    }
 }
 
 const SPIN: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -534,10 +500,6 @@ pub fn draw(
             let is_selected = id == state.selected_id;
             let is_hover = !is_selected && id == state.hovered_id;
             let renaming = is_selected.then(|| state.rename.clone()).flatten();
-            let user = tail_field(row, preview, "last_user");
-            let agent = tail_field(row, preview, "last_agent");
-            let activity = tail_field(row, preview, "activity");
-            let summary = one_line(row, &user, &agent, &activity);
             let bg = if is_selected {
                 Some(colors.selected)
             } else if is_hover {
@@ -553,20 +515,10 @@ pub fn draw(
             let mut title = title_line(row, list_width, is_selected, renaming.as_deref(), colors, spin);
             title.spans.insert(0, rail.clone());
             title.spans.insert(1, Span::raw("   "));
-            let mut second = Line::from(vec![
-                rail,
-                Span::raw("     "),
-                Span::styled(
-                    fit(&summary, list_width.saturating_sub(9).max(1)),
-                    muted,
-                ),
-            ]);
             if let Some(bg) = bg {
                 title = title.style(Style::default().bg(bg));
-                second = second.style(Style::default().bg(bg));
             }
             lines.push((title, Some(*index), None));
-            lines.push((second, Some(*index), None));
             lines.push((Line::default(), None, None));
         }
     }
@@ -793,12 +745,6 @@ mod tests {
     }
 
     #[test]
-    fn summary_is_plain_first_line() {
-        assert_eq!(plain_summary("# Hello **world** from `mock`. More text follows\n- item"), "Hello world from mock.");
-        assert_eq!(plain_summary("```\ncode"), "code");
-    }
-
-    #[test]
     fn draws_without_rows() {
         let screen = render(90, 25, &json!({"rows":[],"path":"~/repos/nexus","branch":"main"}), &mut Dashboard::default());
         assert!(screen.contains("+ New Agent"));
@@ -833,7 +779,7 @@ mod tests {
     fn rows_map_to_click_targets() {
         let mut state = Dashboard::default();
         render(140, 30, &sample(), &mut state);
-        assert_eq!(state.line_rows[..3], [None, None, Some(0)]);
+        assert_eq!(state.line_rows[..4], [None, None, Some(0), None]);
         let op = state.click(state.list_area.x, state.list_area.y + 2, &sample());
         assert_eq!(op.unwrap()["id"], "b");
     }

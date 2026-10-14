@@ -156,8 +156,8 @@ is derived in the reducer from the `thinking.delta`/`thinking.end` event
 timestamps (`BlockView.elapsed_ms`, so replay reproduces it), and the reasoning
 opens beneath its activity member dimmed, with a whole-line `**heading**` shown bold.
 Expanded activity members show their full heading (`✱ Grep …`, `→ Read …`). A subagent
-call is one row, `<spinner|✓> Explore Subagent — short phrase · tier low · provider/model (effort) · time`
-(the model is the latest actual one; `model pending`/`model unavailable` until known, never the tier alone),
+call is one row, `<spinner|◆> Explore Subagent — short phrase · tier low · provider/model (effort) · time`
+(the `◆` is drawn in the agent-type colour, error colour when the child failed (`Error:` detail); the model is the latest actual one; `model pending`/`model unavailable` until known, never the tier alone),
 with elapsed time after the model/effort only once finished, derived
 from the child's durable spawn/completion timestamps. Running subagents do not
 show a duration. Missing
@@ -1283,9 +1283,9 @@ changes are additive and preserve the existing UI/projection contract; they do
 not imply completion of the Ratatui port or PTY verification.
 
 The Sessions dashboard is a full-width status list (Needs input, Working, Idle,
-Done) in the Grok style: `▾ Idle 3 ────` group headers, and each session is two
-rows plus a blank (`◇ Title · branch project … age`, then a muted one-line
-summary). The selected row has the `element` background across the full width, a
+Done) in the Grok style: `▾ Idle 3 ────` group headers, and each session is one
+row plus a blank (`◇ Title · branch project … age`; the summary lives in the
+`Response` box). The selected row has the `element` background across the full width, a
 `│` rail and a bold title; hover is the same without the rail. Working rows show
 an animated braille glyph in purple, needs-input rows a warning `◆`. Nothing
 expands inline. Instead the selected (or hovered) session's `Response` box is a
