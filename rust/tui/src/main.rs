@@ -2537,7 +2537,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     column >= cell.start && column < cell.end.max(cell.start + 1)
                                 });
                                 match hit.map(|cell| cell.kind) {
-                                    // `‹ ›` switch between the open sessions; `[Dashboard]`
+                                    // `‹ ›` switch between the open sessions; `[Sessions]`
                                     // is `/sessions`.
                                     Some(kind @ (render::TabHit::Prev | render::TabHit::Next)) => {
                                         let step = if kind == render::TabHit::Prev { -1 } else { 1 };

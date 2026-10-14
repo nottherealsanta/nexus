@@ -71,7 +71,7 @@ pub enum TabHit {
     Prev,
     /// `›`: the next open session.
     Next,
-    /// `[Dashboard]`: opens the Sessions dashboard (`/sessions`).
+    /// `[Sessions]`: opens the Sessions dashboard (`/sessions`).
     Dashboard,
     /// Sub-agent page only: toggles the details sidebar.
     Details,
@@ -115,7 +115,7 @@ pub fn cycle_tab(s: &Snapshot, step: isize) -> Option<&crate::bridge::Session> {
 }
 /// Grok's in-session top bar, laid out once for drawing and hit-testing. Left:
 /// `Title │ branch ~/path`. Right: update notice, `used / window`, `‹ i/n ›` (two or more
-/// open sessions) and `[Dashboard]`, each separated by `│`. Optional pieces drop out
+/// open sessions) and `[Sessions]`, each separated by `│`. Optional pieces drop out
 /// (notice first, then the nav, then the counter) before the title is squeezed below 12
 /// columns. Returns (start column, text, how to paint it).
 /// Split the host breadcrumb into (path, branch). The projection sends `path:branch`
@@ -127,7 +127,7 @@ fn partition(text: &str) -> (&str, &str) {
         .unwrap_or((text, ""))
 }
 fn top_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
-    let dash = "[Dashboard]".to_string();
+    let dash = "[Sessions]".to_string();
     let counter = match (s.context_used, s.context_window) {
         (Some(used), Some(window)) if window > 0 => {
             Some(format!("{} / {}", short_count(used), short_count(window)))
@@ -227,7 +227,7 @@ fn top_layout(s: &Snapshot, width: usize) -> Vec<(usize, String, Seg)> {
     }
     out
 }
-/// Clickable cells of the top bar (arrows and `[Dashboard]`). On a sub-agent page the
+/// Clickable cells of the top bar (arrows and `[Sessions]`). On a sub-agent page the
 /// only cell is the details toggle.
 pub fn tab_cells(s: &Snapshot, width: usize) -> Vec<TabCell> {
     if !s.agent_page.is_empty() {
@@ -569,12 +569,12 @@ mod chrome_tests {
         };
         let text = bar_text(&s, 100);
         assert!(text.contains("Fix the parser │ main ~/repo"), "{text}");
-        assert!(text.contains("72K / 256K │ ‹ 2/3 › │ [Dashboard]"), "{text}");
+        assert!(text.contains("72K / 256K │ ‹ 2/3 › │ [Sessions]"), "{text}");
         let cells = tab_cells(&s, 100);
         let kinds: Vec<_> = cells.iter().map(|c| c.kind).collect();
         assert_eq!(kinds, [TabHit::Prev, TabHit::Next, TabHit::Dashboard]);
         let dash = &cells[2];
-        assert_eq!(&text.chars().skip(dash.start).take(dash.end - dash.start).collect::<String>(), "[Dashboard]");
+        assert_eq!(&text.chars().skip(dash.start).take(dash.end - dash.start).collect::<String>(), "[Sessions]");
         assert_eq!(cycle_tab(&s, 1).unwrap().id, "s2");
         assert_eq!(cycle_tab(&s, -1).unwrap().id, "s0");
     }
@@ -599,7 +599,7 @@ mod chrome_tests {
             assert!(cells.iter().all(|c| c.end <= usize::from(width).max(1)), "{width}");
             let _ = bar_text(&s, width.max(1));
         }
-        assert!(bar_text(&s, 30).contains("[Dashboard]"));
+        assert!(bar_text(&s, 30).contains("[Sessions]"));
     }
 
     #[test]
