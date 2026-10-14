@@ -1,8 +1,11 @@
 // One ProvidersUsage result renders as a section per connected provider with a
 // labelled bar per limit window (5-hour, weekly, monthly…), its reset time,
 // notes and the endpoint the numbers came from. Wording matches the TUI.
+// Weekly and monthly windows also show reserve: elapsed share minus used share.
 
 export const WARN_AT = 70, CRITICAL_AT = 90;
+export const RESERVE_MIN_PERIOD = 7 * 86400;
+export const RESERVE_NOTE = 'Reserve: share of the week or month elapsed minus share used, i.e. usage you can still spend and stay on pace.';
 
 export function usedPercent(window) {
   const value = window?.used_percent;
@@ -13,6 +16,28 @@ export function tone(window) {
   const used = usedPercent(window);
   if (used === null) return 'unknown';
   return used >= CRITICAL_AT ? 'critical' : used >= WARN_AT ? 'warn' : 'ok';
+}
+
+const finite = value => typeof value === 'number' && Number.isFinite(value) ? value : null;
+
+export function elapsedPercent(window, now = Date.now() / 1000) {
+  const at = finite(window?.resets_at), period = finite(window?.period_seconds);
+  if (at === null || period === null || period < RESERVE_MIN_PERIOD || at <= now) return null;
+  return Math.max(0, Math.min((1 - (at - now) / period) * 100, 100));
+}
+
+export function reserve(window, now) {
+  const used = usedPercent(window), elapsed = elapsedPercent(window, now);
+  return used === null || elapsed === null ? null : elapsed - used;
+}
+
+export function reservePhrase(window, now) {
+  const value = reserve(window, now);
+  if (value === null) return '';
+  // Python's round() is half-to-even; whole percents rarely land on .5 exactly.
+  const rounded = Math.round(value);
+  if (rounded === 0) return 'on pace';
+  return rounded > 0 ? `${rounded}% in reserve` : `${-rounded}% over pace`;
 }
 
 export function percent(value) {
@@ -46,7 +71,9 @@ export function resetPhrase(window, now = Date.now() / 1000) {
 
 export function summary(window, now) {
   const used = usedPercent(window);
-  const parts = used === null ? ['usage unknown'] : [`${percent(used)} used`, `${percent(100 - used)} left`];
+  const parts = used === null ? ['usage unknown'] : [`${percent(used)} used`];
+  const pace = reservePhrase(window, now);
+  if (pace) parts.push(pace);
   const phrase = resetPhrase(window, now);
   if (phrase) parts.push(phrase);
   if (window?.detail) parts.push(String(window.detail));
@@ -67,9 +94,10 @@ export function fetchedText(at) {
 export function renderUsage(result, el, now) {
   const root = el('div', 'usage-report');
   const rows = (result?.providers || []).slice(0, 8);
+  let showsReserve = false;
   if (!rows.length) {
     root.append(el('p', 'usage-empty', 'No connected provider reports usage.'),
-      el('p', 'usage-note', 'Connect ChatGPT, Claude, GitHub Copilot or OpenCode Go in Settings → Providers (Ctrl+S).'));
+      el('p', 'usage-note', 'Connect ChatGPT, Claude, GitHub Copilot, OpenCode Go or xAI in Settings → Providers (Ctrl+S).'));
   }
   for (const row of rows) {
     const section = el('section', 'usage-provider');
@@ -93,13 +121,28 @@ export function renderUsage(result, el, now) {
       const fill = el('span', 'usage-fill');
       fill.style.width = `${used ?? 0}%`;
       meter.append(fill);
-      item.append(el('span', 'usage-label', String(window.label || 'Limit')), meter, el('span', 'usage-summary', summary(window, now)));
+      const elapsed = elapsedPercent(window, now);
+      if (elapsed !== null) {
+        const tick = el('span', 'usage-pace');
+        tick.style.left = `${elapsed}%`;
+        tick.title = 'Even pace';
+        meter.append(tick);
+      }
+      const text = el('span', 'usage-summary');
+      for (const [index, part] of summary(window, now).split(' · ').entries()) {
+        const cls = part.endsWith('in reserve') ? 'usage-reserve' : part.endsWith('over pace') ? 'usage-over' : '';
+        if (index) text.append(document.createTextNode(' · '));
+        text.append(cls ? el('span', cls, part) : document.createTextNode(part));
+      }
+      showsReserve ||= Boolean(reservePhrase(window, now));
+      item.append(el('span', 'usage-label', String(window.label || 'Limit')), meter, text);
       section.append(item);
     }
     for (const note of (row.notes || []).slice(0, 8)) section.append(el('p', 'usage-note', `· ${note}`));
     if (row.source) section.append(el('p', 'usage-source', `Source: ${row.source}`));
     root.append(section);
   }
+  if (showsReserve) root.append(el('p', 'usage-note', RESERVE_NOTE));
   const missing = (result?.not_connected || []).slice(0, 8);
   const footer = [rows.length && missing.length ? `Not connected: ${missing.join(', ')}` : '', fetchedText(result?.fetched_at)].filter(Boolean);
   if (footer.length) root.append(el('p', 'usage-footer', footer.join(' · ')));

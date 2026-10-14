@@ -48,6 +48,7 @@ from .protocol import (
     SessionStarted,
     SessionUpdated,
     SidebandOpen,
+    SidebandReconnected,
     TranscriptAdded,
     TranscriptDelta,
     TurnDone,
@@ -70,6 +71,19 @@ RAW_LOG_MAX_BYTES = 1_048_576
 HELPER_KINDS = ("ready", "levels", "phase", "dc_error", "dropped", "closed")
 PHASES = ("connecting", "listening", "speaking", "working", "muted")
 _FATAL_ERROR_HINT = "authentication"
+# Transport send failures that leave the call running: not sent / delivery unknown (never replayed).
+RECOVERABLE_SEND_ERRORS = ("live_not_connected", "live_send_ambiguous")
+MAX_REJECTION_NOTICES = 4
+RECONNECT_NOTICE = (
+    "The voice connection was briefly interrupted. Something the user said, an interruption of "
+    "your speech, or an update from the agent may have been missed. Do not repeat any earlier "
+    "handoff; the user can read the agent's result in the conversation. If it matters, say "
+    "honestly that you may have missed something and ask the user to repeat only if necessary."
+)
+REJECT_NOTICE = (
+    "Too many requests are already waiting, so this request was not sent to the agent. Tell the "
+    "user briefly and ask them to try again in a moment."
+)
 
 
 class LiveHost(Protocol):
@@ -454,15 +468,22 @@ class LiveManager:
             pending = [t for t in (*call.tasks, call.flush_task, call.start_task) if t is not None and t is not me]
             for task in pending:
                 task.cancel()
+            # Mark the transport terminal in the same loop turn as the cancels: a send cancelled
+            # mid-write invalidates its socket, and that must not start a reconnect that races
+            # this intentional stop.
+            closer = (
+                asyncio.ensure_future(asyncio.wait_for(call.transport.close(reason), 3.0))
+                if call.transport is not None else None
+            )
             if call.bridge is not None:
                 with contextlib.suppress(Exception):
                     await asyncio.wait_for(call.bridge.close(), 2.0)
             for task in pending:
                 with contextlib.suppress(BaseException):
                     await task
-            if call.transport is not None:
+            if closer is not None:
                 with contextlib.suppress(BaseException):
-                    await asyncio.wait_for(call.transport.close(reason), 3.0)
+                    await closer
         finally:
             duration = round(max(0.0, self._clock() - call.started), 1)
             self._emit(call, "live.ended", {
@@ -544,23 +565,77 @@ class LiveManager:
             self._emit(call, "live.transcript.delta", {"role": role, "text": call.partial.get(role, "")[-MAX_CAPTION_CHARS:]})
         call.dirty.clear()
 
+    def _record_error(self, call: _Call, message: str) -> None:
+        """A durable ``live.error`` that is never rate-limited away (rare, user-visible warnings)."""
+        call.last_error = redact_secrets(message)[:300]
+        call.last_error_ts = self._clock()
+        self._emit(call, "live.error", {"message": call.last_error})
+
     async def _append(self, call: _Call, text: str, label: str, delegation_id: str | None) -> None:
-        """Send text to the voice model (chunked) and record it exactly as sent."""
+        """Send text to the voice model (chunked) and record exactly the confirmed prefix.
+
+        Chunks are serialized under ``call.send_lock``. A failed chunk is never replayed: the
+        recorded ``live.appended`` covers only chunks the transport confirmed. A recoverable
+        failure (``live_not_connected``: not sent; ``live_send_ambiguous``: delivery unknown)
+        is recorded as ``live.error`` and the call continues; anything else ends the call.
+        """
         text = text[:MAX_APPEND_CHARS]
         if not text.strip() or call.ending is not None or call.transport is None:
             return
         channel = {"commentary": "commentary", "notice": "speakable"}.get(label)
         messages = append_messages(text, channel=channel, delegation_id=delegation_id)
-        async with call.send_lock:
-            try:
+        parts = [m["content"][0]["text"] for m in messages]
+        confirmed = 0
+        failure: LiveError | None = None
+        try:
+            async with call.send_lock:
+                if call.ending is not None or call.transport is None:  # ended while we waited
+                    return
                 for message in messages:
-                    await call.transport.send(message)
-            except LiveError as exc:
-                self._begin_end(call, "transport_error", exc.message)
-                return
-        self._emit(call, "live.appended", {
-            "delegation_id": delegation_id, "channel": label, "text": text, "chunks": len(messages),
-        })
+                    if call.ending is not None:
+                        break
+                    try:
+                        await call.transport.send(message)
+                    except LiveError as exc:
+                        failure = exc
+                        break
+                    confirmed += 1
+        finally:
+            if confirmed:  # also on cancellation: the prefix really was sent
+                self._emit(call, "live.appended", {
+                    "delegation_id": delegation_id, "channel": label,
+                    "text": "".join(parts[:confirmed]), "chunks": confirmed,
+                })
+        if failure is None:
+            return
+        if failure.code in RECOVERABLE_SEND_ERRORS:
+            if failure.code == "live_send_ambiguous":
+                state = f"part {confirmed + 1} may or may not have arrived and was not retried"
+            else:
+                state = f"part {confirmed + 1} was not sent"
+            self._record_error(call, (
+                f"A {label} update to the voice model was interrupted after {confirmed} of {len(messages)} "
+                f"parts: {state}; the remaining parts were not sent. Nothing is replayed automatically."
+            ))
+            return
+        self._begin_end(call, "transport_error", failure.message)
+
+    def _spawn_notice(
+        self, call: _Call, name: str, limit: int, text: str, delegation_id: str | None = None
+    ) -> bool:
+        """Send a speakable notice from a tracked task; at most ``limit`` such tasks in flight."""
+        if call.ending is not None or sum(1 for t in call.tasks if t.get_name() == name) >= limit:
+            return False
+        task = asyncio.create_task(self._append(call, text, "notice", delegation_id), name=name)
+        call.tasks.add(task)
+
+        def _done(finished: asyncio.Task[Any]) -> None:
+            call.tasks.discard(finished)
+            if not finished.cancelled() and finished.exception() is not None:
+                log.debug("live notice failed: %s", safe_detail(finished.exception()))
+
+        task.add_done_callback(_done)
+        return True
 
     # -- events in -------------------------------------------------------------
 
@@ -577,6 +652,8 @@ class LiveManager:
         elif isinstance(event, (SessionStarted, SessionUpdated)):
             if call.phase == "connecting":
                 self._set_phase(call, "muted" if call.muted else "listening")
+        elif isinstance(event, SidebandReconnected):
+            self._on_reconnected(call, event)
         elif isinstance(event, SessionClosed):
             self._begin_end(call, "remote_closed", event.reason or None)
         elif isinstance(event, TranscriptAdded):
@@ -591,6 +668,16 @@ class LiveManager:
             self._note_error(call, event.message)
             if event.fatal or event.status in (401, 403):
                 self._begin_end(call, "error", event.message)
+
+    def _on_reconnected(self, call: _Call, event: Any) -> None:
+        """The transport re-opened the sideband: warn the user, tell the model, repeat nothing."""
+        gap = max(0.0, float(getattr(event, "gap_s", 0.0) or 0.0))
+        self._record_error(call, (
+            f"The voice connection was interrupted for about {gap:.1f}s and restored. "
+            "Something you said, or an interruption of the voice, may have been missed."
+        ))
+        # Not awaited here: the transport reader calls us, and a send would wait on that reader.
+        self._spawn_notice(call, "nexus-live-reconnect", 1, RECONNECT_NOTICE)
 
     def _merge_partial(self, call: _Call, role: str, text: str, *, cumulative: bool) -> None:
         if role not in ("user", "assistant") or not text:
@@ -630,6 +717,8 @@ class LiveManager:
             return
         if sum(1 for t in call.tasks if t.get_name() == "nexus-live-delegation") >= MAX_PENDING_DELEGATIONS:
             self._note_error(call, "too many pending delegations; ignored one request")
+            # bounded: beyond MAX_REJECTION_NOTICES in flight the durable error above is all there is
+            self._spawn_notice(call, "nexus-live-reject", MAX_REJECTION_NOTICES, REJECT_NOTICE, event.id)
             return
         task = asyncio.create_task(
             bridge.on_delegation(event.id, event.text[:MAX_DELEGATION_CHARS]), name="nexus-live-delegation"

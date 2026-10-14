@@ -6,7 +6,14 @@ import asyncio
 import pytest
 
 from nexus.live import protocol as lp
-from nexus.live.manager import MAX_SDP_BYTES, LiveManager, carried_block, load_instructions
+from nexus.live.manager import (
+    MAX_REJECTION_NOTICES,
+    MAX_SDP_BYTES,
+    LiveManager,
+    SidebandReconnected,
+    carried_block,
+    load_instructions,
+)
 from tests.live_fakes import FakeHost, FakeLiveTransport, live_config, settle
 
 OFFER = "v=0\r\no=- offer\r\n"
@@ -180,6 +187,141 @@ async def test_send_failure_ends_with_transport_error():
     assert_one_ended(host, "transport_error")
 
 
+LONG = "word " * 300  # 1500 bytes -> 3 chunks
+
+
+async def test_silence_never_ends_the_call():
+    manager, _ = make(watch_interval=0.01)
+    host, _ = await start(manager)
+    await asyncio.sleep(0.15)  # no user speech, no agent activity, no events at all
+    assert manager.snapshot().state == "active" and host.of("live.ended") == []
+    assert host.of("live.error") == [] and host.of("live.appended") == []
+    await manager.stop("s1")
+
+
+@pytest.mark.parametrize("code", ["live_not_connected", "live_send_ambiguous"])
+async def test_recoverable_send_errors_keep_the_call_and_record_the_confirmed_prefix(code):
+    t = FakeLiveTransport()
+    t.fail_at = {1: lp.LiveError(code, "transport detail")}
+    manager, _ = make(t)
+    host, _ = await start(manager)
+    await manager._append(manager._call, LONG, "notice", "d1")
+    assert manager.snapshot().state == "active" and host.of("live.ended") == []
+    chunks = lp.chunk_utf8(LONG)
+    appended = host.of("live.appended")
+    assert len(appended) == 1 and appended[0]["chunks"] == 1 and appended[0]["text"] == chunks[0]
+    assert t.attempts == 2 and len(t.sent) == 1  # chunk 2 is never replayed, chunk 3 never tried
+    error = host.of("live.error")[-1]["message"]
+    assert "1 of 3" in error and "not" in error and "replayed" in error
+    assert ("may or may not" in error) == (code == "live_send_ambiguous")
+    await manager._append(manager._call, "next", "notice", None)  # later sends still work
+    assert host.of("live.appended")[-1]["text"] == "next"
+    await manager.stop("s1")
+
+
+async def test_failure_on_first_chunk_records_no_appended_event():
+    t = FakeLiveTransport()
+    t.fail_at = {0: lp.LiveError("live_not_connected", "down")}
+    manager, _ = make(t)
+    host, _ = await start(manager)
+    await manager._append(manager._call, LONG, "final", "d1")
+    assert host.of("live.appended") == [] and host.of("live.error") and manager.snapshot().state == "active"
+    await manager.stop("s1")
+
+
+async def test_generic_send_failure_records_prefix_then_ends():
+    t = FakeLiveTransport()
+    t.fail_at = {2: lp.LiveError("live_send_failed", "broken pipe")}
+    manager, _ = make(t)
+    host, _ = await start(manager)
+    await manager._append(manager._call, LONG, "notice", "d1")
+    await settle(lambda: host.of("live.ended"))
+    assert_one_ended(host, "transport_error")
+    appended = host.of("live.appended")
+    assert appended[0]["chunks"] == 2 and appended[0]["text"] == "".join(lp.chunk_utf8(LONG)[:2])
+    assert host.kinds().index("live.appended") < host.kinds().index("live.ended")
+
+
+async def test_appends_are_serialized_and_recheck_ending_after_the_lock():
+    t = FakeLiveTransport()
+    t.send_gate = asyncio.Event()
+    manager, _ = make(t)
+    host, _ = await start(manager)
+    call = manager._call
+    first = asyncio.create_task(manager._append(call, LONG, "notice", "d1"))
+    second = asyncio.create_task(manager._append(call, LONG, "notice", "d2"))
+    await settle(lambda: t.attempts == 1)
+    await asyncio.sleep(0.01)
+    assert t.attempts == 1  # the second waits for the lock; chunks never interleave
+    stopping = asyncio.create_task(manager.stop("s1"))
+    await asyncio.sleep(0.01)
+    await stopping
+    t.send_gate.set()
+    await asyncio.gather(first, second)
+    assert t.max_in_flight == 1 and t.attempts == 1  # nothing else is sent once the call is ending
+    assert_one_ended(host, "user")
+    assert all(a["delegation_id"] != "d2" for a in host.of("live.appended"))
+
+    t2 = FakeLiveTransport()
+    manager2, _ = make(t2)
+    host2, _ = await start(manager2)
+    call2 = manager2._call
+    await call2.send_lock.acquire()
+    waiting = asyncio.create_task(manager2._append(call2, "late", "notice", None))
+    await asyncio.sleep(0.01)
+    manager2._begin_end(call2, "user", None)
+    call2.send_lock.release()
+    await waiting
+    assert t2.sent == [] and host2.of("live.appended") == []
+
+
+async def test_concurrent_appends_do_not_interleave_chunks():
+    t = FakeLiveTransport()
+    manager, _ = make(t)
+    await start(manager)
+    call = manager._call
+    await asyncio.gather(manager._append(call, LONG, "notice", "a"), manager._append(call, LONG, "notice", "b"))
+    ids = [m["delegation_item_id"] for m in t.sent]
+    assert ids == ["a"] * 3 + ["b"] * 3 and t.max_in_flight == 1
+    await manager.stop("s1")
+
+
+async def test_reconnect_records_a_warning_and_notifies_the_voice_without_deadlock():
+    manager, transports = make()
+    host, _ = await start(manager)
+    t = transports[0]
+    t.send_gate = asyncio.Event()  # a send blocks: the reader callback must still return at once
+    t.push(SidebandReconnected(gap_s=2.5))
+    t.push(SidebandReconnected(gap_s=1.0))  # a second one adds a warning, not a second notice task
+    errors = host.of("live.error")
+    assert len(errors) == 2 and "2.5s" in errors[0]["message"] and "missed" in errors[0]["message"]
+    assert sum(1 for x in manager._call.tasks if x.get_name() == "nexus-live-reconnect") == 1
+    t.send_gate.set()
+    await settle(lambda: t.sent)
+    notice = t.sent[0]
+    assert notice["type"] == "session.context.append" and notice["channel"] == "speakable"
+    text = notice["content"][0]["text"]
+    assert "interrupted" in text and "Do not repeat" in text
+    assert "update from the agent" in text and "read the agent's result in the conversation" in text
+    assert host.enqueued == [] and manager.snapshot().state == "active"  # no automatic delegation repeat
+    await settle(lambda: not any(x.get_name() == "nexus-live-reconnect" for x in manager._call.tasks))
+    await manager.stop("s1")
+
+
+async def test_delegation_cap_sends_bounded_rejection_notices():
+    t = FakeLiveTransport()
+    t.send_gate = asyncio.Event()
+    manager, _ = make(t)
+    host, _ = await start(manager)
+    call = manager._call
+    for i in range(8, 8 + 20):
+        manager._spawn_notice(call, "nexus-live-reject", MAX_REJECTION_NOTICES, "no", f"x{i}")
+    assert sum(1 for x in call.tasks if x.get_name() == "nexus-live-reject") == MAX_REJECTION_NOTICES
+    await manager.stop("s1")
+    assert_one_ended(host)  # blocked notice tasks were cancelled and cleaned up
+    assert t.in_flight == 0
+
+
 async def test_remote_close_and_fatal_error_end_the_call():
     manager, transports = make()
     host, _ = await start(manager)
@@ -339,6 +481,7 @@ def test_instructions_bundled_and_overrides(tmp_path):
     text, source = load_instructions(tmp_path / "myproj", "build", cfg)
     assert source == "bundled" and "build" in text and "myproj" in text and "{{" not in text
     assert "Agent Final Message" in text and "on screen" in text
+    assert "Silence from the user is normal" in text and "duplicate a handoff" in text and "Never read it aloud" in text
     import getpass
     assert getpass.getuser() not in text or getpass.getuser() in ("build", "myproj")
     override = tmp_path / ".agents" / "live" / "instructions.md"

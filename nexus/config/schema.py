@@ -355,6 +355,10 @@ PROVIDER_AUTH_MODES = ("chatgpt_oauth", "github_copilot", "keychain", "xai_oauth
 WORKER_PERMISSION_MODES = frozenset({"default", "manual", "acceptEdits", "plan", "dontAsk", "auto"})
 
 
+#: ``kind`` spellings of the Antigravity (``agy``) subagent-only external worker.
+ANTIGRAVITY_KINDS = frozenset({"antigravity", "agy"})
+
+
 class ProviderSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     kind: str | None = None
     api_key: str | None = None
@@ -396,9 +400,19 @@ class ProviderSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     #: ``--restricted`` (default true): no Bash/WebFetch unless named in
     #: ``worker_tools`` and file tools confined to the workspace.
     worker_restricted: bool | None = None
+    # -- Antigravity external worker (``kind = "antigravity"``, alias ``agy``) --
+    #: Explicit opt-in to agy's own user/global settings, MCP servers and plugins.
+    #: Off by default; Nexus PathGuard never applies inside agy either way.
+    worker_inherits_agy_settings: bool = False
 
     def __post_init__(self) -> None:
         self._validate_worker_fields()
+        if not isinstance(self.worker_inherits_agy_settings, bool):
+            raise ValueError("providers.*.worker_inherits_agy_settings must be a boolean")
+        if self.worker_inherits_agy_settings and self.kind is not None and (
+            not isinstance(self.kind, str) or self.kind.strip().lower() not in ANTIGRAVITY_KINDS
+        ):
+            raise ValueError("providers.*.worker_inherits_agy_settings applies only to kind = antigravity")
         if self.auth is not None and self.auth not in PROVIDER_AUTH_MODES:
             raise ValueError("providers.*.auth must be 'chatgpt_oauth', 'github_copilot', 'keychain' or 'xai_oauth'")
         if self.profile is not None and (
@@ -544,7 +558,8 @@ class ProviderSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
             f"worker_disallowed_tools={self.worker_disallowed_tools!r}, "
             f"worker_setting_sources={self.worker_setting_sources!r}, "
             f"worker_mcp_config={'***' if self.worker_mcp_config else None!r}, "
-            f"worker_restricted={self.worker_restricted!r})"
+            f"worker_restricted={self.worker_restricted!r}, "
+            f"worker_inherits_agy_settings={self.worker_inherits_agy_settings!r})"
         )
 
 

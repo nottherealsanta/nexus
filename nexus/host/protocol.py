@@ -1106,7 +1106,15 @@ class SetupSaveResult(msgspec.Struct, tag=True, frozen=True):
 
 
 class ProvidersStatusResult(msgspec.Struct, tag=True, frozen=True):
-    """Rows: ``id``, ``label``, ``methods``, ``help``, ``connected``, ``detail``, ``login``."""
+    """Rows: ``id``, ``label``, ``methods``, ``help``, ``connected``, ``detail``, ``login``.
+
+    A ``methods`` entry of ``cli`` marks a manual, provider-owned sign-in (the
+    Antigravity ``agy`` CLI): Nexus starts no login flow, reads no credential and
+    never signs it out, so ``login`` stays ``None`` and ``can_logout`` is false.
+    Such a row also carries ``cli_present`` and ``auth_verified``; presence of the
+    CLI is not proof of sign-in, so ``connected`` and ``auth_verified`` stay
+    ``False`` and ``detail`` says to run ``agy`` in a terminal.
+    """
 
     providers: list[dict[str, Any]] = msgspec.field(default_factory=list)
 

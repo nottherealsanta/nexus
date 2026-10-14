@@ -98,6 +98,7 @@ def test_parser_exposes_the_canonical_command_set():
         "chat",
         "desktop",
         "web",
+        "gateway",
         "replay",
         "daemon",
         "restart",

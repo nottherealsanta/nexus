@@ -50,6 +50,7 @@ import msgspec
 import os
 
 from .agents import SubagentOutcome, SubagentRunner, SubagentUsage
+from .agents.runner import qualify_model
 from .agents.handoff import build_handoff, write_handoff
 from .agents.handoff import digest as handoff_digest
 from .agents.last_choice import AgentChoiceStore
@@ -84,6 +85,7 @@ from .model.providers.openai import OpenAIProvider
 from .model.providers.opencode import OpenCodeProvider
 from .model.registry import (
     ADAPTER_ANTHROPIC,
+    ADAPTER_ANTIGRAVITY,
     ADAPTER_CLAUDE_AGENT,
     ADAPTER_CLAUDE_CODE,
     ADAPTER_GEMINI,
@@ -144,7 +146,15 @@ _CORE_ADAPTERS: dict[str, str] = {
     "opencode": ADAPTER_OPENCODE,
     "claude-agent": ADAPTER_CLAUDE_AGENT,
     "claude-code": ADAPTER_CLAUDE_CODE,
+    "antigravity": ADAPTER_ANTIGRAVITY,
+    "agy": ADAPTER_ANTIGRAVITY,
 }
+
+#: ``kind`` spellings of the subagent-only Antigravity external worker.
+_ANTIGRAVITY_KINDS = frozenset({ADAPTER_ANTIGRAVITY, "agy"})
+_ANTIGRAVITY_LABEL = "Antigravity (agy)"
+#: Fields an Antigravity section may set; anything else cannot be honoured and is refused.
+_ANTIGRAVITY_FIELDS = frozenset({"kind", "executable", "timeout_seconds", "worker_inherits_agy_settings"})
 
 #: ``kind`` spellings that mean "any OpenAI-compatible endpoint".
 _OPENAI_COMPATIBLE_KINDS = frozenset(
@@ -1841,6 +1851,26 @@ class _ChildSessionFacade:
             self._manager.evict(_child_session_id(session_id))
 
 
+def _child_models(session: Any) -> tuple[str, ...]:
+    """Concrete models a child session started, from its own durable events.
+
+    Reads ``model.started``/``external.started`` (the child's own, not relayed
+    grandchild events) in order, collapsing consecutive repeats; empty when the
+    child never started a model.
+    """
+    models: list[str] = []
+    for event in getattr(session, "events", ()) or ():
+        if getattr(event, "type", None) not in ("model.started", "external.started"):
+            continue
+        data = getattr(event, "data", None)
+        if not isinstance(data, Mapping) or isinstance(data.get("agent"), Mapping):
+            continue
+        ref = qualify_model(data.get("provider"), data.get("model"))
+        if ref is not None and (not models or models[-1] != ref):
+            models.append(ref)
+    return tuple(models)
+
+
 #: Child events that are internal to the child's own turn/session and must not
 #: reach the parent log: a relayed child ``turn.completed`` would look like the
 #: parent turn ending, and a relayed ``permission.requested`` would be tracked as
@@ -1931,14 +1961,29 @@ _EXTERNAL_STOP_REASON = {
 }
 
 
+def _reported_usage(value: object) -> SubagentUsage | None:
+    """Token counts an external CLI actually reported, else ``None`` (never estimated)."""
+    if value is None:
+        return None
+    usage = SubagentUsage.from_value(value)
+    return usage if usage.total_tokens > 0 else None
+
+
 @dataclass(frozen=True)
 class _ExternalAssignment:
-    """An explicit ``claude-code`` child's resolved worker, authority and model."""
+    """An explicit external-worker child's resolved worker, authority and model."""
 
     worker: Any
     policy: Any
     provider: str
     model: str
+    #: Which external CLI runs it: provenance recorded on the durable outcome.
+    kind: str = ADAPTER_CLAUDE_CODE
+    label: str = "Claude Code"
+    #: Antigravity only: the explicit opt-in to agy's own settings, MCP servers and plugins.
+    inherits_settings: bool = False
+    #: The worker's own provenance statement (for example "Antigravity (own tools)").
+    provenance: str = ""
 
 
 class _ChildRuntime:
@@ -1964,8 +2009,11 @@ class _ChildRuntime:
         sections = getattr(v2, "providers", {}) or {}
         sdk_backend = getattr(getattr(v2, "models", None), "claude_code_subagent_backend", "worker") == "sdk"
         reference = str(getattr(spec, "model", None) or "")
-        if not sdk_backend and reference in getattr(getattr(runtime, "_tiers", None), "order", ()):
-            reference = runtime._claude_code_tier_route(reference) or reference
+        in_tiers = reference in getattr(getattr(runtime, "_tiers", None), "order", ())
+        if in_tiers:
+            route = runtime._external_tier_route(reference, claude=not sdk_backend)
+            reference = route or reference
+            in_tiers = route is None
         head, sep, tail = reference.partition("/")
         provider_name = head if sep else getattr(spec, "provider", None)
         if not sep and provider_name is None:
@@ -1978,7 +2026,7 @@ class _ChildRuntime:
         parent_providers = getattr(runtime, "_providers", {})
         providers = {
             name: provider for name, provider in parent_providers.items()
-            if Runtime._adapter_kind(name, sections.get(name)) != ADAPTER_CLAUDE_CODE
+            if Runtime._adapter_kind(name, sections.get(name)) not in (ADAPTER_CLAUDE_CODE, ADAPTER_ANTIGRAVITY)
         }
         if sdk_backend:
             # Backend ``sdk``: claude-code children run in the normal Nexus child
@@ -1992,7 +2040,13 @@ class _ChildRuntime:
                 aliases=runtime._router.aliases, default=runtime._router.default,
                 fallback=runtime._router.fallback, registry=runtime._registry, tiers=runtime._tiers,
             )
-        if not sdk_backend and Runtime._adapter_kind(provider_name, section) == ADAPTER_CLAUDE_CODE:
+        if Runtime._adapter_kind(provider_name, section) == ADAPTER_ANTIGRAVITY:
+            self._refuse_inherited_external(
+                runtime, spec, label=_ANTIGRAVITY_LABEL, route=f"{provider_name}")
+            # An exact agy model ID only: no tier, alias or inherited name stands in for it.
+            model = tail if sep else ("" if in_tiers or reference in ("", "inherit") else reference)
+            self._external = self._plan_antigravity(runtime, spec, provider_name, section, model)
+        elif not sdk_backend and Runtime._adapter_kind(provider_name, section) == ADAPTER_CLAUDE_CODE:
             self._refuse_inherited_external(runtime, spec)
             model = tail if sep else (reference if _CLAUDE_MODEL_ID.fullmatch(reference) else "")
             self._external = self._plan_external(runtime, spec, provider_name, section, model)
@@ -2025,12 +2079,14 @@ class _ChildRuntime:
         return out
 
     @staticmethod
-    def _refuse_inherited_external(runtime: Any, spec: Any) -> None:
-        """A child never reaches Claude Code's own tools merely by inheriting the parent's model.
+    def _refuse_inherited_external(
+        runtime: Any, spec: Any, *, label: str = "Claude Code", route: str = "claude-code"
+    ) -> None:
+        """A child never reaches an external CLI's own tools merely by inheriting the parent's model.
 
-        Running a ``claude-code`` assignment widens authority (Claude's tools are
-        not mediated by Nexus), so the route must be named by the ``Task`` call,
-        the role (``model``/``provider``) or a configured tier.
+        Running a ``claude-code``/``antigravity`` assignment widens authority (the
+        CLI's tools are not mediated by Nexus), so the route must be named by the
+        ``Task`` call, the role (``model``/``provider``) or a configured tier.
         """
         model = str(getattr(spec, "model", None) or "")
         parent = str(getattr(spec, "parent_model", None) or "")
@@ -2047,9 +2103,9 @@ class _ChildRuntime:
         if role is not None and ((role.model and role.model != "inherit") or role.provider):
             return
         raise ConfigError(
-            f"refusing to run {getattr(spec, 'agent', 'this child')!r} on Claude Code by inheriting the "
-            f"parent's model {model!r}: Claude Code's own tools are not mediated by Nexus. Name "
-            "claude-code/<model> on the role (model/provider) or on the Task call")
+            f"refusing to run {getattr(spec, 'agent', 'this child')!r} on {label} by inheriting the "
+            f"parent's model {model!r}: {label}'s own tools are not mediated by Nexus. Name "
+            f"{route}/<model> on the role (model/provider) or on the Task call")
 
     @staticmethod
     def _plan_external(
@@ -2093,6 +2149,53 @@ class _ChildRuntime:
         return _ExternalAssignment(
             worker=worker, policy=policy, provider=provider_name, model=model
         )
+
+    @staticmethod
+    def _plan_antigravity(
+        runtime: Any, spec: Any, provider_name: str, section: Any, model: str
+    ) -> _ExternalAssignment:
+        """Validate and resolve an Antigravity (``agy``) child before anything starts.
+
+        agy's own tools are not mediated by Nexus, so every restriction Nexus
+        cannot enforce (budgets, read-only, worktree scope, unsupported worker
+        fields) is refused here rather than silently dropped.
+        """
+        from .agents.antigravity_worker import (
+            PROVENANCE,
+            AntigravityWorker,
+            WorkerConfig,
+            resolve_policy,
+        )
+        from .agents.claude_code_worker import nexus_child_is_read_only
+
+        agent = getattr(spec, "agent", "this child")
+        if getattr(spec, "worktree_scope", False) or getattr(spec, "worktree", None):
+            raise ConfigError(
+                "antigravity children cannot run in a worktree: agy's own tools are not "
+                "limited to the no-shell worktree tool profile")
+        budget = getattr(spec, "budget", None)
+        if (getattr(budget, "token_budget", None) is not None
+                or getattr(budget, "cost_budget", None) is not None):
+            raise ConfigError("antigravity children cannot enforce token or cost budgets")
+        Runtime._validate_antigravity_section(provider_name, section)
+        if not model:
+            raise ConfigError(
+                f"refusing to run {agent!r} on Antigravity without an exact model: name "
+                f"{provider_name}/<model id from `agy models`> on the role, tier or Task call")
+        Runtime._check_antigravity_model(runtime, provider_name, model)
+        selection = (getattr(spec, "metadata", None) or {}).get("selection")
+        flagged = bool(selection.get("read_only")) if isinstance(selection, Mapping) else False
+        if nexus_child_is_read_only(tuple(getattr(spec, "tools", ()) or ()), flagged=flagged):
+            raise ConfigError(
+                f"antigravity children cannot be read-only ({agent!r} is): agy's own tools cannot "
+                "be restricted to read-only, so use a Nexus provider for read-only work")
+        config = WorkerConfig.from_section(section)
+        policy = resolve_policy(config, read_only=False)
+        worker = AntigravityWorker(config, environ=runtime._environ)
+        return _ExternalAssignment(
+            worker=worker, policy=policy, provider=provider_name, model=model,
+            kind=ADAPTER_ANTIGRAVITY, label=_ANTIGRAVITY_LABEL, provenance=PROVENANCE,
+            inherits_settings=bool(getattr(section, "worker_inherits_agy_settings", False)))
 
     async def run(self) -> SubagentOutcome:
         if self._external is not None:
@@ -2232,7 +2335,7 @@ class _ChildRuntime:
         if before is not None and after is not None:
             changed = changed_paths(before, after)
             note = ("computed from the workspace's git status/mtimes and any new commits before "
-                    "and after the run, independently of Claude's claims; gitignored files are "
+                    f"and after the run, independently of {external.label}'s claims; gitignored files are "
                     "not checked; it is workspace-wide and may include concurrent changes by "
                     "other writers")
         else:
@@ -2244,11 +2347,20 @@ class _ChildRuntime:
             "provider": external.provider, "model": external.model, "usage": "unknown",
             "authority": external.policy.authority(workspace),
             "files_changed_note": note, "files_changed_total": len(changed),
+            "external_kind": external.kind, "external_label": external.label,
         }
+        if external.kind == ADAPTER_ANTIGRAVITY:
+            metrics["inherits_agy_settings"] = external.inherits_settings
+            metrics["provenance"] = external.provenance
         if result is not None:
+            session_key = "claude_session" if external.kind == ADAPTER_CLAUDE_CODE else "external_session"
+            session_id = (result.claude_session if external.kind == ADAPTER_CLAUDE_CODE
+                          else getattr(result, "claude_session", None) or getattr(result, "session", None) or "")
             metrics.update(
-                claude_session=result.claude_session, transcript_path=result.transcript_path,
+                {session_key: session_id}, transcript_path=result.transcript_path,
                 tool_calls=result.tool_calls, elapsed_seconds=round(result.elapsed_seconds, 3))
+            if external.kind != ADAPTER_CLAUDE_CODE and _reported_usage(getattr(result, "usage", None)) is not None:
+                metrics["usage"] = "reported"  # only when the CLI's own stream carried token counts
             if result.attention:
                 metrics["attention"] = result.attention
             if result.clip_notes:
@@ -2262,20 +2374,22 @@ class _ChildRuntime:
         external = self._external
         assert external is not None
         policy = external.policy
+        label = external.label
         if instructions:
-            head = ("Claude Code has no Nexus system prompt. The role instructions below were "
+            head = (f"{label} has no Nexus system prompt. The role instructions below were "
                     "prepended to the task prompt it received:\n\n" + instructions)
         else:
-            head = "No role instructions were sent; Claude Code received only the task prompt."
+            head = f"No role instructions were sent; {label} received only the task prompt."
         system = f"{head}\n\n[authority] {policy.authority(workspace)}"
-        if policy.tools is not None:
-            tools = [{"name": name, "description": "Claude Code's own tool (not mediated by Nexus)",
-                      "input_schema": {}} for name in policy.tools]
+        policy_tools = getattr(policy, "tools", None)
+        if policy_tools is not None:
+            tools = [{"name": name, "description": f"{label}'s own tool (not mediated by Nexus)",
+                      "input_schema": {}} for name in policy_tools]
         else:
-            # Nexus cannot list Claude's built-ins, but must not show "no tools".
-            denied = ", ".join(policy.disallowed_tools) or "none"
-            tools = [{"name": "Claude Code default set",
-                      "description": ("all of Claude Code's built-in tools for this version, "
+            # Nexus cannot list the CLI's built-ins, but must not show "no tools".
+            denied = ", ".join(getattr(policy, "disallowed_tools", ()) or ()) or "none"
+            tools = [{"name": f"{label} default set",
+                      "description": (f"all of {label}'s built-in tools for this version, "
                                       f"except disallowed: {denied} (not mediated by Nexus)"),
                       "input_schema": {}}]
         return {
@@ -2344,8 +2458,12 @@ class _ChildRuntime:
                                          turn_id=lease.turn_id)))
                 if crash is None and result is not None:
                     if result.status == "completed":
-                        await emit("turn.completed", {"stop_reason": "end_turn", "iterations": 0,
-                                                      "usage": {}, "usage_unknown": True})
+                        reported = (_reported_usage(getattr(result, "usage", None))
+                                    if external.kind != ADAPTER_CLAUDE_CODE else None)
+                        await emit("turn.completed", {
+                            "stop_reason": "end_turn", "iterations": 0,
+                            "usage": reported.to_dict() if reported else {},
+                            **({} if reported else {"usage_unknown": True})})
                     elif result.status == "cancelled":
                         await emit("turn.cancelled", {"reason": result.error, "iterations": 0})
                     else:
@@ -2379,11 +2497,14 @@ class _ChildRuntime:
                     metrics=metrics, files_changed=tuple(changed[:MAX_REPORTED_FILES]))
             outcome = SubagentOutcome(
                 agent=spec.agent, session_id=spec.session_id, status=result.status,
-                text=result.text, is_error=result.is_error, usage=SubagentUsage(),
+                text=result.text, is_error=result.is_error,
+                usage=(_reported_usage(getattr(result, "usage", None)) if metrics.get("usage") == "reported" else None)
+                or SubagentUsage(),
                 stop_reason=_EXTERNAL_STOP_REASON.get(result.status, "error"),
                 dropped_tools=tuple(spec.dropped_tools), clamped=bool(spec.clamped), tier=spec.tier,
                 requested_tier=spec.requested_tier, error=result.error, metrics=metrics,
                 files_changed=tuple(changed[:MAX_REPORTED_FILES]),
+                models=_child_models(session),
             )
             if outcome.status in ("failed", "interrupted"):
                 outcome = self._with_handoff(outcome, spec, session)
@@ -2443,6 +2564,7 @@ class _ChildRuntime:
             requested_tier=spec.requested_tier,
             metrics=dict(metrics or {}),
             files_changed=files_changed,
+            models=_child_models(session),
         )
         return self._with_handoff(base, spec, session)
 
@@ -3756,6 +3878,10 @@ class Runtime:
         if not isinstance(reference, str) or not reference.strip():
             raise ConfigError("model reference must be a nonempty string")
         ref = reference.strip()
+        sections = getattr(getattr(self._load_config(), "v2", None), "providers", {}) or {}
+        head = ref.partition("/")[0]
+        if self._adapter_kind(head, sections.get(head)) == ADAPTER_ANTIGRAVITY:
+            raise ConfigError("Antigravity is Subagents only; choose it in a subagent tier or Task, not as the main model")
         if ref in self._tiers.order and self._registry is None:
             raise ConfigError(
                 f"tier {ref!r} cannot be selected without a model registry; "
@@ -4521,6 +4647,8 @@ class Runtime:
         kind = getattr(section, "kind", None)
         if isinstance(kind, str) and kind.strip():
             normalized = kind.strip().lower()
+            if normalized in _ANTIGRAVITY_KINDS:
+                return ADAPTER_ANTIGRAVITY
             if normalized in _OPENCODE_AGENT_KINDS:
                 return ADAPTER_OPENCODE
             if normalized in _OPENAI_COMPATIBLE_KINDS:
@@ -4567,6 +4695,8 @@ class Runtime:
                 "(Nexus will not default an OpenAI-compatible vendor to the "
                 "official OpenAI endpoint)"
             )
+        if kind == ADAPTER_ANTIGRAVITY:
+            return None  # an external CLI run only by the subagent worker, never a Nexus provider
         if kind in (ADAPTER_CLAUDE_AGENT, ADAPTER_CLAUDE_CODE):
             from .model.providers.claude_agent import ClaudeAgentProvider
 
@@ -4772,6 +4902,57 @@ class Runtime:
         if Runtime._adapter_kind(name, section) != ADAPTER_CLAUDE_CODE and any(
                 getattr(section, field, None) is not None for field in _CLAUDE_WORKER_FIELDS):
             raise ConfigError(f"{name}: worker_* fields apply only to kind = claude-code")
+        if getattr(section, "worker_inherits_agy_settings", False):
+            raise ConfigError(f"{name}: worker_inherits_agy_settings applies only to kind = antigravity")
+
+    @staticmethod
+    def _validate_antigravity_section(name: str, section: Any) -> None:
+        """Only ``executable``, ``timeout_seconds`` and the inheritance opt-in are honoured.
+
+        Every other field (Claude ``worker_*`` policy, credentials, endpoints) would be
+        silently dropped by the agy worker, so it is refused instead.
+        """
+        stray = sorted(
+            field for field in (
+                "api_key", "base_url", "api", "auth", "profile", "command", "args", "env",
+                "inherit_env", "permission_policy", *_CLAUDE_WORKER_FIELDS)
+            if getattr(section, field, None) is not None)
+        if stray:
+            raise ConfigError(
+                f"{name} is the Antigravity (agy) subagent worker; only "
+                f"{', '.join(sorted(_ANTIGRAVITY_FIELDS - {'kind'}))} are supported, not: {', '.join(stray)}")
+        if not isinstance(getattr(section, "worker_inherits_agy_settings", False), bool):
+            raise ConfigError(f"{name}: worker_inherits_agy_settings must be true or false")
+
+    @staticmethod
+    def _check_antigravity_model(runtime: Any, provider_name: str, model: str) -> None:
+        """An exact, currently reported ``agy models`` ID (a refresh hint otherwise)."""
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}", model) is None:
+            raise ConfigError(f"{provider_name}/{model[:64]!r}: not a valid agy model id")
+        registry = getattr(runtime, "_registry", None)
+        status = getattr(registry, "provider_status", lambda _name: None)(provider_name)
+        if status is None or not getattr(registry, "_loaded", False):
+            return  # no discovered catalogue to check against; the worker validates at start
+        if registry.get(f"{provider_name}/{model}") is None:
+            known = ", ".join(sorted(info.id for info in registry.list(provider=provider_name))[:12])
+            raise ConfigError(
+                f"{provider_name}/{model} is not in the models `agy models` reported"
+                + (f" ({known})" if known else " (it reported none: is agy installed and signed in?)")
+                + "; refresh the model list in Settings after fixing agy")
+
+    @staticmethod
+    def _refuse_subagent_only_selection(config: Config, sections: Mapping[str, Any]) -> None:
+        """Antigravity is subagent-only: it can be neither the main, plan, fast nor a fallback model."""
+        v2 = getattr(config, "v2", None)
+        models = getattr(v2, "models", None)
+        refs = [getattr(config, "model", None), getattr(models, "fast", None), getattr(models, "plan", None),
+                getattr(models, "default", None), *(getattr(models, "fallback", None) or ())]
+        for ref in refs:
+            head = ref.partition("/")[0] if isinstance(ref, str) and "/" in ref else ""
+            if head and Runtime._adapter_kind(head, sections.get(head)) == ADAPTER_ANTIGRAVITY:
+                raise ConfigError(
+                    f"{ref!r}: Antigravity (agy) runs only as an explicit subagent route; it cannot be "
+                    "the main, plan, fast or fallback model")
 
     def _build_providers(self, config: Config) -> dict[str, Provider]:
         """Construct every adapter the configuration asks the runtime to own.
@@ -4797,12 +4978,16 @@ class Runtime:
         if not isinstance(model_ref, str):
             model_ref = ""
         fallback = self._config_fallback(v2)
+        self._refuse_subagent_only_selection(config, sections)
 
         # (1) One instance per configured section, under its own name(s).
         for name, section in sections.items():
             kind = self._adapter_kind(name, section)
             if kind is None:
                 continue
+            if kind == ADAPTER_ANTIGRAVITY:
+                self._validate_antigravity_section(name, section)
+                continue  # subagent-only: run by the external worker, never a Nexus provider
             if kind == ADAPTER_CLAUDE_CODE:
                 self._validate_claude_section(name, section)
                 if not bool(getattr(getattr(v2, "models", None), "claude_code_main_enabled", False)):
@@ -5556,19 +5741,26 @@ class Runtime:
         return self._claude_code_tier_route(tier) is not None
 
     def _claude_code_tier_route(self, tier: str) -> str | None:
-        """The ``claude-code/<model>`` entry a tier would run on, else ``None``.
+        """The ``claude-code/<model>`` or ``antigravity/<model>`` entry a tier would run on, else ``None``."""
+        return Runtime._external_tier_route(self, tier)
+
+    def _external_tier_route(self, tier: str, *, claude: bool = True) -> str | None:
+        """The external-worker entry a tier would run on, else ``None``.
 
         Children only: a tier's candidates are walked in order, and the first one
-        that is either a configured ``claude-code`` section (run by the external
-        worker) or runnable by a Nexus provider decides. A tier whose first usable
-        entry is a Nexus provider never reaches the worker. The root's router is
-        untouched: it cannot stream ``claude-code``.
+        that is either a configured ``claude-code`` section (when ``claude``) or
+        ``antigravity`` section (run by an external worker) or runnable by a Nexus
+        provider decides. A tier whose first usable entry is a Nexus provider never
+        reaches a worker. The root's router is untouched: it cannot stream either.
         """
         sections = getattr(getattr(self._config, "v2", None), "providers", None) or {}
         for reference in self._router.tier_candidates(tier):
             head = reference.split("/", 1)[0]
-            if Runtime._adapter_kind(head, sections.get(head)) == ADAPTER_CLAUDE_CODE:
+            kind = Runtime._adapter_kind(head, sections.get(head))
+            if kind == ADAPTER_ANTIGRAVITY or (claude and kind == ADAPTER_CLAUDE_CODE):
                 return reference if "/" in reference else None
+            if kind == ADAPTER_CLAUDE_CODE:
+                return None  # the SDK backend serves this tier through a Nexus provider
             info = self._router._registry_lookup(reference)
             if info is not None and getattr(info, "provider", None) in self._router._providers:
                 return None
@@ -5951,6 +6143,7 @@ class Runtime:
             files_changed=files_changed(
                 session.messages, workspace=getattr(spec, "workspace", None)
             ),
+            models=_child_models(session),
         )
 
     def _child_cost(self, session: Any, outcome: Any) -> float | None:

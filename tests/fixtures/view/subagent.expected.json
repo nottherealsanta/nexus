@@ -102,6 +102,7 @@
       "ok": true,
       "parent": "s1",
       "requested_tier": "high",
+      "resolved_model": "anthropic/claude-small",
       "session": "s1/sub/1",
       "spawned_ts": 4.0,
       "status": "completed",

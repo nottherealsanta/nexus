@@ -91,7 +91,10 @@ and delta accumulation. It imports only `nexus.events`.
 - **Unknown events** are kept as `DiagnosticView`s, never dropped silently.
 - **Child events:** a relayed event carrying an `agent` block reduces into that
   agent's nested conversation (`AgentView`), so a subagent tree rebuilds from the
-  parent log alone.
+  parent log alone. `AgentView.model` is the spawn reference (a tier or requested
+  model); `AgentView.resolved_model` is the actual `provider/model` from the
+  latest child `model.started`/`external.started` (omitted until one is seen;
+  `agent.completed.resolved_model` backfills it).
 - Text is bounded (`MAX_TEXT = 8192` per field, with an ellipsis). Message
   text and thinking blocks (user prompts, pastes, assistant prose) use the much
   larger `MAX_MESSAGE_TEXT` (8 MiB), so a long prompt is never clipped in the

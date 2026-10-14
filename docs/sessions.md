@@ -161,16 +161,20 @@ default) and `SessionManager.set_auto_title` stores the result (`auto`).
 
 - It is not a session: no loop, no tools, no memory, no events, and no cost in the
   session's usage. The turn never waits for it.
-- Root sessions only (the check runs in `SessionStart` before the first message is
-  logged); forks and subagents never start it. One task per session, two at once,
-  cancelled when the session is deleted or the host stops.
+- Root sessions only. The check runs before the first message is logged, in
+  `SessionStart` and in `HostFacade.enqueue` (so `SessionEnqueue`, which the
+  native terminal uses, and direct host callers also title); the task starts only
+  after the message is accepted, so a failed enqueue starts nothing. Forks and
+  subagents never start it. One task per session, two at once, cancelled when the
+  session is deleted or the host stops. A second message sent before the first is
+  logged finds the running task and does not start another.
 - Input is the first message (≤ 2,000 characters, `…` marks a cut, attachments as
   `@name`) in `<message>` tags, treated as data. Output is capped (256 tokens; a
   reasoning model spends hidden tokens against it), cleaned to one line of ≤ 50
   characters (`clean_title`), with a 15 s timeout. The prompt is in `session/title.py`.
 - A failure, timeout, refusal or empty reply keeps the first-message title. One
-  daemon-log line records model, latency, tokens and the outcome (`ok`, `empty`, `timeout`, or `error:<class>[:<http status>]`); the title text
-  is debug-only.
+  daemon-log line records model, latency, tokens and the outcome (`ok`, `empty`,
+  `timeout`, or `error:<class>[:<http status>]`); the title text is debug-only.
 - `set_auto_title` is one conditional `UPDATE ... WHERE title_source =
   'first_message'`, so a title the user sets (reserved source `user`) always wins.
   Clients see the new title on their normal session-list refresh.

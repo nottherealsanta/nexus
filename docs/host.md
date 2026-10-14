@@ -1,5 +1,8 @@
 # Host: daemon, protocol, facade, transports
 
+The optional device gateway is separate from and does not change the host
+service. See [gateway documentation](gateway.md) before enabling it.
+
 `nexus/host/` (L4½) is the transport-neutral surface over one `Runtime`. **A UI
 may use it and nothing else** (`nexus.host`, plus the pure `view`, `events`,
 `client`, `host_support`, `ui_support` helpers).

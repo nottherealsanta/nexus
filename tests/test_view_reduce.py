@@ -600,6 +600,85 @@ def test_agent_tree_nests_child_conversation():
     assert view.phase == "idle"
 
 
+_MODEL_ROOT = {"id": "s1/sub/1", "parent": "s1", "depth": 1, "task": "t1", "session": "s1/sub/1"}
+_MODEL_NESTED = {
+    "id": "s1/sub/1/sub/1", "parent": "s1/sub/1", "parent_agent_id": "s1/sub/1",
+    "depth": 2, "task": "t2", "session": "s1/sub/1/sub/1",
+}
+
+
+def _model_started(seq, meta, provider, model):
+    return _ev(seq, "model.started", {"agent": meta, "provider": provider, "model": model}, session=meta["session"])
+
+
+def test_agent_resolved_model_tracks_actual_model_not_spawn_reference():
+    view = fold([
+        _ev(1, "agent.spawned", {"agent": _MODEL_ROOT, **_MODEL_ROOT, "tier": "low", "model": "low"}, turn="t"),
+    ])
+    agent = view.agents["s1/sub/1"]
+    assert (agent.model, agent.tier, agent.resolved_model) == ("low", "low", None)
+    assert "resolved_model" not in view.to_dict()["agents"][0]  # absent until a model starts
+
+    view = apply_many(view, [
+        _model_started(2, _MODEL_ROOT, "anthropic", "claude-haiku"),
+        _model_started(3, _MODEL_ROOT, "openai", "gpt-fallback"),
+    ])
+    agent = view.agents["s1/sub/1"]
+    assert agent.model == "low"  # spawn reference is untouched
+    assert agent.resolved_model == "openai/gpt-fallback"  # latest start wins
+    assert view.to_dict()["agents"][0]["resolved_model"] == "openai/gpt-fallback"
+
+
+def test_agent_resolved_model_does_not_double_a_qualified_model():
+    view = fold([
+        _ev(1, "agent.spawned", {"agent": _MODEL_ROOT, **_MODEL_ROOT}, turn="t"),
+        _model_started(2, _MODEL_ROOT, "openrouter", "openrouter/anthropic/claude"),
+    ])
+    assert view.agents["s1/sub/1"].resolved_model == "openrouter/anthropic/claude"
+    view = apply(view, _model_started(3, _MODEL_ROOT, "openrouter", "anthropic/claude"))
+    assert view.agents["s1/sub/1"].resolved_model == "openrouter/anthropic/claude"
+    view = apply(view, _model_started(4, _MODEL_ROOT, None, "bare-model"))
+    assert view.agents["s1/sub/1"].resolved_model == "bare-model"
+
+
+def test_nested_agents_keep_their_own_resolved_model_and_replay_matches():
+    events = [
+        _ev(1, "agent.spawned", {"agent": _MODEL_ROOT, **_MODEL_ROOT}, turn="t"),
+        _model_started(2, _MODEL_ROOT, "anthropic", "parent-model"),
+        _ev(3, "agent.spawned", {"agent": _MODEL_NESTED, **_MODEL_NESTED}, session=_MODEL_ROOT["session"]),
+        _model_started(4, _MODEL_NESTED, "openai", "child-model"),
+        _model_started(5, _MODEL_ROOT, "anthropic", "parent-model-2"),
+    ]
+    view = fold(events)
+    root = view.agents["s1/sub/1"]
+    assert root.resolved_model == "anthropic/parent-model-2"
+    assert root.body.agents["s1/sub/1/sub/1"].resolved_model == "openai/child-model"
+    # Replaying the whole log (stale seqs) neither regresses nor changes it.
+    assert apply_many(view, events).to_dict() == view.to_dict()
+    assert fold(events).to_dict() == view.to_dict()
+
+
+def test_external_started_sets_resolved_model_and_completed_backfills():
+    external = {"agent": _MODEL_ROOT, "provider": "claude-code", "model": "sonnet", "session": "w1"}
+    view = fold([
+        _ev(1, "agent.spawned", {"agent": _MODEL_ROOT, **_MODEL_ROOT, "tier": "medium"}, turn="t"),
+        _ev(2, "external.started", external, session=_MODEL_ROOT["session"]),
+    ])
+    assert view.agents["s1/sub/1"].resolved_model == "claude-code/sonnet"
+
+    # No relayed start: the completion's final-model disclosure backfills it.
+    bare = fold([
+        _ev(1, "agent.spawned", {"agent": _MODEL_ROOT, **_MODEL_ROOT, "tier": "medium"}, turn="t"),
+        _ev(2, "agent.completed", {"agent": _MODEL_ROOT, **_MODEL_ROOT, "status": "completed", "resolved_model": "openai/gpt-x"}, turn="t"),
+    ])
+    assert bare.agents["s1/sub/1"].resolved_model == "openai/gpt-x"
+    # ...but never overrides a start already seen.
+    both = apply_many(view, [
+        _ev(3, "agent.completed", {"agent": _MODEL_ROOT, **_MODEL_ROOT, "status": "completed", "resolved_model": "other/x"}, turn="t"),
+    ])
+    assert both.agents["s1/sub/1"].resolved_model == "claude-code/sonnet"
+
+
 def test_agent_tree_is_parent_linked():
     root = {"id": "s1/sub/1", "parent": "s1", "depth": 1, "task": "t1", "session": "s1/sub/1"}
     child = {"id": "s1/sub/1/sub/1", "parent": "s1/sub/1", "depth": 2, "task": "t2", "session": "s1/sub/1/sub/1"}

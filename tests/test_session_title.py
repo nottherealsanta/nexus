@@ -379,6 +379,129 @@ async def test_a_new_session_gets_a_model_written_title_through_the_host(tmp_pat
     await runtime.aclose()
 
 
+async def _enqueue_host(tmp_path):
+    from nexus.config import Config
+    from nexus.config.schema import ConfigV2, ModelSection, SessionsSection
+    from nexus.host import HostFacade
+    from nexus.model.providers.scripted import ScriptedProvider, text_response
+    from nexus.runtime import Runtime
+
+    # An explicit title model: the default ``low`` tier is unresolved in a plain config.
+    config = Config(version=2, v2=ConfigV2(
+        model=ModelSection(default="scripted/m"), sessions=SessionsSection(title_model="scripted/m")
+    ))
+    runtime = Runtime(tmp_path, config=config, providers={"scripted": ScriptedProvider(text_response("a"), text_response("b"))})
+    facade = HostFacade(runtime)
+    facade.open_session("s1")
+    started: list[tuple[str, str | None]] = []
+    real = facade.titles
+    facade.titles = SimpleNamespace(
+        candidate=lambda session, text, labels=None: real.candidate(session, text, labels),
+        start=lambda session, text: started.append((session, text)),
+        cancel=real.cancel,
+        aclose=real.aclose,
+    )
+    return runtime, facade, started
+
+
+async def test_session_enqueue_schedules_a_title_for_the_first_message_only(tmp_path):
+    from nexus.host import protocol as p
+
+    runtime, facade, started = await _enqueue_host(tmp_path)
+    await facade.handle(p.SessionEnqueue(session="s1", content="fix the flaky test", mode="queue", attachment_labels=[]))
+    await facade.wait_idle(timeout=5.0)
+    assert started == [("s1", "fix the flaky test")]
+    # The first message is now logged, so a follow-up is not a title candidate.
+    await facade.handle(p.SessionEnqueue(session="s1", content="and one more thing", mode="queue"))
+    await facade.wait_idle(timeout=5.0)
+    assert [text for _, text in started] == ["fix the flaky test", None]
+    await facade.shutdown()
+    await runtime.aclose()
+
+
+async def test_direct_enqueue_derives_the_title_from_content(tmp_path):
+    runtime, facade, started = await _enqueue_host(tmp_path)
+    await facade.enqueue("s1", [Text("hello blocks")], mode="queue")
+    await facade.wait_idle(timeout=5.0)
+    assert started == [("s1", "hello blocks")]
+    await facade.shutdown()
+    await runtime.aclose()
+
+
+async def test_a_failed_enqueue_schedules_no_title(tmp_path):
+    from nexus.host import protocol as p
+
+    runtime, facade, started = await _enqueue_host(tmp_path)
+    with pytest.raises(ValueError):
+        await facade.enqueue("s1", "hello", mode="bogus")
+
+    async def refuse(*args, **kwargs):
+        raise RuntimeError("supervisor full")
+
+    facade.supervisor.submit = refuse
+    with pytest.raises(RuntimeError):
+        await facade.enqueue("s1", "hello", mode="queue")
+    # Through the wire the same failure is an error result, still without a title.
+    result = await facade.handle(p.SessionEnqueue(session="s1", content="hello", mode="queue"))
+    assert isinstance(result, p.ErrorResult) and result.kind == "RuntimeError"
+    assert started == []
+    await facade.shutdown()
+    await runtime.aclose()
+
+
+async def test_session_enqueue_names_attachments_in_the_title_text(tmp_path):
+    runtime, facade, started = await _enqueue_host(tmp_path)
+    await facade.enqueue("s1", "fix this", mode="queue", title_labels=["main.py"])
+    await facade.wait_idle(timeout=5.0)
+    assert started == [("s1", "fix this @main.py")]
+    await facade.shutdown()
+    await runtime.aclose()
+
+
+async def test_session_enqueue_writes_one_real_title_for_back_to_back_messages(tmp_path):
+    """SessionEnqueue -> real AutoTitler -> persisted auto title, one title call only."""
+    from nexus.config import Config
+    from nexus.config.schema import ConfigV2, ModelSection, SessionsSection
+    from nexus.host import HostFacade
+    from nexus.host import protocol as p
+    from nexus.model.providers.scripted import ScriptedProvider, text_response
+    from nexus.runtime import Runtime
+
+    main = ScriptedProvider(text_response("one"), text_response("two"))
+    titles = ScriptedProvider(text_response("Flaky test fix", provider="titles"), name="titles")
+    config = Config(version=2, v2=ConfigV2(
+        model=ModelSection(default="scripted/m"), sessions=SessionsSection(title_model="titles/t")
+    ))
+    runtime = Runtime(tmp_path, config=config, providers={"scripted": main, "titles": titles})
+    facade = HostFacade(runtime)
+    facade.open_session("s1")
+    await facade.handle(p.SessionEnqueue(session="s1", content="fix the flaky test", mode="queue"))
+    # Sent before the first message is logged: still no second title call.
+    await facade.handle(p.SessionEnqueue(session="s1", content="and one more thing", mode="queue"))
+    pending = list(facade.titles._tasks.values())
+    await facade.wait_idle(timeout=5.0)
+    await asyncio.wait_for(asyncio.gather(*pending), 5)
+
+    summary = runtime.sessions.summary("s1")
+    assert summary.title == "Flaky test fix"
+    # Both accepted user messages are present in the session summary.
+    assert summary.message_count == 2
+    assert runtime.sessions.title_source("s1") == "auto"
+    assert titles.calls == 1
+    await facade.shutdown()
+    await runtime.aclose()
+
+
+async def test_a_forked_session_is_not_a_title_candidate_on_enqueue(tmp_path):
+    runtime, facade, started = await _enqueue_host(tmp_path)
+    runtime.sessions.summary = lambda session: SimpleNamespace(message_count=0, parent_id="parent")
+    await facade.enqueue("s1", "forked message", mode="queue")
+    await facade.wait_idle(timeout=5.0)
+    assert started == [("s1", None)]
+    await facade.shutdown()
+    await runtime.aclose()
+
+
 def test_no_title_call_when_the_tier_cannot_run():
     """A plain config has no tiers: never send ``low`` to a provider as a model id."""
     runtime = _runtime(_Sessions())

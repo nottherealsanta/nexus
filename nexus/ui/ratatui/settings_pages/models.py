@@ -25,7 +25,7 @@ def _items(refs, resolved, candidates):
     for ref in refs:
         candidate = by_ref.get(ref)
         if candidate is not None and candidate.get("scope") == "subagents":
-            items.append((ref, "subagents", "Claude Code subagents only; titles and other jobs skip it"))
+            items.append((ref, "subagents", "subagents only; titles and other jobs skip it"))
         elif ref == resolved:
             items.append((ref, "in use", ""))
         elif candidate is not None and not candidate.get("connected", True):

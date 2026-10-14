@@ -26,6 +26,7 @@ agent can see is hidden from the user. Keep this in mind for every change.
 | Subagents, worktrees, agent definitions | [agents.md](agents.md) | `nexus/agents/` |
 | Skills, hooks, MCP, hot-loaded extensions, Settings files | [extensions.md](extensions.md) | `nexus/ext/`, `nexus/skills/`, `nexus/hooks/`, `nexus/mcp/` |
 | Add a host command; daemon, transports, presence | [host.md](host.md) | `nexus/host/`, `nexus/host_support/` |
+| Enable the optional device gateway | [gateway.md](gateway.md) | `nexus/gateway/` |
 | Add a CLI subcommand or a chat slash command | [cli.md](cli.md) | `nexus/cli.py`, `nexus/ui/cli/` |
 | Something every client must do the same way | [surfaces.md](surfaces.md) | `nexus/ui_support/` |
 | Work on `nexus chat` (Ratatui) | [ratatui-parity.md](ratatui-parity.md) | `nexus/ui/ratatui/`, `rust/tui/` |

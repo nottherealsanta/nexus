@@ -159,6 +159,77 @@ inherited from a trusted parent folder. Worktree children are refused (see
 Routing guards), so that case is not exercised. Subscription
 efficiency and product-use terms are not established by a PTY.
 
+## External Antigravity workers
+
+An explicit `antigravity/<model>` role (a `[providers.<name>]` section with
+`kind = "antigravity"`, alias `agy`) runs Google's Antigravity CLI as an external
+subagent. It is the headless counterpart of the Claude Code worker: the earlier
+"ZMX" design ran Claude Code in an interactive PTY, whereas `agy` is driven
+headless over pipes, with no PTY. `_ChildRuntime._plan_antigravity` resolves and
+validates everything before anything starts, and `_run_external` hands the
+assignment to `agents/antigravity_worker.py:AntigravityWorker`, which returns the
+same `WorkerResult` duck contract and emits the same `external.*` events
+(provider `antigravity`). Config is in [config.md](config.md#antigravity-worker-keys).
+
+**Status: implemented and tested offline with fake `agy` processes only.** No real
+model turn was run and no credentials were used. The event shapes follow the
+documented headless mode (`antigravity.google/docs/cli/headless`, fetched by the
+parent session) and local `agy --version`, `--help` and `models` output on agy
+1.3.4. The `/cli/usage` page returned 404, so nothing here claims to be read from a
+usage URL. Event shapes live in `antigravity_worker.SCHEMA` so a real run can
+correct them in one place.
+
+**Launch.** `agy --input-format stream-json --output-format stream-json --model <id>
+--mode <accept-edits|plan> --print-timeout <n>s` with `cwd` = the assigned
+workspace. There is no `-p` prompt and the prompt is never on argv: it is written to
+stdin as one stream-json user event (`{"event":"user","message":{"content":...}}`,
+64 KiB cap, refused rather than truncated, role instructions as a labelled prefix
+as for Claude), then stdin is closed. `--print-timeout` is a Go-style duration in
+seconds with 5 s slack so Nexus' own deadline decides first. The child leads its own
+process group, signalled on completion, cancel, deadline and close. The preflight
+probes `--version` and `--help` (time-bounded) and refuses a missing flag. POSIX only.
+The child environment is the fixed allowlist; agy uses its own cached login.
+
+**Readback.** stdout is NDJSON keyed by `event`: `init` (cwd, tools, permission
+mode, model), `step_update` (agent text deltas and tool steps) and a terminal
+`result`. Success needs a prior `init` and a `result` whose `status` is exactly
+`SUCCESS` with a response string. EOF, a non-zero exit, a malformed or unknown
+terminal status, or an `init` reporting another cwd or model, or the
+`always-proceed` permission mode, is never success; the partial answer is kept.
+Unknown event types are only counted. stderr is a bounded, ANSI-stripped, redacted
+diagnostic. Usage is whatever the terminal `result.usage` carried (`reported`);
+otherwise, and always for cost, it is `unknown`, never estimated or zero.
+`files_changed` is measured by Nexus exactly as for Claude.
+
+**Statuses:** `completed`, `failed`, `interrupted` (deadline), `cancelled`, and
+`needs_attention` when agy needs sign-in, workspace trust or a permission approval.
+Nexus never answers those: it writes only the prompt, so the attention result tells
+the user to run `agy` interactively, or adjust agy's own permission settings, and
+re-run.
+
+**Routing and refusals.** The route must be explicit (a `Task` call, role or
+tier); inheriting a parent's `antigravity/...` model is refused, as is any route
+without an exact model ID that `agy models` reported (a refresh hint follows).
+A tier entry such as `low = ["antigravity/<id>"]` routes ordinary child
+subagents only; the root never receives it, and tiers are not ranked by price.
+Refused with `ConfigError`, never ignored, because agy's own tools are not
+mediated by Nexus and no Nexus control reaches them:
+
+- a read-only role (agy's `--mode plan` is not verified to prevent writes);
+- tool restriction profiles (`worker_tools`, allow/deny lists, MCP config,
+  setting sources, `worker_restricted`);
+- worktree children;
+- token and cost budgets;
+- unsupported section fields, and a section without
+  `worker_inherits_agy_settings = true`.
+
+There is no `PathGuard`, permission-engine or tool-dispatch mediation of agy's
+tools ([security.md](security.md#external-antigravity-worker)). Antigravity is
+subagent-only: never the root, main, plan, fast, fallback or title model.
+
+Not implemented: automatic `agy -p /usage` (the usage panel says to run `/usage`
+yourself), a sandbox request, a browser surface, and a live-verified event schema.
+
 ## Files
 
 | File | Owns |
@@ -167,6 +238,7 @@ efficiency and product-use terms are not established by a PTY.
 | `manager.py` | `AgentManager`: deterministic discovery, precedence, seeding, tool selection, legacy aliases |
 | `runner.py` | `SubagentRunner`, `ChildSpec`, `SubagentBudget`: bounding rules and event relay |
 | `claude_code_worker.py` | `ClaudeCodeWorker`, `WorkerPolicy`, `resolve_policy`: external Claude Code sessions |
+| `antigravity_worker.py` | `AntigravityWorker`, `WorkerPolicy`, `resolve_policy`: external headless `agy` runs |
 | `worktrees.py` | `WorktreeService`: create, finalize, record, discard |
 | `worktree_review.py` | immutable, read-only review snapshots |
 | `worktree_integrate.py` | apply an acknowledged review to a clean parent, with a rollback journal |
@@ -306,6 +378,30 @@ child `turn.completed` would look like the parent ending, and a relayed
 `context.assembled` records the request it actually sent; the subagent page
 reads it back through `AgentTranscript`. Events: `agent.spawned`,
 `agent.completed`, `agent.clamped`.
+
+**Tier is not model.** A tier (`low|medium|high`) is a routing label; the model a
+child actually ran on is a separate fact, always shown beside it:
+
+- `AgentView.model` is only the spawn-time reference (often the tier);
+  `AgentView.resolved_model` is the concrete `provider/model` of the child's
+  latest relayed `model.started` or `external.started` (nested children tracked
+  per agent, replayed seqs ignored, an already-qualified id never doubled). It is
+  omitted from the wire until a model starts, and `agent.completed` backfills it
+  (`resolved_model`) only when no start was relayed.
+- `SubagentOutcome.models` lists the child's model transitions in
+  chronological order, collapsing only consecutive repeats (`A A B A` becomes
+  `A, B, A`), from its durable child events (`_child_models` in `runtime.py`)
+  or, for cancelled/crashed/fake children, the runner's relay. The last is
+  `actual_model` (so a child that recovered to its original model reports it);
+  more than one entry means a provider fallback.
+- The model-facing report starts with `[model: <provider/model>; tier: <tier>]`
+  (plus `; fallback path: a -> b`). A child with no reported model (refused,
+  failed to start, crashed before the first request, or an external worker whose
+  `external.started` carried no model identity) says
+  `[model: unavailable (not reported); tier: …]`: it is never guessed from the
+  tier, and the wording does not claim whether a request started.
+  `to_dict()` carries `actual_model` (or `null`) and `actual_models`; the `Task`
+  tool result metrics repeat both.
 
 ## Attention goes to the root, then the human
 

@@ -21,6 +21,7 @@ Update the matching doc in the same change as the code.
 | Why something is the way it is; known gaps | [docs/decisions.md](docs/decisions.md) |
 | Config keys, defaults, env vars, on-disk layout | [docs/config.md](docs/config.md) |
 | Events, the reducer, `ConversationView` | [docs/events-and-view.md](docs/events-and-view.md) |
+| Optional device gateway | [docs/gateway.md](docs/gateway.md) |
 | Providers, routing, registry, tiers, sign-in | [docs/models.md](docs/models.md), [docs/provider-onboarding.md](docs/provider-onboarding.md) |
 | Adding and testing a new provider (step by step) | [docs/adding-a-provider.md](docs/adding-a-provider.md) |
 | The loop, turns, limits, failure handling | [docs/loop.md](docs/loop.md) |

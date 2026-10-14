@@ -262,7 +262,7 @@ async def test_api_key_journey_never_echoes_the_key_and_shows_state(home):
     flows = shell.workflows
     await flows.operate({"kind": "providers"})
     assert shell.panel_title == "Settings · Providers" and shell.settings_nav == "providers"
-    assert list(_sections(shell)) == ["ChatGPT (Codex)", "Claude (Pro/Max)", "GitHub Copilot", "OpenCode Go", "xAI (SuperGrok)"], "one section per provider, not connected: A–Z"
+    assert list(_sections(shell)) == ["Antigravity (agy)", "ChatGPT (Codex)", "Claude (Pro/Max)", "GitHub Copilot", "OpenCode Go", "xAI (SuperGrok)"], "one section per provider, not connected: A–Z"
     section = _sections(shell)["OpenCode Go"]
     assert section["summary"] == "not connected" and "Sign out…" not in _buttons(section)
     field = _row(section, ":key")["control"]

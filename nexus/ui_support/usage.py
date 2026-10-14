@@ -1,9 +1,15 @@
 """Provider usage formatting shared by surfaces (``ProvidersUsageResult``).
 
-Pure functions: the native usage panel (``ui/ratatui/workflows.py``) renders
-these strings and the web client's ``js/usage.js`` is a line-for-line port, so
-both surfaces word a limit identically: ``41% used · 59% left · resets in 6d
-5h (Wed 14:15)``.
+Pure functions: the native usage panel (``ui/ratatui/actions.py``, also the
+desktop client's ``/usage``) renders these strings and the web client's
+``js/usage.js`` is a line-for-line port, so every surface words a limit
+identically: ``38% used · 12% in reserve · resets in 6d 5h (Wed Oct 21 14:15)``.
+
+**Reserve** (weekly and monthly windows only, when the host reports
+``resets_at`` and ``period_seconds``): the share of the window already elapsed
+minus the share used. Half the month gone with 20% used leaves 30% in reserve:
+usage that can still be spent while staying on an even pace. A negative value
+reads ``N% over pace``. The bar marks the even-pace point with ``┃``.
 """
 
 from __future__ import annotations
@@ -16,6 +22,11 @@ from typing import Any
 BAR_WIDTH = 24
 #: Used-percent thresholds for the bar tone: ``ok`` below 70, ``warn`` below 90.
 WARN_AT, CRITICAL_AT = 70.0, 90.0
+#: Thin bar glyphs: used, remaining, and the even-pace marker.
+FILLED, TRACK, PACE = "━", "─", "┃"
+#: Reserve is shown for windows at least a week long (weekly and monthly).
+RESERVE_MIN_PERIOD = 7 * 86_400
+RESERVE_NOTE = "Reserve: share of the week or month elapsed minus share used, i.e. usage you can still spend and stay on pace."
 
 
 def _field(value: Any, key: str, default: Any = None) -> Any:
@@ -42,13 +53,49 @@ def percent(value: float) -> str:
     return f"{value:.0f}%" if value == int(value) or 10 <= value <= 90 else f"{value:.1f}%"
 
 
-def bar(window: Any, width: int = BAR_WIDTH) -> str:
-    """A fixed-width text bar: filled cells are the used share."""
+def _number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return None
+    return float(value)
+
+
+def elapsed_percent(window: Any, now: float | None = None) -> float | None:
+    """How much of a weekly or monthly window has passed, or ``None``."""
+    resets_at, period = _number(_field(window, "resets_at")), _number(_field(window, "period_seconds"))
+    if resets_at is None or period is None or period < RESERVE_MIN_PERIOD:
+        return None
+    now = time.time() if now is None else now
+    if resets_at <= now:
+        return None
+    return max(0.0, min((1 - (resets_at - now) / period) * 100, 100.0))
+
+
+def reserve(window: Any, now: float | None = None) -> float | None:
+    """Elapsed share minus used share: positive is spare usage, negative is ahead of pace."""
+    used, elapsed = used_percent(window), elapsed_percent(window, now)
+    return None if used is None or elapsed is None else elapsed - used
+
+
+def reserve_phrase(window: Any, now: float | None = None) -> str:
+    """``30% in reserve``, ``on pace`` or ``12% over pace``; ``""`` when not estimable."""
+    value = reserve(window, now)
+    if value is None:
+        return ""
+    rounded = round(value)
+    if rounded == 0:
+        return "on pace"
+    return f"{rounded}% in reserve" if rounded > 0 else f"{-rounded}% over pace"
+
+
+def bar(window: Any, width: int = BAR_WIDTH, now: float | None = None) -> str:
+    """A thin fixed-width bar: ``━`` used, ``─`` remaining, ``┃`` at the even-pace point."""
     used = used_percent(window)
-    if used is None:
-        return "░" * width
-    filled = min(width, max(1 if used > 0 else 0, round(used / 100 * width)))
-    return "█" * filled + "░" * (width - filled)
+    filled = 0 if used is None else min(width, max(1 if used > 0 else 0, round(used / 100 * width)))
+    cells = [FILLED] * filled + [TRACK] * (width - filled)
+    elapsed = elapsed_percent(window, now)
+    if elapsed is not None:
+        cells[min(width - 1, int(elapsed / 100 * width))] = PACE
+    return "".join(cells)
 
 
 def duration(seconds: float) -> str:
@@ -82,9 +129,14 @@ def reset_phrase(window: Any, now: float | None = None) -> str:
 
 
 def summary(window: Any, now: float | None = None) -> str:
-    """``41% used · 59% left · resets in 6d 5h (Wed Oct 7 14:15) · 14,979 of 15,000 left``."""
+    """``38% used · 12% in reserve · resets in 6d 5h (Wed Oct 21 14:15) · 14,979 of 15,000 left``.
+
+    The remaining share is the bar's track, so it is not repeated as text.
+    """
     used = used_percent(window)
-    parts = ["usage unknown"] if used is None else [f"{percent(used)} used", f"{percent(100 - used)} left"]
+    parts = ["usage unknown"] if used is None else [f"{percent(used)} used"]
+    if phrase := reserve_phrase(window, now):
+        parts.append(phrase)
     if phrase := reset_phrase(window, now):
         parts.append(phrase)
     if detail := _field(window, "detail"):
@@ -106,8 +158,12 @@ def fetched_text(fetched_at: Any) -> str:
 
 
 def usage_lines(result: Any, now: float | None = None) -> tuple[list[str], list[str]]:
-    """The usage screen as text lines with a tone each (``title``, ``ok``/``warn``/``critical``/
-    ``unknown`` for limit windows, ``dim``, ``bad``, ``""``), mirroring the terminal's ``render_usage``."""
+    """The usage screen as text lines with a tone each.
+
+    Limit windows carry ``meter-ok``/``meter-warn``/``meter-critical``/``meter-unknown``:
+    the native renderer colours only the bar glyphs by that tone and keeps the
+    label and summary neutral. Other tones: ``title``, ``dim``, ``bad``, ``""``.
+    """
     from .text import sanitize
 
     lines: list[str] = []
@@ -118,9 +174,10 @@ def usage_lines(result: Any, now: float | None = None) -> tuple[list[str], list[
         tones.append(tone_name)
 
     rows = list(_field(result, "providers", ()) or ())[:8]
+    shows_reserve = False
     if not rows:
         put("No connected provider reports usage.", "title")
-        put("Connect ChatGPT, Claude, GitHub Copilot or OpenCode Go in Settings → Providers.", "dim")
+        put("Connect ChatGPT, Claude, GitHub Copilot, OpenCode Go or xAI in Settings → Providers.", "dim")
     width = max((len(sanitize(str(_field(w, "label", "") or "Limit"), 40))
                  for row in rows for w in list(_field(row, "windows", ()) or ())[:16]), default=0)
     for index, row in enumerate(rows):
@@ -134,12 +191,16 @@ def usage_lines(result: Any, now: float | None = None) -> tuple[list[str], list[
         if not windows and not error:
             put("  No limit windows reported.", "dim")
         for window in windows:
-            label = sanitize(str(_field(window, "label", "") or "Limit"), 40)
-            put(f"  {label:<{width}}  {bar(window)}  {sanitize(summary(window, now), 200)}", tone(window))
+            label = sanitize(str(_field(window, "label", "") or "Limit"), 40).translate(_NO_BAR_GLYPHS)
+            put(f"  {label:<{width}}  {bar(window, now=now)}  {sanitize(summary(window, now), 200)}", "meter-" + tone(window))
+            shows_reserve = shows_reserve or bool(reserve_phrase(window, now))
         for note in list(_field(row, "notes", ()) or ())[:8]:
             put(f"  · {sanitize(str(note), 160)}", "dim")
         if source := _field(row, "source"):
             put(f"  Source: {sanitize(str(source), 80)}", "dim")
+    if shows_reserve:
+        put("")
+        put(RESERVE_NOTE, "dim")
     missing = [sanitize(str(name), 40) for name in list(_field(result, "not_connected", ()) or ())[:8]]
     if missing and rows:
         put("")
@@ -150,8 +211,15 @@ def usage_lines(result: Any, now: float | None = None) -> tuple[list[str], list[
     return lines, tones
 
 
+#: A label never contains bar glyphs, so a renderer can find the bar by its glyphs.
+_NO_BAR_GLYPHS = str.maketrans({FILLED: "-", TRACK: "-", PACE: "|"})
+
 __all__ = [
     "usage_lines",
+    "RESERVE_NOTE",
+    "elapsed_percent",
+    "reserve",
+    "reserve_phrase",
     "BAR_WIDTH",
     "bar",
     "duration",

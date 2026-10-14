@@ -76,6 +76,7 @@ class LiveBridge:
         self._clock = clock
         self._interval = progress_interval
         self._queued: dict[str, str] = {}  # queued_id -> delegation_id
+        self._settled: dict[str, None] = {}  # queued ids already consumed/dropped (ordered set)
         self._turns: dict[str, list[str]] = {}  # turn id -> delegation ids it carries
         self._tools: dict[str, list[str]] = {}  # turn id -> tool names since the last progress
         self._texts: dict[str, str] = {}  # turn id -> last assistant text
@@ -116,10 +117,26 @@ class LiveBridge:
                 await self._append("The request was empty, so nothing was sent to the agent.", "notice", delegation_id)
                 return
             mode = "steer" if self._host.turn_running(self._session) else "queue"
-            queued_id = await self._host.enqueue(
-                self._session, text, mode, {"kind": "live", "delegation_id": delegation_id}
-            )
-            self._queued.setdefault(queued_id, delegation_id)
+            try:
+                queued_id = await self._host.enqueue(
+                    self._session, text, mode, {"kind": "live", "delegation_id": delegation_id}
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - tell the user instead of leaving the voice waiting
+                log.warning("live bridge could not enqueue a delegation", exc_info=True)
+                self._emit("live.error", {
+                    "message": f"Could not hand a spoken request to the agent: {_clip(redact_secrets(str(exc)), 200)}"
+                })
+                await self._append(
+                    "The request could not be sent to the agent, so nothing was started. "
+                    "Tell the user it failed and ask them to try again.", "notice", delegation_id,
+                )
+                return
+            # The tap may already have seen this input queued *and* consumed (a quick tap):
+            # re-adding the mapping then would leave a stale entry that nothing ever pops.
+            if queued_id not in self._settled:
+                self._queued.setdefault(queued_id, delegation_id)
             self._emit("live.delegated", {
                 "delegation_id": delegation_id, "text": text, "mode": mode, "queued_id": queued_id,
             })
@@ -154,14 +171,14 @@ class LiveBridge:
                 if len(self._queued) > 256:
                     self._queued.pop(next(iter(self._queued)))
         elif kind == "input.consumed":
-            delegation = self._queued.pop(str(data.get("queued_id", "")), None)
+            delegation = self._settle(str(data.get("queued_id", "")))
             consumed_turn = str(data.get("turn") or turn)
             if delegation and consumed_turn:
                 self._turns.setdefault(consumed_turn, []).append(delegation)
                 while len(self._turns) > MAX_TRACKED_TURNS:
                     self._turns.pop(next(iter(self._turns)))
         elif kind == "input.dropped":
-            delegation = self._queued.pop(str(data.get("queued_id", "")), None)
+            delegation = self._settle(str(data.get("queued_id", "")))
             if delegation:
                 await self._append(
                     f"The request was not run: {_clip(str(data.get('reason') or 'it was dropped'), 200)}.",
@@ -181,6 +198,15 @@ class LiveBridge:
             await self._on_question(turn, data)
         elif kind in ("turn.completed", "turn.failed", "turn.cancelled") and turn:
             await self._on_terminal(kind, turn, data)
+
+    def _settle(self, queued_id: str) -> str | None:
+        """Pop a queued mapping and remember the id as finished (bounded)."""
+        delegation = self._queued.pop(queued_id, None)
+        if delegation:
+            self._settled[queued_id] = None
+            while len(self._settled) > 256:
+                self._settled.pop(next(iter(self._settled)))
+        return delegation
 
     async def _on_tool(self, turn: str, tool: str) -> None:
         names = self._tools.setdefault(turn, [])

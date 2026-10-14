@@ -425,6 +425,62 @@ pub fn dialog_frame(
     );
     panel_inner(area, borderless)
 }
+/// Glyphs of a usage bar: used, remaining, and the even-pace marker.
+const METER_FILLED: char = '━';
+const METER_TRACK: char = '─';
+const METER_PACE: char = '┃';
+
+/// One usage-window row: `label  ━━━┃───  38% used · 12% in reserve · resets …`.
+/// The label stays in the text colour; used cells take the tone (green, amber,
+/// red), the track and summary are dim, the pace marker is plain text, and the
+/// reserve phrase is green (spare) or amber (over pace).
+fn meter_spans(body: &str, tone: &str, p: &Palette) -> Vec<Span<'static>> {
+    let style = |color: Color| Style::default().fg(color);
+    let fill = match tone {
+        "ok" => p.success,
+        "warn" => p.warning,
+        "critical" => p.error,
+        _ => p.quiet,
+    };
+    let is_bar = |c: char| matches!(c, METER_FILLED | METER_TRACK | METER_PACE);
+    let Some(start) = body.find(is_bar) else {
+        return vec![Span::styled(body.to_string(), style(p.muted))];
+    };
+    let end = body[start..]
+        .find(|c: char| !is_bar(c))
+        .map_or(body.len(), |i| start + i);
+    let mut spans = vec![Span::styled(body[..start].to_string(), style(p.text))];
+    let mut run = String::new();
+    let mut run_color = None;
+    for c in body[start..end].chars() {
+        let color = match c {
+            METER_FILLED => fill,
+            METER_PACE => p.text,
+            _ => p.border_strong,
+        };
+        if run_color.is_some_and(|current| current != color) {
+            spans.push(Span::styled(std::mem::take(&mut run), style(run_color.unwrap())));
+        }
+        run.push(c);
+        run_color = Some(color);
+    }
+    if let Some(color) = run_color {
+        spans.push(Span::styled(run, style(color)));
+    }
+    for (i, part) in body[end..].split(" · ").enumerate() {
+        let color = if part.ends_with("in reserve") {
+            p.success
+        } else if part.ends_with("over pace") {
+            p.warning
+        } else {
+            p.muted
+        };
+        let text = if i == 0 { part.to_string() } else { format!(" · {part}") };
+        spans.push(Span::styled(text, style(color)));
+    }
+    spans
+}
+
 /// Panel lines coloured by tone like the The terminal tool-details modal: bold section
 /// titles, dim labels (`label: ` before a value), green/red/magenta diff lines.
 /// Wrapped rows keep the line's leading indent plus two columns.
@@ -446,7 +502,8 @@ pub fn toned_lines(
             "add" => vec![Span::styled(body.to_string(), style(p.success))],
             "del" => vec![Span::styled(body.to_string(), style(p.error))],
             "hunk" => vec![Span::styled(body.to_string(), style(p.purple))],
-            // Usage windows: the bar's tone colours the whole row.
+            // Usage windows (`ui_support/usage.py`): only the thin bar takes the tone.
+            t if t.starts_with("meter-") => meter_spans(body, &t["meter-".len()..], p),
             "ok" => vec![Span::styled(body.to_string(), style(p.success))],
             "warn" => vec![Span::styled(body.to_string(), style(p.warning))],
             "critical" | "bad" => vec![Span::styled(body.to_string(), style(p.error))],

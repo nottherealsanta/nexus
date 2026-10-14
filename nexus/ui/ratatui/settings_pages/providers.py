@@ -1,8 +1,8 @@
 """Settings → Providers: one page, one section per provider (connected first).
 
 Each section shows the connection, the sign-in options and, while a sign-in is pending, its code,
-page and status, all in place. Credentials never come back: API keys and sign-in codes are typed in
-masked fields, sent to the daemon, and never appear in a page or a toast.
+page and status, all in place. API keys and sign-in codes are typed in masked fields and sent to the daemon; Antigravity CLI
+owns its sign-in and credentials. None are shown in a page or toast.
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import webbrowser
 from ....ui_support import settings_page as sp
 
 AREA = "providers"
-METHOD_LABELS = {"browser": "Sign in with browser", "device": "Use a device code"}
+METHOD_LABELS = {"browser": "Sign in with browser", "device": "Use a device code", "cli": "How to sign in with agy"}
 
 
 def _get(value, key, default=None):
@@ -43,7 +43,7 @@ def _section(workflows, provider, expand: str) -> dict:
     if help_text:
         blocks.append(sp.note(str(help_text)))
     if provider.get("detail"):
-        blocks.append(sp.note(str(provider["detail"]), "warning" if not connected else "muted"))
+        blocks.append(sp.note(str(provider["detail"]), "warning" if not connected and provider.get("cli_present") is not True else "muted"))
     if login is not None:
         if _get(login, "message"):
             blocks.append(sp.note(str(_get(login, "message"))))
@@ -66,9 +66,13 @@ def _section(workflows, provider, expand: str) -> dict:
                    for m in methods if m and m != "api_key"]
         if sign_in:
             blocks.append(sp.buttons(f"{pid}:methods", sign_in, label="Sign in"))
+    if "cli" in methods:
+        blocks.append(sp.buttons(f"{pid}:recheck", [("Re-check models", sp.op(AREA, "recheck", provider=pid), "secondary")]))
     if connected and provider.get("can_logout", True) is not False and login is None:
         blocks.append(sp.buttons(f"{pid}:manage", [("Sign out…", sp.op(AREA, "logout_ask", provider=pid, label=label), "danger")], label="Manage"))
-    status = "sign-in pending" if login is not None else "connected" if connected else "not connected"
+    managed = provider.get("cli_present") is True and not connected and login is None  # sign-in is unverifiable, not absent
+    status = ("sign-in pending" if login is not None else "connected" if connected
+              else "CLI available; sign-in managed by agy" if managed else "not connected")
     tone = "success" if connected else "warning" if login is not None else ""
     return sp.section(f"prov-{pid}", label, blocks, summary=status, tone=tone,
                       open_=connected or login is not None or expand == pid)
@@ -78,7 +82,7 @@ async def build(workflows) -> dict:
     result = await workflows.client.providers_status()
     expand = workflows.page_state.setdefault(AREA, {}).get("expand", "")
     providers = sorted(result.providers, key=lambda row: (not row.get("connected"), str(row.get("label", row["id"])).casefold()))
-    blocks = [sp.note("Credentials stay in the daemon (~/.nexus/credentials.json). Connect more than one provider to fall back between them."),
+    blocks = [sp.note("Nexus-managed credentials stay in the daemon (~/.nexus/credentials.json); Antigravity CLI owns its own sign-in. Connect more than one provider to fall back between them."),
               sp.gap()]
     try:  # first run: say what to do next, with the one action that finishes setup
         setup = await workflows.client.setup_status()
@@ -100,9 +104,17 @@ async def handle(workflows, operation) -> None:
     client = workflows.client
     key = operation["key"]
     flash = workflows.shell.flash
-    if key == "login":
+    if key == "recheck":
+        await client.models_refresh()
+        flash("Models refreshed; sign-in remains managed by agy", "info")
+    elif key == "login":
         workflows.page_state.setdefault(AREA, {})["expand"] = operation["provider"]
-        workflows.login = await client.provider_login(operation["provider"], operation.get("method", ""))
+        started = await client.provider_login(operation["provider"], operation.get("method", ""))
+        if _get(started, "status") == "manual":  # the provider's CLI owns sign-in: show the steps, track nothing
+            workflows.login = None
+            flash(str(_get(started, "message", ""))[:300] or "Sign in with the provider's own CLI", "info")
+        else:
+            workflows.login = started
     elif key == "open":
         login = workflows.login
         if login is not None and str(_get(login, "url", "")).startswith("https://"):

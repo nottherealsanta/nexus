@@ -781,9 +781,12 @@ pre.code-block > code { display: block; width: max-content; min-width: 100%; pad
 .usage-report { display: grid; gap: 18px; }
 .usage-provider { display: grid; gap: 8px; }
 .usage-provider-name { margin: 0; font: 600 13px/20px var(--font-sans); color: var(--text); }
-.usage-window { display: grid; grid-template-columns: minmax(120px, max-content) minmax(96px, 1fr); gap: 2px 14px; align-items: center; }
+.usage-window { display: grid; grid-template-columns: minmax(0, 13rem) minmax(96px, 1fr); gap: 2px 14px; align-items: center; }
 .usage-label { color: var(--text); overflow-wrap: anywhere; }
-.usage-meter { position: relative; height: 8px; overflow: hidden; border-radius: 999px; background: var(--active); }
+.usage-meter { position: relative; height: 4px; overflow: visible; border-radius: 999px; background: var(--active); }
+.usage-pace { position: absolute; top: -3px; width: 2px; height: 10px; margin-left: -1px; border-radius: 1px; background: var(--text); }
+.usage-reserve { color: var(--success); }
+.usage-over { color: var(--warning); }
 .usage-fill { display: block; height: 100%; border-radius: inherit; background: var(--success); }
 .usage-window.warn .usage-fill { background: var(--warning); }
 .usage-window.critical .usage-fill { background: var(--danger); }

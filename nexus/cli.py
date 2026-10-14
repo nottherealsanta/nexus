@@ -1799,6 +1799,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Authorize the token returned by this invocation's fresh host preview",
     )
 
+    from .gateway.cli import add_parser as add_gateway_parser
+
+    add_gateway_parser(sub)
+
     return parser
 
 
@@ -1919,6 +1923,10 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(_update(args, stdout, stderr))
         if args.command == "uninstall":
             return asyncio.run(_uninstall(args, stdout, stderr))
+        if args.command == "gateway":
+            from .gateway.cli import run as run_gateway_command
+
+            return run_gateway_command(args, stdout, stderr)
         parser.error(f"unknown command {args.command!r}")
         return 2
     except KeyboardInterrupt:

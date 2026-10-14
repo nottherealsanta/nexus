@@ -643,16 +643,31 @@ class HostFacade:
         *,
         mode: str = "steer",
         origin: dict[str, Any] | None = None,
+        title_text: str | None = None,
+        title_labels: list[str] | None = None,
     ) -> tuple[str, str]:
         """Persist a submission and schedule its consumption at the boundary.
 
         Returns ``(queued_id, turn_id)``. The submission is durable through the
         session's own ``input.queued`` event; the supervisor only decides *when*
-        it runs, so the global cap applies to queued work too.
+        it runs, so the global cap applies to queued work too. A fresh root
+        session's first accepted message also starts its automatic title;
+        ``title_text``/``title_labels`` override the text derived from ``content``.
         """
         handle = self._session(session_id)
         if mode not in {"queue", "steer", "interrupt"}:
             raise ValueError("mode must be queue, steer, or interrupt")
+        if title_text is None:
+            if isinstance(content, str):
+                title_text = content
+            elif isinstance(content, (list, tuple)):
+                title_text = " ".join(
+                    block.text for block in content if isinstance(getattr(block, "text", None), str)
+                )
+            else:
+                title_text = ""
+        # Decided before anything is logged: the first message is not stored yet.
+        title = self.titles.candidate(session_id, title_text, title_labels)
         if mode == "interrupt":
             await self.cancel(session_id, reason="Interrupted by user message", drop_queue=False)
         extra = {"origin": origin} if origin else {}
@@ -660,6 +675,7 @@ class HostFacade:
         turn_id = await self.supervisor.submit(
             session_id, handle, None, queued_id=queued_id, priority=mode == "interrupt"
         )
+        self.titles.start(session_id, title)
         return queued_id, turn_id
 
     def move_queued(self, session_id: str, queued_id: str, offset: int) -> bool:
@@ -1001,6 +1017,11 @@ class HostFacade:
     def _model_row(self, model: Any, *, selectable_only: bool) -> dict[str, Any]:
         """Project one catalogue row and attach runtime-route effort choices."""
         row = _asdict(model)
+        registry = getattr(self.runtime, "_registry", None)
+        status = registry.provider_status(model.provider) if registry is not None else None
+        if getattr(status, "kind", None) == "antigravity":
+            row["scope"] = "subagents"
+            row["name"] = f"{row.get('name') or model.id} — Subagents only"
         if selectable_only:
             query = getattr(self.runtime, "candidate_supported_efforts", None)
             efforts: object = ()
@@ -1436,6 +1457,8 @@ class HostFacade:
         if result := await dispatch_mock(command, self):
             return result
         if result := await dispatch_providers(command, self.runtime, lambda: not self.supervisor.running):
+            if isinstance(result, p.ProvidersStatusResult):
+                return p.ProvidersStatusResult(providers=_with_antigravity_row(result.providers))
             return result
         if isinstance(command, (
             p.SessionArchive, p.SessionUnarchive, p.SessionListArchived,
@@ -1568,7 +1591,8 @@ class HostFacade:
             return p.SessionStartResult(session=command.session, turn_id=turn_id)
         if isinstance(command, p.SessionEnqueue):
             queued_id, turn_id = await self.enqueue(
-                command.session, self.attachments.content(command.content, command.blocks, command.attachments, command.attachment_labels), mode=command.mode
+                command.session, self.attachments.content(command.content, command.blocks, command.attachments, command.attachment_labels), mode=command.mode,
+                title_text=command.content, title_labels=list(command.attachment_labels or []),
             )
             self.attachments.release(command.attachments)
             return p.SessionEnqueueResult(
@@ -2020,6 +2044,24 @@ class HostFacade:
 _WORKTREE_TTL = 300.0
 _WORKTREE_CACHE_MAX = 4096
 _worktree_cache: dict[str, tuple[float, tuple[str, str]]] = {}
+
+
+def _with_antigravity_row(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Settings -> Providers row for Antigravity unless the auth layer already supplied one.
+
+    The CLI owns its login (run ``agy`` in a terminal), so Nexus has no sign-in or
+    sign-out flow and never reads its credentials; the route is subagent-only.
+    """
+    if any(row.get("id") == "antigravity" for row in rows):
+        return rows
+    return [*rows, {
+        "id": "antigravity", "label": "Antigravity (agy)", "methods": ["cli"],
+        "help": ("External CLI login, managed locally and manually: run `agy` in a terminal to sign in. "
+                 "Nexus never reads or stores its credentials. Subagent-only route "
+                 "(antigravity/<model>); never the main, title or fallback model."),
+        "connected": False, "detail": "", "can_logout": False, "login": None,
+        "capabilities": ["subagent"], "scope": "subagents",
+    }]
 
 
 def _worktree_of(workspace: str) -> tuple[str, str]:

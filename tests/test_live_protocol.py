@@ -26,6 +26,13 @@ def test_session_payload_matches_the_observed_shape():
     assert "v=0" not in repr(request)  # the SDP never prints
 
 
+def test_sideband_reconnected_is_a_synthetic_exported_event():
+    assert lp.SidebandReconnected().gap_s == 0.0 and lp.SidebandReconnected(gap_s=1.5).gap_s == 1.5
+    assert "SidebandReconnected" in lp.__all__
+    assert lp.SidebandReconnected in lp.LiveEvent.__args__
+    assert isinstance(lp.parse_event(frame(type="sideband.reconnected")), lp.Unknown)  # never a wire event
+
+
 def test_resolve_voice():
     assert lp.resolve_voice("") == lp.DEFAULT_VOICE == lp.resolve_voice("default")
     assert lp.resolve_voice("  COVE ") == "cove"

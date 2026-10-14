@@ -97,6 +97,7 @@ def _dump(value: object) -> Any:
             if (
                 (item.name == "provenance" and isinstance(value, ToolCallView) and field_value is None)
                 or (item.name == "usage_unknown" and isinstance(value, AgentView) and not field_value)
+                or (item.name == "resolved_model" and isinstance(value, AgentView) and field_value is None)
                 or (item.name == "external" and isinstance(value, ConversationView) and field_value is None)
             ):
                 continue
@@ -523,7 +524,11 @@ class AgentView(_View):
     requested_tier: str | None = None
     index: int | None = None
     description: str = ""
+    #: Spawn-time reference (a tier or requested model), never the actual model.
     model: str | None = None
+    #: Concrete ``provider/model`` the child last started on, from its
+    #: ``model.started``/``external.started``; ``None`` until one is seen.
+    resolved_model: str | None = None
     tools: list[str] = field(default_factory=list)
     dropped_tools: list[str] = field(default_factory=list)
     clamped: bool = False

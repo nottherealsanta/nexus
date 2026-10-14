@@ -99,6 +99,21 @@ from the durable log. No thinking duration is synthesized.
 | Claude Agent SDK bridge | Buffers final text; currently exposes no live thoughts. | Explicit implementation limitation. |
 | xAI Grok over SuperGrok (2026-10-14) | Live: device sign-in, grok-4.7 text, usage (with cached input) and a normal stop over `/responses`. Reasoning summaries were not asserted live; the event shapes follow OpenCode's xAI tests. | `tests/test_xai_live.py` (2 passed) and a `nexus chat` turn; offline adapter, conformance, device-OAuth and routing tests. |
 
+### External CLI workers (Antigravity)
+
+Antigravity (`agy`, [agents.md](agents.md#external-antigravity-workers)) is not a
+streaming provider, so this inventory does not apply: it emits no `TextDelta`,
+`Usage` or `ToolCall*` events into the shared contract. Its own NDJSON events
+(`init`, `step_update`, `result`) become `external.*` events instead, and tool calls
+are never `tool.*` events. Onboarding it means checking the CLI, not a wire stream:
+
+| Check | Evidence |
+| --- | --- |
+| `agy --version`, `--help`, `agy models` | Observed locally on agy 1.3.4; model IDs are discovered at runtime, never stored as a catalogue |
+| Headless event shapes (`init`, `step_update`, `result`; stdin user event; `--print-timeout` as a duration) | Documented at `antigravity.google/docs/cli/headless`, fetched by the parent session |
+| Quota usage (`agy -p /usage`) | Built-in TSV verified locally on agy 1.3.4. Nexus parses strict four-column rows, inverts remaining percentages to used percentages, and reports unexpected rows as notes only |
+| A real model turn, cached login, permission and trust wording | **Not run**: no credentials, offline fake-agy tests only; quota command verified without a model turn. Needs the user's explicit approval |
+
 Repeat the Copilot regression with an existing connected account:
 
 ```sh
@@ -109,3 +124,18 @@ The test checks Responses fallback, public thinking, its boundary, reply, and no
 termination. Device sign-in itself was not exercised. These observations are a
 baseline; repeat the inventory when onboarding another model or when a provider
 changes its stream format.
+
+### Antigravity visibility and safe discovery
+
+An installed `agy` is discovered without a handwritten provider section using a
+bounded `agy models` probe only. Configured `agy` aliases and custom executables
+are respected. The host model list exposes these rows labelled **Subagents only**
+(including native clients); selecting one as the main model is refused with an
+explanation, while explicit subagent tier/role/Task references remain supported.
+Discovery does not acknowledge inherited settings: worker execution still requires
+`worker_inherits_agy_settings = true` in an explicit provider section.
+
+Providers Settings always includes Antigravity, with manual CLI sign-in: run `agy`
+in your terminal, then **Re-check and refresh models**. CLI presence is not verified
+authentication. Nexus does not run a login subcommand, manage CLI credentials, or
+perform a model turn to discover availability. A missing CLI is reported honestly.

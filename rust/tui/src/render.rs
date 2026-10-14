@@ -2446,6 +2446,26 @@ mod tests {
         assert!(text(4).contains("40 tail"));
     }
     #[test]
+    fn usage_meter_rows_colour_only_the_bar_and_the_reserve() {
+        let p = Palette::new(false);
+        let lines = vec!["  Weekly  ━━━┃───  20% used · 30% in reserve · resets in 3d".to_string()];
+        let rows = toned_lines(&lines, &["meter-ok".to_string()], 120, &p);
+        let spans = &rows[0].spans;
+        let find = |text: &str| spans.iter().find(|s| s.content.contains(text)).unwrap();
+        assert_eq!(find("Weekly").style.fg, Some(p.text), "the label is neutral");
+        assert_eq!(find("━━━").style.fg, Some(p.success), "used cells take the tone");
+        assert_eq!(find("┃").style.fg, Some(p.text), "the pace marker is plain");
+        assert_eq!(find("───").style.fg, Some(p.border_strong), "the track is dim");
+        assert_eq!(find("in reserve").style.fg, Some(p.success));
+        assert_eq!(find("resets").style.fg, Some(p.muted));
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text.trim_start(), lines[0].trim_start(), "no text is lost");
+        let over = vec!["  Monthly  ━━━━  80% used · 30% over pace".to_string()];
+        let rows = toned_lines(&over, &["meter-warn".to_string()], 120, &p);
+        let over_span = rows[0].spans.iter().find(|s| s.content.contains("over pace")).unwrap();
+        assert_eq!(over_span.style.fg, Some(p.warning));
+    }
+    #[test]
     fn tool_detail_lines_are_toned_and_wrapped_inside_the_dialog() {
         let p = Palette::new(false);
         let lines = vec![
