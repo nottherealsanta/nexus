@@ -480,13 +480,20 @@ class SessionTitleSettingsSet(msgspec.Struct, tag=True, frozen=True):
 
 
 class ClaudeCodeSettings(msgspec.Struct, tag=True, frozen=True):
-    """Read ``[models] claude_code_main_enabled`` (Settings -> Models)."""
+    """Read ``[models] claude_code_main_enabled`` and ``claude_code_subagent_backend``."""
 
 
 class ClaudeCodeSettingsSet(msgspec.Struct, tag=True, frozen=True):
-    """Allow or hide Claude Code as a selectable main model (default hidden)."""
+    """Change the Claude Code settings; ``None`` leaves a field unchanged.
 
-    main_enabled: bool
+    ``main_enabled`` allows or hides Claude Code as a selectable main model
+    (default hidden; always the Agent SDK). ``subagent_backend`` is how
+    ``claude-code/<model>`` subagents run: ``"worker"`` (interactive Claude Code,
+    its own tools) or ``"sdk"`` (Agent SDK in a Nexus child loop, Nexus tools).
+    """
+
+    main_enabled: bool | None = None
+    subagent_backend: str | None = None
 
 
 class ModelSelect(msgspec.Struct, tag=True, frozen=True):
@@ -1352,10 +1359,13 @@ class SessionTitleSettingsResult(msgspec.Struct, tag=True, frozen=True):
 
 
 class ClaudeCodeSettingsResult(msgspec.Struct, tag=True, frozen=True):
-    """``message`` explains scope: main selection is SDK-only; subagents are per role."""
+    """``message`` explains scope: main selection is SDK-only; subagents follow ``subagent_backend``."""
 
     main_enabled: bool = False
     message: str = ""
+    subagent_backend: str = "worker"
+    #: Shown beside the backend choice: what each backend does to authority.
+    backend_message: str = ""
     restart_required: bool = False
 
 

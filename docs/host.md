@@ -322,14 +322,17 @@ reason is clipped to 200 characters. The native client reaches it from the `/tas
 menu (a `Cancel <agent>` row under each running agent). Human handoff into the live
 Claude PTY is not implemented.
 
-### Claude Code main-model toggle
+### Claude Code settings
 
-`ClaudeCodeSettings` / `ClaudeCodeSettingsSet(main_enabled)` read and write
-`[models] claude_code_main_enabled` in the global config (same writer, hash check
+`ClaudeCodeSettings` / `ClaudeCodeSettingsSet(main_enabled, subagent_backend)` read
+and write `[models] claude_code_main_enabled` and `claude_code_subagent_backend`
+(`worker` | `sdk`; a field left `None` is unchanged, any other backend is a
+`ConfigError`) in the global config (same writer, hash check
 and read-back as session titles) and rebuild model routes. The set is **rejected**
 (`SessionBusy`, nothing written) while any turn runs, so the config file and the live
 router never disagree; `claude_code_settings_set` itself refuses without an idle
 `reload`. The result's `message` says that main selection
-uses the Agent SDK and that external subagents are configured per role.
+uses the Agent SDK and that subagents are configured per role; `subagent_backend`
+and `backend_message` state the backend and what it mediates.
 `Runtime.claude_code_main_enabled()` reads the effective config on every call, so
 the model picker follows the toggle without a restart.

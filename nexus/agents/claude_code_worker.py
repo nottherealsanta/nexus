@@ -105,7 +105,11 @@ MAX_BLOCKED = 20
 PROVENANCE = "Claude Code (own tools)"
 PROVIDER = "claude-code"
 READ_ONLY_CLAUDE_TOOLS: tuple[str, ...] = ("Read", "Grep", "Glob")
-_MODEL_RE = re.compile(r"claude-(?:sonnet|opus|haiku)-[0-9][a-z0-9.-]*")
+#: An exact ID: ``claude-<family>-<version...>``. Aliases (``sonnet``, ``*-latest``) fail.
+_MODEL_RE = re.compile(r"claude-[a-z]+-[0-9][a-z0-9.-]*")
+#: Tools the worker can never serve: Nexus writes no answers into the terminal,
+#: so a question menu would only stall the assignment until its deadline.
+ALWAYS_DISALLOWED: tuple[str, ...] = ("AskUserQuestion",)
 _PERMISSION_MODES = {
     "default": "manual", "manual": "manual", "acceptEdits": "acceptEdits",
     "plan": "plan", "dontAsk": "dontAsk", "auto": "auto",
@@ -155,15 +159,19 @@ def terminal_text(output: bytes) -> str:
 _SQUASH_RE = re.compile(r"[\s│┃║|╎╏]+")
 
 
-def _squash(output: bytes, prompt: str = "") -> str:
-    """Whitespace/border-free lowercase text, minus any echo of the user's ``prompt``.
+def _squash(output: bytes, prompt: str = "", echoes: Sequence[str] = ()) -> str:
+    """Whitespace/border-free lowercase text, minus any echo of ``prompt``/``echoes``.
 
-    The TUI echoes the assignment, wrapped and boxed; its wording must never be
-    mistaken for Claude's own startup or permission text.
+    The TUI echoes the assignment, wrapped and boxed, and renders Claude's own
+    replies; neither may be mistaken for startup or permission text. Echo removal
+    is best effort: Markdown rendering can change a reply's characters.
     """
     text = _SQUASH_RE.sub("", terminal_text(output)).lower()
-    echo = _SQUASH_RE.sub("", prompt).lower()
-    return text.replace(echo, "") if echo else text
+    for source in (prompt, *echoes):
+        echo = _SQUASH_RE.sub("", source).lower()
+        if echo:
+            text = text.replace(echo, "")
+    return text
 
 
 def startup_block(output: bytes, workspace: str | Path | None = None, prompt: str = "") -> str | None:
@@ -192,14 +200,16 @@ _PROMPT_PHRASES = (
 )
 
 
-def permission_prompt(output: bytes, prompt: str = "") -> bool:
+def permission_prompt(output: bytes, prompt: str = "", replies: Sequence[str] = ()) -> bool:
     """Whether the terminal tail shows a Claude approval menu (diagnostic only).
 
     Requires the question AND the numbered ``1. Yes`` choice, so assistant prose
-    that merely quotes a question is not mistaken for a prompt. Matching is based
-    on the current UI wording and is NOT verified against every Claude release.
+    that merely quotes a question is not mistaken for a prompt; ``replies`` (the
+    assistant text read from the transcript) are removed first, so a reply that
+    contains both is not either. Matching is based on the current UI wording and
+    is NOT verified against every Claude release.
     """
-    text = _squash(output, prompt)
+    text = _squash(output, prompt, replies)
     return "1.yes" in text and any(phrase in text for phrase in _PROMPT_PHRASES)
 
 
@@ -352,10 +362,13 @@ def resolve_policy(config: WorkerConfig, *, read_only: bool) -> WorkerPolicy:
     ``read_only`` is true when the Nexus child was granted no write, edit or
     shell tool. Claude then only gets its read-only tool set, in a mode that
     cannot prompt for or grant more; a configuration that would exceed it is
-    refused with :class:`ConfigError`.
+    refused with :class:`ConfigError`. :data:`ALWAYS_DISALLOWED` is always added
+    to the disallowed tools, so it shows in the disclosed authority.
     """
     mode = _PERMISSION_MODES[config.permission_mode]
     tools = config.tools
+    disallowed = config.disallowed_tools + tuple(
+        name for name in ALWAYS_DISALLOWED if name not in config.disallowed_tools)
     if read_only:
         extra = [name for name in (tools or ()) if name not in READ_ONLY_CLAUDE_TOOLS]
         extra += [rule for rule in config.allowed_tools if _rule_tool(rule) not in READ_ONLY_CLAUDE_TOOLS]
@@ -375,7 +388,7 @@ def resolve_policy(config: WorkerConfig, *, read_only: bool) -> WorkerPolicy:
             mode = "dontAsk"  # narrows, never widens: nothing can prompt for more
     return WorkerPolicy(
         permission_mode=mode, tools=tuple(tools) if tools is not None else None,
-        allowed_tools=config.allowed_tools, disallowed_tools=config.disallowed_tools,
+        allowed_tools=config.allowed_tools, disallowed_tools=disallowed,
         setting_sources=config.setting_sources, mcp_config=config.mcp_config,
         restricted=config.restricted, read_only=read_only, executable=config.executable,
         timeout_seconds=float(config.timeout_seconds), config_dir=config.config_dir,
@@ -967,12 +980,6 @@ class ClaudeCodeWorker:
                 await self._drain(run, final=True)
                 return self._result(run, started, "cancelled",
                                     "Claude Code assignment was cancelled." + partial(), error="cancelled")
-            if time.monotonic() >= deadline:
-                await self._drain(run, final=True)
-                return self._result(
-                    run, started, "interrupted",
-                    f"Claude Code did not finish within {timeout:g}s and was stopped." + partial(),
-                    error=f"deadline of {timeout:g}s exceeded without a Stop result")
             try:
                 chunk = os.read(master, 65536)
             except BlockingIOError:
@@ -1027,13 +1034,21 @@ class ClaudeCodeWorker:
                 body = head + "." + (f"\n[partial answer]\n{message}" if message else partial())
                 return self._result(run, started, "failed", body, error=head, stop="StopFailure")
 
+            # Checked after the hooks, so a Stop that lands at the deadline still counts.
+            if time.monotonic() >= deadline:
+                await self._drain(run, final=True)
+                return self._result(
+                    run, started, "interrupted",
+                    f"Claude Code did not finish within {timeout:g}s and was stopped." + partial(),
+                    error=f"deadline of {timeout:g}s exceeded without a Stop result")
+
             # A started session has passed trust/login/onboarding, so only an
             # unstarted one can be blocked there.
             if not run.seen_assistant and start is None:
                 block = startup_block(run.tail, run.workspace, run.prompt)
                 if block:
                     return attention(block)
-            if policy.permission_mode != "dontAsk" and permission_prompt(run.tail[-4096:], run.prompt):
+            if policy.permission_mode != "dontAsk" and permission_prompt(run.tail[-4096:], run.prompt, run.texts):
                 return attention(
                     f"a Claude permission prompt is waiting in the worker terminal (mode {policy.permission_mode}); "
                     "the worker was stopped unanswered; grant the tool via worker_allowed_tools "
@@ -1071,13 +1086,16 @@ def _stat_key(path: Path) -> tuple[int, int] | None:
     return (info.st_mtime_ns, info.st_size)
 
 
-def snapshot_workspace(workspace: Path) -> dict[str, Any]:
+def snapshot_workspace(workspace: Path, since: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """A bounded fingerprint of the workspace's changed/visible files (blocking).
 
     In a git checkout this is ``git status --porcelain`` plus each listed file's
     mtime and size, so a file that was already dirty and is edited again still
-    differs. Outside git it is an mtime/size walk capped at
-    :data:`MAX_SNAPSHOT_FILES`. Paths are relative to ``workspace``.
+    differs, and the ``HEAD`` commit. When ``since`` (the earlier snapshot) has a
+    different ``HEAD``, the files the new commits touched are recorded under
+    ``committed``, so work that was edited and committed is still reported.
+    Gitignored files are not checked. Outside git it is an mtime/size walk
+    capped at :data:`MAX_SNAPSHOT_FILES`. Paths are relative to ``workspace``.
     """
     workspace = Path(workspace).resolve()
     env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0", "LC_ALL": "C"}
@@ -1091,6 +1109,11 @@ def snapshot_workspace(workspace: Path) -> dict[str, Any]:
     except (OSError, subprocess.SubprocessError):
         return {"kind": "mtime", "files": _walk(workspace)}
     root = Path(top).resolve()
+    head = _git_head(workspace, env)
+    committed: list[str] = []
+    old_head = since.get("head") if since is not None and since.get("kind") == "git" else None
+    if head and old_head and head != old_head:
+        committed = _committed_paths(workspace, root, str(old_head), head, env)
     files: dict[str, Any] = {}
     parts = raw.decode("utf-8", errors="replace").split("\0")
     index = 0
@@ -1110,7 +1133,38 @@ def snapshot_workspace(workspace: Path) -> dict[str, Any]:
         files[relative] = (code, _stat_key(full))
         if len(files) >= MAX_SNAPSHOT_FILES:
             break
-    return {"kind": "git", "files": files}
+    return {"kind": "git", "head": head, "files": files, "committed": committed}
+
+
+def _git_head(workspace: Path, env: Mapping[str, str]) -> str | None:
+    """The ``HEAD`` commit, or ``None`` (unborn branch, git failure)."""
+    try:
+        out = subprocess.run(["git", "-C", str(workspace), "rev-parse", "--verify", "-q", "HEAD"],
+                             capture_output=True, timeout=15, env=env, check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.decode().strip() or None
+
+
+def _committed_paths(workspace: Path, root: Path, old: str, new: str, env: Mapping[str, str]) -> list[str]:
+    """Workspace-relative paths that differ between commits ``old`` and ``new`` (bounded)."""
+    try:
+        raw = subprocess.run(
+            ["git", "-C", str(workspace), "diff", "--name-only", "-z", "--no-renames", old, new],
+            capture_output=True, timeout=30, env=env, check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    paths: list[str] = []
+    for name in raw.decode("utf-8", errors="replace").split("\0"):
+        if not name:
+            continue
+        try:
+            paths.append(str((root / name).relative_to(workspace)))
+        except ValueError:
+            continue  # outside the assigned workspace
+        if len(paths) >= MAX_SNAPSHOT_FILES:
+            break
+    return paths
 
 
 def _walk(workspace: Path) -> dict[str, Any]:
@@ -1126,8 +1180,10 @@ def _walk(workspace: Path) -> dict[str, Any]:
 
 
 def changed_paths(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[str]:
-    """Sorted paths whose fingerprint differs between two snapshots."""
+    """Sorted paths whose fingerprint differs between two snapshots, plus paths
+    touched by commits made between them (``after["committed"]``)."""
     old, new = before.get("files", {}), after.get("files", {})
+    committed = set(after.get("committed") or ())
     if before.get("kind") != after.get("kind"):
-        return sorted(set(old) | set(new))
-    return sorted(path for path in set(old) | set(new) if old.get(path) != new.get(path))
+        return sorted(set(old) | set(new) | committed)
+    return sorted({path for path in set(old) | set(new) if old.get(path) != new.get(path)} | committed)

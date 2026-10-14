@@ -20,6 +20,7 @@ Compaction = Literal["drop_oldest", "evict_tool_results", "summarize", "hybrid"]
 PermissionMode = Literal["allow", "ask", "deny"]
 UnattendedMode = Literal["deny", "allow", "fail_turn"]
 SandboxMode = Literal["read-only", "workspace-write"]
+ClaudeCodeBackend = Literal["worker", "sdk"]
 
 _PERMISSION_MODES = frozenset({"allow", "ask", "deny"})
 _UNATTENDED_MODES = frozenset({"deny", "allow", "fail_turn"})
@@ -188,6 +189,10 @@ class ModelsSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     fast: str | None = None
     plan: str | None = None
     claude_code_main_enabled: bool = False
+    #: How ``claude-code/<model>`` subagents run: ``worker`` (interactive Claude
+    #: Code with its own tools) or ``sdk`` (the Agent SDK inside a normal Nexus
+    #: child loop, Nexus tools and permissions). Main selection is always SDK.
+    claude_code_subagent_backend: ClaudeCodeBackend = "worker"
     refresh_ttl_days: float = DEFAULT_REFRESH_TTL_DAYS
     catalogue_url: str = DEFAULT_CATALOGUE_URL
     offline: bool = False

@@ -1,6 +1,6 @@
 # Nexus-owned interactive Claude Code workers
 
-Status: external worker implemented offline (sections 2-5 A/B); host/native UI (5C), live verification (5D) and crash recovery remain. Revised to independent Claude Code tools.
+Status: worker, host/native UI (5C except human handoff), crash recovery on reopen, Haiku live run, and a subagent backend switch (worker | sdk) are done. Remaining: human handoff into the live PTY, root escalation/pause, Sonnet/Opus live IDs, broader race tests, platform decision, orphan cleanup. Revised to independent Claude Code tools.
 This ledger supersedes the original ZMX-specific plan. No ZMX dependency is
 currently required. The text-only bridge prototype was replaced by the independent worker below.
 
@@ -230,6 +230,23 @@ say this clearly. Do not pretend an external advisor is Nexus-enforced read-only
 - NOT VERIFIED: permission-prompt wording; StopFailure payload; Sonnet/Opus 5.5 IDs;
   diagnostic text still lacks word spacing in Ink output (cosmetic); subscription
   efficiency and commercial terms.
+
+- Review fixes (2026-10-14): `files_changed` also lists files touched by commits
+  made during the run (`HEAD` diff); gitignored files disclosed as unchecked.
+  `AskUserQuestion` always disallowed (it would stall to the deadline). The context
+  snapshot lists "Claude Code default set" instead of 0 tools. No silent default
+  model (`claude-sonnet-4-6` fallback removed; a bare exact ID on a provider-only
+  role is kept). Model IDs accept any `claude-<family>-N` (e.g. Fable). Hooks are
+  checked before the deadline; permission detection removes Claude's own replies.
+- Subagent backend switch (2026-10-14): `[models] claude_code_subagent_backend`
+  `worker` | `sdk`, Settings -> Models "Claude Code subagents run via"
+  (`ClaudeCodeSettingsSet(subagent_backend)`). `sdk` runs the child in the Nexus
+  loop on a per-child `ClaudeAgentProvider`; main selection is unaffected.
+  Verified offline only; no live SDK-backend subagent run.
+- Verification (2026-10-14): full offline suite 5991 passed, 312 skipped, 1 failed
+  (`tests/test_cli.py::test_parser_exposes_the_canonical_command_set`, caused by the
+  unrelated in-progress `gateway` CLI work); ruff clean. No PTY/Playwright check of
+  the new Settings row.
 
 ### Remaining work
 

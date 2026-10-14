@@ -227,11 +227,25 @@ async def test_claude_code_toggle_is_discoverable_explained_and_saved(shell):
     shell.client.claude_code_settings_set.assert_awaited_with(main_enabled=True)
 
 
+@pytest.mark.asyncio
+async def test_claude_code_subagent_backend_choice_is_explained_and_saved(shell):
+    shell.client.claude_code_settings.return_value = p.ClaudeCodeSettingsResult(
+        subagent_backend="worker", backend_message="Claude runs its own tools; Nexus does not mediate them.")
+    await shell.workflows.settings_area("models")
+    row = _find(shell.workflows.settings_page, "row", id="claude-backend")
+    assert row["label"] == "Claude Code subagents run via"
+    assert row["control"]["options"] == ["Interactive worker (ZMX)", "Agent SDK"]
+    assert row["control"]["values"] == ["worker", "sdk"] and row["control"]["active"] == 0
+    assert "own tools" in row["description"]
+    await shell.workflows.operate(sp.op("models", "claude_backend", value="sdk"))
+    shell.client.claude_code_settings_set.assert_awaited_with(subagent_backend="sdk")
+
+
 def test_claude_code_route_is_labelled_for_subagents_not_skipped():
     from nexus.ui.ratatui.settings_pages.models import _items
 
     candidates = [{"ref": "claude-code/claude-haiku-5-5", "connected": True, "scope": "subagents"},
                   {"ref": "codex/m", "connected": True}]
     items = _items(["claude-code/claude-haiku-5-5", "codex/m"], "codex/m", candidates)
-    assert items[0][1] == "subagents" and "worker" in items[0][2]
+    assert items[0][1] == "subagents" and "subagents only" in items[0][2]
     assert items[1][1] == "in use"

@@ -238,11 +238,18 @@ def test_claude_code_main_toggle_refused_unless_idle_and_writes_nothing(tmp_path
     assert not (home / ".nexus" / "config.toml").exists()
 
 
-@pytest.mark.parametrize("value", ["yes", 1, None])
+@pytest.mark.parametrize("value", ["yes", 1])
 def test_claude_code_main_toggle_requires_a_real_bool(tmp_path, monkeypatch, value):
     runtime, home = _runtime(tmp_path, monkeypatch)
     with pytest.raises(ConfigError):
         asyncio.run(model_settings.claude_code_settings_set(runtime, main_enabled=value, reload=True))  # type: ignore[arg-type]
+    assert not (home / ".nexus" / "config.toml").exists()
+
+
+def test_claude_code_settings_with_no_field_writes_nothing(tmp_path, monkeypatch):
+    runtime, home = _runtime(tmp_path, monkeypatch)
+    result = asyncio.run(model_settings.claude_code_settings_set(runtime, main_enabled=None, reload=True))
+    assert result["main_enabled"] is False and result["subagent_backend"] == "worker"
     assert not (home / ".nexus" / "config.toml").exists()
 
 

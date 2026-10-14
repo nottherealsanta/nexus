@@ -63,3 +63,23 @@ async def test_settings_writer_itself_refuses_without_an_idle_reload(runtime):
         await model_settings.claude_code_settings_set(rt, main_enabled=True)
     assert (home / ".nexus" / "config.toml").read_text() == before
     await rt.aclose()
+
+
+async def test_subagent_backend_round_trip_and_validation(runtime):
+    rt, home = runtime
+    host = HostFacade(rt)
+    first = await host.handle(p.ClaudeCodeSettings())
+    assert first.subagent_backend == "worker" and "own tools" in first.backend_message
+
+    result = await host.handle(p.ClaudeCodeSettingsSet(subagent_backend="sdk"))
+    assert result.subagent_backend == "sdk" and "Nexus tools" in result.backend_message
+    saved = tomllib.loads((home / ".nexus" / "config.toml").read_text())["models"]
+    assert saved["claude_code_subagent_backend"] == "sdk"
+    assert "claude_code_main_enabled" not in saved  # an unset field is left alone
+    assert result.main_enabled is False
+
+    bad = await host.handle(p.ClaudeCodeSettingsSet(subagent_backend="zmx"))
+    assert isinstance(bad, p.ErrorResult)
+    assert tomllib.loads((home / ".nexus" / "config.toml").read_text())["models"][
+        "claude_code_subagent_backend"] == "sdk"
+    await rt.aclose()

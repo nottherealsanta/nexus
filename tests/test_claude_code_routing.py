@@ -77,6 +77,27 @@ def test_explicit_child_plans_external_worker_not_a_router_swap(tmp_path):
     assert runtime._providers["claude-code"] is sdk
 
 
+@pytest.mark.asyncio
+async def test_sdk_backend_runs_claude_children_in_the_nexus_loop(tmp_path):
+    config = Config(v2=ConfigV2(
+        providers={"claude-code": ProviderSection(kind="claude-code")},
+        models=ModelsSection(claude_code_subagent_backend="sdk"),
+    ))
+    runtime = Runtime(config=config, workspace=tmp_path)
+    # Main selection stays off: the root router still cannot reach Claude Code.
+    with pytest.raises(ConfigError):
+        runtime._router.resolve(ModelRequest(messages=[], model="claude-code/claude-haiku-4-5"))
+    spec = SimpleNamespace(agent="explicit", config=config, workspace=tmp_path,
+                           model="claude-code/claude-haiku-4-5", tools=("read", "edit"), metadata={})
+    child = _ChildRuntime(runtime, spec, object())
+    assert child._external is None  # no interactive worker
+    resolved = child._router.resolve(ModelRequest(messages=[], model="claude-code/claude-haiku-4-5"))
+    assert isinstance(resolved.provider, ClaudeAgentProvider) and resolved.provider in child._owned
+    await child.aclose()
+    assert child._owned == [] and resolved.provider._closed
+    await runtime.aclose()
+
+
 def test_ordinary_children_are_unchanged(tmp_path):
     sdk = ClaudeAgentProvider(workspace=tmp_path)
     sdk.name = "claude-code"
@@ -117,7 +138,11 @@ async def test_child_close_closes_only_its_worker(tmp_path):
 def test_default_model_budget_guard_and_alias_section(tmp_path):
     spec = SimpleNamespace(config=Config(), workspace=tmp_path, model="standard", provider="claude-code",
                            tools=("write",), metadata={})
-    assert _ChildRuntime(fake_runtime(), spec, object())._external.model.startswith("claude-")
+    # No silent default model: an unnamed (tier/alias) model is refused, an exact bare ID is kept.
+    with pytest.raises(ConfigError, match="exact model"):
+        _ChildRuntime(fake_runtime(), spec, object())
+    spec.model = "claude-haiku-4-5"
+    assert _ChildRuntime(fake_runtime(), spec, object())._external.model == "claude-haiku-4-5"
     spec.budget = SimpleNamespace(token_budget=100, cost_budget=None)
     with pytest.raises(ConfigError, match="cannot enforce"):
         _ChildRuntime(fake_runtime(), spec, object())
@@ -252,6 +277,11 @@ async def test_end_to_end_success_records_and_reports_external_authority(tmp_pat
         types = [event.type for event in session.read().events()]
         assert types[0] == "turn.started" and types[-1] == "turn.completed"
         assert {"external.started", "external.tool", "external.finished", "text"} <= set(types)
+        # The context snapshot never claims "no tools" for Claude's default set.
+        assembled = next(e.data for e in session.read().events() if e.type == "context.assembled")
+        assert assembled["tools"] == 1
+        assert assembled["request"]["tools"][0]["name"] == "Claude Code default set"
+        assert "AskUserQuestion" in assembled["request"]["tools"][0]["description"]
         roles = [(m.role, "".join(b.text for b in m.content if hasattr(b, "text"))) for m in session.messages]
         assert roles == [("user", "fix the bug"), ("assistant", "All done.")]
     finally:

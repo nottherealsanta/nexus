@@ -321,9 +321,17 @@ async def session_title_settings_set(
 
 #: Shown beside the toggle: what it does and what it does not.
 CLAUDE_CODE_NOTE = (
-    "Main selection uses the Claude Agent SDK. External Claude Code subagents are "
-    "configured per role (model: claude-code/<model>) and run Claude's own tools."
+    "Main selection uses the Claude Agent SDK. Claude Code subagents are configured "
+    "per role or tier (model: claude-code/<model>) and run on the backend below."
 )
+CLAUDE_CODE_BACKENDS = ("worker", "sdk")
+#: Per backend: what runs and who mediates the tools.
+CLAUDE_CODE_BACKEND_NOTES = {
+    "worker": ("Interactive Claude Code in a terminal Nexus owns. Claude runs its own tools; "
+               "Nexus permissions and PathGuard do not mediate them, and usage is unknown."),
+    "sdk": ("Agent SDK inside a normal Nexus subagent. Claude's built-in tools are off; it "
+            "uses Nexus tools under Nexus permissions and PathGuard."),
+}
 
 
 def claude_code_settings(runtime: object) -> dict[str, Any]:
@@ -336,22 +344,35 @@ def claude_code_settings(runtime: object) -> dict[str, Any]:
         except (ConfigError, OSError):
             config = None
     section = getattr(getattr(config, "v2", None), "models", None)
+    backend = str(getattr(section, "claude_code_subagent_backend", "worker") or "worker")
     return {"main_enabled": bool(getattr(section, "claude_code_main_enabled", False)),
-            "message": CLAUDE_CODE_NOTE}
+            "message": CLAUDE_CODE_NOTE, "subagent_backend": backend,
+            "backend_message": CLAUDE_CODE_BACKEND_NOTES.get(backend, "")}
 
 
 async def claude_code_settings_set(
-    runtime: object, *, main_enabled: bool, reload: bool = False
+    runtime: object, *, main_enabled: bool | None = None, subagent_backend: str | None = None,
+    reload: bool = False,
 ) -> dict[str, Any]:
-    """Write ``[models] claude_code_main_enabled`` and rebuild routes; refused unless idle.
+    """Write the ``[models]`` Claude Code keys and rebuild routes; refused unless idle.
 
-    ``reload`` is the caller's statement that no turn runs. Without it nothing is
-    written, so the config file and the live router never disagree.
+    ``None`` leaves a key unchanged. ``reload`` is the caller's statement that no
+    turn runs. Without it nothing is written, so the config file and the live
+    router never disagree.
     """
-    if type(main_enabled) is not bool:
+    if main_enabled is not None and type(main_enabled) is not bool:
         raise ConfigError("claude_code_main_enabled must be true or false")
+    if subagent_backend is not None and subagent_backend not in CLAUDE_CODE_BACKENDS:
+        raise ConfigError("claude_code_subagent_backend must be 'worker' or 'sdk'")
     if not reload:
         raise ConfigError("Claude Code settings cannot change while a turn is running")
-    _write(runtime, (("models", "claude_code_main_enabled", main_enabled),))
+    updates = []
+    if main_enabled is not None:
+        updates.append(("models", "claude_code_main_enabled", main_enabled))
+    if subagent_backend is not None:
+        updates.append(("models", "claude_code_subagent_backend", subagent_backend))
+    if not updates:
+        return {**claude_code_settings(runtime), "restart_required": False}
+    _write(runtime, tuple(updates))
     reloaded = await _reload(runtime, reload)
     return {**claude_code_settings(runtime), "restart_required": not reloaded}

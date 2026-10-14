@@ -1082,7 +1082,7 @@ the page shows it, and the Keyboard page scrolls past its second section by whee
 ## External Claude Code workers
 
 Settings → Models tags a tier entry served by a `kind = "claude-code"` section as
-**subagents** (note: "Claude Code worker; titles and other jobs skip it"), never
+**subagents** (note: "Claude Code subagents only; titles and other jobs skip it"), never
 "skipped · provider not connected": only subagents run it, so it is not a Nexus
 provider (`candidate_rows` sets `scope = "subagents"`; `settings_pages/models.py`).
 Titles and other background jobs still use the first Nexus-runnable entry.
@@ -1119,7 +1119,10 @@ draws the new block kind `external`.
 - **Cancel:** the `/tasks` menu adds `Cancel <agent>` under each running agent
   (host `AgentCancel`). No handoff into the live Claude terminal.
 - **Settings:** Settings -> Models has a CLAUDE CODE section with the
-  `Allow Claude Code as a main model` toggle and the scope note.
+  `Allow Claude Code as a main model` toggle and the scope note, and a
+  `Claude Code subagents run via` segmented choice (`Interactive worker (ZMX)` |
+  `Agent SDK`, values `worker` | `sdk`) whose description is the host's
+  `backend_message` (who mediates the tools).
 
 Tests: `tests/test_ratatui_external.py` (projection, replay equality, attention,
 `/tasks` cancel), `tests/test_ratatui_pty_external.py` (the real binary in a PTY drawing

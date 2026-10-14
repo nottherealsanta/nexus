@@ -16,11 +16,22 @@ Code session per assignment, in a Nexus-owned PTY, `cwd` = the assigned
 workspace or worktree, using **Claude's own tools**. Nexus tool grants,
 `PathGuard` and the permission engine do not mediate them (see
 [security.md](security.md#external-claude-code-worker)). Every other child is
-unchanged; ordinary children never see the `claude-code` provider. A model-less
-role uses `claude-sonnet-4-6`; an explicit model must be an exact
-`claude-(sonnet|opus|haiku)-N...` ID, never an alias. Main-agent selection of
+unchanged; ordinary children never see the `claude-code` provider. There is no
+default model: a route that names no exact model (a bare `provider = "claude-code"`
+role with a tier or alias) is refused at start. The model must be an exact
+`claude-<family>-N...` ID, never an alias. Main-agent selection of
 Claude Code still uses the Agent SDK provider and is hidden unless
 `[models] claude_code_main_enabled = true`.
+
+**Backend switch.** `[models] claude_code_subagent_backend` (Settings -> Models,
+"Claude Code subagents run via") picks how these children run: `worker` (default,
+everything in this section) or `sdk`. With `sdk`, `_ChildRuntime` plans no external
+run: the child is a normal Nexus `run_turn` child whose router includes an Agent SDK
+`ClaudeAgentProvider` for each `claude-code` route (the root's when main selection
+built one, else one the child builds and closes itself). Claude's built-in tools
+are off there; it uses the child's Nexus tools under Nexus permissions and
+`PathGuard`, usage is measured, and the routing guards below (inheritance,
+worktree) do not apply. Enabling `sdk` does not make Claude Code a main model.
 
 **Tiers.** A `[models.tiers]` entry may name a `claude-code/<model>` route
 (`low = ["claude-code/claude-haiku-5-5", ...]`). For **children only**,
@@ -70,7 +81,9 @@ Requires POSIX and Claude Code >= 2.1.296; the preflight probes `--version` and
 (default empty, plus `--disable-slash-commands`), `--strict-mcp-config` with
 `--mcp-config` (explicit JSON or an empty server list), `--no-chrome`,
 `--restricted` (default), `--tools`, `--allowedTools`, `--disallowedTools`, and
-`--session-id`. `bypassPermissions` and `--dangerously-skip-permissions`
+`--session-id`. `AskUserQuestion` is always added to `--disallowedTools` (and so
+to the disclosed authority): Nexus never answers a question menu, so one would only
+stall the worker until its deadline. `bypassPermissions` and `--dangerously-skip-permissions`
 are never passed (and rejected at config load). `auto` is accepted as an explicit
 opt-in: Claude's own classifier then answers approvals (verified live on Haiku
 5.5: writes proceeded without a prompt; a risky action is denied with a "denied by
@@ -99,6 +112,9 @@ The JSONL transcript is read incrementally (1 MiB per read, 8 MiB per line, 32
 MiB total), other session ids and sidechains are ignored, entries are
 deduplicated by `uuid`, and reading continues 2 s after Stop to catch late
 flushes. A quiet PTY, or a process that exits without Stop, is never success.
+Hooks are checked before the deadline on each poll, so a Stop that lands at the
+deadline still completes. Permission-menu detection removes the echoed prompt and
+Claude's own replies (from the transcript) before matching, best effort.
 The terminal tail is kept only as an ANSI-stripped, redacted diagnostic of at
 most 1500 characters.
 
@@ -116,8 +132,11 @@ trust or login prompt.
 `AgentView.usage_unknown`, render line `[usage: unknown — external Claude Code
 worker]`). The render also carries an `[authority: ...]` line. `files_changed`
 is computed by Nexus from a before/after git-status plus mtime snapshot of the
-workspace, never from Claude's claims; it is workspace-wide (concurrent writers
-can appear), capped at 100 paths, and carries an announced note. The transcript
+workspace, plus the files touched by any commits made in between (`HEAD` moved),
+never from Claude's claims; gitignored files are not checked. It is workspace-wide
+(concurrent writers can appear), capped at 100 paths, and carries an announced note.
+The `context.assembled` snapshot lists Claude's tools from the policy, or one
+"Claude Code default set" entry (with the disallowed tools) when none are pinned. The transcript
 path, Claude session id, tool-call count and clip notes are in `metrics`
 (`SubagentOutcome.to_dict()["external"]`). `failed` and `interrupted` outcomes
 get the usual handoff. Prompt (64 KiB), tool inputs (4000 chars per string), tool

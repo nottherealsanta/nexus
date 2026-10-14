@@ -113,6 +113,8 @@ async def test_argv_has_no_bypass_flags_and_isolates_extensions(tmp_path, worksp
     assert args[args.index("--setting-sources") + 1] == ""
     assert json.loads(args[args.index("--mcp-config") + 1]) == {"mcpServers": {}}
     assert "--strict-mcp-config" in args and "--restricted" in args and "--disable-slash-commands" in args
+    # Nexus never answers a question menu, so Claude may not open one.
+    assert args[args.index("--disallowedTools") + 1] == "AskUserQuestion"
     assert args[args.index("--model") + 1] == MODEL
     assert args[-2:] == ["--", "-x tricky prompt"]
     settings = json.loads(open(args[args.index("--settings") + 1]).read()) if os.path.exists(
@@ -128,7 +130,7 @@ async def test_explicit_policy_flags(tmp_path, workspace, fake):
     args = invocation(directory)["args"]
     assert args[args.index("--tools") + 1] == "Read,Edit"
     assert args[args.index("--allowedTools") + 1] == "Edit"
-    assert args[args.index("--disallowedTools") + 1] == "Bash(rm *)"
+    assert args[args.index("--disallowedTools") + 1] == "Bash(rm *),AskUserQuestion"
     assert args[args.index("--permission-mode") + 1] == "acceptEdits"
     assert args[args.index("--setting-sources") + 1] == "user"
     assert "--restricted" not in args and "--disable-slash-commands" not in args
@@ -204,6 +206,18 @@ def test_prompt_detection_ignores_plain_prose():
     menu = b"Do you want to proceed?\r\n \xe2\x9d\xaf 1. Yes\r\n 2. No"
     assert cw.permission_prompt(menu)
     assert not cw.permission_prompt(b"The assistant asks: Do you want to proceed? Say yes.")
+    # Claude's own reply (read from the transcript) is not mistaken for a menu.
+    reply = "Options:\n1. Yes, refactor it\n2. No\nDo you want to proceed?"
+    shown = reply.replace("\n", "\r\n").encode()
+    assert cw.permission_prompt(shown)
+    assert not cw.permission_prompt(shown, replies=[reply])
+
+
+def test_exact_model_ids_accept_any_family_but_not_aliases():
+    for model in ("claude-haiku-4-5", "claude-fable-5-1", "claude-opus-5.5"):
+        assert cw._MODEL_RE.fullmatch(model)
+    for alias in ("sonnet", "claude-sonnet-latest", "opus[1m]", "claude-code"):
+        assert not cw._MODEL_RE.fullmatch(alias)
 
 
 async def test_exit_without_stop_is_failed_and_redacted(tmp_path, workspace, fake):
@@ -536,6 +550,28 @@ def test_changed_paths_detects_edits_to_already_dirty_files(tmp_path):
     (repo / "new.txt").write_text("n")
     assert cw.changed_paths(before, cw.snapshot_workspace(repo)) == ["a.txt", "dirty.txt", "new.txt"]
     assert cw.changed_paths(before, before) == []
+
+
+def test_changed_paths_include_files_committed_during_the_run(tmp_path):
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True)  # noqa: E731
+    git("init", "-q")
+    git("config", "user.email", "t@example.invalid")
+    git("config", "user.name", "t")
+    (repo / "a.txt").write_text("1")
+    git("add", "a.txt")
+    git("commit", "-qm", "one")
+    before = cw.snapshot_workspace(repo)
+    # Edited and committed: clean in both `git status` snapshots, found by the HEAD diff.
+    (repo / "a.txt").write_text("2")
+    git("commit", "-qam", "two")
+    after = cw.snapshot_workspace(repo, before)
+    assert after["committed"] == ["a.txt"]
+    assert cw.changed_paths(before, after) == ["a.txt"]
+    assert cw.changed_paths(before, cw.snapshot_workspace(repo)) == []  # no `since`, no commit diff
 
 
 def test_changed_paths_outside_git_uses_mtimes(tmp_path):

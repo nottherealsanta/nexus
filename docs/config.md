@@ -44,7 +44,7 @@ errors redact them and any URL userinfo (`util.redact_secrets`).
 | --- | --- |
 | `[agent]` | `name` build, `profile` coding, `instructions_file` SOUL.md, `memory_file` MEMORY.md, `agents_file` AGENTS.md, `max_iterations` 0 (unlimited), `max_turn_seconds` 0 (unlimited), `sandbox` workspace-write |
 | `[model]` | `default`, `fast`, `plan`, `fallback` list, `params` (`temperature`, `max_output_tokens`, `thinking_budget`) |
-| `[models]` | `claude_code_main_enabled` false, `default`/`fast`/`plan`, `refresh_ttl_days` 7, `catalogue_url` (models.dev), `offline` false, `tiers`, `reasoning_efforts`, `fallback` |
+| `[models]` | `claude_code_main_enabled` false, `claude_code_subagent_backend` `worker`, `default`/`fast`/`plan`, `refresh_ttl_days` 7, `catalogue_url` (models.dev), `offline` false, `tiers`, `reasoning_efforts`, `fallback` |
 | `[providers.<name>]` | see [models.md](models.md#providers) |
 | `[context]` | `max_tokens` (unset = model window, 180000 if unknown), `safety_margin_tokens` 4000, `compaction` hybrid, `compact_at_fraction` 0.85, `[context.limits]` memory 8000, agents_md 8000, skills_index 4000, environment 2000, attachments 20000 |
 | `[permissions]` | `mode` allow, `allow`/`ask`/`deny` lists, `write_roots` (`./`), `read_denyroots`, `on_unattended` deny |
@@ -93,7 +93,12 @@ worker's child environment is the fixed safe allowlist plus `CLAUDE_CONFIG_DIR`.
 `[models] claude_code_main_enabled` (default false) only controls main-model
 selection; it does not enable or disable explicit worker roles. Settings -> Models
 has an `Allow Claude Code as a main model` toggle for it (`ClaudeCodeSettingsSet`)
-that says main selection uses the Agent SDK and external subagents are configured per role.
+that says main selection uses the Agent SDK and subagents are configured per role.
+`[models] claude_code_subagent_backend` (`worker` default, or `sdk`) picks how
+`claude-code/<model>` subagents run: the interactive worker with Claude's own tools,
+or the Agent SDK inside a normal Nexus child with Nexus tools and permissions
+([agents.md](agents.md#external-claude-code-workers)). Settings -> Models shows it as
+`Claude Code subagents run via` with a note on what each backend mediates.
 
 ## On-disk layout
 

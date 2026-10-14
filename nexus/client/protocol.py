@@ -371,8 +371,11 @@ class Client:
 
     async def claude_code_settings(self) -> Any: return await self._request(p.ClaudeCodeSettings())
 
-    async def claude_code_settings_set(self, *, main_enabled: bool) -> Any:
-        return await self._request(p.ClaudeCodeSettingsSet(main_enabled=main_enabled))
+    async def claude_code_settings_set(
+        self, *, main_enabled: bool | None = None, subagent_backend: str | None = None
+    ) -> Any:
+        return await self._request(
+            p.ClaudeCodeSettingsSet(main_enabled=main_enabled, subagent_backend=subagent_backend))
 
     async def select_model(self, session: str, ref: str) -> Any: return await self._request(p.ModelSelect(session=session, ref=ref))
 

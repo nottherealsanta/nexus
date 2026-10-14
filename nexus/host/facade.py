@@ -1804,7 +1804,8 @@ class HostFacade:
                 raise SessionBusy("Claude Code settings cannot change while a turn is running; try again when idle")
             return p.ClaudeCodeSettingsResult(
                 **await model_settings.claude_code_settings_set(
-                    self.runtime, main_enabled=command.main_enabled, reload=True
+                    self.runtime, main_enabled=command.main_enabled,
+                    subagent_backend=command.subagent_backend, reload=True
                 )
             )
         if isinstance(command, p.ModelSelect):

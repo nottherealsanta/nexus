@@ -1918,8 +1918,9 @@ _CLAUDE_WORKER_FIELDS = (
     "worker_setting_sources", "worker_mcp_config", "worker_restricted",
 )
 
-#: Model of an explicit ``claude-code`` child that names none (an exact ID, never an alias).
-DEFAULT_CLAUDE_CODE_MODEL = "claude-sonnet-4-6"
+
+#: An exact Claude model ID named without a provider prefix (aliases and tiers do not match).
+_CLAUDE_MODEL_ID = re.compile(r"claude-[a-z]+-[0-9][a-z0-9.-]*")
 
 #: Child ``stop_reason`` per external worker status.
 _EXTERNAL_STOP_REASON = {
@@ -1955,9 +1956,13 @@ class _ChildRuntime:
         #: Set for an explicit ``claude-code`` child: that assignment is executed
         #: by the external Claude Code worker, never by a Nexus ``run_turn`` loop.
         self._external: _ExternalAssignment | None = None
-        sections = getattr(getattr(getattr(spec, "config", None), "v2", None), "providers", {}) or {}
+        #: Agent SDK providers this child built for ``claude-code`` (backend ``sdk``).
+        self._owned: list[Any] = []
+        v2 = getattr(getattr(spec, "config", None), "v2", None)
+        sections = getattr(v2, "providers", {}) or {}
+        sdk_backend = getattr(getattr(v2, "models", None), "claude_code_subagent_backend", "worker") == "sdk"
         reference = str(getattr(spec, "model", None) or "")
-        if reference in getattr(getattr(runtime, "_tiers", None), "order", ()):
+        if not sdk_backend and reference in getattr(getattr(runtime, "_tiers", None), "order", ()):
             reference = runtime._claude_code_tier_route(reference) or reference
         head, sep, tail = reference.partition("/")
         provider_name = head if sep else getattr(spec, "provider", None)
@@ -1968,19 +1973,54 @@ class _ChildRuntime:
         section = sections.get(provider_name)
         # Claude Code is never available to ordinary Nexus children: only an
         # explicitly configured role reaches the external worker below.
+        parent_providers = getattr(runtime, "_providers", {})
         providers = {
-            name: provider for name, provider in getattr(runtime, "_providers", {}).items()
+            name: provider for name, provider in parent_providers.items()
             if Runtime._adapter_kind(name, sections.get(name)) != ADAPTER_CLAUDE_CODE
         }
-        if len(providers) != len(getattr(runtime, "_providers", {})):
+        if sdk_backend:
+            # Backend ``sdk``: claude-code children run in the normal Nexus child
+            # loop on the Agent SDK provider (no built-in Claude tools; Nexus tools,
+            # permissions and PathGuard apply), even when main selection is off.
+            providers.update(self._sdk_providers(runtime, sections, parent_providers))
+        if providers.keys() != parent_providers.keys() or any(
+                providers[name] is not parent_providers[name] for name in providers):
             self._router = ModelRouter(
                 providers,
                 aliases=runtime._router.aliases, default=runtime._router.default,
                 fallback=runtime._router.fallback, registry=runtime._registry, tiers=runtime._tiers,
             )
-        if Runtime._adapter_kind(provider_name, section) == ADAPTER_CLAUDE_CODE:
+        if not sdk_backend and Runtime._adapter_kind(provider_name, section) == ADAPTER_CLAUDE_CODE:
             self._refuse_inherited_external(runtime, spec)
-            self._external = self._plan_external(runtime, spec, provider_name, section, tail if sep else "")
+            model = tail if sep else (reference if _CLAUDE_MODEL_ID.fullmatch(reference) else "")
+            self._external = self._plan_external(runtime, spec, provider_name, section, model)
+
+    def _sdk_providers(
+        self, runtime: Any, sections: Mapping[str, Any], parent: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Agent SDK providers for every ``claude-code`` route, keyed like the root's.
+
+        The root's own provider is reused when main selection built one; otherwise
+        this child constructs (and later closes) its own, so enabling the SDK
+        backend never makes Claude Code selectable as a main model.
+        """
+        construct = getattr(runtime, "_construct_provider", None)
+        names = dict.fromkeys(("claude-code", *sections))
+        out: dict[str, Any] = {}
+        for name in names:
+            section = sections.get(name)
+            if Runtime._adapter_kind(name, section) != ADAPTER_CLAUDE_CODE:
+                continue
+            provider = parent.get(name)
+            if provider is None:
+                if not callable(construct):
+                    continue
+                provider = construct(name, ADAPTER_CLAUDE_CODE, section, "")
+                if provider is None:
+                    continue
+                self._owned.append(provider)
+            out[name] = provider
+        return out
 
     @staticmethod
     def _refuse_inherited_external(runtime: Any, spec: Any) -> None:
@@ -2037,13 +2077,19 @@ class _ChildRuntime:
                 or getattr(budget, "cost_budget", None) is not None):
             raise ConfigError("claude-code children cannot enforce token or cost budgets")
         runtime._validate_claude_section(provider_name, section)
+        if not model:
+            # No silent default: which Claude model ran must be the one that was named.
+            raise ConfigError(
+                f"refusing to run {getattr(spec, 'agent', 'this child')!r} on Claude Code without an "
+                f"exact model: name {provider_name}/<model id> (for example "
+                f"{provider_name}/claude-haiku-4-5) on the role, tier or Task call")
         selection = (getattr(spec, "metadata", None) or {}).get("selection")
         flagged = bool(selection.get("read_only")) if isinstance(selection, Mapping) else False
         read_only = nexus_child_is_read_only(tuple(getattr(spec, "tools", ()) or ()), flagged=flagged)
         policy = resolve_policy(WorkerConfig.from_section(section), read_only=read_only)
         worker = ClaudeCodeWorker(WorkerConfig.from_section(section), environ=runtime._environ)
         return _ExternalAssignment(
-            worker=worker, policy=policy, provider=provider_name, model=model or DEFAULT_CLAUDE_CODE_MODEL
+            worker=worker, policy=policy, provider=provider_name, model=model
         )
 
     async def run(self) -> SubagentOutcome:
@@ -2183,9 +2229,10 @@ class _ChildRuntime:
         assert external is not None
         if before is not None and after is not None:
             changed = changed_paths(before, after)
-            note = ("computed from the workspace's git status/mtimes before and after the run, "
-                    "independently of Claude's claims; it is workspace-wide and may include "
-                    "concurrent changes by other writers")
+            note = ("computed from the workspace's git status/mtimes and any new commits before "
+                    "and after the run, independently of Claude's claims; gitignored files are "
+                    "not checked; it is workspace-wide and may include concurrent changes by "
+                    "other writers")
         else:
             changed = []
             note = "file changes could not be verified (workspace snapshot failed); none are reported"
@@ -2219,8 +2266,16 @@ class _ChildRuntime:
         else:
             head = "No role instructions were sent; Claude Code received only the task prompt."
         system = f"{head}\n\n[authority] {policy.authority(workspace)}"
-        tools = [{"name": name, "description": "Claude Code's own tool (not mediated by Nexus)",
-                  "input_schema": {}} for name in (policy.tools or ())]
+        if policy.tools is not None:
+            tools = [{"name": name, "description": "Claude Code's own tool (not mediated by Nexus)",
+                      "input_schema": {}} for name in policy.tools]
+        else:
+            # Nexus cannot list Claude's built-ins, but must not show "no tools".
+            denied = ", ".join(policy.disallowed_tools) or "none"
+            tools = [{"name": "Claude Code default set",
+                      "description": ("all of Claude Code's built-in tools for this version, "
+                                      f"except disallowed: {denied} (not mediated by Nexus)"),
+                      "input_schema": {}}]
         return {
             "iteration": 0, "messages": 1, "provider": external.provider, "model": external.model,
             "tools": len(tools),
@@ -2279,7 +2334,7 @@ class _ChildRuntime:
                 except Exception as exc:  # noqa: BLE001 - refusal/preflight failure is reported, not raised
                     crash = exc
                 with contextlib.suppress(Exception):
-                    after = await asyncio.to_thread(snapshot_workspace, workspace)
+                    after = await asyncio.to_thread(snapshot_workspace, workspace, before)
                 if result is not None and result.text:
                     session.append_message(Message(
                         role="assistant", content=[Text(result.text)],
@@ -2302,7 +2357,7 @@ class _ChildRuntime:
                 # The runner builds the cancelled outcome; hand it the disclosure it
                 # would otherwise lose (authority, unknown usage, verified file changes).
                 with contextlib.suppress(Exception):
-                    after = await asyncio.to_thread(snapshot_workspace, workspace)
+                    after = await asyncio.to_thread(snapshot_workspace, workspace, before)
                 with contextlib.suppress(Exception):
                     changed, metrics = self._external_report(workspace, before, after, None)
                     spec.metadata["external_partial"] = {
@@ -2393,6 +2448,10 @@ class _ChildRuntime:
         self._drop_escalations()
         if self._external is not None:
             await self._external.worker.aclose()
+        owned, self._owned = self._owned, []
+        for provider in owned:
+            with contextlib.suppress(Exception):
+                await provider.aclose()
 
 
 # ---------------------------------------------------------------------------
