@@ -211,7 +211,7 @@ fn user(out: &mut Rows, b: &Content, full: usize, p: &Palette) {
 }
 
 fn user_card(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
-    let base = Style::default().fg(p.text).bg(p.panel);
+    let base = Style::default().fg(p.text).bg(p.element);
     // The composer's card shape: panel background and padding, no coloured left rail.
     // The rail's column stays panel-coloured so the prompt text does not move.
     let bar = |_: ()| {
@@ -269,7 +269,7 @@ fn user_card(out: &mut Rows, b: &Content, width: usize, p: &Palette) {
             row.spans.push(Span::styled(" ", base));
             row.spans.push(Span::styled(
                 tag.clone(),
-                Style::default().fg(p.muted).bg(p.panel),
+                Style::default().fg(p.quiet).bg(p.element),
             ));
             let used: usize = row.spans.iter().map(|s| s.content.width()).sum();
             if used < width {
@@ -1143,10 +1143,10 @@ mod tests {
             .iter()
             .find(|span| span.content.contains("#3"))
             .unwrap();
-        assert_eq!(number.style.fg, Some(p.muted));
+        assert_eq!(number.style.fg, Some(p.quiet));
         assert_eq!(
             number.style.bg,
-            Some(p.panel),
+            Some(p.element),
             "number blends into the card without a badge"
         );
         assert!(header.starts_with("▾    hello") && header.trim_end().ends_with("#3"));
@@ -1179,7 +1179,7 @@ mod tests {
                 let card = &line.spans[line.spans.len() - 2];
                 assert_eq!(
                     card.style.bg,
-                    Some(p.panel),
+                    Some(p.element),
                     "the card fills up to its margin"
                 );
                 assert_eq!(

@@ -14,9 +14,14 @@ pub const MAX_ROWS: usize = 3;
 pub struct Pin {
     /// Index into the card list of the pinned user message.
     pub card: usize,
-    /// First content row of the card to draw (always `top + 1`, past the padding row).
+    /// The card's first row (its top padding); text rows follow at `top + 1`.
     pub first: usize,
-    /// Rows the pinned copy has in full (<= MAX_ROWS) and how many fit before the next card.
+    /// The card's last row (its bottom padding).
+    pub last: usize,
+    /// Text rows drawn (<= MAX_ROWS), between the two padding rows.
+    pub body: usize,
+    /// Rows the pinned copy has in full (`body` plus both padding rows) and how many fit
+    /// before the next card.
     pub rows: usize,
     pub shown: usize,
     /// More text than fits: the last row ends in an ellipsis.
@@ -33,7 +38,8 @@ pub fn select(cards: &[(usize, usize)], offset: usize, total: usize) -> Option<P
     let card = cards.iter().rposition(|&(top, _)| top + 1 < offset)?;
     let (top, height) = cards[card];
     let body = height.saturating_sub(2).max(1);
-    let rows = body.min(MAX_ROWS);
+    let body_rows = body.min(MAX_ROWS);
+    let rows = body_rows + 2;
     // The next card pushes the pin up as it arrives, then replaces it.
     let room = cards
         .get(card + 1)
@@ -44,7 +50,9 @@ pub fn select(cards: &[(usize, usize)], offset: usize, total: usize) -> Option<P
     }
     Some(Pin {
         card,
-        first: top + 1,
+        first: top,
+        last: top + height.saturating_sub(1),
+        body: body_rows,
         rows,
         shown,
         clipped: body > MAX_ROWS,
@@ -84,7 +92,8 @@ mod tests {
     #[test]
     fn scrolled_within_a_turn_pins_its_user_message() {
         let pin = select(&CARDS, 6, 40).unwrap();
-        assert_eq!((pin.card, pin.first, pin.rows, pin.shown), (0, 1, 3, 3));
+        assert_eq!((pin.card, pin.first, pin.body, pin.rows, pin.shown), (0, 0, 3, 5, 5));
+        assert_eq!(pin.last, 4);
         assert!(!pin.clipped);
         assert_eq!(select(&CARDS, 2, 40).unwrap().card, 0);
     }
@@ -100,10 +109,10 @@ mod tests {
     #[test]
     fn long_messages_are_capped_at_three_rows_with_an_ellipsis() {
         let pin = select(&[(0, 12)], 5, 30).unwrap();
-        assert_eq!((pin.rows, pin.clipped), (3, true));
+        assert_eq!((pin.body, pin.rows, pin.clipped), (3, 5, true));
         let line = ellipsize(Line::from(vec![Span::raw("   ❯ hello   ")]));
         assert_eq!(line.spans[0].content, "   ❯ hell…   ");
         let single = select(&[(0, 3)], 5, 30).unwrap();
-        assert_eq!((single.rows, single.clipped), (1, false));
+        assert_eq!((single.body, single.clipped), (1, false));
     }
 }

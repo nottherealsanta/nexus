@@ -141,15 +141,17 @@ The transcript auto-scrolls only while the reader is at the bottom: scrolling up
 (wheel, PageUp) stops following, and any scroll that lands back on the last row
 (wheel, PageDown, Down) resumes it. Typing, sending and Ctrl+End also return to the live end.
 
-While scrolled up with content below, a centred quiet pill sits on the transcript's last row:
+While scrolled up with content below, a centred quiet pill sits on its own row: the transcript's last row is reserved for it (the viewport shrinks by one) so it never covers content:
 `↓ N more lines · Ctrl+End to jump`; when new content arrived after the reader scrolled away it
 reads `↓ New messages · Ctrl+End` in the purple accent (`rust/tui/src/jump.rs`). Clicking the
 pill (only its own cells) or Ctrl+End scrolls to the bottom and follows again; it is hidden at
 the bottom.
 
+**User cards** are a full-width band in the palette's `element` colour (`#242424` dark) with a padding row above and below, `#N` right-aligned in quiet; the pinned copy uses the identical band.
+
 **Sticky user message.** When a turn's user card has scrolled off the top (its title row is above
-the viewport) but the turn's content is still visible, the card's first rows (at most 3, last
-row ending in `…` when longer; `#N` included) are pinned over the top of the transcript
+the viewport) but the turn's content is still visible, the card's band (padding row, at most 3 text
+rows with the last ending in `…` when longer, padding row; `#N` included) is pinned over the top of the transcript
 (`rust/tui/src/sticky.rs`, `Cache.sticky`). The next turn's card pushes the pin up and then
 replaces it; with the real card visible at the top there is no pin. Clicking the pin scrolls to
 the real card; the pinned rows cover what is beneath, so clicks there never start a selection.

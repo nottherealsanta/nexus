@@ -1292,7 +1292,7 @@ pub fn draw(
         Block::default().style(Style::default().bg(p.background).fg(p.text)),
         frame.area(),
     );
-    let r = regions(
+    let mut r = regions(
         frame.area(),
         s,
         composer_height(frame.area(), draft, s),
@@ -1309,6 +1309,27 @@ pub fn draw(
     } else {
         cache.update_content(&[], &s.blocks, r.transcript.width, &p);
     }
+    // While scrolled away from the bottom the jump pill owns the transcript's last row, so the
+    // viewport shrinks by one and no content is covered.
+    let pill_row = if !follow
+        && s.dashboard.is_none()
+        && s.panel_title.is_empty()
+        && r.transcript.width > 4
+        && r.transcript.height > 1
+    {
+        let full = r.transcript.height as usize;
+        let max = (cache.lines.len() + crate::session::tail_padding(cache.lines.len(), full))
+            .saturating_sub(full);
+        scroll.min(max) + full < cache.lines.len()
+    } else {
+        false
+    };
+    let pill_rect = if pill_row {
+        r.transcript.height -= 1;
+        Some(Rect::new(r.transcript.x, r.transcript.bottom(), r.transcript.width, 1))
+    } else {
+        None
+    };
     let height = r.transcript.height as usize;
     cache.pad = crate::session::tail_padding(cache.lines.len(), height);
     let total = cache.lines.len() + cache.pad;
@@ -1469,8 +1490,15 @@ pub fn draw(
             let skip = pin.rows - pin.shown;
             let lines: Vec<Line<'static>> = (skip..pin.rows)
                 .filter_map(|k| {
-                    let line = cache.lines.get(pin.first + k)?.clone();
-                    Some(if pin.clipped && k + 1 == pin.rows {
+                    let at = if k == 0 {
+                        pin.first
+                    } else if k + 1 == pin.rows {
+                        pin.last
+                    } else {
+                        pin.first + k
+                    };
+                    let line = cache.lines.get(at)?.clone();
+                    Some(if pin.clipped && k + 2 == pin.rows {
                         crate::sticky::ellipsize(line)
                     } else {
                         line
@@ -1494,16 +1522,11 @@ pub fn draw(
     let below = cache.lines.len().saturating_sub(offset + height);
     if follow || below == 0 || s.dashboard.is_some() || !s.panel_title.is_empty() {
         cache.away_len = None;
-    } else if r.transcript.width > 4 && height > 0 {
+    } else if let Some(row) = pill_rect.filter(|_| height > 0) {
         let away = *cache.away_len.get_or_insert(cache.lines.len());
         if let Some((text, fresh)) = crate::jump::label(below, away, cache.lines.len()) {
-            let w = (text.width() as u16 + 2).min(r.transcript.width.saturating_sub(2));
-            let rect = Rect::new(
-                r.transcript.x + (r.transcript.width - w) / 2,
-                r.transcript.bottom() - 1,
-                w,
-                1,
-            );
+            let w = (text.width() as u16 + 2).min(row.width.saturating_sub(2));
+            let rect = Rect::new(row.x + (row.width - w) / 2, row.y, w, 1);
             let tone = if fresh { p.purple } else { p.muted };
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(
@@ -2781,6 +2804,15 @@ mod tests {
         let rect = cache.jump_hit.expect("scrolled up");
         let bottom = regions(Rect::new(0, 0, 80, 24), &s, composer_height(Rect::new(0, 0, 80, 24), &Editor::default(), &s), false).transcript.bottom();
         assert_eq!(rect.bottom(), bottom, "on the transcript's last row");
+        // The pill's row is reserved: the last content row sits just above it.
+        let row_text = |y: u16| -> String {
+            (0..80u16).map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string()).collect()
+        };
+        assert!(row_text(rect.y - 1).contains("line "), "content ends right above the pill");
+        assert!(
+            !row_text(rect.y).contains("line "),
+            "no transcript text shares the pill row"
+        );
         let text: String = (rect.x..rect.right())
             .map(|x| terminal.backend().buffer()[(x, rect.y)].symbol().to_string())
             .collect();
@@ -2799,6 +2831,7 @@ mod tests {
             "schema": 1, "revision": 1, "title": "T", "status": "idle", "blocks": blocks,
         }))
         .unwrap();
+        let bgs = std::cell::RefCell::new(Vec::new());
         let screen = |scroll: usize, cache: &mut Cache| {
             let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
             terminal
@@ -2809,6 +2842,7 @@ mod tests {
                     );
                 })
                 .unwrap();
+            *bgs.borrow_mut() = (0..24u16).map(|y| terminal.backend().buffer()[(5, y)].bg).collect();
             (0..24u16)
                 .map(|y| {
                     (0..80u16)
@@ -2825,10 +2859,17 @@ mod tests {
         let mid = screen(10, &mut cache);
         let (rect, row) = cache.sticky.expect("pinned card");
         assert_eq!(rect.y, 3, "pinned at the top of the transcript");
-        assert!(mid[3].contains("question number 1"), "{:?}", &mid[..6]);
+        assert!(mid[4].contains("question number 1"), "{:?}", &mid[..7]);
+        assert!(mid[3].chars().take(78).all(|c| c == ' '), "top padding row of the band");
+        assert!(mid[5].chars().take(78).all(|c| c == ' '), "bottom padding row of the band");
+        assert_eq!(rect.height, 3, "padding + one text row + padding");
+        let band = Palette::new(false).element;
+        for y in 3..6u16 {
+            assert_eq!(bgs.borrow()[y as usize], band, "row {y} is on the element band");
+        }
         assert_eq!(row, cache.prompt_top("t1").unwrap());
         let later = screen(cache.prompt_top("t2").unwrap() + 3, &mut cache);
-        assert!(later[3].contains("question number 2"), "{:?}", &later[..6]);
+        assert!(later[4].contains("question number 2"), "{:?}", &later[..7]);
         assert_eq!(later.iter().filter(|l| l.contains("question number 2")).count(), 1);
     }
     fn rich_snapshot(light: bool) -> Snapshot {
