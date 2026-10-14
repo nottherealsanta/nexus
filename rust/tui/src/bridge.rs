@@ -82,6 +82,8 @@ pub struct Snapshot {
     pub queue_collapsed: bool,
     /// The running turn's status line; absent while idle.
     pub turn_status: Option<TurnStatus>,
+    /// Set while the daemon holds this session's turn back on its global concurrent-turn cap.
+    pub slot_wait: Option<SlotWait>,
     pub update_notice: String,
     /// Dismissible notices from the host (plan §8). Always the newest bounded list;
     /// the client shows each id once and owns timers, dedup and dismissal.
@@ -120,6 +122,14 @@ pub struct Snapshot {
     pub completions: Vec<String>,
     pub completion_query: String,
     pub completion_prefix: String,
+}
+/// `⋯ Waiting for a free turn slot (4 of 4 running)`: parked messages, running turns, the cap.
+#[derive(Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct SlotWait {
+    pub waiting: u64,
+    pub running: u64,
+    pub limit: u64,
 }
 /// `Waiting for response… 2.0s` / `4m40s ↓121k [stop]`; times are epoch seconds.
 #[derive(Clone, Default, Deserialize)]
@@ -588,6 +598,9 @@ impl Snapshot {
         }
         if !present.contains_key("turn_status") {
             self.turn_status = previous.turn_status.take();
+        }
+        if !present.contains_key("slot_wait") {
+            self.slot_wait = previous.slot_wait.take();
         }
         if !present.contains_key("update_notice") {
             self.update_notice = std::mem::take(&mut previous.update_notice);

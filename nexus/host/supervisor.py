@@ -48,7 +48,16 @@ class Supervisor:
         if max_concurrent < 1:
             raise ValueError("max_concurrent must be >= 1")
         self._max = max_concurrent
-        self._emit: Emit = emit or (lambda _type, _data: None)
+        sink: Emit = emit or (lambda _type, _data: None)
+
+        def _emit(event_type: str, data: dict[str, Any]) -> None:
+            # Every per-session lifecycle event carries the session's current
+            # global-cap wait (or None), so a client clears or shows it live.
+            if data.get("session") and "slot_wait" not in data:
+                data = {**data, "slot_wait": self.slot_wait(data["session"])}
+            sink(event_type, data)
+
+        self._emit: Emit = _emit
         self._lock = asyncio.Lock()
         self._queues: dict[str, deque[_Pending]] = {}
         self._sessions: dict[str, Any] = {}
@@ -87,6 +96,23 @@ class Supervisor:
         queue = self._queues.get(session)
         return len(queue) if queue else 0
 
+    def slot_wait(self, session: str) -> dict[str, int] | None:
+        """``{waiting, running, limit}`` while ``session`` is parked on the global cap.
+
+        ``None`` unless the session has no turn in flight, holds parked
+        submissions, and every slot is busy. A submission queued behind the
+        session's own running turn is an ordinary queue entry, not a slot wait.
+        """
+        waiting = self.queued_for(session)
+        if (
+            not waiting
+            or session in self._active
+            or session in self._starting
+            or len(self._active) < self._max
+        ):
+            return None
+        return {"waiting": waiting, "running": len(self._active), "limit": self._max}
+
     @property
     def queued(self) -> int:
         return sum(len(queue) for queue in self._queues.values())
@@ -122,7 +148,12 @@ class Supervisor:
         self._idle.clear()
         self._emit(
             "daemon.session_queued",
-            {"session": session_id, "turn_id": turn_id, "depth": self.queued_for(session_id)},
+            {
+                "session": session_id,
+                "turn_id": turn_id,
+                "depth": self.queued_for(session_id),
+                "slot_wait": self.slot_wait(session_id),
+            },
         )
         await self._pump()
         return turn_id
@@ -221,6 +252,9 @@ class Supervisor:
             # the cached handle is no longer needed; drop it. A later ``submit``
             # re-adds it, so forgetting never breaks a session that returns.
             self.forget(session_id)
+        if drop_queue and session is not None:
+            # A parked session's wait ends with its queue; tell its viewers.
+            self._emit("daemon.session_slot", {"session": session_id})
         self._maybe_idle()
         return cancelled, dropped
 

@@ -719,3 +719,14 @@ only the keyboard selection: hover used to swap it under a resting pointer and m
 list jump, so hover is a background tint only and a box appears after Up/Down with an
 empty composer. Up from the top row opens the search bar (also `/`, a click, `Ctrl+K`).
 The `[×]` keeps the archive confirmation. Not verified on a light theme.
+
+## Turns held by the global cap are shown, from supervisor state (2026-10)
+
+An idle session whose submit the supervisor parks (all `max_concurrent` slots busy)
+looks exactly like an idle send that is about to start, so the native client hid the
+message. The supervisor now reports `slot_wait` on its `daemon.session_*` events and
+on each follow subscription's first frame instead of the client guessing from the
+durable log: the wait is scheduling state, not history, so it is not journaled and
+a reconnect re-derives it. The head entry is kept only while `slot_wait` is set, so
+the "steer" flash fix for ordinary idle sends stands. The count of running turns is
+a snapshot at the last event and may lag while the session stays parked.

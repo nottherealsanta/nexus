@@ -583,3 +583,41 @@ async def test_cancel_during_ensure_ready_reports_zero_when_consume_succeeds(
     assert reports and reports[-1]["dropped"] == 0
     await sup.aclose()
     await runtime.aclose()
+
+
+async def test_slot_wait_reports_a_session_parked_on_the_global_cap():
+    """A session held back by a full cap reports {waiting, running, limit} until it starts."""
+    events: list[tuple[str, dict]] = []
+    sup = Supervisor(max_concurrent=1, emit=lambda kind, data: events.append((kind, data)))
+    clock = _Clock()
+    a, b = _FakeSession("a", clock), _FakeSession("b", clock)
+    await sup.submit("a", a, "one")
+    assert sup.slot_wait("a") is None and sup.slot_wait("b") is None
+    await sup.submit("b", b, "two")
+    assert sup.slot_wait("b") == {"waiting": 1, "running": 1, "limit": 1}
+    assert sup.slot_wait("a") is None  # running, not parked
+    queued = [data for kind, data in events if kind == "daemon.session_queued" and data["session"] == "b"]
+    assert queued[-1]["slot_wait"] == {"waiting": 1, "running": 1, "limit": 1}
+    # A submission behind the session's own running turn is an ordinary queue entry.
+    await sup.submit("a", a, "three")
+    assert sup.slot_wait("a") is None
+    a.finish()
+    await wait_for(lambda: b.active)
+    assert sup.slot_wait("b") is None
+    scheduled = [data for kind, data in events if kind == "daemon.session_scheduled" and data["session"] == "b"]
+    assert scheduled[-1]["slot_wait"] is None
+    await drive(sup, a, b)
+
+
+async def test_cancelling_a_parked_session_announces_the_wait_is_over():
+    events: list[tuple[str, dict]] = []
+    sup = Supervisor(max_concurrent=1, emit=lambda kind, data: events.append((kind, data)))
+    clock = _Clock()
+    a, b = _FakeSession("a", clock), _FakeSession("b", clock)
+    await sup.submit("a", a, "one")
+    await sup.submit("b", b, "two")
+    await sup.cancel("b")
+    assert sup.slot_wait("b") is None
+    last = [data for kind, data in events if data.get("session") == "b"][-1]
+    assert last["slot_wait"] is None
+    await drive(sup, a, b)

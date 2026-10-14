@@ -52,6 +52,9 @@ class SessionController:
         self.agent_metadata_known = False
         self.thinking_budget: int | None = None
         self.running = False
+        #: ``{waiting, running, limit}`` while the host holds this session's turn
+        #: back on its global concurrent-turn cap; ``None`` otherwise.
+        self.slot_wait: dict[str, int] | None = None
         #: Called when a turn stream ends by any path so the UI can resync.
         self.on_stream_end: Callable[[], None] | None = None
         self._task: asyncio.Task[None] | None = None
@@ -246,6 +249,7 @@ class SessionController:
             while len(self._parked) > PARKED_SESSIONS:
                 self._parked.popitem(last=False)
         self.session = session
+        self.slot_wait = None
         self._agent_metadata_revision += 1
         resumed = self._parked.pop(session, None)
         self.view, self.cursor, self.completion_seq = resumed or (initial_state(session), 0, 0)
@@ -265,6 +269,17 @@ class SessionController:
     def ingest(self, event: Event) -> tuple[bool, str]:
         """Canonically reduce an event; presentation reads only this projection."""
         before = self.view
+        if (
+            event.type.startswith("daemon.session_")
+            and event.session == self.session
+            and "slot_wait" in event.data
+        ):
+            wait = event.data["slot_wait"]
+            self.slot_wait = (
+                {key: int(wait.get(key) or 0) for key in ("waiting", "running", "limit")}
+                if isinstance(wait, dict) and wait.get("waiting")
+                else None
+            )
         notify = (
             event.session == self.session
             and event.seq > self.cursor

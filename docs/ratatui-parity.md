@@ -471,7 +471,7 @@ removed, 60 lines then a clipping notice); Rust colours `+`/`-`/`@@` rows. The
 sidebar scrolls with the wheel. Keyboard expansion is not implemented yet.
 
 The earlier left sessions sidebar (project chips, worktree grouping, filter) no longer
-exists; see "Grok chrome" below. Worktree and project data stay on the dashboard rows.
+exists; see "Grok chrome" below. Worktree and project data stay on the Sessions rows.
 Per-session delete is not in the native sidebar (use the right-click session
 actions).
 
@@ -646,7 +646,12 @@ four rows, then `+N more`). The hovered row shows `↑ ↓ ✕` at the right (mo
 move down, remove, by durable `queued_id` through `SessionQueueMove`/
 `SessionQueueRemove`); a click on the caret or label collapses to `▸ Queued N`
 (client-local, kept across snapshots). One blank row separates the section from the
-card. The composer grows to fit the box; attachments sit above it. A newer release is announced
+card. When the daemon's global concurrent-turn cap holds this session's turn back
+(`slot_wait` in the snapshot, see `docs/host.md`), the status line reads
+`⋯ Waiting for a free turn slot (4 of 4 running)` (glyph and counts quiet, text in the
+text colour, no `[stop]`) and `_waiting_inputs` keeps the head entry, so the held
+message shows as `#1 …` under `▾ Queued N` instead of being treated as the input
+that starts the turn. The composer grows to fit the box; attachments sit above it. A newer release is announced
 once as an info toast that expires on its own (`UpdateStatus(announce=True)`;
 the host records the announced version in `~/.nexus/cache/update-announced.json`,
 so restarts do not repeat it); the footer never shows it, and `/update` still names
@@ -1031,8 +1036,8 @@ Covered by `render/context.rs` tests and `tests/test_ratatui_workflows.py`.
 Plan: `plans/GROK_TUI_PLAN.md` WS-A. The left **Sessions sidebar was removed**
 (drawer, docked column, filter, project chips, `SESSIONS N`, its hit-tests, `F6`
 focus, right-click actions, the `sessions_request` snapshot field and the
-Settings → Layout row). The Sessions dashboard replaces it: `/session`,
-`/sessions`, `Ctrl+O`, `Ctrl+S`, `Ctrl+B` and the top bar's `[Dashboard]` all send
+Settings → Layout row). Sessions replaces it: `/session`,
+`/sessions`, `Ctrl+O`, `Ctrl+S`, `Ctrl+B` and the top bar's `[Sessions]` all send
 `/sessions`. The right details sidebar (`Ctrl+L`) stays. The saved
 `sessions_sidebar` preference and snapshot key remain only because the GPUI
 desktop client still reads them; the native TUI ignores them.
@@ -1053,10 +1058,10 @@ stay undimmed. Later modals (the Settings modal) reuse the same helper.
 Top bar (`render/chrome.rs::top_layout`, one row): left `Title │ branch ~/path`
 (title bold, branch quiet, path text), right the update notice, `used / window`
 (`72K / 256K`), `‹ i/n ›` (cycle the open sessions, wrapping; hidden with fewer
-than two) and `[Dashboard]`, separated by quiet `│`. Optional pieces drop (notice,
+than two) and `[Sessions]`, separated by quiet `│`. Optional pieces drop (notice,
 then arrows, then counter) before the title is squeezed. Draw and hit-testing share
 one layout (`tab_cells`); `‹ ›` send `session_open` for the neighbouring tab,
-`[Dashboard]` sends `/sessions`, and the notice is clickable as before. The row
+`[Sessions]` sends `/sessions`, and the notice is clickable as before. The row
 under the composer card is now a blank spacer (path and branch live in the top
 bar). Covered by `render/chrome.rs` tests and `tests/test_ratatui_pty_sessions.py`.
 
@@ -1284,7 +1289,7 @@ and tool signals are implemented and have focused Python test coverage. These
 changes are additive and preserve the existing UI/projection contract; they do
 not imply completion of the Ratatui port or PTY verification.
 
-The Sessions dashboard is a full-width list grouped by last-updated time in local time
+The Sessions page is a full-width list grouped by last-updated time in local time
 (Today, Yesterday, This week, Earlier; empty groups omitted; the host projects `bucket` and
 `updated` on each row) in the Grok style: `▾ Today 3 ────` group headers, newest first.
 Each session is two rows plus a blank spacer: `◇ Title · branch project … age`, then a
@@ -1318,11 +1323,11 @@ semantic block and operation toggles a tool's disclosure locally; a single click
 only selects the row, and `i` opens the full inspector. An explicit inspector
 propagates to output rows. Local disclosure matches on semantic kind and id and
 ignores presentation metadata. Settings hover uses the actual hit ranges, and
-disabled rows and modals suppress it. The Sessions dashboard invalidates its
+disabled rows and modals suppress it. The Sessions page invalidates its
 in-flight work when a replacement overlay closes. The 24-capture matrix has had
 pixel review (PTY → xterm captures, not OS screenshots). Still open: the web check
 failure, and timings for a new animate-only idle scenario.
 
 ## Sentence-case tool verbs and purple accents
 
-Tool verbs in verb groups and tool-detail section headings are sentence case (`Read`, `Bash`, `Parameters`), never uppercase, and the Sessions dashboard and Settings create/primary accents (`+ New Agent`, `Worktree`, `+ New file`, `+ Add model…`) use the palette `purple`; green stays reserved for status ("in use", "connected").
+Tool verbs in verb groups and tool-detail section headings are sentence case (`Read`, `Bash`, `Parameters`), never uppercase, and the Sessions page and Settings create/primary accents (`+ New Agent`, `Worktree`, `+ New file`, `+ Add model…`) use the palette `purple`; green stays reserved for status ("in use", "connected").

@@ -166,6 +166,16 @@ round-robin fairness across sessions, cancellation that drops that session's
 queue, and **independence from views**: scheduling never consults a subscriber
 count, so a turn with no viewer runs to completion.
 
+**`slot_wait`.** When every slot is busy and a session has parked submissions but no
+turn of its own in flight, `Supervisor.slot_wait(session)` is
+`{"waiting": n_parked, "running": n, "limit": max_concurrent}`, else `None` (a message
+behind the session's own running turn is an ordinary queue entry, not a slot wait).
+It rides every `daemon.session_*` event of that session (`queued`, `scheduled`,
+`cancelled`, `failed`) and a dedicated `daemon.session_slot` sent when a parked queue
+is cancelled and as the first frame of every follow subscription, so a reconnecting
+client learns the state from supervisor state rather than only from past events.
+`SessionController.slot_wait` mirrors it. No new command: it is derived, never durable.
+
 `Presence`: a subscriber *count*, not identity. `attended` = any view attached;
 a view that disconnects mid-turn applies the session's unattended policy instead
 of blocking forever. `claim`/`release` implement first-responder leases for

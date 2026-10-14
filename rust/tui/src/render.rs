@@ -843,7 +843,12 @@ pub struct Regions {
 const QUEUE_VISIBLE: usize = 4;
 /// Whether the running turn's status line is drawn above the composer.
 pub fn status_visible(s: &Snapshot) -> bool {
-    s.agent_page.is_empty() && s.turn_status.as_ref().is_some_and(|t| !t.activity.is_empty())
+    s.agent_page.is_empty()
+        && (slot_waiting(s) || s.turn_status.as_ref().is_some_and(|t| !t.activity.is_empty()))
+}
+/// The session's turn is held back by the daemon's global concurrent-turn cap.
+fn slot_waiting(s: &Snapshot) -> bool {
+    s.slot_wait.as_ref().is_some_and(|w| w.waiting > 0)
 }
 /// Rows of the unboxed Queued section (blank separator under the status line, header,
 /// listed messages, `+N more`).
@@ -1006,6 +1011,25 @@ pub fn stop_at(composer: Rect, s: &Snapshot, x: u16, y: u16) -> bool {
     y == row.y && x >= start && x < row.right()
 }
 fn draw_status_line(frame: &mut Frame, row: Rect, s: &Snapshot, p: &Palette, spin: usize, hover_stop: bool) {
+    if let Some(w) = s.slot_wait.as_ref().filter(|_| slot_waiting(s)) {
+        let label = crate::transcript::truncate(
+            "Waiting for a free turn slot",
+            usize::from(row.width).saturating_sub(2),
+        );
+        let counts = format!(" ({} of {} running)", w.running, w.limit);
+        let room = usize::from(row.width).saturating_sub(2 + label.width());
+        let counts = crate::transcript::truncate(&counts, room);
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("⋯", Style::default().fg(p.quiet)),
+                Span::raw(" "),
+                Span::styled(label, Style::default().fg(p.text)),
+                Span::styled(counts, Style::default().fg(p.quiet)),
+            ])),
+            row,
+        );
+        return;
+    }
     let Some(t) = s.turn_status.as_ref() else {
         return;
     };
@@ -2722,7 +2746,7 @@ mod tests {
                 if width >= 170 {
                     assert!(screen.contains("Nexus · s1"), "{at}: top-bar title");
                     assert!(screen.contains("‹ 1/2 ›"), "{at}: session arrows");
-                    assert!(screen.contains("[Dashboard]"), "{at}: dashboard button");
+                    assert!(screen.contains("[Sessions]"), "{at}: dashboard button");
                 }
                 assert!(!screen.contains("SESSIONS"), "{at}: no sessions sidebar");
                 if width >= 170 {
@@ -2880,7 +2904,7 @@ mod tests {
                         .map(|x| terminal.backend().buffer()[(x, r.tabs.y)].symbol())
                         .collect();
                     if r.details.width == 0 {
-                        assert!(top.contains("[Dashboard]"), "dashboard button: {top}");
+                        assert!(top.contains("[Sessions]"), "dashboard button: {top}");
                     }
                     assert!(top.contains("/workspace"), "path in the top bar: {top}");
                 }
@@ -3313,6 +3337,42 @@ mod editor_layout_tests {
             .map(|x| buffer[(x, card - 2)].symbol().to_string())
             .collect();
         assert!(line.trim_start().starts_with("▸ Queued 5"), "{line}");
+    }
+
+    #[test]
+    fn status_line_shows_waiting_for_a_free_turn_slot_above_the_queue() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let mut s = Snapshot::default();
+        s.slot_wait = Some(crate::bridge::SlotWait { waiting: 1, running: 4, limit: 4 });
+        s.queue_items = vec![queue_item("q1", "Q", "held back message")];
+        let mut cache = Cache::default();
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        let mut composer = Rect::default();
+        terminal
+            .draw(|frame| {
+                composer = draw(
+                    frame, &s, &Editor::default(), &Editor::default(), &Editor::default(),
+                    "", 0, 0, 0, &mut cache, false, false, false, false, 0, 0,
+                )
+                .composer;
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let text = |y: u16| -> String {
+            (composer.x..composer.right()).map(|x| buffer[(x, y)].symbol().to_string()).collect()
+        };
+        let layout = above_layout(composer, &s);
+        let status = text(layout.status.unwrap().y);
+        assert!(
+            status.contains("⋯ Waiting for a free turn slot (4 of 4 running)"),
+            "{status}"
+        );
+        assert!(!status.contains("[stop]"), "{status}");
+        assert!(text(layout.status.unwrap().y + 1).trim().is_empty(), "blank row");
+        assert!(text(layout.header.unwrap().y).contains("▾ Queued 1"));
+        assert!(text(layout.items[0].1.y).contains("#1 held back message"));
+        s.slot_wait = None;
+        assert!(!status_visible(&s));
     }
 
     #[test]

@@ -628,26 +628,29 @@ def _context_tiers(view):
     return ([boundaries[0]] if boundaries and boundaries[0] != window else []) + ([window] if window else [])
 
 
-def _waiting_inputs(view):
+def _waiting_inputs(view, slot_wait=None):
     """Queued inputs that really wait for a running turn.
 
     A send to an idle session is journaled as ``input.queued`` and only becomes the
     user message at ``input.consumed``, after ``turn.started``. The head entry is
     the one starting the turn while the session is idle or the active turn has no
     user message yet; it is that turn's own input, not a steer, so it is not listed.
+    The exception is a session the host holds back on its global turn cap
+    (``slot_wait``): nothing has started, so the head is a waiting message.
     """
     queue = list(view.input_queue)
     turn = getattr(view, "active_turn", None)
     running = getattr(view, "phase", "") in {"running", "awaiting_permission", "awaiting_input"} and turn is not None
-    if queue and (not running or not any(m.role == "user" for m in turn.messages)):
+    parked = bool(slot_wait and slot_wait.get("waiting"))
+    if queue and not parked and (not running or not any(m.role == "user" for m in turn.messages)):
         queue = queue[1:]
     return queue
 
 
-def _queue_lines(view):
+def _queue_lines(view, slot_wait=None):
     """Messages waiting for the running turn,."""
     from ...ui_support.text import sanitize
-    queue = _waiting_inputs(view)
+    queue = _waiting_inputs(view, slot_wait)
     rows = [f"{'Queued' if item.mode == 'queue' else item.mode.title()} · " + sanitize("".join(
         block.get("text", "") for block in item.content if isinstance(block, dict)), 160) for item in queue[:3]]
     if len(queue) > 3:
@@ -657,7 +660,7 @@ def _queue_lines(view):
 
 
 
-def _queue_items(view):
+def _queue_items(view, slot_wait=None):
     """Pending steering/queued messages for the boxed list above the composer.
 
     Each row carries its durable ``queued_id`` so ↑ ↓ ✕ act on exactly that
@@ -668,7 +671,7 @@ def _queue_items(view):
     return [{"id": item.queued_id, "tag": tags.get(item.mode, "Q"), "mode": item.mode,
              "text": escape_controls(sanitize("".join(
                  block.get("text", "") for block in item.content if isinstance(block, dict)), 160))}
-            for item in _waiting_inputs(view)[:64] if item.queued_id]
+            for item in _waiting_inputs(view, slot_wait)[:64] if item.queued_id]
 
 
 def _tab_rows(controller, shell):
@@ -728,6 +731,7 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
     labelled notice and the others still render.
     """
     view = controller.view
+    slot_wait = getattr(controller, "slot_wait", None)
     failures: list[str] = []
     lines = []
     blocks = []
@@ -845,8 +849,9 @@ def project(controller: TuiController, revision: int, error: str = "", shell=Non
             "context_usage": context_usage(view),
             "context_note": "",
             "context_label": _context_label(display_view),
-            "queue_lines": _queue_lines(view),
-            "queue_items": _queue_items(view),
+            "queue_lines": _queue_lines(view, slot_wait),
+            "queue_items": _queue_items(view, slot_wait),
+            "slot_wait": slot_wait,
             "turn_status": turn_status(view),
             "composer_key": json.dumps([shell.workspace if shell else "", getattr(controller, "session", view.session_id)]),
             "nav": _settings_nav(shell),

@@ -528,6 +528,34 @@ def test_idle_send_never_projects_as_a_queued_or_steer_item():
     assert [i["id"] for i in _queue_items(_running_view([item(1)]))] == ["id1"]
 
 
+def test_session_parked_on_the_global_turn_cap_keeps_its_head_entry():
+    """Idle + slot wait: nothing started, so the head is a waiting message, not the turn's own input."""
+    from types import SimpleNamespace
+    from nexus.ui.ratatui.prototype import _queue_items, _queue_lines
+    from nexus.view.model import QueuedInputView
+
+    head = QueuedInputView(queued_id="id0", mode="queue", content=[{"type": "text", "text": "held"}])
+    idle = SimpleNamespace(input_queue=[head], phase="idle", active_turn=None)
+    wait = {"waiting": 1, "running": 4, "limit": 4}
+    assert [i["id"] for i in _queue_items(idle, wait)] == ["id0"]
+    assert _queue_lines(idle, wait) == ["Queued · held"]
+    assert _queue_items(idle, None) == [] and _queue_items(idle, {"waiting": 0}) == []
+
+
+def test_controller_tracks_slot_wait_from_daemon_events_and_clears_it():
+    from nexus.events import Event
+    from nexus.ui_support.session_controller import SessionController
+
+    controller = SessionController(object(), "s1")
+    wait = {"waiting": 1, "running": 4, "limit": 4}
+    controller.ingest(Event(type="daemon.session_queued", session="s1", data={"session": "s1", "slot_wait": wait}))
+    assert controller.slot_wait == wait
+    controller.ingest(Event(type="daemon.session_queued", session="other", data={"session": "other", "slot_wait": None}))
+    assert controller.slot_wait == wait
+    controller.ingest(Event(type="daemon.session_scheduled", session="s1", data={"session": "s1", "slot_wait": None}))
+    assert controller.slot_wait is None
+
+
 def test_queue_items_carry_durable_ids_and_s_q_tags():
     from nexus.ui.ratatui.prototype import _queue_items
     from nexus.view.model import QueuedInputView

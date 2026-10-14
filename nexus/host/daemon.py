@@ -323,6 +323,13 @@ class _ClientConnection:
     ) -> None:
         error = ""
         try:
+            if follow:
+                # Reconnect-safe: a (re)attached follower learns whether this
+                # session is parked on the global turn cap, not only from events.
+                await self._send(EventFrame(id=sub_id, event=Event(
+                    type="daemon.session_slot", session=session,
+                    data={"session": session,
+                          "slot_wait": self.daemon.facade.supervisor.slot_wait(session)})))
             async for event in self.daemon.facade.subscribe(
                 session, from_seq, follow=follow, client_id=self.client_id
             ):
