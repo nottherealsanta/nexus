@@ -347,7 +347,7 @@ class HooksSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 #: ``[providers.*] auth`` values: ChatGPT OAuth (codex only), GitHub Copilot
 #: device-flow sign-in, or an API key pasted into Settings and kept in the
 #: private credential file.
-PROVIDER_AUTH_MODES = ("chatgpt_oauth", "github_copilot", "keychain")
+PROVIDER_AUTH_MODES = ("chatgpt_oauth", "github_copilot", "keychain", "xai_oauth")
 
 
 #: Claude Code worker permission modes; ``default`` is the older spelling of
@@ -400,7 +400,7 @@ class ProviderSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     def __post_init__(self) -> None:
         self._validate_worker_fields()
         if self.auth is not None and self.auth not in PROVIDER_AUTH_MODES:
-            raise ValueError("providers.*.auth must be 'chatgpt_oauth', 'github_copilot' or 'keychain'")
+            raise ValueError("providers.*.auth must be 'chatgpt_oauth', 'github_copilot', 'keychain' or 'xai_oauth'")
         if self.profile is not None and (
             not isinstance(self.profile, str)
             or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", self.profile)
@@ -413,6 +413,17 @@ class ProviderSection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
                 raise ValueError("chatgpt_oauth cannot be combined with executable or agent fields")
             if self.kind not in (None, "openai", "codex"):
                 raise ValueError("chatgpt_oauth is supported only by the codex/OpenAI provider")
+        if self.auth == "xai_oauth":
+            # SuperGrok sign-in: the token lives in the private credential file
+            # and is only ever sent to xAI's own API.
+            if self.api_key is not None or self.base_url not in (None, "https://api.x.ai/v1"):
+                raise ValueError("xai_oauth cannot use api_key, and its base_url must be https://api.x.ai/v1")
+            if self.api not in (None, "chat", "responses"):
+                raise ValueError("xai_oauth requires api='chat' or api='responses'")
+            if self.kind not in (None, "xai"):
+                raise ValueError("xai_oauth is supported only by the xai provider")
+            if any(value is not None for value in (self.executable, self.command, self.args, self.env, self.inherit_env, self.permission_policy)):
+                raise ValueError("xai_oauth cannot be combined with executable or agent fields")
         if self.auth in ("github_copilot", "keychain"):
             # Credentials come from the private credential file (plan section 7), never config.
             if self.api_key is not None:
@@ -918,6 +929,8 @@ class ConfigV2(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
         for provider_name, provider in self.providers.items():
             if provider.auth == "chatgpt_oauth" and provider_name != "codex":
                 raise ValueError("chatgpt_oauth is supported only by providers.codex")
+            if provider.auth == "xai_oauth" and provider_name != "xai":
+                raise ValueError("xai_oauth is supported only by providers.xai")
         # ``[models]`` is canonical and ``[model]`` is compatibility. A field
         # both sections set must agree; disagreement is a conflict, not a
         # precedence puzzle (plan section 15.9).

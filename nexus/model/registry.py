@@ -43,6 +43,7 @@ __all__ = [
     "ADAPTER_ANTHROPIC",
     "ADAPTER_GEMINI",
     "ADAPTER_OLLAMA",
+    "ADAPTER_XAI",
     "ADAPTER_OPENAI",
     "ADAPTER_OPENCODE",
     "ADAPTER_CLAUDE_AGENT",
@@ -87,6 +88,10 @@ ADAPTER_ANTHROPIC = "anthropic"
 ADAPTER_OPENAI = "openai"
 ADAPTER_GEMINI = "gemini"
 ADAPTER_OLLAMA = "ollama"
+#: xAI (Grok): the OpenAI Responses wire with xAI's endpoint, key and request
+#: rules (``providers/xai.py``). Its own name so the catalogue's ``xai`` entry
+#: is runnable without a ``base_url``.
+ADAPTER_XAI = "xai"
 #: The OpenCode ACP subprocess agent. It is an agent surface, not a model wire
 #: protocol, so it declares no model capabilities; the registry maps it only so
 #: a catalogue listing is not reported as adapter-less.
@@ -96,7 +101,7 @@ ADAPTER_CLAUDE_CODE = "claude-code"
 OPENAI_COMPATIBLE = "openai_compatible"
 
 _KNOWN_ADAPTERS = frozenset(
-    {ADAPTER_ANTHROPIC, ADAPTER_OPENAI, ADAPTER_GEMINI, ADAPTER_OLLAMA, ADAPTER_OPENCODE, ADAPTER_CLAUDE_AGENT, ADAPTER_CLAUDE_CODE}
+    {ADAPTER_ANTHROPIC, ADAPTER_OPENAI, ADAPTER_GEMINI, ADAPTER_OLLAMA, ADAPTER_XAI, ADAPTER_OPENCODE, ADAPTER_CLAUDE_AGENT, ADAPTER_CLAUDE_CODE}
 )
 
 #: ``kind`` spellings that alias a canonical adapter. ``google`` is the
@@ -138,6 +143,7 @@ _NPM_ADAPTERS: dict[str, str] = {
     "@ai-sdk/openai-compatible": ADAPTER_OPENAI,
     "@ai-sdk/google": ADAPTER_GEMINI,
     "@ai-sdk/ollama": ADAPTER_OLLAMA,
+    "@ai-sdk/xai": ADAPTER_XAI,
 }
 
 #: Direct provider ids, for entries whose ``npm`` is missing or unfamiliar.
@@ -150,6 +156,7 @@ _DIRECT_ADAPTERS: dict[str, str] = {
     "google": ADAPTER_GEMINI,
     "gemini": ADAPTER_GEMINI,
     "ollama": ADAPTER_OLLAMA,
+    "xai": ADAPTER_XAI,
     "opencode": ADAPTER_OPENCODE,
     "claude-agent": ADAPTER_CLAUDE_AGENT,
     "claude-code": ADAPTER_CLAUDE_CODE,

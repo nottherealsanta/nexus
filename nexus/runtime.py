@@ -90,6 +90,7 @@ from .model.registry import (
     ADAPTER_OLLAMA,
     ADAPTER_OPENAI,
     ADAPTER_OPENCODE,
+    ADAPTER_XAI,
     OPENAI_COMPATIBLE,
     ModelRegistry,
 )
@@ -139,6 +140,7 @@ _CORE_ADAPTERS: dict[str, str] = {
     "google": ADAPTER_GEMINI,
     "gemini": ADAPTER_GEMINI,
     "ollama": ADAPTER_OLLAMA,
+    "xai": ADAPTER_XAI,
     "opencode": ADAPTER_OPENCODE,
     "claude-agent": ADAPTER_CLAUDE_AGENT,
     "claude-code": ADAPTER_CLAUDE_CODE,
@@ -2501,6 +2503,7 @@ class Runtime:
         owns_hooks: bool | None = None,
         codex_auth_factory: Callable[..., Any] | None = None,
         copilot_auth_factory: Callable[..., Any] | None = None,
+        xai_auth_factory: Callable[..., Any] | None = None,
         api_key_auth_factory: Callable[..., Any] | None = None,
         voice_engine_factory: Callable[..., Any] | None = None,
         voice_store: Any | None = None,
@@ -2526,6 +2529,7 @@ class Runtime:
         self._codex_auth_factory = codex_auth_factory
         #: Keychain-backed sign-in seams (tests inject in-memory stores).
         self._copilot_auth_factory = copilot_auth_factory
+        self._xai_auth_factory = xai_auth_factory
         self._api_key_auth_factory = api_key_auth_factory
 
         # Tool infrastructure. A caller may inject a ready ToolManager, a
@@ -4589,6 +4593,8 @@ class Runtime:
             return GeminiProvider(**kwargs)
         if kind == ADAPTER_OLLAMA:
             return OllamaProvider(api=api, **kwargs)
+        if kind == ADAPTER_XAI:
+            return self._construct_xai(name, section, api, auth, kwargs)
         if kind in (ADAPTER_OPENAI, OPENAI_COMPATIBLE):
             if not api:
                 api = "chat" if kind == OPENAI_COMPATIBLE else "responses"
@@ -4628,6 +4634,28 @@ class Runtime:
                 provider.name = name
             return provider
         return None
+
+    def _construct_xai(
+        self, name: str, section: Any, api: Any, auth: Any, kwargs: dict[str, Any]
+    ) -> Provider:
+        """Build the xAI preset on the SuperGrok subscription sign-in.
+
+        The subscription (``auth = "xai_oauth"``) is the only supported
+        credential: API keys and every other sign-in are refused, so no key is
+        ever read from config or the environment for xAI.
+        """
+        from .auth.xai import XAIHeaders, XAIOAuthManager
+        from .model.providers.xai import XAIProvider
+
+        if auth != "xai_oauth" or getattr(section, "api_key", None) is not None:
+            raise ConfigError(f"providers.{name}: xAI connects only with a SuperGrok subscription "
+                              "(auth = \"xai_oauth\"); sign in from Settings → Providers")
+        factory = self._xai_auth_factory or XAIOAuthManager
+        manager = factory(profile=getattr(section, "profile", None) or "default")
+        kwargs.update(api_key=None, auth_headers=XAIHeaders(manager))
+        provider = XAIProvider(api=api, **kwargs)
+        provider.name = name
+        return provider
 
     def _construct_opencode(
         self, name: str, section: Any, model_ref: str

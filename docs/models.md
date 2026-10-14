@@ -2,8 +2,9 @@
 
 `nexus/model/` (L1) is provider-neutral: message IR, the `Provider` protocol,
 adapters, the router, the models.dev registry and tiers. `nexus/auth/` holds
-file-backed sign-in. To add or change a wire dialect, follow
-[provider-onboarding.md](provider-onboarding.md) as well.
+file-backed sign-in. To add a provider, follow
+[adding-a-provider.md](adding-a-provider.md); to add or change a wire dialect,
+run the [provider-onboarding.md](provider-onboarding.md) stream inventory as well.
 
 ## Files
 
@@ -46,6 +47,7 @@ with a `base_url`.
 | `anthropic.py` | `anthropic` | Messages API; `count_tokens` endpoint; `usage_input_excludes_cache` |
 | `openai.py` | `openai`, `codex`, any `kind = "openai_compatible"` | Responses and Chat Completions behind one class (`api = "responses"\|"chat"`); `EndpointFallback` remembers the dialect a model accepts when a host serves some models on only one endpoint (GitHub Copilot, OpenCode Go) |
 | `gemini.py` | `google`, `gemini`, `kind = "google"` | `generateContent` streaming; synthetic call ids |
+| `xai.py` | `xai` | xAI Grok preset over `OpenAIProvider`: `https://api.x.ai/v1`, `api = "responses"` default (`chat` selectable). **Subscription only:** the section must set `auth = "xai_oauth"` (SuperGrok sign-in); an API key, an env variable, a bare section or any other `kind = "xai"` route is a `ConfigError`. `store: false` on Responses; session id as `x-grok-conv-id`; non-PNG/JPEG/WebP images become a text note; no token counter. Verified live 2026-10-14: SuperGrok device sign-in from Settings (xAI accepted `referrer = nexus`) and grok-4.7 turns over `/responses` with usage and a normal stop (`tests/test_xai_live.py`, `nexus chat`) |
 | `ollama.py` | `ollama` | native `/api/chat` or OpenAI-compatible mode; keyless, loopback default `http://localhost:11434`; conservative capabilities (`tools = false` unless the registry says otherwise) |
 | `opencode.py` | `opencode` (`kind` `acp`) | OpenCode over its Agent Client Protocol subprocess only; ACP tool calls stay inside that agent; child env is an explicit allowlist |
 | `claude_agent.py` (+ `_claude_agent_worker.py`, `claude_agent_auth.py`) | `claude-agent` | included in every install; text-only, buffers replies; SDK built-ins, hooks, settings and persistence disabled; Nexus schemas registered through an in-process MCP intention bridge |
@@ -55,12 +57,14 @@ with a `base_url`.
 | `devtools/mock/provider.py` | dev mode | `mock/<scenario>` models ([devtools.md](devtools.md)) |
 
 `ProviderSection` keys: `kind`, `api_key`, `base_url`, `api`, `auth`
-(`chatgpt_oauth` \| `github_copilot` \| `keychain`), `profile`, `executable`,
+(`chatgpt_oauth` \| `github_copilot` \| `keychain` \| `xai_oauth`), `profile`, `executable`,
 `timeout_seconds`, `command`, `args`, `permission_policy`, `inherit_env`, `env`,
 and, for `kind = "claude-code"` only, the `worker_*` keys
 ([config.md](config.md#claude-code-worker-keys)); `worker_*` on any other kind is a `ConfigError`.
 A `base_url` must be http(s); plain `http` only for loopback; any `user:pass@`
-userinfo is always redacted. An OpenAI-compatible vendor **must** have a
+userinfo is always redacted. `auth = "xai_oauth"` is accepted only on
+`[providers.xai]`, with no `api_key` and no `base_url` other than
+`https://api.x.ai/v1`, so the subscription token can only reach xAI. An OpenAI-compatible vendor **must** have a
 `base_url`, otherwise its model id and key could go to `api.openai.com`
 (a hard `ConfigError`).
 
@@ -159,6 +163,7 @@ the effort prompt for remembered models; `/effort` remains available to change i
 | ChatGPT / Codex OAuth (`auth = "chatgpt_oauth"`) | `auth/codex.py`: browser PKCE or device code; protocol pinned to a cited OpenCode commit (see `auth/NOTICE`) | rotating refresh token + routing metadata in the private credential file; access/ID tokens never persisted |
 | GitHub Copilot (`auth = "github_copilot"`) | `auth/copilot.py`: GitHub.com device flow using OpenCode's OAuth app id (`CLIENT_ID`); the GitHub token is the Copilot API bearer (no `copilot_internal` exchange), verified against `/models` at login | private credential file |
 | Pasted key (`auth = "keychain"`, e.g. OpenCode Go) | `auth/api_key.py` | private credential file |
+| xAI SuperGrok (`auth = "xai_oauth"`) | `auth/xai.py`: device code at `auth.x.ai/oauth2` with OpenCode's xAI OAuth client id and scope (see `auth/NOTICE`); the access token is the Bearer for `api.x.ai`, refreshed 5 min before expiry under the cross-process credential lock | refresh token only (rotations saved) in the private credential file; access token in memory. Sign-in verified live 2026-10-14 with `referrer = nexus`; a refresh after expiry has not yet been observed live |
 
 OpenCode Go (`opencode.ai` base URLs) additionally gets an `x-opencode-session` header on every chat/responses request, set to the Nexus session id (the loop stamps it into `ModelRequest.metadata["session_id"]`); the gateway asks for one stable id per conversation.
 | Claude subscription (`kind = "claude-agent"`) | `model/providers/claude_agent_auth.py:ClaudeCliAuth`: runs `claude auth login --claudeai` headless (`BROWSER` is a no-op), returns the printed URL, then pipes the code the user pastes (`ProviderLoginCode`) to the CLI | the Claude CLI's own store, shared with Claude Code; Nexus never reads it and never signs it out |
@@ -178,6 +183,7 @@ GitHub.com-only; expiring GitHub OAuth tokens require another sign-in. GPT-6
 Luna on `/responses` is learned after Copilot rejects `/chat/completions`.
 Live `/models` and Luna inference were verified; the device sign-in flow was not
 live-tested. CLI: `nexus auth codex login|status|logout`, `nexus claude init`.
+xAI signs in from Settings → Providers only (no CLI subcommand).
 Claude sign-in from Settings was verified up to the printed URL and the code
 prompt; completing it with a real code was not live-tested (it would replace the
 machine's Claude Code login).

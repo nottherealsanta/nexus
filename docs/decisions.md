@@ -591,3 +591,27 @@ are persisted at most 4 times a second, only on change, and replay folds them
 harmlessly. `live.levels` is in the catalogue but never emitted by the daemon:
 clients draw their meter from the helper's own output. Revisit if a bus-only
 path appears.
+
+## xAI is a preset over the Responses adapter, not a new parser (2026-10)
+
+Grok speaks the OpenAI Responses wire with the standard reasoning-summary
+events (OpenCode's `xai-responses` protocol differs only in hosted-tool
+vocabulary). A config block could already reach it, but could not express
+`store: false`, the `x-grok-conv-id` cache header, or xAI's PNG/JPEG/WebP-only
+image rule, so `providers/xai.py` subclasses `OpenAIProvider` through small
+hooks (`_prepare_request`, `_finalize_body`, `_headers`) instead of copying
+its decoder. Hosted tools need new timeline semantics and the WebSocket
+transport is an optimisation, so neither is implemented.
+
+## xAI connects only through the SuperGrok subscription (2026-10)
+
+The user asked for the subscription and nothing else, so xAI has one credential
+route: `auth = "xai_oauth"`, a device-code sign-in from Settings → Providers.
+API keys (config, `${env:XAI_API_KEY}`, a pasted key) are refused for xAI, and
+`xai_oauth` is refused on any other section or `base_url`, so the subscription
+token can only ever reach `api.x.ai`. As with Copilot, Nexus has no OAuth app of
+its own and uses OpenCode's xAI client id and scope (attributed in
+`auth/NOTICE`); it sends `referrer = nexus` rather than claiming to be OpenCode,
+which xAI accepted in a live sign-in on 2026-10-14. Like the ChatGPT route, only
+the refresh token is persisted. Not yet observed live: a token refresh after
+expiry.

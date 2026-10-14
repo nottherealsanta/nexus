@@ -112,7 +112,7 @@ def test_setup_status_exposes_bounded_choices_without_environment_values(tmp_pat
     assert result["global_model"] == ""
     assert result["effective_model"] == "workspace/model"
     assert [row["id"] for row in result["providers"]] == [
-        "codex", "github-copilot", "opencode-go", "openai", "anthropic", "claude-agent", "google", "ollama"
+        "codex", "github-copilot", "opencode-go", "openai", "anthropic", "claude-agent", "google", "xai", "ollama"
     ]
     assert not next(row for row in result["providers"] if row["id"] == "github-copilot")["connected"]
     assert all(set(row) == {"id", "label", "connected", "instruction", "auto"} for row in result["providers"])

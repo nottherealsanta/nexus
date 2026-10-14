@@ -1230,7 +1230,16 @@ class OpenAIProvider:
             async for event in self._stream_api(req, model, alternate):
                 yield event
 
+    def _prepare_request(self, req: ModelRequest) -> ModelRequest:
+        """Vendor hook: adjust the request before translation (identity here)."""
+        return req
+
+    def _finalize_body(self, body: dict[str, Any], api: str) -> dict[str, Any]:
+        """Vendor hook: adjust the translated wire body (identity here)."""
+        return body
+
     async def _stream_api(self, req: ModelRequest, model: str, api: str) -> AsyncIterator[StreamEvent]:
+        req = self._prepare_request(req)
         capabilities = self.capabilities(model)
         if (
             api == API_RESPONSES
@@ -1250,6 +1259,7 @@ class OpenAIProvider:
             default_max_tokens=self._default_max_tokens,
             capabilities=capabilities,
         )
+        body = self._finalize_body(body, api)
         session_id = req.metadata.get("session_id") if isinstance(req.metadata, Mapping) else None
         headers = await self._headers(body, session_id if isinstance(session_id, str) else None)
         usage = _UsageTotals()

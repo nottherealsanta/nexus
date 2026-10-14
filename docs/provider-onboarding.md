@@ -1,7 +1,9 @@
 # Provider and model stream onboarding
 
 Use this checklist when adding a provider, enabling a new model, or changing its
-wire API. Read [models.md](models.md) and [loop.md](loop.md) first. Provider adapters normalize output into
+wire API. [adding-a-provider.md](adding-a-provider.md) is the end-to-end guide
+(route, files, tests, docs); this page is its stream inventory. Read
+[models.md](models.md) and [loop.md](loop.md) first. Provider adapters normalize output into
 `nexus/model/stream.py`; the loop records durable events and both clients consume
 the reduced view. Keep provider-specific parsing in the adapter. A model name is
 not a reliable substitute for inspecting the endpoint's actual stream.
@@ -95,6 +97,7 @@ from the durable log. No thinking duration is synthesized.
 | Copilot `gpt6-luna` | Chat endpoint rejects the model; configured fallback uses Responses. Public summaries, distinct boundaries, reply, usage, stop. | Live catalogue and inference; gated regression below. |
 | Anthropic, Gemini, compatible chat, Ollama, OpenCode ACP | Shared thought normalization and context lifecycle. | Offline adapter/conformance tests; no other connected accounts were available. |
 | Claude Agent SDK bridge | Buffers final text; currently exposes no live thoughts. | Explicit implementation limitation. |
+| xAI Grok over SuperGrok (2026-10-14) | Live: device sign-in, grok-4.7 text, usage (with cached input) and a normal stop over `/responses`. Reasoning summaries were not asserted live; the event shapes follow OpenCode's xAI tests. | `tests/test_xai_live.py` (2 passed) and a `nexus chat` turn; offline adapter, conformance, device-OAuth and routing tests. |
 
 Repeat the Copilot regression with an existing connected account:
 

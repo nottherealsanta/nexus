@@ -76,6 +76,7 @@ here, so add a row when you add a file.
 | `api_key.py` | Pasted provider API keys kept in the private credential file (OpenCode Go) |
 | `codex.py` | Experimental ChatGPT OAuth support for the private Codex Responses endpoint |
 | `copilot.py` | GitHub.com device OAuth and short-lived GitHub Copilot credentials |
+| `xai.py` | xAI SuperGrok device OAuth; refresh-token storage and Bearer headers for `api.x.ai` |
 | `store.py` | Owner-only file-backed provider credentials, atomic writes and bounded locks |
 
 ### `nexus/client/`
@@ -282,6 +283,7 @@ here, so add a row when you add a file.
 | `openai.py` | OpenAI adapter: Responses API and Chat Completions behind one class |
 | `opencode.py` | OpenCode adapter over its documented Agent Client Protocol surface |
 | `scripted.py` | Deterministic, offline provider for tests and examples |
+| `xai.py` | xAI (Grok) preset over the OpenAI Responses adapter: endpoint, `store: false`, cache header, image types |
 
 ### `nexus/net/`
 

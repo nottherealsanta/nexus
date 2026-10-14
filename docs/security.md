@@ -21,6 +21,7 @@ Do not weaken any boundary below to make a feature easier.
 | Untrusted data | MCP descriptions/results, web pages and search results are wrapped with no-authority delimiters and sanitised; results' links are never fetched | `mcp/bridge.py`, `tools/builtin/webfetch.py`, `websearch.py` |
 | Outbound network | public-address-only, resolve once and pin the vetted address, validated redirects (≤ 5), size/time caps, rate limit | `net/outbound.py`, `net/local_search.py` |
 | Model catalogue | only descriptive fields read; cannot set endpoints or credentials | `model/registry.py` |
+| xAI SuperGrok token | `auth = "xai_oauth"` only on `[providers.xai]` with no `api_key` and no `base_url` but `https://api.x.ai/v1`; the device verification URL must be HTTPS on `x.ai`; only the refresh token is stored, sign-in responses are capped at 64 KiB, and errors never carry a token | `auth/xai.py`, `config/schema.py` |
 | Provider URLs | http(s) only; plain http only for loopback; userinfo always redacted | `config/schema.py` |
 | Extension code | quarantine validates (syntax, import in isolated subprocess with timeout, hash re-check); **does not sandbox** | `ext/quarantine.py` |
 | External Claude Code worker | Nexus does **not** mediate Claude's tools; it bounds launch authority only ([below](#external-claude-code-worker)) | `agents/claude_code_worker.py` |
