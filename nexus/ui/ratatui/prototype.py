@@ -628,10 +628,26 @@ def _context_tiers(view):
     return ([boundaries[0]] if boundaries and boundaries[0] != window else []) + ([window] if window else [])
 
 
+def _waiting_inputs(view):
+    """Queued inputs that really wait for a running turn.
+
+    A send to an idle session is journaled as ``input.queued`` and only becomes the
+    user message at ``input.consumed``, after ``turn.started``. The head entry is
+    the one starting the turn while the session is idle or the active turn has no
+    user message yet; it is that turn's own input, not a steer, so it is not listed.
+    """
+    queue = list(view.input_queue)
+    turn = getattr(view, "active_turn", None)
+    running = getattr(view, "phase", "") in {"running", "awaiting_permission", "awaiting_input"} and turn is not None
+    if queue and (not running or not any(m.role == "user" for m in turn.messages)):
+        queue = queue[1:]
+    return queue
+
+
 def _queue_lines(view):
     """Messages waiting for the running turn,."""
     from ...ui_support.text import sanitize
-    queue = list(view.input_queue)
+    queue = _waiting_inputs(view)
     rows = [f"{'Queued' if item.mode == 'queue' else item.mode.title()} · " + sanitize("".join(
         block.get("text", "") for block in item.content if isinstance(block, dict)), 160) for item in queue[:3]]
     if len(queue) > 3:
@@ -652,7 +668,7 @@ def _queue_items(view):
     return [{"id": item.queued_id, "tag": tags.get(item.mode, "Q"), "mode": item.mode,
              "text": escape_controls(sanitize("".join(
                  block.get("text", "") for block in item.content if isinstance(block, dict)), 160))}
-            for item in list(view.input_queue)[:64] if item.queued_id]
+            for item in _waiting_inputs(view)[:64] if item.queued_id]
 
 
 def _tab_rows(controller, shell):

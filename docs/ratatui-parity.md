@@ -639,6 +639,8 @@ shown only while it exceeds usage, and exact again once usage catches up. Activi
 `tool`, Writing, Waiting for permission/answer. Clicking `[stop]` sends the same
 `cancel` action as Esc Esc and Ctrl+C. The transcript draws no second working row.
 Pending steering, queued and interrupt messages form Grok's unboxed section under it
+(only messages waiting behind a running turn: the head input of an idle send starts its own
+turn and is never listed, `_waiting_inputs` in `prototype.py`)
 after one blank row: `▾ Queued N`, then `#n text` rows (`#n` quiet, accent for steer;
 four rows, then `+N more`). The hovered row shows `↑ ↓ ✕` at the right (move up,
 move down, remove, by durable `queued_id` through `SessionQueueMove`/
@@ -1282,15 +1284,23 @@ and tool signals are implemented and have focused Python test coverage. These
 changes are additive and preserve the existing UI/projection contract; they do
 not imply completion of the Ratatui port or PTY verification.
 
-The Sessions dashboard is a full-width status list (Needs input, Working, Idle,
-Done) in the Grok style: `▾ Idle 3 ────` group headers, and each session is one
-row plus a blank (`◇ Title · branch project … age`; the summary lives in the
-`Response` box). The selected row has the `element` background across the full width, a
-`│` rail and a bold title; hover is the same without the rail. Working rows show
-an animated braille glyph in purple, needs-input rows a warning `◆`. Nothing
-expands inline. Instead the selected (or hovered) session's `Response` box is a
+The Sessions dashboard is a full-width list grouped by last-updated time in local time
+(Today, Yesterday, This week, Earlier; empty groups omitted; the host projects `bucket` and
+`updated` on each row) in the Grok style: `▾ Today 3 ────` group headers, newest first.
+Each session is two rows plus a blank spacer: `◇ Title · branch project … age`, then a
+quiet one-line plain-text summary of the last agent message. Status shows in the glyph
+(working = animated purple braille, needs input = warning `◆`, idle `◇`); the header
+chips (`⁙ 1 working │ ◇ 3 idle`) stay. The selected row's `element` background fills the
+whole three-row band (1-column inset, no rail, title not bold) and the age becomes a
+clickable quiet `[×]` that asks to archive (the existing confirmation and busy refusal);
+hover only tints the row. Below the `+ New Agent` actions row sits a `/ Search sessions`
+row with a rule under it. It activates with Up on the top-most row, a click, `/` or
+`Ctrl+K`; typed text filters title, summary, project and branch (case-insensitive) and
+owns all keys, Down or Enter moves into the results, Esc clears and leaves. Nothing
+expands inline. The selected session's `Response` box is a
 bordered, square-cornered box directly above the composer at the composer card's
-width: `❯ last user message`, `…` when clipped, the Markdown tail of the last agent
+width, shown only for the keyboard selection (Up/Down with an empty composer; before that,
+and on hover or click, there is no box): `❯ last user message`, `…` when clipped, the Markdown tail of the last agent
 message (at most half the region), and `Worked for Xs` when the host supplies a
 `worked` field (not projected yet, so usually absent). It updates live from the
 `SessionDashboardPreview` data. Known gap: the host cleans previews to one line, so

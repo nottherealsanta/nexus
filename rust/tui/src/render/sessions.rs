@@ -1,7 +1,9 @@
-//! Full-width Sessions dashboard (Grok style). Rows are grouped by status, one line each
-//! (`◇ Title · branch project … age`) followed by a blank spacer row. Nothing expands inline: the selected or
-//! hovered session's `Response` preview is a bordered box at the bottom of this region,
-//! directly above the composer and as wide as its card. The composer is the normal
+//! Full-width Sessions dashboard (Grok style). Rows are grouped by last-updated time
+//! (Today, Yesterday, This week, Earlier), two lines each (`◇ Title · branch project … age`,
+//! then a one-line summary) followed by a blank spacer row. A `/ Search sessions` row sits
+//! above the first group. Nothing expands inline: the keyboard-selected session's
+//! `Response` preview is a bordered box at the bottom of this region, directly above the
+//! composer and as wide as its card; hover never changes it. The composer is the normal
 //! composer; this module does not draw one.
 use crate::picker::{section, section_label, text, Dashboard};
 use ratatui::{
@@ -161,6 +163,57 @@ fn tail_field(row: &Value, preview: &Value, key: &str) -> String {
         }
     }
     text(row, key).to_owned()
+}
+
+/// First line of Markdown source as plain text: markers stripped, cut at the first
+/// sentence end when that leaves a usable summary.
+fn plain_summary(source: &str) -> String {
+    let line = source
+        .lines()
+        .map(|l| l.trim().trim_start_matches(['#', '>', '-', '*', '+', ' ']))
+        .find(|l| !l.is_empty() && !l.starts_with("```"))
+        .unwrap_or("");
+    let line = line.trim_start_matches(|c: char| c.is_ascii_digit()).trim_start_matches(". ");
+    let mut out = line.replace("**", "").replace("__", "").replace(['`', '*'], "");
+    if let Some(at) = out.find(". ") {
+        if at >= 12 {
+            out.truncate(at + 1);
+        }
+    }
+    out.trim().to_owned()
+}
+
+fn one_line(row: &Value, user: &str, agent: &str, activity: &str) -> String {
+    let (user, agent) = (plain_summary(user), plain_summary(agent));
+    let (user, agent, activity) = (user.as_str(), agent.as_str(), activity);
+    if !activity.is_empty() {
+        return activity.to_owned();
+    }
+    if text(row, "status") == "working" && agent.is_empty() {
+        return "Waiting for response...".to_owned();
+    }
+    if !agent.is_empty() {
+        agent.to_owned()
+    } else {
+        user.to_owned()
+    }
+}
+
+/// One band line: a one-column inset on both sides, `bg` filling between when given.
+fn band(spans: Vec<Span<'static>>, width: usize, bg: Option<Color>) -> Line<'static> {
+    let inner = width.saturating_sub(2);
+    let used = spans_width(&spans);
+    let mut out = vec![Span::raw(" ")];
+    let style = |s: Span<'static>| match bg {
+        Some(bg) => Span::styled(s.content, s.style.bg(bg)),
+        None => s,
+    };
+    out.extend(spans.into_iter().map(style));
+    if inner > used {
+        out.push(style(Span::raw(" ".repeat(inner - used))));
+    }
+    out.push(Span::raw(" "));
+    Line::from(out)
 }
 
 const SPIN: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -357,22 +410,13 @@ pub fn draw(
         Some(Line::from(Span::styled(state.notice.clone(), Style::default().fg(colors.accent))))
     } else if let Some(error) = dashboard.get("error").and_then(Value::as_str).filter(|e| !e.is_empty()) {
         Some(Line::from(Span::styled(format!("Preview error: {error}"), quiet)))
-    } else if state.searching {
-        Some(Line::from(vec![
-            Span::styled("/ ", Style::default().fg(colors.accent)),
-            Span::raw(state.query.clone()),
-            Span::styled("▏", Style::default().fg(colors.accent)),
-        ]))
-    } else if !state.query.is_empty() {
-        Some(Line::from(Span::styled(
-            format!("/ {}  ({} match) · Esc clears", state.query, shown.len()),
-            quiet,
-        )))
     } else {
         None
     };
 
     let mut constraints = vec![
+        Constraint::Length(1),
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -431,14 +475,39 @@ pub fn draw(
         }
     }
 
-    let list = Rect { x: full.x, width: full.width, ..bands[4] };
-    let target_id = if !state.hovered_id.is_empty() {
-        state.hovered_id.clone()
+    // Search row and its rule, like the Settings search.
+    let search = if state.searching {
+        Line::from(vec![
+            Span::styled("/ ", Style::default().fg(colors.accent)),
+            Span::raw(state.query.clone()),
+            Span::styled("▏", Style::default().fg(colors.accent)),
+        ])
+    } else if !state.query.is_empty() {
+        Line::from(vec![
+            Span::styled("/ ", quiet),
+            Span::raw(state.query.clone()),
+            Span::styled(format!("  ({} match) · Esc clears", shown.len()), quiet),
+        ])
     } else {
-        state.selected_id.clone()
+        Line::from(Span::styled("/ Search sessions", quiet))
     };
+    frame.render_widget(Paragraph::new(search), bands[4]);
+    state.search_hit = bands[4];
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "─".repeat(usize::from(area.width)),
+            Style::default().fg(colors.border),
+        ))),
+        bands[5],
+    );
+
+    let list = Rect { x: full.x, width: full.width, ..bands[6] };
     let preview = &dashboard["preview"];
-    let target = shown.iter().find(|row| text(row, "id") == target_id).copied();
+    let target = if state.kb_selected {
+        shown.iter().find(|row| text(row, "id") == state.selected_id).copied()
+    } else {
+        None
+    };
     // The Response box sits at the bottom of this region, above the composer.
     let box_height = match target {
         Some(row) if list.height >= 12 => {
@@ -457,6 +526,7 @@ pub fn draw(
         None => (list, None),
     };
     let mut lines: Vec<RowLine> = Vec::new();
+    let mut archive_at: Option<(usize, (usize, usize))> = None;
     let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
     for (index, row) in shown.iter().enumerate() {
         let key = if state.by_project {
@@ -496,6 +566,10 @@ pub fn draw(
         lines.push((Line::default(), None, None));
         for index in members {
             let row = shown[*index];
+            let user = tail_field(row, preview, "last_user");
+            let agent = tail_field(row, preview, "last_agent");
+            let activity = tail_field(row, preview, "activity");
+            let summary = one_line(row, &user, &agent, &activity);
             let id = text(row, "id");
             let is_selected = id == state.selected_id;
             let is_hover = !is_selected && id == state.hovered_id;
@@ -507,19 +581,19 @@ pub fn draw(
             } else {
                 None
             };
-            let rail = if is_selected {
-                Span::styled("│", Style::default().fg(colors.border_strong))
-            } else {
-                Span::raw(" ")
-            };
-            let mut title = title_line(row, list_width, is_selected, renaming.as_deref(), colors, spin);
-            title.spans.insert(0, rail.clone());
-            title.spans.insert(1, Span::raw("   "));
-            if let Some(bg) = bg {
-                title = title.style(Style::default().bg(bg));
+            let (mut title, close) =
+                title_spans(row, list_width, is_selected, renaming.as_deref(), colors, spin);
+            if let Some(close) = close {
+                archive_at = Some((lines.len(), close));
             }
-            lines.push((title, Some(*index), None));
-            lines.push((Line::default(), None, None));
+            let second = vec![
+                Span::raw("     "),
+                Span::styled(fit(&summary, list_width.saturating_sub(9).max(1)), quiet),
+            ];
+            title.insert(0, Span::raw("  "));
+            lines.push((band(title, list_width, bg), Some(*index), None));
+            lines.push((band(second, list_width, bg), Some(*index), None));
+            lines.push((band(Vec::new(), list_width, bg), Some(*index), None));
         }
     }
     if lines.is_empty() {
@@ -563,6 +637,17 @@ pub fn draw(
     state.line_rows = visible.iter().map(|(_, index, _)| *index).collect();
     state.line_headings = visible.iter().map(|(_, _, heading)| heading.clone()).collect();
     state.list_area = list;
+    state.archive_hit = Rect::default();
+    if let Some((at, (start, len))) = archive_at {
+        if at >= top && at < top + height {
+            state.archive_hit = Rect {
+                x: list.x + start as u16,
+                y: list.y + (at - top) as u16,
+                width: len as u16,
+                height: 1,
+            };
+        }
+    }
     frame.render_widget(
         Paragraph::new(visible.into_iter().map(|(line, _, _)| line).collect::<Vec<_>>()),
         list,
@@ -586,7 +671,7 @@ pub fn draw(
         frame.render_widget(Paragraph::new(body), inner);
     }
     if let Some(line) = footer {
-        frame.render_widget(Paragraph::new(line), bands[5]);
+        frame.render_widget(Paragraph::new(line), bands[7]);
     }
 }
 
@@ -662,48 +747,48 @@ fn preview_lines(
     (lines, age_of(row).to_owned())
 }
 
-fn title_line(
+/// Title row content (after the 2-column indent) and, on the selected row, the `[×]`
+/// archive target as (start column, width) within the list.
+fn title_spans(
     row: &Value,
     width: usize,
     selected: bool,
     renaming: Option<&str>,
     colors: &Colors,
     spin: usize,
-) -> Line<'static> {
+) -> (Vec<Span<'static>>, Option<(usize, usize)>) {
     let quiet = Style::default().fg(colors.quiet);
-    let age = age_of(row).to_owned();
+    let tail = if selected { "[×]".to_owned() } else { age_of(row).to_owned() };
     let meta = meta_of(row);
     let title = match renaming {
         Some(draft) => format!("{draft}▏"),
         None => text(row, "title").to_owned(),
     };
-    // Gutters (2 + 2), glyph and space, and one space before the age.
-    let room = width.saturating_sub(4 + 2 + 1 + 2 + age.width());
+    // Inset (1+1), indent (2), glyph and space (2), a gap, and two trailing columns.
+    let inner = width.saturating_sub(2);
+    let room = inner.saturating_sub(2 + 2 + 1 + 2 + tail.width());
     let meta = if title.width() + meta.width() > room {
         String::new()
     } else {
         meta
     };
     let title = fit(&title, room.saturating_sub(meta.width()).max(1));
-    let pad = width
-        .saturating_sub(4 + 2 + 2 + title.width() + meta.width() + age.width())
+    let pad = inner
+        .saturating_sub(2 + 2 + title.width() + meta.width() + tail.width() + 2)
         .max(1);
-    Line::from(vec![
+    let close = selected.then(|| {
+        (1 + 2 + 2 + title.width() + meta.width() + pad, tail.width())
+    });
+    let spans = vec![
         status_glyph(text(row, "status"), colors, spin),
         Span::raw(" "),
-        Span::styled(
-            title,
-            Style::default().fg(colors.text).add_modifier(if selected {
-                Modifier::BOLD
-            } else {
-                Modifier::empty()
-            }),
-        ),
+        Span::styled(title, Style::default().fg(colors.text)),
         Span::styled(meta, quiet),
         Span::raw(" ".repeat(pad)),
-        Span::styled(age, quiet),
+        Span::styled(tail, quiet),
         Span::raw("  "),
-    ])
+    ];
+    (spans, close)
 }
 
 #[cfg(test)]
@@ -735,9 +820,9 @@ mod tests {
             "branch": "main",
             "workspace": "/w",
             "rows": [
-                {"id":"a","title":"Alpha","status":"idle","day":"Today","project":"nexus","branch":"main","age":"2m",
+                {"id":"a","title":"Alpha","status":"idle","bucket":"Today","updated":9.0,"project":"nexus","branch":"main","age":"2m",
                  "last_user":"What should we work on?","last_agent":"Python sample: frozen Task"},
-                {"id":"b","title":"Beta","status":"input","day":"Today","project":"nexus","branch":"feat/ui","age":"now",
+                {"id":"b","title":"Beta","status":"input","bucket":"Yesterday","updated":5.0,"project":"nexus","branch":"feat/ui","age":"now",
                  "worktree":"feat/ui","last_user":"Need a decision","last_agent":"Which option?"},
             ],
             "preview": {"session":"a","title":"Alpha","state":"idle","last_user":"What should we work on?","last_agent":"Python sample: frozen Task"},
@@ -755,8 +840,13 @@ mod tests {
     fn wide_layout_is_a_full_width_list() {
         let mut state = Dashboard::default();
         let screen = render(140, 30, &sample(), &mut state);
-        assert!(screen.contains("Needs input") && screen.contains("Alpha") && screen.contains("Idle"));
-        assert!(screen.contains("What should we work on?"));
+        assert!(screen.contains("Today") && screen.contains("Alpha") && screen.contains("Yesterday"));
+        assert!(screen.contains("/ Search sessions"));
+        assert!(screen.contains("Python sample: frozen Task"), "second row summary");
+        assert!(!screen.contains("Response"), "no preview before a keyboard selection");
+        assert_eq!(state.preview_area.width, 0);
+        state.kb_selected = true;
+        let screen = render(140, 30, &sample(), &mut state);
         assert!(screen.contains("Response") && screen.contains("❯ What should we work on?"));
         assert!(screen.contains("+ New Agent") && screen.contains("Open Previous"));
         assert!(screen.contains("main") && screen.contains("~/repos/nexus"));
@@ -772,16 +862,18 @@ mod tests {
         let screen = render(50, 20, &sample(), &mut state);
         assert!(screen.contains("Alpha"));
         assert!(!screen.contains("Agent build"));
-        assert_eq!(state.preview_area.width, 46);
+        assert_eq!(state.preview_area.width, 0);
     }
 
     #[test]
     fn rows_map_to_click_targets() {
         let mut state = Dashboard::default();
         render(140, 30, &sample(), &mut state);
-        assert_eq!(state.line_rows[..4], [None, None, Some(0), None]);
-        let op = state.click(state.list_area.x, state.list_area.y + 2, &sample());
-        assert_eq!(op.unwrap()["id"], "b");
+        assert_eq!(state.line_rows[..5], [None, None, Some(0), Some(0), Some(0)]);
+        state.click(state.list_area.x, state.list_area.y + 2, &sample());
+        assert_eq!(state.selected_id, "a");
+        state.click(state.list_area.x, state.list_area.y + 8, &sample());
+        assert_eq!(state.selected_id, "b");
     }
 
     #[test]
@@ -817,10 +909,39 @@ mod tests {
     #[test]
     fn collapsed_heading_hides_its_rows() {
         let mut state = Dashboard::default();
-        state.collapsed.insert("Idle".into());
+        state.collapsed.insert("Today".into());
         let screen = render(140, 30, &sample(), &mut state);
-        assert!(screen.contains("Idle"));
+        assert!(screen.contains("Today"));
         assert!(!screen.contains("Alpha"));
         assert!(screen.contains("Beta"));
+    }
+
+    #[test]
+    fn selected_row_shows_a_clickable_close_instead_of_the_age() {
+        let mut state = Dashboard::default();
+        let screen = render(140, 30, &sample(), &mut state);
+        assert!(screen.contains("[×]") && screen.contains("now"));
+        assert!(!screen.contains("2m"), "selected age is replaced");
+        assert_eq!(state.archive_hit.width, 3);
+        let op = state.click(state.archive_hit.x, state.archive_hit.y, &sample());
+        assert!(op.is_none());
+        assert_eq!(state.confirm_archive.as_deref(), Some("a"));
+        assert!(state.search_hit.width > 0);
+        state.click(state.search_hit.x, state.search_hit.y, &sample());
+        assert!(state.searching);
+    }
+
+    #[test]
+    fn search_filters_by_title_branch_project() {
+        let mut state = Dashboard::default();
+        state.query = "feat/ui".into();
+        let screen = render(140, 30, &sample(), &mut state);
+        assert!(screen.contains("Beta") && !screen.contains("Alpha"));
+    }
+
+    #[test]
+    fn plain_summary_is_first_line() {
+        assert_eq!(plain_summary("# Hello **world** from `mock`. More text follows\n- item"), "Hello world from mock.");
+        assert_eq!(plain_summary("```\ncode"), "code");
     }
 }

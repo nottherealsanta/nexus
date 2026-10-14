@@ -343,3 +343,16 @@ def test_preview_tails_keep_agent_newlines_and_project_worked():
     assert worked_label(view) == "2m 05s"
     view.turns[0].phase = "active"
     assert worked_label(view) == ""
+
+
+def test_rows_carry_local_time_buckets():
+    import time
+    from nexus.ui.ratatui.workflows import _time_bucket
+
+    now = time.mktime((2026, 10, 14, 15, 0, 0, 0, 0, -1))
+    day = 86400
+    assert _time_bucket(now - 3600, now) == "Today"
+    assert _time_bucket(now - day, now) == "Yesterday"
+    assert _time_bucket(now - 3 * day, now) == "This week"
+    assert _time_bucket(now - 9 * day, now) == "Earlier"
+    assert _time_bucket(0.0, now) == "Earlier"

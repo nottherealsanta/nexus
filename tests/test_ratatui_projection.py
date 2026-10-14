@@ -505,11 +505,34 @@ def test_tool_detail_tones_mirror_the_plain_text_and_the_textual_modal():
     assert tones == ["title", "kv", "header", "label", "", "", "", "title", "label", "hunk", "del", "add", ""]
 
 
+def _running_view(queue, user=True):
+    from types import SimpleNamespace
+    turn = SimpleNamespace(messages=[SimpleNamespace(role="user")] if user else [])
+    return SimpleNamespace(input_queue=queue, phase="running", active_turn=turn)
+
+
+def test_idle_send_never_projects_as_a_queued_or_steer_item():
+    """The head input of an idle send starts the turn; it is not waiting behind one."""
+    from types import SimpleNamespace
+    from nexus.ui.ratatui.prototype import _queue_items, _queue_lines
+    from nexus.view.model import QueuedInputView
+
+    def item(i):
+        return QueuedInputView(queued_id=f"id{i}", mode="steer", content=[{"type": "text", "text": f"m{i}"}])
+
+    idle = SimpleNamespace(input_queue=[item(0)], phase="idle", active_turn=None)
+    starting = _running_view([item(0)], user=False)  # turn.started seen, input.consumed not yet
+    for view in (idle, starting):
+        assert _queue_items(view) == [] and _queue_lines(view) == []
+    # A steer sent while the turn already has its user message is listed.
+    assert [i["id"] for i in _queue_items(_running_view([item(1)]))] == ["id1"]
+
+
 def test_queue_items_carry_durable_ids_and_s_q_tags():
     from nexus.ui.ratatui.prototype import _queue_items
     from nexus.view.model import QueuedInputView
 
-    view = initial_state("s")
+    view = _running_view([])
     view.input_queue = [QueuedInputView(queued_id=f"id{i}", mode=mode, content=[{"type": "text", "text": f"msg\x1b {i}"}])
                         for i, mode in enumerate(["steer", "queue", "interrupt"])]
     items = _queue_items(view)
@@ -521,7 +544,7 @@ def test_queue_lines_and_meter_extras_follow_the_textual_status_row(tmp_path, mo
     from nexus.ui.ratatui.prototype import _queue_lines
     from nexus.view.model import QueuedInputView
 
-    view = initial_state("s")
+    view = _running_view([])
     view.input_queue = [QueuedInputView(queued_id=str(i), mode=mode, content=[{"type": "text", "text": f"msg {i}"}])
                         for i, mode in enumerate(["queue", "steer", "interrupt", "queue", "queue"])]
     assert _queue_lines(view) == ["Queued · msg 0", "Steer · msg 1", "Interrupt · msg 2", "+2 more queued"]

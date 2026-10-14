@@ -708,3 +708,14 @@ allow-list); Keyboard stays a drill row. Every framed dialog
 (pickers, panels, Settings) shares `dialog_frame`: `border` outline, bold title top-left,
 clickable `[×]` top-right (`render::close_rect`), and `element` selection fill. Not verified
 on a light theme.
+
+## Sessions dashboard groups by time and previews only on keyboard selection (2026-10)
+
+The native dashboard groups by last-updated local time (Today, Yesterday, This week,
+Earlier) instead of status: people look for "the thing I did recently", and status is
+still carried by the row glyph and header chips. The host computes `bucket` and
+`updated` per row so the client needs no time zone logic. The `Response` box now follows
+only the keyboard selection: hover used to swap it under a resting pointer and made the
+list jump, so hover is a background tint only and a box appears after Up/Down with an
+empty composer. Up from the top row opens the search bar (also `/`, a click, `Ctrl+K`).
+The `[×]` keeps the archive confirmation. Not verified on a light theme.

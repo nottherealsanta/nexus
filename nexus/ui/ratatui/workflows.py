@@ -1025,6 +1025,19 @@ def session_rows(result, current: str = "", seen: dict | None = None, now: float
     return rows
 
 
+def _time_bucket(stamp, now: float | None = None) -> str:
+    """Dashboard time group by local calendar day: Today, Yesterday, This week (2-6 days), Earlier."""
+    import time
+    from datetime import datetime
+    if not stamp:
+        return "Earlier"
+    current = datetime.fromtimestamp(time.time() if now is None else now).date()
+    days = (current - datetime.fromtimestamp(stamp).date()).days
+    if days <= 0:
+        return "Today"
+    return "Yesterday" if days == 1 else "This week" if days < 7 else "Earlier"
+
+
 def _repo_of(entry) -> str:
     """The project a session belongs to: its worktree's repository, else its workspace."""
     return getattr(entry, "repo", "") or entry.workspace
@@ -1049,6 +1062,8 @@ def _session_row(summary, entry, project, day, tree, current, seen, now):
             "repo": _repo_of(entry), "worktree": escape_controls(tree),
             "status": status, "sub": escape_controls(session_subline(summary, status, now, compact=True)),
             "age": escape_controls(age),
+            "updated": float(getattr(summary, "last_activity", 0.0) or 0.0),
+            "bucket": _time_bucket(getattr(summary, "last_activity", 0.0), now),
             "last_user": clean_preview_text(getattr(entry, "last_user", "") or "", 240),
             "last_agent": clean_preview_text(getattr(entry, "last_agent", "") or "", 240),
             "active": summary.id == current}
