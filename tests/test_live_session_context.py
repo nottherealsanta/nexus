@@ -10,7 +10,7 @@ from nexus.live.manager import (
     session_context_block,
 )
 from nexus.model.providers.scripted import ScriptedProvider, text_response, tool_response
-from nexus.model.stream import MessageStart, MessageStop, ThinkingDelta, ThinkingEnd
+from nexus.model.stream import MessageStart, ThinkingDelta, ThinkingEnd
 from nexus.runtime import Runtime
 from tests.live_fakes import FakeHost
 from tests.test_live_bridge import _config

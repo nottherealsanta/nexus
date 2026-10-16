@@ -811,8 +811,9 @@ def test_turn_footer_names_a_limit_stop():
             _ev(2, "turn.completed", data, turn="t1"),
         ]).turns[0])
 
-    assert footer({"stop_reason": "budget", "limit": "max_seconds"}).startswith("stopped by turn limit")
-    assert footer({"stop_reason": "max_iterations"}).startswith("stopped by iteration limit")
+    # The turn clock leads the footer; the limit stop comes right after it.
+    assert footer({"stop_reason": "budget", "limit": "max_seconds"}).split(" · ")[1] == "stopped by turn limit"
+    assert footer({"stop_reason": "max_iterations"}).split(" · ")[1] == "stopped by iteration limit"
     assert "stopped" not in footer({"stop_reason": "end_turn"})
 
 
