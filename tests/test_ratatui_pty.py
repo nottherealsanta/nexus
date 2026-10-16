@@ -169,7 +169,7 @@ def test_native_bridge_keyboard_and_terminal_restoration():
         time.sleep(.1)
         os.write(master, b"\r")
         assert read_action() == {"type": "submit", "text": "keep this draft", "mode": "steer", "generation": 0}
-        os.write(master, b"\x1b[<0;90;21M")  # controls row: above the half-row padding, workspace and meter rows
+        os.write(master, b"\x1b[<0;90;22M")  # controls row: above the half-row padding and the meter row
         assert read_action() == {"type": "command", "text": "/context"}
         os.write(master, b"\x18c")
         assert read_action() == {"type": "context_popover", "text": ""}

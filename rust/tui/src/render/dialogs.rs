@@ -87,7 +87,7 @@ pub fn panel_host(r: &super::Regions, s: &Snapshot) -> Rect {
         return r.transcript;
     }
     let mut union = r.transcript;
-    for rect in [r.composer, r.details, r.tabs, r.workspace, r.context] {
+    for rect in [r.composer, r.details, r.tabs, r.context] {
         if rect.width > 0 && rect.height > 0 {
             union = union.union(rect);
         }

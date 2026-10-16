@@ -451,21 +451,6 @@ pub fn details_rows(
     (out, file_rows)
 }
 
-/// The row below the composer card is a blank spacer: the path and branch live in the top
-/// bar now, so it only keeps the page background.
-pub(super) fn draw_workspace_bar(
-    frame: &mut Frame,
-    _s: &Snapshot,
-    area: Rect,
-    p: &Palette,
-    _spin: usize,
-) {
-    frame.render_widget(
-        Paragraph::new("").style(Style::default().bg(p.background)),
-        area,
-    );
-}
-
 pub fn top_cells(s: &Snapshot, area: Rect) -> Vec<TabCell> {
     tab_cells(s, area.width as usize)
 }

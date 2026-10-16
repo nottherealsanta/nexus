@@ -849,7 +849,6 @@ pub struct Regions {
     pub composer: Rect,
     pub details: Rect,
     pub tabs: Rect,
-    pub workspace: Rect,
     pub context: Rect,
     /// The Live pane below the composer (zero height when no call's rows are on screen).
     pub live: Rect,
@@ -1198,8 +1197,8 @@ pub fn composer_height(area: Rect, draft: &Editor, s: &Snapshot) -> u16 {
         displayed.cursor += s.voice_preview.len();
     }
     let rows = editor_view(&displayed, false, &Palette::new(false), width, u16::MAX).len();
-    // Six fixed rows plus the blank row that always separates the text from the controls.
-    let wanted = 6 + rows.clamp(1, 22) as u16 + above_card_rows(s).max(1);
+    // Five fixed rows plus the blank row that always separates the text from the controls.
+    let wanted = 5 + rows.clamp(1, 22) as u16 + above_card_rows(s).max(1);
     wanted
         .min(area.height.saturating_sub(2 + 4 + crate::live_bar::pane_rows(s)))
         .min(area.height)
@@ -1246,12 +1245,6 @@ pub fn regions(area: Rect, s: &Snapshot, composer_height: u16, _logs_open: bool)
     let drawer = s.details_sidebar && area.width < 100;
     Regions {
         tabs: center[1],
-        workspace: Rect::new(
-            center[5].x,
-            center[5].bottom().saturating_sub(2),
-            center[5].width,
-            1,
-        ),
         details: if drawer {
             Rect::new(
                 area.right().saturating_sub(area.width.min(40)),
@@ -1818,8 +1811,7 @@ pub fn draw(
                 .style(Style::default().bg(cp.panel)),
                 controls,
             );
-            chrome::draw_workspace_bar(frame, s, r.workspace, &p, cache.spin);
-            let meter_area = inset(rows[5], 2, 2);
+            let meter_area = inset(rows[4], 2, 2);
             frame.render_widget(
                 Paragraph::new(Line::from(activity_meter(
                     s,
@@ -2303,7 +2295,7 @@ pub fn draw(
         };
         frame.render_widget(
             Paragraph::new("■").style(Style::default().fg(tone).bg(p.panel)),
-            Rect::new(box_area.x + 3, rows[5].y, 1, 1),
+            Rect::new(box_area.x + 3, rows[4].y, 1, 1),
         );
     }
     // Toasts float above everything, including dialogs; they never take layout.
@@ -3092,8 +3084,10 @@ mod tests {
                 .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string())
                 .collect()
         };
+        // Blocks are separated by a blank gap row, so the row just above the pill is either the
+        // last text row or that gap, depending on the viewport height's parity.
         assert!(
-            row_text(rect.y - 1).contains("line "),
+            row_text(rect.y - 1).contains("line ") || row_text(rect.y - 2).contains("line "),
             "content ends right above the pill"
         );
         assert!(
@@ -3336,11 +3330,11 @@ mod tests {
     fn composer_grows_with_content_and_is_capped() {
         let area = Rect::new(0, 0, 80, 60);
         let mut draft = Editor::default();
-        assert_eq!(composer_height(area, &draft, &Snapshot::default()), 8);
+        assert_eq!(composer_height(area, &draft, &Snapshot::default()), 7);
         draft.insert(&"line\n".repeat(9));
-        assert_eq!(composer_height(area, &draft, &Snapshot::default()), 7 + 10);
+        assert_eq!(composer_height(area, &draft, &Snapshot::default()), 6 + 10);
         draft.insert(&"line\n".repeat(60));
-        assert_eq!(composer_height(area, &draft, &Snapshot::default()), 7 + 22);
+        assert_eq!(composer_height(area, &draft, &Snapshot::default()), 6 + 22);
         assert_eq!(
             composer_height(Rect::new(0, 0, 80, 14), &draft, &Snapshot::default()),
             8,
@@ -3350,7 +3344,7 @@ mod tests {
         queued.queue_items = vec![queue_item("q1", "Q", "a"), queue_item("s1", "S", "b")];
         assert_eq!(
             composer_height(Rect::new(0, 0, 80, 60), &Editor::default(), &queued),
-            8 + 2,
+            7 + 2,
             "two messages get a header and two rows above the editor"
         );
         queued.turn_status = Some(crate::bridge::TurnStatus {
@@ -3359,12 +3353,12 @@ mod tests {
         });
         assert_eq!(
             composer_height(Rect::new(0, 0, 80, 60), &Editor::default(), &queued),
-            8 + 2 + 2,
+            7 + 2 + 2,
             "a running turn adds the status line and a blank separator row"
         );
     }
     #[test]
-    fn workspace_bar_is_between_composer_controls_and_activity() {
+    fn activity_meter_sits_directly_under_the_composer_card() {
         for width in [60, 120, 180] {
             for details_sidebar in [false, true] {
                 let s = Snapshot {
@@ -3382,9 +3376,9 @@ mod tests {
                     false,
                 );
                 let rows = composer_rows(r.composer, &s);
-                assert_eq!(r.workspace, rows[4]);
-                assert_eq!(rows[3].bottom(), r.workspace.y);
-                assert_eq!(r.workspace.bottom(), rows[5].y);
+                assert_eq!(rows.len(), 5, "no spacer row under the card");
+                assert_eq!(rows[3].bottom(), rows[4].y);
+                assert_eq!(rows[4].bottom(), r.composer.bottom());
                 let mut terminal = Terminal::new(TestBackend::new(width, 40)).unwrap();
                 let mut cache = Cache::default();
                 terminal
@@ -3409,15 +3403,6 @@ mod tests {
                         );
                     })
                     .unwrap();
-                let visible_end = if r.details.width > 0 {
-                    r.details.x.min(r.workspace.right())
-                } else {
-                    r.workspace.right()
-                };
-                let row: String = (r.workspace.x..visible_end)
-                    .map(|x| terminal.backend().buffer()[(x, r.workspace.y)].symbol())
-                    .collect();
-                assert!(row.trim().is_empty(), "blank spacer row: {row}");
                 if r.tabs.height > 0 {
                     assert_eq!(r.tabs.height, 1, "top bar has no separator row");
                     let top: String = (r.tabs.x..r.tabs.right())
@@ -3430,17 +3415,11 @@ mod tests {
                 }
                 let buffer = terminal.backend().buffer();
                 assert_eq!(
-                    buffer[(r.workspace.x + 2, rows[2].y)].symbol(),
+                    buffer[(rows[2].x + 2, rows[2].y)].symbol(),
                     " ",
                     "card has no left colour rail"
                 );
-                assert_eq!(buffer[(r.workspace.x + 5, rows[2].y)].symbol(), "A");
-                for x in r.workspace.x..r.workspace.right() {
-                    assert_eq!(
-                        buffer[(x, r.workspace.y)].bg,
-                        Palette::new(false).background
-                    );
-                }
+                assert_eq!(buffer[(rows[2].x + 5, rows[2].y)].symbol(), "A");
             }
         }
     }
@@ -3739,7 +3718,7 @@ mod editor_layout_tests {
         editor.insert("aaaa bbbb cccc dddd");
         let area = Rect::new(0, 0, 17, 40);
         assert_eq!(editor.visual_layout(8).rows.len(), 4);
-        assert_eq!(composer_height(area, &editor, &s), 11);
+        assert_eq!(composer_height(area, &editor, &s), 10);
     }
 
     #[test]
@@ -4282,8 +4261,7 @@ pub fn composer_rows(area: Rect, s: &Snapshot) -> Vec<Rect> {
         Constraint::Min(3),
         Constraint::Length(1),
         Constraint::Length(1), // the card's bottom padding row
-        Constraint::Length(1),
-        Constraint::Length(1),
+        Constraint::Length(1), // the activity meter, directly under the card
     ])
     .split(area)
     .to_vec()

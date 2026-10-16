@@ -245,8 +245,8 @@ The composer card (background `#1E1E1E` in the dark theme, its own `composer`
 palette colour; light keeps the panel tone) has a heavy box-drawing `┃` rail in the agent colour with a sliver of
 background before the card, one padding row above the editor and a half row below
 the controls (a `▀` row: card colour on top, background below, so the card ends
-halfway and leaves a half-row gap above the path; the `┃` rail ends with `╹`
-(heavy up: same stroke, top half) there, so it stops exactly at the card's edge); the workspace line sits under the card on the plain background. One
+halfway and leaves a half-row gap above the activity meter; the `┃` rail ends with `╹`
+(heavy up: same stroke, top half) there, so it stops exactly at the card's edge); the activity meter sits directly under it. One
 blank row always separates the last editor row from the agent/model controls,
 however many rows the draft has (`composer_keeps_a_blank_row_above_the_controls`).
 A blank background row always sits directly above the card as a margin; queued
@@ -276,11 +276,10 @@ concurrently afterwards (`finish_startup` in `prototype.py`) and each repaints w
 the breadcrumb first shows the bare workspace path. Measured with a warm daemon over a PTY:
 splash about 0.2 s, full UI about 0.3 s (was about 1.0 s); cold daemon start not measured.
 
-The workspace/branch/worktree/status bar uses the black conversation background,
-with its path starting at the composer card's `┃` rail. It sits below the composer controls and
-directly above the activity meter. Session tabs remain at the top when the
-sessions sidebar is hidden; the workspace bar's details and update click targets
-move with it.
+There is no row between the composer card and the activity meter: the path, branch and
+worktree live in the top bar, and the old blank spacer row under the card was removed, so the
+meter sits directly under the card's half-row padding (`activity_meter_sits_directly_under_the_composer_card`).
+Session tabs remain at the top when the sessions sidebar is hidden.
 
 User message cards stop one cell short of the column's right edge (an unstyled
 margin cell; the hover Copy button stays inside the card) and have one blank row of panel-colored padding above and below
